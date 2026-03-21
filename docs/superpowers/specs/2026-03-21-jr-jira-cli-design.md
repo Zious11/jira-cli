@@ -379,23 +379,100 @@ Shared infrastructure (`client.rs`, `auth.rs`, `pagination.rs`, `rate_limit.rs`)
 | Crate | Version | Purpose |
 |-------|---------|---------|
 | `clap` | 4.x (derive) | CLI argument parsing |
-| `reqwest` | 0.12.x | HTTP client |
+| `reqwest` | 0.12.x (rustls-tls) | HTTP client (explicit rustls to avoid TLS version issues) |
 | `tokio` | 1.x | Async runtime |
 | `serde` + `serde_json` | 1.x | JSON serialization |
-| `keyring` | 2.x | OS credential storage |
+| `keyring` | 3.x | OS credential storage |
 | `figment` | 0.10.x | Layered config (TOML + env vars) |
 | `comfy-table` | 7.x | Table output |
 | `colored` | 2.x | Terminal colors |
 | `dialoguer` | 0.12.x | Interactive prompts |
-| `anyhow` + `thiserror` | 1.x | Error handling |
-| `open` | latest | Open URLs in browser |
+| `anyhow` + `thiserror` | 2.x | Error handling |
+| `base64` | 0.22.x | Base64 encoding for Basic auth |
+| `urlencoding` | 2.x | URL encoding for query parameters |
+| `madfun` | latest | Markdown to ADF conversion (evaluate; fallback to custom if insufficient) |
+| `open` | 5.x | Open URLs in browser |
 | `dirs` | 5.x | XDG config paths |
+
+### Dev Dependencies
+
+| Crate | Version | Purpose |
+|-------|---------|---------|
+| `wiremock` | 0.6.x | Async HTTP mocking for tests |
+| `assert_cmd` | 2.x | CLI binary integration testing |
+| `predicates` | 3.x | Test assertion predicates |
+| `tempfile` | 3.x | Temporary files/dirs for config tests |
 
 ## Distribution
 
 - **Cargo:** `cargo install jr` (if name is available on crates.io)
-- **Homebrew:** `brew install zious11/tap/jr` via a custom tap
-- **GitHub Releases:** Pre-built binaries for macOS (arm64, x86_64) and Linux (x86_64)
+- **Homebrew:** `brew install zious11/tap/jr` via a custom tap (formula downloads pre-built binaries)
+- **GitHub Releases:** Pre-built binaries for macOS (arm64, x86_64), Linux (x86_64, arm64)
+
+## GitHub Environment Setup
+
+### Repository Structure
+
+```
+.github/
+├── workflows/
+│   ├── ci.yml              # Test, clippy, fmt on every PR and push
+│   └── release.yml         # Build + publish on version tags (v*)
+├── dependabot.yml          # Automated dependency updates
+deny.toml                   # cargo-deny license/vulnerability policy
+rust-toolchain.toml         # Pin Rust version for consistent builds
+```
+
+### CI Workflow (`ci.yml`)
+
+Triggers on every push and PR. Runs in parallel:
+
+1. **Format check:** `cargo fmt --all -- --check`
+2. **Lint:** `cargo clippy --all --all-features --tests -- -D warnings`
+3. **Test:** `cargo test --all-features`
+4. **MSRV check:** Test against the declared minimum Rust version (1.75.0)
+5. **Security audit:** `cargo deny check` for license compliance and known vulnerabilities
+6. **Code coverage:** `cargo llvm-cov` with results uploaded to Codecov
+
+### Release Workflow (`release.yml`)
+
+Triggers on version tags (`v*`). Uses `cargo-dist` or a custom matrix strategy:
+
+1. **Build matrix:** Cross-compile for all targets:
+   - `x86_64-apple-darwin` (macOS Intel)
+   - `aarch64-apple-darwin` (macOS Apple Silicon)
+   - `x86_64-unknown-linux-gnu` (Linux x86_64)
+   - `aarch64-unknown-linux-gnu` (Linux ARM64, via `cross-rs`)
+2. **Package:** `.tar.gz` archives with SHA256 checksums
+3. **Publish:** Create GitHub Release with all binaries attached
+4. **Homebrew:** Auto-update formula in `zious11/homebrew-tap` with new version + checksums
+
+### Cross-Compilation
+
+Linux ARM64 builds use `cross-rs` which provides Docker-based cross-compilation environments. Native compilation for macOS (both architectures) and Linux x86_64 using GitHub-hosted runners.
+
+### reqwest TLS Configuration
+
+reqwest must use the `rustls-tls` feature explicitly (not `default-tls`) to avoid TLS version negotiation issues with Jira Cloud's servers. In `Cargo.toml`:
+
+```toml
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+```
+
+### Dependency Management
+
+- **Dependabot:** Weekly checks for Cargo dependency updates
+- **cargo-deny:** Enforces license allowlist (MIT, Apache-2.0, BSD) and blocks known vulnerabilities via RustSec advisory database
+
+### Branch Protection
+
+- Require PR reviews before merging to `main`
+- Require all CI status checks to pass
+- No force-pushes to `main`
+
+### MSRV Policy
+
+Minimum Supported Rust Version: **1.75.0** (or latest stable minus 3 releases). MSRV bumps increment the minor version. Tested in CI on every PR.
 
 ## Roadmap (Post-v1)
 

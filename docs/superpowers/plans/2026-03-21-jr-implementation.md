@@ -115,7 +115,7 @@ dirs = "5"
 figment = { version = "0.10", features = ["toml", "env"] }
 keyring = "3"
 open = "5"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -4073,6 +4073,266 @@ git commit -m "chore: gitignore, clippy fixes, project polish"
 
 ---
 
+## Task 18: GitHub Environment Setup
+
+**Files:**
+- Create: `.github/workflows/ci.yml`
+- Create: `.github/workflows/release.yml`
+- Create: `.github/dependabot.yml`
+- Create: `deny.toml`
+- Create: `rust-toolchain.toml`
+
+- [ ] **Step 1: Create rust-toolchain.toml**
+
+```toml
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy", "llvm-tools-preview"]
+```
+
+- [ ] **Step 2: Create CI workflow**
+
+Write `.github/workflows/ci.yml`:
+
+```yaml
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all --all-features --tests -- -D warnings
+
+  test:
+    name: Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --all-features
+
+  msrv:
+    name: MSRV (1.75.0)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.75.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --all-features
+
+  deny:
+    name: Deny (licenses + vulnerabilities)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+      - uses: codecov/codecov-action@v4
+        with:
+          files: lcov.info
+          fail_ci_if_error: false
+```
+
+- [ ] **Step 3: Create release workflow**
+
+Write `.github/workflows/release.yml`:
+
+```yaml
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            use_cross: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.use_cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build
+        run: |
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
+
+      - name: Package
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../jr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz jr
+          cd ../../..
+          shasum -a 256 jr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz > jr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jr-${{ matrix.target }}
+          path: |
+            jr-*.tar.gz
+            jr-*.sha256
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            jr-*.tar.gz
+            jr-*.sha256
+```
+
+- [ ] **Step 4: Create cargo-deny config**
+
+Write `deny.toml`:
+
+```toml
+[advisories]
+vulnerability = "deny"
+unmaintained = "warn"
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "OpenSSL",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
+```
+
+- [ ] **Step 5: Create Dependabot config**
+
+Write `.github/dependabot.yml`:
+
+```yaml
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+```
+
+- [ ] **Step 6: Add MSRV to Cargo.toml**
+
+Add to `[package]` section:
+
+```toml
+rust-version = "1.75"
+```
+
+- [ ] **Step 7: Run cargo deny check locally**
+
+```bash
+cargo install cargo-deny
+cargo deny check
+```
+
+Fix any issues.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add -A
+git commit -m "ci: GitHub Actions CI/CD, release pipeline, cargo-deny, dependabot"
+```
+
+- [ ] **Step 9: Configure branch protection (manual)**
+
+After pushing to GitHub, configure branch protection on `main`:
+- Require PR reviews
+- Require status checks: fmt, clippy, test, msrv, deny
+- No force-pushes
+
+---
+
 ## Dependency Order
 
 ```
@@ -4092,7 +4352,9 @@ Task 1 (scaffold)
     └── Task 14 (OAuth)
         └── Task 15 (init)
 Task 16 (integration tests) — after tasks 10-12
-Task 17 (polish) — last
+Task 17 (polish) — after task 16
+Task 18 (GitHub setup) — after task 17
 ```
 
 Tasks 2, 3, 7, 8, 9 have no dependencies on each other and can be executed in parallel after Task 1.
+Task 18 (GitHub setup) can technically run after Task 1, but is placed last so CI validates a complete project.
