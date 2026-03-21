@@ -46,11 +46,13 @@ jr issue list --status "In Progress" # Filter by status
 jr issue list --limit N              # Cap results
 jr issue create                      # Create issue (interactive prompts)
 jr issue create -p FOO -t Bug -s "Title" -d "Description"
+jr issue create -p FOO -t Story -s "Title" --team "Platform"
 jr issue view KEY-123                # View issue details
 jr issue move KEY-123 "In Progress"  # Transition issue to status
 jr issue move KEY-123                # Transition (prompts for available statuses)
 jr issue edit KEY-123 --summary "New title"  # Edit issue fields
 jr issue edit KEY-123 --type "Bug" --priority "High"
+jr issue edit KEY-123 --team "Platform"      # Set team assignment
 jr issue assign KEY-123              # Assign to me
 jr issue assign KEY-123 --to user    # Assign to someone else
 jr issue assign KEY-123 --unassign   # Remove assignee
@@ -145,6 +147,24 @@ $ jr issue move KEY-123 "Deployed"
 Error: "Deployed" is not a valid transition for KEY-123
 Available transitions: In Progress, Blocked, Won't Do
 ```
+
+## Team Assignment
+
+Jira's "Team" field is a custom field (not a built-in field like assignee). It is separate from individual assignment — a ticket can be assigned to both a person and a team.
+
+**How it works under the hood:**
+
+1. On first use (or during `jr init`), query `GET /rest/api/3/field` to find the custom field ID for the "Team" field (e.g., `customfield_10001`). Cache this mapping in global config.
+2. When `--team "Platform"` is provided, resolve the team name to its ID by querying the field's allowed values.
+3. Set the custom field on create/edit via the standard issue fields payload: `{ "customfield_10001": { "id": "team-id" } }`
+
+**Team name matching** uses the same case-insensitive partial matching as transitions — `--team plat` matches "Platform". Ambiguous matches prompt for selection.
+
+**`jr issue view`** displays the team field when present.
+
+**`jr issue list`** supports `--team "Platform"` to filter by team (translates to JQL: `"Team" = "Platform"`).
+
+**Edge case:** If no "Team" custom field exists on the Jira instance, `--team` returns a clear error: `Error: No "Team" field found on this Jira instance`.
 
 ## Authentication
 
