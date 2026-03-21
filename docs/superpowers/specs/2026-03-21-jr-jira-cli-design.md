@@ -404,6 +404,43 @@ Shared infrastructure (`client.rs`, `auth.rs`, `pagination.rs`, `rate_limit.rs`)
 | `assert_cmd` | 2.x | CLI binary integration testing |
 | `predicates` | 3.x | Test assertion predicates |
 | `tempfile` | 3.x | Temporary files/dirs for config tests |
+| `insta` | 1.x | Snapshot testing for CLI output (table, JSON, errors) |
+| `proptest` | 1.x | Property-based testing for parsers and matching |
+
+## Testing Strategy
+
+### Test Layers
+
+1. **Unit tests** (inline `#[cfg(test)]`): Pure logic — config parsing, duration parsing, ADF conversion, partial matching. Fast, no I/O.
+2. **API integration tests** (`tests/`): `JiraClient` against wiremock mock servers. Tests pagination, rate limiting, error handling, auth headers.
+3. **CLI integration tests** (`tests/`): Full binary via `assert_cmd`. Tests end-to-end command behavior, output formats, exit codes.
+4. **Property tests** (inline): `proptest` for duration parsing edge cases and partial match correctness.
+5. **Snapshot tests** (inline + `tests/`): `insta` for table output and error message formatting.
+
+### Test Infrastructure
+
+```
+tests/
+├── common/
+│   ├── mod.rs              # Shared test utilities
+│   ├── fixtures.rs         # Reusable mock JSON responses + builders
+│   └── mock_server.rs      # Helper to create configured wiremock server
+├── api_client.rs           # JiraClient integration tests
+├── issue_commands.rs       # Issue command integration tests
+├── board_sprint_commands.rs
+└── worklog_commands.rs
+```
+
+### Config Injection for Tests
+
+The `JR_BASE_URL` environment variable overrides the configured instance URL, allowing integration tests to point at a wiremock server without writing config files. The `JiraClient::new_for_test()` constructor accepts an explicit base URL and auth header for API-level tests.
+
+### What Not to Test
+
+- External crate behavior (reqwest, clap, serde, dialoguer)
+- Private implementation details
+- Exact log/debug output formatting
+- Time-dependent behavior without mocking time
 
 ## Distribution
 

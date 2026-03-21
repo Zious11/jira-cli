@@ -59,16 +59,19 @@
 | File | What it tests |
 |------|--------------|
 | `tests/cli_smoke.rs` | Binary exists, `--help` works, `--version` works |
-| `src/duration.rs` (inline) | Duration parsing unit tests |
-| `src/adf.rs` (inline) | ADF conversion unit tests |
-| `src/partial_match.rs` (inline) | Partial matching unit tests |
-| `src/config.rs` (inline) | Config loading unit tests |
-| `src/api/pagination.rs` (inline) | Pagination logic unit tests |
-| `src/api/rate_limit.rs` (inline) | Rate limit detection unit tests |
+| `tests/common/mod.rs` | Shared test utilities module |
+| `tests/common/fixtures.rs` | Reusable mock JSON responses and builders |
+| `tests/common/mock_server.rs` | Helper to create pre-configured wiremock servers |
 | `tests/api_client.rs` | JiraClient integration tests with wiremock |
 | `tests/issue_commands.rs` | Issue command integration tests with wiremock |
 | `tests/board_sprint_commands.rs` | Board/sprint command integration tests |
 | `tests/worklog_commands.rs` | Worklog command integration tests |
+| `src/duration.rs` (inline) | Duration parsing unit tests + proptest |
+| `src/adf.rs` (inline) | ADF conversion unit tests + insta snapshots |
+| `src/partial_match.rs` (inline) | Partial matching unit tests + proptest |
+| `src/config.rs` (inline) | Config loading unit tests |
+| `src/api/pagination.rs` (inline) | Pagination logic unit tests |
+| `src/api/rate_limit.rs` (inline) | Rate limit detection unit tests |
 
 ---
 
@@ -129,12 +132,14 @@ assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
 wiremock = "0.6"
+insta = { version = "1", features = ["json"] }
+proptest = "1"
 ```
 
 - [ ] **Step 3: Create module directory structure**
 
 ```bash
-mkdir -p src/cli src/api/jira src/types/jira
+mkdir -p src/cli src/api/jira src/types/jira tests/common
 ```
 
 - [ ] **Step 4: Create error types**
@@ -575,6 +580,11 @@ impl Config {
     }
 
     pub fn base_url(&self) -> anyhow::Result<String> {
+        // JR_BASE_URL env var overrides everything (used by tests to inject wiremock URL)
+        if let Ok(override_url) = std::env::var("JR_BASE_URL") {
+            return Ok(override_url.trim_end_matches('/').to_string());
+        }
+
         let url = self.global.instance.url.as_ref()
             .ok_or_else(|| anyhow::anyhow!("No Jira instance configured. Run \"jr init\" first."))?;
 
@@ -1718,6 +1728,42 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn exact_match_always_found(idx in 0usize..4) {
+            let candidates = vec![
+                "In Progress".into(), "In Review".into(),
+                "Blocked".into(), "Done".into(),
+            ];
+            let input = &candidates[idx];
+            match partial_match(input, &candidates) {
+                MatchResult::Exact(s) => prop_assert_eq!(s, *input),
+                _ => prop_assert!(false, "Expected exact match for '{}'", input),
+            }
+        }
+
+        #[test]
+        fn never_panics_on_arbitrary_input(s in "\\PC{0,50}") {
+            let candidates = vec!["In Progress".into(), "Done".into()];
+            let _ = partial_match(&s, &candidates); // must not panic
+        }
+
+        #[test]
+        fn empty_candidates_always_returns_none(s in "[a-z]{1,10}") {
+            let candidates: Vec<String> = vec![];
+            match partial_match(&s, &candidates) {
+                MatchResult::None(all) => prop_assert!(all.is_empty()),
+                _ => prop_assert!(false, "Expected None for empty candidates"),
+            }
+        }
+    }
+}
 ```
 
 - [ ] **Step 2: Register module in main.rs**
@@ -1730,7 +1776,7 @@ Add `pub mod partial_match;` to `src/main.rs`.
 cargo test partial_match
 ```
 
-Expected: All 5 tests pass.
+Expected: All unit tests and property tests pass.
 
 - [ ] **Step 4: Commit**
 
@@ -1879,6 +1925,45 @@ mod tests {
         assert_eq!(format_duration(5400), "1h30m");
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn valid_single_units_always_parse(h in 1u64..100, unit in prop_oneof![Just("m"), Just("h"), Just("d"), Just("w")]) {
+            let input = format!("{h}{unit}");
+            let result = parse_duration(&input, 8, 5);
+            prop_assert!(result.is_ok(), "Failed to parse: {}", input);
+            prop_assert!(result.unwrap() > 0);
+        }
+
+        #[test]
+        fn combined_units_always_parse(h in 0u64..24, m in 0u64..60) {
+            if h == 0 && m == 0 { return Ok(()); }
+            let input = if m == 0 { format!("{h}h") } else if h == 0 { format!("{m}m") } else { format!("{h}h{m}m") };
+            let result = parse_duration(&input, 8, 5);
+            prop_assert!(result.is_ok(), "Failed to parse: {}", input);
+        }
+
+        #[test]
+        fn garbage_input_never_panics(s in "\\PC{1,20}") {
+            let _ = parse_duration(&s, 8, 5); // must not panic
+        }
+
+        #[test]
+        fn format_roundtrip(seconds in (1u64..86400).prop_filter("divisible by 60", |s| s % 60 == 0)) {
+            let formatted = format_duration(seconds);
+            let reparsed = parse_duration(&formatted, 8, 5).unwrap();
+            // Roundtrip only works for values < 1d since format_duration doesn't emit d/w
+            if seconds < 28800 {
+                prop_assert_eq!(reparsed, seconds, "Roundtrip failed: {} -> {} -> {}", seconds, formatted, reparsed);
+            }
+        }
+    }
+}
 ```
 
 - [ ] **Step 2: Register module in main.rs**
@@ -1891,7 +1976,7 @@ Add `pub mod duration;` to `src/main.rs`.
 cargo test duration
 ```
 
-Expected: All 12 tests pass.
+Expected: All unit tests and property tests pass.
 
 - [ ] **Step 4: Commit**
 
@@ -2210,6 +2295,31 @@ mod tests {
         });
         assert!(adf_to_text(&adf).contains("[unsupported: mediaGroup]"));
     }
+
+    #[test]
+    fn test_markdown_to_adf_snapshot() {
+        let input = "## Root cause\n\nThe auth module had a **critical bug** in `validate_token`.\n\n- Missing null check\n- Wrong error type\n\n```rust\nfn validate() -> bool {\n    true\n}\n```";
+        let adf = markdown_to_adf(input);
+        insta::assert_json_snapshot!("markdown_complex_to_adf", adf);
+    }
+
+    #[test]
+    fn test_adf_to_text_snapshot() {
+        let adf = json!({
+            "type": "doc",
+            "version": 1,
+            "content": [
+                {"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": "Summary"}]},
+                {"type": "paragraph", "content": [{"type": "text", "text": "This is a description."}]},
+                {"type": "bulletList", "content": [
+                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Item one"}]}]},
+                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Item two"}]}]}
+                ]}
+            ]
+        });
+        let text = adf_to_text(&adf);
+        insta::assert_snapshot!("adf_to_text_complex", text);
+    }
 }
 ```
 
@@ -2217,7 +2327,7 @@ mod tests {
 
 Add `pub mod adf;` to `src/main.rs`.
 
-- [ ] **Step 3: Run tests**
+- [ ] **Step 3: Run tests and accept snapshots**
 
 ```bash
 cargo test adf
@@ -3813,17 +3923,111 @@ git commit -m "feat: jr init — interactive setup for instance, auth, and proje
 ## Task 16: Integration Tests
 
 **Files:**
+- Create: `tests/common/mod.rs`
+- Create: `tests/common/fixtures.rs`
+- Create: `tests/common/mock_server.rs`
 - Create: `tests/issue_commands.rs`
 - Create: `tests/board_sprint_commands.rs`
 - Create: `tests/worklog_commands.rs`
+
+- [ ] **Step 0: Create shared test fixtures and helpers**
+
+Write `tests/common/mod.rs`:
+
+```rust
+pub mod fixtures;
+pub mod mock_server;
+```
+
+Write `tests/common/fixtures.rs`:
+
+```rust
+use serde_json::{json, Value};
+
+pub fn user_response() -> Value {
+    json!({
+        "accountId": "abc123",
+        "displayName": "Test User",
+        "emailAddress": "test@test.com"
+    })
+}
+
+pub fn issue_response(key: &str, summary: &str, status: &str) -> Value {
+    json!({
+        "key": key,
+        "fields": {
+            "summary": summary,
+            "status": {"name": status},
+            "issuetype": {"name": "Task"},
+            "priority": {"name": "Medium"},
+            "assignee": {"accountId": "abc123", "displayName": "Test User"},
+            "project": {"key": key.split('-').next().unwrap_or("TEST")}
+        }
+    })
+}
+
+pub fn issue_search_response(issues: Vec<Value>) -> Value {
+    json!({
+        "issues": issues,
+        "nextPageToken": null
+    })
+}
+
+pub fn transitions_response(transitions: Vec<(&str, &str)>) -> Value {
+    json!({
+        "transitions": transitions.iter().map(|(id, name)| json!({
+            "id": id,
+            "name": name,
+        })).collect::<Vec<_>>()
+    })
+}
+
+pub fn worklog_response(seconds: u64, author: &str) -> Value {
+    json!({
+        "id": "12345",
+        "timeSpentSeconds": seconds,
+        "timeSpent": format!("{}h", seconds / 3600),
+        "author": {"accountId": "abc", "displayName": author}
+    })
+}
+
+pub fn error_response(messages: &[&str]) -> Value {
+    json!({
+        "errorMessages": messages
+    })
+}
+```
+
+Write `tests/common/mock_server.rs`:
+
+```rust
+use wiremock::{MockServer, Mock, ResponseTemplate};
+use wiremock::matchers::{method, path};
+use super::fixtures;
+
+pub async fn setup_with_myself() -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/myself"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(fixtures::user_response())
+        )
+        .mount(&server)
+        .await;
+    server
+}
+```
 
 - [ ] **Step 1: Write issue command integration tests**
 
 Write `tests/issue_commands.rs`:
 
 ```rust
+mod common;
+
 use wiremock::{MockServer, Mock, ResponseTemplate};
-use wiremock::matchers::{method, path, body_json_schema};
+use wiremock::matchers::{method, path};
 
 #[tokio::test]
 async fn test_search_issues() {
