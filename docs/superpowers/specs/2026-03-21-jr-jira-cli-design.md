@@ -4,7 +4,7 @@
 
 `jr` is a command-line tool written in Rust for automating Jira Cloud workflows. It provides a fast, scriptable interface for the most common developer interactions with Jira: viewing and transitioning issues, creating tickets, searching with JQL, and logging time.
 
-The tool prioritizes correctness over coverage — it handles scrum and kanban projects properly, queries workflows at runtime instead of guessing, and uses Jira's current API (v3 with cursor-based pagination) rather than deprecated endpoints.
+The tool prioritizes correctness over coverage — it handles scrum and kanban projects properly, queries workflows at runtime instead of guessing, and targets the Jira REST API v3 and Agile REST API.
 
 ## Goals
 
@@ -49,8 +49,11 @@ jr issue create -p FOO -t Bug -s "Title" -d "Description"
 jr issue view KEY-123                # View issue details
 jr issue move KEY-123 "In Progress"  # Transition issue to status
 jr issue move KEY-123                # Transition (prompts for available statuses)
+jr issue edit KEY-123 --summary "New title"  # Edit issue fields
+jr issue edit KEY-123 --status "Bug" --priority "High"
 jr issue assign KEY-123              # Assign to me
 jr issue assign KEY-123 --to user    # Assign to someone else
+jr issue assign KEY-123 --unassign   # Remove assignee
 jr issue comment KEY-123 "message"   # Add comment (plain text)
 jr issue comment KEY-123 --markdown "## Heading\n- item"  # Markdown comment
 jr issue comment KEY-123 --file notes.md --markdown        # Comment from file
@@ -71,6 +74,8 @@ jr sprint current                    # Show current sprint issues (scrum only)
 ```
 jr worklog add KEY-123 2h            # Log 2 hours
 jr worklog add KEY-123 1h30m -m "note"  # Log with comment
+jr worklog add KEY-123 1d            # Log 1 day (= 8h, configurable)
+jr worklog add KEY-123 30m           # Log 30 minutes
 jr worklog list KEY-123              # View worklogs on issue
 ```
 
@@ -79,7 +84,7 @@ jr worklog list KEY-123              # View worklogs on issue
 All commands support:
 
 - `--output json|table` — output format (default: table)
-- `--project FOO` — override per-project config
+- `--project FOO` — override project key (does not affect board-dependent smart defaults; use `--jql` for cross-project queries)
 - `--no-color` — disable colored output (also respects `NO_COLOR` env var)
 - `--verbose` — debug-level detail (full request/response)
 
@@ -91,6 +96,13 @@ All commands support:
 - **Kanban board:** Shows issues assigned to me that are not in a "Done" category status
 
 Board type is auto-detected during `jr init` and stored in per-project config. Sprint commands (`jr sprint list`, `jr sprint current`) return a clear error on kanban projects.
+
+**API call sequence for smart defaults:**
+
+1. Read `board_id` from `.jr.toml`
+2. `GET /rest/agile/1.0/board/{boardId}/configuration` — determine board type
+3. **Scrum path:** `GET /rest/agile/1.0/board/{boardId}/sprint?state=active` → get active sprint ID → `GET /rest/agile/1.0/sprint/{sprintId}/issue?jql=assignee=currentUser()`
+4. **Kanban path:** `GET /rest/agile/1.0/board/{boardId}/issue?jql=assignee=currentUser() AND statusCategory != Done`
 
 ## Transitions
 
@@ -112,10 +124,19 @@ $ jr issue move KEY-123 "In Progress"
 KEY-123 transitioned to "In Progress"
 ```
 
-**Fuzzy matching** — partial input matches against available transitions:
+**Partial matching** — case-insensitive substring match against available transitions:
 ```
 $ jr issue move KEY-123 prog
 KEY-123 transitioned to "In Progress"
+```
+
+**Ambiguous match** — multiple matches prompts for disambiguation:
+```
+$ jr issue move KEY-123 "In"
+Multiple transitions match "In":
+  1. In Progress
+  2. In Review
+Select transition:
 ```
 
 **Error case** — no match shows available options:
@@ -130,21 +151,30 @@ Available transitions: In Progress, Blocked, Won't Do
 ### OAuth 2.0 (3LO) — Primary Method
 
 1. `jr auth login` starts a local HTTP server on a random port
-2. Opens browser to Atlassian's OAuth consent screen
+2. Opens browser to Atlassian's OAuth consent screen with required scopes:
+   - `read:jira-work` — read issues, boards, sprints
+   - `write:jira-work` — create/edit issues, transitions, worklogs
+   - `read:jira-user` — read user info for assignments
+   - `offline_access` — obtain refresh token for persistent sessions
 3. User approves; Atlassian redirects to localhost with auth code
 4. CLI exchanges code for access token + refresh token
-5. Tokens stored in OS keychain (macOS Keychain via `keyring` crate)
-6. Refresh token used automatically when access token expires
+5. CLI calls `GET https://api.atlassian.com/oauth/token/accessible-resources` to resolve the `cloudId` for the Jira instance
+6. All subsequent API calls use `https://api.atlassian.com/ex/jira/{cloudId}/rest/api/3/...`
+7. Tokens stored in OS keychain (macOS Keychain via `keyring` crate)
+
+**OAuth app credentials:** The CLI ships with an embedded OAuth `client_id`. The `client_secret` is not required for public clients using PKCE (Proof Key for Code Exchange), which is the recommended approach for CLI tools. Users do not need to register their own OAuth app.
 
 ### API Token — Fallback Method
 
 1. `jr auth login --token` prompts for email + API token
 2. Credentials stored in OS keychain
+3. API calls use `https://{instance}.atlassian.net/rest/api/3/...` directly (no cloudId needed)
 
 ### Token Lifecycle
 
 - Access token validity checked before each request
 - Auto-refresh on 401 response using refresh token
+- **Refresh token rotation:** Atlassian returns a new refresh token on each refresh — the new token must be stored, replacing the old one
 - If refresh fails, prompt user to re-authenticate
 - `jr auth status` shows: auth method, user email, token expiry, connected instance
 
@@ -199,7 +229,14 @@ A single `JiraClient` struct wrapping `reqwest::Client`. Handles:
 
 ### Pagination
 
-Uses Jira's current cursor-based pagination (`nextPageToken` + `isLast`), not the deprecated `startAt` approach. Auto-paginates by default; `--limit N` caps results.
+Most Jira REST API v3 endpoints use offset-based pagination (`startAt` + `maxResults`). Some newer endpoints (notably the JQL search endpoint `POST /rest/api/3/search/jql`) support cursor-based pagination (`nextPageToken`).
+
+The pagination module supports both strategies:
+
+- **Offset-based** (default): Used for issues, comments, worklogs, and most list endpoints. Iterates by incrementing `startAt` by `maxResults` until `total` is reached.
+- **Cursor-based**: Used where supported (e.g., JQL search via the newer endpoint). Iterates using `nextPageToken` until `isLast` is true.
+
+Auto-paginates by default; `--limit N` caps results.
 
 ### Rate Limiting
 
@@ -225,6 +262,22 @@ Error: Could not reach yourorg.atlassian.net — check your connection
 Error: "InvalidType" is not a valid issue type for project FOO
 Available types: Bug, Story, Task, Epic
 ```
+
+## Worklog Time Format
+
+Time durations are parsed from a human-friendly format and converted to seconds for the Jira API:
+
+| Input | Meaning | Seconds |
+|-------|---------|---------|
+| `30m` | 30 minutes | 1800 |
+| `2h` | 2 hours | 7200 |
+| `1h30m` | 1 hour 30 minutes | 5400 |
+| `1d` | 1 day (default: 8 hours) | 28800 |
+| `1w` | 1 week (default: 5 days) | 144000 |
+
+The hours-per-day (default 8) and days-per-week (default 5) match Jira's default time tracking settings. These can be overridden in global config if the user's Jira instance uses different values.
+
+Decimal values are not supported — use `1h30m` instead of `1.5h`.
 
 ## Rich Text: ADF Handling
 
@@ -263,7 +316,7 @@ jr/
 │   │   ├── mod.rs             # Shared client, auth, pagination, rate limiting
 │   │   ├── client.rs          # Base HTTP client + auth header injection
 │   │   ├── auth.rs            # OAuth flow, token refresh, keychain
-│   │   ├── pagination.rs      # Cursor-based pagination
+│   │   ├── pagination.rs      # Offset + cursor-based pagination
 │   │   ├── rate_limit.rs      # Rate limit handling + retry
 │   │   └── jira/              # Jira-specific API calls
 │   │       ├── mod.rs
@@ -311,7 +364,7 @@ Shared infrastructure (`client.rs`, `auth.rs`, `pagination.rs`, `rate_limit.rs`)
 | `keyring` | 2.x | OS credential storage |
 | `figment` | 0.10.x | Layered config (TOML + env vars) |
 | `comfy-table` | 7.x | Table output |
-| `colored` | 3.x | Terminal colors |
+| `colored` | 2.x | Terminal colors |
 | `dialoguer` | 0.12.x | Interactive prompts |
 | `anyhow` + `thiserror` | 1.x | Error handling |
 | `open` | latest | Open URLs in browser |
