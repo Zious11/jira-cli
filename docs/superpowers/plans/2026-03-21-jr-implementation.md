@@ -945,6 +945,7 @@ mod tests {
         let page: OffsetPage<()> = OffsetPage {
             values: None,
             issues: None,
+            worklogs: None,
             start_at: Some(0),
             max_results: Some(50),
             total: Some(100),
@@ -958,6 +959,7 @@ mod tests {
         let page: OffsetPage<()> = OffsetPage {
             values: None,
             issues: None,
+            worklogs: None,
             start_at: Some(50),
             max_results: Some(50),
             total: Some(75),
@@ -1098,8 +1100,8 @@ impl JiraClient {
         Ok(Self { client, base_url, auth_header, verbose })
     }
 
-    /// For testing: construct with explicit base URL and auth
-    #[cfg(test)]
+    /// For testing: construct with explicit base URL and auth.
+    /// Not gated behind #[cfg(test)] so integration tests in tests/ can use it.
     pub fn new_for_test(base_url: &str, auth_header: &str) -> Self {
         Self {
             client: Client::new(),
