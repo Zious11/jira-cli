@@ -1,6 +1,8 @@
 mod cli;
 mod config;
 mod error;
+#[allow(dead_code)]
+mod output;
 
 use clap::{CommandFactory, Parser};
 use cli::Cli;
