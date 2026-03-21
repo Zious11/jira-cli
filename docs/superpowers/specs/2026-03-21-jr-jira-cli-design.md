@@ -102,7 +102,7 @@ Board type is auto-detected during `jr init` and stored in per-project config. S
 1. Read `board_id` from `.jr.toml`
 2. `GET /rest/agile/1.0/board/{boardId}/configuration` — determine board type
 3. **Scrum path:** `GET /rest/agile/1.0/board/{boardId}/sprint?state=active` → get active sprint ID → `GET /rest/agile/1.0/sprint/{sprintId}/issue?jql=assignee=currentUser()`
-4. **Kanban path:** `GET /rest/agile/1.0/board/{boardId}/issue?jql=assignee=currentUser() AND statusCategory != Done`
+4. **Kanban path:** `POST /rest/api/3/search/jql` with body `{ "jql": "assignee=currentUser() AND statusCategory != Done AND project = {projectKey}" }` (the Agile board endpoint does not support JQL filtering)
 
 ## Transitions
 
