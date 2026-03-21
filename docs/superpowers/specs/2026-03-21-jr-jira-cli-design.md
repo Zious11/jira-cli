@@ -81,6 +81,19 @@ jr worklog add KEY-123 30m           # Log 30 minutes
 jr worklog list KEY-123              # View worklogs on issue
 ```
 
+### Shell & Utilities
+
+```
+jr completion bash                   # Generate bash completions
+jr completion zsh                    # Generate zsh completions
+jr completion fish                   # Generate fish completions
+```
+
+Users install completions by redirecting output:
+- Bash: `jr completion bash > /usr/share/bash-completion/completions/jr`
+- Zsh: `jr completion zsh > ~/.zfunc/_jr`
+- Fish: `jr completion fish > ~/.config/fish/completions/jr.fish`
+
 ### Global Flags
 
 All commands support:
@@ -284,6 +297,29 @@ Error: "InvalidType" is not a valid issue type for project FOO
 Available types: Bug, Story, Task, Epic
 ```
 
+### Exit Codes
+
+Standardized exit codes for scripting:
+
+| Code | Meaning | When |
+|------|---------|------|
+| 0 | Success | Operation completed |
+| 1 | General error | API errors, permission errors, unknown failures |
+| 2 | Auth error | Not authenticated, token expired, refresh failed |
+| 64 | Usage error | Invalid arguments, missing required fields |
+| 78 | Config error | No instance configured, invalid config file |
+| 130 | Interrupted | User pressed Ctrl+C |
+
+### Graceful Shutdown (Ctrl+C)
+
+When the user presses Ctrl+C, `jr` catches SIGINT via `tokio::signal::ctrl_c()` and:
+
+1. Cancels any in-flight HTTP requests (reqwest futures are dropped)
+2. Prints a brief cancellation message to stderr
+3. Exits with code 130
+
+This prevents partial writes or corrupted state from interrupted API calls.
+
 ## Worklog Time Format
 
 Time durations are parsed from a human-friendly format and converted to seconds for the Jira API:
@@ -379,6 +415,7 @@ Shared infrastructure (`client.rs`, `auth.rs`, `pagination.rs`, `rate_limit.rs`)
 | Crate | Version | Purpose |
 |-------|---------|---------|
 | `clap` | 4.x (derive) | CLI argument parsing |
+| `clap_complete` | 4.x | Shell completion generation (bash, zsh, fish) |
 | `reqwest` | 0.12.x (rustls-tls) | HTTP client (explicit rustls to avoid TLS version issues) |
 | `tokio` | 1.x | Async runtime |
 | `serde` + `serde_json` | 1.x | JSON serialization |
@@ -406,6 +443,21 @@ Shared infrastructure (`client.rs`, `auth.rs`, `pagination.rs`, `rate_limit.rs`)
 | `tempfile` | 3.x | Temporary files/dirs for config tests |
 | `insta` | 1.x | Snapshot testing for CLI output (table, JSON, errors) |
 | `proptest` | 1.x | Property-based testing for parsers and matching |
+
+## Release Profile
+
+Optimized binary size for distribution:
+
+```toml
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
+```
+
+This produces a ~5-10 MB binary with full optimization, stripped symbols, and thin LTO. The `panic = "abort"` setting eliminates unwinding overhead since CLI errors are handled via `Result`, not panics.
 
 ## Testing Strategy
 

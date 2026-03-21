@@ -111,6 +111,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 colored = "2"
 comfy-table = "7"
 dialoguer = "0.12"
@@ -134,6 +135,13 @@ tempfile = "3"
 wiremock = "0.6"
 insta = { version = "1", features = ["json"] }
 proptest = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
 ```
 
 - [ ] **Step 3: Create module directory structure**
@@ -166,6 +174,9 @@ pub enum JrError {
     #[error("{0}")]
     UserError(String),
 
+    #[error("Interrupted")]
+    Interrupted,
+
     #[error(transparent)]
     Http(#[from] reqwest::Error),
 
@@ -174,6 +185,19 @@ pub enum JrError {
 
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+}
+
+impl JrError {
+    /// Map error to a standardized exit code for scripting
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            JrError::NotAuthenticated => 2,
+            JrError::ConfigError(_) => 78,
+            JrError::UserError(_) => 64,
+            JrError::Interrupted => 130,
+            _ => 1,
+        }
+    }
 }
 ```
 
@@ -243,6 +267,12 @@ pub enum Command {
     Worklog {
         #[command(subcommand)]
         command: WorklogCommand,
+    },
+    /// Generate shell completions
+    Completion {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
     },
 }
 
@@ -397,7 +427,7 @@ Write `src/main.rs`:
 mod cli;
 mod error;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use cli::Cli;
 
 #[tokio::main]
@@ -410,20 +440,43 @@ async fn main() {
 
     let result = run(cli).await;
     if let Err(e) = result {
+        // Check if the error is a JrError with a specific exit code
+        let exit_code = e.downcast_ref::<error::JrError>()
+            .map(|je| je.exit_code())
+            .unwrap_or(1);
         eprintln!("Error: {e}");
-        std::process::exit(1);
+        std::process::exit(exit_code);
     }
 }
 
 async fn run(cli: Cli) -> anyhow::Result<()> {
-    match cli.command {
-        cli::Command::Init => todo!("init"),
-        cli::Command::Auth { command } => todo!("auth"),
-        cli::Command::Me => todo!("me"),
-        cli::Command::Issue { command } => todo!("issue"),
-        cli::Command::Board { command } => todo!("board"),
-        cli::Command::Sprint { command } => todo!("sprint"),
-        cli::Command::Worklog { command } => todo!("worklog"),
+    // Handle completion before anything else (no config/auth needed)
+    if let cli::Command::Completion { shell } = &cli.command {
+        let mut cmd = Cli::command();
+        clap_complete::generate(*shell, &mut cmd, "jr", &mut std::io::stdout());
+        return Ok(());
+    }
+
+    // Set up Ctrl+C handler
+    let main_task = async {
+        match cli.command {
+            cli::Command::Completion { .. } => unreachable!(),
+            cli::Command::Init => todo!("init"),
+            cli::Command::Auth { command } => todo!("auth"),
+            cli::Command::Me => todo!("me"),
+            cli::Command::Issue { command } => todo!("issue"),
+            cli::Command::Board { command } => todo!("board"),
+            cli::Command::Sprint { command } => todo!("sprint"),
+            cli::Command::Worklog { command } => todo!("worklog"),
+        }
+    };
+
+    tokio::select! {
+        result = main_task => result,
+        _ = tokio::signal::ctrl_c() => {
+            eprintln!("\nInterrupted");
+            std::process::exit(130);
+        }
     }
 }
 ```
