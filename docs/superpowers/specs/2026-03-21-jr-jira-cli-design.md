@@ -59,7 +59,9 @@ jr issue assign KEY-123 --unassign   # Remove assignee
 jr issue comment KEY-123 "message"   # Add comment (plain text)
 jr issue comment KEY-123 --markdown "## Heading\n- item"  # Markdown comment
 jr issue comment KEY-123 --file notes.md --markdown        # Comment from file
+echo "piped text" | jr issue comment KEY-123 --stdin       # Read comment from stdin
 jr issue open KEY-123                # Open in browser
+jr issue open KEY-123 --url-only     # Print URL instead of opening browser
 ```
 
 ### Boards & Sprints
@@ -101,6 +103,7 @@ All commands support:
 - `--output json|table` — output format (default: table)
 - `--project FOO` — override project key (does not affect board-dependent smart defaults; use `--jql` for cross-project queries)
 - `--no-color` — disable colored output (also respects `NO_COLOR` env var)
+- `--no-input` — disable all interactive prompts; fail with an error listing required flags instead (auto-enabled when stdin is not a TTY)
 - `--verbose` — debug-level detail (full request/response)
 
 ## Smart Defaults: Scrum vs Kanban
@@ -320,6 +323,64 @@ When the user presses Ctrl+C, `jr` catches SIGINT via `tokio::signal::ctrl_c()` 
 
 This prevents partial writes or corrupted state from interrupted API calls.
 
+## AI Agent & Scripting Friendliness
+
+`jr` is designed to be usable by AI coding agents (Claude Code, Cursor, etc.) and shell scripts, not just humans at a terminal.
+
+### Non-Interactive Mode
+
+When stdin is not a TTY, or when `--no-input` is passed, all interactive prompts are disabled. Commands that would normally prompt for input instead fail with a clear error listing the required flags:
+
+```
+$ jr issue create --no-input
+Error: Missing required flags for non-interactive mode:
+  -p/--project   Project key
+  -t/--type      Issue type
+  -s/--summary   Issue summary
+```
+
+This applies to: `jr issue create`, `jr issue move` (when no status given), `jr init`, and `jr auth login`.
+
+### Structured Error Output
+
+When `--output json` is set, errors are also written as JSON to stderr:
+
+```json
+{"error": "Not authenticated. Run \"jr auth login\" to connect.", "code": 2}
+```
+
+This allows AI agents to parse errors programmatically instead of regex-matching human-readable text.
+
+### No Surprise Side Effects
+
+Commands never open a browser, editor, or pager unless explicitly requested:
+
+- `jr auth login` — prints the OAuth URL to stdout and waits; use `--open` to also open the browser
+- `jr issue open KEY-123` — opens browser by default; use `--url-only` to print the URL instead
+- All output goes directly to stdout/stderr, never to a pager
+
+### Stdin Support
+
+Commands that accept text content support `--stdin` to read from a pipe:
+
+```bash
+echo "Fixed the bug" | jr issue comment KEY-123 --stdin
+cat description.md | jr issue create -p FOO -t Bug -s "Title" --description-stdin --markdown
+```
+
+### Idempotent Operations
+
+State-changing commands handle already-in-target-state gracefully:
+
+- `jr issue move KEY-123 "Done"` — if already "Done", prints a message and exits 0 (not an error)
+- `jr issue assign KEY-123` — if already assigned to me, prints a message and exits 0
+
+This makes it safe for AI agents and scripts to retry commands without error-handling the "already done" case.
+
+### Rich View for Single-Command Context
+
+`jr issue view KEY-123 --output json` returns all issue data in a single call — summary, description, status, assignee, priority, project, comments, transitions, team. An AI agent can understand the full state of an issue from one command without chaining multiple calls.
+
 ## Worklog Time Format
 
 Time durations are parsed from a human-friendly format and converted to seconds for the Jira API:
@@ -431,6 +492,7 @@ Shared infrastructure (`client.rs`, `auth.rs`, `pagination.rs`, `rate_limit.rs`)
 | `toml` | 0.8.x | TOML serialization for saving config |
 | `chrono` | 0.4.x | Datetime handling for token expiry and worklogs |
 | `open` | 5.x | Open URLs in browser |
+| `atty` | 0.2.x | TTY detection for auto-enabling `--no-input` |
 | `dirs` | 5.x | XDG config paths |
 
 ### Dev Dependencies

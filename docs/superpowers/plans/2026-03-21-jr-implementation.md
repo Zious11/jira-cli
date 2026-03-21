@@ -110,6 +110,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
+atty = "0.2"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 colored = "2"
@@ -225,6 +226,10 @@ pub struct Cli {
     /// Disable colored output
     #[arg(long, global = true)]
     pub no_color: bool,
+
+    /// Disable interactive prompts (auto-enabled when stdin is not a TTY)
+    #[arg(long, global = true)]
+    pub no_input: bool,
 
     /// Enable verbose output
     #[arg(long, global = true)]
@@ -375,11 +380,17 @@ pub enum IssueCommand {
         /// Read comment from file
         #[arg(long)]
         file: Option<String>,
+        /// Read comment from stdin (for piping)
+        #[arg(long)]
+        stdin: bool,
     },
     /// Open issue in browser
     Open {
         /// Issue key
         key: String,
+        /// Print URL instead of opening browser (for scripting/AI agents)
+        #[arg(long)]
+        url_only: bool,
     },
 }
 
@@ -438,13 +449,32 @@ async fn main() {
         colored::control::set_override(false);
     }
 
+    // Auto-enable --no-input when stdin is not a TTY (AI agents, pipes, scripts)
+    let mut cli = cli;
+    if !cli.no_input && !atty::is(atty::Stream::Stdin) {
+        cli.no_input = true;
+    }
+
+    let output_format = cli.output.clone();
     let result = run(cli).await;
     if let Err(e) = result {
-        // Check if the error is a JrError with a specific exit code
         let exit_code = e.downcast_ref::<error::JrError>()
             .map(|je| je.exit_code())
             .unwrap_or(1);
-        eprintln!("Error: {e}");
+
+        // Structured JSON errors when --output json is set
+        match output_format {
+            cli::OutputFormat::Json => {
+                eprintln!("{}", serde_json::json!({
+                    "error": e.to_string(),
+                    "code": exit_code
+                }));
+            }
+            _ => {
+                eprintln!("Error: {e}");
+            }
+        }
+
         std::process::exit(exit_code);
     }
 }
@@ -2717,11 +2747,11 @@ pub async fn handle(
         IssueCommand::Assign { key, to, unassign } => {
             assign(client, &key, to, unassign).await
         }
-        IssueCommand::Comment { key, message, markdown, file } => {
-            comment(client, &key, message, markdown, file).await
+        IssueCommand::Comment { key, message, markdown, file, stdin } => {
+            comment(client, &key, message, markdown, file, stdin).await
         }
-        IssueCommand::Open { key } => {
-            open_in_browser(config, &key)
+        IssueCommand::Open { key, url_only } => {
+            open_in_browser(config, &key, url_only)
         }
     }
 }
@@ -2945,6 +2975,17 @@ async fn transition(
     key: &str,
     target_status: Option<String>,
 ) -> Result<()> {
+    // Check current status for idempotency
+    if let Some(ref target) = target_status {
+        let issue = client.get_issue(key).await?;
+        if let Some(status) = &issue.fields.status {
+            if status.name.to_lowercase() == target.to_lowercase() {
+                output::print_success(&format!("{key} is already \"{target}\""));
+                return Ok(());
+            }
+        }
+    }
+
     let response = client.get_transitions(key).await?;
     let names: Vec<String> = response.transitions.iter().map(|t| t.name.clone()).collect();
 
@@ -2998,12 +3039,18 @@ async fn assign(
         client.assign_issue(key, None).await?;
         output::print_success(&format!("{key} unassigned"));
     } else if let Some(user) = to {
-        // For now, treat --to value as account ID
-        // Future: look up user by name/email
         client.assign_issue(key, Some(&user)).await?;
         output::print_success(&format!("{key} assigned to {user}"));
     } else {
         let me = client.get_myself().await?;
+        // Idempotent: check if already assigned to me
+        let issue = client.get_issue(key).await?;
+        if let Some(assignee) = &issue.fields.assignee {
+            if assignee.account_id == me.account_id {
+                output::print_success(&format!("{key} is already assigned to you"));
+                return Ok(());
+            }
+        }
         client.assign_issue(key, Some(&me.account_id)).await?;
         output::print_success(&format!("{key} assigned to you"));
     }
@@ -3016,13 +3063,19 @@ async fn comment(
     message: Option<String>,
     markdown: bool,
     file: Option<String>,
+    stdin: bool,
 ) -> Result<()> {
-    let text = if let Some(path) = file {
+    let text = if stdin {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin().read_to_string(&mut buf)?;
+        buf
+    } else if let Some(path) = file {
         std::fs::read_to_string(&path)?
     } else if let Some(msg) = message {
         msg
     } else {
-        anyhow::bail!("Provide a message or use --file");
+        anyhow::bail!("Provide a message, use --file, or pipe via --stdin");
     };
 
     let body = if markdown {
@@ -3036,12 +3089,17 @@ async fn comment(
     Ok(())
 }
 
-fn open_in_browser(config: &Config, key: &str) -> Result<()> {
+fn open_in_browser(config: &Config, key: &str, url_only: bool) -> Result<()> {
     let url = config.global.instance.url.as_ref()
         .ok_or_else(|| anyhow::anyhow!("No Jira instance configured"))?;
     let browse_url = format!("{url}/browse/{key}");
-    open::that(&browse_url)?;
-    println!("Opened {browse_url}");
+
+    if url_only {
+        println!("{browse_url}");
+    } else {
+        open::that(&browse_url)?;
+        println!("Opened {browse_url}");
+    }
     Ok(())
 }
 ```
