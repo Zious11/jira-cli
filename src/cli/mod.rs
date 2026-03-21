@@ -27,7 +27,7 @@ pub struct Cli {
     pub verbose: bool,
 }
 
-#[derive(Clone, ValueEnum)]
+#[derive(Clone, Copy, ValueEnum)]
 pub enum OutputFormat {
     Table,
     Json,
