@@ -103,7 +103,7 @@ Board type is auto-detected during `jr init` and stored in per-project config. S
 
 1. Read `board_id` from `.jr.toml`
 2. `GET /rest/agile/1.0/board/{boardId}/configuration` — determine board type
-3. **Scrum path:** `GET /rest/agile/1.0/board/{boardId}/sprint?state=active` → get active sprint ID → `GET /rest/agile/1.0/sprint/{sprintId}/issue?jql=assignee=currentUser()`
+3. **Scrum path:** `GET /rest/agile/1.0/board/{boardId}/sprint?state=active` → get active sprint ID → `POST /rest/api/3/search/jql` with body `{ "jql": "sprint = {sprintId} AND assignee = currentUser()" }` (the Agile sprint issue endpoint does not support JQL filtering)
 4. **Kanban path:** `POST /rest/api/3/search/jql` with body `{ "jql": "assignee=currentUser() AND statusCategory != Done AND project = {projectKey}" }` (the Agile board endpoint does not support JQL filtering)
 
 ## Transitions
@@ -387,10 +387,12 @@ Shared infrastructure (`client.rs`, `auth.rs`, `pagination.rs`, `rate_limit.rs`)
 | `comfy-table` | 7.x | Table output |
 | `colored` | 2.x | Terminal colors |
 | `dialoguer` | 0.12.x | Interactive prompts |
-| `anyhow` + `thiserror` | 2.x | Error handling |
+| `anyhow` | 1.x | Application-level error handling |
+| `thiserror` | 2.x | Typed error derivation |
 | `base64` | 0.22.x | Base64 encoding for Basic auth |
 | `urlencoding` | 2.x | URL encoding for query parameters |
-| `madfun` | latest | Markdown to ADF conversion (evaluate; fallback to custom if insufficient) |
+| `toml` | 0.8.x | TOML serialization for saving config |
+| `chrono` | 0.4.x | Datetime handling for token expiry and worklogs |
 | `open` | 5.x | Open URLs in browser |
 | `dirs` | 5.x | XDG config paths |
 
@@ -405,7 +407,7 @@ Shared infrastructure (`client.rs`, `auth.rs`, `pagination.rs`, `rate_limit.rs`)
 
 ## Distribution
 
-- **Cargo:** `cargo install jr` (if name is available on crates.io)
+- **Cargo:** `cargo install jr-cli` (the crate name `jr` is taken on crates.io; the binary is still named `jr`)
 - **Homebrew:** `brew install zious11/tap/jr` via a custom tap (formula downloads pre-built binaries)
 - **GitHub Releases:** Pre-built binaries for macOS (arm64, x86_64), Linux (x86_64, arm64)
 
@@ -430,7 +432,7 @@ Triggers on every push and PR. Runs in parallel:
 1. **Format check:** `cargo fmt --all -- --check`
 2. **Lint:** `cargo clippy --all --all-features --tests -- -D warnings`
 3. **Test:** `cargo test --all-features`
-4. **MSRV check:** Test against the declared minimum Rust version (1.75.0)
+4. **MSRV check:** Test against the declared minimum Rust version (1.85.0)
 5. **Security audit:** `cargo deny check` for license compliance and known vulnerabilities
 6. **Code coverage:** `cargo llvm-cov` with results uploaded to Codecov
 
@@ -472,7 +474,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 
 ### MSRV Policy
 
-Minimum Supported Rust Version: **1.75.0** (or latest stable minus 3 releases). MSRV bumps increment the minor version. Tested in CI on every PR.
+Minimum Supported Rust Version: **1.85.0** (or latest stable minus 3 releases). MSRV bumps increment the minor version. Tested in CI on every PR.
 
 ## Roadmap (Post-v1)
 

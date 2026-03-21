@@ -2592,14 +2592,16 @@ async fn list(
             let board_config = client.get_board_config(board_id).await?;
             match board_config.board_type.as_deref() {
                 Some("scrum") => {
-                    // Scrum: show my issues in the active sprint
+                    // Scrum: show my issues in the active sprint via JQL
+                    // (Agile sprint issue endpoint does not support JQL filtering)
                     let sprints = client.list_sprints(board_id, Some("active")).await?;
                     match sprints.first() {
                         Some(sprint) => {
-                            client.get_sprint_issues(
-                                sprint.id,
-                                Some("assignee = currentUser()"),
-                            ).await?
+                            let jql = format!(
+                                "sprint = {} AND assignee = currentUser() ORDER BY rank ASC",
+                                sprint.id
+                            );
+                            client.search_issues(&jql, limit).await?
                         }
                         None => {
                             println!("No active sprint. Falling back to JQL search.");
@@ -3604,7 +3606,7 @@ fn extract_query_param(request: &str, param: &str) -> Option<String> {
 }
 
 fn urlencode(s: &str) -> String {
-    s.replace(' ', "%20").replace(':', "%3A")
+    urlencoding::encode(s).into_owned()
 }
 ```
 
@@ -4133,11 +4135,11 @@ jobs:
       - run: cargo test --all-features
 
   msrv:
-    name: MSRV (1.75.0)
+    name: MSRV (1.85.0)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.75.0
+      - uses: dtolnay/rust-toolchain@1.85.0
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --all-features
 
@@ -4220,7 +4222,11 @@ jobs:
           cd target/${{ matrix.target }}/release
           tar czf ../../../jr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz jr
           cd ../../..
-          shasum -a 256 jr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz > jr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz.sha256
+          if command -v sha256sum &>/dev/null; then
+            sha256sum jr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz > jr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz.sha256
+          else
+            shasum -a 256 jr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz > jr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz.sha256
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -4305,7 +4311,7 @@ updates:
 Add to `[package]` section:
 
 ```toml
-rust-version = "1.75"
+rust-version = "1.85"
 ```
 
 - [ ] **Step 7: Run cargo deny check locally**
