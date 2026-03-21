@@ -115,24 +115,32 @@ impl Config {
     }
 }
 
-pub fn global_config_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.config"))
-        .join("jr")
-        .join("config.toml")
+pub fn global_config_dir() -> PathBuf {
+    // Use XDG_CONFIG_HOME if set, otherwise ~/.config (matches spec: ~/.config/jr/)
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        PathBuf::from(xdg).join("jr")
+    } else {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("~"))
+            .join(".config")
+            .join("jr")
+    }
 }
 
-pub fn global_config_dir() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.config"))
-        .join("jr")
+pub fn global_config_path() -> PathBuf {
+    global_config_dir().join("config.toml")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::Mutex;
     use tempfile::TempDir;
+
+    /// Guards tests that mutate process-global env vars so they don't
+    /// interfere with other tests running in parallel.
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_default_config() {
@@ -158,6 +166,7 @@ mod tests {
 
     #[test]
     fn test_base_url_api_token() {
+        let _guard = ENV_MUTEX.lock().unwrap();
         let config = Config {
             global: GlobalConfig {
                 instance: InstanceConfig {
@@ -174,6 +183,7 @@ mod tests {
 
     #[test]
     fn test_base_url_oauth() {
+        let _guard = ENV_MUTEX.lock().unwrap();
         let config = Config {
             global: GlobalConfig {
                 instance: InstanceConfig {
@@ -193,6 +203,7 @@ mod tests {
 
     #[test]
     fn test_base_url_missing() {
+        let _guard = ENV_MUTEX.lock().unwrap();
         let config = Config {
             global: GlobalConfig::default(),
             project: ProjectConfig::default(),
@@ -211,5 +222,65 @@ mod tests {
         };
         assert_eq!(config.project_key(Some("BAR")), Some("BAR".into()));
         assert_eq!(config.project_key(None), Some("FOO".into()));
+    }
+
+    #[test]
+    fn test_base_url_env_override() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        std::env::set_var("JR_BASE_URL", "http://localhost:8080");
+        let config = Config::default();
+        assert_eq!(config.base_url().unwrap(), "http://localhost:8080");
+        std::env::remove_var("JR_BASE_URL");
+    }
+
+    #[test]
+    fn test_base_url_trailing_slash_trimmed() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let config = Config {
+            global: GlobalConfig {
+                instance: InstanceConfig {
+                    url: Some("https://myorg.atlassian.net/".into()),
+                    cloud_id: None,
+                    auth_method: Some("api_token".into()),
+                },
+                defaults: DefaultsConfig::default(),
+            },
+            project: ProjectConfig::default(),
+        };
+        assert_eq!(config.base_url().unwrap(), "https://myorg.atlassian.net");
+    }
+
+    #[test]
+    fn test_save_and_load_global_config() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        let config = Config {
+            global: GlobalConfig {
+                instance: InstanceConfig {
+                    url: Some("https://test.atlassian.net".into()),
+                    cloud_id: None,
+                    auth_method: Some("api_token".into()),
+                },
+                defaults: DefaultsConfig::default(),
+            },
+            project: ProjectConfig::default(),
+        };
+
+        // Write config to temp path
+        let content = toml::to_string_pretty(&config.global).unwrap();
+        fs::write(&config_path, &content).unwrap();
+
+        // Read it back
+        let loaded: GlobalConfig = Figment::new()
+            .merge(Toml::file(&config_path))
+            .extract()
+            .unwrap();
+
+        assert_eq!(
+            loaded.instance.url.as_deref(),
+            Some("https://test.atlassian.net")
+        );
+        assert_eq!(loaded.instance.auth_method.as_deref(), Some("api_token"));
     }
 }
