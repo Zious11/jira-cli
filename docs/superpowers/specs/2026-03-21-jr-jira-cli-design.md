@@ -34,6 +34,7 @@ jr auth login                        # Authenticate (OAuth 2.0 or API token)
 jr auth login --token                # Authenticate with API token
 jr auth status                       # Show current auth state
 jr me                                # Show current user info
+jr project fields FOO                # List valid issue types, priorities, statuses for a project
 ```
 
 ### Issues
@@ -46,13 +47,18 @@ jr issue list --status "In Progress" # Filter by status
 jr issue list --limit N              # Cap results
 jr issue create                      # Create issue (interactive prompts)
 jr issue create -p FOO -t Bug -s "Title" -d "Description"
+jr issue create -p FOO -t Bug -s "Title" --priority High --label backend
 jr issue create -p FOO -t Story -s "Title" --team "Platform"
+jr issue create -p FOO -t Bug -s "Title" --description-stdin < desc.md --markdown
 jr issue view KEY-123                # View issue details
+jr issue view KEY-123 --output json  # Full issue data for AI agents
 jr issue move KEY-123 "In Progress"  # Transition issue to status
 jr issue move KEY-123                # Transition (prompts for available statuses)
+jr issue transitions KEY-123         # List available transitions without moving
 jr issue edit KEY-123 --summary "New title"  # Edit issue fields
 jr issue edit KEY-123 --type "Bug" --priority "High"
 jr issue edit KEY-123 --team "Platform"      # Set team assignment
+jr issue edit KEY-123 --label add:backend --label remove:frontend
 jr issue assign KEY-123              # Assign to me
 jr issue assign KEY-123 --to user    # Assign to someone else
 jr issue assign KEY-123 --unassign   # Remove assignee
@@ -377,9 +383,34 @@ State-changing commands handle already-in-target-state gracefully:
 
 This makes it safe for AI agents and scripts to retry commands without error-handling the "already done" case.
 
+### Structured Success Output
+
+When `--output json` is set, write operations return structured JSON to stdout (not human text):
+
+```bash
+$ jr issue create -p FOO -t Bug -s "Auth bug" --output json
+{"key": "FOO-456"}
+
+$ jr issue move FOO-456 "In Progress" --output json
+{"key": "FOO-456", "status": "In Progress"}
+
+$ jr issue comment FOO-456 "Fixed it" --output json
+{"key": "FOO-456", "comment_id": "12345"}
+```
+
+This allows AI agents to capture created keys and IDs for follow-up commands.
+
 ### Rich View for Single-Command Context
 
-`jr issue view KEY-123 --output json` returns all issue data in a single call — summary, description, status, assignee, priority, project, comments, transitions, team. An AI agent can understand the full state of an issue from one command without chaining multiple calls.
+`jr issue view KEY-123 --output json` returns all issue data in a single call — summary, description, status, assignee, priority, project, labels, team, comments (with timestamps and authors), and available transitions. An AI agent can understand the full state of an issue from one command without chaining multiple calls.
+
+### Project Field Discovery
+
+`jr project fields FOO --output json` returns valid issue types, priorities, and statuses for a project. AI agents use this to know what values are valid before creating or editing issues, avoiding trial-and-error guessing.
+
+### Querying Transitions Without Moving
+
+`jr issue transitions KEY-123 --output json` returns the list of available transitions for an issue without performing any transition. AI agents use this to check whether a target status is reachable before attempting `jr issue move`.
 
 ## Worklog Time Format
 

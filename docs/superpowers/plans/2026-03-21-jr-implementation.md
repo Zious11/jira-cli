@@ -253,6 +253,12 @@ pub enum Command {
     },
     /// Show current user info
     Me,
+    /// Show valid issue types, priorities, and statuses for a project
+    #[command(name = "project")]
+    Project {
+        #[command(subcommand)]
+        command: ProjectCommand,
+    },
     /// Manage issues
     Issue {
         #[command(subcommand)]
@@ -324,9 +330,21 @@ pub enum IssueCommand {
         /// Description
         #[arg(short, long)]
         description: Option<String>,
+        /// Read description from stdin (for piping)
+        #[arg(long)]
+        description_stdin: bool,
+        /// Priority
+        #[arg(long)]
+        priority: Option<String>,
+        /// Labels (can be specified multiple times)
+        #[arg(long)]
+        label: Vec<String>,
         /// Team assignment
         #[arg(long)]
         team: Option<String>,
+        /// Interpret description as Markdown
+        #[arg(long)]
+        markdown: bool,
     },
     /// View issue details
     View {
@@ -346,6 +364,9 @@ pub enum IssueCommand {
         /// New priority
         #[arg(long)]
         priority: Option<String>,
+        /// Add or remove labels (e.g., --label add:backend --label remove:frontend)
+        #[arg(long)]
+        label: Vec<String>,
         /// Team assignment
         #[arg(long)]
         team: Option<String>,
@@ -356,6 +377,11 @@ pub enum IssueCommand {
         key: String,
         /// Target status (partial match supported)
         status: Option<String>,
+    },
+    /// List available transitions without performing one
+    Transitions {
+        /// Issue key
+        key: String,
     },
     /// Assign issue
     Assign {
@@ -391,6 +417,15 @@ pub enum IssueCommand {
         /// Print URL instead of opening browser (for scripting/AI agents)
         #[arg(long)]
         url_only: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ProjectCommand {
+    /// Show valid issue types, priorities, and statuses
+    Fields {
+        /// Project key (uses configured project if omitted)
+        project: Option<String>,
     },
 }
 
@@ -494,6 +529,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             cli::Command::Init => todo!("init"),
             cli::Command::Auth { command } => todo!("auth"),
             cli::Command::Me => todo!("me"),
+            cli::Command::Project { command } => todo!("project"),
             cli::Command::Issue { command } => todo!("issue"),
             cli::Command::Board { command } => todo!("board"),
             cli::Command::Sprint { command } => todo!("sprint"),
@@ -2735,14 +2771,17 @@ pub async fn handle(
             list(config, client, output_format, project_override, jql, status, team, limit).await
         }
         IssueCommand::View { key } => view(client, output_format, &key).await,
-        IssueCommand::Create { project, issue_type, summary, description, team } => {
-            create(config, client, project_override, project, issue_type, summary, description, team).await
+        IssueCommand::Create { project, issue_type, summary, description, description_stdin, priority, label, team, markdown } => {
+            create(config, client, output_format, project_override, project, issue_type, summary, description, description_stdin, priority, label, team, markdown).await
         }
-        IssueCommand::Edit { key, summary, issue_type, priority, team } => {
-            edit(client, &key, summary, issue_type, priority, team).await
+        IssueCommand::Edit { key, summary, issue_type, priority, label, team } => {
+            edit(client, output_format, &key, summary, issue_type, priority, label, team).await
         }
         IssueCommand::Move { key, status } => {
-            transition(client, &key, status).await
+            transition(client, output_format, &key, status).await
+        }
+        IssueCommand::Transitions { key } => {
+            list_transitions(client, output_format, &key).await
         }
         IssueCommand::Assign { key, to, unassign } => {
             assign(client, &key, to, unassign).await
@@ -2898,12 +2937,17 @@ async fn view(client: &JiraClient, output_format: &OutputFormat, key: &str) -> R
 async fn create(
     config: &Config,
     client: &JiraClient,
+    output_format: &OutputFormat,
     project_override: Option<&str>,
     project: Option<String>,
     issue_type: Option<String>,
     summary: Option<String>,
     description: Option<String>,
+    description_stdin: bool,
+    priority: Option<String>,
+    labels: Vec<String>,
     team: Option<String>,
+    markdown: bool,
 ) -> Result<()> {
     let project_key = project
         .or_else(|| config.project_key(project_override))
@@ -2930,14 +2974,40 @@ async fn create(
         "summary": summary_text,
     });
 
-    if let Some(desc) = description {
-        fields["description"] = crate::adf::text_to_adf(&desc);
+    // Description: from flag, stdin, or omitted
+    let desc_text = if description_stdin {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin().read_to_string(&mut buf)?;
+        Some(buf)
+    } else {
+        description
+    };
+
+    if let Some(desc) = desc_text {
+        fields["description"] = if markdown {
+            crate::adf::markdown_to_adf(&desc)
+        } else {
+            crate::adf::text_to_adf(&desc)
+        };
+    }
+
+    if let Some(p) = priority {
+        fields["priority"] = serde_json::json!({"name": p});
+    }
+
+    if !labels.is_empty() {
+        fields["labels"] = serde_json::json!(labels);
     }
 
     // Team assignment handled in Task 13
 
     let result = client.create_issue(fields).await?;
-    output::print_success(&format!("Created {}", result.key));
+
+    match output_format {
+        OutputFormat::Json => println!("{}", serde_json::json!({"key": result.key})),
+        _ => output::print_success(&format!("Created {}", result.key)),
+    }
     Ok(())
 }
 
@@ -2970,8 +3040,23 @@ async fn edit(
     Ok(())
 }
 
+async fn list_transitions(
+    client: &JiraClient,
+    output_format: &OutputFormat,
+    key: &str,
+) -> Result<()> {
+    let response = client.get_transitions(key).await?;
+    let names: Vec<String> = response.transitions.iter().map(|t| t.name.clone()).collect();
+    let rows: Vec<Vec<String>> = response.transitions.iter().map(|t| {
+        vec![t.id.clone(), t.name.clone()]
+    }).collect();
+
+    output::print_output(output_format, &["ID", "Name"], &rows, &response.transitions)
+}
+
 async fn transition(
     client: &JiraClient,
+    output_format: &OutputFormat,
     key: &str,
     target_status: Option<String>,
 ) -> Result<()> {
@@ -3025,7 +3110,11 @@ async fn transition(
         .unwrap();
 
     client.transition_issue(key, &transition.id).await?;
-    output::print_success(&format!("{key} transitioned to \"{selected}\""));
+
+    match output_format {
+        OutputFormat::Json => println!("{}", serde_json::json!({"key": key, "status": selected})),
+        _ => output::print_success(&format!("{key} transitioned to \"{selected}\"")),
+    }
     Ok(())
 }
 
