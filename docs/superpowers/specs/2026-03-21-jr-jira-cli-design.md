@@ -50,7 +50,7 @@ jr issue view KEY-123                # View issue details
 jr issue move KEY-123 "In Progress"  # Transition issue to status
 jr issue move KEY-123                # Transition (prompts for available statuses)
 jr issue edit KEY-123 --summary "New title"  # Edit issue fields
-jr issue edit KEY-123 --status "Bug" --priority "High"
+jr issue edit KEY-123 --type "Bug" --priority "High"
 jr issue assign KEY-123              # Assign to me
 jr issue assign KEY-123 --to user    # Assign to someone else
 jr issue assign KEY-123 --unassign   # Remove assignee
@@ -162,7 +162,7 @@ Available transitions: In Progress, Blocked, Won't Do
 6. All subsequent API calls use `https://api.atlassian.com/ex/jira/{cloudId}/rest/api/3/...`
 7. Tokens stored in OS keychain (macOS Keychain via `keyring` crate)
 
-**OAuth app credentials:** The CLI ships with an embedded OAuth `client_id`. The `client_secret` is not required for public clients using PKCE (Proof Key for Code Exchange), which is the recommended approach for CLI tools. Users do not need to register their own OAuth app.
+**OAuth app credentials:** The CLI ships with an embedded OAuth `client_id` and `client_secret`. Atlassian's OAuth 2.0 (3LO) requires a `client_secret` for the token exchange — there is no public client / PKCE flow. The embedded secret is not truly confidential (it can be extracted from the binary), but this is standard practice for CLI tools (GitHub CLI, Slack CLI, etc.). The secret controls which app is making requests, not user authorization — user consent via the browser is the real security boundary. Users do not need to register their own OAuth app.
 
 ### API Token — Fallback Method
 
@@ -195,6 +195,7 @@ Located at `~/.config/jr/config.toml`:
 ```toml
 [instance]
 url = "https://yourorg.atlassian.net"
+cloud_id = "abc123-def456"  # Auto-populated during OAuth login
 auth_method = "oauth"  # or "api_token"
 
 [defaults]
@@ -234,14 +235,14 @@ Most Jira REST API v3 endpoints use offset-based pagination (`startAt` + `maxRes
 The pagination module supports both strategies:
 
 - **Offset-based** (default): Used for issues, comments, worklogs, and most list endpoints. Iterates by incrementing `startAt` by `maxResults` until `total` is reached.
-- **Cursor-based**: Used where supported (e.g., JQL search via the newer endpoint). Iterates using `nextPageToken` until `isLast` is true.
+- **Cursor-based**: Used where supported (e.g., JQL search via `POST /rest/api/3/search/jql`). Iterates using `nextPageToken` until the field is absent from the response.
 
 Auto-paginates by default; `--limit N` caps results.
 
 ### Rate Limiting
 
-- Reads `X-RateLimit-Remaining` and `X-RateLimit-Reset` response headers
-- On 429 response: waits for reset time, retries automatically (up to 3 retries)
+- Reads `X-RateLimit-Remaining` header on all responses for awareness
+- On 429 response: reads `Retry-After` header (preferred) or `X-RateLimit-Reset` to determine wait time, retries automatically (up to 3 retries)
 - Shows progress indicator during waits
 
 ### Error Handling
