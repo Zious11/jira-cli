@@ -523,7 +523,6 @@ Shared infrastructure (`client.rs`, `auth.rs`, `pagination.rs`, `rate_limit.rs`)
 | `toml` | 0.8.x | TOML serialization for saving config |
 | `chrono` | 0.4.x | Datetime handling for token expiry and worklogs |
 | `open` | 5.x | Open URLs in browser |
-| `atty` | 0.2.x | TTY detection for auto-enabling `--no-input` |
 | `dirs` | 5.x | XDG config paths |
 
 ### Dev Dependencies

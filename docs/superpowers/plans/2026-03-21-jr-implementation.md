@@ -110,7 +110,6 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
-atty = "0.2"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 colored = "2"
@@ -486,8 +485,11 @@ async fn main() {
 
     // Auto-enable --no-input when stdin is not a TTY (AI agents, pipes, scripts)
     let mut cli = cli;
-    if !cli.no_input && !atty::is(atty::Stream::Stdin) {
-        cli.no_input = true;
+    if !cli.no_input {
+        use std::io::IsTerminal;
+        if !std::io::stdin().is_terminal() {
+            cli.no_input = true;
+        }
     }
 
     let output_format = cli.output.clone();
@@ -3013,10 +3015,12 @@ async fn create(
 
 async fn edit(
     client: &JiraClient,
+    output_format: &OutputFormat,
     key: &str,
     summary: Option<String>,
     issue_type: Option<String>,
     priority: Option<String>,
+    labels: Vec<String>,
     _team: Option<String>,
 ) -> Result<()> {
     let mut fields = serde_json::Map::new();
@@ -3031,12 +3035,43 @@ async fn edit(
         fields.insert("priority".into(), serde_json::json!({"name": p}));
     }
 
+    // Handle labels: --label add:foo --label remove:bar
+    if !labels.is_empty() {
+        let mut update_labels = serde_json::Map::new();
+        let mut add_labels = Vec::new();
+        let mut remove_labels = Vec::new();
+
+        for label in &labels {
+            if let Some(name) = label.strip_prefix("add:") {
+                add_labels.push(serde_json::json!({"value": name}));
+            } else if let Some(name) = label.strip_prefix("remove:") {
+                remove_labels.push(serde_json::json!(name));
+            } else {
+                add_labels.push(serde_json::json!({"value": label}));
+            }
+        }
+
+        if !add_labels.is_empty() {
+            update_labels.insert("add".into(), serde_json::json!(add_labels));
+        }
+        if !remove_labels.is_empty() {
+            update_labels.insert("remove".into(), serde_json::json!(remove_labels));
+        }
+        // Labels use the update syntax, not fields
+        // Will need to use PUT /rest/api/3/issue/{key} with "update" payload
+        fields.insert("labels".into(), serde_json::json!(update_labels));
+    }
+
     if fields.is_empty() {
-        anyhow::bail!("No fields to update. Use --summary, --type, --priority, or --team.");
+        anyhow::bail!("No fields to update. Use --summary, --type, --priority, --label, or --team.");
     }
 
     client.edit_issue(key, serde_json::Value::Object(fields)).await?;
-    output::print_success(&format!("{key} updated"));
+
+    match output_format {
+        OutputFormat::Json => println!("{}", serde_json::json!({"key": key, "updated": true})),
+        _ => output::print_success(&format!("{key} updated")),
+    }
     Ok(())
 }
 
@@ -3744,6 +3779,151 @@ Expected: All tests pass.
 ```bash
 git add -A
 git commit -m "feat: team assignment via custom field discovery and caching"
+```
+
+---
+
+## Task 13b: Project Fields Command
+
+**Files:**
+- Create: `src/cli/project.rs`
+- Create: `src/api/jira/projects.rs`
+- Modify: `src/main.rs`
+
+- [ ] **Step 1: Implement project metadata API calls**
+
+Write `src/api/jira/projects.rs`:
+
+```rust
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use crate::api::client::JiraClient;
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct IssueTypeMetadata {
+    pub name: String,
+    pub description: Option<String>,
+    pub subtask: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct PriorityMetadata {
+    pub name: String,
+    pub id: String,
+}
+
+impl JiraClient {
+    pub async fn get_project_issue_types(&self, project_key: &str) -> Result<Vec<IssueTypeMetadata>> {
+        let project: serde_json::Value = self.get(&format!("/rest/api/3/project/{project_key}")).await?;
+        let types = project.get("issueTypes")
+            .and_then(|v| serde_json::from_value::<Vec<IssueTypeMetadata>>(v.clone()).ok())
+            .unwrap_or_default();
+        Ok(types)
+    }
+
+    pub async fn get_priorities(&self) -> Result<Vec<PriorityMetadata>> {
+        self.get("/rest/api/3/priority").await
+    }
+
+    pub async fn get_project_statuses(&self, project_key: &str) -> Result<Vec<serde_json::Value>> {
+        self.get(&format!("/rest/api/3/project/{project_key}/statuses")).await
+    }
+}
+```
+
+Add `pub mod projects;` to `src/api/jira/mod.rs`.
+
+- [ ] **Step 2: Implement project CLI handler**
+
+Write `src/cli/project.rs`:
+
+```rust
+use anyhow::Result;
+use crate::api::client::JiraClient;
+use crate::cli::{ProjectCommand, OutputFormat};
+use crate::config::Config;
+use crate::output;
+
+pub async fn handle(
+    command: ProjectCommand,
+    config: &Config,
+    client: &JiraClient,
+    output_format: &OutputFormat,
+    project_override: Option<&str>,
+) -> Result<()> {
+    match command {
+        ProjectCommand::Fields { project } => {
+            fields(config, client, output_format, project_override, project).await
+        }
+    }
+}
+
+async fn fields(
+    config: &Config,
+    client: &JiraClient,
+    output_format: &OutputFormat,
+    project_override: Option<&str>,
+    project: Option<String>,
+) -> Result<()> {
+    let project_key = project
+        .or_else(|| config.project_key(project_override))
+        .ok_or_else(|| anyhow::anyhow!("No project specified. Use 'jr project fields FOO' or configure .jr.toml"))?;
+
+    let issue_types = client.get_project_issue_types(&project_key).await?;
+    let priorities = client.get_priorities().await?;
+
+    match output_format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::json!({
+                "project": project_key,
+                "issue_types": issue_types,
+                "priorities": priorities,
+            }));
+        }
+        OutputFormat::Table => {
+            println!("Project: {project_key}\n");
+            println!("Issue Types:");
+            for t in &issue_types {
+                let suffix = if t.subtask == Some(true) { " (subtask)" } else { "" };
+                println!("  - {}{}", t.name, suffix);
+            }
+            println!("\nPriorities:");
+            for p in &priorities {
+                println!("  - {}", p.name);
+            }
+        }
+    }
+    Ok(())
+}
+```
+
+Add `pub mod project;` to `src/cli/mod.rs`.
+
+- [ ] **Step 3: Wire project command into main.rs**
+
+Replace `todo!("project")`:
+
+```rust
+cli::Command::Project { command } => {
+    let config = config::Config::load()?;
+    let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
+    cli::project::handle(command, &config, &client, &cli.output, cli.project.as_deref()).await
+}
+```
+
+- [ ] **Step 4: Run tests**
+
+```bash
+cargo test
+```
+
+Expected: All tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add -A
+git commit -m "feat: jr project fields — discover issue types and priorities"
 ```
 
 ---
@@ -4757,6 +4937,7 @@ Task 1 (scaffold)
     │   └── Task 6 (auth commands)
     ├── Task 10 (issue commands)
     │   └── Task 13 (team assignment)
+    │       └── Task 13b (project fields)
     ├── Task 11 (board + sprint)
     ├── Task 12 (worklog)
     └── Task 14 (OAuth)
