@@ -90,9 +90,9 @@ pub enum Command {
 pub enum AuthCommand {
     /// Authenticate with Jira
     Login {
-        /// Use API token instead of OAuth
+        /// Use OAuth 2.0 instead of API token (requires your own OAuth app)
         #[arg(long)]
-        token: bool,
+        oauth: bool,
     },
     /// Show authentication status
     Status,

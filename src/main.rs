@@ -64,11 +64,11 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             cli::Command::Completion { .. } => unreachable!(),
             cli::Command::Init => cli::init::handle().await,
             cli::Command::Auth { command } => match command {
-                cli::AuthCommand::Login { token } => {
-                    if token {
-                        cli::auth::login_token().await
-                    } else {
+                cli::AuthCommand::Login { oauth } => {
+                    if oauth {
                         cli::auth::login_oauth().await
+                    } else {
+                        cli::auth::login_token().await
                     }
                 }
                 cli::AuthCommand::Status => cli::auth::status().await,

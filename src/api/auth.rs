@@ -13,9 +13,6 @@ const KEY_API_TOKEN: &str = "api-token";
 const KEY_OAUTH_ACCESS: &str = "oauth-access-token";
 const KEY_OAUTH_REFRESH: &str = "oauth-refresh-token";
 
-// Placeholder credentials — replace after registering OAuth app on Atlassian Developer Console
-const CLIENT_ID: &str = "YOUR_CLIENT_ID";
-const CLIENT_SECRET: &str = "YOUR_CLIENT_SECRET";
 const SCOPES: &str = "read:jira-work write:jira-work read:jira-user offline_access";
 
 fn entry(key: &str) -> Result<Entry> {
@@ -60,6 +57,28 @@ pub fn load_oauth_tokens() -> Result<(String, String)> {
     Ok((access, refresh))
 }
 
+/// Store OAuth app credentials (client_id and client_secret) in the system keychain.
+pub fn store_oauth_app_credentials(client_id: &str, client_secret: &str) -> Result<()> {
+    let entry = Entry::new(SERVICE_NAME, "oauth_client_id")?;
+    entry.set_password(client_id)?;
+    let entry = Entry::new(SERVICE_NAME, "oauth_client_secret")?;
+    entry.set_password(client_secret)?;
+    Ok(())
+}
+
+/// Load OAuth app credentials (client_id and client_secret) from the system keychain.
+pub fn load_oauth_app_credentials() -> Result<(String, String)> {
+    let id_entry = Entry::new(SERVICE_NAME, "oauth_client_id")?;
+    let id = id_entry
+        .get_password()
+        .context("No OAuth app credentials found. Run \"jr auth login --oauth\" and provide your client_id and client_secret.")?;
+    let secret_entry = Entry::new(SERVICE_NAME, "oauth_client_secret")?;
+    let secret = secret_entry
+        .get_password()
+        .context("No OAuth app credentials found.")?;
+    Ok((id, secret))
+}
+
 /// Remove all stored credentials from the system keychain.
 pub fn clear_credentials() {
     for key in [
@@ -67,6 +86,8 @@ pub fn clear_credentials() {
         KEY_API_TOKEN,
         KEY_OAUTH_ACCESS,
         KEY_OAUTH_REFRESH,
+        "oauth_client_id",
+        "oauth_client_secret",
     ] {
         if let Ok(e) = entry(key) {
             let _ = e.delete_credential();
@@ -87,7 +108,7 @@ pub struct OAuthResult {
 /// 3. Exchange the authorization code for tokens
 /// 4. Fetch accessible resources to get the cloud ID
 /// 5. Store tokens in the system keychain
-pub async fn oauth_login() -> Result<OAuthResult> {
+pub async fn oauth_login(client_id: &str, client_secret: &str) -> Result<OAuthResult> {
     // 1. Find an available port for the local callback server.
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
@@ -99,7 +120,7 @@ pub async fn oauth_login() -> Result<OAuthResult> {
     let auth_url = format!(
         "https://auth.atlassian.com/authorize\
          ?audience=api.atlassian.com\
-         &client_id={CLIENT_ID}\
+         &client_id={client_id}\
          &scope={}\
          &redirect_uri={redirect_uri}\
          &state={state}\
@@ -144,8 +165,8 @@ pub async fn oauth_login() -> Result<OAuthResult> {
         .post("https://auth.atlassian.com/oauth/token")
         .json(&serde_json::json!({
             "grant_type": "authorization_code",
-            "client_id": CLIENT_ID,
-            "client_secret": CLIENT_SECRET,
+            "client_id": client_id,
+            "client_secret": client_secret,
             "code": code,
             "redirect_uri": redirect_uri,
         }))
@@ -195,7 +216,7 @@ pub async fn oauth_login() -> Result<OAuthResult> {
 
 /// Refresh the OAuth 2.0 access token using the stored refresh token.
 /// Returns the new access token on success.
-pub async fn refresh_oauth_token() -> Result<String> {
+pub async fn refresh_oauth_token(client_id: &str, client_secret: &str) -> Result<String> {
     let (_, refresh_token) = load_oauth_tokens()?;
 
     let client = reqwest::Client::new();
@@ -203,8 +224,8 @@ pub async fn refresh_oauth_token() -> Result<String> {
         .post("https://auth.atlassian.com/oauth/token")
         .json(&serde_json::json!({
             "grant_type": "refresh_token",
-            "client_id": CLIENT_ID,
-            "client_secret": CLIENT_SECRET,
+            "client_id": client_id,
+            "client_secret": client_secret,
             "refresh_token": refresh_token,
         }))
         .send()

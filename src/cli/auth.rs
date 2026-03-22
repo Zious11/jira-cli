@@ -1,4 +1,5 @@
 use anyhow::Result;
+use dialoguer::{Input, Password};
 
 use crate::api::auth;
 use crate::config::Config;
@@ -20,8 +21,23 @@ pub async fn login_token() -> Result<()> {
 }
 
 /// Run the OAuth 2.0 (3LO) login flow and persist site configuration.
+/// Prompts the user for their own OAuth app credentials.
 pub async fn login_oauth() -> Result<()> {
-    let result = crate::api::auth::oauth_login().await?;
+    println!("OAuth 2.0 requires your own Atlassian OAuth app.");
+    println!("Create one at: https://developer.atlassian.com/console/myapps/\n");
+
+    let client_id: String = Input::new()
+        .with_prompt("OAuth Client ID")
+        .interact_text()?;
+
+    let client_secret: String = Password::new()
+        .with_prompt("OAuth Client Secret")
+        .interact()?;
+
+    // Store OAuth app credentials in keychain
+    crate::api::auth::store_oauth_app_credentials(&client_id, &client_secret)?;
+
+    let result = crate::api::auth::oauth_login(&client_id, &client_secret).await?;
 
     let mut config = Config::load().unwrap_or_default();
     config.global.instance.url = Some(result.site_url);
