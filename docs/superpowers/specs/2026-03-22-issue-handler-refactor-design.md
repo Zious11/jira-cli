@@ -98,11 +98,11 @@ async fn handle_list(
 | `handle_list` | 10 params | 6 params | Removed |
 | `handle_create` | 15 params | 6 params | Removed |
 | `handle_edit` | 12 params | 5 params | Removed |
-| `handle_comment` | 8 params | 3 params | Removed |
+| `handle_comment` | 7 params | 3 params | Removed |
 | `handle_view` | 4 params | 4 params | N/A |
-| `handle_move` | 4 params | 4 params | N/A |
+| `handle_move` | 5 params | 4 params | N/A |
 | `handle_transitions` | 3 params | 3 params | N/A |
-| `handle_assign` | 4 params | 3 params | N/A |
+| `handle_assign` | 5 params | 3 params | N/A |
 | `handle_open` | 3 params | 2 params | N/A |
 
 All handlers at or below clippy's 7-parameter threshold. All 4 `#[allow(clippy::too_many_arguments)]` removed.
