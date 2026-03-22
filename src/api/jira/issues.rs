@@ -48,7 +48,7 @@ impl JiraClient {
     /// Get a single issue by key.
     pub async fn get_issue(&self, key: &str) -> Result<Issue> {
         let path = format!(
-            "/rest/api/3/issue/{}?fields=summary,status,issuetype,priority,assignee,project,description",
+            "/rest/api/3/issue/{}?fields=summary,status,issuetype,priority,assignee,project,description,labels",
             urlencoding::encode(key)
         );
         self.get(&path).await
