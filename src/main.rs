@@ -93,7 +93,20 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 Ok(())
             }
             cli::Command::Project { .. } => anyhow::bail!("Command not yet implemented"),
-            cli::Command::Issue { .. } => anyhow::bail!("Command not yet implemented"),
+            cli::Command::Issue { command } => {
+                let config = config::Config::load()?;
+                let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
+                cli::issue::handle(
+                    command,
+                    &cli.output,
+                    &config,
+                    &client,
+                    cli.project.as_deref(),
+                    cli.no_input,
+                )
+                .await?;
+                Ok(())
+            }
             cli::Command::Board { .. } => anyhow::bail!("Command not yet implemented"),
             cli::Command::Sprint { .. } => anyhow::bail!("Command not yet implemented"),
             cli::Command::Worklog { .. } => anyhow::bail!("Command not yet implemented"),
