@@ -27,6 +27,7 @@ pub async fn handle() -> Result<()> {
         instance: InstanceConfig {
             url: Some(url.clone()),
             cloud_id: None,
+            org_id: None,
             auth_method: None,
         },
         defaults: DefaultsConfig::default(),

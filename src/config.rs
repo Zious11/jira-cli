@@ -24,6 +24,7 @@ pub struct GlobalConfig {
 pub struct InstanceConfig {
     pub url: Option<String>,
     pub cloud_id: Option<String>,
+    pub org_id: Option<String>,
     pub auth_method: Option<String>,
 }
 
@@ -177,6 +178,7 @@ mod tests {
                 instance: InstanceConfig {
                     url: Some("https://myorg.atlassian.net".into()),
                     cloud_id: None,
+                    org_id: None,
                     auth_method: Some("api_token".into()),
                 },
                 defaults: DefaultsConfig::default(),
@@ -195,6 +197,7 @@ mod tests {
                 instance: InstanceConfig {
                     url: Some("https://myorg.atlassian.net".into()),
                     cloud_id: Some("abc-123".into()),
+                    org_id: None,
                     auth_method: Some("oauth".into()),
                 },
                 defaults: DefaultsConfig::default(),
@@ -248,6 +251,7 @@ mod tests {
                 instance: InstanceConfig {
                     url: Some("https://myorg.atlassian.net/".into()),
                     cloud_id: None,
+                    org_id: None,
                     auth_method: Some("api_token".into()),
                 },
                 defaults: DefaultsConfig::default(),
@@ -268,6 +272,7 @@ mod tests {
                 instance: InstanceConfig {
                     url: Some("https://test.atlassian.net".into()),
                     cloud_id: None,
+                    org_id: None,
                     auth_method: Some("api_token".into()),
                 },
                 defaults: DefaultsConfig::default(),

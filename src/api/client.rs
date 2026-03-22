@@ -17,6 +17,7 @@ const DEFAULT_RETRY_SECS: u64 = 1;
 pub struct JiraClient {
     client: Client,
     base_url: String,
+    instance_url: String,
     auth_header: String,
     verbose: bool,
 }
@@ -26,6 +27,14 @@ impl JiraClient {
     /// from the system keychain.
     pub fn from_config(config: &Config, verbose: bool) -> anyhow::Result<Self> {
         let base_url = config.base_url()?;
+        let instance_url = config
+            .global
+            .instance
+            .url
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No Jira instance configured. Run \"jr init\" first."))?
+            .trim_end_matches('/')
+            .to_string();
         let auth_method = config
             .global
             .instance
@@ -52,6 +61,7 @@ impl JiraClient {
         Ok(Self {
             client,
             base_url,
+            instance_url,
             auth_header,
             verbose,
         })
@@ -62,6 +72,7 @@ impl JiraClient {
     pub fn new_for_test(base_url: String, auth_header: String) -> Self {
         Self {
             client: Client::new(),
+            instance_url: base_url.clone(),
             base_url,
             auth_header,
             verbose: false,
@@ -206,6 +217,33 @@ impl JiraClient {
     /// Returns the base URL (useful for constructing browser-facing URLs).
     pub fn base_url(&self) -> &str {
         &self.base_url
+    }
+
+    /// Returns the raw Jira instance URL (always the real instance URL, even for OAuth users).
+    pub fn instance_url(&self) -> &str {
+        &self.instance_url
+    }
+
+    /// Perform a GET request against the real Jira instance URL (bypasses OAuth proxy base_url).
+    pub async fn get_from_instance<T: DeserializeOwned>(&self, path: &str) -> anyhow::Result<T> {
+        let url = format!("{}{}", self.instance_url, path);
+        let request = self.client.get(&url);
+        let response = self.send(request).await?;
+        let body = response.json::<T>().await?;
+        Ok(body)
+    }
+
+    /// Perform a POST request against the real Jira instance URL (bypasses OAuth proxy base_url).
+    pub async fn post_to_instance<T: DeserializeOwned, B: Serialize>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> anyhow::Result<T> {
+        let url = format!("{}{}", self.instance_url, path);
+        let request = self.client.post(&url).json(body);
+        let response = self.send(request).await?;
+        let parsed = response.json::<T>().await?;
+        Ok(parsed)
     }
 
     /// Returns the HTTP method for building requests externally (if needed).
