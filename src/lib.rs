@@ -1,5 +1,6 @@
 pub mod adf;
 pub mod api;
+pub mod cache;
 pub mod cli;
 pub mod config;
 pub mod duration;
