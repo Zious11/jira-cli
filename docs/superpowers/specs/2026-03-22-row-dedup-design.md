@@ -88,13 +88,14 @@ Becomes a 1-line thin wrapper. Kept for backward compatibility since it's `pub` 
 Replace the 30-line inline block with:
 
 ```rust
+let effective_sp = if show_points { sp_field_id } else { None };
 let rows: Vec<Vec<String>> = issues.iter()
-    .map(|issue| format_issue_row(issue, sp_field_id))
+    .map(|issue| format_issue_row(issue, effective_sp))
     .collect();
-output::print_output(output_format, &issue_table_headers(sp_field_id.is_some()), &rows, &issues)?;
+output::print_output(output_format, &issue_table_headers(effective_sp.is_some()), &rows, &issues)?;
 ```
 
-Removes the `if show_points && sp_field_id.is_some()` / `else` branch entirely — `format_issue_row` handles both cases.
+The `--points` flag gates whether story points appear in the table. `effective_sp` is `None` unless the user explicitly passed `--points`, preserving the current behavior. Removes the `if/else` branch entirely — `format_issue_row` handles both cases.
 
 ### 3. `handle_current` (sprint.rs)
 
