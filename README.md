@@ -23,8 +23,11 @@ cargo install --path .
 # Set up your Jira instance and authenticate
 jr init
 
-# Or configure manually with an API token
-jr auth login --token
+# Authenticate with API token (default)
+jr auth login
+
+# Or authenticate with OAuth 2.0 (requires your own OAuth app)
+jr auth login --oauth
 
 # View your current sprint/board issues
 jr issue list
@@ -50,7 +53,7 @@ jr issue comment KEY-123 "Deployed to staging"
 | Command | Description |
 |---------|-------------|
 | `jr init` | Configure Jira instance and authenticate |
-| `jr auth login` | Authenticate (OAuth 2.0 or `--token` for API token) |
+| `jr auth login` | Authenticate with API token (default) or `--oauth` for OAuth 2.0 |
 | `jr auth status` | Show authentication status |
 | `jr me` | Show current user info |
 | `jr issue list` | List issues (smart defaults for scrum/kanban) |
@@ -95,7 +98,7 @@ jr issue comment KEY-123 "Deployed to staging"
 ```toml
 [instance]
 url = "https://yourorg.atlassian.net"
-auth_method = "oauth"  # or "api_token"
+auth_method = "api_token"  # or "oauth"
 
 [defaults]
 output = "table"
