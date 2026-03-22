@@ -56,19 +56,9 @@ pub async fn handle(
     no_input: bool,
 ) -> Result<()> {
     match command {
-        IssueCommand::List {
-            jql,
-            status,
-            team,
-            limit,
-            points,
-        } => {
+        IssueCommand::List { .. } => {
             handle_list(
-                jql,
-                status,
-                team,
-                limit,
-                points,
+                command,
                 output_format,
                 config,
                 client,
@@ -77,32 +67,10 @@ pub async fn handle(
             )
             .await
         }
-
-        IssueCommand::View { key } => handle_view(&key, output_format, config, client).await,
-
-        IssueCommand::Create {
-            project,
-            issue_type,
-            summary,
-            description,
-            description_stdin,
-            priority,
-            label,
-            team,
-            points,
-            markdown,
-        } => {
+        IssueCommand::View { .. } => handle_view(command, output_format, config, client).await,
+        IssueCommand::Create { .. } => {
             handle_create(
-                project,
-                issue_type,
-                summary,
-                description,
-                description_stdin,
-                priority,
-                label,
-                team,
-                points,
-                markdown,
+                command,
                 output_format,
                 config,
                 client,
@@ -111,71 +79,40 @@ pub async fn handle(
             )
             .await
         }
-
-        IssueCommand::Edit {
-            key,
-            summary,
-            issue_type,
-            priority,
-            label,
-            team,
-            points,
-            no_points,
-        } => {
-            handle_edit(
-                &key,
-                summary,
-                issue_type,
-                priority,
-                label,
-                team,
-                points,
-                no_points,
-                output_format,
-                config,
-                client,
-                no_input,
-            )
-            .await
+        IssueCommand::Edit { .. } => {
+            handle_edit(command, output_format, config, client, no_input).await
         }
-
-        IssueCommand::Move { key, status } => {
-            handle_move(&key, status, output_format, client, no_input).await
+        IssueCommand::Move { .. } => handle_move(command, output_format, client, no_input).await,
+        IssueCommand::Transitions { .. } => {
+            handle_transitions(command, output_format, client).await
         }
-
-        IssueCommand::Transitions { key } => handle_transitions(&key, output_format, client).await,
-
-        IssueCommand::Assign { key, to, unassign } => {
-            handle_assign(&key, to, unassign, output_format, client).await
-        }
-
-        IssueCommand::Comment {
-            key,
-            message,
-            markdown,
-            file,
-            stdin,
-        } => handle_comment(&key, message, markdown, file, stdin, output_format, client).await,
-
-        IssueCommand::Open { key, url_only } => handle_open(&key, url_only, client).await,
+        IssueCommand::Assign { .. } => handle_assign(command, output_format, client).await,
+        IssueCommand::Comment { .. } => handle_comment(command, output_format, client).await,
+        IssueCommand::Open { .. } => handle_open(command, client).await,
     }
 }
 
 // ── List ──────────────────────────────────────────────────────────────
 
-#[allow(clippy::too_many_arguments)]
 async fn handle_list(
-    jql: Option<String>,
-    status: Option<String>,
-    team: Option<String>,
-    limit: Option<u32>,
-    show_points: bool,
+    command: IssueCommand,
     output_format: &OutputFormat,
     config: &Config,
     client: &JiraClient,
     project_override: Option<&str>,
     no_input: bool,
 ) -> Result<()> {
+    let IssueCommand::List {
+        jql,
+        status,
+        team,
+        limit,
+        points: show_points,
+    } = command
+    else {
+        unreachable!()
+    };
+
     let sp_field_id = config.global.fields.story_points_field_id.as_deref();
     let extra: Vec<&str> = sp_field_id.iter().copied().collect();
     // Resolve team name to (field_id, uuid) before building JQL
@@ -340,14 +277,18 @@ fn build_fallback_jql(
 // ── View ──────────────────────────────────────────────────────────────
 
 async fn handle_view(
-    key: &str,
+    command: IssueCommand,
     output_format: &OutputFormat,
     config: &Config,
     client: &JiraClient,
 ) -> Result<()> {
+    let IssueCommand::View { key } = command else {
+        unreachable!()
+    };
+
     let sp_field_id = config.global.fields.story_points_field_id.as_deref();
     let extra: Vec<&str> = sp_field_id.iter().copied().collect();
-    let issue = client.get_issue(key, &extra).await?;
+    let issue = client.get_issue(&key, &extra).await?;
 
     match output_format {
         OutputFormat::Json => {
@@ -441,24 +382,30 @@ async fn handle_view(
 
 // ── Create ────────────────────────────────────────────────────────────
 
-#[allow(clippy::too_many_arguments)]
 async fn handle_create(
-    project: Option<String>,
-    issue_type: Option<String>,
-    summary: Option<String>,
-    description: Option<String>,
-    description_stdin: bool,
-    priority: Option<String>,
-    labels: Vec<String>,
-    team: Option<String>,
-    points: Option<f64>,
-    markdown: bool,
+    command: IssueCommand,
     output_format: &OutputFormat,
     config: &Config,
     client: &JiraClient,
     project_override: Option<&str>,
     no_input: bool,
 ) -> Result<()> {
+    let IssueCommand::Create {
+        project,
+        issue_type,
+        summary,
+        description,
+        description_stdin,
+        priority,
+        label: labels,
+        team,
+        points,
+        markdown,
+    } = command
+    else {
+        unreachable!()
+    };
+
     // Resolve project key
     let project_key = project
         .or_else(|| config.project_key(project_override))
@@ -554,21 +501,27 @@ async fn handle_create(
 
 // ── Edit ──────────────────────────────────────────────────────────────
 
-#[allow(clippy::too_many_arguments)]
 async fn handle_edit(
-    key: &str,
-    summary: Option<String>,
-    issue_type: Option<String>,
-    priority: Option<String>,
-    labels: Vec<String>,
-    team: Option<String>,
-    points: Option<f64>,
-    no_points: bool,
+    command: IssueCommand,
     output_format: &OutputFormat,
     config: &Config,
     client: &JiraClient,
     no_input: bool,
 ) -> Result<()> {
+    let IssueCommand::Edit {
+        key,
+        summary,
+        issue_type,
+        priority,
+        label: labels,
+        team,
+        points,
+        no_points,
+    } = command
+    else {
+        unreachable!()
+    };
+
     let mut fields = json!({});
     let mut has_updates = false;
 
@@ -621,7 +574,7 @@ async fn handle_edit(
         if !label_update.is_empty() {
             // Labels with add:/remove: syntax use the update endpoint pattern
             // We need to use the "update" key in the request body
-            let path = format!("/rest/api/3/issue/{}", urlencoding::encode(key));
+            let path = format!("/rest/api/3/issue/{}", urlencoding::encode(&key));
             let mut body = json!({});
             if fields != json!({}) {
                 body["fields"] = fields;
@@ -651,7 +604,7 @@ async fn handle_edit(
         );
     }
 
-    client.edit_issue(key, fields).await?;
+    client.edit_issue(&key, fields).await?;
 
     match output_format {
         OutputFormat::Json => {
@@ -671,14 +624,17 @@ async fn handle_edit(
 // ── Move (Transition) ────────────────────────────────────────────────
 
 async fn handle_move(
-    key: &str,
-    status: Option<String>,
+    command: IssueCommand,
     output_format: &OutputFormat,
     client: &JiraClient,
     no_input: bool,
 ) -> Result<()> {
+    let IssueCommand::Move { key, status } = command else {
+        unreachable!()
+    };
+
     // Get available transitions
-    let transitions_resp = client.get_transitions(key).await?;
+    let transitions_resp = client.get_transitions(&key).await?;
     let transitions = &transitions_resp.transitions;
 
     if transitions.is_empty() {
@@ -686,7 +642,7 @@ async fn handle_move(
     }
 
     // Check current status first
-    let issue = client.get_issue(key, &[]).await?;
+    let issue = client.get_issue(&key, &[]).await?;
     let current_status = issue
         .fields
         .status
@@ -794,7 +750,7 @@ async fn handle_move(
     };
 
     client
-        .transition_issue(key, &selected_transition.id)
+        .transition_issue(&key, &selected_transition.id)
         .await?;
 
     let new_status = selected_transition
@@ -825,11 +781,15 @@ async fn handle_move(
 // ── Transitions ───────────────────────────────────────────────────────
 
 async fn handle_transitions(
-    key: &str,
+    command: IssueCommand,
     output_format: &OutputFormat,
     client: &JiraClient,
 ) -> Result<()> {
-    let resp = client.get_transitions(key).await?;
+    let IssueCommand::Transitions { key } = command else {
+        unreachable!()
+    };
+
+    let resp = client.get_transitions(&key).await?;
 
     let rows: Vec<Vec<String>> = resp
         .transitions
@@ -856,14 +816,16 @@ async fn handle_transitions(
 // ── Assign ────────────────────────────────────────────────────────────
 
 async fn handle_assign(
-    key: &str,
-    to: Option<String>,
-    unassign: bool,
+    command: IssueCommand,
     output_format: &OutputFormat,
     client: &JiraClient,
 ) -> Result<()> {
+    let IssueCommand::Assign { key, to, unassign } = command else {
+        unreachable!()
+    };
+
     if unassign {
-        client.assign_issue(key, None).await?;
+        client.assign_issue(&key, None).await?;
         match output_format {
             OutputFormat::Json => {
                 println!(
@@ -890,7 +852,7 @@ async fn handle_assign(
         let me = client.get_myself().await?;
 
         // Idempotent: check if already assigned to self
-        let issue = client.get_issue(key, &[]).await?;
+        let issue = client.get_issue(&key, &[]).await?;
         if let Some(ref assignee) = issue.fields.assignee {
             if assignee.account_id == me.account_id {
                 match output_format {
@@ -915,7 +877,7 @@ async fn handle_assign(
         me.account_id
     };
 
-    client.assign_issue(key, Some(&account_id)).await?;
+    client.assign_issue(&key, Some(&account_id)).await?;
 
     match output_format {
         OutputFormat::Json => {
@@ -938,16 +900,22 @@ async fn handle_assign(
 
 // ── Comment ───────────────────────────────────────────────────────────
 
-#[allow(clippy::too_many_arguments)]
 async fn handle_comment(
-    key: &str,
-    message: Option<String>,
-    markdown: bool,
-    file: Option<String>,
-    stdin: bool,
+    command: IssueCommand,
     output_format: &OutputFormat,
     client: &JiraClient,
 ) -> Result<()> {
+    let IssueCommand::Comment {
+        key,
+        message,
+        markdown,
+        file,
+        stdin,
+    } = command
+    else {
+        unreachable!()
+    };
+
     // Resolve comment text from the various sources
     let text = if stdin {
         let mut buf = String::new();
@@ -972,7 +940,7 @@ async fn handle_comment(
         adf::text_to_adf(&text)
     };
 
-    let comment = client.add_comment(key, adf_body).await?;
+    let comment = client.add_comment(&key, adf_body).await?;
 
     match output_format {
         OutputFormat::Json => {
@@ -992,7 +960,11 @@ async fn handle_comment(
 
 // ── Open ──────────────────────────────────────────────────────────────
 
-async fn handle_open(key: &str, url_only: bool, client: &JiraClient) -> Result<()> {
+async fn handle_open(command: IssueCommand, client: &JiraClient) -> Result<()> {
+    let IssueCommand::Open { key, url_only } = command else {
+        unreachable!()
+    };
+
     let url = format!("{}/browse/{}", client.base_url(), key);
 
     if url_only {
