@@ -1,4 +1,6 @@
 #[allow(dead_code)]
+pub mod adf;
+#[allow(dead_code)]
 pub mod api;
 pub mod cli;
 pub mod config;

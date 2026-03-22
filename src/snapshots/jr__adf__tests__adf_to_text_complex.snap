@@ -1,0 +1,8 @@
+---
+source: src/adf.rs
+expression: text
+---
+## Summary
+This is a description.
+- Item one
+- Item two
