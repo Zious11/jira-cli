@@ -27,6 +27,7 @@ pub async fn handle() -> Result<()> {
         instance: InstanceConfig {
             url: Some(url.clone()),
             cloud_id: None,
+            org_id: None,
             auth_method: None,
         },
         defaults: DefaultsConfig::default(),
@@ -90,6 +91,30 @@ pub async fn handle() -> Result<()> {
         let mut config = Config::load()?;
         config.global.fields.team_field_id = Some(team_id);
         config.save_global()?;
+    }
+
+    // Step 6: Prefetch cloud_id and org_id via GraphQL (single call)
+    let hostname = url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_end_matches('/');
+    if let Ok(metadata) = client.get_org_metadata(hostname).await {
+        let mut config = Config::load()?;
+        config.global.instance.cloud_id = Some(metadata.cloud_id);
+        config.global.instance.org_id = Some(metadata.org_id.clone());
+        config.save_global()?;
+
+        // Step 7: Prefetch team list into cache
+        if let Ok(api_teams) = client.list_teams(&metadata.org_id).await {
+            let cached: Vec<crate::cache::CachedTeam> = api_teams
+                .into_iter()
+                .map(|t| crate::cache::CachedTeam {
+                    id: t.team_id,
+                    name: t.display_name,
+                })
+                .collect();
+            let _ = crate::cache::write_team_cache(&cached);
+        }
     }
 
     output::print_success("\njr is ready! Try \"jr issue list\" to see your tickets.");
