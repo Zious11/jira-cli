@@ -59,12 +59,13 @@ pub async fn handle(
         IssueCommand::List {
             jql,
             status,
-            team: _team,
+            team,
             limit,
         } => {
             handle_list(
                 jql,
                 status,
+                team,
                 limit,
                 output_format,
                 config,
@@ -84,7 +85,7 @@ pub async fn handle(
             description_stdin,
             priority,
             label,
-            team: _team,
+            team,
             markdown,
         } => {
             handle_create(
@@ -95,6 +96,7 @@ pub async fn handle(
                 description_stdin,
                 priority,
                 label,
+                team,
                 markdown,
                 output_format,
                 config,
@@ -111,7 +113,7 @@ pub async fn handle(
             issue_type,
             priority,
             label,
-            team: _team,
+            team,
         } => {
             handle_edit(
                 &key,
@@ -119,7 +121,9 @@ pub async fn handle(
                 issue_type,
                 priority,
                 label,
+                team,
                 output_format,
+                config,
                 client,
             )
             .await
@@ -149,9 +153,11 @@ pub async fn handle(
 
 // ── List ──────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_list(
     jql: Option<String>,
     status: Option<String>,
+    team: Option<String>,
     limit: Option<u32>,
     output_format: &OutputFormat,
     config: &Config,
@@ -175,18 +181,29 @@ async fn handle_list(
                         match client.list_sprints(bid, Some("active")).await {
                             Ok(sprints) if !sprints.is_empty() => {
                                 let sprint = &sprints[0];
-                                let mut jql_parts = vec![format!("sprint = {}", sprint.id)];
+                                let mut jql_parts = vec![
+                                    format!("sprint = {}", sprint.id),
+                                    "assignee = currentUser()".to_string(),
+                                ];
                                 if let Some(ref s) = status {
                                     jql_parts.push(format!("status = \"{}\"", s));
+                                }
+                                if let Some(ref t) = team {
+                                    jql_parts.push(format!("\"Team\" = \"{}\"", t));
                                 }
                                 jql_parts.push("ORDER BY rank ASC".into());
                                 jql_parts.join(" AND ")
                             }
-                            _ => build_fallback_jql(project_key.as_deref(), status.as_deref()),
+                            _ => build_fallback_jql(
+                                project_key.as_deref(),
+                                status.as_deref(),
+                                team.as_deref(),
+                            ),
                         }
                     } else {
                         // Kanban: show open issues
-                        let mut jql_parts: Vec<String> = Vec::new();
+                        let mut jql_parts: Vec<String> =
+                            vec!["assignee = currentUser()".to_string()];
                         if let Some(ref pk) = project_key {
                             jql_parts.push(format!("project = \"{}\"", pk));
                         }
@@ -194,14 +211,19 @@ async fn handle_list(
                         if let Some(ref s) = status {
                             jql_parts.push(format!("status = \"{}\"", s));
                         }
+                        if let Some(ref t) = team {
+                            jql_parts.push(format!("\"Team\" = \"{}\"", t));
+                        }
                         jql_parts.push("ORDER BY rank ASC".into());
                         jql_parts.join(" AND ")
                     }
                 }
-                Err(_) => build_fallback_jql(project_key.as_deref(), status.as_deref()),
+                Err(_) => {
+                    build_fallback_jql(project_key.as_deref(), status.as_deref(), team.as_deref())
+                }
             }
         } else {
-            build_fallback_jql(project_key.as_deref(), status.as_deref())
+            build_fallback_jql(project_key.as_deref(), status.as_deref(), team.as_deref())
         }
     };
 
@@ -218,13 +240,20 @@ async fn handle_list(
     Ok(())
 }
 
-fn build_fallback_jql(project_key: Option<&str>, status: Option<&str>) -> String {
+fn build_fallback_jql(
+    project_key: Option<&str>,
+    status: Option<&str>,
+    team: Option<&str>,
+) -> String {
     let mut parts: Vec<String> = Vec::new();
     if let Some(pk) = project_key {
         parts.push(format!("project = \"{}\"", pk));
     }
     if let Some(s) = status {
         parts.push(format!("status = \"{}\"", s));
+    }
+    if let Some(t) = team {
+        parts.push(format!("\"Team\" = \"{}\"", t));
     }
     parts.push("ORDER BY updated DESC".into());
     parts.join(" AND ")
@@ -316,6 +345,7 @@ async fn handle_create(
     description_stdin: bool,
     priority: Option<String>,
     labels: Vec<String>,
+    team: Option<String>,
     markdown: bool,
     output_format: &OutputFormat,
     config: &Config,
@@ -392,6 +422,11 @@ async fn handle_create(
         fields["labels"] = json!(labels);
     }
 
+    if let Some(ref team_name) = team {
+        let (field_id, value) = resolve_team_field(config, client, team_name).await?;
+        fields[&field_id] = json!({"value": value});
+    }
+
     let response = client.create_issue(fields).await?;
 
     match output_format {
@@ -408,13 +443,16 @@ async fn handle_create(
 
 // ── Edit ──────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_edit(
     key: &str,
     summary: Option<String>,
     issue_type: Option<String>,
     priority: Option<String>,
     labels: Vec<String>,
+    team: Option<String>,
     output_format: &OutputFormat,
+    config: &Config,
     client: &JiraClient,
 ) -> Result<()> {
     let mut fields = json!({});
@@ -432,6 +470,12 @@ async fn handle_edit(
 
     if let Some(ref p) = priority {
         fields["priority"] = json!({ "name": p });
+        has_updates = true;
+    }
+
+    if let Some(ref team_name) = team {
+        let (field_id, value) = resolve_team_field(config, client, team_name).await?;
+        fields[&field_id] = json!({"value": value});
         has_updates = true;
     }
 
@@ -476,7 +520,9 @@ async fn handle_edit(
     }
 
     if !has_updates {
-        bail!("No fields specified to update. Use --summary, --type, --priority, or --label.");
+        bail!(
+            "No fields specified to update. Use --summary, --type, --priority, --label, or --team."
+        );
     }
 
     client.edit_issue(key, fields).await?;
@@ -834,6 +880,23 @@ async fn handle_open(key: &str, url_only: bool, client: &JiraClient) -> Result<(
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────
+
+async fn resolve_team_field(
+    config: &Config,
+    client: &JiraClient,
+    team_name: &str,
+) -> Result<(String, String)> {
+    let field_id = if let Some(id) = &config.global.fields.team_field_id {
+        id.clone()
+    } else {
+        client
+            .find_team_field_id()
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("No \"Team\" field found on this Jira instance"))?
+    };
+    // For now, set team as a simple value — exact format depends on field configuration
+    Ok((field_id, team_name.to_string()))
+}
 
 fn prompt_input(prompt: &str) -> Result<String> {
     let input: String = dialoguer::Input::new()
