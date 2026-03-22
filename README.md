@@ -56,10 +56,10 @@ jr issue comment KEY-123 "Deployed to staging"
 | `jr auth login` | Authenticate with API token (default) or `--oauth` for OAuth 2.0 |
 | `jr auth status` | Show authentication status |
 | `jr me` | Show current user info |
-| `jr issue list` | List issues (smart defaults for scrum/kanban) |
+| `jr issue list` | List issues (smart defaults for scrum/kanban, `--team` to filter) |
 | `jr issue view KEY` | View issue details |
-| `jr issue create` | Create an issue |
-| `jr issue edit KEY` | Edit issue fields |
+| `jr issue create` | Create an issue (`--team` to set team) |
+| `jr issue edit KEY` | Edit issue fields (`--team` to set team) |
 | `jr issue move KEY [STATUS]` | Transition issue (partial match on status name) |
 | `jr issue transitions KEY` | List available transitions |
 | `jr issue assign KEY` | Assign to self (or `--to USER`, `--unassign`) |
@@ -71,6 +71,7 @@ jr issue comment KEY-123 "Deployed to staging"
 | `jr sprint current` | Show current sprint issues |
 | `jr worklog add KEY 2h` | Log time (`1h30m`, `1d`, `1w`) |
 | `jr worklog list KEY` | List worklogs |
+| `jr team list` | List available teams (`--refresh` to force update) |
 | `jr project fields FOO` | Show valid issue types and priorities |
 | `jr completion bash\|zsh\|fish` | Generate shell completions |
 
@@ -92,6 +93,9 @@ jr issue comment KEY-123 "Deployed to staging"
 
 # Per-project config (in your repo root)
 .jr.toml
+
+# Team cache (disposable, 7-day TTL)
+~/.cache/jr/teams.json
 ```
 
 **Global config:**

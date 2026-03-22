@@ -15,8 +15,9 @@ src/
 │   ├── board.rs         # board list/view
 │   ├── sprint.rs        # sprint list/current (scrum-only, errors on kanban)
 │   ├── worklog.rs       # worklog add/list
+│   ├── team.rs          # team list (with cache + lazy org discovery)
 │   ├── auth.rs          # auth login (API token default, --oauth for OAuth 2.0), auth status
-│   ├── init.rs          # Interactive setup
+│   ├── init.rs          # Interactive setup (prefetches org metadata + team cache)
 │   └── project.rs       # project fields (issue types, priorities for a project)
 ├── api/
 │   ├── client.rs        # JiraClient — HTTP methods, auth headers, rate limit retry, 429/401 handling
@@ -24,7 +25,8 @@ src/
 │   ├── pagination.rs    # Offset-based (most endpoints) + cursor-based (JQL search)
 │   ├── rate_limit.rs    # Retry-After parsing
 │   └── jira/            # Jira-specific API call implementations (one file per resource)
-├── types/jira/          # Serde structs for API responses (Issue, Board, Sprint, User, etc.)
+├── types/jira/          # Serde structs for API responses (Issue, Board, Sprint, User, Team, etc.)
+├── cache.rs             # XDG cache (~/.cache/jr/) — team list with 7-day TTL
 ├── config.rs            # Global (~/.config/jr/config.toml) + per-project (.jr.toml), figment layering
 ├── output.rs            # Table (comfy-table) and JSON formatting
 ├── adf.rs               # Atlassian Document Format: text→ADF, markdown→ADF, ADF→text
@@ -66,12 +68,14 @@ See `docs/adr/` for detailed rationale:
 - ADR-0002: OAuth 2.0 auth approach (superseded — no embedded secrets, user-provided OAuth credentials)
 - ADR-0003: reqwest with rustls-tls
 - ADR-0004: Per-feature specs, not a growing master spec
+- ADR-0005: GraphQL hostNames for org discovery (team support)
 
 ## Specs & Plans
 
 - **v1 design spec:** `docs/superpowers/specs/2026-03-21-jr-jira-cli-design.md`
 - **v1 implementation plan:** `docs/superpowers/plans/2026-03-21-jr-implementation.md`
 - **Feature specs (post-v1):** `docs/specs/{feature-name}.md`
+- **Team assignment spec:** `docs/specs/team-assignment.md`
 
 When adding a new feature:
 1. Read this file
