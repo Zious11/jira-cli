@@ -77,7 +77,7 @@ pub async fn handle(
             .await
         }
 
-        IssueCommand::View { key } => handle_view(&key, output_format, client).await,
+        IssueCommand::View { key } => handle_view(&key, output_format, config, client).await,
 
         IssueCommand::Create {
             project,
@@ -281,8 +281,10 @@ fn build_fallback_jql(
 
 // ── View ──────────────────────────────────────────────────────────────
 
-async fn handle_view(key: &str, output_format: &OutputFormat, client: &JiraClient) -> Result<()> {
-    let issue = client.get_issue(key, &[]).await?;
+async fn handle_view(key: &str, output_format: &OutputFormat, config: &Config, client: &JiraClient) -> Result<()> {
+    let sp_field_id = config.global.fields.story_points_field_id.as_deref();
+    let extra: Vec<&str> = sp_field_id.iter().copied().collect();
+    let issue = client.get_issue(key, &extra).await?;
 
     match output_format {
         OutputFormat::Json => {
@@ -296,7 +298,7 @@ async fn handle_view(key: &str, output_format: &OutputFormat, client: &JiraClien
                 .map(adf::adf_to_text)
                 .unwrap_or_else(|| "(no description)".into());
 
-            let rows = vec![
+            let mut rows = vec![
                 vec!["Key".into(), issue.key.clone()],
                 vec!["Summary".into(), issue.fields.summary.clone()],
                 vec![
@@ -354,8 +356,18 @@ async fn handle_view(key: &str, output_format: &OutputFormat, client: &JiraClien
                         .map(|l| l.join(", "))
                         .unwrap_or_else(|| "(none)".into()),
                 ],
-                vec!["Description".into(), desc_text],
             ];
+
+            if let Some(field_id) = sp_field_id {
+                let points_display = issue
+                    .fields
+                    .story_points(field_id)
+                    .map(format_points)
+                    .unwrap_or_else(|| "(none)".into());
+                rows.push(vec!["Points".into(), points_display]);
+            }
+
+            rows.push(vec!["Description".into(), desc_text]);
 
             println!("{}", output::render_table(&["Field", "Value"], &rows));
         }
