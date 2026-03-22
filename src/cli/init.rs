@@ -93,6 +93,42 @@ pub async fn handle() -> Result<()> {
         config.save_global()?;
     }
 
+    // Step 5b: Discover story points field
+    match client.find_story_points_field_id().await {
+        Ok(matches) => {
+            let field_id = match matches.len() {
+                0 => {
+                    eprintln!("No story points field found — skipping. You can set story_points_field_id manually in config.");
+                    None
+                }
+                1 => {
+                    eprintln!("Found story points field: {} ({})", matches[0].1, matches[0].0);
+                    Some(matches[0].0.clone())
+                }
+                _ => {
+                    let names: Vec<String> = matches
+                        .iter()
+                        .map(|(id, name)| format!("{} ({})", name, id))
+                        .collect();
+                    let selection = Select::new()
+                        .with_prompt("Multiple story points fields found. Select one")
+                        .items(&names)
+                        .interact()?;
+                    Some(matches[selection].0.clone())
+                }
+            };
+
+            if let Some(id) = field_id {
+                let mut config = Config::load()?;
+                config.global.fields.story_points_field_id = Some(id);
+                config.save_global()?;
+            }
+        }
+        Err(e) => {
+            eprintln!("Could not discover story points field: {}. Skipping.", e);
+        }
+    }
+
     // Step 6: Prefetch cloud_id and org_id via GraphQL (single call)
     let hostname = url
         .trim_start_matches("https://")
