@@ -18,7 +18,7 @@ clap_complete = "4"
 colored = "2"
 comfy-table = "7"
 dialoguer = "0.12"
-dirs = "5"
+dirs = "6"
 figment = { version = "0.10", features = ["toml", "env"] }
 keyring = { version = "3", features = ["apple-native", "linux-native"] }
 open = "5"
