@@ -74,3 +74,49 @@ async fn test_get_transitions() {
     assert_eq!(transitions.transitions.len(), 2);
     client.transition_issue("FOO-1", "21").await.unwrap();
 }
+
+#[tokio::test]
+async fn test_search_issues_with_story_points() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response(vec![
+                common::fixtures::issue_response_with_points("FOO-1", "Story A", "To Do", Some(5.0)),
+                common::fixtures::issue_response_with_points("FOO-2", "Story B", "Done", None),
+            ]),
+        ))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let issues = client
+        .search_issues("project = FOO", None, &["customfield_10031"])
+        .await
+        .unwrap();
+
+    assert_eq!(issues.len(), 2);
+    assert_eq!(issues[0].fields.story_points("customfield_10031"), Some(5.0));
+    assert_eq!(issues[1].fields.story_points("customfield_10031"), None);
+}
+
+#[tokio::test]
+async fn test_find_story_points_field_id() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::fields_response_with_story_points()),
+        )
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let matches = client.find_story_points_field_id().await.unwrap();
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].0, "customfield_10031");
+    assert_eq!(matches[0].1, "Story Points");
+}
