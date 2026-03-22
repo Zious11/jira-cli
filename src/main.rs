@@ -1,7 +1,10 @@
 use clap::{CommandFactory, Parser};
+use jr::api;
 use jr::cli;
 use jr::cli::Cli;
+use jr::config;
 use jr::error;
+use jr::output;
 
 #[tokio::main]
 async fn main() {
@@ -61,7 +64,25 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             cli::Command::Completion { .. } => unreachable!(),
             cli::Command::Init => todo!("init"),
             cli::Command::Auth { .. } => todo!("auth"),
-            cli::Command::Me => todo!("me"),
+            cli::Command::Me => {
+                let config = config::Config::load()?;
+                let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
+                let user = client.get_myself().await?;
+                output::print_output(
+                    &cli.output,
+                    &["Field", "Value"],
+                    &[
+                        vec!["Name".into(), user.display_name.clone()],
+                        vec![
+                            "Email".into(),
+                            user.email_address.clone().unwrap_or_default(),
+                        ],
+                        vec!["Account ID".into(), user.account_id.clone()],
+                    ],
+                    &user,
+                )?;
+                Ok(())
+            }
             cli::Command::Project { .. } => todo!("project"),
             cli::Command::Issue { .. } => todo!("issue"),
             cli::Command::Board { .. } => todo!("board"),
