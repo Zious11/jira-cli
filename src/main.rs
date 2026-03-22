@@ -62,7 +62,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     let main_task = async {
         match cli.command {
             cli::Command::Completion { .. } => unreachable!(),
-            cli::Command::Init => anyhow::bail!("Command not yet implemented"),
+            cli::Command::Init => cli::init::handle().await,
             cli::Command::Auth { command } => match command {
                 cli::AuthCommand::Login { token } => {
                     if token {
