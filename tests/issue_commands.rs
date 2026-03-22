@@ -135,8 +135,7 @@ async fn test_list_link_types() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issueLinkType"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(common::fixtures::link_types_response()),
+            ResponseTemplate::new(200).set_body_json(common::fixtures::link_types_response()),
         )
         .mount(&server)
         .await;
@@ -155,10 +154,9 @@ async fn test_get_issue_with_parent_and_links() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/FOO-2"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(common::fixtures::issue_with_links_response("FOO-2", "Test issue")),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_with_links_response("FOO-2", "Test issue"),
+        ))
         .mount(&server)
         .await;
 
