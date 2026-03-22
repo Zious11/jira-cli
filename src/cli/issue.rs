@@ -61,13 +61,14 @@ pub async fn handle(
             status,
             team,
             limit,
-            points: _points,
+            points,
         } => {
             handle_list(
                 jql,
                 status,
                 team,
                 limit,
+                points,
                 output_format,
                 config,
                 client,
@@ -168,12 +169,15 @@ async fn handle_list(
     status: Option<String>,
     team: Option<String>,
     limit: Option<u32>,
+    show_points: bool,
     output_format: &OutputFormat,
     config: &Config,
     client: &JiraClient,
     project_override: Option<&str>,
     no_input: bool,
 ) -> Result<()> {
+    let sp_field_id = config.global.fields.story_points_field_id.as_deref();
+    let extra: Vec<&str> = sp_field_id.iter().copied().collect();
     // Resolve team name to (field_id, uuid) before building JQL
     let resolved_team = if let Some(ref team_name) = team {
         Some(resolve_team_field(config, client, team_name, no_input).await?)
@@ -250,15 +254,44 @@ async fn handle_list(
         }
     };
 
-    let issues = client.search_issues(&effective_jql, limit, &[]).await?;
-    let rows = format_issue_rows_public(&issues);
+    let issues = client.search_issues(&effective_jql, limit, &extra).await?;
 
-    output::print_output(
-        output_format,
-        &["Key", "Type", "Status", "Priority", "Assignee", "Summary"],
-        &rows,
-        &issues,
-    )?;
+    if let (true, Some(field_id)) = (show_points, sp_field_id) {
+        let rows: Vec<Vec<String>> = issues
+            .iter()
+            .map(|issue| {
+                let pts = issue
+                    .fields
+                    .story_points(field_id)
+                    .map(format_points)
+                    .unwrap_or_else(|| "-".into());
+                vec![
+                    issue.key.clone(),
+                    issue.fields.issue_type.as_ref().map(|t| t.name.clone()).unwrap_or_default(),
+                    issue.fields.status.as_ref().map(|s| s.name.clone()).unwrap_or_default(),
+                    issue.fields.priority.as_ref().map(|p| p.name.clone()).unwrap_or_default(),
+                    pts,
+                    issue.fields.assignee.as_ref().map(|a| a.display_name.clone()).unwrap_or_else(|| "Unassigned".into()),
+                    issue.fields.summary.clone(),
+                ]
+            })
+            .collect();
+
+        output::print_output(
+            output_format,
+            &["Key", "Type", "Status", "Priority", "Points", "Assignee", "Summary"],
+            &rows,
+            &issues,
+        )?;
+    } else {
+        let rows = format_issue_rows_public(&issues);
+        output::print_output(
+            output_format,
+            &["Key", "Type", "Status", "Priority", "Assignee", "Summary"],
+            &rows,
+            &issues,
+        )?;
+    }
 
     Ok(())
 }
