@@ -118,8 +118,8 @@ pub async fn handle(
             priority,
             label,
             team,
-            points: _points,
-            no_points: _no_points,
+            points,
+            no_points,
         } => {
             handle_edit(
                 &key,
@@ -128,6 +128,8 @@ pub async fn handle(
                 priority,
                 label,
                 team,
+                points,
+                no_points,
                 output_format,
                 config,
                 client,
@@ -500,6 +502,8 @@ async fn handle_edit(
     priority: Option<String>,
     labels: Vec<String>,
     team: Option<String>,
+    points: Option<f64>,
+    no_points: bool,
     output_format: &OutputFormat,
     config: &Config,
     client: &JiraClient,
@@ -526,6 +530,18 @@ async fn handle_edit(
     if let Some(ref team_name) = team {
         let (field_id, team_id) = resolve_team_field(config, client, team_name, no_input).await?;
         fields[&field_id] = json!(team_id);
+        has_updates = true;
+    }
+
+    if let Some(pts) = points {
+        let field_id = resolve_story_points_field_id(config)?;
+        fields[&field_id] = json!(pts);
+        has_updates = true;
+    }
+
+    if no_points {
+        let field_id = resolve_story_points_field_id(config)?;
+        fields[&field_id] = json!(null);
         has_updates = true;
     }
 
@@ -571,7 +587,7 @@ async fn handle_edit(
 
     if !has_updates {
         bail!(
-            "No fields specified to update. Use --summary, --type, --priority, --label, or --team."
+            "No fields specified to update. Use --summary, --type, --priority, --label, --team, --points, or --no-points."
         );
     }
 
