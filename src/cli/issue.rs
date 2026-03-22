@@ -125,6 +125,7 @@ pub async fn handle(
                 output_format,
                 config,
                 client,
+                no_input,
             )
             .await
         }
@@ -423,7 +424,7 @@ async fn handle_create(
     }
 
     if let Some(ref team_name) = team {
-        let (field_id, team_id) = resolve_team_field(config, client, team_name).await?;
+        let (field_id, team_id) = resolve_team_field(config, client, team_name, no_input).await?;
         fields[&field_id] = json!(team_id);
     }
 
@@ -454,6 +455,7 @@ async fn handle_edit(
     output_format: &OutputFormat,
     config: &Config,
     client: &JiraClient,
+    no_input: bool,
 ) -> Result<()> {
     let mut fields = json!({});
     let mut has_updates = false;
@@ -474,7 +476,7 @@ async fn handle_edit(
     }
 
     if let Some(ref team_name) = team {
-        let (field_id, team_id) = resolve_team_field(config, client, team_name).await?;
+        let (field_id, team_id) = resolve_team_field(config, client, team_name, no_input).await?;
         fields[&field_id] = json!(team_id);
         has_updates = true;
     }
@@ -885,17 +887,65 @@ async fn resolve_team_field(
     config: &Config,
     client: &JiraClient,
     team_name: &str,
+    no_input: bool,
 ) -> Result<(String, String)> {
+    // 1. Resolve team_field_id
     let field_id = if let Some(id) = &config.global.fields.team_field_id {
         id.clone()
     } else {
         client
             .find_team_field_id()
             .await?
-            .ok_or_else(|| anyhow::anyhow!("No \"Team\" field found on this Jira instance"))?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "No \"Team\" field found on this Jira instance. This instance may not have the Team field configured."
+                )
+            })?
     };
-    // For now, set team as a simple value — exact format depends on field configuration
-    Ok((field_id, team_name.to_string()))
+
+    // 2. Load teams from cache (or fetch if missing/expired)
+    let teams = match crate::cache::read_team_cache()? {
+        Some(cached) => cached.teams,
+        None => crate::cli::team::fetch_and_cache_teams(config, client).await?,
+    };
+
+    // 3. Partial match
+    let team_names: Vec<String> = teams.iter().map(|t| t.name.clone()).collect();
+    match crate::partial_match::partial_match(team_name, &team_names) {
+        crate::partial_match::MatchResult::Exact(matched_name) => {
+            let team = teams
+                .iter()
+                .find(|t| t.name == matched_name)
+                .expect("matched name must exist in teams");
+            Ok((field_id, team.id.clone()))
+        }
+        crate::partial_match::MatchResult::Ambiguous(matches) => {
+            if no_input {
+                let quoted: Vec<String> = matches.iter().map(|m| format!("\"{}\"", m)).collect();
+                anyhow::bail!(
+                    "Multiple teams match \"{}\": {}. Use a more specific name.",
+                    team_name,
+                    quoted.join(", ")
+                );
+            }
+            let selection = dialoguer::Select::new()
+                .with_prompt(format!("Multiple teams match \"{team_name}\""))
+                .items(&matches)
+                .interact()?;
+            let selected_name = &matches[selection];
+            let team = teams
+                .iter()
+                .find(|t| &t.name == selected_name)
+                .expect("selected name must exist in teams");
+            Ok((field_id, team.id.clone()))
+        }
+        crate::partial_match::MatchResult::None(_) => {
+            anyhow::bail!(
+                "No team matching \"{}\". Run \"jr team list --refresh\" to update.",
+                team_name
+            );
+        }
+    }
 }
 
 fn prompt_input(prompt: &str) -> Result<String> {
