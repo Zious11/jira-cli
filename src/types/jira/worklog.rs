@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use super::User;
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Worklog {
     pub id: Option<String>,
     pub author: Option<User>,

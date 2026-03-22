@@ -2,6 +2,7 @@ pub mod auth;
 pub mod board;
 pub mod issue;
 pub mod sprint;
+pub mod worklog;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
