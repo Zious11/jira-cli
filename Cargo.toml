@@ -20,7 +20,7 @@ comfy-table = "7"
 dialoguer = "0.12"
 dirs = "5"
 figment = { version = "0.10", features = ["toml", "env"] }
-keyring = "3"
+keyring = { version = "3", features = ["apple-native", "linux-native"] }
 open = "5"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
