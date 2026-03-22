@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod board;
 pub mod issue;
+pub mod project;
 pub mod sprint;
 pub mod worklog;
 

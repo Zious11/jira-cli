@@ -8,11 +8,18 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Debug, Deserialize, Serialize, Default)]
+pub struct FieldsConfig {
+    pub team_field_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct GlobalConfig {
     #[serde(default)]
     pub instance: InstanceConfig,
     #[serde(default)]
     pub defaults: DefaultsConfig,
+    #[serde(default)]
+    pub fields: FieldsConfig,
 }
 
 #[derive(Debug, Deserialize, Serialize, Default)]
@@ -175,6 +182,7 @@ mod tests {
                     auth_method: Some("api_token".into()),
                 },
                 defaults: DefaultsConfig::default(),
+                ..Default::default()
             },
             project: ProjectConfig::default(),
         };
@@ -192,6 +200,7 @@ mod tests {
                     auth_method: Some("oauth".into()),
                 },
                 defaults: DefaultsConfig::default(),
+                ..Default::default()
             },
             project: ProjectConfig::default(),
         };
@@ -244,6 +253,7 @@ mod tests {
                     auth_method: Some("api_token".into()),
                 },
                 defaults: DefaultsConfig::default(),
+                ..Default::default()
             },
             project: ProjectConfig::default(),
         };
@@ -263,6 +273,7 @@ mod tests {
                     auth_method: Some("api_token".into()),
                 },
                 defaults: DefaultsConfig::default(),
+                ..Default::default()
             },
             project: ProjectConfig::default(),
         };
