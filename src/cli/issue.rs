@@ -191,8 +191,8 @@ async fn handle_list(
                                 if let Some(ref t) = team {
                                     jql_parts.push(format!("\"Team\" = \"{}\"", t));
                                 }
-                                jql_parts.push("ORDER BY rank ASC".into());
-                                jql_parts.join(" AND ")
+                                let where_clause = jql_parts.join(" AND ");
+                                format!("{} ORDER BY rank ASC", where_clause)
                             }
                             _ => build_fallback_jql(
                                 project_key.as_deref(),
@@ -214,8 +214,8 @@ async fn handle_list(
                         if let Some(ref t) = team {
                             jql_parts.push(format!("\"Team\" = \"{}\"", t));
                         }
-                        jql_parts.push("ORDER BY rank ASC".into());
-                        jql_parts.join(" AND ")
+                        let where_clause = jql_parts.join(" AND ");
+                        format!("{} ORDER BY rank ASC", where_clause)
                     }
                 }
                 Err(_) => {
@@ -255,8 +255,8 @@ fn build_fallback_jql(
     if let Some(t) = team {
         parts.push(format!("\"Team\" = \"{}\"", t));
     }
-    parts.push("ORDER BY updated DESC".into());
-    parts.join(" AND ")
+    let where_clause = parts.join(" AND ");
+    format!("{} ORDER BY updated DESC", where_clause)
 }
 
 // ── View ──────────────────────────────────────────────────────────────
@@ -423,8 +423,8 @@ async fn handle_create(
     }
 
     if let Some(ref team_name) = team {
-        let (field_id, value) = resolve_team_field(config, client, team_name).await?;
-        fields[&field_id] = json!({"value": value});
+        let (field_id, team_id) = resolve_team_field(config, client, team_name).await?;
+        fields[&field_id] = json!(team_id);
     }
 
     let response = client.create_issue(fields).await?;
@@ -474,8 +474,8 @@ async fn handle_edit(
     }
 
     if let Some(ref team_name) = team {
-        let (field_id, value) = resolve_team_field(config, client, team_name).await?;
-        fields[&field_id] = json!({"value": value});
+        let (field_id, team_id) = resolve_team_field(config, client, team_name).await?;
+        fields[&field_id] = json!(team_id);
         has_updates = true;
     }
 
@@ -903,4 +903,55 @@ fn prompt_input(prompt: &str) -> Result<String> {
         .with_prompt(prompt)
         .interact_text()?;
     Ok(input)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fallback_jql_order_by_not_joined_with_and() {
+        let jql = build_fallback_jql(Some("PROJ"), None, None);
+        assert!(
+            !jql.contains("AND ORDER BY"),
+            "ORDER BY must not be joined with AND: {jql}"
+        );
+        assert!(jql.ends_with("ORDER BY updated DESC"));
+    }
+
+    #[test]
+    fn fallback_jql_with_team_has_valid_order_by() {
+        let jql = build_fallback_jql(Some("PROJ"), None, Some("Alpha"));
+        assert!(
+            !jql.contains("AND ORDER BY"),
+            "ORDER BY must not be joined with AND: {jql}"
+        );
+        assert!(jql.contains("\"Team\" = \"Alpha\""));
+        assert!(jql.ends_with("ORDER BY updated DESC"));
+    }
+
+    #[test]
+    fn fallback_jql_with_all_filters() {
+        let jql = build_fallback_jql(Some("PROJ"), Some("In Progress"), Some("Beta"));
+        assert!(
+            !jql.contains("AND ORDER BY"),
+            "ORDER BY must not be joined with AND: {jql}"
+        );
+        assert!(jql.contains("project = \"PROJ\""));
+        assert!(jql.contains("status = \"In Progress\""));
+        assert!(jql.contains("\"Team\" = \"Beta\""));
+        assert!(jql.ends_with("ORDER BY updated DESC"));
+    }
+
+    #[test]
+    fn fallback_jql_no_filters_still_has_order_by() {
+        let jql = build_fallback_jql(None, None, None);
+        assert_eq!(jql, " ORDER BY updated DESC");
+    }
+
+    #[test]
+    fn fallback_jql_with_status_only() {
+        let jql = build_fallback_jql(None, Some("Done"), None);
+        assert_eq!(jql, "status = \"Done\" ORDER BY updated DESC");
+    }
 }
