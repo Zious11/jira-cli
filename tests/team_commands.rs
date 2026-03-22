@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 mod common;
 
 use wiremock::matchers::{method, path, path_regex};
@@ -10,8 +11,7 @@ async fn test_get_org_metadata() {
     Mock::given(method("POST"))
         .and(path("/gateway/api/graphql"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(common::fixtures::graphql_org_metadata_json()),
+            ResponseTemplate::new(200).set_body_json(common::fixtures::graphql_org_metadata_json()),
         )
         .mount(&server)
         .await;
@@ -30,9 +30,7 @@ async fn test_list_teams() {
 
     Mock::given(method("GET"))
         .and(path_regex("/gateway/api/public/teams/v1/org/.*/teams"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(common::fixtures::teams_list_json()),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(common::fixtures::teams_list_json()))
         .mount(&server)
         .await;
 

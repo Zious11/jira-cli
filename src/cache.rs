@@ -87,8 +87,14 @@ mod tests {
     fn write_then_read_returns_data() {
         with_temp_cache(|| {
             let teams = vec![
-                CachedTeam { id: "uuid-1".into(), name: "Alpha".into() },
-                CachedTeam { id: "uuid-2".into(), name: "Beta".into() },
+                CachedTeam {
+                    id: "uuid-1".into(),
+                    name: "Alpha".into(),
+                },
+                CachedTeam {
+                    id: "uuid-2".into(),
+                    name: "Beta".into(),
+                },
             ];
             write_team_cache(&teams).unwrap();
 
@@ -104,7 +110,10 @@ mod tests {
         with_temp_cache(|| {
             let expired = TeamCache {
                 fetched_at: Utc::now() - chrono::Duration::days(8),
-                teams: vec![CachedTeam { id: "uuid-1".into(), name: "Old".into() }],
+                teams: vec![CachedTeam {
+                    id: "uuid-1".into(),
+                    name: "Old".into(),
+                }],
             };
             let dir = cache_dir();
             std::fs::create_dir_all(&dir).unwrap();
@@ -121,7 +130,10 @@ mod tests {
         with_temp_cache(|| {
             let recent = TeamCache {
                 fetched_at: Utc::now() - chrono::Duration::days(3),
-                teams: vec![CachedTeam { id: "uuid-1".into(), name: "Recent".into() }],
+                teams: vec![CachedTeam {
+                    id: "uuid-1".into(),
+                    name: "Recent".into(),
+                }],
             };
             let dir = cache_dir();
             std::fs::create_dir_all(&dir).unwrap();

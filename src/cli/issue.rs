@@ -228,12 +228,18 @@ async fn handle_list(
                         format!("{} ORDER BY rank ASC", where_clause)
                     }
                 }
-                Err(_) => {
-                    build_fallback_jql(project_key.as_deref(), status.as_deref(), resolved_team.as_ref())
-                }
+                Err(_) => build_fallback_jql(
+                    project_key.as_deref(),
+                    status.as_deref(),
+                    resolved_team.as_ref(),
+                ),
             }
         } else {
-            build_fallback_jql(project_key.as_deref(), status.as_deref(), resolved_team.as_ref())
+            build_fallback_jql(
+                project_key.as_deref(),
+                status.as_deref(),
+                resolved_team.as_ref(),
+            )
         }
     };
 
@@ -971,7 +977,10 @@ mod tests {
     #[test]
     fn fallback_jql_order_by_not_joined_with_and() {
         let jql = build_fallback_jql(Some("PROJ"), None, None);
-        assert!(!jql.contains("AND ORDER BY"), "ORDER BY must not be joined with AND: {jql}");
+        assert!(
+            !jql.contains("AND ORDER BY"),
+            "ORDER BY must not be joined with AND: {jql}"
+        );
         assert!(jql.ends_with("ORDER BY updated DESC"));
     }
 
@@ -979,7 +988,10 @@ mod tests {
     fn fallback_jql_with_team_has_valid_order_by() {
         let team = ("customfield_10001".to_string(), "uuid-123".to_string());
         let jql = build_fallback_jql(Some("PROJ"), None, Some(&team));
-        assert!(!jql.contains("AND ORDER BY"), "ORDER BY must not be joined with AND: {jql}");
+        assert!(
+            !jql.contains("AND ORDER BY"),
+            "ORDER BY must not be joined with AND: {jql}"
+        );
         assert!(jql.contains("customfield_10001 = \"uuid-123\""));
         assert!(jql.ends_with("ORDER BY updated DESC"));
     }
@@ -988,7 +1000,10 @@ mod tests {
     fn fallback_jql_with_all_filters() {
         let team = ("customfield_10001".to_string(), "uuid-456".to_string());
         let jql = build_fallback_jql(Some("PROJ"), Some("In Progress"), Some(&team));
-        assert!(!jql.contains("AND ORDER BY"), "ORDER BY must not be joined with AND: {jql}");
+        assert!(
+            !jql.contains("AND ORDER BY"),
+            "ORDER BY must not be joined with AND: {jql}"
+        );
         assert!(jql.contains("project = \"PROJ\""));
         assert!(jql.contains("status = \"In Progress\""));
         assert!(jql.contains("customfield_10001 = \"uuid-456\""));
