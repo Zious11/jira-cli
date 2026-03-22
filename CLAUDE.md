@@ -15,7 +15,7 @@ src/
 │   ├── board.rs         # board list/view
 │   ├── sprint.rs        # sprint list/current (scrum-only, errors on kanban)
 │   ├── worklog.rs       # worklog add/list
-│   ├── auth.rs          # auth login (OAuth + API token), auth status
+│   ├── auth.rs          # auth login (API token default, --oauth for OAuth 2.0), auth status
 │   ├── init.rs          # Interactive setup
 │   └── project.rs       # project fields (issue types, priorities for a project)
 ├── api/
@@ -63,7 +63,7 @@ cargo deny check                     # License + vulnerability audit
 
 See `docs/adr/` for detailed rationale:
 - ADR-0001: Thin client vs generated API client
-- ADR-0002: OAuth 2.0 with embedded client secret
+- ADR-0002: OAuth 2.0 auth approach (superseded — no embedded secrets, user-provided OAuth credentials)
 - ADR-0003: reqwest with rustls-tls
 - ADR-0004: Per-feature specs, not a growing master spec
 
