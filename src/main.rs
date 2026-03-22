@@ -63,7 +63,16 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         match cli.command {
             cli::Command::Completion { .. } => unreachable!(),
             cli::Command::Init => todo!("init"),
-            cli::Command::Auth { .. } => todo!("auth"),
+            cli::Command::Auth { command } => match command {
+                cli::AuthCommand::Login { token } => {
+                    if token {
+                        cli::auth::login_token().await
+                    } else {
+                        cli::auth::login_oauth().await
+                    }
+                }
+                cli::AuthCommand::Status => cli::auth::status().await,
+            },
             cli::Command::Me => {
                 let config = config::Config::load()?;
                 let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
