@@ -17,7 +17,13 @@ impl JiraClient {
         let mut next_page_token: Option<String> = None;
 
         let mut fields = vec![
-            "summary", "status", "issuetype", "priority", "assignee", "project", "description",
+            "summary",
+            "status",
+            "issuetype",
+            "priority",
+            "assignee",
+            "project",
+            "description",
         ];
         fields.extend_from_slice(extra_fields);
 
@@ -57,8 +63,8 @@ impl JiraClient {
 
     /// Get a single issue by key.
     pub async fn get_issue(&self, key: &str, extra_fields: &[&str]) -> Result<Issue> {
-        let mut fields = "summary,status,issuetype,priority,assignee,project,description,labels"
-            .to_string();
+        let mut fields =
+            "summary,status,issuetype,priority,assignee,project,description,labels".to_string();
         for f in extra_fields {
             fields.push(',');
             fields.push_str(f);

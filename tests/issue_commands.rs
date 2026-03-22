@@ -82,7 +82,12 @@ async fn test_search_issues_with_story_points() {
         .and(path("/rest/api/3/search/jql"))
         .respond_with(ResponseTemplate::new(200).set_body_json(
             common::fixtures::issue_search_response(vec![
-                common::fixtures::issue_response_with_points("FOO-1", "Story A", "To Do", Some(5.0)),
+                common::fixtures::issue_response_with_points(
+                    "FOO-1",
+                    "Story A",
+                    "To Do",
+                    Some(5.0),
+                ),
                 common::fixtures::issue_response_with_points("FOO-2", "Story B", "Done", None),
             ]),
         ))
@@ -97,7 +102,10 @@ async fn test_search_issues_with_story_points() {
         .unwrap();
 
     assert_eq!(issues.len(), 2);
-    assert_eq!(issues[0].fields.story_points("customfield_10031"), Some(5.0));
+    assert_eq!(
+        issues[0].fields.story_points("customfield_10031"),
+        Some(5.0)
+    );
     assert_eq!(issues[1].fields.story_points("customfield_10031"), None);
 }
 

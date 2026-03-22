@@ -48,8 +48,7 @@ impl JiraClient {
                 "/rest/agile/1.0/sprint/{}/issue?startAt={}&maxResults={}",
                 sprint_id, start_at, max_results
             );
-            let mut fields_str =
-                "summary,status,issuetype,priority,assignee,project".to_string();
+            let mut fields_str = "summary,status,issuetype,priority,assignee,project".to_string();
             for f in extra_fields {
                 fields_str.push(',');
                 fields_str.push_str(f);

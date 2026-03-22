@@ -102,7 +102,10 @@ pub async fn handle() -> Result<()> {
                     None
                 }
                 1 => {
-                    eprintln!("Found story points field: {} ({})", matches[0].1, matches[0].0);
+                    eprintln!(
+                        "Found story points field: {} ({})",
+                        matches[0].1, matches[0].0
+                    );
                     Some(matches[0].0.clone())
                 }
                 _ => {

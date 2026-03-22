@@ -267,11 +267,31 @@ async fn handle_list(
                     .unwrap_or_else(|| "-".into());
                 vec![
                     issue.key.clone(),
-                    issue.fields.issue_type.as_ref().map(|t| t.name.clone()).unwrap_or_default(),
-                    issue.fields.status.as_ref().map(|s| s.name.clone()).unwrap_or_default(),
-                    issue.fields.priority.as_ref().map(|p| p.name.clone()).unwrap_or_default(),
+                    issue
+                        .fields
+                        .issue_type
+                        .as_ref()
+                        .map(|t| t.name.clone())
+                        .unwrap_or_default(),
+                    issue
+                        .fields
+                        .status
+                        .as_ref()
+                        .map(|s| s.name.clone())
+                        .unwrap_or_default(),
+                    issue
+                        .fields
+                        .priority
+                        .as_ref()
+                        .map(|p| p.name.clone())
+                        .unwrap_or_default(),
                     pts,
-                    issue.fields.assignee.as_ref().map(|a| a.display_name.clone()).unwrap_or_else(|| "Unassigned".into()),
+                    issue
+                        .fields
+                        .assignee
+                        .as_ref()
+                        .map(|a| a.display_name.clone())
+                        .unwrap_or_else(|| "Unassigned".into()),
                     issue.fields.summary.clone(),
                 ]
             })
@@ -279,7 +299,9 @@ async fn handle_list(
 
         output::print_output(
             output_format,
-            &["Key", "Type", "Status", "Priority", "Points", "Assignee", "Summary"],
+            &[
+                "Key", "Type", "Status", "Priority", "Points", "Assignee", "Summary",
+            ],
             &rows,
             &issues,
         )?;
@@ -317,7 +339,12 @@ fn build_fallback_jql(
 
 // ── View ──────────────────────────────────────────────────────────────
 
-async fn handle_view(key: &str, output_format: &OutputFormat, config: &Config, client: &JiraClient) -> Result<()> {
+async fn handle_view(
+    key: &str,
+    output_format: &OutputFormat,
+    config: &Config,
+    client: &JiraClient,
+) -> Result<()> {
     let sp_field_id = config.global.fields.story_points_field_id.as_deref();
     let extra: Vec<&str> = sp_field_id.iter().copied().collect();
     let issue = client.get_issue(key, &extra).await?;
