@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 description = "A fast CLI for Jira Cloud"
 repository = "https://github.com/Zious11/jira-cli"
+rust-version = "1.85"
+license = "MIT"
 
 [[bin]]
 name = "jr"
