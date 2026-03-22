@@ -60,6 +60,7 @@ cargo deny check                     # License + vulnerability audit
 - **Idempotent:** State-changing commands (move, assign) exit 0 if already in target state.
 - **Tests:** TDD. Unit tests inline, integration tests in `tests/`. Property tests with proptest. Snapshot tests with insta.
 - **No unsafe code** without explicit justification in a comment.
+- **No lint suppression without refactoring.** If clippy warns (e.g., `too_many_arguments`), refactor to fix the root cause — don't add `#[allow]`. If refactoring is impractical, ask the user before suppressing.
 
 ## Key Decisions
 
