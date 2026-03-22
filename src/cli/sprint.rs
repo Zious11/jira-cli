@@ -148,64 +148,16 @@ async fn handle_current(
 
             eprintln!();
 
-            if let Some(field_id) = sp_field_id {
-                let rows: Vec<Vec<String>> = issues
-                    .iter()
-                    .map(|issue| {
-                        let pts = issue
-                            .fields
-                            .story_points(field_id)
-                            .map(super::issue::format_points)
-                            .unwrap_or_else(|| "-".into());
-                        vec![
-                            issue.key.clone(),
-                            issue
-                                .fields
-                                .issue_type
-                                .as_ref()
-                                .map(|t| t.name.clone())
-                                .unwrap_or_default(),
-                            issue
-                                .fields
-                                .status
-                                .as_ref()
-                                .map(|s| s.name.clone())
-                                .unwrap_or_default(),
-                            issue
-                                .fields
-                                .priority
-                                .as_ref()
-                                .map(|p| p.name.clone())
-                                .unwrap_or_default(),
-                            pts,
-                            issue
-                                .fields
-                                .assignee
-                                .as_ref()
-                                .map(|a| a.display_name.clone())
-                                .unwrap_or_else(|| "Unassigned".into()),
-                            issue.fields.summary.clone(),
-                        ]
-                    })
-                    .collect();
-
-                output::print_output(
-                    output_format,
-                    &[
-                        "Key", "Type", "Status", "Priority", "Points", "Assignee", "Summary",
-                    ],
-                    &rows,
-                    &issues,
-                )?;
-            } else {
-                let rows = super::issue::format_issue_rows_public(&issues);
-                output::print_output(
-                    output_format,
-                    &["Key", "Type", "Status", "Priority", "Assignee", "Summary"],
-                    &rows,
-                    &issues,
-                )?;
-            }
+            let rows: Vec<Vec<String>> = issues
+                .iter()
+                .map(|issue| super::issue::format_issue_row(issue, sp_field_id))
+                .collect();
+            output::print_output(
+                output_format,
+                &super::issue::issue_table_headers(sp_field_id.is_some()),
+                &rows,
+                &issues,
+            )?;
         }
     }
 
