@@ -36,10 +36,7 @@ impl JiraClient {
         let mut cursor: Option<String> = None;
 
         loop {
-            let mut path = format!(
-                "/gateway/api/public/teams/v1/org/{}/teams",
-                org_id
-            );
+            let mut path = format!("/gateway/api/public/teams/v1/org/{}/teams", org_id);
             if let Some(ref c) = cursor {
                 path.push_str(&format!("?cursor={}", urlencoding::encode(c)));
             }
