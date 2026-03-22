@@ -22,7 +22,7 @@ async fn test_search_issues() {
     let client =
         jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
     let issues = client
-        .search_issues("assignee = currentUser()", None)
+        .search_issues("assignee = currentUser()", None, &[])
         .await
         .unwrap();
     assert_eq!(issues.len(), 1);
@@ -46,7 +46,7 @@ async fn test_get_issue() {
 
     let client =
         jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
-    let issue = client.get_issue("FOO-1").await.unwrap();
+    let issue = client.get_issue("FOO-1", &[]).await.unwrap();
     assert_eq!(issue.key, "FOO-1");
     assert_eq!(issue.fields.status.unwrap().name, "In Progress");
 }

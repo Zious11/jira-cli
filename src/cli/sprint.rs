@@ -74,7 +74,7 @@ async fn handle_current(
     }
 
     let sprint = &sprints[0];
-    let issues = client.get_sprint_issues(sprint.id, None).await?;
+    let issues = client.get_sprint_issues(sprint.id, None, &[]).await?;
 
     match output_format {
         OutputFormat::Json => {

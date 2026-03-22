@@ -50,7 +50,7 @@ async fn handle_view(
             bail!("No active sprint found for board {}.", board_id);
         }
         let sprint = &sprints[0];
-        client.get_sprint_issues(sprint.id, None).await?
+        client.get_sprint_issues(sprint.id, None, &[]).await?
     } else {
         // Kanban: search for issues not in Done status category
         let project_key = config.project_key(None);
@@ -61,7 +61,7 @@ async fn handle_view(
         jql_parts.push("statusCategory != Done".into());
         jql_parts.push("ORDER BY rank ASC".into());
         let jql = jql_parts.join(" AND ");
-        client.search_issues(&jql, None).await?
+        client.search_issues(&jql, None, &[]).await?
     };
 
     let rows = super::issue::format_issue_rows_public(&issues);

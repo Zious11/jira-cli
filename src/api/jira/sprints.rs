@@ -33,7 +33,12 @@ impl JiraClient {
     }
 
     /// Get issues in a specific sprint, with optional JQL filter.
-    pub async fn get_sprint_issues(&self, sprint_id: u64, jql: Option<&str>) -> Result<Vec<Issue>> {
+    pub async fn get_sprint_issues(
+        &self,
+        sprint_id: u64,
+        jql: Option<&str>,
+        extra_fields: &[&str],
+    ) -> Result<Vec<Issue>> {
         let mut all_issues: Vec<Issue> = Vec::new();
         let mut start_at: u32 = 0;
         let max_results: u32 = 50;
@@ -43,6 +48,13 @@ impl JiraClient {
                 "/rest/agile/1.0/sprint/{}/issue?startAt={}&maxResults={}",
                 sprint_id, start_at, max_results
             );
+            let mut fields_str =
+                "summary,status,issuetype,priority,assignee,project".to_string();
+            for f in extra_fields {
+                fields_str.push(',');
+                fields_str.push_str(f);
+            }
+            path.push_str(&format!("&fields={}", fields_str));
             if let Some(q) = jql {
                 path.push_str(&format!("&jql={}", urlencoding::encode(q)));
             }

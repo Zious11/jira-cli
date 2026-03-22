@@ -6,16 +6,26 @@ use serde_json::Value;
 
 impl JiraClient {
     /// Search issues using JQL with cursor-based pagination.
-    pub async fn search_issues(&self, jql: &str, limit: Option<u32>) -> Result<Vec<Issue>> {
+    pub async fn search_issues(
+        &self,
+        jql: &str,
+        limit: Option<u32>,
+        extra_fields: &[&str],
+    ) -> Result<Vec<Issue>> {
         let max_per_page = limit.unwrap_or(50).min(100);
         let mut all_issues: Vec<Issue> = Vec::new();
         let mut next_page_token: Option<String> = None;
+
+        let mut fields = vec![
+            "summary", "status", "issuetype", "priority", "assignee", "project", "description",
+        ];
+        fields.extend_from_slice(extra_fields);
 
         loop {
             let mut body = serde_json::json!({
                 "jql": jql,
                 "maxResults": max_per_page,
-                "fields": ["summary", "status", "issuetype", "priority", "assignee", "project", "description"]
+                "fields": fields
             });
 
             if let Some(ref token) = next_page_token {
@@ -46,10 +56,17 @@ impl JiraClient {
     }
 
     /// Get a single issue by key.
-    pub async fn get_issue(&self, key: &str) -> Result<Issue> {
+    pub async fn get_issue(&self, key: &str, extra_fields: &[&str]) -> Result<Issue> {
+        let mut fields = "summary,status,issuetype,priority,assignee,project,description,labels"
+            .to_string();
+        for f in extra_fields {
+            fields.push(',');
+            fields.push_str(f);
+        }
         let path = format!(
-            "/rest/api/3/issue/{}?fields=summary,status,issuetype,priority,assignee,project,description,labels",
-            urlencoding::encode(key)
+            "/rest/api/3/issue/{}?fields={}",
+            urlencoding::encode(key),
+            fields
         );
         self.get(&path).await
     }

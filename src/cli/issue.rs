@@ -243,7 +243,7 @@ async fn handle_list(
         }
     };
 
-    let issues = client.search_issues(&effective_jql, limit).await?;
+    let issues = client.search_issues(&effective_jql, limit, &[]).await?;
     let rows = format_issue_rows_public(&issues);
 
     output::print_output(
@@ -278,7 +278,7 @@ fn build_fallback_jql(
 // ── View ──────────────────────────────────────────────────────────────
 
 async fn handle_view(key: &str, output_format: &OutputFormat, client: &JiraClient) -> Result<()> {
-    let issue = client.get_issue(key).await?;
+    let issue = client.get_issue(key, &[]).await?;
 
     match output_format {
         OutputFormat::Json => {
@@ -587,7 +587,7 @@ async fn handle_move(
     }
 
     // Check current status first
-    let issue = client.get_issue(key).await?;
+    let issue = client.get_issue(key, &[]).await?;
     let current_status = issue
         .fields
         .status
@@ -791,7 +791,7 @@ async fn handle_assign(
         let me = client.get_myself().await?;
 
         // Idempotent: check if already assigned to self
-        let issue = client.get_issue(key).await?;
+        let issue = client.get_issue(key, &[]).await?;
         if let Some(ref assignee) = issue.fields.assignee {
             if assignee.account_id == me.account_id {
                 match output_format {
