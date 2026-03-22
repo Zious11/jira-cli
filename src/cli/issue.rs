@@ -71,6 +71,7 @@ pub async fn handle(
                 config,
                 client,
                 project_override,
+                no_input,
             )
             .await
         }
@@ -164,7 +165,15 @@ async fn handle_list(
     config: &Config,
     client: &JiraClient,
     project_override: Option<&str>,
+    no_input: bool,
 ) -> Result<()> {
+    // Resolve team name to (field_id, uuid) before building JQL
+    let resolved_team = if let Some(ref team_name) = team {
+        Some(resolve_team_field(config, client, team_name, no_input).await?)
+    } else {
+        None
+    };
+
     let effective_jql = if let Some(raw_jql) = jql {
         raw_jql
     } else {
@@ -189,8 +198,8 @@ async fn handle_list(
                                 if let Some(ref s) = status {
                                     jql_parts.push(format!("status = \"{}\"", s));
                                 }
-                                if let Some(ref t) = team {
-                                    jql_parts.push(format!("\"Team\" = \"{}\"", t));
+                                if let Some((field_id, team_uuid)) = &resolved_team {
+                                    jql_parts.push(format!("{} = \"{}\"", field_id, team_uuid));
                                 }
                                 let where_clause = jql_parts.join(" AND ");
                                 format!("{} ORDER BY rank ASC", where_clause)
@@ -198,7 +207,7 @@ async fn handle_list(
                             _ => build_fallback_jql(
                                 project_key.as_deref(),
                                 status.as_deref(),
-                                team.as_deref(),
+                                resolved_team.as_ref(),
                             ),
                         }
                     } else {
@@ -212,19 +221,19 @@ async fn handle_list(
                         if let Some(ref s) = status {
                             jql_parts.push(format!("status = \"{}\"", s));
                         }
-                        if let Some(ref t) = team {
-                            jql_parts.push(format!("\"Team\" = \"{}\"", t));
+                        if let Some((field_id, team_uuid)) = &resolved_team {
+                            jql_parts.push(format!("{} = \"{}\"", field_id, team_uuid));
                         }
                         let where_clause = jql_parts.join(" AND ");
                         format!("{} ORDER BY rank ASC", where_clause)
                     }
                 }
                 Err(_) => {
-                    build_fallback_jql(project_key.as_deref(), status.as_deref(), team.as_deref())
+                    build_fallback_jql(project_key.as_deref(), status.as_deref(), resolved_team.as_ref())
                 }
             }
         } else {
-            build_fallback_jql(project_key.as_deref(), status.as_deref(), team.as_deref())
+            build_fallback_jql(project_key.as_deref(), status.as_deref(), resolved_team.as_ref())
         }
     };
 
@@ -244,7 +253,7 @@ async fn handle_list(
 fn build_fallback_jql(
     project_key: Option<&str>,
     status: Option<&str>,
-    team: Option<&str>,
+    resolved_team: Option<&(String, String)>,
 ) -> String {
     let mut parts: Vec<String> = Vec::new();
     if let Some(pk) = project_key {
@@ -253,8 +262,8 @@ fn build_fallback_jql(
     if let Some(s) = status {
         parts.push(format!("status = \"{}\"", s));
     }
-    if let Some(t) = team {
-        parts.push(format!("\"Team\" = \"{}\"", t));
+    if let Some((field_id, team_uuid)) = resolved_team {
+        parts.push(format!("{} = \"{}\"", field_id, team_uuid));
     }
     let where_clause = parts.join(" AND ");
     format!("{} ORDER BY updated DESC", where_clause)
@@ -962,34 +971,27 @@ mod tests {
     #[test]
     fn fallback_jql_order_by_not_joined_with_and() {
         let jql = build_fallback_jql(Some("PROJ"), None, None);
-        assert!(
-            !jql.contains("AND ORDER BY"),
-            "ORDER BY must not be joined with AND: {jql}"
-        );
+        assert!(!jql.contains("AND ORDER BY"), "ORDER BY must not be joined with AND: {jql}");
         assert!(jql.ends_with("ORDER BY updated DESC"));
     }
 
     #[test]
     fn fallback_jql_with_team_has_valid_order_by() {
-        let jql = build_fallback_jql(Some("PROJ"), None, Some("Alpha"));
-        assert!(
-            !jql.contains("AND ORDER BY"),
-            "ORDER BY must not be joined with AND: {jql}"
-        );
-        assert!(jql.contains("\"Team\" = \"Alpha\""));
+        let team = ("customfield_10001".to_string(), "uuid-123".to_string());
+        let jql = build_fallback_jql(Some("PROJ"), None, Some(&team));
+        assert!(!jql.contains("AND ORDER BY"), "ORDER BY must not be joined with AND: {jql}");
+        assert!(jql.contains("customfield_10001 = \"uuid-123\""));
         assert!(jql.ends_with("ORDER BY updated DESC"));
     }
 
     #[test]
     fn fallback_jql_with_all_filters() {
-        let jql = build_fallback_jql(Some("PROJ"), Some("In Progress"), Some("Beta"));
-        assert!(
-            !jql.contains("AND ORDER BY"),
-            "ORDER BY must not be joined with AND: {jql}"
-        );
+        let team = ("customfield_10001".to_string(), "uuid-456".to_string());
+        let jql = build_fallback_jql(Some("PROJ"), Some("In Progress"), Some(&team));
+        assert!(!jql.contains("AND ORDER BY"), "ORDER BY must not be joined with AND: {jql}");
         assert!(jql.contains("project = \"PROJ\""));
         assert!(jql.contains("status = \"In Progress\""));
-        assert!(jql.contains("\"Team\" = \"Beta\""));
+        assert!(jql.contains("customfield_10001 = \"uuid-456\""));
         assert!(jql.ends_with("ORDER BY updated DESC"));
     }
 
