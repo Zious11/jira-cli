@@ -61,17 +61,17 @@ Reading as "FOO-1 blocks FOO-2". Calls `POST /rest/api/3/issueLink` with:
 
 ```json
 {
-  "inwardIssue": {"key": "FOO-1"},
-  "outwardIssue": {"key": "FOO-2"},
+  "outwardIssue": {"key": "FOO-1"},
+  "inwardIssue": {"key": "FOO-2"},
   "type": {"name": "Blocks"}
 }
 ```
 
-In Jira's link model, `inwardIssue` is the source of the action and `outwardIssue` is the target. So for "Blocks": inward = the issue that blocks, outward = the issue that is blocked.
+In Jira's link model, `outwardIssue` gets the "outward" label of the link type. For "Blocks": outward = "blocks", inward = "is blocked by". So `outwardIssue = FOO-1` means "FOO-1 blocks", and `inwardIssue = FOO-2` means "FOO-2 is blocked by". Validated against live instance link type definitions.
 
-**Response:** HTTP 201 Created with no response body. Use `post_no_content` (same pattern as `transition_issue`).
+**Response:** Returns nothing on success. Use `post_no_content` (same pattern as `transition_issue`). To get the link ID, fetch the issue's `issuelinks` field afterward.
 
-**Idempotent:** Before creating, fetch existing links on the outward issue and check if a link of the same type to the inward issue already exists. If so, exit 0 with "already linked" message.
+**Idempotent:** The Jira API itself is idempotent for link creation — duplicate link requests silently succeed (per official Atlassian docs: "If the link request duplicates a link, the response indicates that the issue link was created"). No client-side duplicate check needed.
 
 **Type matching:** Link type names are title case in Jira ("Blocks", "Duplicate", "Relates"). Use case-insensitive partial matching (same `partial_match` module used for transitions). If ambiguous, prompt or error in `--no-input` mode.
 
@@ -274,7 +274,7 @@ Add to `IssueFields`:
 | Parent issue not found | Surface Jira's 404: "Issue FOO-999 not found" |
 | Link type not found | Error: "Unknown link type 'foo'. Run 'jr issue link-types' to see available types." |
 | Ambiguous link type match | Prompt to select (or error listing matches in `--no-input`) |
-| Link already exists | Exit 0: "FOO-1 already blocks FOO-2" |
+| Link already exists | API silently succeeds — exit 0 (idempotent by design) |
 | No link to remove | Exit 0: "No link found between FOO-1 and FOO-2" |
 | Self-linking | Client-side error before API call: "Cannot link an issue to itself." |
 | Permission denied | Surface Jira's 401/403 error |
@@ -283,7 +283,7 @@ Add to `IssueFields`:
 
 All commands support `--output json`:
 
-- **`link`:** `{"key1": "FOO-1", "key2": "FOO-2", "type": "Blocks", "created": true}` or `{"created": false, "reason": "already linked"}`
+- **`link`:** `{"key1": "FOO-1", "key2": "FOO-2", "type": "Blocks", "linked": true}`
 - **`unlink`:** `{"unlinked": true, "count": 2}` or `{"unlinked": false, "count": 0}`
 - **`link-types`:** the array from the API response
 - **`view`:** parent and links included in the existing JSON output
