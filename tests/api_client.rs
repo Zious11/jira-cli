@@ -4,7 +4,6 @@ use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct MyselfResponse {
     account_id: String,
     display_name: String,

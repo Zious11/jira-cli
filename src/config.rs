@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use figment::{
     providers::{Env, Format, Serialized, Toml},
     Figment,

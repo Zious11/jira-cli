@@ -1,8 +1,6 @@
 use thiserror::Error;
 
 #[derive(Error, Debug)]
-// TODO: remove #[allow(dead_code)] once subcommands are implemented
-#[allow(dead_code)]
 pub enum JrError {
     #[error("Not authenticated. Run \"jr auth login\" to connect.")]
     NotAuthenticated,
