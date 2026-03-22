@@ -4,6 +4,7 @@ pub mod init;
 pub mod issue;
 pub mod project;
 pub mod sprint;
+pub mod team;
 pub mod worklog;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -77,6 +78,11 @@ pub enum Command {
     Worklog {
         #[command(subcommand)]
         command: WorklogCommand,
+    },
+    /// Manage teams
+    Team {
+        #[command(subcommand)]
+        command: TeamCommand,
     },
     /// Generate shell completions
     Completion {
@@ -242,6 +248,16 @@ pub enum SprintCommand {
     List,
     /// Show current sprint issues
     Current,
+}
+
+#[derive(Subcommand)]
+pub enum TeamCommand {
+    /// List available teams
+    List {
+        /// Force refresh from API, ignoring cache
+        #[arg(long)]
+        refresh: bool,
+    },
 }
 
 #[derive(Subcommand)]
