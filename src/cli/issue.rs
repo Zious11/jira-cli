@@ -88,7 +88,7 @@ pub async fn handle(
             priority,
             label,
             team,
-            points: _points,
+            points,
             markdown,
         } => {
             handle_create(
@@ -100,6 +100,7 @@ pub async fn handle(
                 priority,
                 label,
                 team,
+                points,
                 markdown,
                 output_format,
                 config,
@@ -388,6 +389,7 @@ async fn handle_create(
     priority: Option<String>,
     labels: Vec<String>,
     team: Option<String>,
+    points: Option<f64>,
     markdown: bool,
     output_format: &OutputFormat,
     config: &Config,
@@ -467,6 +469,11 @@ async fn handle_create(
     if let Some(ref team_name) = team {
         let (field_id, team_id) = resolve_team_field(config, client, team_name, no_input).await?;
         fields[&field_id] = json!(team_id);
+    }
+
+    if let Some(pts) = points {
+        let field_id = resolve_story_points_field_id(config)?;
+        fields[&field_id] = json!(pts);
     }
 
     let response = client.create_issue(fields).await?;
@@ -1000,7 +1007,6 @@ pub fn format_points(value: f64) -> String {
     }
 }
 
-#[allow(dead_code)] // wired in Tasks 7-8
 fn resolve_story_points_field_id(config: &Config) -> Result<String> {
     config
         .global
