@@ -389,7 +389,7 @@ async fn handle_create(
         team,
         points,
         markdown,
-        parent: _,
+        parent,
     } = command
     else {
         unreachable!()
@@ -474,6 +474,10 @@ async fn handle_create(
         fields[&field_id] = json!(pts);
     }
 
+    if let Some(ref parent_key) = parent {
+        fields["parent"] = json!({"key": parent_key});
+    }
+
     let response = client.create_issue(fields).await?;
 
     match output_format {
@@ -506,7 +510,7 @@ async fn handle_edit(
         team,
         points,
         no_points,
-        parent: _,
+        parent,
     } = command
     else {
         unreachable!()
@@ -545,6 +549,11 @@ async fn handle_edit(
     if no_points {
         let field_id = resolve_story_points_field_id(config)?;
         fields[&field_id] = json!(null);
+        has_updates = true;
+    }
+
+    if let Some(ref parent_key) = parent {
+        fields["parent"] = json!({"key": parent_key});
         has_updates = true;
     }
 
@@ -590,7 +599,7 @@ async fn handle_edit(
 
     if !has_updates {
         bail!(
-            "No fields specified to update. Use --summary, --type, --priority, --label, --team, --points, or --no-points."
+            "No fields specified to update. Use --summary, --type, --priority, --label, --team, --points, --no-points, or --parent."
         );
     }
 
