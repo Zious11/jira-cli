@@ -61,6 +61,7 @@ pub async fn handle(
             status,
             team,
             limit,
+            points: _points,
         } => {
             handle_list(
                 jql,
@@ -87,6 +88,7 @@ pub async fn handle(
             priority,
             label,
             team,
+            points: _points,
             markdown,
         } => {
             handle_create(
@@ -115,6 +117,8 @@ pub async fn handle(
             priority,
             label,
             team,
+            points: _points,
+            no_points: _no_points,
         } => {
             handle_edit(
                 &key,
@@ -973,6 +977,31 @@ async fn resolve_team_field(
     }
 }
 
+pub fn format_points(value: f64) -> String {
+    if !value.is_finite() {
+        return "-".to_string();
+    }
+    if value.fract() == 0.0 {
+        format!("{}", value as i64)
+    } else {
+        format!("{}", value)
+    }
+}
+
+#[allow(dead_code)] // wired in Tasks 7-8
+fn resolve_story_points_field_id(config: &Config) -> Result<String> {
+    config
+        .global
+        .fields
+        .story_points_field_id
+        .clone()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Story points field not configured. Run \"jr init\" or set story_points_field_id under [fields] in ~/.config/jr/config.toml"
+            )
+        })
+}
+
 fn prompt_input(prompt: &str) -> Result<String> {
     let input: String = dialoguer::Input::new()
         .with_prompt(prompt)
@@ -1030,5 +1059,25 @@ mod tests {
     fn fallback_jql_with_status_only() {
         let jql = build_fallback_jql(None, Some("Done"), None);
         assert_eq!(jql, "status = \"Done\" ORDER BY updated DESC");
+    }
+
+    #[test]
+    fn format_points_whole_number() {
+        assert_eq!(format_points(5.0), "5");
+        assert_eq!(format_points(13.0), "13");
+        assert_eq!(format_points(0.0), "0");
+    }
+
+    #[test]
+    fn format_points_decimal() {
+        assert_eq!(format_points(3.5), "3.5");
+        assert_eq!(format_points(0.5), "0.5");
+    }
+
+    #[test]
+    fn format_points_non_finite() {
+        assert_eq!(format_points(f64::NAN), "-");
+        assert_eq!(format_points(f64::INFINITY), "-");
+        assert_eq!(format_points(f64::NEG_INFINITY), "-");
     }
 }
