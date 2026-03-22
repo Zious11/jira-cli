@@ -17,7 +17,7 @@ src/
 │   ├── worklog.rs       # worklog add/list
 │   ├── team.rs          # team list (with cache + lazy org discovery)
 │   ├── auth.rs          # auth login (API token default, --oauth for OAuth 2.0), auth status
-│   ├── init.rs          # Interactive setup (prefetches org metadata + team cache)
+│   ├── init.rs          # Interactive setup (prefetches org metadata + team cache + story points field)
 │   └── project.rs       # project fields (issue types, priorities for a project)
 ├── api/
 │   ├── client.rs        # JiraClient — HTTP methods, auth headers, rate limit retry, 429/401 handling

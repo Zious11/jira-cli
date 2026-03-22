@@ -36,7 +36,7 @@ jr issue list
 jr issue view KEY-123
 
 # Create an issue
-jr issue create -p FOO -t Bug -s "Auth token not refreshing" --priority High
+jr issue create -p FOO -t Bug -s "Auth token not refreshing" --priority High --points 5
 
 # Transition an issue
 jr issue move KEY-123 "In Progress"
@@ -56,10 +56,10 @@ jr issue comment KEY-123 "Deployed to staging"
 | `jr auth login` | Authenticate with API token (default) or `--oauth` for OAuth 2.0 |
 | `jr auth status` | Show authentication status |
 | `jr me` | Show current user info |
-| `jr issue list` | List issues (smart defaults for scrum/kanban, `--team` to filter) |
-| `jr issue view KEY` | View issue details |
-| `jr issue create` | Create an issue (`--team` to set team) |
-| `jr issue edit KEY` | Edit issue fields (`--team` to set team) |
+| `jr issue list` | List issues (smart defaults for scrum/kanban, `--team`, `--points`) |
+| `jr issue view KEY` | View issue details (includes story points) |
+| `jr issue create` | Create an issue (`--team`, `--points`) |
+| `jr issue edit KEY` | Edit issue fields (`--team`, `--points`, `--no-points`) |
 | `jr issue move KEY [STATUS]` | Transition issue (partial match on status name) |
 | `jr issue transitions KEY` | List available transitions |
 | `jr issue assign KEY` | Assign to self (or `--to USER`, `--unassign`) |
@@ -68,7 +68,7 @@ jr issue comment KEY-123 "Deployed to staging"
 | `jr board list` | List boards |
 | `jr board view` | Show current board issues |
 | `jr sprint list` | List sprints (scrum only) |
-| `jr sprint current` | Show current sprint issues |
+| `jr sprint current` | Show current sprint issues (with points summary) |
 | `jr worklog add KEY 2h` | Log time (`1h30m`, `1d`, `1w`) |
 | `jr worklog list KEY` | List worklogs |
 | `jr team list` | List available teams (`--refresh` to force update) |
@@ -106,6 +106,9 @@ auth_method = "api_token"  # or "oauth"
 
 [defaults]
 output = "table"
+
+[fields]
+story_points_field_id = "customfield_XXXXX"  # auto-discovered during init
 ```
 
 **Per-project config:**
