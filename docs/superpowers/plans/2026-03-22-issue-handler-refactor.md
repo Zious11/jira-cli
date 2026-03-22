@@ -354,7 +354,31 @@ Run: `cargo test --test issue_commands`
 Run: `cargo test --test team_commands`
 Expected: All pass — integration tests verify behavior is unchanged
 
-- [ ] **Step 4: Commit formatting if needed**
+- [ ] **Step 4: Build release binary and verify clap dispatch**
+
+```bash
+cargo build --release
+./target/release/jr --help
+./target/release/jr issue --help
+./target/release/jr issue list --help
+./target/release/jr issue create --help
+./target/release/jr issue edit --help
+```
+
+Expected: All help outputs render correctly with no panics. This proves the enum dispatch wiring is correct.
+
+- [ ] **Step 5: Live smoke test against Jira instance**
+
+```bash
+./target/release/jr issue list --limit 2
+./target/release/jr issue list --points --limit 2
+./target/release/jr issue view <any-issue-key>
+./target/release/jr sprint current
+```
+
+Expected: All commands return data without errors. This proves the handler functions receive and destructure the enum correctly at runtime.
+
+- [ ] **Step 6: Commit formatting if needed**
 
 ```bash
 cargo fmt --all
