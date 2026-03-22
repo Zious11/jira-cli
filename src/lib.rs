@@ -6,7 +6,6 @@ pub mod cli;
 pub mod config;
 pub mod duration;
 pub mod error;
-#[allow(dead_code)]
 pub mod output;
 pub mod partial_match;
 pub mod types;

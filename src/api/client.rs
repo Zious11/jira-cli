@@ -114,16 +114,9 @@ impl JiraClient {
         let mut last_response: Option<Response> = None;
 
         for attempt in 0..=MAX_RETRIES {
-            let req = if attempt == 0 {
-                request
-                    .try_clone()
-                    .expect("request should be cloneable (JSON body)")
-            } else {
-                // For retries we must clone again
-                request
-                    .try_clone()
-                    .expect("request should be cloneable (JSON body)")
-            };
+            let req = request
+                .try_clone()
+                .expect("request should be cloneable (JSON body)");
 
             let req = req.header("Authorization", &self.auth_header);
 

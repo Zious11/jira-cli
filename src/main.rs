@@ -62,7 +62,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     let main_task = async {
         match cli.command {
             cli::Command::Completion { .. } => unreachable!(),
-            cli::Command::Init => todo!("init"),
+            cli::Command::Init => anyhow::bail!("Command not yet implemented"),
             cli::Command::Auth { command } => match command {
                 cli::AuthCommand::Login { token } => {
                     if token {
@@ -92,11 +92,11 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 )?;
                 Ok(())
             }
-            cli::Command::Project { .. } => todo!("project"),
-            cli::Command::Issue { .. } => todo!("issue"),
-            cli::Command::Board { .. } => todo!("board"),
-            cli::Command::Sprint { .. } => todo!("sprint"),
-            cli::Command::Worklog { .. } => todo!("worklog"),
+            cli::Command::Project { .. } => anyhow::bail!("Command not yet implemented"),
+            cli::Command::Issue { .. } => anyhow::bail!("Command not yet implemented"),
+            cli::Command::Board { .. } => anyhow::bail!("Command not yet implemented"),
+            cli::Command::Sprint { .. } => anyhow::bail!("Command not yet implemented"),
+            cli::Command::Worklog { .. } => anyhow::bail!("Command not yet implemented"),
         }
     };
 
