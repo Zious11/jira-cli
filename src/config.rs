@@ -8,6 +8,7 @@ use std::path::PathBuf;
 #[derive(Debug, Deserialize, Serialize, Default)]
 pub struct FieldsConfig {
     pub team_field_id: Option<String>,
+    pub story_points_field_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Default)]

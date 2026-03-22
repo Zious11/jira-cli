@@ -120,6 +120,9 @@ pub enum IssueCommand {
         /// Maximum number of results
         #[arg(long)]
         limit: Option<u32>,
+        /// Show story points column
+        #[arg(long)]
+        points: bool,
     },
     /// Create a new issue
     Create {
@@ -147,6 +150,9 @@ pub enum IssueCommand {
         /// Team assignment
         #[arg(long)]
         team: Option<String>,
+        /// Story points
+        #[arg(long)]
+        points: Option<f64>,
         /// Interpret description as Markdown
         #[arg(long)]
         markdown: bool,
@@ -175,6 +181,12 @@ pub enum IssueCommand {
         /// Team assignment
         #[arg(long)]
         team: Option<String>,
+        /// Story points
+        #[arg(long, conflicts_with = "no_points")]
+        points: Option<f64>,
+        /// Clear story points
+        #[arg(long, conflicts_with = "points")]
+        no_points: bool,
     },
     /// Transition issue to a new status
     Move {

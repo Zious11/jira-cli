@@ -61,12 +61,14 @@ pub async fn handle(
             status,
             team,
             limit,
+            points,
         } => {
             handle_list(
                 jql,
                 status,
                 team,
                 limit,
+                points,
                 output_format,
                 config,
                 client,
@@ -76,7 +78,7 @@ pub async fn handle(
             .await
         }
 
-        IssueCommand::View { key } => handle_view(&key, output_format, client).await,
+        IssueCommand::View { key } => handle_view(&key, output_format, config, client).await,
 
         IssueCommand::Create {
             project,
@@ -87,6 +89,7 @@ pub async fn handle(
             priority,
             label,
             team,
+            points,
             markdown,
         } => {
             handle_create(
@@ -98,6 +101,7 @@ pub async fn handle(
                 priority,
                 label,
                 team,
+                points,
                 markdown,
                 output_format,
                 config,
@@ -115,6 +119,8 @@ pub async fn handle(
             priority,
             label,
             team,
+            points,
+            no_points,
         } => {
             handle_edit(
                 &key,
@@ -123,6 +129,8 @@ pub async fn handle(
                 priority,
                 label,
                 team,
+                points,
+                no_points,
                 output_format,
                 config,
                 client,
@@ -161,12 +169,15 @@ async fn handle_list(
     status: Option<String>,
     team: Option<String>,
     limit: Option<u32>,
+    show_points: bool,
     output_format: &OutputFormat,
     config: &Config,
     client: &JiraClient,
     project_override: Option<&str>,
     no_input: bool,
 ) -> Result<()> {
+    let sp_field_id = config.global.fields.story_points_field_id.as_deref();
+    let extra: Vec<&str> = sp_field_id.iter().copied().collect();
     // Resolve team name to (field_id, uuid) before building JQL
     let resolved_team = if let Some(ref team_name) = team {
         Some(resolve_team_field(config, client, team_name, no_input).await?)
@@ -243,15 +254,66 @@ async fn handle_list(
         }
     };
 
-    let issues = client.search_issues(&effective_jql, limit).await?;
-    let rows = format_issue_rows_public(&issues);
+    let issues = client.search_issues(&effective_jql, limit, &extra).await?;
 
-    output::print_output(
-        output_format,
-        &["Key", "Type", "Status", "Priority", "Assignee", "Summary"],
-        &rows,
-        &issues,
-    )?;
+    if let (true, Some(field_id)) = (show_points, sp_field_id) {
+        let rows: Vec<Vec<String>> = issues
+            .iter()
+            .map(|issue| {
+                let pts = issue
+                    .fields
+                    .story_points(field_id)
+                    .map(format_points)
+                    .unwrap_or_else(|| "-".into());
+                vec![
+                    issue.key.clone(),
+                    issue
+                        .fields
+                        .issue_type
+                        .as_ref()
+                        .map(|t| t.name.clone())
+                        .unwrap_or_default(),
+                    issue
+                        .fields
+                        .status
+                        .as_ref()
+                        .map(|s| s.name.clone())
+                        .unwrap_or_default(),
+                    issue
+                        .fields
+                        .priority
+                        .as_ref()
+                        .map(|p| p.name.clone())
+                        .unwrap_or_default(),
+                    pts,
+                    issue
+                        .fields
+                        .assignee
+                        .as_ref()
+                        .map(|a| a.display_name.clone())
+                        .unwrap_or_else(|| "Unassigned".into()),
+                    issue.fields.summary.clone(),
+                ]
+            })
+            .collect();
+
+        output::print_output(
+            output_format,
+            &[
+                "Key", "Type", "Status", "Priority", "Points", "Assignee", "Summary",
+            ],
+            &rows,
+            &issues,
+        )?;
+    } else {
+        let rows = format_issue_rows_public(&issues);
+        output::print_output(
+            output_format,
+            &["Key", "Type", "Status", "Priority", "Assignee", "Summary"],
+            &rows,
+            &issues,
+        )?;
+    }
 
     Ok(())
 }
@@ -277,8 +339,15 @@ fn build_fallback_jql(
 
 // ── View ──────────────────────────────────────────────────────────────
 
-async fn handle_view(key: &str, output_format: &OutputFormat, client: &JiraClient) -> Result<()> {
-    let issue = client.get_issue(key).await?;
+async fn handle_view(
+    key: &str,
+    output_format: &OutputFormat,
+    config: &Config,
+    client: &JiraClient,
+) -> Result<()> {
+    let sp_field_id = config.global.fields.story_points_field_id.as_deref();
+    let extra: Vec<&str> = sp_field_id.iter().copied().collect();
+    let issue = client.get_issue(key, &extra).await?;
 
     match output_format {
         OutputFormat::Json => {
@@ -292,7 +361,7 @@ async fn handle_view(key: &str, output_format: &OutputFormat, client: &JiraClien
                 .map(adf::adf_to_text)
                 .unwrap_or_else(|| "(no description)".into());
 
-            let rows = vec![
+            let mut rows = vec![
                 vec!["Key".into(), issue.key.clone()],
                 vec!["Summary".into(), issue.fields.summary.clone()],
                 vec![
@@ -350,8 +419,18 @@ async fn handle_view(key: &str, output_format: &OutputFormat, client: &JiraClien
                         .map(|l| l.join(", "))
                         .unwrap_or_else(|| "(none)".into()),
                 ],
-                vec!["Description".into(), desc_text],
             ];
+
+            if let Some(field_id) = sp_field_id {
+                let points_display = issue
+                    .fields
+                    .story_points(field_id)
+                    .map(format_points)
+                    .unwrap_or_else(|| "(none)".into());
+                rows.push(vec!["Points".into(), points_display]);
+            }
+
+            rows.push(vec!["Description".into(), desc_text]);
 
             println!("{}", output::render_table(&["Field", "Value"], &rows));
         }
@@ -372,6 +451,7 @@ async fn handle_create(
     priority: Option<String>,
     labels: Vec<String>,
     team: Option<String>,
+    points: Option<f64>,
     markdown: bool,
     output_format: &OutputFormat,
     config: &Config,
@@ -453,6 +533,11 @@ async fn handle_create(
         fields[&field_id] = json!(team_id);
     }
 
+    if let Some(pts) = points {
+        let field_id = resolve_story_points_field_id(config)?;
+        fields[&field_id] = json!(pts);
+    }
+
     let response = client.create_issue(fields).await?;
 
     match output_format {
@@ -477,6 +562,8 @@ async fn handle_edit(
     priority: Option<String>,
     labels: Vec<String>,
     team: Option<String>,
+    points: Option<f64>,
+    no_points: bool,
     output_format: &OutputFormat,
     config: &Config,
     client: &JiraClient,
@@ -503,6 +590,18 @@ async fn handle_edit(
     if let Some(ref team_name) = team {
         let (field_id, team_id) = resolve_team_field(config, client, team_name, no_input).await?;
         fields[&field_id] = json!(team_id);
+        has_updates = true;
+    }
+
+    if let Some(pts) = points {
+        let field_id = resolve_story_points_field_id(config)?;
+        fields[&field_id] = json!(pts);
+        has_updates = true;
+    }
+
+    if no_points {
+        let field_id = resolve_story_points_field_id(config)?;
+        fields[&field_id] = json!(null);
         has_updates = true;
     }
 
@@ -548,7 +647,7 @@ async fn handle_edit(
 
     if !has_updates {
         bail!(
-            "No fields specified to update. Use --summary, --type, --priority, --label, or --team."
+            "No fields specified to update. Use --summary, --type, --priority, --label, --team, --points, or --no-points."
         );
     }
 
@@ -587,7 +686,7 @@ async fn handle_move(
     }
 
     // Check current status first
-    let issue = client.get_issue(key).await?;
+    let issue = client.get_issue(key, &[]).await?;
     let current_status = issue
         .fields
         .status
@@ -791,7 +890,7 @@ async fn handle_assign(
         let me = client.get_myself().await?;
 
         // Idempotent: check if already assigned to self
-        let issue = client.get_issue(key).await?;
+        let issue = client.get_issue(key, &[]).await?;
         if let Some(ref assignee) = issue.fields.assignee {
             if assignee.account_id == me.account_id {
                 match output_format {
@@ -973,6 +1072,30 @@ async fn resolve_team_field(
     }
 }
 
+pub fn format_points(value: f64) -> String {
+    if !value.is_finite() {
+        return "-".to_string();
+    }
+    if value.fract() == 0.0 {
+        format!("{}", value as i64)
+    } else {
+        format!("{}", value)
+    }
+}
+
+fn resolve_story_points_field_id(config: &Config) -> Result<String> {
+    config
+        .global
+        .fields
+        .story_points_field_id
+        .clone()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Story points field not configured. Run \"jr init\" or set story_points_field_id under [fields] in ~/.config/jr/config.toml"
+            )
+        })
+}
+
 fn prompt_input(prompt: &str) -> Result<String> {
     let input: String = dialoguer::Input::new()
         .with_prompt(prompt)
@@ -1030,5 +1153,25 @@ mod tests {
     fn fallback_jql_with_status_only() {
         let jql = build_fallback_jql(None, Some("Done"), None);
         assert_eq!(jql, "status = \"Done\" ORDER BY updated DESC");
+    }
+
+    #[test]
+    fn format_points_whole_number() {
+        assert_eq!(format_points(5.0), "5");
+        assert_eq!(format_points(13.0), "13");
+        assert_eq!(format_points(0.0), "0");
+    }
+
+    #[test]
+    fn format_points_decimal() {
+        assert_eq!(format_points(3.5), "3.5");
+        assert_eq!(format_points(0.5), "0.5");
+    }
+
+    #[test]
+    fn format_points_non_finite() {
+        assert_eq!(format_points(f64::NAN), "-");
+        assert_eq!(format_points(f64::INFINITY), "-");
+        assert_eq!(format_points(f64::NEG_INFINITY), "-");
     }
 }
