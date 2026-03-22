@@ -57,30 +57,37 @@ pub async fn handle(
 ) -> Result<()> {
     match command {
         IssueCommand::List { .. } => {
-            handle_list(command, output_format, config, client, project_override, no_input).await
+            handle_list(
+                command,
+                output_format,
+                config,
+                client,
+                project_override,
+                no_input,
+            )
+            .await
         }
-        IssueCommand::View { .. } => {
-            handle_view(command, output_format, config, client).await
-        }
+        IssueCommand::View { .. } => handle_view(command, output_format, config, client).await,
         IssueCommand::Create { .. } => {
-            handle_create(command, output_format, config, client, project_override, no_input)
-                .await
+            handle_create(
+                command,
+                output_format,
+                config,
+                client,
+                project_override,
+                no_input,
+            )
+            .await
         }
         IssueCommand::Edit { .. } => {
             handle_edit(command, output_format, config, client, no_input).await
         }
-        IssueCommand::Move { .. } => {
-            handle_move(command, output_format, client, no_input).await
-        }
+        IssueCommand::Move { .. } => handle_move(command, output_format, client, no_input).await,
         IssueCommand::Transitions { .. } => {
             handle_transitions(command, output_format, client).await
         }
-        IssueCommand::Assign { .. } => {
-            handle_assign(command, output_format, client).await
-        }
-        IssueCommand::Comment { .. } => {
-            handle_comment(command, output_format, client).await
-        }
+        IssueCommand::Assign { .. } => handle_assign(command, output_format, client).await,
+        IssueCommand::Comment { .. } => handle_comment(command, output_format, client).await,
         IssueCommand::Open { .. } => handle_open(command, client).await,
     }
 }
