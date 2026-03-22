@@ -1,11 +1,7 @@
-mod cli;
-mod config;
-mod error;
-#[allow(dead_code)]
-mod output;
-
 use clap::{CommandFactory, Parser};
-use cli::Cli;
+use jr::cli;
+use jr::cli::Cli;
+use jr::error;
 
 #[tokio::main]
 async fn main() {
