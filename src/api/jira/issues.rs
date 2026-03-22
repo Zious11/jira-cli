@@ -64,7 +64,7 @@ impl JiraClient {
     /// Get a single issue by key.
     pub async fn get_issue(&self, key: &str, extra_fields: &[&str]) -> Result<Issue> {
         let mut fields =
-            "summary,status,issuetype,priority,assignee,project,description,labels".to_string();
+            "summary,status,issuetype,priority,assignee,project,description,labels,parent,issuelinks".to_string();
         for f in extra_fields {
             fields.push(',');
             fields.push_str(f);
