@@ -340,6 +340,16 @@ async fn handle_view(key: &str, output_format: &OutputFormat, client: &JiraClien
                         .map(|p| format!("{} ({})", p.name.as_deref().unwrap_or(""), p.key))
                         .unwrap_or_default(),
                 ],
+                vec![
+                    "Labels".into(),
+                    issue
+                        .fields
+                        .labels
+                        .as_ref()
+                        .filter(|l| !l.is_empty())
+                        .map(|l| l.join(", "))
+                        .unwrap_or_else(|| "(none)".into()),
+                ],
                 vec!["Description".into(), desc_text],
             ];
 

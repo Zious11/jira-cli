@@ -19,6 +19,8 @@ pub struct IssueFields {
     pub priority: Option<Priority>,
     pub assignee: Option<User>,
     pub project: Option<IssueProject>,
+    #[serde(default)]
+    pub labels: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
