@@ -35,3 +35,24 @@ pub fn transitions_response(transitions: Vec<(&str, &str)>) -> Value {
 pub fn error_response(messages: &[&str]) -> Value {
     json!({ "errorMessages": messages })
 }
+
+pub fn graphql_org_metadata_json() -> Value {
+    json!({
+        "data": {
+            "tenantContexts": [
+                { "orgId": "test-org-id-456", "cloudId": "test-cloud-id-123" }
+            ]
+        }
+    })
+}
+
+pub fn teams_list_json() -> Value {
+    json!({
+        "entities": [
+            { "teamId": "team-uuid-alpha", "displayName": "Alpha Team" },
+            { "teamId": "team-uuid-beta", "displayName": "Beta Team" },
+            { "teamId": "team-uuid-security", "displayName": "Security Engineering" }
+        ],
+        "cursor": null
+    })
+}
