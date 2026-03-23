@@ -4,7 +4,7 @@
 
 **Goal:** Warn on stderr when `--points` flag is used but `story_points_field_id` is not configured, instead of silently skipping (closes GitHub issue #18).
 
-**Architecture:** Extract a pure function `resolve_show_points` that encapsulates the flag+config resolution with warning. Replace the inline ternary in `handle_list`. Add 3 unit tests covering all branches.
+**Architecture:** Extract a helper function `resolve_show_points` that encapsulates the flag+config resolution and emits the warning to stderr. Replace the inline ternary in `handle_list`. Add 3 unit tests covering all branches.
 
 **Tech Stack:** Rust, anyhow
 
@@ -75,7 +75,7 @@ fn resolve_show_points<'a>(show_points: bool, sp_field_id: Option<&'a str>) -> O
             None => {
                 eprintln!(
                     "warning: --points ignored. Story points field not configured. \
-                     Run \"jr init\" or set story_points_field_id in ~/.config/jr/config.toml"
+                     Run \"jr init\" or set [fields].story_points_field_id in ~/.config/jr/config.toml"
                 );
                 None
             }

@@ -16,7 +16,7 @@ This violates the CLAUDE.md convention: "Errors: Always suggest what to do next.
 
 ### Extract `resolve_show_points` helper
 
-Extract the `show_points` + `sp_field_id` resolution into a pure function in `src/cli/issue/list.rs` so it can be unit tested:
+Extract the `show_points` + `sp_field_id` resolution into a small helper function in `src/cli/issue/list.rs` so it can be unit tested:
 
 ```rust
 /// Resolve whether to show story points. Returns the field ID if points should be shown,
@@ -28,7 +28,7 @@ fn resolve_show_points<'a>(show_points: bool, sp_field_id: Option<&'a str>) -> O
             None => {
                 eprintln!(
                     "warning: --points ignored. Story points field not configured. \
-                     Run \"jr init\" or set story_points_field_id in ~/.config/jr/config.toml"
+                     Run \"jr init\" or set [fields].story_points_field_id in ~/.config/jr/config.toml"
                 );
                 None
             }

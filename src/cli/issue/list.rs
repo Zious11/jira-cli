@@ -136,7 +136,7 @@ fn resolve_show_points(show_points: bool, sp_field_id: Option<&str>) -> Option<&
             None => {
                 eprintln!(
                     "warning: --points ignored. Story points field not configured. \
-                     Run \"jr init\" or set story_points_field_id in ~/.config/jr/config.toml"
+                     Run \"jr init\" or set [fields].story_points_field_id in ~/.config/jr/config.toml"
                 );
                 None
             }
