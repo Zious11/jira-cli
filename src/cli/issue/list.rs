@@ -111,7 +111,7 @@ pub(super) async fn handle_list(
 
     let issues = client.search_issues(&effective_jql, limit, &extra).await?;
 
-    let effective_sp = if show_points { sp_field_id } else { None };
+    let effective_sp = resolve_show_points(show_points, sp_field_id);
     let rows: Vec<Vec<String>> = issues
         .iter()
         .map(|issue| format::format_issue_row(issue, effective_sp))
@@ -124,6 +124,26 @@ pub(super) async fn handle_list(
     )?;
 
     Ok(())
+}
+
+/// Resolve whether to show story points. Returns the field ID if points should
+/// be shown, or None. Emits a warning to stderr if --points was requested but
+/// config is missing.
+fn resolve_show_points(show_points: bool, sp_field_id: Option<&str>) -> Option<&str> {
+    if show_points {
+        match sp_field_id {
+            Some(id) => Some(id),
+            None => {
+                eprintln!(
+                    "warning: --points ignored. Story points field not configured. \
+                     Run \"jr init\" or set [fields].story_points_field_id in ~/.config/jr/config.toml"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    }
 }
 
 fn build_fallback_jql(
@@ -382,5 +402,25 @@ mod tests {
     fn fallback_jql_with_status_only() {
         let jql = build_fallback_jql(None, Some("Done"), None).unwrap();
         assert_eq!(jql, "status = \"Done\" ORDER BY updated DESC");
+    }
+
+    #[test]
+    fn resolve_show_points_flag_false() {
+        assert_eq!(resolve_show_points(false, Some("customfield_10031")), None);
+        assert_eq!(resolve_show_points(false, None), None);
+    }
+
+    #[test]
+    fn resolve_show_points_flag_true_config_present() {
+        assert_eq!(
+            resolve_show_points(true, Some("customfield_10031")),
+            Some("customfield_10031")
+        );
+    }
+
+    #[test]
+    fn resolve_show_points_flag_true_config_missing() {
+        // Warning emitted to stderr (not captured), but function returns None without error
+        assert_eq!(resolve_show_points(true, None), None);
     }
 }
