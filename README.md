@@ -1,6 +1,6 @@
 # jr
 
-A fast CLI for Jira Cloud, written in Rust.
+A fast, agent-friendly CLI for Jira Cloud, written in Rust. Built for both humans and AI agents — commands support structured JSON output, actionable error messages with suggested next steps, and `--no-input` mode for fully non-interactive automation.
 
 ## Install
 
@@ -45,7 +45,7 @@ jr issue list
 jr issue view KEY-123
 
 # Create an issue
-jr issue create -p FOO -t Bug -s "Auth token not refreshing" --priority High --points 5
+jr issue create --project FOO --type Bug --summary "Auth token not refreshing" --priority High --points 5
 
 # Transition an issue
 jr issue move KEY-123 "In Progress"
@@ -74,6 +74,9 @@ jr issue comment KEY-123 "Deployed to staging"
 | `jr issue assign KEY` | Assign to self (or `--to USER`, `--unassign`) |
 | `jr issue comment KEY "msg"` | Add a comment (`--stdin`, `--file`, `--markdown`) |
 | `jr issue open KEY` | Open in browser (`--url-only` for scripts) |
+| `jr issue link KEY1 KEY2` | Link two issues (`--type blocks`, defaults to Relates) |
+| `jr issue unlink KEY1 KEY2` | Remove link(s) between issues (`--type` to filter) |
+| `jr issue link-types` | List available link types |
 | `jr board list` | List boards |
 | `jr board view` | Show current board issues |
 | `jr sprint list` | List sprints (scrum only) |
