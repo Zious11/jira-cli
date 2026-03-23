@@ -48,7 +48,7 @@ The kanban path in `board.rs` (line 56-63) is bounded by `statusCategory != Done
 
 ```rust
 if project_key.is_none() {
-    eprintln!("Warning: No project configured for board. Showing issues across all projects. Set project in .jr.toml to scope results.");
+    eprintln!("warning: no project configured for board. Showing issues across all projects. Set project in .jr.toml to scope results.");
 }
 ```
 
