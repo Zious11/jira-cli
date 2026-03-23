@@ -1,6 +1,6 @@
 # jr
 
-A fast, agent-friendly CLI for Jira Cloud, written in Rust. Built for both humans and AI agents — every command returns structured output, actionable error messages with suggested next steps, and operates fully non-interactively for automation workflows.
+A fast, agent-friendly CLI for Jira Cloud, written in Rust. Built for both humans and AI agents — commands support structured JSON output, actionable error messages with suggested next steps, and `--no-input` mode for fully non-interactive automation.
 
 ## Install
 

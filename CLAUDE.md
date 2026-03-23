@@ -31,7 +31,9 @@ src/
 │       ├── fields.rs    # list fields, story points field discovery
 │       ├── links.rs     # create/delete issue links, list link types
 │       ├── teams.rs     # org metadata (GraphQL), list teams
-│       └── worklogs.rs  # add/list worklogs
+│       ├── worklogs.rs  # add/list worklogs
+│       ├── projects.rs  # project details
+│       └── users.rs     # current user, assignable users
 ├── types/jira/          # Serde structs for API responses (Issue, Board, Sprint, User, Team, etc.)
 ├── cache.rs             # XDG cache (~/.cache/jr/) — team list with 7-day TTL
 ├── config.rs            # Global (~/.config/jr/config.toml) + per-project (.jr.toml), figment layering
@@ -61,7 +63,7 @@ cargo deny check                     # License + vulnerability audit
 
 - **Commits:** Conventional Commits format (`feat:`, `fix:`, `docs:`, `chore:`, `ci:`, `test:`)
 - **Branches:** `type/short-description` (e.g., `feat/issue-commands`, `fix/auth-flow`). Default branch is `develop`. Feature branches → PR to `develop` → PR to `main` for releases.
-- **Protected branches:** `main` and `develop` require CI to pass. PRs require code owner approval. Admins can bypass.
+- **Protected branches:** `main` and `develop` require CI to pass and code owner approval on PRs. Admins can bypass.
 - **Errors:** Always suggest what to do next. Map to exit codes via `JrError::exit_code()`
 - **Output:** `--output json` returns structured JSON for both success and errors. Human text is default.
 - **Non-interactive:** `--no-input` disables prompts (auto-enabled when stdin is not a TTY). Commands must have fully non-interactive flag equivalents.
