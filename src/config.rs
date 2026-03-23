@@ -238,10 +238,11 @@ mod tests {
     #[test]
     fn test_base_url_env_override() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        std::env::set_var("JR_BASE_URL", "http://localhost:8080");
+        // SAFETY: test holds ENV_MUTEX, so no concurrent env access.
+        unsafe { std::env::set_var("JR_BASE_URL", "http://localhost:8080") };
         let config = Config::default();
         assert_eq!(config.base_url().unwrap(), "http://localhost:8080");
-        std::env::remove_var("JR_BASE_URL");
+        unsafe { std::env::remove_var("JR_BASE_URL") };
     }
 
     #[test]

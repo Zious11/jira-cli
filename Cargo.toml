@@ -1,7 +1,7 @@
 [package]
 name = "jr"
-version = "0.1.0"
-edition = "2021"
+version = "0.2.0"
+edition = "2024"
 description = "A fast CLI for Jira Cloud"
 repository = "https://github.com/Zious11/jira-cli"
 rust-version = "1.85"
