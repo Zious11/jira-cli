@@ -7,7 +7,7 @@ Accepted
 reqwest supports multiple TLS backends: `native-tls` (platform default) and `rustls-tls` (pure Rust). The default varies by platform and can be overridden by transitive dependencies pulling in the `default` feature.
 
 ## Decision
-Use `reqwest` with `default-features = false` and explicitly enable `rustls-tls`.
+Use `reqwest` with `default-features = false` and explicitly enable rustls. Feature name changed from `rustls-tls` (0.12) to `rustls` (0.13).
 
 ## Rationale
 - **TLS version consistency** — `native-tls` on some platforms negotiates TLSv1.2, which Jira Cloud may reject. `rustls` consistently supports TLSv1.3.
