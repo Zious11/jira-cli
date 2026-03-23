@@ -98,7 +98,9 @@ pub async fn handle() -> Result<()> {
         Ok(matches) => {
             let field_id = match matches.len() {
                 0 => {
-                    eprintln!("No story points field found — skipping. You can set story_points_field_id manually in config.");
+                    eprintln!(
+                        "No story points field found — skipping. You can set story_points_field_id manually in config."
+                    );
                     None
                 }
                 1 => {

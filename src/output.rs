@@ -1,6 +1,6 @@
 use crate::cli::OutputFormat;
 use colored::Colorize;
-use comfy_table::{presets::UTF8_FULL_CONDENSED, ContentArrangement, Table};
+use comfy_table::{ContentArrangement, Table, presets::UTF8_FULL_CONDENSED};
 use serde::Serialize;
 
 pub fn render_table(headers: &[&str], rows: &[Vec<String>]) -> String {

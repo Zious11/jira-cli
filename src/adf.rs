@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub fn text_to_adf(text: &str) -> Value {
     json!({

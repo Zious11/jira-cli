@@ -3,8 +3,8 @@ use crate::config::Config;
 use crate::error::JrError;
 use base64::Engine;
 use reqwest::{Client, Method, RequestBuilder, Response, StatusCode};
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::time::Duration;
 
 /// Maximum number of retries when the API returns 429 Too Many Requests.
