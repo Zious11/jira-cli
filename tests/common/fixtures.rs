@@ -93,6 +93,53 @@ pub fn fields_response_with_story_points() -> Value {
     ])
 }
 
+pub fn link_types_response() -> Value {
+    json!({
+        "issueLinkTypes": [
+            {
+                "id": "1000",
+                "name": "Blocks",
+                "inward": "is blocked by",
+                "outward": "blocks"
+            },
+            {
+                "id": "1001",
+                "name": "Duplicate",
+                "inward": "is duplicated by",
+                "outward": "duplicates"
+            },
+            {
+                "id": "1002",
+                "name": "Relates",
+                "inward": "relates to",
+                "outward": "relates to"
+            }
+        ]
+    })
+}
+
+pub fn issue_with_links_response(key: &str, summary: &str) -> Value {
+    json!({
+        "key": key,
+        "fields": {
+            "summary": summary,
+            "status": {"name": "To Do"},
+            "issuetype": {"name": "Story"},
+            "priority": {"name": "Medium"},
+            "assignee": {"accountId": "abc123", "displayName": "Test User"},
+            "project": {"key": key.split('-').next().unwrap_or("TEST")},
+            "parent": {"key": "FOO-1", "fields": {"summary": "Parent Epic"}},
+            "issuelinks": [
+                {
+                    "id": "20001",
+                    "type": {"name": "Blocks", "inward": "is blocked by", "outward": "blocks"},
+                    "outwardIssue": {"key": "FOO-3", "fields": {"summary": "Blocked issue"}}
+                }
+            ]
+        }
+    })
+}
+
 pub fn teams_list_json() -> Value {
     json!({
         "entities": [

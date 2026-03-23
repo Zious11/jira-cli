@@ -117,6 +117,14 @@ impl JiraClient {
         Ok(())
     }
 
+    /// Perform a DELETE request that returns 204 No Content on success.
+    pub async fn delete(&self, path: &str) -> anyhow::Result<()> {
+        let url = format!("{}{}", self.base_url, path);
+        let request = self.client.delete(&url);
+        self.send(request).await?;
+        Ok(())
+    }
+
     /// Send a request with auth headers, retrying on 429 up to MAX_RETRIES times.
     async fn send(&self, request: RequestBuilder) -> anyhow::Result<Response> {
         // We need to be able to retry, so we clone the request builder.

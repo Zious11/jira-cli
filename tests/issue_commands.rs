@@ -128,3 +128,79 @@ async fn test_find_story_points_field_id() {
     assert_eq!(matches[0].0, "customfield_10031");
     assert_eq!(matches[0].1, "Story Points");
 }
+
+#[tokio::test]
+async fn test_list_link_types() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issueLinkType"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(common::fixtures::link_types_response()),
+        )
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let types = client.list_link_types().await.unwrap();
+    assert_eq!(types.len(), 3);
+    assert_eq!(types[0].name, "Blocks");
+    assert_eq!(types[0].outward.as_deref(), Some("blocks"));
+    assert_eq!(types[0].inward.as_deref(), Some("is blocked by"));
+}
+
+#[tokio::test]
+async fn test_get_issue_with_parent_and_links() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_with_links_response("FOO-2", "Test issue"),
+        ))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let issue = client.get_issue("FOO-2", &[]).await.unwrap();
+
+    let parent = issue.fields.parent.unwrap();
+    assert_eq!(parent.key, "FOO-1");
+    assert_eq!(parent.fields.unwrap().summary.unwrap(), "Parent Epic");
+
+    let links = issue.fields.issuelinks.unwrap();
+    assert_eq!(links.len(), 1);
+    assert_eq!(links[0].link_type.name, "Blocks");
+    assert_eq!(links[0].outward_issue.as_ref().unwrap().key, "FOO-3");
+}
+
+#[tokio::test]
+async fn test_create_issue_link() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issueLink"))
+        .respond_with(ResponseTemplate::new(201))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    client
+        .create_issue_link("FOO-1", "FOO-2", "Blocks")
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_delete_issue_link() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/issueLink/10001"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    client.delete_issue_link("10001").await.unwrap();
+}

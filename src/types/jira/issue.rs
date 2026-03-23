@@ -11,6 +11,48 @@ pub struct Issue {
     pub fields: IssueFields,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ParentIssue {
+    pub key: String,
+    pub fields: Option<LinkedIssueFields>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LinkedIssueFields {
+    pub summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct IssueLink {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub link_type: IssueLinkType,
+    #[serde(rename = "inwardIssue")]
+    pub inward_issue: Option<LinkedIssue>,
+    #[serde(rename = "outwardIssue")]
+    pub outward_issue: Option<LinkedIssue>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LinkedIssue {
+    pub key: String,
+    pub fields: Option<LinkedIssueFields>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct IssueLinkType {
+    pub id: Option<String>,
+    pub name: String,
+    pub inward: Option<String>,
+    pub outward: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct IssueLinkTypesResponse {
+    #[serde(rename = "issueLinkTypes")]
+    pub issue_link_types: Vec<IssueLinkType>,
+}
+
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct IssueFields {
     pub summary: String,
@@ -23,6 +65,8 @@ pub struct IssueFields {
     pub project: Option<IssueProject>,
     #[serde(default)]
     pub labels: Option<Vec<String>>,
+    pub parent: Option<ParentIssue>,
+    pub issuelinks: Option<Vec<IssueLink>>,
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
 }
@@ -163,5 +207,57 @@ mod tests {
         let json = json!({"summary": "test", "description": null});
         let fields: IssueFields = serde_json::from_value(json).unwrap();
         assert!(fields.description.is_none());
+    }
+
+    #[test]
+    fn parent_deserializes() {
+        let json = json!({
+            "summary": "test",
+            "parent": {"key": "FOO-42", "fields": {"summary": "Parent epic"}}
+        });
+        let fields: IssueFields = serde_json::from_value(json).unwrap();
+        let parent = fields.parent.unwrap();
+        assert_eq!(parent.key, "FOO-42");
+        assert_eq!(parent.fields.unwrap().summary.unwrap(), "Parent epic");
+    }
+
+    #[test]
+    fn parent_missing() {
+        let json = json!({"summary": "test"});
+        let fields: IssueFields = serde_json::from_value(json).unwrap();
+        assert!(fields.parent.is_none());
+    }
+
+    #[test]
+    fn issuelinks_deserializes() {
+        let json = json!({
+            "summary": "test",
+            "issuelinks": [{
+                "id": "10001",
+                "type": {"name": "Blocks", "inward": "is blocked by", "outward": "blocks"},
+                "outwardIssue": {"key": "FOO-2", "fields": {"summary": "Other issue"}}
+            }]
+        });
+        let fields: IssueFields = serde_json::from_value(json).unwrap();
+        let links = fields.issuelinks.unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].id, "10001");
+        assert_eq!(links[0].link_type.name, "Blocks");
+        let outward = links[0].outward_issue.as_ref().unwrap();
+        assert_eq!(outward.key, "FOO-2");
+    }
+
+    #[test]
+    fn issuelinks_missing() {
+        let json = json!({"summary": "test"});
+        let fields: IssueFields = serde_json::from_value(json).unwrap();
+        assert!(fields.issuelinks.is_none());
+    }
+
+    #[test]
+    fn issuelinks_empty_array() {
+        let json = json!({"summary": "test", "issuelinks": []});
+        let fields: IssueFields = serde_json::from_value(json).unwrap();
+        assert_eq!(fields.issuelinks.unwrap().len(), 0);
     }
 }

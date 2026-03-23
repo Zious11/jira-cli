@@ -1,6 +1,7 @@
 pub mod boards;
 pub mod fields;
 pub mod issues;
+pub mod links;
 pub mod projects;
 pub mod sprints;
 pub mod teams;

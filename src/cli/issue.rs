@@ -121,6 +121,11 @@ pub async fn handle(
         IssueCommand::Assign { .. } => handle_assign(command, output_format, client).await,
         IssueCommand::Comment { .. } => handle_comment(command, output_format, client).await,
         IssueCommand::Open { .. } => handle_open(command, client).await,
+        IssueCommand::Link { .. } => handle_link(command, output_format, client, no_input).await,
+        IssueCommand::Unlink { .. } => {
+            handle_unlink(command, output_format, client, no_input).await
+        }
+        IssueCommand::LinkTypes => handle_link_types(output_format, client).await,
     }
 }
 
@@ -347,6 +352,66 @@ async fn handle_view(
                 ],
             ];
 
+            rows.push(vec![
+                "Parent".into(),
+                issue
+                    .fields
+                    .parent
+                    .as_ref()
+                    .map(|p| {
+                        let summary = p
+                            .fields
+                            .as_ref()
+                            .and_then(|f| f.summary.as_deref())
+                            .unwrap_or("");
+                        format!("{} ({})", p.key, summary)
+                    })
+                    .unwrap_or_else(|| "(none)".into()),
+            ]);
+
+            let links_display = issue
+                .fields
+                .issuelinks
+                .as_ref()
+                .filter(|links| !links.is_empty())
+                .map(|links| {
+                    links
+                        .iter()
+                        .map(|link| {
+                            if let Some(ref outward) = link.outward_issue {
+                                let desc = link
+                                    .link_type
+                                    .outward
+                                    .as_deref()
+                                    .unwrap_or(&link.link_type.name);
+                                let summary = outward
+                                    .fields
+                                    .as_ref()
+                                    .and_then(|f| f.summary.as_deref())
+                                    .unwrap_or("");
+                                format!("{} {} ({})", desc, outward.key, summary)
+                            } else if let Some(ref inward) = link.inward_issue {
+                                let desc = link
+                                    .link_type
+                                    .inward
+                                    .as_deref()
+                                    .unwrap_or(&link.link_type.name);
+                                let summary = inward
+                                    .fields
+                                    .as_ref()
+                                    .and_then(|f| f.summary.as_deref())
+                                    .unwrap_or("");
+                                format!("{} {} ({})", desc, inward.key, summary)
+                            } else {
+                                link.link_type.name.clone()
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .unwrap_or_else(|| "(none)".into());
+            rows.push(vec!["Links".into(), links_display]);
+
             if let Some(field_id) = sp_field_id {
                 let points_display = issue
                     .fields
@@ -386,6 +451,7 @@ async fn handle_create(
         team,
         points,
         markdown,
+        parent,
     } = command
     else {
         unreachable!()
@@ -470,6 +536,10 @@ async fn handle_create(
         fields[&field_id] = json!(pts);
     }
 
+    if let Some(ref parent_key) = parent {
+        fields["parent"] = json!({"key": parent_key});
+    }
+
     let response = client.create_issue(fields).await?;
 
     match output_format {
@@ -502,6 +572,7 @@ async fn handle_edit(
         team,
         points,
         no_points,
+        parent,
     } = command
     else {
         unreachable!()
@@ -540,6 +611,11 @@ async fn handle_edit(
     if no_points {
         let field_id = resolve_story_points_field_id(config)?;
         fields[&field_id] = json!(null);
+        has_updates = true;
+    }
+
+    if let Some(ref parent_key) = parent {
+        fields["parent"] = json!({"key": parent_key});
         has_updates = true;
     }
 
@@ -585,7 +661,7 @@ async fn handle_edit(
 
     if !has_updates {
         bail!(
-            "No fields specified to update. Use --summary, --type, --priority, --label, --team, --points, or --no-points."
+            "No fields specified to update. Use --summary, --type, --priority, --label, --team, --points, --no-points, or --parent."
         );
     }
 
@@ -957,6 +1033,222 @@ async fn handle_open(command: IssueCommand, client: &JiraClient) -> Result<()> {
     } else {
         open::that(&url)?;
         eprintln!("Opened {} in browser", key);
+    }
+
+    Ok(())
+}
+
+// ── Link Types ────────────────────────────────────────────────────
+
+async fn handle_link_types(output_format: &OutputFormat, client: &JiraClient) -> Result<()> {
+    let link_types = client.list_link_types().await?;
+
+    let rows: Vec<Vec<String>> = link_types
+        .iter()
+        .map(|lt| {
+            vec![
+                lt.id.clone().unwrap_or_default(),
+                lt.name.clone(),
+                lt.outward.clone().unwrap_or_default(),
+                lt.inward.clone().unwrap_or_default(),
+            ]
+        })
+        .collect();
+
+    output::print_output(
+        output_format,
+        &["ID", "Name", "Outward", "Inward"],
+        &rows,
+        &link_types,
+    )?;
+
+    Ok(())
+}
+
+// ── Link ──────────────────────────────────────────────────────────
+
+async fn handle_link(
+    command: IssueCommand,
+    output_format: &OutputFormat,
+    client: &JiraClient,
+    no_input: bool,
+) -> Result<()> {
+    let IssueCommand::Link {
+        key1,
+        key2,
+        r#type: link_type_name,
+    } = command
+    else {
+        unreachable!()
+    };
+
+    if key1.eq_ignore_ascii_case(&key2) {
+        bail!("Cannot link an issue to itself.");
+    }
+
+    let link_types = client.list_link_types().await?;
+    let type_names: Vec<String> = link_types.iter().map(|lt| lt.name.clone()).collect();
+    let resolved_name = match partial_match::partial_match(&link_type_name, &type_names) {
+        MatchResult::Exact(name) => name,
+        MatchResult::Ambiguous(matches) => {
+            if no_input {
+                bail!(
+                    "Ambiguous link type \"{}\". Matches: {}",
+                    link_type_name,
+                    matches.join(", ")
+                );
+            }
+            let selection = dialoguer::Select::new()
+                .with_prompt(format!("Multiple types match \"{link_type_name}\""))
+                .items(&matches)
+                .interact()?;
+            matches[selection].clone()
+        }
+        MatchResult::None(_) => {
+            bail!(
+                "Unknown link type \"{}\". Run \"jr issue link-types\" to see available types.",
+                link_type_name
+            );
+        }
+    };
+
+    client
+        .create_issue_link(&key1, &key2, &resolved_name)
+        .await?;
+
+    match output_format {
+        OutputFormat::Json => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "key1": key1,
+                    "key2": key2,
+                    "type": resolved_name,
+                    "linked": true
+                }))?
+            );
+        }
+        OutputFormat::Table => {
+            output::print_success(&format!("Linked {} → {} ({})", key1, key2, resolved_name));
+        }
+    }
+
+    Ok(())
+}
+
+// ── Unlink ────────────────────────────────────────────────────────
+
+async fn handle_unlink(
+    command: IssueCommand,
+    output_format: &OutputFormat,
+    client: &JiraClient,
+    no_input: bool,
+) -> Result<()> {
+    let IssueCommand::Unlink {
+        key1,
+        key2,
+        r#type: link_type_filter,
+    } = command
+    else {
+        unreachable!()
+    };
+
+    let resolved_type_filter = if let Some(ref type_name) = link_type_filter {
+        let link_types = client.list_link_types().await?;
+        let type_names: Vec<String> = link_types.iter().map(|lt| lt.name.clone()).collect();
+        let resolved = match partial_match::partial_match(type_name, &type_names) {
+            MatchResult::Exact(name) => name,
+            MatchResult::Ambiguous(matches) => {
+                if no_input {
+                    bail!(
+                        "Ambiguous link type \"{}\". Matches: {}",
+                        type_name,
+                        matches.join(", ")
+                    );
+                }
+                let selection = dialoguer::Select::new()
+                    .with_prompt(format!("Multiple types match \"{type_name}\""))
+                    .items(&matches)
+                    .interact()?;
+                matches[selection].clone()
+            }
+            MatchResult::None(_) => {
+                bail!(
+                    "Unknown link type \"{}\". Run \"jr issue link-types\" to see available types.",
+                    type_name
+                );
+            }
+        };
+        Some(resolved)
+    } else {
+        None
+    };
+
+    let issue = client.get_issue(&key1, &[]).await?;
+    let links = issue.fields.issuelinks.unwrap_or_default();
+
+    let matching_links: Vec<&crate::types::jira::issue::IssueLink> = links
+        .iter()
+        .filter(|link| {
+            let matches_key = link
+                .outward_issue
+                .as_ref()
+                .map(|i| i.key.eq_ignore_ascii_case(&key2))
+                .unwrap_or(false)
+                || link
+                    .inward_issue
+                    .as_ref()
+                    .map(|i| i.key.eq_ignore_ascii_case(&key2))
+                    .unwrap_or(false);
+
+            let matches_type = resolved_type_filter
+                .as_ref()
+                .map(|t| link.link_type.name.eq_ignore_ascii_case(t))
+                .unwrap_or(true);
+
+            matches_key && matches_type
+        })
+        .collect();
+
+    if matching_links.is_empty() {
+        match output_format {
+            OutputFormat::Json => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "unlinked": false,
+                        "count": 0
+                    }))?
+                );
+            }
+            OutputFormat::Table => {
+                output::print_success(&format!("No link found between {} and {}", key1, key2));
+            }
+        }
+        return Ok(());
+    }
+
+    let count = matching_links.len();
+    for link in &matching_links {
+        client.delete_issue_link(&link.id).await?;
+    }
+
+    match output_format {
+        OutputFormat::Json => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "unlinked": true,
+                    "count": count
+                }))?
+            );
+        }
+        OutputFormat::Table => {
+            output::print_success(&format!(
+                "Removed {} link(s) between {} and {}",
+                count, key1, key2
+            ));
+        }
     }
 
     Ok(())

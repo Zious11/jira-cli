@@ -156,6 +156,9 @@ pub enum IssueCommand {
         /// Interpret description as Markdown
         #[arg(long)]
         markdown: bool,
+        /// Parent issue key (e.g., for subtasks or stories under epics)
+        #[arg(long)]
+        parent: Option<String>,
     },
     /// View issue details
     View {
@@ -187,6 +190,9 @@ pub enum IssueCommand {
         /// Clear story points
         #[arg(long, conflicts_with = "points")]
         no_points: bool,
+        /// Parent issue key
+        #[arg(long)]
+        parent: Option<String>,
     },
     /// Transition issue to a new status
     Move {
@@ -235,6 +241,28 @@ pub enum IssueCommand {
         #[arg(long)]
         url_only: bool,
     },
+    /// Link two issues
+    Link {
+        /// First issue key (outward — e.g., the issue that "blocks")
+        key1: String,
+        /// Second issue key (inward — e.g., the issue that "is blocked by")
+        key2: String,
+        /// Link type name (partial match supported, default: "Relates")
+        #[arg(long, default_value = "Relates")]
+        r#type: String,
+    },
+    /// Remove link(s) between two issues
+    Unlink {
+        /// First issue key
+        key1: String,
+        /// Second issue key
+        key2: String,
+        /// Only remove links of this type (removes all if omitted)
+        #[arg(long)]
+        r#type: Option<String>,
+    },
+    /// List available link types
+    LinkTypes,
 }
 
 #[derive(Subcommand)]
