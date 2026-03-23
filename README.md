@@ -4,17 +4,26 @@ A fast CLI for Jira Cloud, written in Rust.
 
 ## Install
 
+### From source (available now)
+
 ```bash
-# Homebrew
-brew install zious11/tap/jr
-
-# Cargo
-cargo install jr-cli
-
-# From source
+brew install rust   # if you don't have Rust installed
 git clone https://github.com/Zious11/jira-cli.git
 cd jira-cli
 cargo install --path .
+```
+
+### Coming soon
+
+```bash
+# Homebrew tap (planned)
+brew install zious11/tap/jr
+
+# Crates.io (planned)
+cargo install jr-cli
+
+# Install script (planned)
+curl -fsSL https://raw.githubusercontent.com/Zious11/jira-cli/main/install.sh | sh
 ```
 
 ## Quick Start
