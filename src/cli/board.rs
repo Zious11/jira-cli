@@ -54,6 +54,11 @@ async fn handle_view(
     } else {
         // Kanban: search for issues not in Done status category
         let project_key = config.project_key(None);
+        if project_key.is_none() {
+            eprintln!(
+                "warning: no project configured for board. Showing issues across all projects. Set project in .jr.toml to scope results."
+            );
+        }
         let mut jql_parts: Vec<String> = Vec::new();
         if let Some(ref pk) = project_key {
             jql_parts.push(format!("project = \"{}\"", pk));
