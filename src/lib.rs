@@ -5,6 +5,7 @@ pub mod cli;
 pub mod config;
 pub mod duration;
 pub mod error;
+pub mod jql;
 pub mod output;
 pub mod partial_match;
 pub mod types;
