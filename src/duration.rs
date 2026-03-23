@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 /// Parses a human-friendly duration string into seconds.
 /// Supported formats: `30m`, `2h`, `1h30m`, `1d`, `1w`, `1w2d3h30m`

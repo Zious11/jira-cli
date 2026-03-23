@@ -70,9 +70,10 @@ mod tests {
     fn with_temp_cache<F: FnOnce()>(f: F) {
         let _guard = ENV_MUTEX.lock().unwrap();
         let dir = TempDir::new().unwrap();
-        std::env::set_var("XDG_CACHE_HOME", dir.path());
+        // SAFETY: test holds ENV_MUTEX, so no concurrent env access.
+        unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
         f();
-        std::env::remove_var("XDG_CACHE_HOME");
+        unsafe { std::env::remove_var("XDG_CACHE_HOME") };
     }
 
     #[test]

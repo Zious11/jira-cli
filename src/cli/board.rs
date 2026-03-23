@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 use crate::api::client::JiraClient;
 use crate::cli::{BoardCommand, OutputFormat};
