@@ -62,10 +62,17 @@ pub(super) async fn handle_list(
                                     "assignee = currentUser()".to_string(),
                                 ];
                                 if let Some(ref s) = status {
-                                    jql_parts.push(format!("status = \"{}\"", s));
+                                    jql_parts.push(format!(
+                                        "status = \"{}\"",
+                                        crate::jql::escape_value(s)
+                                    ));
                                 }
                                 if let Some((field_id, team_uuid)) = &resolved_team {
-                                    jql_parts.push(format!("{} = \"{}\"", field_id, team_uuid));
+                                    jql_parts.push(format!(
+                                        "{} = \"{}\"",
+                                        field_id,
+                                        crate::jql::escape_value(team_uuid)
+                                    ));
                                 }
                                 let where_clause = jql_parts.join(" AND ");
                                 format!("{} ORDER BY rank ASC", where_clause)
@@ -81,14 +88,19 @@ pub(super) async fn handle_list(
                         let mut jql_parts: Vec<String> =
                             vec!["assignee = currentUser()".to_string()];
                         if let Some(ref pk) = project_key {
-                            jql_parts.push(format!("project = \"{}\"", pk));
+                            jql_parts
+                                .push(format!("project = \"{}\"", crate::jql::escape_value(pk)));
                         }
                         jql_parts.push("statusCategory != Done".into());
                         if let Some(ref s) = status {
-                            jql_parts.push(format!("status = \"{}\"", s));
+                            jql_parts.push(format!("status = \"{}\"", crate::jql::escape_value(s)));
                         }
                         if let Some((field_id, team_uuid)) = &resolved_team {
-                            jql_parts.push(format!("{} = \"{}\"", field_id, team_uuid));
+                            jql_parts.push(format!(
+                                "{} = \"{}\"",
+                                field_id,
+                                crate::jql::escape_value(team_uuid)
+                            ));
                         }
                         let where_clause = jql_parts.join(" AND ");
                         format!("{} ORDER BY rank ASC", where_clause)
@@ -161,13 +173,17 @@ fn build_fallback_jql(
     }
     let mut parts: Vec<String> = Vec::new();
     if let Some(pk) = project_key {
-        parts.push(format!("project = \"{}\"", pk));
+        parts.push(format!("project = \"{}\"", crate::jql::escape_value(pk)));
     }
     if let Some(s) = status {
-        parts.push(format!("status = \"{}\"", s));
+        parts.push(format!("status = \"{}\"", crate::jql::escape_value(s)));
     }
     if let Some((field_id, team_uuid)) = resolved_team {
-        parts.push(format!("{} = \"{}\"", field_id, team_uuid));
+        parts.push(format!(
+            "{} = \"{}\"",
+            field_id,
+            crate::jql::escape_value(team_uuid)
+        ));
     }
     let where_clause = parts.join(" AND ");
     Ok(format!("{} ORDER BY updated DESC", where_clause))
@@ -422,5 +438,14 @@ mod tests {
     fn resolve_show_points_flag_true_config_missing() {
         // Warning emitted to stderr (not captured), but function returns None without error
         assert_eq!(resolve_show_points(true, None), None);
+    }
+
+    #[test]
+    fn fallback_jql_escapes_special_chars_in_status() {
+        let jql = build_fallback_jql(None, Some(r#"In "Progress"#), None).unwrap();
+        assert!(
+            jql.contains(r#"status = "In \"Progress""#),
+            "Status with quotes should be escaped: {jql}"
+        );
     }
 }

@@ -61,7 +61,7 @@ async fn handle_view(
         }
         let mut jql_parts: Vec<String> = Vec::new();
         if let Some(ref pk) = project_key {
-            jql_parts.push(format!("project = \"{}\"", pk));
+            jql_parts.push(format!("project = \"{}\"", crate::jql::escape_value(pk)));
         }
         jql_parts.push("statusCategory != Done".into());
         jql_parts.push("ORDER BY rank ASC".into());
