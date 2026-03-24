@@ -35,6 +35,11 @@ impl JiraClient {
         let fields = self.list_fields().await?;
         Ok(filter_story_points_fields(&fields))
     }
+
+    pub async fn find_cmdb_field_ids(&self) -> Result<Vec<String>> {
+        let fields = self.list_fields().await?;
+        Ok(filter_cmdb_fields(&fields))
+    }
 }
 
 const KNOWN_SP_SCHEMA_TYPES: &[&str] = &[
@@ -72,6 +77,23 @@ pub fn filter_story_points_fields(fields: &[Field]) -> Vec<(String, String)> {
     matches
         .into_iter()
         .map(|(id, name, _)| (id, name))
+        .collect()
+}
+
+const CMDB_SCHEMA_TYPE: &str = "com.atlassian.jira.plugins.cmdb:cmdb-object-cftype";
+
+pub fn filter_cmdb_fields(fields: &[Field]) -> Vec<String> {
+    fields
+        .iter()
+        .filter(|f| {
+            f.custom == Some(true)
+                && f.schema
+                    .as_ref()
+                    .and_then(|s| s.custom.as_deref())
+                    .map(|c| c == CMDB_SCHEMA_TYPE)
+                    .unwrap_or(false)
+        })
+        .map(|f| f.id.clone())
         .collect()
 }
 
@@ -195,5 +217,75 @@ mod tests {
         )];
         let result = filter_story_points_fields(&fields);
         assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn filter_cmdb_fields_finds_assets_type() {
+        let fields = vec![make_field(
+            "customfield_10191",
+            "Client",
+            true,
+            "any",
+            "com.atlassian.jira.plugins.cmdb:cmdb-object-cftype",
+        )];
+        let result = filter_cmdb_fields(&fields);
+        assert_eq!(result, vec!["customfield_10191"]);
+    }
+
+    #[test]
+    fn filter_cmdb_fields_ignores_non_cmdb() {
+        let fields = vec![
+            make_field(
+                "customfield_10031",
+                "Story Points",
+                true,
+                "number",
+                "com.atlassian.jira.plugin.system.customfieldtypes:float",
+            ),
+            make_field(
+                "customfield_10191",
+                "Client",
+                true,
+                "any",
+                "com.atlassian.jira.plugins.cmdb:cmdb-object-cftype",
+            ),
+        ];
+        let result = filter_cmdb_fields(&fields);
+        assert_eq!(result, vec!["customfield_10191"]);
+    }
+
+    #[test]
+    fn filter_cmdb_fields_empty_when_no_cmdb() {
+        let fields = vec![make_field(
+            "customfield_10031",
+            "Story Points",
+            true,
+            "number",
+            "com.atlassian.jira.plugin.system.customfieldtypes:float",
+        )];
+        let result = filter_cmdb_fields(&fields);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn filter_cmdb_fields_multiple() {
+        let fields = vec![
+            make_field(
+                "customfield_10191",
+                "Client",
+                true,
+                "any",
+                "com.atlassian.jira.plugins.cmdb:cmdb-object-cftype",
+            ),
+            make_field(
+                "customfield_10245",
+                "Server",
+                true,
+                "any",
+                "com.atlassian.jira.plugins.cmdb:cmdb-object-cftype",
+            ),
+        ];
+        let result = filter_cmdb_fields(&fields);
+        assert_eq!(result, vec!["customfield_10191", "customfield_10245"]);
     }
 }
