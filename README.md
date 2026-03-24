@@ -1,5 +1,12 @@
 # jr
 
+[![CI](https://github.com/Zious11/jira-cli/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/Zious11/jira-cli/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Zious11/jira-cli?label=release)](https://github.com/Zious11/jira-cli/releases/latest)
+[![Pre-release](https://img.shields.io/github/v/release/Zious11/jira-cli?include_prereleases&label=dev)](https://github.com/Zious11/jira-cli/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![MSRV](https://img.shields.io/badge/MSRV-1.85-orange.svg)](https://blog.rust-lang.org/)
+[![codecov](https://codecov.io/gh/Zious11/jira-cli/branch/develop/graph/badge.svg)](https://codecov.io/gh/Zious11/jira-cli)
+
 A fast, agent-friendly CLI for Jira Cloud, written in Rust. Built for both humans and AI agents — commands support structured JSON output, actionable error messages with suggested next steps, and `--no-input` mode for fully non-interactive automation.
 
 ## Install
