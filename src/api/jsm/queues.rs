@@ -8,7 +8,10 @@ use crate::types::jsm::QueueIssue;
 impl JiraClient {
     /// List all queues for a service desk, auto-paginating.
     pub async fn list_queues(&self, service_desk_id: &str) -> Result<Vec<Queue>> {
-        let base = format!("/rest/servicedeskapi/servicedesk/{}/queue", service_desk_id);
+        let base = format!(
+            "/rest/servicedeskapi/servicedesk/{}/queue",
+            urlencoding::encode(service_desk_id)
+        );
         let mut all = Vec::new();
         let mut start = 0u32;
         let page_size = 50u32;
@@ -39,7 +42,8 @@ impl JiraClient {
     ) -> Result<Vec<QueueIssue>> {
         let base = format!(
             "/rest/servicedeskapi/servicedesk/{}/queue/{}/issue",
-            service_desk_id, queue_id
+            urlencoding::encode(service_desk_id),
+            urlencoding::encode(queue_id)
         );
         let mut all = Vec::new();
         let mut start = 0u32;
