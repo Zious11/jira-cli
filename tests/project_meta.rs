@@ -7,6 +7,13 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
 async fn project_meta_cache_miss_fetches_from_api() {
+    let cache_dir = tempfile::tempdir().unwrap();
+    // SAFETY: tests run in separate processes (each integration test file is its own
+    // binary), so mutating XDG_CACHE_HOME here does not race with other test binaries.
+    // Within this binary the three tests are async and tokio runs them on a single
+    // thread by default, so there is no intra-binary data race on the env.
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache_dir.path()) };
+
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
@@ -51,6 +58,10 @@ async fn project_meta_cache_miss_fetches_from_api() {
 
 #[tokio::test]
 async fn project_meta_software_project_has_no_service_desk_id() {
+    let cache_dir = tempfile::tempdir().unwrap();
+    // SAFETY: see project_meta_cache_miss_fetches_from_api for rationale.
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache_dir.path()) };
+
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
@@ -79,6 +90,10 @@ async fn project_meta_software_project_has_no_service_desk_id() {
 
 #[tokio::test]
 async fn require_service_desk_errors_for_software_project() {
+    let cache_dir = tempfile::tempdir().unwrap();
+    // SAFETY: see project_meta_cache_miss_fetches_from_api for rationale.
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache_dir.path()) };
+
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
