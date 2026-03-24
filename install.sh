@@ -64,16 +64,24 @@ TARBALL="${BINARY}-${VERSION}-${TARGET}.tar.gz"
 CHECKSUM_FILE="${TARBALL}.sha256"
 BASE_URL="https://github.com/${REPO}/releases/download/${VERSION}"
 
-TMP_DIR="$(mktemp -d)"
+TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t jr)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
 echo "Downloading ${BINARY} ${VERSION} for ${TARGET}..."
 
-curl -fSL "${BASE_URL}/${TARBALL}" -o "${TMP_DIR}/${TARBALL}" \
-    || err "Failed to download jr ${VERSION}. Check your internet connection and try again. See https://github.com/${REPO}/releases for available versions."
+HTTP_CODE="$(curl -sSL -w "%{http_code}" -o "${TMP_DIR}/${TARBALL}" "${BASE_URL}/${TARBALL}")" || true
+case "${HTTP_CODE}" in
+    200) ;;
+    404) err "Release ${VERSION} not found. See https://github.com/${REPO}/releases for available versions." ;;
+    *)   err "Failed to download jr ${VERSION} (HTTP ${HTTP_CODE}). Check your internet connection and try again." ;;
+esac
 
-curl -fSL "${BASE_URL}/${CHECKSUM_FILE}" -o "${TMP_DIR}/${CHECKSUM_FILE}" \
-    || err "Failed to download checksum file. Check your internet connection and try again."
+HTTP_CODE="$(curl -sSL -w "%{http_code}" -o "${TMP_DIR}/${CHECKSUM_FILE}" "${BASE_URL}/${CHECKSUM_FILE}")" || true
+case "${HTTP_CODE}" in
+    200) ;;
+    404) err "Checksum file for ${VERSION} not found. The release may be incomplete. See https://github.com/${REPO}/releases." ;;
+    *)   err "Failed to download checksum file (HTTP ${HTTP_CODE}). Check your internet connection and try again." ;;
+esac
 
 # Verify checksum (cd required — .sha256 contains bare filename)
 cd "${TMP_DIR}"
