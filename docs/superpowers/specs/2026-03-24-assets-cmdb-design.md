@@ -16,7 +16,7 @@ The `jr` codebase uses product-namespaced modules: `api/jira/`, `api/jsm/`, `typ
 
 Assets API calls require a `workspaceId`. This is site-wide (not per-project) and discovered once:
 
-1. `GET {instance_url}/rest/servicedeskapi/assets/workspace` → returns `{"workspaceId": "..."}`. Uses `get_from_instance()` (same pattern as JSM endpoints).
+1. `GET {instance_url}/rest/servicedeskapi/assets/workspace` → returns a paginated `ServiceDeskPage`, e.g. `{ "values": [{ "workspaceId": "..." }] }`. Uses `get_from_instance()` (same pattern as JSM endpoints).
 2. Cache in `~/.cache/jr/workspace.json` with 7-day TTL (separate from `project_meta.json` since workspace ID is site-wide).
 
 Cache structure:
@@ -28,7 +28,7 @@ Cache structure:
 }
 ```
 
-Cache invalidation: on 404 from Assets endpoints, clear and re-fetch.
+Cache invalidation strategy (planned): on 404 from Assets endpoints, clear the workspace cache and re-fetch. The current implementation does not yet perform automatic invalidation and retry; it may be added in a future iteration.
 
 Cache functions in `src/cache.rs` (filesystem only):
 
@@ -328,7 +328,7 @@ Resolves an object key (e.g., `OBJ-1`) to its numeric ID via AQL:
 
 ```
 POST .../v1/object/aql?maxResults=1&includeAttributes=false
-Body: {"qlQuery": "objectKey = \"OBJ-1\""}
+Body: {"qlQuery": "Key = \"OBJ-1\""}
 ```
 
 Returns the ID or errors with "No asset matching ...". If the input is purely numeric, treats it as an ID directly (skip AQL).
@@ -355,7 +355,7 @@ $ jr assets search "objectType = Client"
  OBJ-3     Client   Initech
 ```
 
-With `--attributes` adds `Created` and `Updated` columns plus attribute values.
+With `--attributes` adds `Created` and `Updated` columns to the table output and passes `includeAttributes=true` to the API.
 
 JSON mode returns the full `AssetObject` array. The `--attributes` flag controls whether `includeAttributes=true` is passed to the API — this applies to both table and JSON output. Without `--attributes`, JSON output includes the object metadata but no attributes array.
 
@@ -388,7 +388,7 @@ $ jr assets tickets OBJ-1
  PROJ-38   Change Issue      Update firewall rules for new subnet     Closed        Medium
 ```
 
-JSON mode returns the `ConnectedTicketsResponse` object (includes `allTicketsQuery` JQL).
+JSON mode returns the full `ConnectedTicketsResponse` object (includes `tickets` array and `allTicketsQuery` JQL). The `--limit` flag only affects table output; JSON always returns the full response.
 
 ### CLI Enum
 
