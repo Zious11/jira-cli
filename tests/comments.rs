@@ -73,7 +73,7 @@ async fn list_comments_with_limit() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/FOO-3/comment"))
         .and(query_param("startAt", "0"))
-        .and(query_param("maxResults", "100"))
+        .and(query_param("maxResults", "1"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "comments": [
                 {
@@ -81,16 +81,10 @@ async fn list_comments_with_limit() {
                     "author": { "accountId": "abc", "displayName": "Alice", "emailAddress": "a@test.com", "active": true },
                     "body": null,
                     "created": "2026-03-20T10:00:00.000+0000"
-                },
-                {
-                    "id": "10002",
-                    "author": { "accountId": "def", "displayName": "Bob", "emailAddress": "b@test.com", "active": true },
-                    "body": null,
-                    "created": "2026-03-21T11:00:00.000+0000"
                 }
             ],
             "startAt": 0,
-            "maxResults": 100,
+            "maxResults": 1,
             "total": 2
         })))
         .mount(&server)

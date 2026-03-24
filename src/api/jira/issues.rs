@@ -126,14 +126,24 @@ impl JiraClient {
         let base = format!("/rest/api/3/issue/{}/comment", urlencoding::encode(key));
         let mut all = Vec::new();
         let mut start_at = 0u32;
-        let page_size = 100;
+        let max_page_size: u32 = 100;
 
         loop {
+            let page_size = match limit {
+                Some(cap) => {
+                    let remaining = cap.saturating_sub(all.len() as u32);
+                    if remaining == 0 {
+                        break;
+                    }
+                    remaining.min(max_page_size)
+                }
+                None => max_page_size,
+            };
             let path = format!("{}?startAt={}&maxResults={}", base, start_at, page_size);
             let page: OffsetPage<Comment> = self.get(&path).await?;
             let has_more = page.has_more();
             let next = page.next_start();
-            all.extend(page.items().to_vec());
+            all.append(&mut page.comments.unwrap_or_default());
 
             if let Some(cap) = limit {
                 if all.len() >= cap as usize {

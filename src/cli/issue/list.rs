@@ -220,17 +220,29 @@ pub(super) async fn handle_comments(
 ) -> Result<()> {
     let comments = client.list_comments(key, limit).await?;
 
-    let rows: Vec<Vec<String>> = comments
-        .iter()
-        .map(|c| {
-            let author = c.author.as_ref().map(|a| a.display_name.as_str());
-            let created = c.created.as_deref();
-            let body_text = c.body.as_ref().map(adf::adf_to_text);
-            format_comment_row(author, created, body_text.as_deref())
-        })
-        .collect();
+    match output_format {
+        OutputFormat::Json => {
+            output::print_output(output_format, &["Author", "Date", "Body"], &[], &comments)?;
+        }
+        OutputFormat::Table => {
+            let rows: Vec<Vec<String>> = comments
+                .iter()
+                .map(|c| {
+                    let author = c.author.as_ref().map(|a| a.display_name.as_str());
+                    let created = c.created.as_deref();
+                    let body_text = c.body.as_ref().map(adf::adf_to_text);
+                    format_comment_row(author, created, body_text.as_deref())
+                })
+                .collect();
 
-    output::print_output(output_format, &["Author", "Date", "Body"], &rows, &comments)?;
+            output::print_output(
+                output_format,
+                &["Author", "Date", "Body"],
+                &rows,
+                &comments,
+            )?;
+        }
+    }
 
     Ok(())
 }
