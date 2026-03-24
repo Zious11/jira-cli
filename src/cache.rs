@@ -112,6 +112,43 @@ pub fn write_project_meta(project_key: &str, meta: &ProjectMeta) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WorkspaceCache {
+    pub workspace_id: String,
+    pub fetched_at: DateTime<Utc>,
+}
+
+pub fn read_workspace_cache() -> Result<Option<WorkspaceCache>> {
+    let path = cache_dir().join("workspace.json");
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let content = std::fs::read_to_string(&path)?;
+    let cache: WorkspaceCache = serde_json::from_str(&content)?;
+
+    let age = Utc::now() - cache.fetched_at;
+    if age.num_days() >= CACHE_TTL_DAYS {
+        return Ok(None);
+    }
+
+    Ok(Some(cache))
+}
+
+pub fn write_workspace_cache(workspace_id: &str) -> Result<()> {
+    let dir = cache_dir();
+    std::fs::create_dir_all(&dir)?;
+
+    let cache = WorkspaceCache {
+        workspace_id: workspace_id.to_string(),
+        fetched_at: Utc::now(),
+    };
+
+    let content = serde_json::to_string_pretty(&cache)?;
+    std::fs::write(dir.join("workspace.json"), content)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,6 +312,44 @@ mod tests {
             let sw_loaded = read_project_meta("DEV").unwrap().expect("should exist");
             assert_eq!(sw_loaded.project_type, "software");
             assert!(sw_loaded.service_desk_id.is_none());
+        });
+    }
+
+    #[test]
+    fn read_missing_workspace_cache_returns_none() {
+        with_temp_cache(|| {
+            let result = read_workspace_cache().unwrap();
+            assert!(result.is_none());
+        });
+    }
+
+    #[test]
+    fn write_then_read_workspace_cache() {
+        with_temp_cache(|| {
+            write_workspace_cache("abc-123-def").unwrap();
+
+            let cache = read_workspace_cache().unwrap().expect("should exist");
+            assert_eq!(cache.workspace_id, "abc-123-def");
+        });
+    }
+
+    #[test]
+    fn expired_workspace_cache_returns_none() {
+        with_temp_cache(|| {
+            let expired = WorkspaceCache {
+                workspace_id: "old-id".into(),
+                fetched_at: Utc::now() - chrono::Duration::days(8),
+            };
+            let dir = cache_dir();
+            std::fs::create_dir_all(&dir).unwrap();
+            let content = serde_json::to_string_pretty(&expired).unwrap();
+            std::fs::write(dir.join("workspace.json"), content).unwrap();
+
+            let result = read_workspace_cache().unwrap();
+            assert!(
+                result.is_none(),
+                "expired workspace cache should return None"
+            );
         });
     }
 }

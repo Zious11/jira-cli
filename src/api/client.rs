@@ -20,6 +20,7 @@ pub struct JiraClient {
     instance_url: String,
     auth_header: String,
     verbose: bool,
+    assets_base_url: Option<String>,
 }
 
 impl JiraClient {
@@ -58,24 +59,34 @@ impl JiraClient {
 
         let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
 
+        let assets_base_url = config.global.instance.cloud_id.as_ref().map(|cloud_id| {
+            format!(
+                "https://api.atlassian.com/ex/jira/{}/jsm/assets",
+                urlencoding::encode(cloud_id)
+            )
+        });
+
         Ok(Self {
             client,
             base_url,
             instance_url,
             auth_header,
             verbose,
+            assets_base_url,
         })
     }
 
     /// Create a client for integration testing. This is **not** gated behind
     /// `#[cfg(test)]` so that integration tests in `tests/` can use it.
     pub fn new_for_test(base_url: String, auth_header: String) -> Self {
+        let assets_base_url = Some(format!("{}/jsm/assets", &base_url));
         Self {
             client: Client::new(),
             instance_url: base_url.clone(),
             base_url,
             auth_header,
             verbose: false,
+            assets_base_url,
         }
     }
 
@@ -252,6 +263,54 @@ impl JiraClient {
         let response = self.send(request).await?;
         let parsed = response.json::<T>().await?;
         Ok(parsed)
+    }
+
+    /// Perform a GET request against the Assets/CMDB API gateway.
+    ///
+    /// Constructs URL: `{assets_base_url}/workspace/{workspace_id}/v1/{path}`.
+    /// Requires `cloud_id` in config (set during `jr init`).
+    pub async fn get_assets<T: DeserializeOwned>(
+        &self,
+        workspace_id: &str,
+        path: &str,
+    ) -> anyhow::Result<T> {
+        let base = self.assets_base_url.as_ref().ok_or_else(|| {
+            JrError::ConfigError(
+                "Cloud ID not configured. Run \"jr init\" to set up your instance.".into(),
+            )
+        })?;
+        let url = format!(
+            "{}/workspace/{}/v1/{}",
+            base,
+            urlencoding::encode(workspace_id),
+            path
+        );
+        let request = self.client.get(&url);
+        let response = self.send(request).await?;
+        Ok(response.json::<T>().await?)
+    }
+
+    /// Perform a POST request against the Assets/CMDB API gateway.
+    pub async fn post_assets<T: DeserializeOwned, B: Serialize>(
+        &self,
+        workspace_id: &str,
+        path: &str,
+        body: &B,
+    ) -> anyhow::Result<T> {
+        let base = self.assets_base_url.as_ref().ok_or_else(|| {
+            JrError::ConfigError(
+                "Cloud ID not configured. Run \"jr init\" to set up your instance.".into(),
+            )
+        })?;
+        let url = format!(
+            "{}/workspace/{}/v1/{}",
+            base,
+            urlencoding::encode(workspace_id),
+            path
+        );
+        let request = self.client.post(&url).json(body);
+        let response = self.send(request).await?;
+        Ok(response.json::<T>().await?)
     }
 
     /// Returns the HTTP method for building requests externally (if needed).

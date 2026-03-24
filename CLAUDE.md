@@ -19,6 +19,7 @@ src/
 │   │   ├── workflow.rs  # move + transitions + assign + comment + open
 │   │   ├── links.rs     # link + unlink + link-types
 │   │   └── helpers.rs   # team/points resolution, prompts
+│   ├── assets.rs        # assets search/view/tickets
 │   ├── board.rs         # board list/view
 │   ├── sprint.rs        # sprint list/current (scrum-only, errors on kanban)
 │   ├── worklog.rs       # worklog add/list
@@ -32,6 +33,10 @@ src/
 │   ├── auth.rs          # OAuth 2.0 flow, API token storage, keychain read/write, token refresh
 │   ├── pagination.rs    # Offset-based (most endpoints) + cursor-based (JQL search)
 │   ├── rate_limit.rs    # Retry-After parsing
+│   ├── assets/          # Assets/CMDB API call implementations
+│   │   ├── workspace.rs     # workspace ID discovery + cache
+│   │   ├── objects.rs       # AQL search, get object, resolve key
+│   │   └── tickets.rs       # connected tickets
 │   └── jira/            # Jira-specific API call implementations (one file per resource)
 │       ├── issues.rs    # search, get, create, edit, list comments
 │       ├── boards.rs    # list boards, get board config
@@ -45,9 +50,10 @@ src/
 │   ├── jsm/             # JSM-specific API call implementations
 │   │   ├── servicedesks.rs  # list service desks, project meta orchestration
 │   │   └── queues.rs        # list queues, get queue issues
+├── types/assets/        # Serde structs for Assets API responses (AssetObject, ConnectedTicket, etc.)
 ├── types/jira/          # Serde structs for API responses (Issue, Board, Sprint, User, Team, etc.)
 ├── types/jsm/           # Serde structs for JSM API responses (ServiceDesk, Queue, etc.)
-├── cache.rs             # XDG cache (~/.cache/jr/) — team list with 7-day TTL, project meta cache
+├── cache.rs             # XDG cache (~/.cache/jr/) — team list, project meta, workspace ID (all 7-day TTL)
 ├── config.rs            # Global (~/.config/jr/config.toml) + per-project (.jr.toml), figment layering
 ├── output.rs            # Table (comfy-table) and JSON formatting
 ├── adf.rs               # Atlassian Document Format: text→ADF, markdown→ADF, ADF→text

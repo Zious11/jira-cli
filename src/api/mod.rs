@@ -1,3 +1,4 @@
+pub mod assets;
 pub mod auth;
 pub mod client;
 pub mod jira;

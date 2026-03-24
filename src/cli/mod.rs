@@ -1,3 +1,4 @@
+pub mod assets;
 pub mod auth;
 pub mod board;
 pub mod init;
@@ -47,6 +48,11 @@ pub enum OutputFormat {
 pub enum Command {
     /// Initialize jr configuration
     Init,
+    /// Manage Assets/CMDB objects
+    Assets {
+        #[command(subcommand)]
+        command: AssetsCommand,
+    },
     /// Manage authentication
     Auth {
         #[command(subcommand)]
@@ -95,6 +101,37 @@ pub enum Command {
         /// Shell to generate completions for
         #[arg(value_enum)]
         shell: clap_complete::Shell,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AssetsCommand {
+    /// Search assets with AQL query
+    Search {
+        /// AQL query (e.g. "objectType = Client")
+        query: String,
+        /// Maximum number of results
+        #[arg(long)]
+        limit: Option<u32>,
+        /// Include object attributes in output
+        #[arg(long)]
+        attributes: bool,
+    },
+    /// View asset details
+    View {
+        /// Object key (e.g. OBJ-1) or numeric ID
+        key: String,
+        /// Include object attributes in output
+        #[arg(long)]
+        attributes: bool,
+    },
+    /// Show Jira issues connected to an asset
+    Tickets {
+        /// Object key (e.g. OBJ-1) or numeric ID
+        key: String,
+        /// Maximum number of tickets to show
+        #[arg(long)]
+        limit: Option<u32>,
     },
 }
 
