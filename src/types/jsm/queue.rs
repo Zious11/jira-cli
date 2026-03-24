@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::types::jira::User;
 use crate::types::jira::issue::{IssueType, Priority, Status};
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Queue {
     pub id: String,
     pub name: String,
@@ -13,13 +13,13 @@ pub struct Queue {
     pub issue_count: Option<u64>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct QueueIssue {
     pub key: String,
     pub fields: QueueIssueFields,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct QueueIssueFields {
     pub summary: Option<String>,
     pub status: Option<Status>,

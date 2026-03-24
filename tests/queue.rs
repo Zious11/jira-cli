@@ -1,0 +1,187 @@
+#[allow(dead_code)]
+mod common;
+
+use serde_json::json;
+use wiremock::matchers::{method, path, query_param};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+#[tokio::test]
+async fn list_queues_returns_all_queues() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk/15/queue"))
+        .and(query_param("includeCount", "true"))
+        .and(query_param("start", "0"))
+        .and(query_param("limit", "50"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 2,
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "values": [
+                { "id": "10", "name": "Triage", "jql": "project = HELPDESK AND status = New", "issueCount": 12 },
+                { "id": "20", "name": "In Progress", "jql": "project = HELPDESK AND status = \"In Progress\"", "issueCount": 7 }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".into());
+    let queues = client.list_queues("15").await.unwrap();
+    assert_eq!(queues.len(), 2);
+    assert_eq!(queues[0].name, "Triage");
+    assert_eq!(queues[0].issue_count, Some(12));
+    assert_eq!(queues[1].name, "In Progress");
+}
+
+#[tokio::test]
+async fn list_queues_empty() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk/15/queue"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 0,
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "values": []
+        })))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".into());
+    let queues = client.list_queues("15").await.unwrap();
+    assert!(queues.is_empty());
+}
+
+#[tokio::test]
+async fn get_queue_issues_returns_issues() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk/15/queue/10/issue"))
+        .and(query_param("start", "0"))
+        .and(query_param("limit", "50"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 2,
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "values": [
+                {
+                    "key": "HELPDESK-42",
+                    "fields": {
+                        "summary": "VPN not working",
+                        "status": { "name": "New", "statusCategory": { "name": "To Do", "key": "new" } },
+                        "issuetype": { "name": "Service Request" },
+                        "priority": { "name": "High" },
+                        "assignee": null
+                    }
+                },
+                {
+                    "key": "HELPDESK-41",
+                    "fields": {
+                        "summary": "Need license renewal",
+                        "status": { "name": "New", "statusCategory": { "name": "To Do", "key": "new" } },
+                        "issuetype": { "name": "Service Request" },
+                        "assignee": { "accountId": "abc", "displayName": "Jane D." }
+                    }
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".into());
+    let issues = client.get_queue_issues("15", "10", None).await.unwrap();
+    assert_eq!(issues.len(), 2);
+    assert_eq!(issues[0].key, "HELPDESK-42");
+    assert!(issues[0].fields.assignee.is_none());
+    assert_eq!(
+        issues[1].fields.assignee.as_ref().unwrap().display_name,
+        "Jane D."
+    );
+}
+
+#[tokio::test]
+async fn get_queue_issues_with_limit() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk/15/queue/10/issue"))
+        .and(query_param("start", "0"))
+        .and(query_param("limit", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 1,
+            "start": 0,
+            "limit": 1,
+            "isLastPage": false,
+            "values": [
+                {
+                    "key": "HELPDESK-42",
+                    "fields": {
+                        "summary": "VPN not working"
+                    }
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".into());
+    let issues = client.get_queue_issues("15", "10", Some(1)).await.unwrap();
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].key, "HELPDESK-42");
+}
+
+#[tokio::test]
+async fn get_queue_issues_paginated() {
+    let server = MockServer::start().await;
+
+    // Page 1
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk/15/queue/10/issue"))
+        .and(query_param("start", "0"))
+        .and(query_param("limit", "50"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 1,
+            "start": 0,
+            "limit": 1,
+            "isLastPage": false,
+            "values": [
+                { "key": "HELPDESK-2", "fields": { "summary": "Issue A" } }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    // Page 2
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk/15/queue/10/issue"))
+        .and(query_param("start", "1"))
+        .and(query_param("limit", "50"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 1,
+            "start": 1,
+            "limit": 1,
+            "isLastPage": true,
+            "values": [
+                { "key": "HELPDESK-1", "fields": { "summary": "Issue B" } }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".into());
+    let issues = client.get_queue_issues("15", "10", None).await.unwrap();
+    assert_eq!(issues.len(), 2);
+    assert_eq!(issues[0].key, "HELPDESK-2");
+    assert_eq!(issues[1].key, "HELPDESK-1");
+}
