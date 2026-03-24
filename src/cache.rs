@@ -1,6 +1,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 const CACHE_TTL_DAYS: i64 = 7;
@@ -56,6 +57,58 @@ pub fn write_team_cache(teams: &[CachedTeam]) -> Result<()> {
 
     let content = serde_json::to_string_pretty(&cache)?;
     std::fs::write(dir.join("teams.json"), content)?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectMeta {
+    pub project_type: String,
+    pub simplified: bool,
+    pub project_id: String,
+    pub service_desk_id: Option<String>,
+    pub fetched_at: DateTime<Utc>,
+}
+
+pub fn read_project_meta(project_key: &str) -> Result<Option<ProjectMeta>> {
+    let path = cache_dir().join("project_meta.json");
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let content = std::fs::read_to_string(&path)?;
+    let map: HashMap<String, ProjectMeta> = serde_json::from_str(&content)?;
+
+    match map.get(project_key) {
+        Some(meta) => {
+            let age = Utc::now() - meta.fetched_at;
+            if age.num_days() >= CACHE_TTL_DAYS {
+                Ok(None)
+            } else {
+                Ok(Some(meta.clone()))
+            }
+        }
+        None => Ok(None),
+    }
+}
+
+pub fn write_project_meta(project_key: &str, meta: &ProjectMeta) -> Result<()> {
+    let dir = cache_dir();
+    std::fs::create_dir_all(&dir)?;
+
+    let path = dir.join("project_meta.json");
+
+    // Read existing map or start fresh
+    let mut map: HashMap<String, ProjectMeta> = if path.exists() {
+        let content = std::fs::read_to_string(&path)?;
+        serde_json::from_str(&content).unwrap_or_default()
+    } else {
+        HashMap::new()
+    };
+
+    map.insert(project_key.to_string(), meta.clone());
+
+    let content = serde_json::to_string_pretty(&map)?;
+    std::fs::write(&path, content)?;
     Ok(())
 }
 
@@ -144,6 +197,84 @@ mod tests {
             let cache = read_team_cache().unwrap().expect("cache should be valid");
             assert_eq!(cache.teams.len(), 1);
             assert_eq!(cache.teams[0].name, "Recent");
+        });
+    }
+
+    #[test]
+    fn read_missing_project_meta_returns_none() {
+        with_temp_cache(|| {
+            let result = read_project_meta("NOEXIST").unwrap();
+            assert!(result.is_none());
+        });
+    }
+
+    #[test]
+    fn write_then_read_project_meta() {
+        with_temp_cache(|| {
+            let meta = ProjectMeta {
+                project_type: "service_desk".into(),
+                simplified: false,
+                project_id: "10042".into(),
+                service_desk_id: Some("15".into()),
+                fetched_at: Utc::now(),
+            };
+            write_project_meta("HELPDESK", &meta).unwrap();
+
+            let loaded = read_project_meta("HELPDESK")
+                .unwrap()
+                .expect("should exist");
+            assert_eq!(loaded.project_type, "service_desk");
+            assert_eq!(loaded.service_desk_id.as_deref(), Some("15"));
+            assert_eq!(loaded.project_id, "10042");
+            assert!(!loaded.simplified);
+        });
+    }
+
+    #[test]
+    fn expired_project_meta_returns_none() {
+        with_temp_cache(|| {
+            let meta = ProjectMeta {
+                project_type: "service_desk".into(),
+                simplified: false,
+                project_id: "10042".into(),
+                service_desk_id: Some("15".into()),
+                fetched_at: Utc::now() - chrono::Duration::days(8),
+            };
+            write_project_meta("HELPDESK", &meta).unwrap();
+
+            let result = read_project_meta("HELPDESK").unwrap();
+            assert!(result.is_none(), "expired project meta should return None");
+        });
+    }
+
+    #[test]
+    fn project_meta_multiple_projects() {
+        with_temp_cache(|| {
+            let jsm = ProjectMeta {
+                project_type: "service_desk".into(),
+                simplified: false,
+                project_id: "10042".into(),
+                service_desk_id: Some("15".into()),
+                fetched_at: Utc::now(),
+            };
+            let software = ProjectMeta {
+                project_type: "software".into(),
+                simplified: true,
+                project_id: "10001".into(),
+                service_desk_id: None,
+                fetched_at: Utc::now(),
+            };
+            write_project_meta("HELPDESK", &jsm).unwrap();
+            write_project_meta("DEV", &software).unwrap();
+
+            let jsm_loaded = read_project_meta("HELPDESK")
+                .unwrap()
+                .expect("should exist");
+            assert_eq!(jsm_loaded.project_type, "service_desk");
+
+            let sw_loaded = read_project_meta("DEV").unwrap().expect("should exist");
+            assert_eq!(sw_loaded.project_type, "software");
+            assert!(sw_loaded.service_desk_id.is_none());
         });
     }
 }

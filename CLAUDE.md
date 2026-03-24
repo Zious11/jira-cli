@@ -25,7 +25,8 @@ src/
 │   ├── team.rs          # team list (with cache + lazy org discovery)
 │   ├── auth.rs          # auth login (API token default, --oauth for OAuth 2.0), auth status
 │   ├── init.rs          # Interactive setup (prefetches org metadata + team cache + story points field)
-│   └── project.rs       # project fields (issue types, priorities for a project)
+│   ├── project.rs       # project fields (issue types, priorities for a project)
+│   └── queue.rs         # queue list/view (JSM service desks)
 ├── api/
 │   ├── client.rs        # JiraClient — HTTP methods, auth headers, rate limit retry, 429/401 handling
 │   ├── auth.rs          # OAuth 2.0 flow, API token storage, keychain read/write, token refresh
@@ -41,8 +42,12 @@ src/
 │       ├── worklogs.rs  # add/list worklogs
 │       ├── projects.rs  # project details
 │       └── users.rs     # current user, assignable users
+│   ├── jsm/             # JSM-specific API call implementations
+│   │   ├── servicedesks.rs  # list service desks, project meta orchestration
+│   │   └── queues.rs        # list queues, get queue issues
 ├── types/jira/          # Serde structs for API responses (Issue, Board, Sprint, User, Team, etc.)
-├── cache.rs             # XDG cache (~/.cache/jr/) — team list with 7-day TTL
+├── types/jsm/           # Serde structs for JSM API responses (ServiceDesk, Queue, etc.)
+├── cache.rs             # XDG cache (~/.cache/jr/) — team list with 7-day TTL, project meta cache
 ├── config.rs            # Global (~/.config/jr/config.toml) + per-project (.jr.toml), figment layering
 ├── output.rs            # Table (comfy-table) and JSON formatting
 ├── adf.rs               # Atlassian Document Format: text→ADF, markdown→ADF, ADF→text

@@ -138,6 +138,18 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
                 cli::team::handle(command, &cli.output, &config, &client).await
             }
+            cli::Command::Queue { command } => {
+                let config = config::Config::load()?;
+                let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
+                cli::queue::handle(
+                    command,
+                    &cli.output,
+                    &config,
+                    &client,
+                    cli.project.as_deref(),
+                )
+                .await
+            }
         }
     };
 

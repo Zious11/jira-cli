@@ -93,6 +93,8 @@ jr issue comment KEY-123 "Deployed to staging"
 | `jr sprint current` | Show current sprint issues (with points summary) |
 | `jr worklog add KEY 2h` | Log time (`1h30m`, `1d`, `1w`) |
 | `jr worklog list KEY` | List worklogs |
+| `jr queue list`                  | List JSM queues for the project's service desk |
+| `jr queue view <name>`           | View issues in a queue (partial name match)    |
 | `jr team list` | List available teams (`--refresh` to force update) |
 | `jr project fields FOO` | Show valid issue types and priorities |
 | `jr completion bash\|zsh\|fish` | Generate shell completions |

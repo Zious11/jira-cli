@@ -3,6 +3,7 @@ pub mod board;
 pub mod init;
 pub mod issue;
 pub mod project;
+pub mod queue;
 pub mod sprint;
 pub mod team;
 pub mod worklog;
@@ -83,6 +84,11 @@ pub enum Command {
     Team {
         #[command(subcommand)]
         command: TeamCommand,
+    },
+    /// Manage JSM queues
+    Queue {
+        #[command(subcommand)]
+        command: QueueCommand,
     },
     /// Generate shell completions
     Completion {
@@ -324,5 +330,22 @@ pub enum WorklogCommand {
     List {
         /// Issue key
         key: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum QueueCommand {
+    /// List queues for the service desk
+    List,
+    /// View issues in a queue
+    View {
+        /// Queue name (partial match supported)
+        name: Option<String>,
+        /// Queue ID (use if name is ambiguous)
+        #[arg(long)]
+        id: Option<String>,
+        /// Maximum number of issues to return
+        #[arg(long)]
+        limit: Option<u32>,
     },
 }

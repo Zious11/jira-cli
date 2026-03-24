@@ -78,6 +78,39 @@ impl<T> CursorPage<T> {
     }
 }
 
+/// Offset-based pagination used by Jira Service Management `/rest/servicedeskapi/` endpoints.
+///
+/// Uses different field names than `OffsetPage`: `size` (items in page) instead of `total`,
+/// `isLastPage` boolean instead of computed from startAt+maxResults, and `start`/`limit`
+/// instead of `startAt`/`maxResults`.
+#[derive(Debug, Deserialize)]
+pub struct ServiceDeskPage<T> {
+    /// Count of items in the current page.
+    pub size: u32,
+    /// Zero-based starting index.
+    pub start: u32,
+    /// Maximum items per page.
+    pub limit: u32,
+    /// Whether this is the last page of results.
+    #[serde(rename = "isLastPage")]
+    pub is_last_page: bool,
+    /// The items in this page.
+    #[serde(default)]
+    pub values: Vec<T>,
+}
+
+impl<T> ServiceDeskPage<T> {
+    /// Returns true if there are more pages after this one.
+    pub fn has_more(&self) -> bool {
+        !self.is_last_page
+    }
+
+    /// Returns the `start` value for the next page.
+    pub fn next_start(&self) -> u32 {
+        self.start + self.size
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,5 +196,60 @@ mod tests {
             next_page_token: None,
         };
         assert!(!last_page.has_more());
+    }
+
+    #[test]
+    fn test_service_desk_page_has_more() {
+        let page: ServiceDeskPage<String> = ServiceDeskPage {
+            size: 5,
+            start: 0,
+            limit: 50,
+            is_last_page: false,
+            values: vec!["a".into(), "b".into(), "c".into(), "d".into(), "e".into()],
+        };
+        assert!(page.has_more());
+        assert_eq!(page.next_start(), 5);
+    }
+
+    #[test]
+    fn test_service_desk_page_last_page() {
+        let page: ServiceDeskPage<String> = ServiceDeskPage {
+            size: 3,
+            start: 10,
+            limit: 50,
+            is_last_page: true,
+            values: vec!["a".into(), "b".into(), "c".into()],
+        };
+        assert!(!page.has_more());
+        assert_eq!(page.next_start(), 13);
+    }
+
+    #[test]
+    fn test_service_desk_page_empty() {
+        let page: ServiceDeskPage<String> = ServiceDeskPage {
+            size: 0,
+            start: 0,
+            limit: 50,
+            is_last_page: true,
+            values: vec![],
+        };
+        assert!(!page.has_more());
+        assert_eq!(page.next_start(), 0);
+        assert!(page.values.is_empty());
+    }
+
+    #[test]
+    fn test_service_desk_page_deserialize() {
+        let json = r#"{
+            "size": 2,
+            "start": 0,
+            "limit": 50,
+            "isLastPage": false,
+            "values": ["item1", "item2"]
+        }"#;
+        let page: ServiceDeskPage<String> = serde_json::from_str(json).unwrap();
+        assert_eq!(page.size, 2);
+        assert_eq!(page.values.len(), 2);
+        assert!(!page.is_last_page);
     }
 }
