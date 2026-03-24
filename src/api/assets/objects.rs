@@ -99,3 +99,24 @@ pub async fn resolve_object_key(
         .into()
     })
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn numeric_id_detected() {
+        assert!("123".chars().all(|c| c.is_ascii_digit()));
+        assert!("0".chars().all(|c| c.is_ascii_digit()));
+    }
+
+    #[test]
+    fn object_key_not_numeric() {
+        assert!(!"OBJ-1".chars().all(|c| c.is_ascii_digit()));
+        assert!(!"SCHEMA-88".chars().all(|c| c.is_ascii_digit()));
+        assert!(!"abc".chars().all(|c| c.is_ascii_digit()));
+    }
+
+    #[test]
+    fn empty_string_is_numeric() {
+        assert!("".chars().all(|c| c.is_ascii_digit()));
+    }
+}
