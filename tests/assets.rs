@@ -205,6 +205,65 @@ async fn get_connected_tickets_returns_tickets() {
 }
 
 #[tokio::test]
+async fn search_assets_paginated() {
+    let server = MockServer::start().await;
+
+    // Page 1
+    Mock::given(method("POST"))
+        .and(path("/jsm/assets/workspace/ws-123/v1/object/aql"))
+        .and(query_param("startAt", "0"))
+        .and(query_param("maxResults", "25"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "startAt": 0,
+            "maxResults": 25,
+            "total": 2,
+            "isLast": false,
+            "values": [
+                {
+                    "id": "70",
+                    "label": "Acme Corp",
+                    "objectKey": "OBJ-70",
+                    "objectType": { "id": "13", "name": "Client" }
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    // Page 2
+    Mock::given(method("POST"))
+        .and(path("/jsm/assets/workspace/ws-123/v1/object/aql"))
+        .and(query_param("startAt", "25"))
+        .and(query_param("maxResults", "25"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "startAt": 25,
+            "maxResults": 25,
+            "total": 2,
+            "isLast": true,
+            "values": [
+                {
+                    "id": "71",
+                    "label": "Globex Inc",
+                    "objectKey": "OBJ-71",
+                    "objectType": { "id": "13", "name": "Client" }
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".into());
+    let results = client
+        .search_assets("ws-123", "objectType = Client", None, false)
+        .await
+        .unwrap();
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].label, "Acme Corp");
+    assert_eq!(results[1].label, "Globex Inc");
+}
+
+#[tokio::test]
 async fn get_connected_tickets_empty() {
     let server = MockServer::start().await;
 
