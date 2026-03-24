@@ -14,7 +14,7 @@ src/
 │   ├── issue/           # issue commands (split by operation theme)
 │   │   ├── mod.rs       # dispatch + re-exports
 │   │   ├── format.rs    # row formatting, headers, points display
-│   │   ├── list.rs      # list + view (read operations)
+│   │   ├── list.rs      # list + view + comments (read operations)
 │   │   ├── create.rs    # create + edit (field-building)
 │   │   ├── workflow.rs  # move + transitions + assign + comment + open
 │   │   ├── links.rs     # link + unlink + link-types
@@ -32,7 +32,7 @@ src/
 │   ├── pagination.rs    # Offset-based (most endpoints) + cursor-based (JQL search)
 │   ├── rate_limit.rs    # Retry-After parsing
 │   └── jira/            # Jira-specific API call implementations (one file per resource)
-│       ├── issues.rs    # search, get, create, edit
+│       ├── issues.rs    # search, get, create, edit, list comments
 │       ├── boards.rs    # list boards, get board config
 │       ├── sprints.rs   # list sprints, get sprint issues
 │       ├── fields.rs    # list fields, story points field discovery

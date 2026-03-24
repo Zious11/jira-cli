@@ -73,6 +73,7 @@ jr issue comment KEY-123 "Deployed to staging"
 | `jr issue transitions KEY` | List available transitions |
 | `jr issue assign KEY` | Assign to self (or `--to USER`, `--unassign`) |
 | `jr issue comment KEY "msg"` | Add a comment (`--stdin`, `--file`, `--markdown`) |
+| `jr issue comments KEY` | List comments (`--limit N`) |
 | `jr issue open KEY` | Open in browser (`--url-only` for scripts) |
 | `jr issue link KEY1 KEY2` | Link two issues (`--type blocks`, defaults to Relates) |
 | `jr issue unlink KEY1 KEY2` | Remove link(s) between issues (`--type` to filter) |
