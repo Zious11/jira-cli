@@ -118,7 +118,7 @@ pub struct TransitionsResponse {
     pub transitions: Vec<Transition>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Comment {
     pub id: Option<String>,
     pub body: Option<Value>,

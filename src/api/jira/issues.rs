@@ -1,5 +1,5 @@
 use crate::api::client::JiraClient;
-use crate::api::pagination::CursorPage;
+use crate::api::pagination::{CursorPage, OffsetPage};
 use crate::types::jira::{Comment, CreateIssueResponse, Issue, TransitionsResponse};
 use anyhow::Result;
 use serde_json::Value;
@@ -119,5 +119,33 @@ impl JiraClient {
         let path = format!("/rest/api/3/issue/{}/comment", urlencoding::encode(key));
         let payload = serde_json::json!({ "body": body });
         self.post(&path, &payload).await
+    }
+
+    /// List comments on an issue with auto-pagination.
+    pub async fn list_comments(&self, key: &str, limit: Option<u32>) -> Result<Vec<Comment>> {
+        let base = format!("/rest/api/3/issue/{}/comment", urlencoding::encode(key));
+        let mut all = Vec::new();
+        let mut start_at = 0u32;
+        let page_size = 100;
+
+        loop {
+            let path = format!("{}?startAt={}&maxResults={}", base, start_at, page_size);
+            let page: OffsetPage<Comment> = self.get(&path).await?;
+            let has_more = page.has_more();
+            let next = page.next_start();
+            all.extend(page.items().to_vec());
+
+            if let Some(cap) = limit {
+                if all.len() >= cap as usize {
+                    all.truncate(cap as usize);
+                    break;
+                }
+            }
+            if !has_more {
+                break;
+            }
+            start_at = next;
+        }
+        Ok(all)
     }
 }
