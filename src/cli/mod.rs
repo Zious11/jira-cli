@@ -341,6 +341,18 @@ pub enum IssueCommand {
 
 #[derive(Subcommand)]
 pub enum ProjectCommand {
+    /// List accessible projects
+    List {
+        /// Filter by project type (software, service_desk, business)
+        #[arg(long = "type")]
+        project_type: Option<String>,
+        /// Maximum number of results (default: 50)
+        #[arg(long)]
+        limit: Option<u32>,
+        /// Fetch all projects (paginate through all pages)
+        #[arg(long, conflicts_with = "limit")]
+        all: bool,
+    },
     /// Show valid issue types, priorities, and statuses
     Fields {
         /// Project key (uses configured project if omitted)

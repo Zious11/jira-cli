@@ -66,6 +66,9 @@ jr issue list --reporter me --recent 7d
 # Open issues assigned to me (excludes Done)
 jr issue list --assignee me --open
 
+# Discover available projects
+jr project list
+
 # View a specific issue
 jr issue view KEY-123
 
@@ -116,6 +119,7 @@ jr issue comment KEY-123 "Deployed to staging"
 | `jr assets view <key>`          | View asset details (key or numeric ID)         |
 | `jr assets tickets <key>`       | Show Jira issues connected to an asset         |
 | `jr team list` | List available teams (`--refresh` to force update) |
+| `jr project list` | List accessible projects (`--type`, `--limit`/`--all`) |
 | `jr project fields FOO` | Show valid issue types and priorities |
 | `jr completion bash\|zsh\|fish` | Generate shell completions |
 

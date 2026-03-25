@@ -176,3 +176,29 @@ pub fn teams_list_json() -> Value {
         "cursor": null
     })
 }
+
+/// Project search response — paginated envelope with `values` array.
+pub fn project_search_response(projects: Vec<Value>) -> Value {
+    let total = projects.len() as u32;
+    json!({
+        "values": projects,
+        "startAt": 0,
+        "maxResults": 50,
+        "total": total,
+    })
+}
+
+pub fn project_response(key: &str, name: &str, type_key: &str, lead_name: Option<&str>) -> Value {
+    let lead = lead_name.map(|name| {
+        json!({
+            "accountId": format!("acc-{}", key.to_lowercase()),
+            "displayName": name,
+        })
+    });
+    json!({
+        "key": key,
+        "name": name,
+        "projectTypeKey": type_key,
+        "lead": lead,
+    })
+}

@@ -16,7 +16,11 @@ pub async fn handle(
     project_override: Option<&str>,
 ) -> Result<()> {
     let project_key = config.project_key(project_override).ok_or_else(|| {
-        JrError::UserError("No project configured. Run \"jr init\" or pass --project.".into())
+        JrError::UserError(
+            "No project configured. Run \"jr init\" or pass --project. \
+             Run \"jr project list\" to see available projects."
+                .into(),
+        )
     })?;
 
     let service_desk_id = servicedesks::require_service_desk(client, &project_key).await?;
