@@ -100,3 +100,71 @@ async fn handle_fields(
     }
     Ok(())
 }
+
+/// Suggest valid projects when an invalid key is used.
+///
+/// Returns a hint string like `Did you mean "FOO"? Run "jr project list" to see available projects.`
+/// If no close match is found or the API call fails, returns a generic hint.
+pub async fn suggest_projects(client: &JiraClient, invalid_key: &str) -> String {
+    let generic = "Run \"jr project list\" to see available projects.".to_string();
+
+    let projects = match client.list_projects(None, Some(50)).await {
+        Ok(p) => p,
+        Err(_) => return generic,
+    };
+
+    let keys: Vec<String> = projects.iter().map(|p| p.key.clone()).collect();
+    match crate::partial_match::partial_match(invalid_key, &keys) {
+        crate::partial_match::MatchResult::Exact(matched) => {
+            format!("Did you mean \"{matched}\"? {generic}")
+        }
+        crate::partial_match::MatchResult::Ambiguous(matches) => {
+            let quoted: Vec<String> = matches.iter().map(|m| format!("\"{m}\"")).collect();
+            format!("Did you mean {}? {generic}", quoted.join(" or "))
+        }
+        crate::partial_match::MatchResult::None(_) => generic,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn suggest_projects_match_logic_exact() {
+        let keys = vec!["FOO".to_string(), "BAR".to_string(), "BAZ".to_string()];
+        match crate::partial_match::partial_match("FOO", &keys) {
+            crate::partial_match::MatchResult::Exact(m) => assert_eq!(m, "FOO"),
+            _ => panic!("Expected exact match"),
+        }
+    }
+
+    #[test]
+    fn suggest_projects_match_logic_partial() {
+        let keys = vec!["FOO".to_string(), "BAR".to_string(), "BAZ".to_string()];
+        match crate::partial_match::partial_match("FO", &keys) {
+            crate::partial_match::MatchResult::Exact(m) => assert_eq!(m, "FOO"),
+            _ => panic!("Expected unique partial match"),
+        }
+    }
+
+    #[test]
+    fn suggest_projects_match_logic_ambiguous() {
+        let keys = vec!["FOO".to_string(), "BAR".to_string(), "BAZ".to_string()];
+        match crate::partial_match::partial_match("BA", &keys) {
+            crate::partial_match::MatchResult::Ambiguous(matches) => {
+                assert_eq!(matches.len(), 2);
+                assert!(matches.contains(&"BAR".to_string()));
+                assert!(matches.contains(&"BAZ".to_string()));
+            }
+            _ => panic!("Expected ambiguous match"),
+        }
+    }
+
+    #[test]
+    fn suggest_projects_match_logic_none() {
+        let keys = vec!["FOO".to_string(), "BAR".to_string()];
+        match crate::partial_match::partial_match("ZZZ", &keys) {
+            crate::partial_match::MatchResult::None(_) => {}
+            _ => panic!("Expected no match"),
+        }
+    }
+}

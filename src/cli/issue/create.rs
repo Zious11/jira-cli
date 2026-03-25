@@ -45,7 +45,10 @@ pub(super) async fn handle_create(
             }
         })
         .ok_or_else(|| {
-            anyhow::anyhow!("Project key is required. Use --project or configure .jr.toml")
+            anyhow::anyhow!(
+                "Project key is required. Use --project or configure .jr.toml. \
+                 Run \"jr project list\" to see available projects."
+            )
         })?;
 
     // Resolve issue type
