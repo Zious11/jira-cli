@@ -69,17 +69,22 @@ The `else` branch is refactored to reference the hoisted `project_key` variable 
 | `--jql "priority = Highest"` (no project anywhere) | `priority = Highest ORDER BY updated DESC` |
 | `--project PROJ` (no jql) | Unchanged — board-aware logic applies |
 | `--project PROJ --jql "project = OTHER AND type = Bug"` | `project = "PROJ" AND project = OTHER AND type = Bug ORDER BY ...` — contradictory project clauses are the user's responsibility, consistent with how `--status` + JQL `status =` behaves |
-| `--project PROJ --jql "ORDER BY created DESC"` | `project = "PROJ" ORDER BY updated DESC` — empty JQL after stripping ORDER BY is skipped |
+| `--project PROJ --jql "ORDER BY created DESC"` | `project = "PROJ" ORDER BY updated DESC` — empty JQL after stripping ORDER BY is skipped (requires `strip_order_by` fix, see below) |
 | No flags | Unchanged — unbounded query guard triggers |
 
 ## Scope
+
+### `strip_order_by` fix
+
+The current `strip_order_by` in `src/jql.rs` searches for `" ORDER BY"` (with a leading space). This misses JQL that starts with `ORDER BY` at position 0 (e.g., `"ORDER BY created DESC"`). Fix: also match `ORDER BY` at the start of the string. Add a unit test for this case.
 
 ### What changes
 
 | File | Change |
 |------|--------|
-| `src/cli/issue/list.rs` | Refactor `handle_list` to resolve project key before the `if/else`, include it in base parts when `--jql` is present |
+| `src/cli/issue/list.rs` | Refactor `handle_list` to resolve project key before the `if/else`, include it in base parts when `--jql` is present; skip empty stripped JQL |
 | `src/cli/issue/list.rs` | Add unit tests for the new composition behavior |
+| `src/jql.rs` | Fix `strip_order_by` to handle ORDER BY at position 0; add unit test |
 | `tests/issue_commands.rs` | Add integration test verifying `--project` + `--jql` sends correct composed JQL |
 
 ### What doesn't change
@@ -87,7 +92,6 @@ The `else` branch is refactored to reference the hoisted `project_key` variable 
 - Board-aware logic (scrum sprint detection, kanban `statusCategory != Done`) — only applies when `--jql` is absent
 - All existing filter flags (`--assignee`, `--reporter`, `--status`, `--team`, `--recent`, `--open`) — already compose correctly via `build_filter_clauses`
 - The `build_filter_clauses` function — untouched
-- The `jql.rs` module — untouched
 
 ## Testing
 
