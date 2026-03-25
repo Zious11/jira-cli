@@ -175,6 +175,9 @@ pub enum IssueCommand {
         /// Show issues created within duration (e.g., 7d, 4w, 2M)
         #[arg(long)]
         recent: Option<String>,
+        /// Show only open issues (excludes Done status category)
+        #[arg(long, conflicts_with = "status")]
+        open: bool,
         /// Show story points column
         #[arg(long)]
         points: bool,
