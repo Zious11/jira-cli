@@ -34,6 +34,7 @@ pub(super) async fn handle_list(
         assignee,
         reporter,
         recent,
+        open,
         points: show_points,
         assets: show_assets,
     } = command
@@ -82,6 +83,7 @@ pub(super) async fn handle_list(
         status.as_deref(),
         team_clause.as_deref(),
         recent.as_deref(),
+        open,
     );
 
     // Build base JQL + order by
@@ -148,7 +150,7 @@ pub(super) async fn handle_list(
     // Guard against unbounded query
     if all_parts.is_empty() {
         return Err(JrError::UserError(
-            "No project or filters specified. Use --project, --assignee, --reporter, --status, --team, --recent, or --jql. \
+            "No project or filters specified. Use --project, --assignee, --reporter, --status, --open, --team, --recent, or --jql. \
              You can also set a default project in .jr.toml or run \"jr init\"."
                 .into(),
         )
@@ -325,6 +327,7 @@ fn build_filter_clauses(
     status: Option<&str>,
     team_clause: Option<&str>,
     recent: Option<&str>,
+    open: bool,
 ) -> Vec<String> {
     let mut parts = Vec::new();
     if let Some(a) = assignee_jql {
@@ -335,6 +338,9 @@ fn build_filter_clauses(
     }
     if let Some(s) = status {
         parts.push(format!("status = \"{}\"", crate::jql::escape_value(s)));
+    }
+    if open {
+        parts.push("statusCategory != \"Done\"".to_string());
     }
     if let Some(t) = team_clause {
         parts.push(t.to_string());
@@ -655,19 +661,19 @@ mod tests {
 
     #[test]
     fn build_jql_parts_assignee_me() {
-        let parts = build_filter_clauses(Some("currentUser()"), None, None, None, None);
+        let parts = build_filter_clauses(Some("currentUser()"), None, None, None, None, false);
         assert_eq!(parts, vec!["assignee = currentUser()"]);
     }
 
     #[test]
     fn build_jql_parts_reporter_account_id() {
-        let parts = build_filter_clauses(None, Some("5b10ac8d82e05b22cc7d4ef5"), None, None, None);
+        let parts = build_filter_clauses(None, Some("5b10ac8d82e05b22cc7d4ef5"), None, None, None, false);
         assert_eq!(parts, vec!["reporter = 5b10ac8d82e05b22cc7d4ef5"]);
     }
 
     #[test]
     fn build_jql_parts_recent() {
-        let parts = build_filter_clauses(None, None, None, None, Some("7d"));
+        let parts = build_filter_clauses(None, None, None, None, Some("7d"), false);
         assert_eq!(parts, vec!["created >= -7d"]);
     }
 
@@ -679,6 +685,7 @@ mod tests {
             Some("In Progress"),
             Some(r#"customfield_10001 = "uuid-123""#),
             Some("30d"),
+            false,
         );
         assert_eq!(parts.len(), 5);
         assert!(parts.contains(&"assignee = currentUser()".to_string()));
@@ -690,13 +697,13 @@ mod tests {
 
     #[test]
     fn build_jql_parts_empty() {
-        let parts = build_filter_clauses(None, None, None, None, None);
+        let parts = build_filter_clauses(None, None, None, None, None, false);
         assert!(parts.is_empty());
     }
 
     #[test]
     fn build_jql_parts_jql_plus_status_compose() {
-        let filter = build_filter_clauses(None, None, Some("Done"), None, None);
+        let filter = build_filter_clauses(None, None, Some("Done"), None, None, false);
         let mut all_parts = vec!["type = Bug".to_string()];
         all_parts.extend(filter);
         let jql = all_parts.join(" AND ");
@@ -705,7 +712,39 @@ mod tests {
 
     #[test]
     fn build_jql_parts_status_escaping() {
-        let parts = build_filter_clauses(None, None, Some(r#"He said "hi" \o/"#), None, None);
+        let parts = build_filter_clauses(None, None, Some(r#"He said "hi" \o/"#), None, None, false);
         assert_eq!(parts, vec![r#"status = "He said \"hi\" \\o/""#.to_string()]);
+    }
+
+    #[test]
+    fn build_jql_parts_open() {
+        let parts = build_filter_clauses(None, None, None, None, None, true);
+        assert_eq!(parts, vec!["statusCategory != \"Done\""]);
+    }
+
+    #[test]
+    fn build_jql_parts_open_with_assignee() {
+        let parts = build_filter_clauses(Some("currentUser()"), None, None, None, None, true);
+        assert_eq!(parts.len(), 2);
+        assert!(parts.contains(&"assignee = currentUser()".to_string()));
+        assert!(parts.contains(&"statusCategory != \"Done\"".to_string()));
+    }
+
+    #[test]
+    fn build_jql_parts_all_filters_with_open() {
+        let parts = build_filter_clauses(
+            Some("currentUser()"),
+            Some("currentUser()"),
+            None, // status conflicts with open, so None here
+            Some(r#"customfield_10001 = "uuid-123""#),
+            Some("30d"),
+            true,
+        );
+        assert_eq!(parts.len(), 5);
+        assert!(parts.contains(&"assignee = currentUser()".to_string()));
+        assert!(parts.contains(&"reporter = currentUser()".to_string()));
+        assert!(parts.contains(&"statusCategory != \"Done\"".to_string()));
+        assert!(parts.contains(&r#"customfield_10001 = "uuid-123""#.to_string()));
+        assert!(parts.contains(&"created >= -30d".to_string()));
     }
 }
