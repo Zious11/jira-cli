@@ -26,6 +26,16 @@ pub fn issue_search_response(issues: Vec<Value>) -> Value {
     json!({ "issues": issues, "nextPageToken": Value::Null })
 }
 
+/// Search response with `nextPageToken` set (indicating more results exist).
+pub fn issue_search_response_with_next_page(issues: Vec<Value>) -> Value {
+    json!({ "issues": issues, "nextPageToken": "next-page-token-abc" })
+}
+
+/// Response for the approximate-count endpoint.
+pub fn approximate_count_response(count: u64) -> Value {
+    json!({ "count": count })
+}
+
 pub fn transitions_response(transitions: Vec<(&str, &str)>) -> Value {
     json!({
         "transitions": transitions.iter().map(|(id, name)| json!({"id": id, "name": name})).collect::<Vec<_>>()

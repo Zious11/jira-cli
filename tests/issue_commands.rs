@@ -206,3 +206,125 @@ async fn test_delete_issue_link() {
         jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
     client.delete_issue_link("10001").await.unwrap();
 }
+
+#[tokio::test]
+async fn test_search_issues_has_more_flag() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response_with_next_page(vec![
+                common::fixtures::issue_response("FOO-1", "Test issue", "To Do"),
+            ]),
+        ))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let result = client
+        .search_issues("project = FOO", Some(1), &[])
+        .await
+        .unwrap();
+    assert_eq!(result.issues.len(), 1);
+    assert!(result.has_more);
+}
+
+#[tokio::test]
+async fn test_search_issues_no_more_results() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response(vec![
+                common::fixtures::issue_response("FOO-1", "Test issue", "To Do"),
+            ]),
+        ))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let result = client
+        .search_issues("project = FOO", Some(10), &[])
+        .await
+        .unwrap();
+    assert_eq!(result.issues.len(), 1);
+    assert!(!result.has_more);
+}
+
+#[tokio::test]
+async fn test_search_issues_no_limit_fetches_all() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response(vec![
+                common::fixtures::issue_response("FOO-1", "Issue 1", "To Do"),
+                common::fixtures::issue_response("FOO-2", "Issue 2", "To Do"),
+                common::fixtures::issue_response("FOO-3", "Issue 3", "To Do"),
+            ]),
+        ))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let result = client
+        .search_issues("project = FOO", None, &[])
+        .await
+        .unwrap();
+    assert_eq!(result.issues.len(), 3);
+    assert!(!result.has_more);
+}
+
+#[tokio::test]
+async fn test_approximate_count() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/approximate-count"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::approximate_count_response(42)),
+        )
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let count = client.approximate_count("project = FOO").await.unwrap();
+    assert_eq!(count, 42);
+}
+
+#[tokio::test]
+async fn test_approximate_count_zero() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/approximate-count"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::approximate_count_response(0)),
+        )
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let count = client.approximate_count("project = FOO").await.unwrap();
+    assert_eq!(count, 0);
+}
+
+#[tokio::test]
+async fn test_approximate_count_server_error_returns_err() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/approximate-count"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let result = client.approximate_count("project = FOO").await;
+    assert!(result.is_err());
+}
