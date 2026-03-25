@@ -41,6 +41,8 @@ pub fn strip_order_by(jql: &str) -> &str {
     let upper = jql.to_ascii_uppercase();
     if let Some(pos) = upper.find(" ORDER BY") {
         jql[..pos].trim_end()
+    } else if upper.starts_with("ORDER BY") {
+        ""
     } else {
         jql
     }
@@ -102,6 +104,16 @@ mod tests {
             strip_order_by("project = PROJ   ORDER BY rank ASC"),
             "project = PROJ"
         );
+    }
+
+    #[test]
+    fn strip_order_by_at_position_zero() {
+        assert_eq!(strip_order_by("ORDER BY created DESC"), "");
+    }
+
+    #[test]
+    fn strip_order_by_at_position_zero_lowercase() {
+        assert_eq!(strip_order_by("order by rank ASC"), "");
     }
 
     #[test]
