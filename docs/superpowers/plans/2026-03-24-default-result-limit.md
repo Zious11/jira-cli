@@ -136,7 +136,6 @@ Replace the entire function body with:
                 break;
             }
 
-            more_available = true;
             next_page_token = token;
         }
 
