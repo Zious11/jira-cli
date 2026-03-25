@@ -149,6 +149,43 @@ pub fn write_workspace_cache(workspace_id: &str) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CmdbFieldsCache {
+    pub field_ids: Vec<String>,
+    pub fetched_at: DateTime<Utc>,
+}
+
+pub fn read_cmdb_fields_cache() -> Result<Option<CmdbFieldsCache>> {
+    let path = cache_dir().join("cmdb_fields.json");
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let content = std::fs::read_to_string(&path)?;
+    let cache: CmdbFieldsCache = serde_json::from_str(&content)?;
+
+    let age = Utc::now() - cache.fetched_at;
+    if age.num_days() >= CACHE_TTL_DAYS {
+        return Ok(None);
+    }
+
+    Ok(Some(cache))
+}
+
+pub fn write_cmdb_fields_cache(field_ids: &[String]) -> Result<()> {
+    let dir = cache_dir();
+    std::fs::create_dir_all(&dir)?;
+
+    let cache = CmdbFieldsCache {
+        field_ids: field_ids.to_vec(),
+        fetched_at: Utc::now(),
+    };
+
+    let content = serde_json::to_string_pretty(&cache)?;
+    std::fs::write(dir.join("cmdb_fields.json"), content)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -350,6 +387,44 @@ mod tests {
                 result.is_none(),
                 "expired workspace cache should return None"
             );
+        });
+    }
+
+    #[test]
+    fn read_missing_cmdb_fields_cache_returns_none() {
+        with_temp_cache(|| {
+            let result = read_cmdb_fields_cache().unwrap();
+            assert!(result.is_none());
+        });
+    }
+
+    #[test]
+    fn write_then_read_cmdb_fields_cache() {
+        with_temp_cache(|| {
+            write_cmdb_fields_cache(&["customfield_10191".into(), "customfield_10245".into()])
+                .unwrap();
+
+            let cache = read_cmdb_fields_cache()
+                .unwrap()
+                .expect("should exist");
+            assert_eq!(cache.field_ids, vec!["customfield_10191", "customfield_10245"]);
+        });
+    }
+
+    #[test]
+    fn expired_cmdb_fields_cache_returns_none() {
+        with_temp_cache(|| {
+            let expired = CmdbFieldsCache {
+                field_ids: vec!["customfield_10191".into()],
+                fetched_at: Utc::now() - chrono::Duration::days(8),
+            };
+            let dir = cache_dir();
+            std::fs::create_dir_all(&dir).unwrap();
+            let content = serde_json::to_string_pretty(&expired).unwrap();
+            std::fs::write(dir.join("cmdb_fields.json"), content).unwrap();
+
+            let result = read_cmdb_fields_cache().unwrap();
+            assert!(result.is_none(), "expired cmdb fields cache should return None");
         });
     }
 }
