@@ -189,10 +189,12 @@ pub fn project_search_response(projects: Vec<Value>) -> Value {
 }
 
 pub fn project_response(key: &str, name: &str, type_key: &str, lead_name: Option<&str>) -> Value {
-    let lead = lead_name.map(|name| json!({
-        "accountId": format!("acc-{}", key.to_lowercase()),
-        "displayName": name,
-    }));
+    let lead = lead_name.map(|name| {
+        json!({
+            "accountId": format!("acc-{}", key.to_lowercase()),
+            "displayName": name,
+        })
+    });
     json!({
         "key": key,
         "name": name,

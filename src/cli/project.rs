@@ -49,7 +49,12 @@ async fn handle_list(
         })
         .collect();
 
-    output::print_output(output_format, &["Key", "Name", "Lead", "Type"], &rows, &projects)
+    output::print_output(
+        output_format,
+        &["Key", "Name", "Lead", "Type"],
+        &rows,
+        &projects,
+    )
 }
 
 async fn handle_fields(

@@ -11,8 +11,18 @@ async fn test_list_projects() {
         .and(path("/rest/api/3/project/search"))
         .respond_with(ResponseTemplate::new(200).set_body_json(
             common::fixtures::project_search_response(vec![
-                common::fixtures::project_response("FOO", "Project Foo", "software", Some("Jane Doe")),
-                common::fixtures::project_response("BAR", "Project Bar", "service_desk", Some("John Smith")),
+                common::fixtures::project_response(
+                    "FOO",
+                    "Project Foo",
+                    "software",
+                    Some("Jane Doe"),
+                ),
+                common::fixtures::project_response(
+                    "BAR",
+                    "Project Bar",
+                    "service_desk",
+                    Some("John Smith"),
+                ),
             ]),
         ))
         .mount(&server)
@@ -54,9 +64,12 @@ async fn test_list_projects_lead_missing() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/project/search"))
         .respond_with(ResponseTemplate::new(200).set_body_json(
-            common::fixtures::project_search_response(vec![
-                common::fixtures::project_response("FOO", "Project Foo", "software", None),
-            ]),
+            common::fixtures::project_search_response(vec![common::fixtures::project_response(
+                "FOO",
+                "Project Foo",
+                "software",
+                None,
+            )]),
         ))
         .mount(&server)
         .await;
@@ -75,16 +88,22 @@ async fn test_list_projects_with_type_filter() {
         .and(path("/rest/api/3/project/search"))
         .and(wiremock::matchers::query_param("typeKey", "software"))
         .respond_with(ResponseTemplate::new(200).set_body_json(
-            common::fixtures::project_search_response(vec![
-                common::fixtures::project_response("FOO", "Project Foo", "software", Some("Jane Doe")),
-            ]),
+            common::fixtures::project_search_response(vec![common::fixtures::project_response(
+                "FOO",
+                "Project Foo",
+                "software",
+                Some("Jane Doe"),
+            )]),
         ))
         .mount(&server)
         .await;
 
     let client =
         jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
-    let projects = client.list_projects(Some("software"), Some(50)).await.unwrap();
+    let projects = client
+        .list_projects(Some("software"), Some(50))
+        .await
+        .unwrap();
     assert_eq!(projects.len(), 1);
     assert_eq!(projects[0].project_type_key, "software");
 }
