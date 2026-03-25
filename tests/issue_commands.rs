@@ -1,7 +1,7 @@
 #[allow(dead_code)]
 mod common;
 
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
@@ -436,4 +436,38 @@ async fn test_search_users_unrecognized_response_errors() {
         jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
     let result = client.search_users("Test").await;
     assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_search_issues_jql_with_project_scope() {
+    let server = MockServer::start().await;
+
+    // The mock only matches if the POST body contains the expected composed JQL
+    let expected_jql = r#"project = "PROJ" AND (priority = Highest) ORDER BY updated DESC"#;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(serde_json::json!({
+            "jql": expected_jql
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response(vec![common::fixtures::issue_response(
+                "PROJ-1",
+                "High priority issue",
+                "To Do",
+            )]),
+        ))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+
+    // This is the JQL that handle_list would compose when given
+    // --project PROJ --jql "priority = Highest"
+    let result = client
+        .search_issues(expected_jql, Some(30), &[])
+        .await
+        .unwrap();
+    assert_eq!(result.issues.len(), 1);
+    assert_eq!(result.issues[0].key, "PROJ-1");
 }

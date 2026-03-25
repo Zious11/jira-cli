@@ -17,6 +17,24 @@ use super::helpers;
 
 // ── List ──────────────────────────────────────────────────────────────
 
+/// Build base JQL parts when `--jql` is provided.
+///
+/// Returns `(base_parts, order_by)`. Strips any trailing `ORDER BY` clause
+/// from `jql` and prepends the project scope if `project_key` is set.
+fn build_jql_base_parts(jql: &str, project_key: Option<&str>) -> (Vec<String>, &'static str) {
+    let stripped = crate::jql::strip_order_by(jql);
+    let mut parts = Vec::new();
+
+    if let Some(pk) = project_key {
+        parts.push(format!("project = \"{}\"", crate::jql::escape_value(pk)));
+    }
+    if !stripped.is_empty() {
+        parts.push(format!("({})", stripped));
+    }
+
+    (parts, "updated DESC")
+}
+
 pub(super) async fn handle_list(
     command: IssueCommand,
     output_format: &OutputFormat,
@@ -86,14 +104,14 @@ pub(super) async fn handle_list(
         open,
     );
 
+    // Resolve project key once, before the JQL vs board-aware branch
+    let project_key = config.project_key(project_override);
+
     // Build base JQL + order by
-    let (base_parts, order_by): (Vec<String>, &str) = if let Some(raw_jql) = jql {
-        // --jql provided: strip any existing ORDER BY to avoid duplicate clauses
-        let stripped = crate::jql::strip_order_by(&raw_jql);
-        (vec![stripped.to_string()], "updated DESC")
+    let (base_parts, order_by): (Vec<String>, &str) = if let Some(ref raw_jql) = jql {
+        build_jql_base_parts(raw_jql, project_key.as_deref())
     } else {
         let board_id = config.project.board_id;
-        let project_key = config.project_key(project_override);
 
         if let Some(bid) = board_id {
             match client.get_board_config(bid).await {
@@ -754,5 +772,67 @@ mod tests {
         assert!(parts.contains(&"statusCategory != Done".to_string()));
         assert!(parts.contains(&r#"customfield_10001 = "uuid-123""#.to_string()));
         assert!(parts.contains(&"created >= -30d".to_string()));
+    }
+
+    #[test]
+    fn build_jql_base_parts_jql_with_project() {
+        let (parts, order_by) = build_jql_base_parts("priority = Highest", Some("PROJ"));
+        assert_eq!(
+            parts,
+            vec![
+                "project = \"PROJ\"".to_string(),
+                "(priority = Highest)".to_string(),
+            ]
+        );
+        assert_eq!(order_by, "updated DESC");
+    }
+
+    #[test]
+    fn build_jql_base_parts_jql_without_project() {
+        let (parts, order_by) = build_jql_base_parts("priority = Highest", None);
+        assert_eq!(parts, vec!["(priority = Highest)".to_string()]);
+        assert_eq!(order_by, "updated DESC");
+    }
+
+    #[test]
+    fn build_jql_base_parts_jql_with_order_by_and_project() {
+        let (parts, order_by) =
+            build_jql_base_parts("priority = Highest ORDER BY created DESC", Some("PROJ"));
+        assert_eq!(
+            parts,
+            vec![
+                "project = \"PROJ\"".to_string(),
+                "(priority = Highest)".to_string(),
+            ]
+        );
+        assert_eq!(order_by, "updated DESC");
+    }
+
+    #[test]
+    fn build_jql_base_parts_jql_or_with_project_preserves_scope() {
+        let (parts, order_by) =
+            build_jql_base_parts("priority = Highest OR status = Done", Some("PROJ"));
+        assert_eq!(
+            parts,
+            vec![
+                "project = \"PROJ\"".to_string(),
+                "(priority = Highest OR status = Done)".to_string(),
+            ]
+        );
+        assert_eq!(order_by, "updated DESC");
+    }
+
+    #[test]
+    fn build_jql_base_parts_jql_order_by_only_with_project() {
+        let (parts, order_by) = build_jql_base_parts("ORDER BY created DESC", Some("PROJ"));
+        assert_eq!(parts, vec!["project = \"PROJ\"".to_string()]);
+        assert_eq!(order_by, "updated DESC");
+    }
+
+    #[test]
+    fn build_jql_base_parts_jql_order_by_only_no_project() {
+        let (parts, order_by) = build_jql_base_parts("ORDER BY created DESC", None);
+        assert!(parts.is_empty());
+        assert_eq!(order_by, "updated DESC");
     }
 }
