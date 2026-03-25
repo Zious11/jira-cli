@@ -106,16 +106,31 @@ pub async fn enrich_assets(client: &JiraClient, assets: &mut [LinkedAsset]) {
         return;
     }
 
-    // Get workspace ID — required for Assets API calls.
-    let workspace_id = match get_or_fetch_workspace_id(client).await {
-        Ok(wid) => wid,
-        Err(_) => return, // Degrade gracefully
+    // Check whether all assets that need enrichment carry their own workspace_id.
+    // If any are missing it, we fall back to fetching the global workspace ID.
+    let all_have_workspace = needs_enrichment
+        .iter()
+        .all(|&idx| assets[idx].workspace_id.is_some());
+
+    let fallback_workspace_id: Option<String> = if all_have_workspace {
+        None
+    } else {
+        // Get workspace ID — required for Assets API calls.
+        match get_or_fetch_workspace_id(client).await {
+            Ok(wid) => Some(wid),
+            Err(_) => return, // Degrade gracefully
+        }
     };
 
     let futures: Vec<_> = needs_enrichment
         .iter()
         .map(|&idx| {
-            let wid = workspace_id.clone();
+            // Prefer the per-asset workspace_id; fall back to the global one.
+            let wid = assets[idx]
+                .workspace_id
+                .clone()
+                .or_else(|| fallback_workspace_id.clone())
+                .expect("workspace_id must be available (checked above)");
             let oid = assets[idx].id.clone().unwrap();
             async move {
                 let result = client.get_asset(&wid, &oid, false).await;
