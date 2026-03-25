@@ -150,10 +150,69 @@ pub(super) async fn handle_list(
     let show_assets_col = show_assets && !cmdb_field_ids.is_empty();
     let mut issue_assets: Vec<Vec<LinkedAsset>> = Vec::new();
     if show_assets_col {
+        // Extract linked assets for all issues first.
         for issue in &issues {
-            let mut linked = extract_linked_assets(&issue.fields.extra, &cmdb_field_ids);
-            enrich_assets(client, &mut linked).await;
-            issue_assets.push(linked);
+            issue_assets.push(extract_linked_assets(&issue.fields.extra, &cmdb_field_ids));
+        }
+
+        // Collect unique (workspace_id, object_id) pairs that need enrichment,
+        // then resolve them all in one batch to avoid redundant API calls.
+        use std::collections::HashMap as StdHashMap;
+        let mut to_enrich: StdHashMap<(String, String), ()> = StdHashMap::new();
+        let mut enrich_indices: Vec<(usize, usize)> = Vec::new(); // (issue_idx, asset_idx)
+
+        for (i, assets) in issue_assets.iter().enumerate() {
+            for (j, asset) in assets.iter().enumerate() {
+                if asset.id.is_some() && asset.key.is_none() && asset.name.is_none() {
+                    let wid = asset.workspace_id.clone().unwrap_or_default();
+                    let oid = asset.id.clone().unwrap();
+                    let key = (wid, oid);
+                    to_enrich.entry(key.clone()).or_insert(());
+                    enrich_indices.push((i, j));
+                }
+            }
+        }
+
+        if !to_enrich.is_empty() {
+            // Get workspace ID for assets that don't carry their own.
+            let fallback_wid = crate::api::assets::workspace::get_or_fetch_workspace_id(client)
+                .await
+                .ok();
+
+            let futures: Vec<_> = to_enrich
+                .keys()
+                .map(|(wid, oid)| {
+                    let wid = if wid.is_empty() {
+                        fallback_wid.clone().unwrap_or_default()
+                    } else {
+                        wid.clone()
+                    };
+                    let oid = oid.clone();
+                    async move {
+                        let result = client.get_asset(&wid, &oid, false).await;
+                        (oid, result)
+                    }
+                })
+                .collect();
+
+            let results = futures::future::join_all(futures).await;
+            let mut resolved: StdHashMap<String, (String, String, String)> = StdHashMap::new();
+            for (oid, result) in results {
+                if let Ok(obj) = result {
+                    resolved.insert(oid, (obj.object_key, obj.label, obj.object_type.name));
+                }
+            }
+
+            // Apply enrichment back to assets.
+            for (i, j) in &enrich_indices {
+                if let Some(oid) = &issue_assets[*i][*j].id.clone() {
+                    if let Some((key, name, asset_type)) = resolved.get(oid) {
+                        issue_assets[*i][*j].key = Some(key.clone());
+                        issue_assets[*i][*j].name = Some(name.clone());
+                        issue_assets[*i][*j].asset_type = Some(asset_type.clone());
+                    }
+                }
+            }
         }
     }
     let rows: Vec<Vec<String>> = issues

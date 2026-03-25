@@ -1420,7 +1420,7 @@ async fn enrichment_resolves_ids_to_names() {
 
 - [ ] **Step 2: Run integration tests**
 
-Run: `cargo test --test linked_assets`
+Run: `cargo test --test cmdb_fields`
 Expected: All 5 tests PASS
 
 - [ ] **Step 3: Run full test suite**

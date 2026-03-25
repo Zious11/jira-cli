@@ -40,7 +40,7 @@ Cache discovered field IDs in `~/.cache/jr/cmdb_fields.json` with 7-day TTL. Sam
 ```json
 {
   "field_ids": ["customfield_10191"],
-  "cached_at": "2026-03-24T12:00:00Z"
+  "fetched_at": "2026-03-24T12:00:00Z"
 }
 ```
 
@@ -66,9 +66,10 @@ The CMDB custom field response shape varies across Jira instances:
 
 ```rust
 pub struct LinkedAsset {
-    pub object_key: Option<String>,   // e.g., "OBJ-1"
-    pub label: Option<String>,        // e.g., "Acme Corp"
-    pub object_id: Option<String>,    // numeric ID
+    pub key: Option<String>,          // e.g., "OBJ-1"
+    pub name: Option<String>,         // e.g., "Acme Corp"
+    pub asset_type: Option<String>,   // e.g., "Client" (serialized as "type")
+    pub id: Option<String>,           // numeric ID
     pub workspace_id: Option<String>, // workspace ID
 }
 ```
@@ -157,8 +158,8 @@ PROJ-125  Bug          Done         -                      Fix login page
 - If `--assets` passed but no CMDB fields discovered → warn to stderr (same pattern as `--points`)
 
 **Performance:**
-- Enrichment batched per page: collect unique `objectId` values, resolve in parallel via `futures::future::join_all`
-- Capped at page size (max 50 issues × 1-3 fields = ~150 enrichment calls worst case)
+- Enrichment deduplicates across the page: collect unique `(workspace_id, object_id)` pairs from all issues, resolve in parallel via `futures::future::join_all`, then map results back to each issue
+- Deduplication avoids redundant API calls when the same asset appears on multiple issues
 - 429 retry already handled by `JiraClient.send()`
 
 ### 3c. `jr issue assets KEY` — New Subcommand
