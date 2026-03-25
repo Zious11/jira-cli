@@ -2,12 +2,18 @@ use crate::api::client::JiraClient;
 use crate::api::pagination::{CursorPage, OffsetPage};
 use crate::types::jira::{Comment, CreateIssueResponse, Issue, TransitionsResponse};
 use anyhow::Result;
+use serde::Deserialize;
 use serde_json::Value;
 
 /// Result of a paginated issue search, including whether more results exist.
 pub struct SearchResult {
     pub issues: Vec<Issue>,
     pub has_more: bool,
+}
+
+#[derive(Deserialize)]
+struct ApproximateCountResponse {
+    count: u64,
 }
 
 impl JiraClient {
@@ -71,6 +77,18 @@ impl JiraClient {
             issues: all_issues,
             has_more: more_available,
         })
+    }
+
+    /// Get an approximate count of issues matching a JQL query.
+    ///
+    /// Uses the dedicated count endpoint which is lightweight (no issue data fetched).
+    /// The JQL should not include ORDER BY — use `jql::strip_order_by()` before calling.
+    pub async fn approximate_count(&self, jql: &str) -> Result<u64> {
+        let body = serde_json::json!({ "jql": jql });
+        let resp: ApproximateCountResponse = self
+            .post("/rest/api/3/search/approximate-count", &body)
+            .await?;
+        Ok(resp.count)
     }
 
     /// Get a single issue by key.
@@ -192,5 +210,19 @@ mod tests {
             has_more: true,
         };
         assert!(result.has_more);
+    }
+
+    #[test]
+    fn approximate_count_response_deserializes() {
+        let json = r#"{"count": 1234}"#;
+        let resp: ApproximateCountResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.count, 1234);
+    }
+
+    #[test]
+    fn approximate_count_response_zero() {
+        let json = r#"{"count": 0}"#;
+        let resp: ApproximateCountResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.count, 0);
     }
 }
