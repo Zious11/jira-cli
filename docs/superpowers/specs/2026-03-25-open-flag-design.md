@@ -76,7 +76,7 @@ Edge case with `--jql`: `--open` composes freely. If user's `--jql` already has 
 | `src/cli/issue/list.rs` | Destructure `open`, pass to `build_filter_clauses()`, add clause |
 | `README.md` | Add `--open` to command table |
 
-No new files, no new modules, no new API calls.
+No new runtime/code modules or API calls; only updates to existing CLI code and documentation.
 
 Additionally, the unbounded query guard error message (`list.rs:151`) must be updated to include `--open` in the list of available flags.
 

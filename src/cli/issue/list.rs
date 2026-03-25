@@ -340,7 +340,7 @@ fn build_filter_clauses(
         parts.push(format!("status = \"{}\"", crate::jql::escape_value(s)));
     }
     if open {
-        parts.push("statusCategory != \"Done\"".to_string());
+        parts.push("statusCategory != Done".to_string());
     }
     if let Some(t) = team_clause {
         parts.push(t.to_string());
@@ -727,7 +727,7 @@ mod tests {
     #[test]
     fn build_jql_parts_open() {
         let parts = build_filter_clauses(None, None, None, None, None, true);
-        assert_eq!(parts, vec!["statusCategory != \"Done\""]);
+        assert_eq!(parts, vec!["statusCategory != Done"]);
     }
 
     #[test]
@@ -735,7 +735,7 @@ mod tests {
         let parts = build_filter_clauses(Some("currentUser()"), None, None, None, None, true);
         assert_eq!(parts.len(), 2);
         assert!(parts.contains(&"assignee = currentUser()".to_string()));
-        assert!(parts.contains(&"statusCategory != \"Done\"".to_string()));
+        assert!(parts.contains(&"statusCategory != Done".to_string()));
     }
 
     #[test]
@@ -751,7 +751,7 @@ mod tests {
         assert_eq!(parts.len(), 5);
         assert!(parts.contains(&"assignee = currentUser()".to_string()));
         assert!(parts.contains(&"reporter = currentUser()".to_string()));
-        assert!(parts.contains(&"statusCategory != \"Done\"".to_string()));
+        assert!(parts.contains(&"statusCategory != Done".to_string()));
         assert!(parts.contains(&r#"customfield_10001 = "uuid-123""#.to_string()));
         assert!(parts.contains(&"created >= -30d".to_string()));
     }
