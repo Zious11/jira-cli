@@ -1,11 +1,15 @@
 use anyhow::Result;
 
 use crate::adf;
+use crate::api::assets::linked::{
+    enrich_assets, extract_linked_assets, get_or_fetch_cmdb_field_ids,
+};
 use crate::api::client::JiraClient;
 use crate::cli::{IssueCommand, OutputFormat};
 use crate::config::Config;
 use crate::error::JrError;
 use crate::output;
+use crate::types::assets::linked::format_linked_assets;
 
 use super::format;
 use super::helpers;
@@ -256,7 +260,11 @@ pub(super) async fn handle_view(
     };
 
     let sp_field_id = config.global.fields.story_points_field_id.as_deref();
-    let extra: Vec<&str> = sp_field_id.iter().copied().collect();
+    let cmdb_field_ids = get_or_fetch_cmdb_field_ids(client).await.unwrap_or_default();
+    let mut extra: Vec<&str> = sp_field_id.iter().copied().collect();
+    for f in &cmdb_field_ids {
+        extra.push(f.as_str());
+    }
     let issue = client.get_issue(&key, &extra).await?;
 
     match output_format {
@@ -390,6 +398,17 @@ pub(super) async fn handle_view(
                 })
                 .unwrap_or_else(|| "(none)".into());
             rows.push(vec!["Links".into(), links_display]);
+
+            if !cmdb_field_ids.is_empty() {
+                let mut linked = extract_linked_assets(&issue.fields.extra, &cmdb_field_ids);
+                enrich_assets(client, &mut linked).await;
+                let display = if linked.is_empty() {
+                    "(none)".into()
+                } else {
+                    format_linked_assets(&linked)
+                };
+                rows.push(vec!["Assets".into(), display]);
+            }
 
             if let Some(field_id) = sp_field_id {
                 let points_display = issue
