@@ -108,8 +108,7 @@ async fn issue_with_modern_cmdb_fields() {
         .unwrap();
 
     let cmdb_ids = vec!["customfield_10191".to_string()];
-    let assets =
-        jr::api::assets::linked::extract_linked_assets(&issue.fields.extra, &cmdb_ids);
+    let assets = jr::api::assets::linked::extract_linked_assets(&issue.fields.extra, &cmdb_ids);
     assert_eq!(assets.len(), 1);
     assert_eq!(assets[0].key.as_deref(), Some("OBJ-1"));
     assert_eq!(assets[0].name.as_deref(), Some("Acme Corp"));
@@ -139,8 +138,7 @@ async fn issue_with_null_cmdb_field() {
         .unwrap();
 
     let cmdb_ids = vec!["customfield_10191".to_string()];
-    let assets =
-        jr::api::assets::linked::extract_linked_assets(&issue.fields.extra, &cmdb_ids);
+    let assets = jr::api::assets::linked::extract_linked_assets(&issue.fields.extra, &cmdb_ids);
     assert!(assets.is_empty());
 }
 

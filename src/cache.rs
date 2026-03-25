@@ -404,10 +404,11 @@ mod tests {
             write_cmdb_fields_cache(&["customfield_10191".into(), "customfield_10245".into()])
                 .unwrap();
 
-            let cache = read_cmdb_fields_cache()
-                .unwrap()
-                .expect("should exist");
-            assert_eq!(cache.field_ids, vec!["customfield_10191", "customfield_10245"]);
+            let cache = read_cmdb_fields_cache().unwrap().expect("should exist");
+            assert_eq!(
+                cache.field_ids,
+                vec!["customfield_10191", "customfield_10245"]
+            );
         });
     }
 
@@ -424,7 +425,10 @@ mod tests {
             std::fs::write(dir.join("cmdb_fields.json"), content).unwrap();
 
             let result = read_cmdb_fields_cache().unwrap();
-            assert!(result.is_none(), "expired cmdb fields cache should return None");
+            assert!(
+                result.is_none(),
+                "expired cmdb fields cache should return None"
+            );
         });
     }
 }

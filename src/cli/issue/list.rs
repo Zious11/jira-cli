@@ -128,7 +128,9 @@ pub(super) async fn handle_list(
     };
 
     let cmdb_field_ids = if show_assets {
-        let ids = get_or_fetch_cmdb_field_ids(client).await.unwrap_or_default();
+        let ids = get_or_fetch_cmdb_field_ids(client)
+            .await
+            .unwrap_or_default();
         if ids.is_empty() {
             eprintln!(
                 "warning: --assets ignored. No Assets custom fields found on this Jira instance."
@@ -289,7 +291,9 @@ pub(super) async fn handle_view(
     };
 
     let sp_field_id = config.global.fields.story_points_field_id.as_deref();
-    let cmdb_field_ids = get_or_fetch_cmdb_field_ids(client).await.unwrap_or_default();
+    let cmdb_field_ids = get_or_fetch_cmdb_field_ids(client)
+        .await
+        .unwrap_or_default();
     let mut extra: Vec<&str> = sp_field_id.iter().copied().collect();
     for f in &cmdb_field_ids {
         extra.push(f.as_str());

@@ -81,8 +81,8 @@ jr issue comment KEY-123 "Deployed to staging"
 | `jr auth login` | Authenticate with API token (default) or `--oauth` for OAuth 2.0 |
 | `jr auth status` | Show authentication status |
 | `jr me` | Show current user info |
-| `jr issue list` | List issues (smart defaults for scrum/kanban, `--team`, `--points`) |
-| `jr issue view KEY` | View issue details (includes story points) |
+| `jr issue list` | List issues (smart defaults for scrum/kanban, `--team`, `--points`, `--assets`) |
+| `jr issue view KEY` | View issue details (includes story points, linked assets) |
 | `jr issue create` | Create an issue (`--team`, `--points`) |
 | `jr issue edit KEY` | Edit issue fields (`--team`, `--points`, `--no-points`) |
 | `jr issue move KEY [STATUS]` | Transition issue (partial match on status name) |
@@ -94,6 +94,7 @@ jr issue comment KEY-123 "Deployed to staging"
 | `jr issue link KEY1 KEY2` | Link two issues (`--type blocks`, defaults to Relates) |
 | `jr issue unlink KEY1 KEY2` | Remove link(s) between issues (`--type` to filter) |
 | `jr issue link-types` | List available link types |
+| `jr issue assets KEY`          | Show assets linked to an issue                |
 | `jr board list` | List boards |
 | `jr board view` | Show current board issues |
 | `jr sprint list` | List sprints (scrum only) |
