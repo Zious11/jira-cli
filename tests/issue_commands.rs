@@ -464,7 +464,10 @@ async fn test_search_issues_jql_with_project_scope() {
 
     // This is the JQL that handle_list would compose when given
     // --project PROJ --jql "priority = Highest"
-    let result = client.search_issues(expected_jql, Some(30), &[]).await.unwrap();
+    let result = client
+        .search_issues(expected_jql, Some(30), &[])
+        .await
+        .unwrap();
     assert_eq!(result.issues.len(), 1);
     assert_eq!(result.issues[0].key, "PROJ-1");
 }

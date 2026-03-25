@@ -21,10 +21,7 @@ use super::helpers;
 ///
 /// Returns `(base_parts, order_by)`. Strips any trailing `ORDER BY` clause
 /// from `jql` and prepends the project scope if `project_key` is set.
-fn build_jql_base_parts(
-    jql: &str,
-    project_key: Option<&str>,
-) -> (Vec<String>, &'static str) {
+fn build_jql_base_parts(jql: &str, project_key: Option<&str>) -> (Vec<String>, &'static str) {
     let stripped = crate::jql::strip_order_by(jql);
     let mut parts = Vec::new();
 
@@ -141,10 +138,7 @@ pub(super) async fn handle_list(
                         // Kanban: statusCategory != Done, no implicit assignee
                         let mut parts = Vec::new();
                         if let Some(ref pk) = project_key {
-                            parts.push(format!(
-                                "project = \"{}\"",
-                                crate::jql::escape_value(pk)
-                            ));
+                            parts.push(format!("project = \"{}\"", crate::jql::escape_value(pk)));
                         }
                         parts.push("statusCategory != Done".into());
                         (parts, "rank ASC")
@@ -153,10 +147,7 @@ pub(super) async fn handle_list(
                 Err(_) => {
                     let mut parts = Vec::new();
                     if let Some(ref pk) = project_key {
-                        parts.push(format!(
-                            "project = \"{}\"",
-                            crate::jql::escape_value(pk)
-                        ));
+                        parts.push(format!("project = \"{}\"", crate::jql::escape_value(pk)));
                     }
                     (parts, "updated DESC")
                 }
@@ -164,10 +155,7 @@ pub(super) async fn handle_list(
         } else {
             let mut parts = Vec::new();
             if let Some(ref pk) = project_key {
-                parts.push(format!(
-                    "project = \"{}\"",
-                    crate::jql::escape_value(pk)
-                ));
+                parts.push(format!("project = \"{}\"", crate::jql::escape_value(pk)));
             }
             (parts, "updated DESC")
         }
@@ -788,8 +776,7 @@ mod tests {
 
     #[test]
     fn build_jql_base_parts_jql_with_project() {
-        let (parts, order_by) =
-            build_jql_base_parts("priority = Highest", Some("PROJ"));
+        let (parts, order_by) = build_jql_base_parts("priority = Highest", Some("PROJ"));
         assert_eq!(
             parts,
             vec![
@@ -802,8 +789,7 @@ mod tests {
 
     #[test]
     fn build_jql_base_parts_jql_without_project() {
-        let (parts, order_by) =
-            build_jql_base_parts("priority = Highest", None);
+        let (parts, order_by) = build_jql_base_parts("priority = Highest", None);
         assert_eq!(parts, vec!["priority = Highest".to_string()]);
         assert_eq!(order_by, "updated DESC");
     }
@@ -824,16 +810,14 @@ mod tests {
 
     #[test]
     fn build_jql_base_parts_jql_order_by_only_with_project() {
-        let (parts, order_by) =
-            build_jql_base_parts("ORDER BY created DESC", Some("PROJ"));
+        let (parts, order_by) = build_jql_base_parts("ORDER BY created DESC", Some("PROJ"));
         assert_eq!(parts, vec!["project = \"PROJ\"".to_string()]);
         assert_eq!(order_by, "updated DESC");
     }
 
     #[test]
     fn build_jql_base_parts_jql_order_by_only_no_project() {
-        let (parts, order_by) =
-            build_jql_base_parts("ORDER BY created DESC", None);
+        let (parts, order_by) = build_jql_base_parts("ORDER BY created DESC", None);
         assert!(parts.is_empty());
         assert_eq!(order_by, "updated DESC");
     }
