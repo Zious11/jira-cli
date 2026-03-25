@@ -144,7 +144,8 @@ pub(super) async fn handle_list(
         extra.push(f.as_str());
     }
 
-    let issues = client.search_issues(&effective_jql, limit, &extra).await?;
+    let search_result = client.search_issues(&effective_jql, limit, &extra).await?;
+    let issues = search_result.issues;
 
     let effective_sp = resolve_show_points(show_points, sp_field_id);
     let show_assets_col = show_assets && !cmdb_field_ids.is_empty();

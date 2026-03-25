@@ -21,12 +21,13 @@ async fn test_search_issues() {
 
     let client =
         jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
-    let issues = client
+    let result = client
         .search_issues("assignee = currentUser()", None, &[])
         .await
         .unwrap();
-    assert_eq!(issues.len(), 1);
-    assert_eq!(issues[0].key, "FOO-1");
+    assert_eq!(result.issues.len(), 1);
+    assert_eq!(result.issues[0].key, "FOO-1");
+    assert!(!result.has_more);
 }
 
 #[tokio::test]
@@ -96,17 +97,18 @@ async fn test_search_issues_with_story_points() {
 
     let client =
         jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
-    let issues = client
+    let result = client
         .search_issues("project = FOO", None, &["customfield_10031"])
         .await
         .unwrap();
 
-    assert_eq!(issues.len(), 2);
+    assert_eq!(result.issues.len(), 2);
     assert_eq!(
-        issues[0].fields.story_points("customfield_10031"),
+        result.issues[0].fields.story_points("customfield_10031"),
         Some(5.0)
     );
-    assert_eq!(issues[1].fields.story_points("customfield_10031"), None);
+    assert_eq!(result.issues[1].fields.story_points("customfield_10031"), None);
+    assert!(!result.has_more);
 }
 
 #[tokio::test]
