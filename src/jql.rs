@@ -7,6 +7,19 @@ pub fn escape_value(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+/// Strip `ORDER BY` clause from JQL for use with count-only endpoints.
+///
+/// The approximate-count endpoint only needs the WHERE clause. ORDER BY is
+/// meaningless for a count and may cause issues with bounded-JQL validation.
+pub fn strip_order_by(jql: &str) -> &str {
+    let upper = jql.to_uppercase();
+    if let Some(pos) = upper.find(" ORDER BY") {
+        jql[..pos].trim_end()
+    } else {
+        jql
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -34,6 +47,35 @@ mod tests {
     #[test]
     fn trailing_backslash() {
         assert_eq!(escape_value(r"foo\"), r"foo\\");
+    }
+
+    #[test]
+    fn strip_order_by_removes_clause() {
+        assert_eq!(
+            strip_order_by("project = PROJ ORDER BY updated DESC"),
+            "project = PROJ"
+        );
+    }
+
+    #[test]
+    fn strip_order_by_no_clause() {
+        assert_eq!(strip_order_by("project = PROJ"), "project = PROJ");
+    }
+
+    #[test]
+    fn strip_order_by_case_insensitive() {
+        assert_eq!(
+            strip_order_by("project = PROJ order by rank ASC"),
+            "project = PROJ"
+        );
+    }
+
+    #[test]
+    fn strip_order_by_trims_whitespace() {
+        assert_eq!(
+            strip_order_by("project = PROJ   ORDER BY rank ASC"),
+            "project = PROJ"
+        );
     }
 }
 
