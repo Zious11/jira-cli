@@ -16,9 +16,8 @@ pub fn format_issue_row(
     sp_field_id: Option<&str>,
     assets: Option<&[LinkedAsset]>,
 ) -> Vec<String> {
-    let col_count = 6
-        + if sp_field_id.is_some() { 1 } else { 0 }
-        + if assets.is_some() { 1 } else { 0 };
+    let col_count =
+        6 + if sp_field_id.is_some() { 1 } else { 0 } + if assets.is_some() { 1 } else { 0 };
     let mut row = Vec::with_capacity(col_count);
     row.push(issue.key.clone());
     row.push(
