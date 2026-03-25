@@ -150,6 +150,22 @@ pub fn issue_with_links_response(key: &str, summary: &str) -> Value {
     })
 }
 
+/// User search response — flat array of User objects.
+pub fn user_search_response(users: Vec<(&str, &str, bool)>) -> Value {
+    let user_objects: Vec<Value> = users
+        .into_iter()
+        .map(|(account_id, display_name, active)| {
+            json!({
+                "accountId": account_id,
+                "displayName": display_name,
+                "emailAddress": format!("{}@test.com", display_name.to_lowercase().replace(' ', ".")),
+                "active": active,
+            })
+        })
+        .collect();
+    json!(user_objects)
+}
+
 pub fn teams_list_json() -> Value {
     json!({
         "entities": [

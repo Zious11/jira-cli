@@ -31,6 +31,9 @@ pub(super) async fn handle_list(
         team,
         limit,
         all,
+        assignee,
+        reporter,
+        recent,
         points: show_points,
         assets: show_assets,
     } = command
@@ -40,8 +43,26 @@ pub(super) async fn handle_list(
 
     let effective_limit = resolve_effective_limit(limit, all);
 
+    // Validate --recent duration format early
+    if let Some(ref d) = recent {
+        crate::jql::validate_duration(d).map_err(JrError::UserError)?;
+    }
+
+    // Resolve --assignee and --reporter to JQL values
+    let assignee_jql = if let Some(ref name) = assignee {
+        Some(helpers::resolve_user(client, name, no_input).await?)
+    } else {
+        None
+    };
+    let reporter_jql = if let Some(ref name) = reporter {
+        Some(helpers::resolve_user(client, name, no_input).await?)
+    } else {
+        None
+    };
+
     let sp_field_id = config.global.fields.story_points_field_id.as_deref();
     let mut extra: Vec<&str> = sp_field_id.iter().copied().collect();
+
     // Resolve team name to (field_id, uuid) before building JQL
     let resolved_team = if let Some(ref team_name) = team {
         Some(helpers::resolve_team_field(config, client, team_name, no_input).await?)
@@ -49,86 +70,93 @@ pub(super) async fn handle_list(
         None
     };
 
-    let effective_jql = if let Some(raw_jql) = jql {
-        raw_jql
+    // Build pre-formatted team clause for build_filter_clauses
+    let team_clause = resolved_team.as_ref().map(|(field_id, team_uuid)| {
+        format!("{} = \"{}\"", field_id, crate::jql::escape_value(team_uuid))
+    });
+
+    // Build filter clauses from all flag values
+    let filter_parts = build_filter_clauses(
+        assignee_jql.as_deref(),
+        reporter_jql.as_deref(),
+        status.as_deref(),
+        team_clause.as_deref(),
+        recent.as_deref(),
+    );
+
+    // Build base JQL + order by
+    let (base_parts, order_by): (Vec<String>, &str) = if let Some(raw_jql) = jql {
+        // --jql provided: strip any existing ORDER BY to avoid duplicate clauses
+        let stripped = crate::jql::strip_order_by(&raw_jql);
+        (vec![stripped.to_string()], "updated DESC")
     } else {
-        // Try smart defaults: detect board type and build JQL
         let board_id = config.project.board_id;
         let project_key = config.project_key(project_override);
 
         if let Some(bid) = board_id {
-            // Detect board type
             match client.get_board_config(bid).await {
                 Ok(board_config) => {
                     let board_type = board_config.board_type.to_lowercase();
                     if board_type == "scrum" {
-                        // For scrum boards, find the active sprint
                         match client.list_sprints(bid, Some("active")).await {
                             Ok(sprints) if !sprints.is_empty() => {
                                 let sprint = &sprints[0];
-                                let mut jql_parts = vec![
-                                    format!("sprint = {}", sprint.id),
-                                    "assignee = currentUser()".to_string(),
-                                ];
-                                if let Some(ref s) = status {
-                                    jql_parts.push(format!(
-                                        "status = \"{}\"",
-                                        crate::jql::escape_value(s)
-                                    ));
-                                }
-                                if let Some((field_id, team_uuid)) = &resolved_team {
-                                    jql_parts.push(format!(
-                                        "{} = \"{}\"",
-                                        field_id,
-                                        crate::jql::escape_value(team_uuid)
-                                    ));
-                                }
-                                let where_clause = jql_parts.join(" AND ");
-                                format!("{} ORDER BY rank ASC", where_clause)
+                                (vec![format!("sprint = {}", sprint.id)], "rank ASC")
                             }
-                            _ => build_fallback_jql(
-                                project_key.as_deref(),
-                                status.as_deref(),
-                                resolved_team.as_ref(),
-                            )?,
+                            _ => {
+                                let mut parts = Vec::new();
+                                if let Some(ref pk) = project_key {
+                                    parts.push(format!(
+                                        "project = \"{}\"",
+                                        crate::jql::escape_value(pk)
+                                    ));
+                                }
+                                (parts, "updated DESC")
+                            }
                         }
                     } else {
-                        // Kanban: show open issues
-                        let mut jql_parts: Vec<String> =
-                            vec!["assignee = currentUser()".to_string()];
+                        // Kanban: statusCategory != Done, no implicit assignee
+                        let mut parts = Vec::new();
                         if let Some(ref pk) = project_key {
-                            jql_parts
-                                .push(format!("project = \"{}\"", crate::jql::escape_value(pk)));
+                            parts.push(format!("project = \"{}\"", crate::jql::escape_value(pk)));
                         }
-                        jql_parts.push("statusCategory != Done".into());
-                        if let Some(ref s) = status {
-                            jql_parts.push(format!("status = \"{}\"", crate::jql::escape_value(s)));
-                        }
-                        if let Some((field_id, team_uuid)) = &resolved_team {
-                            jql_parts.push(format!(
-                                "{} = \"{}\"",
-                                field_id,
-                                crate::jql::escape_value(team_uuid)
-                            ));
-                        }
-                        let where_clause = jql_parts.join(" AND ");
-                        format!("{} ORDER BY rank ASC", where_clause)
+                        parts.push("statusCategory != Done".into());
+                        (parts, "rank ASC")
                     }
                 }
-                Err(_) => build_fallback_jql(
-                    project_key.as_deref(),
-                    status.as_deref(),
-                    resolved_team.as_ref(),
-                )?,
+                Err(_) => {
+                    let mut parts = Vec::new();
+                    if let Some(ref pk) = project_key {
+                        parts.push(format!("project = \"{}\"", crate::jql::escape_value(pk)));
+                    }
+                    (parts, "updated DESC")
+                }
             }
         } else {
-            build_fallback_jql(
-                project_key.as_deref(),
-                status.as_deref(),
-                resolved_team.as_ref(),
-            )?
+            let mut parts = Vec::new();
+            if let Some(ref pk) = project_key {
+                parts.push(format!("project = \"{}\"", crate::jql::escape_value(pk)));
+            }
+            (parts, "updated DESC")
         }
     };
+
+    // Combine base + filters
+    let mut all_parts = base_parts;
+    all_parts.extend(filter_parts);
+
+    // Guard against unbounded query
+    if all_parts.is_empty() {
+        return Err(JrError::UserError(
+            "No project or filters specified. Use --project, --assignee, --reporter, --status, --team, --recent, or --jql. \
+             You can also set a default project in .jr.toml or run \"jr init\"."
+                .into(),
+        )
+        .into());
+    }
+
+    let where_clause = all_parts.join(" AND ");
+    let effective_jql = format!("{where_clause} ORDER BY {order_by}");
 
     let cmdb_field_ids = if show_assets {
         let ids = get_or_fetch_cmdb_field_ids(client)
@@ -290,35 +318,31 @@ fn resolve_show_points(show_points: bool, sp_field_id: Option<&str>) -> Option<&
     }
 }
 
-fn build_fallback_jql(
-    project_key: Option<&str>,
+/// Build JQL filter clauses from resolved flag values.
+fn build_filter_clauses(
+    assignee_jql: Option<&str>,
+    reporter_jql: Option<&str>,
     status: Option<&str>,
-    resolved_team: Option<&(String, String)>,
-) -> Result<String> {
-    if project_key.is_none() && status.is_none() && resolved_team.is_none() {
-        return Err(JrError::UserError(
-            "No project or filters specified. Use --project KEY, --status STATUS, or --team NAME. \
-             You can also set a default project in .jr.toml or run \"jr init\"."
-                .into(),
-        )
-        .into());
+    team_clause: Option<&str>,
+    recent: Option<&str>,
+) -> Vec<String> {
+    let mut parts = Vec::new();
+    if let Some(a) = assignee_jql {
+        parts.push(format!("assignee = {a}"));
     }
-    let mut parts: Vec<String> = Vec::new();
-    if let Some(pk) = project_key {
-        parts.push(format!("project = \"{}\"", crate::jql::escape_value(pk)));
+    if let Some(r) = reporter_jql {
+        parts.push(format!("reporter = {r}"));
     }
     if let Some(s) = status {
         parts.push(format!("status = \"{}\"", crate::jql::escape_value(s)));
     }
-    if let Some((field_id, team_uuid)) = resolved_team {
-        parts.push(format!(
-            "{} = \"{}\"",
-            field_id,
-            crate::jql::escape_value(team_uuid)
-        ));
+    if let Some(t) = team_clause {
+        parts.push(t.to_string());
     }
-    let where_clause = parts.join(" AND ");
-    Ok(format!("{} ORDER BY updated DESC", where_clause))
+    if let Some(d) = recent {
+        parts.push(format!("created >= -{d}"));
+    }
+    parts
 }
 
 // ── Comments ─────────────────────────────────────────────────────────
@@ -562,67 +586,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fallback_jql_order_by_not_joined_with_and() {
-        let jql = build_fallback_jql(Some("PROJ"), None, None).unwrap();
-        assert!(
-            !jql.contains("AND ORDER BY"),
-            "ORDER BY must not be joined with AND: {jql}"
-        );
-        assert!(jql.ends_with("ORDER BY updated DESC"));
-    }
-
-    #[test]
-    fn fallback_jql_with_team_has_valid_order_by() {
-        let team = ("customfield_10001".to_string(), "uuid-123".to_string());
-        let jql = build_fallback_jql(Some("PROJ"), None, Some(&team)).unwrap();
-        assert!(
-            !jql.contains("AND ORDER BY"),
-            "ORDER BY must not be joined with AND: {jql}"
-        );
-        assert!(jql.contains("customfield_10001 = \"uuid-123\""));
-        assert!(jql.ends_with("ORDER BY updated DESC"));
-    }
-
-    #[test]
-    fn fallback_jql_with_all_filters() {
-        let team = ("customfield_10001".to_string(), "uuid-456".to_string());
-        let jql = build_fallback_jql(Some("PROJ"), Some("In Progress"), Some(&team)).unwrap();
-        assert!(
-            !jql.contains("AND ORDER BY"),
-            "ORDER BY must not be joined with AND: {jql}"
-        );
-        assert!(jql.contains("project = \"PROJ\""));
-        assert!(jql.contains("status = \"In Progress\""));
-        assert!(jql.contains("customfield_10001 = \"uuid-456\""));
-        assert!(jql.ends_with("ORDER BY updated DESC"));
-    }
-
-    #[test]
-    fn fallback_jql_errors_when_no_filters() {
-        let result = build_fallback_jql(None, None, None);
-        assert!(result.is_err(), "Expected error for unbounded query");
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("--project"),
-            "Error should mention --project: {err_msg}"
-        );
-        assert!(
-            err_msg.contains(".jr.toml"),
-            "Error should mention .jr.toml: {err_msg}"
-        );
-        assert!(
-            err_msg.contains("jr init"),
-            "Error should mention jr init: {err_msg}"
-        );
-    }
-
-    #[test]
-    fn fallback_jql_with_status_only() {
-        let jql = build_fallback_jql(None, Some("Done"), None).unwrap();
-        assert_eq!(jql, "status = \"Done\" ORDER BY updated DESC");
-    }
-
-    #[test]
     fn resolve_show_points_flag_false() {
         assert_eq!(resolve_show_points(false, Some("customfield_10031")), None);
         assert_eq!(resolve_show_points(false, None), None);
@@ -640,15 +603,6 @@ mod tests {
     fn resolve_show_points_flag_true_config_missing() {
         // Warning emitted to stderr (not captured), but function returns None without error
         assert_eq!(resolve_show_points(true, None), None);
-    }
-
-    #[test]
-    fn fallback_jql_escapes_special_chars_in_status() {
-        let jql = build_fallback_jql(None, Some(r#"In "Progress"#), None).unwrap();
-        assert!(
-            jql.contains(r#"status = "In \"Progress""#),
-            "Status with quotes should be escaped: {jql}"
-        );
     }
 
     #[test]
@@ -697,5 +651,61 @@ mod tests {
     #[test]
     fn effective_limit_all_returns_none() {
         assert_eq!(resolve_effective_limit(None, true), None);
+    }
+
+    #[test]
+    fn build_jql_parts_assignee_me() {
+        let parts = build_filter_clauses(Some("currentUser()"), None, None, None, None);
+        assert_eq!(parts, vec!["assignee = currentUser()"]);
+    }
+
+    #[test]
+    fn build_jql_parts_reporter_account_id() {
+        let parts = build_filter_clauses(None, Some("5b10ac8d82e05b22cc7d4ef5"), None, None, None);
+        assert_eq!(parts, vec!["reporter = 5b10ac8d82e05b22cc7d4ef5"]);
+    }
+
+    #[test]
+    fn build_jql_parts_recent() {
+        let parts = build_filter_clauses(None, None, None, None, Some("7d"));
+        assert_eq!(parts, vec!["created >= -7d"]);
+    }
+
+    #[test]
+    fn build_jql_parts_all_filters() {
+        let parts = build_filter_clauses(
+            Some("currentUser()"),
+            Some("currentUser()"),
+            Some("In Progress"),
+            Some(r#"customfield_10001 = "uuid-123""#),
+            Some("30d"),
+        );
+        assert_eq!(parts.len(), 5);
+        assert!(parts.contains(&"assignee = currentUser()".to_string()));
+        assert!(parts.contains(&"reporter = currentUser()".to_string()));
+        assert!(parts.contains(&"status = \"In Progress\"".to_string()));
+        assert!(parts.contains(&r#"customfield_10001 = "uuid-123""#.to_string()));
+        assert!(parts.contains(&"created >= -30d".to_string()));
+    }
+
+    #[test]
+    fn build_jql_parts_empty() {
+        let parts = build_filter_clauses(None, None, None, None, None);
+        assert!(parts.is_empty());
+    }
+
+    #[test]
+    fn build_jql_parts_jql_plus_status_compose() {
+        let filter = build_filter_clauses(None, None, Some("Done"), None, None);
+        let mut all_parts = vec!["type = Bug".to_string()];
+        all_parts.extend(filter);
+        let jql = all_parts.join(" AND ");
+        assert_eq!(jql, r#"type = Bug AND status = "Done""#);
+    }
+
+    #[test]
+    fn build_jql_parts_status_escaping() {
+        let parts = build_filter_clauses(None, None, Some(r#"He said "hi" \o/"#), None, None);
+        assert_eq!(parts, vec![r#"status = "He said \"hi\" \\o/""#.to_string()]);
     }
 }

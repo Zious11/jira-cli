@@ -87,3 +87,106 @@ pub(super) fn prompt_input(prompt: &str) -> Result<String> {
         .interact_text()?;
     Ok(input)
 }
+
+/// Check if a user input string is the "me" keyword (case-insensitive).
+fn is_me_keyword(input: &str) -> bool {
+    input.eq_ignore_ascii_case("me")
+}
+
+/// Resolve a user flag value to a JQL fragment.
+///
+/// - `"me"` (case-insensitive) → `"currentUser()"` (no API call)
+/// - Any other value → search users API, filter active, disambiguate via partial_match
+///
+/// Returns the JQL value to use (either `"currentUser()"` or an unquoted accountId).
+pub(super) async fn resolve_user(
+    client: &JiraClient,
+    name: &str,
+    no_input: bool,
+) -> Result<String> {
+    if is_me_keyword(name) {
+        return Ok("currentUser()".to_string());
+    }
+
+    let users = client.search_users(name).await?;
+    let active_users: Vec<_> = users
+        .into_iter()
+        .filter(|u| u.active == Some(true))
+        .collect();
+
+    if active_users.is_empty() {
+        anyhow::bail!(
+            "No active user found matching \"{}\". The user may be deactivated.",
+            name
+        );
+    }
+
+    if active_users.len() == 1 {
+        return Ok(active_users[0].account_id.clone());
+    }
+
+    // Multiple matches — disambiguate
+    let display_names: Vec<String> = active_users
+        .iter()
+        .map(|u| u.display_name.clone())
+        .collect();
+    match crate::partial_match::partial_match(name, &display_names) {
+        crate::partial_match::MatchResult::Exact(matched_name) => {
+            let user = active_users
+                .iter()
+                .find(|u| u.display_name == matched_name)
+                .expect("matched name must exist in active_users");
+            Ok(user.account_id.clone())
+        }
+        crate::partial_match::MatchResult::Ambiguous(matches) => {
+            if no_input {
+                anyhow::bail!(
+                    "Multiple users match \"{}\": {}. Use a more specific name.",
+                    name,
+                    matches.join(", ")
+                );
+            }
+            let selection = dialoguer::Select::new()
+                .with_prompt(format!("Multiple users match \"{name}\""))
+                .items(&matches)
+                .interact()?;
+            let selected_name = &matches[selection];
+            let user = active_users
+                .iter()
+                .find(|u| &u.display_name == selected_name)
+                .expect("selected name must exist in active_users");
+            Ok(user.account_id.clone())
+        }
+        crate::partial_match::MatchResult::None(_) => {
+            anyhow::bail!(
+                "No active user found matching \"{}\". The user may be deactivated.",
+                name
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_me_keyword_lowercase() {
+        assert!(is_me_keyword("me"));
+    }
+
+    #[test]
+    fn is_me_keyword_uppercase() {
+        assert!(is_me_keyword("ME"));
+    }
+
+    #[test]
+    fn is_me_keyword_mixed_case() {
+        assert!(is_me_keyword("Me"));
+    }
+
+    #[test]
+    fn is_me_keyword_not_me() {
+        assert!(!is_me_keyword("Jane"));
+    }
+}

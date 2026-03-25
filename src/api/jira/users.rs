@@ -6,4 +6,26 @@ impl JiraClient {
     pub async fn get_myself(&self) -> Result<User> {
         self.get("/rest/api/3/myself").await
     }
+
+    /// Search for users by name or email prefix.
+    ///
+    /// Returns active and inactive users — caller should filter by `active` field.
+    /// The response format may vary (flat array or paginated object), so both are handled.
+    pub async fn search_users(&self, query: &str) -> Result<Vec<User>> {
+        let path = format!(
+            "/rest/api/3/user/search?query={}",
+            urlencoding::encode(query)
+        );
+        let raw: serde_json::Value = self.get(&path).await?;
+        let users: Vec<User> = if raw.is_array() {
+            serde_json::from_value(raw)?
+        } else if let Some(values) = raw.get("values") {
+            serde_json::from_value(values.clone())?
+        } else {
+            anyhow::bail!(
+                "Unexpected response from user search API. Expected a JSON array or object with \"values\" key."
+            );
+        };
+        Ok(users)
+    }
 }

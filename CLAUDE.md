@@ -14,11 +14,11 @@ src/
 │   ├── issue/           # issue commands (split by operation theme)
 │   │   ├── mod.rs       # dispatch + re-exports
 │   │   ├── format.rs    # row formatting, headers, points display
-│   │   ├── list.rs      # list + view + comments (read operations)
+│   │   ├── list.rs      # list + view + comments (read operations, unified JQL composition)
 │   │   ├── create.rs    # create + edit (field-building)
 │   │   ├── workflow.rs  # move + transitions + assign + comment + open
 │   │   ├── links.rs     # link + unlink + link-types
-│   │   ├── helpers.rs   # team/points resolution, prompts
+│   │   ├── helpers.rs   # team/points resolution, user resolution, prompts
 │   │   └── assets.rs    # linked assets (issue→asset lookup)
 │   ├── assets.rs        # assets search/view/tickets
 │   ├── board.rs         # board list/view
@@ -48,7 +48,7 @@ src/
 │       ├── teams.rs     # org metadata (GraphQL), list teams
 │       ├── worklogs.rs  # add/list worklogs
 │       ├── projects.rs  # project details
-│       └── users.rs     # current user, assignable users
+│       └── users.rs     # current user, user search, assignable users
 │   ├── jsm/             # JSM-specific API call implementations
 │   │   ├── servicedesks.rs  # list service desks, project meta orchestration
 │   │   └── queues.rs        # list queues, get queue issues
@@ -60,6 +60,7 @@ src/
 ├── output.rs            # Table (comfy-table) and JSON formatting
 ├── adf.rs               # Atlassian Document Format: text→ADF, markdown→ADF, ADF→text
 ├── duration.rs          # Worklog duration parser (2h, 1h30m, 1d, 1w)
+├── jql.rs               # JQL utilities: escape_value, strip_order_by, validate_duration
 ├── partial_match.rs     # Case-insensitive substring matching with disambiguation
 └── error.rs             # JrError enum with exit codes (0/1/2/64/78/130)
 ```

@@ -166,6 +166,15 @@ pub enum IssueCommand {
         /// Fetch all results (no default limit)
         #[arg(long, conflicts_with = "limit")]
         all: bool,
+        /// Filter by assignee ("me" for current user, or a name to search)
+        #[arg(long)]
+        assignee: Option<String>,
+        /// Filter by reporter ("me" for current user, or a name to search)
+        #[arg(long)]
+        reporter: Option<String>,
+        /// Show issues created within duration (e.g., 7d, 4w, 2M)
+        #[arg(long)]
+        recent: Option<String>,
         /// Show story points column
         #[arg(long)]
         points: bool,

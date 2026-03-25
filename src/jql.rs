@@ -7,6 +7,32 @@ pub fn escape_value(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+/// Validate a JQL relative date duration string.
+///
+/// JQL relative dates use the format `<digits><unit>` where unit is one of:
+/// `y` (years), `M` (months), `w` (weeks), `d` (days), `h` (hours), `m` (minutes).
+/// Units are case-sensitive — `M` is months, `m` is minutes.
+/// Combined units like `4w2d` are not supported by Jira.
+pub fn validate_duration(s: &str) -> Result<(), String> {
+    if s.len() < 2 {
+        return Err(format!(
+            "Invalid duration '{s}'. Use a number followed by y, M, w, d, h, or m (e.g., 7d, 4w, 2M)."
+        ));
+    }
+    let (digits, unit) = s.split_at(s.len() - 1);
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+        return Err(format!(
+            "Invalid duration '{s}'. Use a number followed by y, M, w, d, h, or m (e.g., 7d, 4w, 2M)."
+        ));
+    }
+    if !matches!(unit, "y" | "M" | "w" | "d" | "h" | "m") {
+        return Err(format!(
+            "Invalid duration '{s}'. Use a number followed by y, M, w, d, h, or m (e.g., 7d, 4w, 2M)."
+        ));
+    }
+    Ok(())
+}
+
 /// Strip `ORDER BY` clause from JQL for use with count-only endpoints.
 ///
 /// The approximate-count endpoint only needs the WHERE clause. ORDER BY is
@@ -76,6 +102,66 @@ mod tests {
             strip_order_by("project = PROJ   ORDER BY rank ASC"),
             "project = PROJ"
         );
+    }
+
+    #[test]
+    fn validate_duration_valid_days() {
+        assert!(validate_duration("7d").is_ok());
+    }
+
+    #[test]
+    fn validate_duration_valid_weeks() {
+        assert!(validate_duration("4w").is_ok());
+    }
+
+    #[test]
+    fn validate_duration_valid_months_uppercase() {
+        assert!(validate_duration("2M").is_ok());
+    }
+
+    #[test]
+    fn validate_duration_valid_years() {
+        assert!(validate_duration("1y").is_ok());
+    }
+
+    #[test]
+    fn validate_duration_valid_hours() {
+        assert!(validate_duration("5h").is_ok());
+    }
+
+    #[test]
+    fn validate_duration_valid_minutes() {
+        assert!(validate_duration("10m").is_ok());
+    }
+
+    #[test]
+    fn validate_duration_valid_zero() {
+        assert!(validate_duration("0d").is_ok());
+    }
+
+    #[test]
+    fn validate_duration_invalid_unit() {
+        assert!(validate_duration("7x").is_err());
+    }
+
+    #[test]
+    fn validate_duration_reversed() {
+        assert!(validate_duration("d7").is_err());
+    }
+
+    #[test]
+    fn validate_duration_empty() {
+        assert!(validate_duration("").is_err());
+    }
+
+    #[test]
+    fn validate_duration_combined_units() {
+        assert!(validate_duration("4w2d").is_err());
+    }
+
+    #[test]
+    fn validate_duration_no_digits() {
+        assert!(validate_duration("d").is_err());
     }
 }
 

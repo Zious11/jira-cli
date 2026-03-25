@@ -55,7 +55,13 @@ jr auth login
 jr auth login --oauth
 
 # View your current sprint/board issues
-jr issue list
+jr issue list --project FOO
+
+# My assigned tickets
+jr issue list --assignee me
+
+# Tickets I reported in the last 7 days
+jr issue list --reporter me --recent 7d
 
 # View a specific issue
 jr issue view KEY-123
@@ -81,7 +87,7 @@ jr issue comment KEY-123 "Deployed to staging"
 | `jr auth login` | Authenticate with API token (default) or `--oauth` for OAuth 2.0 |
 | `jr auth status` | Show authentication status |
 | `jr me` | Show current user info |
-| `jr issue list` | List issues (smart defaults for scrum/kanban, `--team`, `--points`, `--assets`) |
+| `jr issue list` | List issues (`--assignee`, `--reporter`, `--recent`, `--status`, `--team`, `--jql`, `--limit`/`--all`, `--points`, `--assets`) |
 | `jr issue view KEY` | View issue details (includes story points, linked assets) |
 | `jr issue create` | Create an issue (`--team`, `--points`) |
 | `jr issue edit KEY` | Edit issue fields (`--team`, `--points`, `--no-points`) |
