@@ -3,7 +3,7 @@ use anyhow::Result;
 use crate::api::client::JiraClient;
 use crate::api::pagination::AssetsPage;
 use crate::error::JrError;
-use crate::types::assets::AssetObject;
+use crate::types::assets::{AssetObject, ObjectAttribute};
 
 impl JiraClient {
     /// Search assets via AQL with auto-pagination.
@@ -71,6 +71,17 @@ impl JiraClient {
             urlencoding::encode(object_id),
             include_attributes
         );
+        self.get_assets(workspace_id, &path).await
+    }
+
+    /// Get all attributes for a single object, with full attribute definitions
+    /// including human-readable names.
+    pub async fn get_object_attributes(
+        &self,
+        workspace_id: &str,
+        object_id: &str,
+    ) -> Result<Vec<ObjectAttribute>> {
+        let path = format!("object/{}/attributes", urlencoding::encode(object_id));
         self.get_assets(workspace_id, &path).await
     }
 }
