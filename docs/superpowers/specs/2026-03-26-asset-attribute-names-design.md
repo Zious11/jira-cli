@@ -34,7 +34,7 @@ Without cross-referencing the object type schema, users have no idea what these 
 └───────────┴──────────────┘
 ```
 
-System attributes (Key, Name, Created, Updated) are filtered out because they already appear in the main view table above.
+System attributes (Key, Created, Updated), the label attribute (Name), and hidden attributes are filtered out because they already appear in the main view table above or are not meant to be displayed.
 
 ## API Approach
 
@@ -71,7 +71,8 @@ Each entry in the response array contains:
 
 Key fields used:
 - `objectTypeAttribute.name` — human-readable attribute name (replaces numeric ID)
-- `objectTypeAttribute.system` — `true` for Key, Name, Created, Updated (filter these out)
+- `objectTypeAttribute.system` — `true` for Key, Created, Updated (filter these out)
+- `objectTypeAttribute.label` — `true` for the Name attribute (the object's display name, already shown in main view table; filter out)
 - `objectTypeAttribute.hidden` — `true` for attributes hidden in the Jira UI (filter these out)
 - `objectTypeAttribute.position` — display order
 - `objectAttributeValues[].displayValue` — preferred display value (falls back to `value`)
@@ -106,6 +107,8 @@ pub struct ObjectTypeAttributeDef {
     pub system: bool,
     #[serde(default)]
     pub hidden: bool,
+    #[serde(default)]
+    pub label: bool,
     #[serde(default)]
     pub position: i32,
 }
@@ -171,8 +174,12 @@ if attributes {
     let mut attrs = client
         .get_object_attributes(workspace_id, &object_id)
         .await?;
-    // Filter out system (Key, Name, Created, Updated) and hidden attributes
-    attrs.retain(|a| !a.object_type_attribute.system && !a.object_type_attribute.hidden);
+    // Filter out system (Key, Created, Updated), label (Name), and hidden attributes
+    attrs.retain(|a| {
+        !a.object_type_attribute.system
+            && !a.object_type_attribute.hidden
+            && !a.object_type_attribute.label
+    });
     attrs.sort_by_key(|a| a.object_type_attribute.position);
 
     if !attrs.is_empty() {
