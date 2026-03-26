@@ -37,6 +37,35 @@ pub struct ObjectAttributeValue {
     pub display_value: Option<String>,
 }
 
+/// A single attribute entry from `GET /object/{id}/attributes`.
+/// Includes the full attribute definition with name, unlike `AssetAttribute`
+/// which only has the numeric `objectTypeAttributeId`.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ObjectAttribute {
+    pub id: String,
+    #[serde(rename = "objectTypeAttributeId")]
+    pub object_type_attribute_id: String,
+    #[serde(rename = "objectTypeAttribute")]
+    pub object_type_attribute: ObjectTypeAttributeDef,
+    #[serde(rename = "objectAttributeValues", default)]
+    pub values: Vec<ObjectAttributeValue>,
+}
+
+/// Attribute definition from the object type schema.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ObjectTypeAttributeDef {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub system: bool,
+    #[serde(default)]
+    pub hidden: bool,
+    #[serde(default)]
+    pub label: bool,
+    #[serde(default)]
+    pub position: i32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,6 +111,83 @@ mod tests {
         assert_eq!(
             obj.attributes[0].values[0].display_value.as_deref(),
             Some("contact@acme.com")
+        );
+    }
+
+    #[test]
+    fn deserialize_object_attribute_with_name() {
+        let json = r#"{
+            "id": "637",
+            "objectTypeAttributeId": "134",
+            "objectTypeAttribute": {
+                "id": "134",
+                "name": "Location",
+                "system": false,
+                "hidden": false,
+                "label": false,
+                "position": 4
+            },
+            "objectAttributeValues": [
+                { "value": "New York, NY", "displayValue": "New York, NY" }
+            ]
+        }"#;
+        let attr: ObjectAttribute = serde_json::from_str(json).unwrap();
+        assert_eq!(attr.id, "637");
+        assert_eq!(attr.object_type_attribute_id, "134");
+        assert_eq!(attr.object_type_attribute.name, "Location");
+        assert!(!attr.object_type_attribute.system);
+        assert!(!attr.object_type_attribute.hidden);
+        assert!(!attr.object_type_attribute.label);
+        assert_eq!(attr.object_type_attribute.position, 4);
+        assert_eq!(attr.values.len(), 1);
+        assert_eq!(
+            attr.values[0].display_value.as_deref(),
+            Some("New York, NY")
+        );
+    }
+
+    #[test]
+    fn deserialize_object_attribute_defaults() {
+        let json = r#"{
+            "id": "640",
+            "objectTypeAttributeId": "135",
+            "objectTypeAttribute": {
+                "id": "135",
+                "name": "Name"
+            },
+            "objectAttributeValues": []
+        }"#;
+        let attr: ObjectAttribute = serde_json::from_str(json).unwrap();
+        assert_eq!(attr.object_type_attribute.name, "Name");
+        assert!(!attr.object_type_attribute.system);
+        assert!(!attr.object_type_attribute.hidden);
+        assert!(!attr.object_type_attribute.label);
+        assert_eq!(attr.object_type_attribute.position, 0);
+        assert!(attr.values.is_empty());
+    }
+
+    #[test]
+    fn deserialize_object_attribute_system() {
+        let json = r#"{
+            "id": "638",
+            "objectTypeAttributeId": "136",
+            "objectTypeAttribute": {
+                "id": "136",
+                "name": "Created",
+                "system": true,
+                "hidden": false,
+                "label": false,
+                "position": 2
+            },
+            "objectAttributeValues": [
+                { "value": "2021-02-16T20:04:41.527Z", "displayValue": "16/Feb/21 8:04 PM" }
+            ]
+        }"#;
+        let attr: ObjectAttribute = serde_json::from_str(json).unwrap();
+        assert!(attr.object_type_attribute.system);
+        assert_eq!(
+            attr.values[0].display_value.as_deref(),
+            Some("16/Feb/21 8:04 PM")
         );
     }
 }
