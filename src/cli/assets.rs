@@ -103,11 +103,13 @@ async fn handle_view(
                 attrs
                     .retain(|a| !a.object_type_attribute.system && !a.object_type_attribute.hidden);
                 attrs.sort_by_key(|a| a.object_type_attribute.position);
-                let combined = serde_json::json!({
-                    "object": object,
-                    "attributes": attrs,
-                });
-                println!("{}", serde_json::to_string_pretty(&combined)?);
+                // Inject richer attributes into the existing object JSON to preserve
+                // the root-level schema (additive change, not a wrapper envelope).
+                let mut object_value = serde_json::to_value(&object)?;
+                if let serde_json::Value::Object(ref mut map) = object_value {
+                    map.insert("attributes".to_string(), serde_json::to_value(&attrs)?);
+                }
+                println!("{}", output::render_json(&object_value)?);
             } else {
                 println!("{}", output::render_json(&object)?);
             }

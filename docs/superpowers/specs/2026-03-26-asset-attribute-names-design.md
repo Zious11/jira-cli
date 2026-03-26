@@ -268,6 +268,6 @@ This wraps the object and attributes in a single JSON envelope, giving consumers
 
 ## Backward Compatibility
 
-No breaking changes. The fix produces human-readable output where previously it produced opaque numeric IDs. The `--attributes` flag was effectively unusable without this fix.
+Table output: No breaking changes. The fix produces human-readable output where previously it produced opaque numeric IDs. The `--attributes` flag was effectively unusable without this fix.
 
-JSON output gains richer attribute data (attribute names and metadata) — this is additive, not breaking.
+JSON output: When using `--output json --attributes`, the `attributes` array in the root object is replaced with richer attribute entries that include `objectTypeAttribute.name` and other metadata. The root-level object schema is preserved (no envelope wrapper). Existing fields (`objectTypeAttributeId`, `objectAttributeValues`) remain present. The addition of `objectTypeAttribute` is additive. System and hidden attributes are filtered out.
