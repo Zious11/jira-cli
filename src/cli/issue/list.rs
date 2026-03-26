@@ -496,6 +496,33 @@ pub(super) async fn handle_view(
                         .unwrap_or_else(|| "Unassigned".into()),
                 ],
                 vec![
+                    "Reporter".into(),
+                    issue
+                        .fields
+                        .reporter
+                        .as_ref()
+                        .map(|r| r.display_name.clone())
+                        .unwrap_or_else(|| "(none)".into()),
+                ],
+                vec![
+                    "Created".into(),
+                    issue
+                        .fields
+                        .created
+                        .as_deref()
+                        .map(format_comment_date)
+                        .unwrap_or_else(|| "-".into()),
+                ],
+                vec![
+                    "Updated".into(),
+                    issue
+                        .fields
+                        .updated
+                        .as_deref()
+                        .map(format_comment_date)
+                        .unwrap_or_else(|| "-".into()),
+                ],
+                vec![
                     "Project".into(),
                     issue
                         .fields

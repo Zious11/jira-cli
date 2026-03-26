@@ -259,3 +259,26 @@ pub fn project_statuses_response() -> Value {
         }
     ])
 }
+
+pub fn issue_response_with_standard_fields(key: &str, summary: &str) -> Value {
+    json!({
+        "key": key,
+        "fields": {
+            "summary": summary,
+            "status": {"name": "In Progress", "statusCategory": {"name": "In Progress", "key": "indeterminate"}},
+            "issuetype": {"name": "Bug"},
+            "priority": {"name": "High"},
+            "assignee": {"accountId": "abc123", "displayName": "John Doe"},
+            "reporter": {"accountId": "def456", "displayName": "Jane Smith"},
+            "project": {"key": key.split('-').next().unwrap_or("TEST"), "name": "Test Project"},
+            "created": "2026-03-20T14:32:00.000+0000",
+            "updated": "2026-03-25T09:15:22.000+0000",
+            "resolution": {"name": "Fixed"},
+            "components": [{"name": "Backend"}, {"name": "API"}],
+            "fixVersions": [{"name": "v2.0", "released": false, "releaseDate": "2026-04-01"}],
+            "labels": ["bug"],
+            "parent": null,
+            "issuelinks": []
+        }
+    })
+}

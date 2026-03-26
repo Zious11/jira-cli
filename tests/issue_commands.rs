@@ -471,3 +471,86 @@ async fn test_search_issues_jql_with_project_scope() {
     assert_eq!(result.issues.len(), 1);
     assert_eq!(result.issues[0].key, "PROJ-1");
 }
+
+#[tokio::test]
+async fn get_issue_includes_standard_fields() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-42"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_response_with_standard_fields("FOO-42", "Test with all fields"),
+        ))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let issue = client.get_issue("FOO-42", &[]).await.unwrap();
+
+    // Verify new fields are deserialized
+    assert_eq!(
+        issue.fields.created.as_deref(),
+        Some("2026-03-20T14:32:00.000+0000")
+    );
+    assert_eq!(
+        issue.fields.updated.as_deref(),
+        Some("2026-03-25T09:15:22.000+0000")
+    );
+
+    let reporter = issue.fields.reporter.as_ref().unwrap();
+    assert_eq!(reporter.display_name, "Jane Smith");
+    assert_eq!(reporter.account_id, "def456");
+
+    assert_eq!(issue.fields.resolution.as_ref().unwrap().name, "Fixed");
+
+    let components = issue.fields.components.as_ref().unwrap();
+    assert_eq!(components.len(), 2);
+    assert_eq!(components[0].name, "Backend");
+    assert_eq!(components[1].name, "API");
+
+    let versions = issue.fields.fix_versions.as_ref().unwrap();
+    assert_eq!(versions.len(), 1);
+    assert_eq!(versions[0].name, "v2.0");
+    assert_eq!(versions[0].released, Some(false));
+    assert_eq!(versions[0].release_date.as_deref(), Some("2026-04-01"));
+
+    // Verify JSON serialization includes the new fields at the expected paths
+    let json_str = serde_json::to_string(&issue).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+    assert!(value["fields"]["created"].is_string());
+    assert!(value["fields"]["reporter"].is_object());
+    assert!(value["fields"]["resolution"].is_object());
+    assert!(value["fields"]["components"].is_array());
+    assert!(value["fields"]["fixVersions"].is_array());
+}
+
+#[tokio::test]
+async fn get_issue_null_standard_fields() {
+    let server = MockServer::start().await;
+
+    // Issue with all new fields null/absent
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-43"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(common::fixtures::issue_response(
+                "FOO-43",
+                "Minimal issue",
+                "To Do",
+            )),
+        )
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let issue = client.get_issue("FOO-43", &[]).await.unwrap();
+
+    // All new fields should be None (the fixture doesn't include them)
+    assert!(issue.fields.created.is_none());
+    assert!(issue.fields.updated.is_none());
+    assert!(issue.fields.reporter.is_none());
+    assert!(issue.fields.resolution.is_none());
+    assert!(issue.fields.components.is_none());
+    assert!(issue.fields.fix_versions.is_none());
+}
