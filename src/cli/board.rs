@@ -14,7 +14,7 @@ pub async fn handle(
 ) -> Result<()> {
     match command {
         BoardCommand::List => handle_list(client, output_format).await,
-        BoardCommand::View => handle_view(config, client, output_format).await,
+        BoardCommand::View { board } => handle_view(config, client, output_format, board).await,
     }
 }
 
@@ -35,9 +35,13 @@ async fn handle_view(
     config: &Config,
     client: &JiraClient,
     output_format: &OutputFormat,
+    board_override: Option<u64>,
 ) -> Result<()> {
-    let board_id = config.project.board_id.ok_or_else(|| {
-        anyhow::anyhow!("No board_id configured. Set board_id in .jr.toml or run \"jr init\".")
+    let board_id = config.board_id(board_override).ok_or_else(|| {
+        anyhow::anyhow!(
+            "No board configured. Use --board <ID> or set board_id in .jr.toml.\n\
+             Run \"jr board list\" to see available boards."
+        )
     })?;
 
     let board_config = client.get_board_config(board_id).await?;

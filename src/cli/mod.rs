@@ -365,15 +365,27 @@ pub enum BoardCommand {
     /// List boards
     List,
     /// View current board issues
-    View,
+    View {
+        /// Board ID (overrides board_id in .jr.toml)
+        #[arg(long)]
+        board: Option<u64>,
+    },
 }
 
 #[derive(Subcommand)]
 pub enum SprintCommand {
     /// List sprints
-    List,
+    List {
+        /// Board ID (overrides board_id in .jr.toml)
+        #[arg(long)]
+        board: Option<u64>,
+    },
     /// Show current sprint issues
-    Current,
+    Current {
+        /// Board ID (overrides board_id in .jr.toml)
+        #[arg(long)]
+        board: Option<u64>,
+    },
 }
 
 #[derive(Subcommand)]
