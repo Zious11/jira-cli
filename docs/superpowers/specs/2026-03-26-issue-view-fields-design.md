@@ -38,10 +38,10 @@ Missing: `created`, `updated`, `reporter`, `resolution`, `components`, `fixVersi
 From the Jira REST API v3:
 
 - **`created`** / **`updated`** — ISO 8601 strings (e.g., `"2026-03-20T14:32:00.000+0000"`)
-- **`reporter`** — Simplified User object with `accountId`, `displayName`, `active`. Same shape as `assignee`. The existing `User` type handles this — `emailAddress: Option<String>` naturally handles its absence.
+- **`reporter`** — Simplified User object with `accountId`, `displayName`, `active`. Same shape as `assignee`. The existing `User` type handles this — `emailAddress: Option<String>` naturally handles its absence. Note: `User.account_id` and `display_name` are non-optional `String` fields. The Jira API always returns these for valid users; deleted/deactivated users still retain their `accountId` and `displayName`. If the reporter field itself is absent, the `Option<User>` wrapper handles it.
 - **`resolution`** — Object with `name` when resolved (e.g., `{"name": "Fixed"}`), `null` when unresolved
-- **`components`** — Array of objects with `name` (e.g., `[{"name": "Backend"}]`). Always an array, even when empty (`[]`).
-- **`fixVersions`** — Array of version objects with `name`, `released`, `releaseDate`
+- **`components`** — Array of objects with `name` (e.g., `[{"name": "Backend"}]`). Typically an array (even when empty `[]`), but may be `null` or absent depending on project configuration and issue screens. Typed as `Option<Vec<Component>>` with `#[serde(default)]` to handle all three cases: absent → `None`, `null` → `None`, `[]` → `Some(vec![])`.
+- **`fixVersions`** — Array of version objects with `name`, `released`, `releaseDate`. Same `Option<Vec<>>` + `#[serde(default)]` pattern as `components` for the same reasons.
 
 ## Fix
 
@@ -114,7 +114,7 @@ let mut fields =
     "summary,status,issuetype,priority,assignee,reporter,project,description,labels,parent,issuelinks,created,updated,resolution,components,fixVersions".to_string();
 ```
 
-**`search_issues()`** — add to the fields vec:
+**`search_issues()`** — add the 6 new fields to the existing vec. Note: `labels`, `parent`, and `issuelinks` are intentionally absent from `search_issues` — they are only fetched by `get_issue()` for the single-issue view. The search endpoint returns a lighter payload for list rendering.
 
 ```rust
 let mut fields = vec![
@@ -168,7 +168,7 @@ rows.push(vec![
 ]);
 ```
 
-The existing `format_comment_date()` function already handles Jira's ISO 8601 format and produces `YYYY-MM-DD HH:MM` output — reused here.
+The existing `format_comment_date()` function (private, defined in the same file `list.rs`) already handles Jira's ISO 8601 format and produces `YYYY-MM-DD HH:MM` output — reused here. No visibility change needed since `handle_view` is in the same module.
 
 ### 5. JSON Output
 
@@ -210,8 +210,8 @@ No changes needed. `IssueFields` derives `Serialize`, so the 6 new typed fields 
     "status": { "name": "In Progress", "statusCategory": { "name": "In Progress", "key": "indeterminate" } },
     "issuetype": { "name": "Bug" },
     "priority": { "name": "High" },
-    "assignee": { "accountId": "5b10a284...", "displayName": "John Doe", "active": true },
-    "reporter": { "accountId": "5b10a2844c20...", "displayName": "Jane Smith", "active": true },
+    "assignee": { "accountId": "5b10a284...", "displayName": "John Doe", "emailAddress": null, "active": true },
+    "reporter": { "accountId": "5b10a2844c20...", "displayName": "Jane Smith", "emailAddress": null, "active": true },
     "created": "2026-03-20T14:32:00.000+0000",
     "updated": "2026-03-25T09:15:22.000+0000",
     "resolution": { "name": "Fixed" },
@@ -246,6 +246,8 @@ No changes needed. `IssueFields` derives `Serialize`, so the 6 new typed fields 
 
 - Deserialize `IssueFields` with all 6 new fields present — verify typed access
 - Deserialize with all 6 fields absent/null — verify all default to `None`
+- Deserialize with `components: []` (empty array) — verify `Some(vec![])`, distinct from `None`
+- Deserialize with `fixVersions: []` (empty array) — verify `Some(vec![])`, distinct from `None`
 - Deserialize `Resolution` with `name` field
 - Deserialize `Component` with `name` field
 - Deserialize `Version` with `name`, `released`, `releaseDate` (and with optional fields absent)
