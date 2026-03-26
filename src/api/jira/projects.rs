@@ -18,13 +18,31 @@ pub struct PriorityMetadata {
     pub id: String,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+pub struct StatusMetadata {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct IssueTypeWithStatuses {
+    pub id: String,
+    pub name: String,
+    pub subtask: Option<bool>,
+    pub statuses: Vec<StatusMetadata>,
+}
+
 impl JiraClient {
     pub async fn get_project_issue_types(
         &self,
         project_key: &str,
     ) -> Result<Vec<IssueTypeMetadata>> {
         let project: serde_json::Value = self
-            .get(&format!("/rest/api/3/project/{project_key}"))
+            .get(&format!(
+                "/rest/api/3/project/{}",
+                urlencoding::encode(project_key)
+            ))
             .await?;
         let types = project
             .get("issueTypes")
@@ -35,6 +53,17 @@ impl JiraClient {
 
     pub async fn get_priorities(&self) -> Result<Vec<PriorityMetadata>> {
         self.get("/rest/api/3/priority").await
+    }
+
+    pub async fn get_project_statuses(
+        &self,
+        project_key: &str,
+    ) -> Result<Vec<IssueTypeWithStatuses>> {
+        self.get(&format!(
+            "/rest/api/3/project/{}/statuses",
+            urlencoding::encode(project_key)
+        ))
+        .await
     }
 
     pub async fn list_projects(

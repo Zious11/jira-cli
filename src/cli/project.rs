@@ -74,6 +74,7 @@ async fn handle_fields(
 
     let issue_types = client.get_project_issue_types(&project_key).await?;
     let priorities = client.get_priorities().await?;
+    let statuses = client.get_project_statuses(&project_key).await?;
 
     match output_format {
         OutputFormat::Json => {
@@ -83,6 +84,7 @@ async fn handle_fields(
                     "project": project_key,
                     "issue_types": issue_types,
                     "priorities": priorities,
+                    "statuses_by_issue_type": statuses,
                 })
             );
         }
@@ -100,6 +102,19 @@ async fn handle_fields(
             println!("\nPriorities:");
             for p in &priorities {
                 println!("  - {}", p.name);
+            }
+            let has_statuses = statuses.iter().any(|it| !it.statuses.is_empty());
+            if has_statuses {
+                println!("\nStatuses by Issue Type:");
+                for it in &statuses {
+                    if it.statuses.is_empty() {
+                        continue;
+                    }
+                    println!("  {}:", it.name);
+                    for s in &it.statuses {
+                        println!("    - {}", s.name);
+                    }
+                }
             }
         }
     }

@@ -154,3 +154,49 @@ async fn test_list_projects_all_paginates() {
     assert_eq!(projects[1].key, "BAR");
     assert_eq!(projects[2].key, "BAZ");
 }
+
+#[tokio::test]
+async fn test_get_project_statuses() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/statuses"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(common::fixtures::project_statuses_response()),
+        )
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let result = client.get_project_statuses("FOO").await.unwrap();
+    assert_eq!(result.len(), 2);
+    assert_eq!(result[0].name, "Task");
+    assert_eq!(result[0].id, "3");
+    assert_eq!(result[0].subtask, Some(false));
+    assert_eq!(result[0].statuses.len(), 3);
+    assert_eq!(result[0].statuses[0].name, "To Do");
+    assert_eq!(result[0].statuses[0].id, "10000");
+    assert_eq!(
+        result[0].statuses[0].description.as_deref(),
+        Some("Work that has not been started.")
+    );
+    assert_eq!(result[0].statuses[1].name, "In Progress");
+    assert_eq!(result[0].statuses[2].name, "Done");
+    assert_eq!(result[1].name, "Bug");
+    assert_eq!(result[1].statuses.len(), 2);
+}
+
+#[tokio::test]
+async fn test_get_project_statuses_empty() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/FOO/statuses"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let result = client.get_project_statuses("FOO").await.unwrap();
+    assert!(result.is_empty());
+}

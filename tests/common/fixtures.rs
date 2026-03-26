@@ -202,3 +202,60 @@ pub fn project_response(key: &str, name: &str, type_key: &str, lead_name: Option
         "lead": lead,
     })
 }
+
+/// Project statuses response — top-level array of issue types with nested statuses.
+pub fn project_statuses_response() -> Value {
+    json!([
+        {
+            "id": "3",
+            "name": "Task",
+            "self": "https://test.atlassian.net/rest/api/3/issueType/3",
+            "subtask": false,
+            "statuses": [
+                {
+                    "id": "10000",
+                    "name": "To Do",
+                    "description": "Work that has not been started.",
+                    "iconUrl": "https://test.atlassian.net/images/icons/statuses/open.png",
+                    "self": "https://test.atlassian.net/rest/api/3/status/10000"
+                },
+                {
+                    "id": "10001",
+                    "name": "In Progress",
+                    "description": "The issue is currently being worked on.",
+                    "iconUrl": "https://test.atlassian.net/images/icons/statuses/inprogress.png",
+                    "self": "https://test.atlassian.net/rest/api/3/status/10001"
+                },
+                {
+                    "id": "10002",
+                    "name": "Done",
+                    "description": "Work has been completed.",
+                    "iconUrl": "https://test.atlassian.net/images/icons/statuses/closed.png",
+                    "self": "https://test.atlassian.net/rest/api/3/status/10002"
+                }
+            ]
+        },
+        {
+            "id": "1",
+            "name": "Bug",
+            "self": "https://test.atlassian.net/rest/api/3/issueType/1",
+            "subtask": false,
+            "statuses": [
+                {
+                    "id": "10000",
+                    "name": "To Do",
+                    "description": "Work that has not been started.",
+                    "iconUrl": "https://test.atlassian.net/images/icons/statuses/open.png",
+                    "self": "https://test.atlassian.net/rest/api/3/status/10000"
+                },
+                {
+                    "id": "10002",
+                    "name": "Done",
+                    "description": "Work has been completed.",
+                    "iconUrl": "https://test.atlassian.net/images/icons/statuses/closed.png",
+                    "self": "https://test.atlassian.net/rest/api/3/status/10002"
+                }
+            ]
+        }
+    ])
+}
