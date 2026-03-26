@@ -39,7 +39,10 @@ impl JiraClient {
         project_key: &str,
     ) -> Result<Vec<IssueTypeMetadata>> {
         let project: serde_json::Value = self
-            .get(&format!("/rest/api/3/project/{project_key}"))
+            .get(&format!(
+                "/rest/api/3/project/{}",
+                urlencoding::encode(project_key)
+            ))
             .await?;
         let types = project
             .get("issueTypes")
@@ -56,8 +59,11 @@ impl JiraClient {
         &self,
         project_key: &str,
     ) -> Result<Vec<IssueTypeWithStatuses>> {
-        self.get(&format!("/rest/api/3/project/{project_key}/statuses"))
-            .await
+        self.get(&format!(
+            "/rest/api/3/project/{}/statuses",
+            urlencoding::encode(project_key)
+        ))
+        .await
     }
 
     pub async fn list_projects(
