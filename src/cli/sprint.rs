@@ -13,8 +13,16 @@ pub async fn handle(
     client: &JiraClient,
     output_format: &OutputFormat,
 ) -> Result<()> {
-    let board_id = config.project.board_id.ok_or_else(|| {
-        anyhow::anyhow!("No board_id configured. Set board_id in .jr.toml or run \"jr init\".")
+    let board_override = match &command {
+        SprintCommand::List { board } => *board,
+        SprintCommand::Current { board } => *board,
+    };
+
+    let board_id = config.board_id(board_override).ok_or_else(|| {
+        anyhow::anyhow!(
+            "No board configured. Use --board <ID> or set board_id in .jr.toml.\n\
+             Run \"jr board list\" to see available boards."
+        )
     })?;
 
     // Guard: sprints only make sense for scrum boards
@@ -29,8 +37,10 @@ pub async fn handle(
     }
 
     match command {
-        SprintCommand::List => handle_list(board_id, client, output_format).await,
-        SprintCommand::Current => handle_current(board_id, client, output_format, config).await,
+        SprintCommand::List { .. } => handle_list(board_id, client, output_format).await,
+        SprintCommand::Current { .. } => {
+            handle_current(board_id, client, output_format, config).await
+        }
     }
 }
 
