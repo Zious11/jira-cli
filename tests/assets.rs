@@ -289,9 +289,7 @@ async fn get_object_attributes_returns_named_attributes() {
 
     // Mock returns a mix of system, label, hidden, and user-defined attributes
     Mock::given(method("GET"))
-        .and(path(
-            "/jsm/assets/workspace/ws-123/v1/object/88/attributes",
-        ))
+        .and(path("/jsm/assets/workspace/ws-123/v1/object/88/attributes"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([
             {
                 "id": "637",
@@ -374,10 +372,7 @@ async fn get_object_attributes_returns_named_attributes() {
 
     let client =
         jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".into());
-    let attrs = client
-        .get_object_attributes("ws-123", "88")
-        .await
-        .unwrap();
+    let attrs = client.get_object_attributes("ws-123", "88").await.unwrap();
 
     // All 5 attributes returned from API
     assert_eq!(attrs.len(), 5);
