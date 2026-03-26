@@ -109,7 +109,7 @@ pub async fn require_service_desk(client: &JiraClient, project_key: &str) -> Res
         };
         return Err(JrError::UserError(format!(
             "\"{}\" is a {} project. Queue commands require a Jira Service Management project. \
-             Run \"jr project fields {}\" to see available commands.",
+             Run \"jr project fields --project {}\" to see available commands.",
             project_key, type_label, project_key
         ))
         .into());

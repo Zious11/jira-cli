@@ -64,7 +64,10 @@ async fn handle_fields(
     project_override: Option<&str>,
 ) -> Result<()> {
     let project_key = config.project_key(project_override).ok_or_else(|| {
-        anyhow::anyhow!("No project specified. Run \"jr project list\" to see available projects.")
+        anyhow::anyhow!(
+            "No project specified. Use --project <KEY> or configure a default project in .jr.toml. \
+             Run \"jr project list\" to see available projects."
+        )
     })?;
 
     let issue_types = client.get_project_issue_types(&project_key).await?;
