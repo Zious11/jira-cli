@@ -120,7 +120,10 @@ async fn handle_current(
     let sprint = &sprints[0];
     let sp_field_id = config.global.fields.story_points_field_id.as_deref();
     let extra: Vec<&str> = sp_field_id.iter().copied().collect();
-    let issues = client.get_sprint_issues(sprint.id, None, &extra).await?;
+    let issues = client
+        .get_sprint_issues(sprint.id, None, None, &extra)
+        .await?
+        .issues;
 
     let sprint_summary = sp_field_id.map(|field_id| compute_sprint_summary(&issues, field_id));
 

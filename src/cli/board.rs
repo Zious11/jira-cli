@@ -67,7 +67,10 @@ async fn handle_view(
             bail!("No active sprint found for board {}.", board_id);
         }
         let sprint = &sprints[0];
-        client.get_sprint_issues(sprint.id, None, &[]).await?
+        client
+            .get_sprint_issues(sprint.id, None, None, &[])
+            .await?
+            .issues
     } else {
         // Kanban: search for issues not in Done status category
         let project_key = config.project_key(None);
