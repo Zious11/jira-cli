@@ -108,7 +108,7 @@ jr issue comment KEY-123 "Deployed to staging"
 | `jr issue link-types` | List available link types |
 | `jr issue assets KEY`          | Show assets linked to an issue                |
 | `jr board list` | List boards |
-| `jr board view --board 42` | Show current board issues (`--board` or config) |
+| `jr board view --board 42` | Show current board issues (`--board` or config, `--limit`/`--all`) |
 | `jr sprint list --board 42` | List sprints (`--board` or config, scrum only) |
 | `jr sprint current --board 42` | Show current sprint issues (with points summary) |
 | `jr worklog add KEY 2h` | Log time (`1h30m`, `1d`, `1w`) |
