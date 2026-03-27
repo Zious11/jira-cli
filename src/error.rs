@@ -11,7 +11,7 @@ pub enum JrError {
     #[error("API error ({status}): {message}")]
     ApiError { status: u16, message: String },
 
-    #[error("Configuration error: {0}")]
+    #[error("{0}")]
     ConfigError(String),
 
     #[error("{0}")]
@@ -39,5 +39,36 @@ impl JrError {
             JrError::Interrupted => 130,
             _ => 1,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_error_exit_code() {
+        assert_eq!(JrError::ConfigError("test".into()).exit_code(), 78);
+    }
+
+    #[test]
+    fn user_error_exit_code() {
+        assert_eq!(JrError::UserError("test".into()).exit_code(), 64);
+    }
+
+    #[test]
+    fn config_error_display_no_prefix() {
+        assert_eq!(
+            JrError::ConfigError("No board_id configured.".into()).to_string(),
+            "No board_id configured."
+        );
+    }
+
+    #[test]
+    fn user_error_display_passthrough() {
+        assert_eq!(
+            JrError::UserError("Invalid selection".into()).to_string(),
+            "Invalid selection"
+        );
     }
 }
