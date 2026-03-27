@@ -430,3 +430,37 @@ pub enum QueueCommand {
         limit: Option<u32>,
     },
 }
+
+pub(crate) const DEFAULT_LIMIT: u32 = 30;
+
+/// Resolve the effective limit from CLI flags.
+///
+/// Returns `None` when `--all` is set (no limit), otherwise returns the
+/// explicit `--limit` value or the default.
+pub(crate) fn resolve_effective_limit(limit: Option<u32>, all: bool) -> Option<u32> {
+    if all {
+        None
+    } else {
+        Some(limit.unwrap_or(DEFAULT_LIMIT))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn effective_limit_defaults_to_30() {
+        assert_eq!(resolve_effective_limit(None, false), Some(30));
+    }
+
+    #[test]
+    fn effective_limit_respects_explicit_limit() {
+        assert_eq!(resolve_effective_limit(Some(50), false), Some(50));
+    }
+
+    #[test]
+    fn effective_limit_all_returns_none() {
+        assert_eq!(resolve_effective_limit(None, true), None);
+    }
+}
