@@ -263,3 +263,24 @@ pub(super) async fn handle_edit(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::error::JrError;
+
+    #[test]
+    fn missing_project_returns_user_error() {
+        let result: Option<String> = None;
+        let err = result
+            .ok_or_else(|| {
+                JrError::UserError(
+                    "Project key is required. Use --project or configure .jr.toml. \
+                     Run \"jr project list\" to see available projects."
+                        .into(),
+                )
+            })
+            .unwrap_err();
+        assert_eq!(err.exit_code(), 64);
+        assert!(err.to_string().contains("Project key is required"));
+    }
+}

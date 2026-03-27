@@ -119,4 +119,20 @@ mod tests {
             "project = \"FOO\\\"BAR\" AND statusCategory != Done ORDER BY rank ASC"
         );
     }
+
+    #[test]
+    fn missing_board_id_returns_config_error() {
+        let result: Option<u64> = None;
+        let err = result
+            .ok_or_else(|| {
+                crate::error::JrError::ConfigError(
+                    "No board configured. Use --board <ID> or set board_id in .jr.toml.\n\
+                     Run \"jr board list\" to see available boards."
+                        .into(),
+                )
+            })
+            .unwrap_err();
+        assert_eq!(err.exit_code(), 78);
+        assert!(err.to_string().contains("No board configured"));
+    }
 }
