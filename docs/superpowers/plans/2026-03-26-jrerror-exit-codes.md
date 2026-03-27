@@ -107,7 +107,7 @@ Note: some files may already import `JrError` or `crate::error`. Check each file
 
 - [ ] **Step 1: Replace in `src/cli/board.rs:40`**
 
-Change `anyhow::anyhow!("No board_id configured. Set board_id in .jr.toml or run \"jr init\".")` to `JrError::ConfigError("No board_id configured. Set board_id in .jr.toml or run \"jr init\".".into())`. Add `use crate::error::JrError;` if not present.
+Change the `anyhow::anyhow!(...)` call to `JrError::ConfigError("...".into())`, keeping the existing message text exactly as-is. Add `use crate::error::JrError;` if not present.
 
 - [ ] **Step 2: Replace in `src/cli/sprint.rs:17`**
 

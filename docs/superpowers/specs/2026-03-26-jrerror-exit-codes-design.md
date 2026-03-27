@@ -32,8 +32,8 @@ Missing values in config files that the user needs to set up via `jr init` or ma
 
 | File | Line | Current | Message |
 |------|------|---------|---------|
-| `src/cli/board.rs` | 40 | `anyhow::anyhow!(...)` | "No board_id configured. Set board_id in .jr.toml or run \"jr init\"." |
-| `src/cli/sprint.rs` | 17 | `anyhow::anyhow!(...)` | "No board_id configured. Set board_id in .jr.toml or run \"jr init\"." |
+| `src/cli/board.rs` | 50 | `anyhow::anyhow!(...)` | "No board configured. Use --board <ID> or set board_id in .jr.toml..." |
+| `src/cli/sprint.rs` | 20 | `anyhow::anyhow!(...)` | "No board configured. Use --board <ID> or set board_id in .jr.toml..." |
 | `src/api/client.rs` | 36 | `anyhow::anyhow!(...)` | "No Jira instance configured. Run \"jr init\" first." |
 | `src/cli/team.rs` | 86 | `anyhow::anyhow!(...)` | "No Jira instance configured. Run \"jr init\" first." |
 | `src/config.rs` | 98 | `anyhow::anyhow!(...)` | "No Jira instance configured. Run \"jr init\" first." |
