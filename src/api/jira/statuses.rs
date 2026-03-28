@@ -13,7 +13,9 @@ impl JiraClient {
     /// Returns a flat list of unique status names. The endpoint is not paginated.
     pub async fn get_all_statuses(&self) -> Result<Vec<String>> {
         let entries: Vec<StatusEntry> = self.get("/rest/api/3/status").await?;
-        let names: Vec<String> = entries.into_iter().map(|e| e.name).collect();
+        let mut names: Vec<String> = entries.into_iter().map(|e| e.name).collect();
+        names.sort();
+        names.dedup();
         Ok(names)
     }
 }
