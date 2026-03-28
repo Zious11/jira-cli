@@ -15,6 +15,24 @@ use crate::types::assets::linked::format_linked_assets;
 use super::format;
 use super::helpers;
 
+use crate::api::jira::projects::IssueTypeWithStatuses;
+use crate::partial_match::{self, MatchResult};
+
+/// Extract unique status names from project-scoped statuses response (deduplicated, sorted).
+fn extract_unique_status_names(issue_types: &[IssueTypeWithStatuses]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut names = Vec::new();
+    for it in issue_types {
+        for s in &it.statuses {
+            if seen.insert(s.name.clone()) {
+                names.push(s.name.clone());
+            }
+        }
+    }
+    names.sort();
+    names
+}
+
 // ── List ──────────────────────────────────────────────────────────────
 
 /// Build base JQL parts when `--jql` is provided.
@@ -94,18 +112,80 @@ pub(super) async fn handle_list(
         format!("{} = \"{}\"", field_id, crate::jql::escape_value(team_uuid))
     });
 
+    // Resolve project key once, before validation and JQL building
+    let project_key = config.project_key(project_override);
+
+    // Validate --project exists
+    if let Some(ref pk) = project_key {
+        // Skip if --status is set (project will be validated via statuses endpoint below)
+        if status.is_none() && !client.project_exists(pk).await? {
+            return Err(JrError::UserError(format!(
+                "Project \"{}\" not found. Run \"jr project list\" to see available projects.",
+                pk
+            ))
+            .into());
+        }
+    }
+
+    // Validate --status and resolve to exact name
+    let resolved_status: Option<String> = if let Some(ref status_input) = status {
+        let valid_statuses = if let Some(ref pk) = project_key {
+            // Project-scoped: also validates project existence (404 = not found)
+            match client.get_project_statuses(pk).await {
+                Ok(issue_types) => extract_unique_status_names(&issue_types),
+                Err(e) => {
+                    if let Some(JrError::ApiError { status: 404, .. }) = e.downcast_ref::<JrError>()
+                    {
+                        return Err(JrError::UserError(format!(
+                            "Project \"{}\" not found. Run \"jr project list\" to see available projects.",
+                            pk
+                        ))
+                        .into());
+                    }
+                    return Err(e);
+                }
+            }
+        } else {
+            client.get_all_statuses().await?
+        };
+
+        match partial_match::partial_match(status_input, &valid_statuses) {
+            MatchResult::Exact(name) => Some(name),
+            MatchResult::Ambiguous(matches) => {
+                return Err(JrError::UserError(format!(
+                    "Ambiguous status \"{}\". Matches: {}",
+                    status_input,
+                    matches.join(", ")
+                ))
+                .into());
+            }
+            MatchResult::None(all) => {
+                let available = all.join(", ");
+                let scope = if let Some(ref pk) = project_key {
+                    format!(" for project {}", pk)
+                } else {
+                    String::new()
+                };
+                return Err(JrError::UserError(format!(
+                    "No status matching \"{}\"{scope}. Available: {available}",
+                    status_input,
+                ))
+                .into());
+            }
+        }
+    } else {
+        None
+    };
+
     // Build filter clauses from all flag values
     let filter_parts = build_filter_clauses(
         assignee_jql.as_deref(),
         reporter_jql.as_deref(),
-        status.as_deref(),
+        resolved_status.as_deref(),
         team_clause.as_deref(),
         recent.as_deref(),
         open,
     );
-
-    // Resolve project key once, before the JQL vs board-aware branch
-    let project_key = config.project_key(project_override);
 
     // Build base JQL + order by
     let (base_parts, order_by): (Vec<String>, &str) = if let Some(ref raw_jql) = jql {
@@ -835,5 +915,59 @@ mod tests {
         let (parts, order_by) = build_jql_base_parts("ORDER BY created DESC", None);
         assert!(parts.is_empty());
         assert_eq!(order_by, "updated DESC");
+    }
+
+    #[test]
+    fn extract_unique_status_names_deduplicates_and_sorts() {
+        use crate::api::jira::projects::{IssueTypeWithStatuses, StatusMetadata};
+        let issue_types = vec![
+            IssueTypeWithStatuses {
+                id: "1".into(),
+                name: "Task".into(),
+                subtask: None,
+                statuses: vec![
+                    StatusMetadata {
+                        id: "10".into(),
+                        name: "To Do".into(),
+                        description: None,
+                    },
+                    StatusMetadata {
+                        id: "20".into(),
+                        name: "In Progress".into(),
+                        description: None,
+                    },
+                    StatusMetadata {
+                        id: "30".into(),
+                        name: "Done".into(),
+                        description: None,
+                    },
+                ],
+            },
+            IssueTypeWithStatuses {
+                id: "2".into(),
+                name: "Bug".into(),
+                subtask: None,
+                statuses: vec![
+                    StatusMetadata {
+                        id: "10".into(),
+                        name: "To Do".into(),
+                        description: None,
+                    },
+                    StatusMetadata {
+                        id: "30".into(),
+                        name: "Done".into(),
+                        description: None,
+                    },
+                ],
+            },
+        ];
+        let names = extract_unique_status_names(&issue_types);
+        assert_eq!(names, vec!["Done", "In Progress", "To Do"]);
+    }
+
+    #[test]
+    fn extract_unique_status_names_empty() {
+        let names = extract_unique_status_names(&[]);
+        assert!(names.is_empty());
     }
 }
