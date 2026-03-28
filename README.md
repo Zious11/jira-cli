@@ -69,6 +69,9 @@ jr issue list --reporter me --recent 7d
 # Open issues assigned to me (excludes Done)
 jr issue list --assignee me --open
 
+# Issues in a specific status
+jr issue list --project FOO --status "In Progress"
+
 # Discover available projects
 jr project list
 
