@@ -66,6 +66,26 @@ impl JiraClient {
         .await
     }
 
+    /// Check whether a project with the given key exists.
+    ///
+    /// Returns `Ok(true)` if the project is accessible, `Ok(false)` if the API
+    /// returns 404, and propagates any other error (auth, network, etc.).
+    pub async fn project_exists(&self, key: &str) -> Result<bool> {
+        let path = format!("/rest/api/3/project/{}", urlencoding::encode(key));
+        match self.get::<serde_json::Value>(&path).await {
+            Ok(_) => Ok(true),
+            Err(e) => {
+                if let Some(crate::error::JrError::ApiError { status: 404, .. }) =
+                    e.downcast_ref::<crate::error::JrError>()
+                {
+                    Ok(false)
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
+
     pub async fn list_projects(
         &self,
         type_key: Option<&str>,
