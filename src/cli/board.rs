@@ -50,9 +50,11 @@ pub async fn resolve_board_id(
             };
             bail!(
                 "No {} found for project {}. \
-                 Verify the project key is correct, then try \"jr board list --project {}\".",
+                 The project key may be incorrect, or the project may not have any {}. \
+                 Run \"jr board list --project {}\" to inspect available boards.",
                 board_kind,
                 project_key,
+                board_kind,
                 project_key,
             );
         }
