@@ -16,7 +16,7 @@ pub async fn handle(
 ) -> Result<()> {
     let board_override = match &command {
         SprintCommand::List { board } => *board,
-        SprintCommand::Current { board } => *board,
+        SprintCommand::Current { board, .. } => *board,
     };
 
     let board_id =
@@ -38,8 +38,8 @@ pub async fn handle(
 
     match command {
         SprintCommand::List { .. } => handle_list(board_id, client, output_format).await,
-        SprintCommand::Current { .. } => {
-            handle_current(board_id, client, output_format, config).await
+        SprintCommand::Current { limit, all, .. } => {
+            handle_current(board_id, client, output_format, config, limit, all).await
         }
     }
 }
@@ -108,7 +108,10 @@ async fn handle_current(
     client: &JiraClient,
     output_format: &OutputFormat,
     config: &Config,
+    limit: Option<u32>,
+    all: bool,
 ) -> Result<()> {
+    let effective_limit = crate::cli::resolve_effective_limit(limit, all);
     let sprints = client.list_sprints(board_id, Some("active")).await?;
 
     if sprints.is_empty() {
@@ -118,10 +121,12 @@ async fn handle_current(
     let sprint = &sprints[0];
     let sp_field_id = config.global.fields.story_points_field_id.as_deref();
     let extra: Vec<&str> = sp_field_id.iter().copied().collect();
-    let issues = client
-        .get_sprint_issues(sprint.id, None, None, &extra)
-        .await?
-        .issues;
+    let result = client
+        .get_sprint_issues(sprint.id, None, effective_limit, &extra)
+        .await?;
+    let issues = result.issues;
+    let has_more = result.has_more;
+    let issue_count = issues.len();
 
     let sprint_summary = sp_field_id.map(|field_id| compute_sprint_summary(&issues, field_id));
 
@@ -172,6 +177,13 @@ async fn handle_current(
                 &issues,
             )?;
         }
+    }
+
+    if has_more && !all {
+        eprintln!(
+            "Showing {} results. Use --limit or --all to see more.",
+            issue_count
+        );
     }
 
     Ok(())

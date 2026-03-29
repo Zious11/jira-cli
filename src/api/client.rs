@@ -28,16 +28,17 @@ impl JiraClient {
     /// from the system keychain.
     pub fn from_config(config: &Config, verbose: bool) -> anyhow::Result<Self> {
         let base_url = config.base_url()?;
-        let instance_url = config
-            .global
-            .instance
-            .url
-            .as_ref()
-            .ok_or_else(|| {
-                JrError::ConfigError("No Jira instance configured. Run \"jr init\" first.".into())
-            })?
-            .trim_end_matches('/')
-            .to_string();
+        let instance_url = if let Some(url) = config.global.instance.url.as_ref() {
+            url.trim_end_matches('/').to_string()
+        } else if std::env::var("JR_BASE_URL").is_ok() {
+            // When JR_BASE_URL overrides and no instance URL is configured, use base_url (tests).
+            base_url.clone()
+        } else {
+            return Err(JrError::ConfigError(
+                "No Jira instance configured. Run \"jr init\" first.".into(),
+            )
+            .into());
+        };
         let auth_method = config
             .global
             .instance
@@ -45,17 +46,22 @@ impl JiraClient {
             .as_deref()
             .unwrap_or("api_token");
 
-        let auth_header = match auth_method {
-            "oauth" => {
-                let (access, _refresh) = crate::api::auth::load_oauth_tokens()?;
-                format!("Bearer {access}")
-            }
-            _ => {
-                // api_token (default)
-                let (email, token) = crate::api::auth::load_api_token()?;
-                let encoded =
-                    base64::engine::general_purpose::STANDARD.encode(format!("{email}:{token}"));
-                format!("Basic {encoded}")
+        // JR_AUTH_HEADER env var overrides keychain auth (used by tests to inject mock auth)
+        let auth_header = if let Ok(header) = std::env::var("JR_AUTH_HEADER") {
+            header
+        } else {
+            match auth_method {
+                "oauth" => {
+                    let (access, _refresh) = crate::api::auth::load_oauth_tokens()?;
+                    format!("Bearer {access}")
+                }
+                _ => {
+                    // api_token (default)
+                    let (email, token) = crate::api::auth::load_api_token()?;
+                    let encoded = base64::engine::general_purpose::STANDARD
+                        .encode(format!("{email}:{token}"));
+                    format!("Basic {encoded}")
+                }
             }
         };
 

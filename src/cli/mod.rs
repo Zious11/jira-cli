@@ -392,6 +392,12 @@ pub enum SprintCommand {
         /// Board ID (overrides board_id in .jr.toml)
         #[arg(long)]
         board: Option<u64>,
+        /// Maximum number of issues to return
+        #[arg(long)]
+        limit: Option<u32>,
+        /// Fetch all results (no default limit)
+        #[arg(long, conflicts_with = "limit")]
+        all: bool,
     },
 }
 
