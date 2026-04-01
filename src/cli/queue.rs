@@ -92,7 +92,9 @@ async fn handle_view(
         return output::print_output(output_format, &headers, &empty, &empty_issues);
     }
 
-    // Step 2: Batch-fetch full issues via search API
+    // Step 2: Batch-fetch full issues via search API.
+    // Note: very large queues (500+ issues) may exceed the JQL string length limit.
+    // The --limit flag (default 50) keeps this well within bounds in practice.
     let jql = build_key_in_jql(&keys);
     let search_result = client
         .search_issues(&jql, Some(keys.len() as u32), &[])
@@ -180,6 +182,8 @@ async fn resolve_queue_by_name(
 
 #[cfg(test)]
 mod tests {
+    use super::{build_key_in_jql, reorder_by_queue_position};
+    use crate::types::jira::Issue;
     use crate::types::jsm::Queue;
 
     fn make_queue(id: &str, name: &str) -> Queue {
@@ -246,9 +250,6 @@ mod tests {
         let err = find_queue_id("Triage", &queues).unwrap_err();
         assert!(err.starts_with("duplicate"));
     }
-
-    use super::{build_key_in_jql, reorder_by_queue_position};
-    use crate::types::jira::Issue;
 
     fn make_issue(key: &str) -> Issue {
         Issue {
