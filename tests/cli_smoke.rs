@@ -34,7 +34,14 @@ fn test_no_args_shows_help() {
 fn test_edit_description_and_description_stdin_conflict() {
     Command::cargo_bin("jr")
         .unwrap()
-        .args(["issue", "edit", "FOO-1", "--description", "text", "--description-stdin"])
+        .args([
+            "issue",
+            "edit",
+            "FOO-1",
+            "--description",
+            "text",
+            "--description-stdin",
+        ])
         .assert()
         .failure()
         .stderr(predicate::str::contains("cannot be used with"));
