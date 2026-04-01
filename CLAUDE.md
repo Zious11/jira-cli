@@ -22,7 +22,7 @@ src/
 │   │   └── assets.rs    # linked assets (issue→asset lookup)
 │   ├── assets.rs        # assets search/view/tickets (--open/--status client-side filtering)
 │   ├── board.rs         # board list/view
-│   ├── sprint.rs        # sprint list/current (scrum-only, errors on kanban)
+│   ├── sprint.rs        # sprint list/current/add/remove (scrum-only, errors on kanban)
 │   ├── worklog.rs       # worklog add/list
 │   ├── team.rs          # team list (with cache + lazy org discovery)
 │   ├── auth.rs          # auth login (API token default, --oauth for OAuth 2.0), auth status
