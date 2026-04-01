@@ -396,7 +396,9 @@ pub(super) async fn handle_list(
             let mut per_field_by_id: Vec<(String, Vec<LinkedAsset>)> = Vec::new();
             let mut offset = 0;
             for field_id in &cmdb_field_id_list {
-                let count = extract_linked_assets(&issue.fields.extra, &[field_id.clone()]).len();
+                let count =
+                    extract_linked_assets(&issue.fields.extra, std::slice::from_ref(field_id))
+                        .len();
                 if count > 0 && offset + count <= issue_assets[i].len() {
                     let enriched = issue_assets[i][offset..offset + count].to_vec();
                     per_field_by_id.push((field_id.clone(), enriched));
@@ -565,9 +567,7 @@ pub(super) async fn handle_view(
     };
 
     let sp_field_id = config.global.fields.story_points_field_id.as_deref();
-    let cmdb_fields = get_or_fetch_cmdb_fields(client)
-        .await
-        .unwrap_or_default();
+    let cmdb_fields = get_or_fetch_cmdb_fields(client).await.unwrap_or_default();
     let cmdb_field_id_list = cmdb_field_ids(&cmdb_fields);
     let mut extra: Vec<&str> = sp_field_id.iter().copied().collect();
     for f in &cmdb_field_id_list {

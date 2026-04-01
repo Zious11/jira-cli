@@ -76,9 +76,7 @@ async fn handle_fields(
     let issue_types = client.get_project_issue_types(&project_key).await?;
     let priorities = client.get_priorities().await?;
     let statuses = client.get_project_statuses(&project_key).await?;
-    let cmdb_fields = get_or_fetch_cmdb_fields(client)
-        .await
-        .unwrap_or_default();
+    let cmdb_fields = get_or_fetch_cmdb_fields(client).await.unwrap_or_default();
 
     match output_format {
         OutputFormat::Json => {

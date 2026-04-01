@@ -105,7 +105,7 @@ pub fn extract_linked_assets_per_field(
 ) -> Vec<(String, Vec<LinkedAsset>)> {
     let mut result = Vec::new();
     for (field_id, field_name) in cmdb_fields {
-        let assets = extract_linked_assets(extra, &[field_id.clone()]);
+        let assets = extract_linked_assets(extra, std::slice::from_ref(field_id));
         if !assets.is_empty() {
             result.push((field_name.clone(), assets));
         }
@@ -357,9 +357,7 @@ mod tests {
             "customfield_10191".into(),
             json!([{"label": "Acme Corp", "objectKey": "OBJ-1"}]),
         );
-        let cmdb_fields = vec![
-            ("customfield_10191".to_string(), "Client".to_string()),
-        ];
+        let cmdb_fields = vec![("customfield_10191".to_string(), "Client".to_string())];
         let result = extract_linked_assets_per_field(&extra, &cmdb_fields);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].0, "Client");
@@ -380,7 +378,10 @@ mod tests {
         );
         let cmdb_fields = vec![
             ("customfield_10191".to_string(), "Client".to_string()),
-            ("customfield_10245".to_string(), "Affected Service".to_string()),
+            (
+                "customfield_10245".to_string(),
+                "Affected Service".to_string(),
+            ),
         ];
         let result = extract_linked_assets_per_field(&extra, &cmdb_fields);
         assert_eq!(result.len(), 2);
@@ -398,7 +399,10 @@ mod tests {
         );
         let cmdb_fields = vec![
             ("customfield_10191".to_string(), "Client".to_string()),
-            ("customfield_10245".to_string(), "Affected Service".to_string()),
+            (
+                "customfield_10245".to_string(),
+                "Affected Service".to_string(),
+            ),
         ];
         let result = extract_linked_assets_per_field(&extra, &cmdb_fields);
         assert_eq!(result.len(), 1);
@@ -408,9 +412,7 @@ mod tests {
     #[test]
     fn extract_per_field_missing_field() {
         let extra = HashMap::new();
-        let cmdb_fields = vec![
-            ("customfield_10191".to_string(), "Client".to_string()),
-        ];
+        let cmdb_fields = vec![("customfield_10191".to_string(), "Client".to_string())];
         let result = extract_linked_assets_per_field(&extra, &cmdb_fields);
         assert!(result.is_empty());
     }
