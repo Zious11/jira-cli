@@ -3,7 +3,10 @@ use anyhow::Result;
 use crate::api::assets::{objects, workspace};
 use crate::api::client::JiraClient;
 use crate::cli::{AssetsCommand, OutputFormat};
+use crate::error::JrError;
 use crate::output;
+use crate::partial_match::{self, MatchResult};
+use crate::types::assets::ConnectedTicket;
 
 pub async fn handle(
     command: AssetsCommand,
@@ -31,9 +34,12 @@ pub async fn handle(
         AssetsCommand::View { key, attributes } => {
             handle_view(&workspace_id, &key, attributes, output_format, client).await
         }
-        AssetsCommand::Tickets { key, limit } => {
-            handle_tickets(&workspace_id, &key, limit, output_format, client).await
-        }
+        AssetsCommand::Tickets {
+            key,
+            limit,
+            open,
+            status,
+        } => handle_tickets(&workspace_id, &key, limit, open, status, output_format, client).await,
     }
 }
 
@@ -168,10 +174,81 @@ async fn handle_view(
     Ok(())
 }
 
+/// Filter connected tickets by status. Returns the filtered list.
+///
+/// `--open`: exclude tickets where status.colorName == "green" (Done category).
+/// `--status`: partial match on status.name.
+/// Tickets with no status are included by --open, excluded by --status.
+fn filter_tickets(
+    tickets: Vec<ConnectedTicket>,
+    open: bool,
+    status: Option<&str>,
+) -> Result<Vec<ConnectedTicket>> {
+    if open {
+        return Ok(tickets
+            .into_iter()
+            .filter(|t| {
+                t.status
+                    .as_ref()
+                    .and_then(|s| s.color_name.as_deref())
+                    .map(|c| c != "green")
+                    .unwrap_or(true)
+            })
+            .collect());
+    }
+
+    if let Some(status_input) = status {
+        let mut seen = std::collections::HashSet::new();
+        let status_names: Vec<String> = tickets
+            .iter()
+            .filter_map(|t| t.status.as_ref().map(|s| s.name.clone()))
+            .filter(|name| seen.insert(name.clone()))
+            .collect();
+
+        let matched = match partial_match::partial_match(status_input, &status_names) {
+            MatchResult::Exact(name) => name,
+            MatchResult::Ambiguous(matches) => {
+                return Err(JrError::UserError(format!(
+                    "Ambiguous status \"{}\". Matches: {}",
+                    status_input,
+                    matches.join(", ")
+                ))
+                .into());
+            }
+            MatchResult::None(all) => {
+                let available = if all.is_empty() {
+                    "none".to_string()
+                } else {
+                    all.join(", ")
+                };
+                return Err(JrError::UserError(format!(
+                    "No status matching \"{}\". Available: {}",
+                    status_input, available
+                ))
+                .into());
+            }
+        };
+
+        return Ok(tickets
+            .into_iter()
+            .filter(|t| {
+                t.status
+                    .as_ref()
+                    .map(|s| s.name == matched)
+                    .unwrap_or(false)
+            })
+            .collect());
+    }
+
+    Ok(tickets)
+}
+
 async fn handle_tickets(
     workspace_id: &str,
     key: &str,
     limit: Option<u32>,
+    open: bool,
+    status: Option<String>,
     output_format: &OutputFormat,
     client: &JiraClient,
 ) -> Result<()> {
@@ -180,17 +257,18 @@ async fn handle_tickets(
         .get_connected_tickets(workspace_id, &object_id)
         .await?;
 
+    let filtered = filter_tickets(resp.tickets, open, status.as_deref())?;
+
+    let tickets: Vec<_> = match limit {
+        Some(n) => filtered.into_iter().take(n as usize).collect(),
+        None => filtered,
+    };
+
     match output_format {
         OutputFormat::Json => {
-            // JSON: return full response including allTicketsQuery metadata
-            println!("{}", output::render_json(&resp)?);
+            println!("{}", output::render_json(&tickets)?);
         }
         OutputFormat::Table => {
-            let tickets: Vec<_> = match limit {
-                Some(n) => resp.tickets.into_iter().take(n as usize).collect(),
-                None => resp.tickets,
-            };
-
             let rows: Vec<Vec<String>> = tickets
                 .iter()
                 .map(|t| {
@@ -223,3 +301,4 @@ async fn handle_tickets(
     }
     Ok(())
 }
+
