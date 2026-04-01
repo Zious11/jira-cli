@@ -36,7 +36,7 @@ impl JiraClient {
         Ok(filter_story_points_fields(&fields))
     }
 
-    pub async fn find_cmdb_field_ids(&self) -> Result<Vec<String>> {
+    pub async fn find_cmdb_field_ids(&self) -> Result<Vec<(String, String)>> {
         let fields = self.list_fields().await?;
         Ok(filter_cmdb_fields(&fields))
     }
@@ -82,7 +82,7 @@ pub fn filter_story_points_fields(fields: &[Field]) -> Vec<(String, String)> {
 
 const CMDB_SCHEMA_TYPE: &str = "com.atlassian.jira.plugins.cmdb:cmdb-object-cftype";
 
-pub fn filter_cmdb_fields(fields: &[Field]) -> Vec<String> {
+pub fn filter_cmdb_fields(fields: &[Field]) -> Vec<(String, String)> {
     fields
         .iter()
         .filter(|f| {
@@ -93,7 +93,7 @@ pub fn filter_cmdb_fields(fields: &[Field]) -> Vec<String> {
                     .map(|c| c == CMDB_SCHEMA_TYPE)
                     .unwrap_or(false)
         })
-        .map(|f| f.id.clone())
+        .map(|f| (f.id.clone(), f.name.clone()))
         .collect()
 }
 
@@ -229,7 +229,10 @@ mod tests {
             "com.atlassian.jira.plugins.cmdb:cmdb-object-cftype",
         )];
         let result = filter_cmdb_fields(&fields);
-        assert_eq!(result, vec!["customfield_10191"]);
+        assert_eq!(
+            result,
+            vec![("customfield_10191".to_string(), "Client".to_string())]
+        );
     }
 
     #[test]
@@ -251,7 +254,10 @@ mod tests {
             ),
         ];
         let result = filter_cmdb_fields(&fields);
-        assert_eq!(result, vec!["customfield_10191"]);
+        assert_eq!(
+            result,
+            vec![("customfield_10191".to_string(), "Client".to_string())]
+        );
     }
 
     #[test]
@@ -263,7 +269,7 @@ mod tests {
             "number",
             "com.atlassian.jira.plugin.system.customfieldtypes:float",
         )];
-        let result = filter_cmdb_fields(&fields);
+        let result: Vec<(String, String)> = filter_cmdb_fields(&fields);
         assert!(result.is_empty());
     }
 
@@ -286,6 +292,12 @@ mod tests {
             ),
         ];
         let result = filter_cmdb_fields(&fields);
-        assert_eq!(result, vec!["customfield_10191", "customfield_10245"]);
+        assert_eq!(
+            result,
+            vec![
+                ("customfield_10191".to_string(), "Client".to_string()),
+                ("customfield_10245".to_string(), "Server".to_string()),
+            ]
+        );
     }
 }
