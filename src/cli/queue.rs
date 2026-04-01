@@ -246,4 +246,72 @@ mod tests {
         let err = find_queue_id("Triage", &queues).unwrap_err();
         assert!(err.starts_with("duplicate"));
     }
+
+    use super::{build_key_in_jql, reorder_by_queue_position};
+    use crate::types::jira::Issue;
+
+    fn make_issue(key: &str) -> Issue {
+        Issue {
+            key: key.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn build_jql_single_key() {
+        let jql = build_key_in_jql(&["FOO-1".to_string()]);
+        assert_eq!(jql, "key IN (FOO-1)");
+    }
+
+    #[test]
+    fn build_jql_multiple_keys() {
+        let keys = vec![
+            "FOO-1".to_string(),
+            "FOO-2".to_string(),
+            "BAR-99".to_string(),
+        ];
+        let jql = build_key_in_jql(&keys);
+        assert_eq!(jql, "key IN (FOO-1, FOO-2, BAR-99)");
+    }
+
+    #[test]
+    fn reorder_matches_queue_order() {
+        let issues = vec![
+            make_issue("FOO-3"),
+            make_issue("FOO-1"),
+            make_issue("FOO-2"),
+        ];
+        let queue_keys = vec!["FOO-1".into(), "FOO-2".into(), "FOO-3".into()];
+        let result = reorder_by_queue_position(issues, &queue_keys);
+        let keys: Vec<&str> = result.iter().map(|i| i.key.as_str()).collect();
+        assert_eq!(keys, vec!["FOO-1", "FOO-2", "FOO-3"]);
+    }
+
+    #[test]
+    fn reorder_omits_nothing_on_full_match() {
+        let issues = vec![make_issue("A-1"), make_issue("A-2")];
+        let queue_keys = vec!["A-2".into(), "A-1".into()];
+        let result = reorder_by_queue_position(issues, &queue_keys);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].key, "A-2");
+        assert_eq!(result[1].key, "A-1");
+    }
+
+    #[test]
+    fn reorder_with_missing_key_from_search() {
+        let issues = vec![make_issue("A-1"), make_issue("A-3")];
+        let queue_keys = vec!["A-1".into(), "A-2".into(), "A-3".into()];
+        let result = reorder_by_queue_position(issues, &queue_keys);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].key, "A-1");
+        assert_eq!(result[1].key, "A-3");
+    }
+
+    #[test]
+    fn reorder_empty_issues() {
+        let issues: Vec<Issue> = vec![];
+        let queue_keys = vec!["A-1".into()];
+        let result = reorder_by_queue_position(issues, &queue_keys);
+        assert!(result.is_empty());
+    }
 }
