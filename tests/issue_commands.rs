@@ -554,3 +554,123 @@ async fn get_issue_null_standard_fields() {
     assert!(issue.fields.components.is_none());
     assert!(issue.fields.fix_versions.is_none());
 }
+
+#[tokio::test]
+async fn test_edit_issue_with_description() {
+    let server = MockServer::start().await;
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-10"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": {
+                "description": {
+                    "version": 1,
+                    "type": "doc",
+                    "content": [
+                        {
+                            "type": "paragraph",
+                            "content": [
+                                { "type": "text", "text": "Updated description" }
+                            ]
+                        }
+                    ]
+                }
+            }
+        })))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    client
+        .edit_issue(
+            "FOO-10",
+            serde_json::json!({
+                "description": jr::adf::text_to_adf("Updated description")
+            }),
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_edit_issue_with_markdown_description() {
+    let server = MockServer::start().await;
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-11"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": {
+                "description": {
+                    "version": 1,
+                    "type": "doc",
+                    "content": [
+                        {
+                            "type": "paragraph",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "bold text",
+                                    "marks": [{"type": "strong"}]
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        })))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    client
+        .edit_issue(
+            "FOO-11",
+            serde_json::json!({
+                "description": jr::adf::markdown_to_adf("**bold text**")
+            }),
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_edit_issue_description_with_other_fields() {
+    let server = MockServer::start().await;
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-12"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": {
+                "summary": "New summary",
+                "description": {
+                    "version": 1,
+                    "type": "doc",
+                    "content": [
+                        {
+                            "type": "paragraph",
+                            "content": [
+                                { "type": "text", "text": "New description" }
+                            ]
+                        }
+                    ]
+                }
+            }
+        })))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    client
+        .edit_issue(
+            "FOO-12",
+            serde_json::json!({
+                "summary": "New summary",
+                "description": jr::adf::text_to_adf("New description")
+            }),
+        )
+        .await
+        .unwrap();
+}
