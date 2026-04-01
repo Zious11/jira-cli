@@ -13,7 +13,7 @@ pub struct Queue {
 /// Lightweight struct for extracting only the issue key from queue responses.
 /// The JSM queue endpoint returns full issue objects, but we only need the key
 /// for the two-step fetch (keys → search_issues).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct QueueIssueKey {
     pub key: String,
 }

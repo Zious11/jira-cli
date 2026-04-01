@@ -1,7 +1,10 @@
+use std::collections::HashMap;
+
 use anyhow::Result;
 
 use crate::api::client::JiraClient;
 use crate::api::jsm::servicedesks;
+use crate::cli::issue::{format_issue_rows_public, issue_table_headers};
 use crate::cli::{OutputFormat, QueueCommand};
 use crate::config::Config;
 use crate::error::JrError;
@@ -77,44 +80,57 @@ async fn handle_view(
         }
     };
 
-    let issues = client
-        .get_queue_issues(service_desk_id, &queue_id, limit)
+    // Step 1: Fetch issue keys from the queue (preserves queue membership and ordering)
+    let keys = client
+        .get_queue_issue_keys(service_desk_id, &queue_id, limit)
         .await?;
 
-    let rows: Vec<Vec<String>> = issues
-        .iter()
-        .map(|i| {
-            vec![
-                i.key.clone(),
-                i.fields
-                    .issuetype
-                    .as_ref()
-                    .map(|t| t.name.clone())
-                    .unwrap_or_else(|| "\u{2014}".into()),
-                i.fields
-                    .summary
-                    .clone()
-                    .unwrap_or_else(|| "\u{2014}".into()),
-                i.fields
-                    .status
-                    .as_ref()
-                    .map(|s| s.name.clone())
-                    .unwrap_or_else(|| "\u{2014}".into()),
-                i.fields
-                    .assignee
-                    .as_ref()
-                    .map(|u| u.display_name.clone())
-                    .unwrap_or_else(|| "\u{2014}".into()),
-            ]
-        })
-        .collect();
+    if keys.is_empty() {
+        let headers = issue_table_headers(false, false);
+        let empty: Vec<Vec<String>> = vec![];
+        let empty_issues: Vec<crate::types::jira::Issue> = vec![];
+        return output::print_output(output_format, &headers, &empty, &empty_issues);
+    }
 
-    output::print_output(
-        output_format,
-        &["Key", "Type", "Summary", "Status", "Assignee"],
-        &rows,
-        &issues,
-    )
+    // Step 2: Batch-fetch full issues via search API
+    let jql = build_key_in_jql(&keys);
+    let search_result = client
+        .search_issues(&jql, Some(keys.len() as u32), &[])
+        .await?;
+
+    // Step 3: Re-order results to match original queue ordering
+    let issues = reorder_by_queue_position(search_result.issues, &keys);
+
+    // Step 4: Output
+    let headers = issue_table_headers(false, false);
+    let rows = format_issue_rows_public(&issues);
+    output::print_output(output_format, &headers, &rows, &issues)
+}
+
+/// Build a JQL `key IN (...)` clause from a list of issue keys.
+/// Issue keys are identifiers in JQL and must NOT be quoted.
+fn build_key_in_jql(keys: &[String]) -> String {
+    format!("key IN ({})", keys.join(", "))
+}
+
+/// Re-order issues to match the original queue key ordering.
+/// Issues not found in the search results (e.g., permission-denied) are silently omitted.
+fn reorder_by_queue_position(
+    mut issues: Vec<crate::types::jira::Issue>,
+    queue_keys: &[String],
+) -> Vec<crate::types::jira::Issue> {
+    let position: HashMap<&str, usize> = queue_keys
+        .iter()
+        .enumerate()
+        .map(|(i, k)| (k.as_str(), i))
+        .collect();
+    issues.sort_by_key(|issue| {
+        position
+            .get(issue.key.as_str())
+            .copied()
+            .unwrap_or(usize::MAX)
+    });
+    issues
 }
 
 async fn resolve_queue_by_name(

@@ -64,8 +64,7 @@ impl JiraClient {
                 None => max_page_size,
             };
             let path = format!("{}?start={}&limit={}", base, start, page_size);
-            let page: ServiceDeskPage<QueueIssueKey> =
-                self.get_from_instance(&path).await?;
+            let page: ServiceDeskPage<QueueIssueKey> = self.get_from_instance(&path).await?;
             let has_more = page.has_more();
             let next = page.next_start();
             all.extend(page.values.into_iter().map(|ik| ik.key));
