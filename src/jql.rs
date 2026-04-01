@@ -33,6 +33,50 @@ pub fn validate_duration(s: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Validate an asset object key matches the SCHEMA-NUMBER format.
+///
+/// Asset keys are always `<uppercase-alpha>-<digits>` (e.g., CUST-5, SRV-42, ITSM-123).
+pub fn validate_asset_key(key: &str) -> Result<(), String> {
+    let Some((prefix, number)) = key.split_once('-') else {
+        return Err(format!(
+            "Invalid asset key \"{key}\". Expected format: SCHEMA-NUMBER (e.g., CUST-5, SRV-42)."
+        ));
+    };
+    if prefix.is_empty()
+        || !prefix.chars().all(|c| c.is_ascii_alphanumeric())
+        || number.is_empty()
+        || !number.chars().all(|c| c.is_ascii_digit())
+    {
+        return Err(format!(
+            "Invalid asset key \"{key}\". Expected format: SCHEMA-NUMBER (e.g., CUST-5, SRV-42)."
+        ));
+    }
+    Ok(())
+}
+
+/// Build a JQL clause that filters issues by a linked asset object key.
+///
+/// Uses `aqlFunction()` with the human-readable field name (required by Jira Cloud).
+/// When multiple CMDB fields exist, OR them together and wrap in parentheses.
+pub fn build_asset_clause(asset_key: &str, cmdb_fields: &[(String, String)]) -> String {
+    let clauses: Vec<String> = cmdb_fields
+        .iter()
+        .map(|(_, name)| {
+            format!(
+                "\"{}\" IN aqlFunction(\"Key = \\\"{}\\\"\")",
+                escape_value(name),
+                escape_value(asset_key),
+            )
+        })
+        .collect();
+
+    if clauses.len() == 1 {
+        clauses.into_iter().next().unwrap()
+    } else {
+        format!("({})", clauses.join(" OR "))
+    }
+}
+
 /// Strip `ORDER BY` clause from JQL for use with count-only endpoints.
 ///
 /// The approximate-count endpoint only needs the WHERE clause. ORDER BY is
@@ -174,6 +218,79 @@ mod tests {
     #[test]
     fn validate_duration_no_digits() {
         assert!(validate_duration("d").is_err());
+    }
+
+    #[test]
+    fn validate_asset_key_valid_simple() {
+        assert!(validate_asset_key("CUST-5").is_ok());
+    }
+
+    #[test]
+    fn validate_asset_key_valid_long() {
+        assert!(validate_asset_key("SRV-42").is_ok());
+    }
+
+    #[test]
+    fn validate_asset_key_valid_itsm() {
+        assert!(validate_asset_key("ITSM-123").is_ok());
+    }
+
+    #[test]
+    fn validate_asset_key_invalid_no_number() {
+        assert!(validate_asset_key("CUST-").is_err());
+    }
+
+    #[test]
+    fn validate_asset_key_invalid_no_prefix() {
+        assert!(validate_asset_key("-5").is_err());
+    }
+
+    #[test]
+    fn validate_asset_key_invalid_no_hyphen() {
+        assert!(validate_asset_key("foo").is_err());
+    }
+
+    #[test]
+    fn validate_asset_key_invalid_empty() {
+        assert!(validate_asset_key("").is_err());
+    }
+
+    #[test]
+    fn validate_asset_key_invalid_spaces() {
+        assert!(validate_asset_key("CU ST-5").is_err());
+    }
+
+    #[test]
+    fn build_asset_clause_single_field() {
+        let fields = vec![("customfield_10191".to_string(), "Client".to_string())];
+        let clause = build_asset_clause("CUST-5", &fields);
+        assert_eq!(
+            clause,
+            r#""Client" IN aqlFunction("Key = \"CUST-5\"")"#
+        );
+    }
+
+    #[test]
+    fn build_asset_clause_multiple_fields() {
+        let fields = vec![
+            ("customfield_10191".to_string(), "Client".to_string()),
+            ("customfield_10245".to_string(), "Server".to_string()),
+        ];
+        let clause = build_asset_clause("SRV-42", &fields);
+        assert_eq!(
+            clause,
+            r#"("Client" IN aqlFunction("Key = \"SRV-42\"") OR "Server" IN aqlFunction("Key = \"SRV-42\""))"#
+        );
+    }
+
+    #[test]
+    fn build_asset_clause_field_name_with_quotes() {
+        let fields = vec![("customfield_10191".to_string(), r#"My "Assets""#.to_string())];
+        let clause = build_asset_clause("OBJ-1", &fields);
+        assert_eq!(
+            clause,
+            r#""My \"Assets\"" IN aqlFunction("Key = \"OBJ-1\"")"#
+        );
     }
 }
 
