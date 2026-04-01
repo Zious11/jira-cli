@@ -1,5 +1,6 @@
 use anyhow::Result;
 
+use crate::api::assets::linked::get_or_fetch_cmdb_fields;
 use crate::api::client::JiraClient;
 use crate::cli::{OutputFormat, ProjectCommand};
 use crate::config::Config;
@@ -75,6 +76,7 @@ async fn handle_fields(
     let issue_types = client.get_project_issue_types(&project_key).await?;
     let priorities = client.get_priorities().await?;
     let statuses = client.get_project_statuses(&project_key).await?;
+    let cmdb_fields = get_or_fetch_cmdb_fields(client).await.unwrap_or_default();
 
     match output_format {
         OutputFormat::Json => {
@@ -85,6 +87,9 @@ async fn handle_fields(
                     "issue_types": issue_types,
                     "priorities": priorities,
                     "statuses_by_issue_type": statuses,
+                    "asset_fields": cmdb_fields.iter().map(|(id, name)| {
+                        serde_json::json!({"id": id, "name": name})
+                    }).collect::<Vec<_>>(),
                 })
             );
         }
@@ -114,6 +119,12 @@ async fn handle_fields(
                     for s in &it.statuses {
                         println!("    - {}", s.name);
                     }
+                }
+            }
+            if !cmdb_fields.is_empty() {
+                println!("\nCustom Fields (Assets) \u{2014} instance-wide:");
+                for (id, name) in &cmdb_fields {
+                    println!("  - {} ({})", name, id);
                 }
             }
         }

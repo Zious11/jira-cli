@@ -2,7 +2,8 @@ use anyhow::Result;
 
 use crate::adf;
 use crate::api::assets::linked::{
-    cmdb_field_ids, enrich_assets, extract_linked_assets, get_or_fetch_cmdb_fields,
+    cmdb_field_ids, enrich_assets, enrich_json_assets, extract_linked_assets,
+    get_or_fetch_cmdb_fields,
 };
 use crate::api::client::JiraClient;
 use crate::cli::{IssueCommand, OutputFormat, resolve_effective_limit};
@@ -309,7 +310,7 @@ pub(super) async fn handle_list(
         .search_issues(&effective_jql, effective_limit, &extra)
         .await?;
     let has_more = search_result.has_more;
-    let issues = search_result.issues;
+    let mut issues = search_result.issues;
 
     let effective_sp = resolve_show_points(show_points, sp_field_id);
     let show_assets_col = show_assets && !cmdb_field_id_list.is_empty();
@@ -383,6 +384,31 @@ pub(super) async fn handle_list(
             }
         }
     }
+
+    // For JSON output with --assets, inject enriched data back into issue JSON
+    if show_assets_col && matches!(output_format, OutputFormat::Json) {
+        for (i, issue) in issues.iter_mut().enumerate() {
+            if issue_assets[i].is_empty() {
+                continue;
+            }
+            // Build per-field-id enrichment: re-extract per field to get grouping,
+            // then match by position to enriched issue_assets[i]
+            let mut per_field_by_id: Vec<(String, Vec<LinkedAsset>)> = Vec::new();
+            let mut offset = 0;
+            for field_id in &cmdb_field_id_list {
+                let count =
+                    extract_linked_assets(&issue.fields.extra, std::slice::from_ref(field_id))
+                        .len();
+                if count > 0 && offset + count <= issue_assets[i].len() {
+                    let enriched = issue_assets[i][offset..offset + count].to_vec();
+                    per_field_by_id.push((field_id.clone(), enriched));
+                }
+                offset += count;
+            }
+            enrich_json_assets(&mut issue.fields.extra, &per_field_by_id);
+        }
+    }
+
     let rows: Vec<Vec<String>> = issues
         .iter()
         .enumerate()
@@ -547,10 +573,52 @@ pub(super) async fn handle_view(
     for f in &cmdb_field_id_list {
         extra.push(f.as_str());
     }
-    let issue = client.get_issue(&key, &extra).await?;
+    let mut issue = client.get_issue(&key, &extra).await?;
+
+    // Extract and enrich assets per-field (shared by both JSON and table paths).
+    // Iterate cmdb_fields directly so we always have (field_id, field_name) together —
+    // avoids any name-based reverse lookups that could break with duplicate field names.
+    let per_field_enriched: Vec<(String, String, Vec<LinkedAsset>)> = if !cmdb_fields.is_empty() {
+        // Extract per-field, keeping both ID and name
+        let mut per_field: Vec<(String, String, Vec<LinkedAsset>)> = Vec::new();
+        for (field_id, field_name) in &cmdb_fields {
+            let assets = extract_linked_assets(&issue.fields.extra, std::slice::from_ref(field_id));
+            if !assets.is_empty() {
+                per_field.push((field_id.clone(), field_name.clone(), assets));
+            }
+        }
+
+        // Collect all assets for batch enrichment
+        let mut all_assets: Vec<LinkedAsset> = per_field
+            .iter()
+            .flat_map(|(_, _, assets)| assets.clone())
+            .collect();
+        enrich_assets(client, &mut all_assets).await;
+
+        // Redistribute enriched assets back
+        let mut enriched = Vec::new();
+        let mut offset = 0;
+        for (field_id, field_name, original_assets) in &per_field {
+            let count = original_assets.len();
+            let assets = all_assets[offset..offset + count].to_vec();
+            offset += count;
+            enriched.push((field_id.clone(), field_name.clone(), assets));
+        }
+        enriched
+    } else {
+        Vec::new()
+    };
 
     match output_format {
         OutputFormat::Json => {
+            // Inject enriched data back into JSON before printing
+            if !per_field_enriched.is_empty() {
+                let per_field_by_id: Vec<(String, Vec<LinkedAsset>)> = per_field_enriched
+                    .iter()
+                    .map(|(id, _, assets)| (id.clone(), assets.clone()))
+                    .collect();
+                enrich_json_assets(&mut issue.fields.extra, &per_field_by_id);
+            }
             println!("{}", output::render_json(&issue)?);
         }
         OutputFormat::Table => {
@@ -708,15 +776,10 @@ pub(super) async fn handle_view(
                 .unwrap_or_else(|| "(none)".into());
             rows.push(vec!["Links".into(), links_display]);
 
-            if !cmdb_field_id_list.is_empty() {
-                let mut linked = extract_linked_assets(&issue.fields.extra, &cmdb_field_id_list);
-                enrich_assets(client, &mut linked).await;
-                let display = if linked.is_empty() {
-                    "(none)".into()
-                } else {
-                    format_linked_assets(&linked)
-                };
-                rows.push(vec!["Assets".into(), display]);
+            // Per-field asset rows (replaces the old single "Assets" row)
+            for (_, field_name, assets) in &per_field_enriched {
+                let display = format_linked_assets(assets);
+                rows.push(vec![field_name.clone(), display]);
             }
 
             if let Some(field_id) = sp_field_id {

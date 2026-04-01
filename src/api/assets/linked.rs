@@ -97,6 +97,74 @@ fn parse_cmdb_value(value: &Value) -> Option<LinkedAsset> {
     })
 }
 
+/// Extract linked assets grouped by CMDB field, returning (field_name, assets) pairs.
+/// Skips fields that have no linked assets on the issue.
+pub fn extract_linked_assets_per_field(
+    extra: &HashMap<String, Value>,
+    cmdb_fields: &[(String, String)],
+) -> Vec<(String, Vec<LinkedAsset>)> {
+    let mut result = Vec::new();
+    for (field_id, field_name) in cmdb_fields {
+        let assets = extract_linked_assets(extra, std::slice::from_ref(field_id));
+        if !assets.is_empty() {
+            result.push((field_name.clone(), assets));
+        }
+    }
+    result
+}
+
+/// Inject enriched fields into a single JSON object from a `LinkedAsset`.
+fn inject_asset_fields(obj: &mut serde_json::Map<String, Value>, asset: &LinkedAsset) {
+    if let Some(ref key) = asset.key {
+        obj.insert("objectKey".to_string(), Value::String(key.clone()));
+    }
+    if let Some(ref name) = asset.name {
+        obj.insert("label".to_string(), Value::String(name.clone()));
+    }
+    if let Some(ref asset_type) = asset.asset_type {
+        obj.insert("objectType".to_string(), Value::String(asset_type.clone()));
+    }
+}
+
+/// Inject enriched asset data back into the issue's `fields.extra` HashMap.
+///
+/// For each CMDB field, matches enriched `LinkedAsset` entries by position to the
+/// original JSON elements and injects `objectKey`, `label`, and `objectType`
+/// as additional fields (additive, does not remove existing fields).
+///
+/// Handles both array-shaped fields (`[{...}, {...}]`) and single-object fields (`{...}`).
+pub fn enrich_json_assets(
+    extra: &mut HashMap<String, Value>,
+    per_field: &[(String, Vec<LinkedAsset>)],
+) {
+    for (field_id, assets) in per_field {
+        if assets.is_empty() {
+            continue;
+        }
+        let Some(value) = extra.get_mut(field_id) else {
+            continue;
+        };
+
+        // Array shape: match assets by position
+        if let Some(arr) = value.as_array_mut() {
+            for (i, asset) in assets.iter().enumerate() {
+                if i >= arr.len() {
+                    break;
+                }
+                if let Some(obj) = arr[i].as_object_mut() {
+                    inject_asset_fields(obj, asset);
+                }
+            }
+            continue;
+        }
+
+        // Single-object shape: enrich with first asset
+        if let Some(obj) = value.as_object_mut() {
+            inject_asset_fields(obj, &assets[0]);
+        }
+    }
+}
+
 /// Enrich assets that only have IDs by fetching from the Assets API.
 pub async fn enrich_assets(client: &JiraClient, assets: &mut [LinkedAsset]) {
     // Only enrich assets that have an ID but are missing key/name.
@@ -295,5 +363,194 @@ mod tests {
         let assets = extract_linked_assets(&extra, &["customfield_10191".into()]);
         assert_eq!(assets.len(), 1);
         assert_eq!(assets[0].id.as_deref(), Some("88"));
+    }
+
+    #[test]
+    fn extract_per_field_single_field() {
+        let mut extra = HashMap::new();
+        extra.insert(
+            "customfield_10191".into(),
+            json!([{"label": "Acme Corp", "objectKey": "OBJ-1"}]),
+        );
+        let cmdb_fields = vec![("customfield_10191".to_string(), "Client".to_string())];
+        let result = extract_linked_assets_per_field(&extra, &cmdb_fields);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, "Client");
+        assert_eq!(result[0].1.len(), 1);
+        assert_eq!(result[0].1[0].key.as_deref(), Some("OBJ-1"));
+    }
+
+    #[test]
+    fn extract_per_field_multiple_fields() {
+        let mut extra = HashMap::new();
+        extra.insert(
+            "customfield_10191".into(),
+            json!([{"label": "Acme Corp", "objectKey": "OBJ-1"}]),
+        );
+        extra.insert(
+            "customfield_10245".into(),
+            json!([{"label": "Email Server", "objectKey": "SRV-42"}]),
+        );
+        let cmdb_fields = vec![
+            ("customfield_10191".to_string(), "Client".to_string()),
+            (
+                "customfield_10245".to_string(),
+                "Affected Service".to_string(),
+            ),
+        ];
+        let result = extract_linked_assets_per_field(&extra, &cmdb_fields);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].0, "Client");
+        assert_eq!(result[1].0, "Affected Service");
+    }
+
+    #[test]
+    fn extract_per_field_skips_empty() {
+        let mut extra = HashMap::new();
+        extra.insert("customfield_10191".into(), json!(null));
+        extra.insert(
+            "customfield_10245".into(),
+            json!([{"label": "Email Server", "objectKey": "SRV-42"}]),
+        );
+        let cmdb_fields = vec![
+            ("customfield_10191".to_string(), "Client".to_string()),
+            (
+                "customfield_10245".to_string(),
+                "Affected Service".to_string(),
+            ),
+        ];
+        let result = extract_linked_assets_per_field(&extra, &cmdb_fields);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, "Affected Service");
+    }
+
+    #[test]
+    fn extract_per_field_missing_field() {
+        let extra = HashMap::new();
+        let cmdb_fields = vec![("customfield_10191".to_string(), "Client".to_string())];
+        let result = extract_linked_assets_per_field(&extra, &cmdb_fields);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn enrich_json_injects_resolved_fields() {
+        let mut extra = HashMap::new();
+        extra.insert(
+            "customfield_10191".to_string(),
+            json!([{"objectId": "88", "workspaceId": "ws-1"}]),
+        );
+
+        let per_field = vec![(
+            "customfield_10191".to_string(),
+            vec![LinkedAsset {
+                id: Some("88".into()),
+                workspace_id: Some("ws-1".into()),
+                key: Some("OBJ-88".into()),
+                name: Some("Acme Corp".into()),
+                asset_type: Some("Client".into()),
+            }],
+        )];
+
+        enrich_json_assets(&mut extra, &per_field);
+
+        let enriched = &extra["customfield_10191"];
+        let arr = enriched.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["objectId"], "88");
+        assert_eq!(arr[0]["workspaceId"], "ws-1");
+        assert_eq!(arr[0]["objectKey"], "OBJ-88");
+        assert_eq!(arr[0]["label"], "Acme Corp");
+        assert_eq!(arr[0]["objectType"], "Client");
+    }
+
+    #[test]
+    fn enrich_json_preserves_already_enriched() {
+        let mut extra = HashMap::new();
+        extra.insert(
+            "customfield_10191".to_string(),
+            json!([{"objectKey": "OBJ-1", "label": "Already There"}]),
+        );
+
+        let per_field = vec![(
+            "customfield_10191".to_string(),
+            vec![LinkedAsset {
+                key: Some("OBJ-1".into()),
+                name: Some("Already There".into()),
+                ..Default::default()
+            }],
+        )];
+
+        enrich_json_assets(&mut extra, &per_field);
+
+        let arr = extra["customfield_10191"].as_array().unwrap();
+        assert_eq!(arr[0]["objectKey"], "OBJ-1");
+        assert_eq!(arr[0]["label"], "Already There");
+    }
+
+    #[test]
+    fn enrich_json_partial_enrichment() {
+        let mut extra = HashMap::new();
+        extra.insert(
+            "customfield_10191".to_string(),
+            json!([
+                {"objectId": "88", "workspaceId": "ws-1"},
+                {"objectId": "99", "workspaceId": "ws-1"}
+            ]),
+        );
+
+        let per_field = vec![(
+            "customfield_10191".to_string(),
+            vec![
+                LinkedAsset {
+                    id: Some("88".into()),
+                    workspace_id: Some("ws-1".into()),
+                    key: Some("OBJ-88".into()),
+                    name: Some("Acme".into()),
+                    asset_type: Some("Client".into()),
+                },
+                LinkedAsset {
+                    id: Some("99".into()),
+                    workspace_id: Some("ws-1".into()),
+                    key: None,
+                    name: None,
+                    asset_type: None,
+                },
+            ],
+        )];
+
+        enrich_json_assets(&mut extra, &per_field);
+
+        let arr = extra["customfield_10191"].as_array().unwrap();
+        assert_eq!(arr[0]["objectKey"], "OBJ-88");
+        assert!(arr[1].get("objectKey").is_none());
+    }
+
+    #[test]
+    fn enrich_json_single_object_shape() {
+        let mut extra = HashMap::new();
+        extra.insert(
+            "customfield_10191".to_string(),
+            json!({"objectId": "88", "workspaceId": "ws-1"}),
+        );
+
+        let per_field = vec![(
+            "customfield_10191".to_string(),
+            vec![LinkedAsset {
+                id: Some("88".into()),
+                workspace_id: Some("ws-1".into()),
+                key: Some("OBJ-88".into()),
+                name: Some("Acme Corp".into()),
+                asset_type: Some("Client".into()),
+            }],
+        )];
+
+        enrich_json_assets(&mut extra, &per_field);
+
+        let obj = extra["customfield_10191"].as_object().unwrap();
+        assert_eq!(obj["objectId"], "88");
+        assert_eq!(obj["workspaceId"], "ws-1");
+        assert_eq!(obj["objectKey"], "OBJ-88");
+        assert_eq!(obj["label"], "Acme Corp");
+        assert_eq!(obj["objectType"], "Client");
     }
 }
