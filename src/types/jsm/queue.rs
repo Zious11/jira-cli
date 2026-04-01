@@ -1,8 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-use crate::types::jira::User;
-use crate::types::jira::issue::{IssueType, Priority, Status};
-
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Queue {
     pub id: String,
@@ -13,21 +10,13 @@ pub struct Queue {
     pub issue_count: Option<u64>,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
-pub struct QueueIssue {
+/// Lightweight struct for extracting only the issue key from JSM queue issue
+/// representations. The JSM queue endpoint returns issues containing only the
+/// fields configured as queue columns, and we only need the key for the
+/// two-step fetch (keys → search_issues).
+#[derive(Debug, Default, Deserialize)]
+pub struct QueueIssueKey {
     pub key: String,
-    pub fields: QueueIssueFields,
-}
-
-#[derive(Debug, Default, Deserialize, Serialize)]
-pub struct QueueIssueFields {
-    pub summary: Option<String>,
-    pub status: Option<Status>,
-    pub issuetype: Option<IssueType>,
-    pub priority: Option<Priority>,
-    pub assignee: Option<User>,
-    pub reporter: Option<User>,
-    pub created: Option<String>,
 }
 
 #[cfg(test)]
@@ -64,40 +53,31 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_queue_issue_minimal() {
-        let json = r#"{
-            "key": "HELPDESK-42",
-            "fields": {
-                "summary": "VPN not working"
-            }
-        }"#;
-        let issue: QueueIssue = serde_json::from_str(json).unwrap();
-        assert_eq!(issue.key, "HELPDESK-42");
-        assert_eq!(issue.fields.summary.as_deref(), Some("VPN not working"));
-        assert!(issue.fields.status.is_none());
-        assert!(issue.fields.assignee.is_none());
-    }
-
-    #[test]
-    fn deserialize_queue_issue_full() {
+    fn deserialize_queue_issue_key() {
         let json = r#"{
             "key": "HELPDESK-42",
             "fields": {
                 "summary": "VPN not working",
-                "status": { "name": "New", "statusCategory": { "name": "To Do", "key": "new" } },
-                "issuetype": { "name": "Service Request" },
-                "priority": { "name": "High" },
-                "assignee": { "accountId": "abc123", "displayName": "Jane D." },
-                "reporter": { "accountId": "def456", "displayName": "John S." },
-                "created": "2026-03-24T10:00:00.000+0000"
+                "status": { "name": "New" }
             }
         }"#;
-        let issue: QueueIssue = serde_json::from_str(json).unwrap();
-        assert_eq!(issue.key, "HELPDESK-42");
-        assert_eq!(issue.fields.status.as_ref().unwrap().name, "New");
-        assert_eq!(
-            issue.fields.assignee.as_ref().unwrap().display_name,
-            "Jane D."
-        );
+        let issue_key: QueueIssueKey = serde_json::from_str(json).unwrap();
+        assert_eq!(issue_key.key, "HELPDESK-42");
+    }
+
+    #[test]
+    fn deserialize_queue_issue_key_ignores_extra_fields() {
+        let json = r#"{
+            "key": "SD-10",
+            "id": "17227",
+            "self": "https://example.atlassian.net/rest/api/2/issue/17227",
+            "fields": {
+                "summary": "Printer broken",
+                "issuetype": null,
+                "priority": null
+            }
+        }"#;
+        let issue_key: QueueIssueKey = serde_json::from_str(json).unwrap();
+        assert_eq!(issue_key.key, "SD-10");
     }
 }

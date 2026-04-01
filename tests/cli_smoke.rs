@@ -56,3 +56,24 @@ fn test_assets_tickets_open_and_status_conflict() {
         .failure()
         .stderr(predicate::str::contains("cannot be used with"));
 }
+
+#[test]
+fn test_queue_view_help() {
+    Command::cargo_bin("jr")
+        .unwrap()
+        .args(["queue", "view", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("View issues in a queue"))
+        .stdout(predicate::str::contains("--limit"));
+}
+
+#[test]
+fn test_queue_list_help() {
+    Command::cargo_bin("jr")
+        .unwrap()
+        .args(["queue", "list", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("List queues"));
+}

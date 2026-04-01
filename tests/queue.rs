@@ -59,7 +59,7 @@ async fn list_queues_empty() {
 }
 
 #[tokio::test]
-async fn get_queue_issues_returns_issues() {
+async fn get_queue_issue_keys_returns_keys() {
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
@@ -98,18 +98,14 @@ async fn get_queue_issues_returns_issues() {
 
     let client =
         jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".into());
-    let issues = client.get_queue_issues("15", "10", None).await.unwrap();
-    assert_eq!(issues.len(), 2);
-    assert_eq!(issues[0].key, "HELPDESK-42");
-    assert!(issues[0].fields.assignee.is_none());
-    assert_eq!(
-        issues[1].fields.assignee.as_ref().unwrap().display_name,
-        "Jane D."
-    );
+    let keys = client.get_queue_issue_keys("15", "10", None).await.unwrap();
+    assert_eq!(keys.len(), 2);
+    assert_eq!(keys[0], "HELPDESK-42");
+    assert_eq!(keys[1], "HELPDESK-41");
 }
 
 #[tokio::test]
-async fn get_queue_issues_with_limit() {
+async fn get_queue_issue_keys_with_limit() {
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
@@ -135,13 +131,16 @@ async fn get_queue_issues_with_limit() {
 
     let client =
         jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".into());
-    let issues = client.get_queue_issues("15", "10", Some(1)).await.unwrap();
-    assert_eq!(issues.len(), 1);
-    assert_eq!(issues[0].key, "HELPDESK-42");
+    let keys = client
+        .get_queue_issue_keys("15", "10", Some(1))
+        .await
+        .unwrap();
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0], "HELPDESK-42");
 }
 
 #[tokio::test]
-async fn get_queue_issues_paginated() {
+async fn get_queue_issue_keys_paginated() {
     let server = MockServer::start().await;
 
     // Page 1
@@ -180,8 +179,8 @@ async fn get_queue_issues_paginated() {
 
     let client =
         jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".into());
-    let issues = client.get_queue_issues("15", "10", None).await.unwrap();
-    assert_eq!(issues.len(), 2);
-    assert_eq!(issues[0].key, "HELPDESK-2");
-    assert_eq!(issues[1].key, "HELPDESK-1");
+    let keys = client.get_queue_issue_keys("15", "10", None).await.unwrap();
+    assert_eq!(keys.len(), 2);
+    assert_eq!(keys[0], "HELPDESK-2");
+    assert_eq!(keys[1], "HELPDESK-1");
 }
