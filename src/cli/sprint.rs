@@ -1,4 +1,5 @@
 use anyhow::{Result, bail};
+use serde_json::json;
 
 use crate::api::client::JiraClient;
 use crate::cli::{OutputFormat, SprintCommand};
@@ -14,18 +15,43 @@ pub async fn handle(
     output_format: &OutputFormat,
     project_override: Option<&str>,
 ) -> Result<()> {
-    let board_override = match &command {
-        SprintCommand::List { board } => *board,
-        SprintCommand::Current { board, .. } => *board,
-    };
+    match command {
+        SprintCommand::List { board } => {
+            let board_id = resolve_scrum_board(config, client, board, project_override).await?;
+            handle_list(board_id, client, output_format).await
+        }
+        SprintCommand::Current {
+            board, limit, all, ..
+        } => {
+            let board_id = resolve_scrum_board(config, client, board, project_override).await?;
+            handle_current(board_id, client, output_format, config, limit, all).await
+        }
+        SprintCommand::Add {
+            sprint,
+            current,
+            issues,
+            board,
+        } => {
+            handle_add(sprint, current, board, issues, config, client, output_format, project_override)
+                .await
+        }
+        SprintCommand::Remove { issues } => {
+            handle_remove(issues, output_format, client).await
+        }
+    }
+}
 
+/// Resolve board ID and verify it's a scrum board.
+async fn resolve_scrum_board(
+    config: &Config,
+    client: &JiraClient,
+    board: Option<u64>,
+    project_override: Option<&str>,
+) -> Result<u64> {
     let board_id =
-        crate::cli::board::resolve_board_id(config, client, board_override, project_override, true)
+        crate::cli::board::resolve_board_id(config, client, board, project_override, true)
             .await?;
 
-    // Guard: sprints only make sense for scrum boards.
-    // When resolve_board_id auto-discovers (step 3), it already filters to scrum.
-    // This guard catches the case where --board or config provides a kanban board directly.
     let board_config = client.get_board_config(board_id).await?;
     let board_type = board_config.board_type.to_lowercase();
     if board_type != "scrum" {
@@ -36,12 +62,96 @@ pub async fn handle(
         );
     }
 
-    match command {
-        SprintCommand::List { .. } => handle_list(board_id, client, output_format).await,
-        SprintCommand::Current { limit, all, .. } => {
-            handle_current(board_id, client, output_format, config, limit, all).await
+    Ok(board_id)
+}
+
+const MAX_SPRINT_ISSUES: usize = 50;
+
+async fn handle_add(
+    sprint: Option<u64>,
+    current: bool,
+    board: Option<u64>,
+    issues: Vec<String>,
+    config: &Config,
+    client: &JiraClient,
+    output_format: &OutputFormat,
+    project_override: Option<&str>,
+) -> Result<()> {
+    if issues.len() > MAX_SPRINT_ISSUES {
+        bail!(
+            "Too many issues (got {}). Maximum is {} per operation.",
+            issues.len(),
+            MAX_SPRINT_ISSUES
+        );
+    }
+
+    let sprint_id = if current {
+        let board_id = resolve_scrum_board(config, client, board, project_override).await?;
+        let sprints = client.list_sprints(board_id, Some("active")).await?;
+        if sprints.is_empty() {
+            bail!("No active sprint found for board {}.", board_id);
+        }
+        sprints[0].id
+    } else {
+        sprint.expect("clap enforces --sprint when --current is absent")
+    };
+
+    client.add_issues_to_sprint(sprint_id, &issues).await?;
+
+    match output_format {
+        OutputFormat::Json => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "sprint_id": sprint_id,
+                    "issues": issues,
+                    "added": true
+                }))?
+            );
+        }
+        OutputFormat::Table => {
+            output::print_success(&format!(
+                "Added {} issue(s) to sprint {}",
+                issues.len(),
+                sprint_id
+            ));
         }
     }
+
+    Ok(())
+}
+
+async fn handle_remove(
+    issues: Vec<String>,
+    output_format: &OutputFormat,
+    client: &JiraClient,
+) -> Result<()> {
+    if issues.len() > MAX_SPRINT_ISSUES {
+        bail!(
+            "Too many issues (got {}). Maximum is {} per operation.",
+            issues.len(),
+            MAX_SPRINT_ISSUES
+        );
+    }
+
+    client.move_issues_to_backlog(&issues).await?;
+
+    match output_format {
+        OutputFormat::Json => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "issues": issues,
+                    "removed": true
+                }))?
+            );
+        }
+        OutputFormat::Table => {
+            output::print_success(&format!("Moved {} issue(s) to backlog", issues.len()));
+        }
+    }
+
+    Ok(())
 }
 
 async fn handle_list(
