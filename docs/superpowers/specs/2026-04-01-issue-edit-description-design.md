@@ -41,7 +41,7 @@ jr issue edit PROJ-123 --description "**bold text**" --markdown
 
 - `--description` and `--description-stdin` are mutually exclusive (enforced by clap `conflicts_with`).
 - `--markdown` without a description source is silently ignored (matches `create` behavior).
-- `--description ""` sets an empty description (valid — clears the description body).
+- `--description ""` sets a description with an empty paragraph (valid — Jira stores this as a non-null ADF document with no visible text). To fully clear a description, a future `--no-description` flag would send `"description": null`.
 
 ## API Behavior
 
