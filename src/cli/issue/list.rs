@@ -73,6 +73,7 @@ pub(super) async fn handle_list(
         open,
         points: show_points,
         assets: show_assets,
+        asset: asset_key,
     } = command
     else {
         unreachable!()
@@ -80,9 +81,17 @@ pub(super) async fn handle_list(
 
     let effective_limit = resolve_effective_limit(limit, all);
 
+    // Auto-enable assets display column when filtering by asset
+    let show_assets = show_assets || asset_key.is_some();
+
     // Validate --recent duration format early
     if let Some(ref d) = recent {
         crate::jql::validate_duration(d).map_err(JrError::UserError)?;
+    }
+
+    // Validate --asset key format early
+    if let Some(ref key) = asset_key {
+        crate::jql::validate_asset_key(key).map_err(JrError::UserError)?;
     }
 
     // Resolve --assignee and --reporter to JQL values
@@ -111,6 +120,22 @@ pub(super) async fn handle_list(
     let team_clause = resolved_team.as_ref().map(|(field_id, team_uuid)| {
         format!("{} = \"{}\"", field_id, crate::jql::escape_value(team_uuid))
     });
+
+    // Resolve CMDB fields for --asset filter (needs field names for aqlFunction)
+    let asset_clause = if let Some(ref key) = asset_key {
+        let cmdb_fields = get_or_fetch_cmdb_fields(client).await?;
+        if cmdb_fields.is_empty() {
+            return Err(JrError::UserError(
+                "--asset requires Assets custom fields on this Jira instance. \
+                 Assets requires Jira Service Management Premium or Enterprise."
+                    .into(),
+            )
+            .into());
+        }
+        Some(crate::jql::build_asset_clause(key, &cmdb_fields))
+    } else {
+        None
+    };
 
     // Resolve project key once, before validation and JQL building
     let project_key = config.project_key(project_override);
@@ -185,6 +210,7 @@ pub(super) async fn handle_list(
         team_clause.as_deref(),
         recent.as_deref(),
         open,
+        asset_clause.as_deref(),
     );
 
     // Build base JQL + order by
@@ -248,7 +274,7 @@ pub(super) async fn handle_list(
     // Guard against unbounded query
     if all_parts.is_empty() {
         return Err(JrError::UserError(
-            "No project or filters specified. Use --project, --assignee, --reporter, --status, --open, --team, --recent, or --jql. \
+            "No project or filters specified. Use --project, --assignee, --reporter, --status, --open, --team, --recent, --asset, or --jql. \
              You can also set a default project in .jr.toml or run \"jr init\"."
                 .into(),
         )
@@ -416,6 +442,7 @@ fn build_filter_clauses(
     team_clause: Option<&str>,
     recent: Option<&str>,
     open: bool,
+    asset_clause: Option<&str>,
 ) -> Vec<String> {
     let mut parts = Vec::new();
     if let Some(a) = assignee_jql {
@@ -435,6 +462,9 @@ fn build_filter_clauses(
     }
     if let Some(d) = recent {
         parts.push(format!("created >= -{d}"));
+    }
+    if let Some(a) = asset_clause {
+        parts.push(a.to_string());
     }
     parts
 }
