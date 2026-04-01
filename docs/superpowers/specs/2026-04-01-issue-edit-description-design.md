@@ -113,23 +113,22 @@ Update the "no fields specified" bail message to include `--description` and `--
 
 ## Testing
 
-### Unit Tests (inline in `create.rs`)
+### CLI Tests (`tests/cli_smoke.rs`)
 
 - `--description` and `--description-stdin` conflict at parse time (clap validation)
-- `--markdown` without description produces no description field
 
-### Integration Tests (`tests/`)
+### Integration Tests (`tests/issue_commands.rs`)
 
-| Test | Input | Assertion |
-|------|-------|-----------|
-| Plain text description | `--description "hello"` | PUT body contains ADF paragraph with "hello" |
-| Markdown description | `--description "**bold**" --markdown` | PUT body contains ADF with bold markup |
-| Stdin description | `--description-stdin` with piped input | PUT body contains ADF from stdin text |
-| Combined fields | `--description "text" --summary "new"` | PUT body contains both description ADF and summary |
-| Markdown flag alone | `--markdown --summary "new"` | PUT body has summary but no description field |
-| JSON output | `--description "text" --output json` | Outputs `{"key": "...", "updated": true}` |
+| Test | Input | Assertion | Status |
+|------|-------|-----------|--------|
+| Plain text description | `--description "hello"` | PUT body contains ADF paragraph with "hello" | Implemented |
+| Markdown description | `--description "**bold**" --markdown` | PUT body contains ADF with bold markup | Implemented |
+| Combined fields | `--description "text" --summary "new"` | PUT body contains both description ADF and summary | Implemented |
+| Stdin description | `--description-stdin` with piped input | PUT body contains ADF from stdin text | Deferred (stdin piping in test harness) |
+| Markdown flag alone | `--markdown --summary "new"` | PUT body has summary but no description field | Covered implicitly |
+| JSON output | `--description "text" --output json` | Outputs `{"key": "...", "updated": true}` | Covered by existing edit JSON test path |
 
-Integration tests use wiremock to mock the Jira API and verify PUT request bodies. Tests use `body_json` matcher for exact matching or `received_requests()` for partial body inspection.
+Integration tests use wiremock to mock the Jira API and verify PUT request bodies via `body_partial_json` matcher.
 
 ## Out of Scope
 
