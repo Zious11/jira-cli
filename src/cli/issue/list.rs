@@ -122,7 +122,7 @@ pub(super) async fn handle_list(
     });
 
     // Resolve CMDB fields for --asset filter (needs field names for aqlFunction)
-    let asset_clause = if let Some(ref key) = asset_key {
+    let (asset_clause, asset_cmdb_fields) = if let Some(ref key) = asset_key {
         let cmdb_fields = get_or_fetch_cmdb_fields(client).await?;
         if cmdb_fields.is_empty() {
             return Err(JrError::UserError(
@@ -132,9 +132,10 @@ pub(super) async fn handle_list(
             )
             .into());
         }
-        Some(crate::jql::build_asset_clause(key, &cmdb_fields))
+        let clause = crate::jql::build_asset_clause(key, &cmdb_fields);
+        (Some(clause), Some(cmdb_fields))
     } else {
-        None
+        (None, None)
     };
 
     // Resolve project key once, before validation and JQL building
@@ -285,13 +286,17 @@ pub(super) async fn handle_list(
     let effective_jql = format!("{where_clause} ORDER BY {order_by}");
 
     let cmdb_fields = if show_assets {
-        let fields = get_or_fetch_cmdb_fields(client).await.unwrap_or_default();
-        if fields.is_empty() {
-            eprintln!(
-                "warning: --assets ignored. No Assets custom fields found on this Jira instance."
-            );
+        if let Some(fields) = asset_cmdb_fields {
+            fields
+        } else {
+            let fields = get_or_fetch_cmdb_fields(client).await.unwrap_or_default();
+            if fields.is_empty() {
+                eprintln!(
+                    "warning: --assets ignored. No Assets custom fields found on this Jira instance."
+                );
+            }
+            fields
         }
-        fields
     } else {
         Vec::new()
     };

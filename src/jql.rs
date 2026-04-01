@@ -35,7 +35,7 @@ pub fn validate_duration(s: &str) -> Result<(), String> {
 
 /// Validate an asset object key matches the SCHEMA-NUMBER format.
 ///
-/// Asset keys are always `<uppercase-alpha>-<digits>` (e.g., CUST-5, SRV-42, ITSM-123).
+/// Asset keys follow the `<alphanumeric>-<digits>` format (e.g., CUST-5, SRV-42, ITSM-123).
 pub fn validate_asset_key(key: &str) -> Result<(), String> {
     let Some((prefix, number)) = key.split_once('-') else {
         return Err(format!(

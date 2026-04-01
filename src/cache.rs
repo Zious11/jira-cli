@@ -162,7 +162,10 @@ pub fn read_cmdb_fields_cache() -> Result<Option<CmdbFieldsCache>> {
     }
 
     let content = std::fs::read_to_string(&path)?;
-    let cache: CmdbFieldsCache = serde_json::from_str(&content)?;
+    let cache: CmdbFieldsCache = match serde_json::from_str(&content) {
+        Ok(c) => c,
+        Err(_) => return Ok(None),
+    };
 
     let age = Utc::now() - cache.fetched_at;
     if age.num_days() >= CACHE_TTL_DAYS {
