@@ -197,10 +197,10 @@ pub enum IssueCommand {
         #[arg(short, long)]
         summary: Option<String>,
         /// Description
-        #[arg(short, long)]
+        #[arg(short, long, conflicts_with = "description_stdin")]
         description: Option<String>,
         /// Read description from stdin (for piping)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "description")]
         description_stdin: bool,
         /// Priority
         #[arg(long)]
@@ -254,6 +254,15 @@ pub enum IssueCommand {
         /// Parent issue key
         #[arg(long)]
         parent: Option<String>,
+        /// Description
+        #[arg(short, long, conflicts_with = "description_stdin")]
+        description: Option<String>,
+        /// Read description from stdin (for piping)
+        #[arg(long, conflicts_with = "description")]
+        description_stdin: bool,
+        /// Interpret description as Markdown
+        #[arg(long)]
+        markdown: bool,
     },
     /// Transition issue to a new status
     Move {

@@ -2,24 +2,29 @@
 mod common;
 
 use serde_json::json;
-use std::sync::Mutex;
+use tokio::sync::Mutex;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Serialize project_meta tests — they share the XDG_CACHE_HOME env var.
-static ENV_MUTEX: Mutex<()> = Mutex::new(());
+/// The guard MUST be held for the entire test body, not just the set_var call,
+/// to prevent another test from changing XDG_CACHE_HOME while async work is in progress.
+static ENV_MUTEX: Mutex<()> = Mutex::const_new(());
 
-/// Set XDG_CACHE_HOME under the mutex, then drop the guard before any async work.
-fn set_cache_dir(dir: &std::path::Path) {
-    let _guard = ENV_MUTEX.lock().unwrap();
-    // SAFETY: ENV_MUTEX ensures no concurrent test mutates XDG_CACHE_HOME.
+/// Acquire the env mutex and set XDG_CACHE_HOME. Caller MUST hold the returned
+/// guard for the duration of the test to prevent env var races.
+async fn set_cache_dir(dir: &std::path::Path) -> tokio::sync::MutexGuard<'static, ()> {
+    let guard = ENV_MUTEX.lock().await;
+    // SAFETY: ENV_MUTEX guard is held by caller for the entire test duration,
+    // and all tests use current_thread flavor so no concurrent env mutation.
     unsafe { std::env::set_var("XDG_CACHE_HOME", dir) };
+    guard
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn project_meta_cache_miss_fetches_from_api() {
     let cache_dir = tempfile::tempdir().unwrap();
-    set_cache_dir(cache_dir.path());
+    let _env_guard = set_cache_dir(cache_dir.path()).await;
 
     let server = MockServer::start().await;
 
@@ -64,7 +69,7 @@ async fn project_meta_cache_miss_fetches_from_api() {
 #[tokio::test(flavor = "current_thread")]
 async fn project_meta_software_project_has_no_service_desk_id() {
     let cache_dir = tempfile::tempdir().unwrap();
-    set_cache_dir(cache_dir.path());
+    let _env_guard = set_cache_dir(cache_dir.path()).await;
 
     let server = MockServer::start().await;
 
@@ -94,7 +99,7 @@ async fn project_meta_software_project_has_no_service_desk_id() {
 #[tokio::test(flavor = "current_thread")]
 async fn require_service_desk_errors_for_software_project() {
     let cache_dir = tempfile::tempdir().unwrap();
-    set_cache_dir(cache_dir.path());
+    let _env_guard = set_cache_dir(cache_dir.path()).await;
 
     let server = MockServer::start().await;
 
