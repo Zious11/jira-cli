@@ -302,3 +302,132 @@ async fn handle_tickets(
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::assets::{ConnectedTicket, TicketPriority, TicketStatus, TicketType};
+
+    fn make_ticket(key: &str, status_name: &str, color: &str) -> ConnectedTicket {
+        ConnectedTicket {
+            key: key.to_string(),
+            id: "1".to_string(),
+            title: format!("Ticket {}", key),
+            reporter: None,
+            created: None,
+            updated: None,
+            status: Some(TicketStatus {
+                name: status_name.to_string(),
+                color_name: Some(color.to_string()),
+            }),
+            issue_type: Some(TicketType {
+                name: "Task".to_string(),
+            }),
+            priority: Some(TicketPriority {
+                name: "Medium".to_string(),
+            }),
+        }
+    }
+
+    fn make_ticket_no_status(key: &str) -> ConnectedTicket {
+        ConnectedTicket {
+            key: key.to_string(),
+            id: "1".to_string(),
+            title: format!("Ticket {}", key),
+            reporter: None,
+            created: None,
+            updated: None,
+            status: None,
+            issue_type: None,
+            priority: None,
+        }
+    }
+
+    #[test]
+    fn filter_open_excludes_done() {
+        let tickets = vec![
+            make_ticket("A-1", "In Progress", "yellow"),
+            make_ticket("A-2", "Done", "green"),
+            make_ticket("A-3", "To Do", "blue-gray"),
+        ];
+        let result = filter_tickets(tickets, true, None).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].key, "A-1");
+        assert_eq!(result[1].key, "A-3");
+    }
+
+    #[test]
+    fn filter_open_includes_no_status() {
+        let tickets = vec![
+            make_ticket("A-1", "In Progress", "yellow"),
+            make_ticket_no_status("A-2"),
+        ];
+        let result = filter_tickets(tickets, true, None).unwrap();
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn filter_status_exact_match() {
+        let tickets = vec![
+            make_ticket("A-1", "In Progress", "yellow"),
+            make_ticket("A-2", "Done", "green"),
+            make_ticket("A-3", "To Do", "blue-gray"),
+        ];
+        let result = filter_tickets(tickets, false, Some("Done")).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].key, "A-2");
+    }
+
+    #[test]
+    fn filter_status_partial_match() {
+        let tickets = vec![
+            make_ticket("A-1", "In Progress", "yellow"),
+            make_ticket("A-2", "Done", "green"),
+        ];
+        let result = filter_tickets(tickets, false, Some("prog")).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].key, "A-1");
+    }
+
+    #[test]
+    fn filter_status_no_match() {
+        let tickets = vec![make_ticket("A-1", "In Progress", "yellow")];
+        let result = filter_tickets(tickets, false, Some("Blocked"));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("No status matching"));
+        assert!(err.contains("In Progress"));
+    }
+
+    #[test]
+    fn filter_status_ambiguous() {
+        let tickets = vec![
+            make_ticket("A-1", "In Progress", "yellow"),
+            make_ticket("A-2", "In Review", "yellow"),
+        ];
+        let result = filter_tickets(tickets, false, Some("In"));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Ambiguous"));
+    }
+
+    #[test]
+    fn filter_status_excludes_no_status() {
+        let tickets = vec![
+            make_ticket("A-1", "Done", "green"),
+            make_ticket_no_status("A-2"),
+        ];
+        let result = filter_tickets(tickets, false, Some("Done")).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].key, "A-1");
+    }
+
+    #[test]
+    fn no_filter_returns_all() {
+        let tickets = vec![
+            make_ticket("A-1", "In Progress", "yellow"),
+            make_ticket("A-2", "Done", "green"),
+        ];
+        let result = filter_tickets(tickets, false, None).unwrap();
+        assert_eq!(result.len(), 2);
+    }
+}
