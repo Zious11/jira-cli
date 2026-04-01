@@ -36,7 +36,7 @@ impl JiraClient {
         Ok(filter_story_points_fields(&fields))
     }
 
-    pub async fn find_cmdb_field_ids(&self) -> Result<Vec<(String, String)>> {
+    pub async fn find_cmdb_fields(&self) -> Result<Vec<(String, String)>> {
         let fields = self.list_fields().await?;
         Ok(filter_cmdb_fields(&fields))
     }

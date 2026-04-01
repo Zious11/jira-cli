@@ -31,7 +31,7 @@ Add `--asset <KEY>` to `IssueCommand::List`:
 
 ### aqlFunction() — the JQL Function
 
-The Jira Assets JQL function is **`aqlFunction()`**, not `aqlFunction()`. It accepts an AQL (Assets Query Language) string and returns matching objects. It must be used with the **human-readable custom field name**, not the `cf[ID]` shorthand or `customfield_NNNNN` format.
+The Jira Assets JQL function used here is **`aqlFunction()`**. It accepts an AQL (Assets Query Language) string and returns matching objects. It must be used with the **human-readable custom field name**, not the `cf[ID]` shorthand or `customfield_NNNNN` format.
 
 Supported operators: `IS`, `IS NOT`, `IN`, `NOT IN`.
 
@@ -146,5 +146,5 @@ When `--asset` is used, automatically enable the `--assets` display column witho
 - AQL attribute for object key is **`Key`** (a reserved AQL keyword) — e.g., `Key = "CUST-5"`. Note: `objectKey` is the JSON field name in REST API responses, but `Key` is the AQL query attribute (confirmed via Atlassian AQL docs)
 - Asset object keys follow `SCHEMA-NUMBER` format (confirmed)
 - Empty AQL results produce empty JQL results, not errors (confirmed)
-- Available on JSM Premium, Standard, and Enterprise plans (confirmed)
+- Available on all paid JSM plans: Standard, Premium, and Enterprise (confirmed via Atlassian docs)
 - Deprecated functions like `attributeValue()` should be avoided; `aqlFunction()` is the current standard

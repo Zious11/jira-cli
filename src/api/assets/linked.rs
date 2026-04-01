@@ -14,7 +14,7 @@ pub async fn get_or_fetch_cmdb_fields(client: &JiraClient) -> Result<Vec<(String
         return Ok(cached.fields);
     }
 
-    let fields = client.find_cmdb_field_ids().await?;
+    let fields = client.find_cmdb_fields().await?;
     let _ = cache::write_cmdb_fields_cache(&fields);
     Ok(fields)
 }

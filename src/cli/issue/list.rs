@@ -127,7 +127,7 @@ pub(super) async fn handle_list(
         if cmdb_fields.is_empty() {
             return Err(JrError::UserError(
                 "--asset requires Assets custom fields on this Jira instance. \
-                 Assets requires Jira Service Management Premium or Enterprise."
+                 Assets requires a paid Jira Service Management plan."
                     .into(),
             )
             .into());

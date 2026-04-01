@@ -59,6 +59,10 @@ pub fn validate_asset_key(key: &str) -> Result<(), String> {
 /// Uses `aqlFunction()` with the human-readable field name (required by Jira Cloud).
 /// When multiple CMDB fields exist, OR them together and wrap in parentheses.
 pub fn build_asset_clause(asset_key: &str, cmdb_fields: &[(String, String)]) -> String {
+    debug_assert!(
+        !cmdb_fields.is_empty(),
+        "cmdb_fields must not be empty — callers should check before calling"
+    );
     let clauses: Vec<String> = cmdb_fields
         .iter()
         .map(|(_, name)| {

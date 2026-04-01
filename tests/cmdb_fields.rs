@@ -59,7 +59,7 @@ async fn discover_cmdb_field_ids() {
 
     let client =
         jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".into());
-    let fields = client.find_cmdb_field_ids().await.unwrap();
+    let fields = client.find_cmdb_fields().await.unwrap();
     assert_eq!(
         fields,
         vec![("customfield_10191".to_string(), "Client".to_string())]
@@ -78,7 +78,7 @@ async fn discover_cmdb_field_ids_empty() {
 
     let client =
         jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".into());
-    let fields: Vec<(String, String)> = client.find_cmdb_field_ids().await.unwrap();
+    let fields: Vec<(String, String)> = client.find_cmdb_fields().await.unwrap();
     assert!(fields.is_empty());
 }
 
