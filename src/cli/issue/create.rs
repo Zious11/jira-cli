@@ -154,6 +154,9 @@ pub(super) async fn handle_edit(
         points,
         no_points,
         parent,
+        description,
+        description_stdin,
+        markdown,
     } = command
     else {
         unreachable!()
@@ -161,6 +164,25 @@ pub(super) async fn handle_edit(
 
     let mut fields = json!({});
     let mut has_updates = false;
+
+    // Resolve description
+    let desc_text = if description_stdin {
+        let mut buf = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;
+        Some(buf)
+    } else {
+        description
+    };
+
+    if let Some(ref text) = desc_text {
+        let adf_body = if markdown {
+            adf::markdown_to_adf(text)
+        } else {
+            adf::text_to_adf(text)
+        };
+        fields["description"] = adf_body;
+        has_updates = true;
+    }
 
     if let Some(ref s) = summary {
         fields["summary"] = json!(s);
@@ -243,7 +265,7 @@ pub(super) async fn handle_edit(
 
     if !has_updates {
         bail!(
-            "No fields specified to update. Use --summary, --type, --priority, --label, --team, --points, --no-points, or --parent."
+            "No fields specified to update. Use --summary, --type, --priority, --label, --team, --points, --no-points, --parent, --description, or --description-stdin."
         );
     }
 
