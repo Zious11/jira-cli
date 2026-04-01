@@ -9,6 +9,17 @@
 
 A fast, agent-friendly CLI for Jira Cloud, written in Rust. Built for both humans and AI agents — commands support structured JSON output, actionable error messages with suggested next steps, and `--no-input` mode for fully non-interactive automation.
 
+## Why jr?
+
+- **Fast** — native Rust binary, no JVM or Node runtime
+- **Agent-friendly** — structured JSON output, non-interactive mode, idempotent operations, actionable error messages with exit codes
+- **Smart defaults** — auto-discovers scrum boards, story points fields, and CMDB asset fields during `jr init`
+- **Composable filters** — chain `--assignee`, `--status`, `--team`, `--asset`, `--open`, `--recent` on `issue list`
+- **Assets/CMDB support** — search assets, view linked tickets, filter by asset on issues, enriched JSON output
+- **Partial matching** — type `jr issue move KEY "prog"` and it matches "In Progress"
+- **JSM queues** — list and view JSM service desk queues
+- **Shell completions** — bash, zsh, fish
+
 ## Install
 
 ### One-liner (macOS, Linux)
@@ -186,7 +197,7 @@ board_id = 42
 - `--stdin` flag on comment/create reads content from pipes
 - `--url-only` prints URLs instead of opening a browser
 - State-changing commands are idempotent (exit 0 if already in target state)
-- Exit codes: 0=success, 1=error, 2=auth, 64=usage, 78=config, 130=interrupted
+- Structured exit codes (see [Exit Codes](#exit-codes) table)
 
 ```bash
 # AI agent workflow example
@@ -195,6 +206,30 @@ jr issue move KEY-123 "In Progress"          # Start work
 echo "Fixed the bug" | jr issue comment KEY-123 --stdin  # Add comment
 jr issue move KEY-123 "Done"                 # Complete
 ```
+
+## Shell Completions
+
+```bash
+# Bash (add to ~/.bashrc)
+eval "$(jr completion bash)"
+
+# Zsh (add to ~/.zshrc)
+eval "$(jr completion zsh)"
+
+# Fish (add to ~/.config/fish/config.fish)
+jr completion fish | source
+```
+
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | General error |
+| 2 | Authentication error |
+| 64 | Usage error (bad arguments) |
+| 78 | Configuration error |
+| 130 | Interrupted (Ctrl+C) |
 
 ## License
 
