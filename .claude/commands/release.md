@@ -37,7 +37,10 @@ ephemeral pre-releases and the stable version is chosen at release time.
    ```
    git commit -m "chore: bump version to X.Y.Z-dev.N"
    ```
-8. Tag: `git tag vX.Y.Z-dev.N`
+8. Tag (annotated — required to trigger the Release workflow and show as verified):
+   ```
+   git tag -a vX.Y.Z-dev.N -m "chore: release vX.Y.Z-dev.N"
+   ```
 9. Push commit and tag:
    ```
    git push origin develop
@@ -94,7 +97,10 @@ If already on `develop` or `main`, skip to Stage 2.
 4. Run `cargo fmt --all` to ensure formatting is correct
 5. Run `cargo test` to verify everything passes
 6. If any changes from steps 3-5, commit them on a branch, PR into `main`
-7. After merge confirmation, tag `vX.Y.Z` on main
+7. After merge confirmation, create an annotated tag on main:
+   ```
+   git tag -a vX.Y.Z -m "chore: release vX.Y.Z"
+   ```
 8. Push the tag to trigger the release workflow
 9. Print: "Release vX.Y.Z tagged and pushed. GitHub Actions will build and publish binaries."
 10. Provide the releases URL
