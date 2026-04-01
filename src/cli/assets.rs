@@ -39,7 +39,18 @@ pub async fn handle(
             limit,
             open,
             status,
-        } => handle_tickets(&workspace_id, &key, limit, open, status, output_format, client).await,
+        } => {
+            handle_tickets(
+                &workspace_id,
+                &key,
+                limit,
+                open,
+                status,
+                output_format,
+                client,
+            )
+            .await
+        }
     }
 }
 
