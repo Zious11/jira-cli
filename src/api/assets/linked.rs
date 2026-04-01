@@ -113,6 +113,43 @@ pub fn extract_linked_assets_per_field(
     result
 }
 
+/// Inject enriched asset data back into the issue's `fields.extra` HashMap.
+///
+/// For each CMDB field, matches enriched `LinkedAsset` entries by position to the
+/// original JSON array elements and injects `objectKey`, `label`, and `objectType`
+/// as additional fields (additive, does not remove existing fields).
+pub fn enrich_json_assets(
+    extra: &mut HashMap<String, Value>,
+    per_field: &[(String, Vec<LinkedAsset>)],
+) {
+    for (field_id, assets) in per_field {
+        let Some(value) = extra.get_mut(field_id) else {
+            continue;
+        };
+        let Some(arr) = value.as_array_mut() else {
+            continue;
+        };
+
+        for (i, asset) in assets.iter().enumerate() {
+            if i >= arr.len() {
+                break;
+            }
+            let Some(obj) = arr[i].as_object_mut() else {
+                continue;
+            };
+            if let Some(ref key) = asset.key {
+                obj.insert("objectKey".to_string(), Value::String(key.clone()));
+            }
+            if let Some(ref name) = asset.name {
+                obj.insert("label".to_string(), Value::String(name.clone()));
+            }
+            if let Some(ref asset_type) = asset.asset_type {
+                obj.insert("objectType".to_string(), Value::String(asset_type.clone()));
+            }
+        }
+    }
+}
+
 /// Enrich assets that only have IDs by fetching from the Assets API.
 pub async fn enrich_assets(client: &JiraClient, assets: &mut [LinkedAsset]) {
     // Only enrich assets that have an ID but are missing key/name.
@@ -376,5 +413,98 @@ mod tests {
         ];
         let result = extract_linked_assets_per_field(&extra, &cmdb_fields);
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn enrich_json_injects_resolved_fields() {
+        let mut extra = HashMap::new();
+        extra.insert(
+            "customfield_10191".to_string(),
+            json!([{"objectId": "88", "workspaceId": "ws-1"}]),
+        );
+
+        let per_field = vec![(
+            "customfield_10191".to_string(),
+            vec![LinkedAsset {
+                id: Some("88".into()),
+                workspace_id: Some("ws-1".into()),
+                key: Some("OBJ-88".into()),
+                name: Some("Acme Corp".into()),
+                asset_type: Some("Client".into()),
+            }],
+        )];
+
+        enrich_json_assets(&mut extra, &per_field);
+
+        let enriched = &extra["customfield_10191"];
+        let arr = enriched.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["objectId"], "88");
+        assert_eq!(arr[0]["workspaceId"], "ws-1");
+        assert_eq!(arr[0]["objectKey"], "OBJ-88");
+        assert_eq!(arr[0]["label"], "Acme Corp");
+        assert_eq!(arr[0]["objectType"], "Client");
+    }
+
+    #[test]
+    fn enrich_json_preserves_already_enriched() {
+        let mut extra = HashMap::new();
+        extra.insert(
+            "customfield_10191".to_string(),
+            json!([{"objectKey": "OBJ-1", "label": "Already There"}]),
+        );
+
+        let per_field = vec![(
+            "customfield_10191".to_string(),
+            vec![LinkedAsset {
+                key: Some("OBJ-1".into()),
+                name: Some("Already There".into()),
+                ..Default::default()
+            }],
+        )];
+
+        enrich_json_assets(&mut extra, &per_field);
+
+        let arr = extra["customfield_10191"].as_array().unwrap();
+        assert_eq!(arr[0]["objectKey"], "OBJ-1");
+        assert_eq!(arr[0]["label"], "Already There");
+    }
+
+    #[test]
+    fn enrich_json_partial_enrichment() {
+        let mut extra = HashMap::new();
+        extra.insert(
+            "customfield_10191".to_string(),
+            json!([
+                {"objectId": "88", "workspaceId": "ws-1"},
+                {"objectId": "99", "workspaceId": "ws-1"}
+            ]),
+        );
+
+        let per_field = vec![(
+            "customfield_10191".to_string(),
+            vec![
+                LinkedAsset {
+                    id: Some("88".into()),
+                    workspace_id: Some("ws-1".into()),
+                    key: Some("OBJ-88".into()),
+                    name: Some("Acme".into()),
+                    asset_type: Some("Client".into()),
+                },
+                LinkedAsset {
+                    id: Some("99".into()),
+                    workspace_id: Some("ws-1".into()),
+                    key: None,
+                    name: None,
+                    asset_type: None,
+                },
+            ],
+        )];
+
+        enrich_json_assets(&mut extra, &per_field);
+
+        let arr = extra["customfield_10191"].as_array().unwrap();
+        assert_eq!(arr[0]["objectKey"], "OBJ-88");
+        assert!(arr[1].get("objectKey").is_none());
     }
 }
