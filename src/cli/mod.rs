@@ -132,6 +132,12 @@ pub enum AssetsCommand {
         /// Maximum number of tickets to show
         #[arg(long)]
         limit: Option<u32>,
+        /// Show only open tickets (excludes Done status category)
+        #[arg(long, conflicts_with = "status")]
+        open: bool,
+        /// Filter by status (partial match supported)
+        #[arg(long, conflicts_with = "open")]
+        status: Option<String>,
     },
 }
 
