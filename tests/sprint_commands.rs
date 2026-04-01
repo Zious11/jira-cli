@@ -227,3 +227,146 @@ fn sprint_current_limit_and_all_conflict() {
 
     cmd.assert().failure().code(2);
 }
+
+#[tokio::test]
+async fn sprint_add_with_sprint_id() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/agile/1.0/sprint/100/issue"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["sprint", "add", "--sprint", "100", "FOO-1", "FOO-2"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "Expected success, got: {:?}", output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Added 2 issue(s) to sprint 100"),
+        "Expected success message, got: {stdout}"
+    );
+}
+
+#[tokio::test]
+async fn sprint_add_json_output() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/agile/1.0/sprint/200/issue"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args([
+            "--output", "json",
+            "sprint", "add", "--sprint", "200", "BAR-1",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "Expected success, got: {:?}", output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    assert_eq!(parsed["sprint_id"], 200);
+    assert_eq!(parsed["issues"], serde_json::json!(["BAR-1"]));
+    assert_eq!(parsed["added"], true);
+}
+
+#[tokio::test]
+async fn sprint_remove_moves_to_backlog() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/agile/1.0/backlog/issue"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["sprint", "remove", "FOO-1", "FOO-3"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "Expected success, got: {:?}", output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Moved 2 issue(s) to backlog"),
+        "Expected success message, got: {stdout}"
+    );
+}
+
+#[tokio::test]
+async fn sprint_remove_json_output() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/agile/1.0/backlog/issue"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args([
+            "--output", "json",
+            "sprint", "remove", "QUX-5",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "Expected success, got: {:?}", output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    assert_eq!(parsed["issues"], serde_json::json!(["QUX-5"]));
+    assert_eq!(parsed["removed"], true);
+}
+
+#[tokio::test]
+async fn sprint_add_with_current_flag() {
+    let server = MockServer::start().await;
+    mount_prereqs(&server).await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/agile/1.0/sprint/100/issue"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .arg("--project")
+        .arg("PROJ")
+        .args(["sprint", "add", "--current", "TEST-1", "TEST-2"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "Expected success, got: {:?}", output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Added 2 issue(s) to sprint 100"),
+        "Expected success message, got: {stdout}"
+    );
+}
