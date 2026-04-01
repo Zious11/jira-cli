@@ -2,7 +2,8 @@
 mod common;
 
 use assert_cmd::Command;
-use wiremock::matchers::{method, path, query_param};
+use serde_json::json;
+use wiremock::matchers::{body_partial_json, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Helper: build N issues for testing.
@@ -234,6 +235,7 @@ async fn sprint_add_with_sprint_id() {
 
     Mock::given(method("POST"))
         .and(path("/rest/agile/1.0/sprint/100/issue"))
+        .and(body_partial_json(json!({"issues": ["FOO-1", "FOO-2"]})))
         .respond_with(ResponseTemplate::new(204))
         .expect(1)
         .mount(&server)
@@ -265,6 +267,7 @@ async fn sprint_add_json_output() {
 
     Mock::given(method("POST"))
         .and(path("/rest/agile/1.0/sprint/200/issue"))
+        .and(body_partial_json(json!({"issues": ["BAR-1"]})))
         .respond_with(ResponseTemplate::new(204))
         .expect(1)
         .mount(&server)
@@ -298,6 +301,7 @@ async fn sprint_remove_moves_to_backlog() {
 
     Mock::given(method("POST"))
         .and(path("/rest/agile/1.0/backlog/issue"))
+        .and(body_partial_json(json!({"issues": ["FOO-1", "FOO-3"]})))
         .respond_with(ResponseTemplate::new(204))
         .expect(1)
         .mount(&server)
@@ -329,6 +333,7 @@ async fn sprint_remove_json_output() {
 
     Mock::given(method("POST"))
         .and(path("/rest/agile/1.0/backlog/issue"))
+        .and(body_partial_json(json!({"issues": ["QUX-5"]})))
         .respond_with(ResponseTemplate::new(204))
         .expect(1)
         .mount(&server)
@@ -360,6 +365,7 @@ async fn sprint_add_with_current_flag() {
 
     Mock::given(method("POST"))
         .and(path("/rest/agile/1.0/sprint/100/issue"))
+        .and(body_partial_json(json!({"issues": ["TEST-1", "TEST-2"]})))
         .respond_with(ResponseTemplate::new(204))
         .expect(1)
         .mount(&server)

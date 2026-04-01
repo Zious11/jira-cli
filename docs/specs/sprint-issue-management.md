@@ -1,4 +1,4 @@
-# sprint issue management
+# Sprint Issue Management
 
 **Issue:** [#83](https://github.com/Zious11/jira-cli/issues/83)
 **Status:** Design approved
@@ -146,8 +146,8 @@ the API does not distinguish "newly moved" from "already there".
 | Scenario | Behavior |
 |----------|----------|
 | >50 issues provided | Client-side error before API call: "Too many issues (got N). Maximum is 50 per operation." |
-| Closed sprint (`add`) | API returns 400 — surface as: "Cannot add issues to a closed sprint. Only open or active sprints are allowed." |
-| Sprint not found (`add`) | API returns 404 — surface as: "Sprint N not found." |
+| Closed sprint (`add`) | API returns 400 — pass through API error message |
+| Sprint not found (`add`) | API returns 404 — pass through API error message |
 | No active sprint (`--current`) | Existing error path: "No active sprint found for board N." |
 | Invalid issue key | API returns 400 — pass through API error message |
 | No project configured (`--current`) | Existing error path: "No project configured. Run \"jr init\" or pass --project." |
