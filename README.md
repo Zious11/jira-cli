@@ -72,6 +72,12 @@ jr issue list --assignee me --open
 # Issues in a specific status
 jr issue list --project FOO --status "In Progress"
 
+# Issues linked to a specific asset
+jr issue list --project FOO --asset CUST-5 --open
+
+# Open tickets for an asset (quick lookup)
+jr assets tickets CUST-5 --open
+
 # Discover available projects
 jr project list
 
@@ -99,8 +105,8 @@ jr issue comment KEY-123 "Deployed to staging"
 | `jr auth login` | Authenticate with API token (default) or `--oauth` for OAuth 2.0 |
 | `jr auth status` | Show authentication status |
 | `jr me` | Show current user info |
-| `jr issue list` | List issues (`--assignee`, `--reporter`, `--recent`, `--status`, `--open`, `--team`, `--jql`, `--limit`/`--all`, `--points`, `--assets`) |
-| `jr issue view KEY` | View issue details (includes story points, linked assets) |
+| `jr issue list` | List issues (`--assignee`, `--reporter`, `--recent`, `--status`, `--open`, `--team`, `--asset KEY`, `--jql`, `--limit`/`--all`, `--points`, `--assets`) |
+| `jr issue view KEY` | View issue details (per-field asset rows, enriched JSON, story points) |
 | `jr issue create` | Create an issue (`--team`, `--points`) |
 | `jr issue edit KEY` | Edit issue fields (`--team`, `--points`, `--no-points`) |
 | `jr issue move KEY [STATUS]` | Transition issue (partial match on status name) |
@@ -123,10 +129,10 @@ jr issue comment KEY-123 "Deployed to staging"
 | `jr queue view <name>`           | View issues in a queue (partial name match)    |
 | `jr assets search <AQL>`        | Search assets via AQL query                    |
 | `jr assets view <key>`          | View asset details (key or numeric ID)         |
-| `jr assets tickets <key>`       | Show Jira issues connected to an asset         |
+| `jr assets tickets <key>`       | Show Jira issues connected to an asset (`--open`, `--status`, `--limit`) |
 | `jr team list` | List available teams (`--refresh` to force update) |
 | `jr project list` | List accessible projects (`--type`, `--limit`/`--all`) |
-| `jr project fields --project FOO` | Show valid issue types, priorities, and statuses |
+| `jr project fields --project FOO` | Show valid issue types, priorities, statuses, and asset custom fields |
 | `jr completion bash\|zsh\|fish` | Generate shell completions |
 
 ## Global Flags

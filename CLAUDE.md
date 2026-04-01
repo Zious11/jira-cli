@@ -20,14 +20,14 @@ src/
 │   │   ├── links.rs     # link + unlink + link-types
 │   │   ├── helpers.rs   # team/points resolution, user resolution, prompts
 │   │   └── assets.rs    # linked assets (issue→asset lookup)
-│   ├── assets.rs        # assets search/view/tickets
+│   ├── assets.rs        # assets search/view/tickets (with --open/--status client-side filtering)
 │   ├── board.rs         # board list/view
 │   ├── sprint.rs        # sprint list/current (scrum-only, errors on kanban)
 │   ├── worklog.rs       # worklog add/list
 │   ├── team.rs          # team list (with cache + lazy org discovery)
 │   ├── auth.rs          # auth login (API token default, --oauth for OAuth 2.0), auth status
 │   ├── init.rs          # Interactive setup (prefetches org metadata + team cache + story points field)
-│   ├── project.rs       # project fields (issue types, priorities for a project)
+│   ├── project.rs       # project fields (issue types, priorities, statuses, asset custom fields)
 │   └── queue.rs         # queue list/view (JSM service desks)
 ├── api/
 │   ├── client.rs        # JiraClient — HTTP methods, auth headers, rate limit retry, 429/401 handling
@@ -36,14 +36,14 @@ src/
 │   ├── rate_limit.rs    # Retry-After parsing
 │   ├── assets/          # Assets/CMDB API call implementations
 │   │   ├── workspace.rs     # workspace ID discovery + cache
-│   │   ├── linked.rs        # CMDB field discovery cache, adaptive parsing, enrichment
+│   │   ├── linked.rs        # CMDB field discovery cache, adaptive parsing, enrichment, per-field extraction, JSON enrichment
 │   │   ├── objects.rs       # AQL search, get object, resolve key
 │   │   └── tickets.rs       # connected tickets
 │   └── jira/            # Jira-specific API call implementations (one file per resource)
 │       ├── issues.rs    # search, get, create, edit, list comments
 │       ├── boards.rs    # list boards, get board config
 │       ├── sprints.rs   # list sprints, get sprint issues
-│       ├── fields.rs    # list fields, story points field discovery
+│       ├── fields.rs    # list fields, story points field discovery, CMDB field discovery (id+name pairs)
 │       ├── links.rs     # create/delete issue links, list link types
 │       ├── teams.rs     # org metadata (GraphQL), list teams
 │       ├── worklogs.rs  # add/list worklogs
@@ -60,7 +60,7 @@ src/
 ├── output.rs            # Table (comfy-table) and JSON formatting
 ├── adf.rs               # Atlassian Document Format: text→ADF, markdown→ADF, ADF→text
 ├── duration.rs          # Worklog duration parser (2h, 1h30m, 1d, 1w)
-├── jql.rs               # JQL utilities: escape_value, strip_order_by, validate_duration
+├── jql.rs               # JQL utilities: escape_value, strip_order_by, validate_duration, validate_asset_key, build_asset_clause
 ├── partial_match.rs     # Case-insensitive substring matching with disambiguation
 └── error.rs             # JrError enum with exit codes (0/1/2/64/78/130)
 ```
@@ -109,6 +109,9 @@ See `docs/adr/` for detailed rationale:
 - **v1 implementation plan:** `docs/superpowers/plans/2026-03-21-jr-implementation.md`
 - **Feature specs (post-v1):** `docs/specs/{feature-name}.md`
 - **Team assignment spec:** `docs/specs/team-assignment.md`
+- **Asset filter spec:** `docs/specs/issue-list-asset-filter.md`
+- **Asset field resolution spec:** `docs/specs/resolve-asset-custom-fields.md`
+- **Asset tickets filtering spec:** `docs/specs/assets-tickets-status-filter.md`
 
 When adding a new feature:
 1. Read this file
