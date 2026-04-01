@@ -264,10 +264,7 @@ mod tests {
     fn build_asset_clause_single_field() {
         let fields = vec![("customfield_10191".to_string(), "Client".to_string())];
         let clause = build_asset_clause("CUST-5", &fields);
-        assert_eq!(
-            clause,
-            r#""Client" IN aqlFunction("Key = \"CUST-5\"")"#
-        );
+        assert_eq!(clause, r#""Client" IN aqlFunction("Key = \"CUST-5\"")"#);
     }
 
     #[test]
@@ -285,7 +282,10 @@ mod tests {
 
     #[test]
     fn build_asset_clause_field_name_with_quotes() {
-        let fields = vec![("customfield_10191".to_string(), r#"My "Assets""#.to_string())];
+        let fields = vec![(
+            "customfield_10191".to_string(),
+            r#"My "Assets""#.to_string(),
+        )];
         let clause = build_asset_clause("OBJ-1", &fields);
         assert_eq!(
             clause,

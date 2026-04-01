@@ -285,9 +285,7 @@ pub(super) async fn handle_list(
     let effective_jql = format!("{where_clause} ORDER BY {order_by}");
 
     let cmdb_fields = if show_assets {
-        let fields = get_or_fetch_cmdb_fields(client)
-            .await
-            .unwrap_or_default();
+        let fields = get_or_fetch_cmdb_fields(client).await.unwrap_or_default();
         if fields.is_empty() {
             eprintln!(
                 "warning: --assets ignored. No Assets custom fields found on this Jira instance."
@@ -314,7 +312,10 @@ pub(super) async fn handle_list(
     if show_assets_col {
         // Extract linked assets for all issues first.
         for issue in &issues {
-            issue_assets.push(extract_linked_assets(&issue.fields.extra, &cmdb_field_id_list));
+            issue_assets.push(extract_linked_assets(
+                &issue.fields.extra,
+                &cmdb_field_id_list,
+            ));
         }
 
         // Collect unique (workspace_id, object_id) pairs that need enrichment,
@@ -535,9 +536,7 @@ pub(super) async fn handle_view(
     };
 
     let sp_field_id = config.global.fields.story_points_field_id.as_deref();
-    let cmdb_fields = get_or_fetch_cmdb_fields(client)
-        .await
-        .unwrap_or_default();
+    let cmdb_fields = get_or_fetch_cmdb_fields(client).await.unwrap_or_default();
     let cmdb_field_id_list = cmdb_field_ids(&cmdb_fields);
     let mut extra: Vec<&str> = sp_field_id.iter().copied().collect();
     for f in &cmdb_field_id_list {
@@ -792,7 +791,8 @@ mod tests {
 
     #[test]
     fn build_jql_parts_assignee_me() {
-        let parts = build_filter_clauses(Some("currentUser()"), None, None, None, None, false);
+        let parts =
+            build_filter_clauses(Some("currentUser()"), None, None, None, None, false, None);
         assert_eq!(parts, vec!["assignee = currentUser()"]);
     }
 
@@ -805,13 +805,14 @@ mod tests {
             None,
             None,
             false,
+            None,
         );
         assert_eq!(parts, vec!["reporter = 5b10ac8d82e05b22cc7d4ef5"]);
     }
 
     #[test]
     fn build_jql_parts_recent() {
-        let parts = build_filter_clauses(None, None, None, None, Some("7d"), false);
+        let parts = build_filter_clauses(None, None, None, None, Some("7d"), false, None);
         assert_eq!(parts, vec!["created >= -7d"]);
     }
 
@@ -824,6 +825,7 @@ mod tests {
             Some(r#"customfield_10001 = "uuid-123""#),
             Some("30d"),
             false,
+            None,
         );
         assert_eq!(parts.len(), 5);
         assert!(parts.contains(&"assignee = currentUser()".to_string()));
@@ -835,13 +837,13 @@ mod tests {
 
     #[test]
     fn build_jql_parts_empty() {
-        let parts = build_filter_clauses(None, None, None, None, None, false);
+        let parts = build_filter_clauses(None, None, None, None, None, false, None);
         assert!(parts.is_empty());
     }
 
     #[test]
     fn build_jql_parts_jql_plus_status_compose() {
-        let filter = build_filter_clauses(None, None, Some("Done"), None, None, false);
+        let filter = build_filter_clauses(None, None, Some("Done"), None, None, false, None);
         let mut all_parts = vec!["type = Bug".to_string()];
         all_parts.extend(filter);
         let jql = all_parts.join(" AND ");
@@ -850,20 +852,27 @@ mod tests {
 
     #[test]
     fn build_jql_parts_status_escaping() {
-        let parts =
-            build_filter_clauses(None, None, Some(r#"He said "hi" \o/"#), None, None, false);
+        let parts = build_filter_clauses(
+            None,
+            None,
+            Some(r#"He said "hi" \o/"#),
+            None,
+            None,
+            false,
+            None,
+        );
         assert_eq!(parts, vec![r#"status = "He said \"hi\" \\o/""#.to_string()]);
     }
 
     #[test]
     fn build_jql_parts_open() {
-        let parts = build_filter_clauses(None, None, None, None, None, true);
+        let parts = build_filter_clauses(None, None, None, None, None, true, None);
         assert_eq!(parts, vec!["statusCategory != Done"]);
     }
 
     #[test]
     fn build_jql_parts_open_with_assignee() {
-        let parts = build_filter_clauses(Some("currentUser()"), None, None, None, None, true);
+        let parts = build_filter_clauses(Some("currentUser()"), None, None, None, None, true, None);
         assert_eq!(parts.len(), 2);
         assert!(parts.contains(&"assignee = currentUser()".to_string()));
         assert!(parts.contains(&"statusCategory != Done".to_string()));
@@ -878,6 +887,7 @@ mod tests {
             Some(r#"customfield_10001 = "uuid-123""#),
             Some("30d"),
             true,
+            None,
         );
         assert_eq!(parts.len(), 5);
         assert!(parts.contains(&"assignee = currentUser()".to_string()));
@@ -885,6 +895,30 @@ mod tests {
         assert!(parts.contains(&"statusCategory != Done".to_string()));
         assert!(parts.contains(&r#"customfield_10001 = "uuid-123""#.to_string()));
         assert!(parts.contains(&"created >= -30d".to_string()));
+    }
+
+    #[test]
+    fn build_jql_parts_asset_clause() {
+        let clause = r#""Client" IN aqlFunction("Key = \"CUST-5\"")"#;
+        let parts = build_filter_clauses(None, None, None, None, None, false, Some(clause));
+        assert_eq!(parts, vec![clause.to_string()]);
+    }
+
+    #[test]
+    fn build_jql_parts_asset_with_assignee() {
+        let clause = r#""Client" IN aqlFunction("Key = \"CUST-5\"")"#;
+        let parts = build_filter_clauses(
+            Some("currentUser()"),
+            None,
+            None,
+            None,
+            None,
+            false,
+            Some(clause),
+        );
+        assert_eq!(parts.len(), 2);
+        assert!(parts.contains(&"assignee = currentUser()".to_string()));
+        assert!(parts.contains(&clause.to_string()));
     }
 
     #[test]
