@@ -121,9 +121,9 @@ pub enum AssetsCommand {
     View {
         /// Object key (e.g. OBJ-1) or numeric ID
         key: String,
-        /// Include object attributes in output
+        /// Omit object attributes from output
         #[arg(long)]
-        attributes: bool,
+        no_attributes: bool,
     },
     /// Show Jira issues connected to an asset
     Tickets {
