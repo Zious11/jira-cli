@@ -1046,3 +1046,69 @@ async fn list_object_types_returns_flat_array() {
         Some("Physical office or site.")
     );
 }
+
+#[tokio::test]
+async fn schemas_json_lists_all_schemas() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path(
+            "/jsm/assets/workspace/ws-123/v1/objectschema/list",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "startAt": 0,
+            "maxResults": 25,
+            "total": 2,
+            "isLast": true,
+            "values": [
+                {
+                    "id": "6",
+                    "name": "ITSM",
+                    "objectSchemaKey": "ITSM",
+                    "status": "Ok",
+                    "objectCount": 95,
+                    "objectTypeCount": 34
+                },
+                {
+                    "id": "1",
+                    "name": "Human Resources",
+                    "objectSchemaKey": "HR",
+                    "status": "Ok",
+                    "objectCount": 1023,
+                    "objectTypeCount": 14
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/assets/workspace"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 1,
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "values": [{ "workspaceId": "ws-123" }]
+        })))
+        .mount(&server)
+        .await;
+
+    let _guard = set_cache_dir(&tempfile::tempdir().unwrap().keep()).await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["assets", "schemas", "--output", "json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 2);
+    assert_eq!(arr[0]["name"], "ITSM");
+    assert_eq!(arr[0]["objectSchemaKey"], "ITSM");
+    assert_eq!(arr[1]["name"], "Human Resources");
+}

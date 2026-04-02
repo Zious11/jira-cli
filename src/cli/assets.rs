@@ -442,11 +442,32 @@ async fn handle_tickets(
 }
 
 async fn handle_schemas(
-    _workspace_id: &str,
-    _output_format: &OutputFormat,
-    _client: &JiraClient,
+    workspace_id: &str,
+    output_format: &OutputFormat,
+    client: &JiraClient,
 ) -> Result<()> {
-    todo!("handle_schemas")
+    let schemas = client.list_object_schemas(workspace_id).await?;
+
+    let rows: Vec<Vec<String>> = schemas
+        .iter()
+        .map(|s| {
+            vec![
+                s.id.clone(),
+                s.object_schema_key.clone(),
+                s.name.clone(),
+                s.description.clone().unwrap_or_else(|| "\u{2014}".into()),
+                s.object_type_count.to_string(),
+                s.object_count.to_string(),
+            ]
+        })
+        .collect();
+
+    output::print_output(
+        output_format,
+        &["ID", "Key", "Name", "Description", "Types", "Objects"],
+        &rows,
+        &schemas,
+    )
 }
 
 async fn handle_types(
