@@ -228,11 +228,12 @@ pub(super) async fn resolve_assignee(
                 .expect("selected name must exist in users");
             Ok((user.account_id.clone(), user.display_name.clone()))
         }
-        crate::partial_match::MatchResult::None(_) => {
+        crate::partial_match::MatchResult::None(all_names) => {
             anyhow::bail!(
-                "No assignable user matching \"{}\" on issue {}. The user may not exist or may lack permission for this project.",
+                "No assignable user with a name matching \"{}\" on issue {}. Found: {}",
                 name,
                 issue_key,
+                all_names.join(", "),
             );
         }
     }
