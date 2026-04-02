@@ -33,11 +33,7 @@ impl JiraClient {
     ///
     /// Uses the `/user/assignable/search` endpoint which pre-filters for
     /// active users with assignment permission on the issue's project.
-    pub async fn search_assignable_users(
-        &self,
-        query: &str,
-        issue_key: &str,
-    ) -> Result<Vec<User>> {
+    pub async fn search_assignable_users(&self, query: &str, issue_key: &str) -> Result<Vec<User>> {
         let path = format!(
             "/rest/api/3/user/assignable/search?query={}&issueKey={}",
             urlencoding::encode(query),

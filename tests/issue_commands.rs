@@ -826,9 +826,7 @@ async fn assign_to_me_keyword() {
     // Mock get myself
     Mock::given(method("GET"))
         .and(path("/rest/api/3/myself"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(common::fixtures::user_response()),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(common::fixtures::user_response()))
         .mount(&server)
         .await;
 
