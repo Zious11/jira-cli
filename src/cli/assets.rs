@@ -479,6 +479,11 @@ async fn handle_schemas(
     client: &JiraClient,
 ) -> Result<()> {
     let schemas = client.list_object_schemas(workspace_id).await?;
+    if schemas.is_empty() {
+        return Err(
+            JrError::UserError("No asset schemas found in this workspace.".into()).into(),
+        );
+    }
 
     let rows: Vec<Vec<String>> = schemas
         .iter()

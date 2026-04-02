@@ -1090,7 +1090,8 @@ async fn schemas_json_lists_all_schemas() {
         .mount(&server)
         .await;
 
-    let _guard = set_cache_dir(&tempfile::tempdir().unwrap().keep()).await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let _guard = set_cache_dir(cache_dir.path()).await;
 
     let output = assert_cmd::Command::cargo_bin("jr")
         .unwrap()
@@ -1176,7 +1177,8 @@ async fn types_json_lists_all_types() {
         .mount(&server)
         .await;
 
-    let _guard = set_cache_dir(&tempfile::tempdir().unwrap().keep()).await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let _guard = set_cache_dir(cache_dir.path()).await;
 
     let output = assert_cmd::Command::cargo_bin("jr")
         .unwrap()
@@ -1267,7 +1269,8 @@ async fn schema_json_shows_attributes() {
         .mount(&server)
         .await;
 
-    let _guard = set_cache_dir(&tempfile::tempdir().unwrap().keep()).await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let _guard = set_cache_dir(cache_dir.path()).await;
 
     let output = assert_cmd::Command::cargo_bin("jr")
         .unwrap()
@@ -1357,7 +1360,8 @@ async fn schema_table_filters_system_attrs() {
         .mount(&server)
         .await;
 
-    let _guard = set_cache_dir(&tempfile::tempdir().unwrap().keep()).await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let _guard = set_cache_dir(cache_dir.path()).await;
 
     let output = assert_cmd::Command::cargo_bin("jr")
         .unwrap()
