@@ -15,10 +15,11 @@ pub(crate) trait Expiring {
 /// (unparseable) files. Propagates I/O errors.
 fn read_cache<T: DeserializeOwned + Expiring>(filename: &str) -> Result<Option<T>> {
     let path = cache_dir().join(filename);
-    if !path.exists() {
-        return Ok(None);
-    }
-    let content = std::fs::read_to_string(&path)?;
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
     let cache: T = match serde_json::from_str(&content) {
         Ok(c) => c,
         Err(_) => return Ok(None),
