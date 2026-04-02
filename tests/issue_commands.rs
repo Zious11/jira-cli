@@ -1,7 +1,7 @@
 #[allow(dead_code)]
 mod common;
 
-use wiremock::matchers::{body_partial_json, method, path};
+use wiremock::matchers::{body_partial_json, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
@@ -673,4 +673,242 @@ async fn test_edit_issue_description_with_other_fields() {
         )
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn test_search_assignable_users_single() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/search"))
+        .and(query_param("query", "Jane"))
+        .and(query_param("issueKey", "FOO-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::user_search_response(vec![("acc-assign-1", "Jane Doe", true)]),
+        ))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let users = client
+        .search_assignable_users("Jane", "FOO-1")
+        .await
+        .unwrap();
+    assert_eq!(users.len(), 1);
+    assert_eq!(users[0].account_id, "acc-assign-1");
+    assert_eq!(users[0].display_name, "Jane Doe");
+}
+
+#[tokio::test]
+async fn test_search_assignable_users_empty() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/search"))
+        .and(query_param("query", "Nobody"))
+        .and(query_param("issueKey", "FOO-1"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::user_search_response(vec![])),
+        )
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let users = client
+        .search_assignable_users("Nobody", "FOO-1")
+        .await
+        .unwrap();
+    assert!(users.is_empty());
+}
+
+#[tokio::test]
+async fn test_search_assignable_users_paginated_response() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/search"))
+        .and(query_param("query", "Paged"))
+        .and(query_param("issueKey", "FOO-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "total": 1,
+            "values": [
+                {
+                    "accountId": "acc-paged-assign",
+                    "displayName": "Paged Assignee",
+                    "emailAddress": "paged@test.com",
+                    "active": true
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let users = client
+        .search_assignable_users("Paged", "FOO-1")
+        .await
+        .unwrap();
+    assert_eq!(users.len(), 1);
+    assert_eq!(users[0].account_id, "acc-paged-assign");
+}
+
+#[tokio::test]
+async fn assign_to_user_resolves_display_name() {
+    let server = MockServer::start().await;
+
+    // Mock assignable user search → single result
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::user_search_response(vec![("acc-jane-123", "Jane Doe", true)]),
+        ))
+        .mount(&server)
+        .await;
+
+    // Mock get issue → currently unassigned
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_response_with_assignee("FOO-1", "Test issue", None),
+        ))
+        .mount(&server)
+        .await;
+
+    // Mock assign → 204
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1/assignee"))
+        .and(body_partial_json(serde_json::json!({
+            "accountId": "acc-jane-123"
+        })))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+
+    // Resolve and assign
+    let users = client
+        .search_assignable_users("Jane", "FOO-1")
+        .await
+        .unwrap();
+    assert_eq!(users.len(), 1);
+    assert_eq!(users[0].account_id, "acc-jane-123");
+
+    client
+        .assign_issue("FOO-1", Some(&users[0].account_id))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn assign_to_user_not_found() {
+    let server = MockServer::start().await;
+
+    // Mock assignable user search → empty results
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/search"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::user_search_response(vec![])),
+        )
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let users = client
+        .search_assignable_users("Nonexistent", "FOO-1")
+        .await
+        .unwrap();
+    assert!(users.is_empty());
+}
+
+#[tokio::test]
+async fn assign_to_me_keyword() {
+    let server = MockServer::start().await;
+
+    // Mock get myself
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/myself"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(common::fixtures::user_response()))
+        .mount(&server)
+        .await;
+
+    // Mock get issue → currently unassigned
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_response_with_assignee("FOO-1", "Test issue", None),
+        ))
+        .mount(&server)
+        .await;
+
+    // Mock assign → 204
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1/assignee"))
+        .and(body_partial_json(serde_json::json!({
+            "accountId": "abc123"
+        })))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+
+    // "me" should resolve to get_myself(), not search API
+    let me = client.get_myself().await.unwrap();
+    assert_eq!(me.account_id, "abc123");
+
+    client
+        .assign_issue("FOO-1", Some(&me.account_id))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn assign_idempotent_already_assigned() {
+    let server = MockServer::start().await;
+
+    // Mock assignable user search → single result
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::user_search_response(vec![("acc-jane-123", "Jane Doe", true)]),
+        ))
+        .mount(&server)
+        .await;
+
+    // Mock get issue → already assigned to Jane
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_response_with_assignee(
+                "FOO-1",
+                "Test issue",
+                Some(("acc-jane-123", "Jane Doe")),
+            ),
+        ))
+        .mount(&server)
+        .await;
+
+    // NO mock for PUT /assignee — if the code tries to call it, the test fails
+    // because wiremock returns 404 for unmocked paths.
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+
+    // Resolve user
+    let users = client
+        .search_assignable_users("Jane", "FOO-1")
+        .await
+        .unwrap();
+    assert_eq!(users[0].account_id, "acc-jane-123");
+
+    // Get issue and verify already assigned
+    let issue = client.get_issue("FOO-1", &[]).await.unwrap();
+    let assignee = issue.fields.assignee.unwrap();
+    assert_eq!(assignee.account_id, "acc-jane-123");
 }

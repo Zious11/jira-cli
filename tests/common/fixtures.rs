@@ -323,6 +323,32 @@ pub fn board_list_response(boards: Vec<Value>) -> Value {
     })
 }
 
+/// Issue response with a specific assignee (or null if None).
+pub fn issue_response_with_assignee(
+    key: &str,
+    summary: &str,
+    assignee: Option<(&str, &str)>,
+) -> Value {
+    let assignee_value = match assignee {
+        Some((account_id, display_name)) => json!({
+            "accountId": account_id,
+            "displayName": display_name,
+        }),
+        None => Value::Null,
+    };
+    json!({
+        "key": key,
+        "fields": {
+            "summary": summary,
+            "status": {"name": "To Do"},
+            "issuetype": {"name": "Task"},
+            "priority": {"name": "Medium"},
+            "assignee": assignee_value,
+            "project": {"key": key.split('-').next().unwrap_or("TEST")}
+        }
+    })
+}
+
 pub fn issue_response_with_standard_fields(key: &str, summary: &str) -> Value {
     json!({
         "key": key,

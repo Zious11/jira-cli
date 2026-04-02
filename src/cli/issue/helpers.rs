@@ -167,6 +167,78 @@ pub(super) async fn resolve_user(
     }
 }
 
+/// Resolve a user flag value to an (account_id, display_name) tuple for assignment.
+///
+/// - `"me"` (case-insensitive) → `get_myself()` (no search API call)
+/// - Any other value → assignable user search API scoped to issue, disambiguate via partial_match
+///
+/// Unlike `resolve_user` (which returns JQL fragments), this returns concrete
+/// account details for the `PUT /assignee` API.
+pub(super) async fn resolve_assignee(
+    client: &JiraClient,
+    name: &str,
+    issue_key: &str,
+    no_input: bool,
+) -> Result<(String, String)> {
+    if is_me_keyword(name) {
+        let me = client.get_myself().await?;
+        return Ok((me.account_id, me.display_name));
+    }
+
+    let users = client.search_assignable_users(name, issue_key).await?;
+
+    if users.is_empty() {
+        anyhow::bail!(
+            "No assignable user matching \"{}\" on issue {}. The user may not exist or may lack permission for this project. Try a different name or check spelling.",
+            name,
+            issue_key,
+        );
+    }
+
+    if users.len() == 1 {
+        return Ok((users[0].account_id.clone(), users[0].display_name.clone()));
+    }
+
+    // Multiple matches — disambiguate
+    let display_names: Vec<String> = users.iter().map(|u| u.display_name.clone()).collect();
+    match crate::partial_match::partial_match(name, &display_names) {
+        crate::partial_match::MatchResult::Exact(matched_name) => {
+            let user = users
+                .iter()
+                .find(|u| u.display_name == matched_name)
+                .expect("matched name must exist in users");
+            Ok((user.account_id.clone(), user.display_name.clone()))
+        }
+        crate::partial_match::MatchResult::Ambiguous(matches) => {
+            if no_input {
+                anyhow::bail!(
+                    "Multiple users match \"{}\": {}. Use a more specific name.",
+                    name,
+                    matches.join(", ")
+                );
+            }
+            let selection = dialoguer::Select::new()
+                .with_prompt(format!("Multiple users match \"{name}\""))
+                .items(&matches)
+                .interact()?;
+            let selected_name = &matches[selection];
+            let user = users
+                .iter()
+                .find(|u| &u.display_name == selected_name)
+                .expect("selected name must exist in users");
+            Ok((user.account_id.clone(), user.display_name.clone()))
+        }
+        crate::partial_match::MatchResult::None(all_names) => {
+            anyhow::bail!(
+                "No assignable user with a name matching \"{}\" on issue {}. Found: {}",
+                name,
+                issue_key,
+                all_names.join(", "),
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
