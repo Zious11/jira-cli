@@ -101,7 +101,8 @@ worth genericizing:
 | Project meta | `project_meta.json` | Per-entry (`ProjectMeta.fetched_at`) |
 | Object type attrs | `object_type_attrs.json` | Per-file (`ObjectTypeAttrCache.fetched_at`) |
 
-These stay as explicit functions. The only change is normalizing corrupt-file
+These stay as explicit functions with a doc comment explaining why they are not
+genericized (different TTL semantics). The only change is normalizing corrupt-file
 handling: `read_project_meta` currently propagates deserialization errors via `?`.
 After this refactor it will return `Ok(None)` on corrupt data, matching
 `read_cmdb_fields_cache` and `read_object_type_attr_cache` which already do this.
@@ -133,6 +134,10 @@ Add 3 corrupt-file tests for caches that previously lacked them:
 - `corrupt_team_cache_returns_none`
 - `corrupt_workspace_cache_returns_none`
 - `corrupt_project_meta_returns_none`
+
+Each corrupt test should cover both garbage data (`"not json"`) and valid JSON
+with a wrong shape (e.g., `{"unexpected": true}`) to exercise the `Expiring`
+deserialization path.
 
 ### Estimated impact
 
