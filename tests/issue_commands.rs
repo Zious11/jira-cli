@@ -918,6 +918,14 @@ async fn test_search_issues_includes_labels_parent_issuelinks() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": [
+                "summary", "status", "issuetype", "priority", "assignee",
+                "reporter", "project", "description", "created", "updated",
+                "resolution", "components", "fixVersions",
+                "labels", "parent", "issuelinks"
+            ]
+        })))
         .respond_with(ResponseTemplate::new(200).set_body_json(
             common::fixtures::issue_search_response(vec![
                 common::fixtures::issue_response_with_labels_parent_links(
