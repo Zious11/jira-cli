@@ -89,6 +89,10 @@ pub struct ProjectMeta {
     pub fetched_at: DateTime<Utc>,
 }
 
+/// Read cached project metadata for a specific project key.
+///
+/// Keyed cache — not genericized because TTL is checked per-entry
+/// (`ProjectMeta.fetched_at`), unlike whole-file caches.
 pub fn read_project_meta(project_key: &str) -> Result<Option<ProjectMeta>> {
     let path = cache_dir().join("project_meta.json");
     if !path.exists() {
@@ -114,6 +118,9 @@ pub fn read_project_meta(project_key: &str) -> Result<Option<ProjectMeta>> {
     }
 }
 
+/// Write cached project metadata for a specific project key.
+///
+/// Merges into the existing map file, preserving entries for other projects.
 pub fn write_project_meta(project_key: &str, meta: &ProjectMeta) -> Result<()> {
     let dir = cache_dir();
     std::fs::create_dir_all(&dir)?;
@@ -207,6 +214,11 @@ pub struct ObjectTypeAttrCache {
     pub types: HashMap<String, Vec<CachedObjectTypeAttr>>,
 }
 
+/// Read cached attributes for a specific object type.
+///
+/// Keyed cache — not genericized because TTL is checked per-file
+/// (`ObjectTypeAttrCache.fetched_at`) but lookup is per-key, with a different
+/// return type (`Vec<CachedObjectTypeAttr>`) than the stored wrapper struct.
 pub fn read_object_type_attr_cache(
     object_type_id: &str,
 ) -> Result<Option<Vec<CachedObjectTypeAttr>>> {
@@ -229,6 +241,9 @@ pub fn read_object_type_attr_cache(
     Ok(cache.types.get(object_type_id).cloned())
 }
 
+/// Write cached attributes for a specific object type.
+///
+/// Merges into the existing map file, preserving entries for other object types.
 pub fn write_object_type_attr_cache(
     object_type_id: &str,
     attrs: &[CachedObjectTypeAttr],
