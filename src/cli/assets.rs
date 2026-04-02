@@ -578,6 +578,24 @@ async fn handle_types(
     Ok(())
 }
 
+/// Build an ambiguous type error with schema-labeled matches.
+fn ambiguous_type_error(
+    input: &str,
+    matches: &[String],
+    candidates: &[(crate::types::assets::ObjectTypeEntry, String)],
+) -> JrError {
+    let labeled: Vec<String> = candidates
+        .iter()
+        .filter(|(t, _)| matches.contains(&t.name))
+        .map(|(t, s)| format!("{} ({})", t.name, s))
+        .collect();
+    JrError::UserError(format!(
+        "Ambiguous type \"{}\". Matches: {}. Use --schema to narrow results.",
+        input,
+        labeled.join(", ")
+    ))
+}
+
 /// Format the Type column for an attribute definition.
 fn format_attribute_type(attr: &crate::types::assets::ObjectTypeAttributeDef) -> String {
     if let Some(ref dt) = attr.default_type {
@@ -623,27 +641,15 @@ async fn handle_schema(
         .into());
     }
 
-    // Partial match on type name
-    let type_names: Vec<String> = candidates.iter().map(|(t, _)| t.name.clone()).collect();
-    let matched_name = match partial_match::partial_match(type_name, &type_names) {
+    // Partial match on type name — deduplicated for partial_match, then
+    // check for cross-schema duplicates on the resolved name.
+    let mut deduped_names: Vec<String> = candidates.iter().map(|(t, _)| t.name.clone()).collect();
+    deduped_names.sort();
+    deduped_names.dedup();
+    let matched_name = match partial_match::partial_match(type_name, &deduped_names) {
         MatchResult::Exact(name) => name,
         MatchResult::Ambiguous(matches) => {
-            // Include schema name for disambiguation
-            let labeled: Vec<String> = matches
-                .iter()
-                .filter_map(|m| {
-                    candidates
-                        .iter()
-                        .find(|(t, _)| t.name == *m)
-                        .map(|(t, s)| format!("{} ({})", t.name, s))
-                })
-                .collect();
-            return Err(JrError::UserError(format!(
-                "Ambiguous type \"{}\". Matches: {}. Use --schema to narrow results.",
-                type_name,
-                labeled.join(", ")
-            ))
-            .into());
+            return Err(ambiguous_type_error(type_name, &matches, &candidates).into());
         }
         MatchResult::None(_) => {
             return Err(JrError::UserError(format!(
@@ -654,10 +660,25 @@ async fn handle_schema(
         }
     };
 
-    let (matched_type, schema_name) = candidates
+    // Check for cross-schema duplicates: same name in multiple schemas
+    let same_name: Vec<&(crate::types::assets::ObjectTypeEntry, String)> = candidates
         .iter()
-        .find(|(t, _)| t.name == matched_name)
-        .unwrap();
+        .filter(|(t, _)| t.name == matched_name)
+        .collect();
+    if same_name.len() > 1 {
+        let labeled: Vec<String> = same_name
+            .iter()
+            .map(|(t, s)| format!("{} ({})", t.name, s))
+            .collect();
+        return Err(JrError::UserError(format!(
+            "Ambiguous type \"{}\". Matches: {}. Use --schema to narrow results.",
+            type_name,
+            labeled.join(", ")
+        ))
+        .into());
+    }
+
+    let (matched_type, schema_name) = same_name.first().unwrap();
 
     // Fetch attributes
     let attrs = client
