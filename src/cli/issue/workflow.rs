@@ -208,6 +208,7 @@ pub(super) async fn handle_assign(
     command: IssueCommand,
     output_format: &OutputFormat,
     client: &JiraClient,
+    no_input: bool,
 ) -> Result<()> {
     let IssueCommand::Assign { key, to, unassign } = command else {
         unreachable!()
@@ -233,38 +234,39 @@ pub(super) async fn handle_assign(
         return Ok(());
     }
 
-    let account_id = if let Some(ref user_query) = to {
-        // Assign to another user — use the provided value as account ID
-        user_query.clone()
+    // Resolve account ID and display name
+    let (account_id, display_name) = if let Some(ref user_query) = to {
+        helpers::resolve_assignee(client, user_query, &key, no_input).await?
     } else {
-        // Assign to self
         let me = client.get_myself().await?;
-
-        // Idempotent: check if already assigned to self
-        let issue = client.get_issue(&key, &[]).await?;
-        if let Some(ref assignee) = issue.fields.assignee {
-            if assignee.account_id == me.account_id {
-                match output_format {
-                    OutputFormat::Json => {
-                        println!(
-                            "{}",
-                            serde_json::to_string_pretty(&json!({
-                                "key": key,
-                                "assignee": me.display_name,
-                                "changed": false
-                            }))?
-                        );
-                    }
-                    OutputFormat::Table => {
-                        output::print_success(&format!("{} is already assigned to you", key));
-                    }
-                }
-                return Ok(());
-            }
-        }
-
-        me.account_id
+        (me.account_id, me.display_name)
     };
+
+    // Idempotent: check if already assigned to target user
+    let issue = client.get_issue(&key, &[]).await?;
+    if let Some(ref assignee) = issue.fields.assignee {
+        if assignee.account_id == account_id {
+            match output_format {
+                OutputFormat::Json => {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&json!({
+                            "key": key,
+                            "assignee": display_name,
+                            "changed": false
+                        }))?
+                    );
+                }
+                OutputFormat::Table => {
+                    output::print_success(&format!(
+                        "{} is already assigned to {}",
+                        key, display_name
+                    ));
+                }
+            }
+            return Ok(());
+        }
+    }
 
     client.assign_issue(&key, Some(&account_id)).await?;
 
@@ -274,13 +276,13 @@ pub(super) async fn handle_assign(
                 "{}",
                 serde_json::to_string_pretty(&json!({
                     "key": key,
-                    "assignee": account_id,
+                    "assignee": display_name,
                     "changed": true
                 }))?
             );
         }
         OutputFormat::Table => {
-            output::print_success(&format!("Assigned {} to {}", key, account_id));
+            output::print_success(&format!("Assigned {} to {}", key, display_name));
         }
     }
 

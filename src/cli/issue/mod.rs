@@ -59,7 +59,7 @@ pub async fn handle(
             workflow::handle_transitions(command, output_format, client).await
         }
         IssueCommand::Assign { .. } => {
-            workflow::handle_assign(command, output_format, client).await
+            workflow::handle_assign(command, output_format, client, no_input).await
         }
         IssueCommand::Comment { .. } => {
             workflow::handle_comment(command, output_format, client).await
