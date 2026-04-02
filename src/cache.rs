@@ -11,7 +11,8 @@ pub(crate) trait Expiring {
     fn fetched_at(&self) -> DateTime<Utc>;
 }
 
-/// Read a whole-file cache. Returns `Ok(None)` on missing, expired, or corrupt files.
+/// Read a whole-file cache. Returns `Ok(None)` on missing, expired, or corrupt
+/// (unparseable) files. Propagates I/O errors.
 fn read_cache<T: DeserializeOwned + Expiring>(filename: &str) -> Result<Option<T>> {
     let path = cache_dir().join(filename);
     if !path.exists() {
@@ -285,9 +286,13 @@ mod tests {
     static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     fn with_temp_cache<F: FnOnce()>(f: F) {
+        // Recover from poison: catch_unwind below ensures env cleanup completed
+        // even if a prior test panicked, so the guarded state is consistent.
         let guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().unwrap();
-        // SAFETY: test holds ENV_MUTEX, so no concurrent env access.
+        // SAFETY: ENV_MUTEX serialises all tests that touch XDG_CACHE_HOME;
+        // the variable is only read inside cache functions called within this
+        // lock, so no concurrent env access occurs.
         unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
         unsafe { std::env::remove_var("XDG_CACHE_HOME") };
