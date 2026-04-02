@@ -912,3 +912,52 @@ async fn assign_idempotent_already_assigned() {
     let assignee = issue.fields.assignee.unwrap();
     assert_eq!(assignee.account_id, "acc-jane-123");
 }
+
+#[tokio::test]
+async fn test_search_issues_includes_labels_parent_issuelinks() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response(vec![
+                common::fixtures::issue_response_with_labels_parent_links(
+                    "FOO-10",
+                    "Labeled issue",
+                ),
+            ]),
+        ))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let result = client
+        .search_issues("project = FOO", Some(10), &[])
+        .await
+        .unwrap();
+
+    assert_eq!(result.issues.len(), 1);
+    let issue = &result.issues[0];
+
+    // Labels
+    let labels = issue.fields.labels.as_ref().expect("labels should be Some");
+    assert_eq!(labels, &vec!["bug".to_string(), "frontend".to_string()]);
+
+    // Parent
+    let parent = issue.fields.parent.as_ref().expect("parent should be Some");
+    assert_eq!(parent.key, "FOO-1");
+    assert_eq!(
+        parent.fields.as_ref().unwrap().summary.as_deref(),
+        Some("Parent Epic")
+    );
+
+    // Issue links
+    let links = issue
+        .fields
+        .issuelinks
+        .as_ref()
+        .expect("issuelinks should be Some");
+    assert_eq!(links.len(), 1);
+    assert_eq!(links[0].link_type.name, "Blocks");
+    assert_eq!(links[0].outward_issue.as_ref().unwrap().key, "FOO-3");
+}

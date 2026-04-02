@@ -371,3 +371,26 @@ pub fn issue_response_with_standard_fields(key: &str, summary: &str) -> Value {
         }
     })
 }
+
+pub fn issue_response_with_labels_parent_links(key: &str, summary: &str) -> Value {
+    json!({
+        "key": key,
+        "fields": {
+            "summary": summary,
+            "status": {"name": "To Do"},
+            "issuetype": {"name": "Story"},
+            "priority": {"name": "Medium"},
+            "assignee": {"accountId": "abc123", "displayName": "Test User"},
+            "project": {"key": key.split('-').next().unwrap_or("TEST")},
+            "labels": ["bug", "frontend"],
+            "parent": {"key": "FOO-1", "fields": {"summary": "Parent Epic"}},
+            "issuelinks": [
+                {
+                    "id": "30001",
+                    "type": {"name": "Blocks", "inward": "is blocked by", "outward": "blocks"},
+                    "outwardIssue": {"key": "FOO-3", "fields": {"summary": "Blocked issue"}}
+                }
+            ]
+        }
+    })
+}
