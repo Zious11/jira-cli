@@ -54,6 +54,15 @@ pub async fn handle(
             )
             .await
         }
+        AssetsCommand::Schemas => {
+            handle_schemas(&workspace_id, output_format, client).await
+        }
+        AssetsCommand::Types { schema } => {
+            handle_types(&workspace_id, schema, output_format, client).await
+        }
+        AssetsCommand::Schema { name, schema } => {
+            handle_schema(&workspace_id, &name, schema, output_format, client).await
+        }
     }
 }
 
@@ -430,6 +439,33 @@ async fn handle_tickets(
         }
     }
     Ok(())
+}
+
+async fn handle_schemas(
+    _workspace_id: &str,
+    _output_format: &OutputFormat,
+    _client: &JiraClient,
+) -> Result<()> {
+    todo!("handle_schemas")
+}
+
+async fn handle_types(
+    _workspace_id: &str,
+    _schema: Option<String>,
+    _output_format: &OutputFormat,
+    _client: &JiraClient,
+) -> Result<()> {
+    todo!("handle_types")
+}
+
+async fn handle_schema(
+    _workspace_id: &str,
+    _name: &str,
+    _schema: Option<String>,
+    _output_format: &OutputFormat,
+    _client: &JiraClient,
+) -> Result<()> {
+    todo!("handle_schema")
 }
 
 #[cfg(test)]

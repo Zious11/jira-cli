@@ -139,6 +139,22 @@ pub enum AssetsCommand {
         #[arg(long, conflicts_with = "open")]
         status: Option<String>,
     },
+    /// List object schemas in the workspace
+    Schemas,
+    /// List object types (all schemas or filtered)
+    Types {
+        /// Filter by schema (partial name match or exact ID)
+        #[arg(long)]
+        schema: Option<String>,
+    },
+    /// Show attributes for an object type
+    Schema {
+        /// Object type name (partial match supported)
+        name: String,
+        /// Filter by schema (partial name match or exact ID)
+        #[arg(long)]
+        schema: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

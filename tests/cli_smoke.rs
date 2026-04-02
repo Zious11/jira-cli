@@ -131,3 +131,35 @@ fn test_sprint_add_requires_sprint_or_current() {
         .failure()
         .stderr(predicate::str::contains("--sprint"));
 }
+
+#[test]
+fn test_assets_schemas_help() {
+    Command::cargo_bin("jr")
+        .unwrap()
+        .args(["assets", "schemas", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("List object schemas"));
+}
+
+#[test]
+fn test_assets_types_help() {
+    Command::cargo_bin("jr")
+        .unwrap()
+        .args(["assets", "types", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("List object types"))
+        .stdout(predicate::str::contains("--schema"));
+}
+
+#[test]
+fn test_assets_schema_help() {
+    Command::cargo_bin("jr")
+        .unwrap()
+        .args(["assets", "schema", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Show attributes"))
+        .stdout(predicate::str::contains("--schema"));
+}
