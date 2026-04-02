@@ -969,3 +969,161 @@ async fn test_search_issues_includes_labels_parent_issuelinks() {
     assert_eq!(links[0].link_type.name, "Blocks");
     assert_eq!(links[0].outward_issue.as_ref().unwrap().key, "FOO-3");
 }
+
+#[tokio::test]
+async fn test_create_issue_with_assignee() {
+    let server = MockServer::start().await;
+
+    // Mock multiProjectSearch → single result
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .and(query_param("projectKeys", "FOO"))
+        .and(query_param("query", "Jane"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::multi_project_user_search_response(vec![(
+                "acc-jane-123",
+                "Jane Doe",
+            )]),
+        ))
+        .mount(&server)
+        .await;
+
+    // Mock create issue → verify assignee in request body
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": {
+                "project": {"key": "FOO"},
+                "issuetype": {"name": "Task"},
+                "summary": "Test with assignee",
+                "assignee": {"id": "acc-jane-123"}
+            }
+        })))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .set_body_json(common::fixtures::create_issue_response("FOO-99")),
+        )
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+
+    // Resolve user
+    let users = client
+        .search_assignable_users_by_project("Jane", "FOO")
+        .await
+        .unwrap();
+    assert_eq!(users.len(), 1);
+    assert_eq!(users[0].account_id, "acc-jane-123");
+    assert_eq!(users[0].display_name, "Jane Doe");
+
+    // Create issue with assignee field
+    let mut fields = serde_json::json!({
+        "project": {"key": "FOO"},
+        "issuetype": {"name": "Task"},
+        "summary": "Test with assignee",
+    });
+    fields["assignee"] = serde_json::json!({"id": users[0].account_id});
+
+    let response = client.create_issue(fields).await.unwrap();
+    assert_eq!(response.key, "FOO-99");
+}
+
+#[tokio::test]
+async fn test_create_issue_with_assignee_me() {
+    let server = MockServer::start().await;
+
+    // Mock get_myself
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/myself"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(common::fixtures::user_response()))
+        .mount(&server)
+        .await;
+
+    // Mock create issue → verify assignee uses "me" account ID
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": {
+                "assignee": {"id": "abc123"}
+            }
+        })))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .set_body_json(common::fixtures::create_issue_response("FOO-100")),
+        )
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+
+    // "me" resolves via get_myself, not search API
+    let me = client.get_myself().await.unwrap();
+    assert_eq!(me.account_id, "abc123");
+
+    // Create issue with self-assignment
+    let mut fields = serde_json::json!({
+        "project": {"key": "FOO"},
+        "issuetype": {"name": "Task"},
+        "summary": "Assigned to me",
+    });
+    fields["assignee"] = serde_json::json!({"id": me.account_id});
+
+    let response = client.create_issue(fields).await.unwrap();
+    assert_eq!(response.key, "FOO-100");
+}
+
+#[tokio::test]
+async fn test_create_issue_without_assignee() {
+    let server = MockServer::start().await;
+
+    // Mock create issue — NO multiProjectSearch mock (test fails if it's called)
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue"))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .set_body_json(common::fixtures::create_issue_response("FOO-101")),
+        )
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+
+    let fields = serde_json::json!({
+        "project": {"key": "FOO"},
+        "issuetype": {"name": "Task"},
+        "summary": "No assignee",
+    });
+
+    let response = client.create_issue(fields).await.unwrap();
+    assert_eq!(response.key, "FOO-101");
+}
+
+#[tokio::test]
+async fn test_create_issue_assignee_not_found() {
+    let server = MockServer::start().await;
+
+    // Mock multiProjectSearch → empty results
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::multi_project_user_search_response(vec![])),
+        )
+        .mount(&server)
+        .await;
+
+    // NO create mock — test fails if create is attempted
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+
+    let users = client
+        .search_assignable_users_by_project("Nonexistent", "FOO")
+        .await
+        .unwrap();
+    assert!(users.is_empty());
+}
