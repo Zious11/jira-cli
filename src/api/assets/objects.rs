@@ -1,9 +1,12 @@
+use std::collections::HashMap;
+
 use anyhow::Result;
 
 use crate::api::client::JiraClient;
 use crate::api::pagination::AssetsPage;
+use crate::cache::{self, CachedObjectTypeAttr};
 use crate::error::JrError;
-use crate::types::assets::{AssetObject, ObjectAttribute};
+use crate::types::assets::{AssetObject, ObjectAttribute, ObjectTypeAttributeDef};
 
 impl JiraClient {
     /// Search assets via AQL with auto-pagination.
@@ -84,6 +87,23 @@ impl JiraClient {
         let path = format!("object/{}/attributes", urlencoding::encode(object_id));
         self.get_assets(workspace_id, &path).await
     }
+
+    /// Get all attribute definitions for an object type.
+    ///
+    /// Returns schema-level metadata (name, system, hidden, label, position)
+    /// for every attribute defined on the type. Used to enrich search results
+    /// where only `objectTypeAttributeId` is present.
+    pub async fn get_object_type_attributes(
+        &self,
+        workspace_id: &str,
+        object_type_id: &str,
+    ) -> Result<Vec<ObjectTypeAttributeDef>> {
+        let path = format!(
+            "objecttype/{}/attributes",
+            urlencoding::encode(object_type_id)
+        );
+        self.get_assets(workspace_id, &path).await
+    }
 }
 
 /// Resolve an object key (e.g., "OBJ-1") to its numeric ID.
@@ -121,6 +141,67 @@ pub async fn resolve_object_key(
         ))
         .into()
     })
+}
+
+/// Enrich search results by resolving attribute definitions for each unique object type.
+///
+/// Returns a HashMap mapping `objectTypeAttributeId` → `CachedObjectTypeAttr` for use
+/// in output formatting (filtering system/hidden, sorting by position, displaying names).
+///
+/// Fetches definitions from cache first, falling back to the API. Results are cached
+/// for 7 days per object type.
+pub async fn enrich_search_attributes(
+    client: &JiraClient,
+    workspace_id: &str,
+    objects: &[AssetObject],
+) -> Result<HashMap<String, CachedObjectTypeAttr>> {
+    // Collect unique object type IDs
+    let mut type_ids: Vec<String> = objects.iter().map(|o| o.object_type.id.clone()).collect();
+    type_ids.sort();
+    type_ids.dedup();
+
+    let mut attr_map: HashMap<String, CachedObjectTypeAttr> = HashMap::new();
+
+    for type_id in &type_ids {
+        // Try cache first
+        let attrs = match cache::read_object_type_attr_cache(type_id) {
+            Ok(Some(cached)) => cached,
+            _ => {
+                // Cache miss — fetch from API
+                match client
+                    .get_object_type_attributes(workspace_id, type_id)
+                    .await
+                {
+                    Ok(defs) => {
+                        let cached: Vec<CachedObjectTypeAttr> = defs
+                            .iter()
+                            .map(|d| CachedObjectTypeAttr {
+                                id: d.id.clone(),
+                                name: d.name.clone(),
+                                system: d.system,
+                                hidden: d.hidden,
+                                label: d.label,
+                                position: d.position,
+                            })
+                            .collect();
+                        // Best-effort cache write
+                        let _ = cache::write_object_type_attr_cache(type_id, &cached);
+                        cached
+                    }
+                    Err(_) => {
+                        // Graceful degradation: skip this type, let caller decide on warnings
+                        continue;
+                    }
+                }
+            }
+        };
+
+        for attr in attrs {
+            attr_map.insert(attr.id.clone(), attr);
+        }
+    }
+
+    Ok(attr_map)
 }
 
 #[cfg(test)]

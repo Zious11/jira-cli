@@ -1,12 +1,15 @@
+use std::collections::HashMap;
+
 use anyhow::Result;
 
 use crate::api::assets::{objects, workspace};
 use crate::api::client::JiraClient;
+use crate::cache::CachedObjectTypeAttr;
 use crate::cli::{AssetsCommand, OutputFormat};
 use crate::error::JrError;
 use crate::output;
 use crate::partial_match::{self, MatchResult};
-use crate::types::assets::ConnectedTicket;
+use crate::types::assets::{AssetAttribute, ConnectedTicket};
 
 pub async fn handle(
     command: AssetsCommand,
@@ -67,24 +70,88 @@ async fn handle_search(
         .await?;
 
     if attributes {
-        let rows: Vec<Vec<String>> = objects
-            .iter()
-            .map(|o| {
-                vec![
-                    o.object_key.clone(),
-                    o.object_type.name.clone(),
-                    o.label.clone(),
-                    o.created.clone().unwrap_or_default(),
-                    o.updated.clone().unwrap_or_default(),
-                ]
-            })
-            .collect();
-        output::print_output(
-            output_format,
-            &["Key", "Type", "Name", "Created", "Updated"],
-            &rows,
-            &objects,
-        )
+        let attr_map =
+            crate::api::assets::objects::enrich_search_attributes(client, workspace_id, &objects)
+                .await?;
+
+        match output_format {
+            OutputFormat::Json => {
+                // Serialize to Value, inject objectTypeAttribute, filter system/hidden
+                let mut json_objects: Vec<serde_json::Value> = Vec::new();
+                for obj in &objects {
+                    let mut obj_value = serde_json::to_value(obj)?;
+                    if let Some(attrs_array) = obj_value
+                        .get_mut("attributes")
+                        .and_then(|a| a.as_array_mut())
+                    {
+                        // Inject objectTypeAttribute into each attribute
+                        for attr_value in attrs_array.iter_mut() {
+                            if let Some(attr_id) = attr_value
+                                .get("objectTypeAttributeId")
+                                .and_then(|v| v.as_str())
+                            {
+                                if let Some(def) = attr_map.get(attr_id) {
+                                    if let Some(map) = attr_value.as_object_mut() {
+                                        map.insert(
+                                            "objectTypeAttribute".to_string(),
+                                            serde_json::json!({
+                                                "name": def.name,
+                                                "position": def.position,
+                                            }),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        // Filter out system and hidden attributes
+                        attrs_array.retain(|attr| {
+                            let attr_id = attr
+                                .get("objectTypeAttributeId")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            match attr_map.get(attr_id) {
+                                Some(def) => !def.system && !def.hidden,
+                                None => true, // keep unknown attributes
+                            }
+                        });
+                        // Sort by position
+                        attrs_array.sort_by_key(|attr| {
+                            let attr_id = attr
+                                .get("objectTypeAttributeId")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            attr_map
+                                .get(attr_id)
+                                .map(|d| d.position)
+                                .unwrap_or(i32::MAX)
+                        });
+                    }
+                    json_objects.push(obj_value);
+                }
+                println!("{}", output::render_json(&json_objects)?);
+            }
+            OutputFormat::Table => {
+                let rows: Vec<Vec<String>> = objects
+                    .iter()
+                    .map(|o| {
+                        let attr_str = format_inline_attributes(&o.attributes, &attr_map);
+                        vec![
+                            o.object_key.clone(),
+                            o.object_type.name.clone(),
+                            o.label.clone(),
+                            attr_str,
+                        ]
+                    })
+                    .collect();
+                output::print_output(
+                    output_format,
+                    &["Key", "Type", "Name", "Attributes"],
+                    &rows,
+                    &objects,
+                )?;
+            }
+        }
+        Ok(())
     } else {
         let rows: Vec<Vec<String>> = objects
             .iter()
@@ -98,6 +165,41 @@ async fn handle_search(
             .collect();
         output::print_output(output_format, &["Key", "Type", "Name"], &rows, &objects)
     }
+}
+
+/// Format attributes as inline `Name: Value` pairs for table display.
+///
+/// Filters out system, hidden, and label attributes. Sorts by position.
+/// Multi-value attributes use the first displayValue (or value as fallback).
+fn format_inline_attributes(
+    attributes: &[AssetAttribute],
+    attr_map: &HashMap<String, CachedObjectTypeAttr>,
+) -> String {
+    let mut displayable: Vec<(&AssetAttribute, &CachedObjectTypeAttr)> = attributes
+        .iter()
+        .filter_map(|a| {
+            attr_map.get(&a.object_type_attribute_id).and_then(|def| {
+                if def.system || def.hidden || def.label {
+                    None
+                } else {
+                    Some((a, def))
+                }
+            })
+        })
+        .collect();
+    displayable.sort_by_key(|(_, def)| def.position);
+
+    displayable
+        .iter()
+        .filter_map(|(attr, def)| {
+            let value = attr
+                .values
+                .first()
+                .and_then(|v| v.display_value.as_deref().or(v.value.as_deref()));
+            value.map(|v| format!("{}: {}", def.name, v))
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 async fn handle_view(

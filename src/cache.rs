@@ -189,6 +189,80 @@ pub fn write_cmdb_fields_cache(fields: &[(String, String)]) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedObjectTypeAttr {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub system: bool,
+    #[serde(default)]
+    pub hidden: bool,
+    #[serde(default)]
+    pub label: bool,
+    #[serde(default)]
+    pub position: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ObjectTypeAttrCache {
+    pub fetched_at: DateTime<Utc>,
+    pub types: HashMap<String, Vec<CachedObjectTypeAttr>>,
+}
+
+pub fn read_object_type_attr_cache(
+    object_type_id: &str,
+) -> Result<Option<Vec<CachedObjectTypeAttr>>> {
+    let path = cache_dir().join("object_type_attrs.json");
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let content = std::fs::read_to_string(&path)?;
+    let cache: ObjectTypeAttrCache = match serde_json::from_str(&content) {
+        Ok(c) => c,
+        Err(_) => return Ok(None),
+    };
+
+    let age = Utc::now() - cache.fetched_at;
+    if age.num_days() >= CACHE_TTL_DAYS {
+        return Ok(None);
+    }
+
+    Ok(cache.types.get(object_type_id).cloned())
+}
+
+pub fn write_object_type_attr_cache(
+    object_type_id: &str,
+    attrs: &[CachedObjectTypeAttr],
+) -> Result<()> {
+    let dir = cache_dir();
+    std::fs::create_dir_all(&dir)?;
+
+    let path = dir.join("object_type_attrs.json");
+
+    let mut cache: ObjectTypeAttrCache = if path.exists() {
+        let content = std::fs::read_to_string(&path)?;
+        serde_json::from_str(&content).unwrap_or(ObjectTypeAttrCache {
+            fetched_at: Utc::now(),
+            types: HashMap::new(),
+        })
+    } else {
+        ObjectTypeAttrCache {
+            fetched_at: Utc::now(),
+            types: HashMap::new(),
+        }
+    };
+
+    cache
+        .types
+        .insert(object_type_id.to_string(), attrs.to_vec());
+    cache.fetched_at = Utc::now();
+
+    let content = serde_json::to_string_pretty(&cache)?;
+    std::fs::write(&path, content)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -438,6 +512,125 @@ mod tests {
                 result.is_none(),
                 "expired cmdb fields cache should return None"
             );
+        });
+    }
+
+    #[test]
+    fn read_missing_object_type_attr_cache_returns_none() {
+        with_temp_cache(|| {
+            let result = read_object_type_attr_cache("23").unwrap();
+            assert!(result.is_none());
+        });
+    }
+
+    #[test]
+    fn write_then_read_object_type_attr_cache() {
+        with_temp_cache(|| {
+            let attrs = vec![
+                CachedObjectTypeAttr {
+                    id: "134".into(),
+                    name: "Key".into(),
+                    system: true,
+                    hidden: false,
+                    label: false,
+                    position: 0,
+                },
+                CachedObjectTypeAttr {
+                    id: "135".into(),
+                    name: "Name".into(),
+                    system: false,
+                    hidden: false,
+                    label: true,
+                    position: 1,
+                },
+            ];
+            write_object_type_attr_cache("23", &attrs).unwrap();
+
+            let loaded = read_object_type_attr_cache("23")
+                .unwrap()
+                .expect("should exist");
+            assert_eq!(loaded.len(), 2);
+            assert_eq!(loaded[0].name, "Key");
+            assert!(loaded[0].system);
+            assert_eq!(loaded[1].name, "Name");
+            assert!(loaded[1].label);
+        });
+    }
+
+    #[test]
+    fn expired_object_type_attr_cache_returns_none() {
+        with_temp_cache(|| {
+            let expired = ObjectTypeAttrCache {
+                fetched_at: Utc::now() - chrono::Duration::days(8),
+                types: {
+                    let mut m = HashMap::new();
+                    m.insert(
+                        "23".to_string(),
+                        vec![CachedObjectTypeAttr {
+                            id: "134".into(),
+                            name: "Key".into(),
+                            system: true,
+                            hidden: false,
+                            label: false,
+                            position: 0,
+                        }],
+                    );
+                    m
+                },
+            };
+            let dir = cache_dir();
+            std::fs::create_dir_all(&dir).unwrap();
+            let content = serde_json::to_string_pretty(&expired).unwrap();
+            std::fs::write(dir.join("object_type_attrs.json"), content).unwrap();
+
+            let result = read_object_type_attr_cache("23").unwrap();
+            assert!(result.is_none(), "expired cache should return None");
+        });
+    }
+
+    #[test]
+    fn object_type_attr_cache_multiple_types() {
+        with_temp_cache(|| {
+            let attrs_a = vec![CachedObjectTypeAttr {
+                id: "134".into(),
+                name: "Key".into(),
+                system: true,
+                hidden: false,
+                label: false,
+                position: 0,
+            }];
+            let attrs_b = vec![CachedObjectTypeAttr {
+                id: "200".into(),
+                name: "Hostname".into(),
+                system: false,
+                hidden: false,
+                label: false,
+                position: 3,
+            }];
+            write_object_type_attr_cache("23", &attrs_a).unwrap();
+            write_object_type_attr_cache("45", &attrs_b).unwrap();
+
+            let loaded_a = read_object_type_attr_cache("23")
+                .unwrap()
+                .expect("type 23 should exist");
+            assert_eq!(loaded_a[0].name, "Key");
+
+            let loaded_b = read_object_type_attr_cache("45")
+                .unwrap()
+                .expect("type 45 should exist");
+            assert_eq!(loaded_b[0].name, "Hostname");
+        });
+    }
+
+    #[test]
+    fn object_type_attr_cache_corrupt_returns_none() {
+        with_temp_cache(|| {
+            let dir = cache_dir();
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("object_type_attrs.json"), "not json").unwrap();
+
+            let result = read_object_type_attr_cache("23").unwrap();
+            assert!(result.is_none(), "corrupt cache should return None");
         });
     }
 }

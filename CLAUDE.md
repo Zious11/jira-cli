@@ -20,7 +20,7 @@ src/
 │   │   ├── links.rs     # link + unlink + link-types
 │   │   ├── helpers.rs   # team/points resolution, user resolution, prompts
 │   │   └── assets.rs    # linked assets (issue→asset lookup)
-│   ├── assets.rs        # assets search/view/tickets (--open/--status client-side filtering)
+│   ├── assets.rs        # assets search/view/tickets (--open/--status client-side filtering, search attribute enrichment)
 │   ├── board.rs         # board list/view
 │   ├── sprint.rs        # sprint list/current (scrum-only, errors on kanban)
 │   ├── worklog.rs       # worklog add/list

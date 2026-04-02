@@ -2,8 +2,20 @@
 mod common;
 
 use serde_json::json;
+use tokio::sync::Mutex;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+/// Serialize tests that touch XDG_CACHE_HOME — all tests in this file that
+/// manipulate the env var must hold this mutex for the entire test duration.
+static ENV_MUTEX: Mutex<()> = Mutex::const_new(());
+
+async fn set_cache_dir(dir: &std::path::Path) -> tokio::sync::MutexGuard<'static, ()> {
+    let guard = ENV_MUTEX.lock().await;
+    // SAFETY: ENV_MUTEX guard is held by caller for the entire test duration.
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir) };
+    guard
+}
 
 #[tokio::test]
 async fn search_assets_returns_objects() {
@@ -412,5 +424,510 @@ async fn get_object_attributes_returns_named_attributes() {
     assert_eq!(
         visible[1].values[0].display_value.as_deref(),
         Some("New York, NY")
+    );
+}
+
+#[tokio::test]
+async fn get_object_type_attributes_returns_definitions() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path(
+            "/jsm/assets/workspace/ws-123/v1/objecttype/23/attributes",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {
+                "id": "134",
+                "name": "Key",
+                "system": true,
+                "hidden": false,
+                "label": false,
+                "position": 0,
+                "editable": false,
+                "sortable": true
+            },
+            {
+                "id": "135",
+                "name": "Name",
+                "system": false,
+                "hidden": false,
+                "label": true,
+                "position": 1,
+                "editable": true,
+                "sortable": true
+            },
+            {
+                "id": "140",
+                "name": "Location",
+                "system": false,
+                "hidden": false,
+                "label": false,
+                "position": 5,
+                "editable": true,
+                "sortable": true
+            }
+        ])))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".into());
+    let attrs = client
+        .get_object_type_attributes("ws-123", "23")
+        .await
+        .unwrap();
+
+    assert_eq!(attrs.len(), 3);
+    assert_eq!(attrs[0].id, "134");
+    assert_eq!(attrs[0].name, "Key");
+    assert!(attrs[0].system);
+    assert!(!attrs[0].hidden);
+    assert_eq!(attrs[1].id, "135");
+    assert_eq!(attrs[1].name, "Name");
+    assert!(attrs[1].label);
+    assert_eq!(attrs[2].id, "140");
+    assert_eq!(attrs[2].name, "Location");
+    assert_eq!(attrs[2].position, 5);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn enrich_search_attributes_injects_names() {
+    let cache_dir = tempfile::tempdir().unwrap();
+    let _env_guard = set_cache_dir(cache_dir.path()).await;
+
+    let server = MockServer::start().await;
+
+    // Mock: object type 13 attribute definitions
+    Mock::given(method("GET"))
+        .and(path(
+            "/jsm/assets/workspace/ws-123/v1/objecttype/13/attributes",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {
+                "id": "134",
+                "name": "Key",
+                "system": true,
+                "hidden": false,
+                "label": false,
+                "position": 0
+            },
+            {
+                "id": "140",
+                "name": "Location",
+                "system": false,
+                "hidden": false,
+                "label": false,
+                "position": 5
+            },
+            {
+                "id": "141",
+                "name": "Secret",
+                "system": false,
+                "hidden": true,
+                "label": false,
+                "position": 6
+            }
+        ])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".into());
+
+    // Simulate search results with inline attributes (no names)
+    let objects = vec![jr::types::assets::AssetObject {
+        id: "70".into(),
+        label: "Acme Corp".into(),
+        object_key: "OBJ-70".into(),
+        object_type: jr::types::assets::ObjectType {
+            id: "13".into(),
+            name: "Client".into(),
+            description: None,
+        },
+        created: None,
+        updated: None,
+        attributes: vec![
+            jr::types::assets::AssetAttribute {
+                id: "637".into(),
+                object_type_attribute_id: "140".into(),
+                values: vec![jr::types::assets::ObjectAttributeValue {
+                    value: Some("New York".into()),
+                    display_value: Some("New York".into()),
+                }],
+            },
+            jr::types::assets::AssetAttribute {
+                id: "638".into(),
+                object_type_attribute_id: "141".into(),
+                values: vec![jr::types::assets::ObjectAttributeValue {
+                    value: Some("secret".into()),
+                    display_value: Some("secret".into()),
+                }],
+            },
+        ],
+    }];
+
+    let enriched = jr::api::assets::objects::enrich_search_attributes(&client, "ws-123", &objects)
+        .await
+        .unwrap();
+
+    // Returns the attribute definition map for use in output formatting
+    assert!(enriched.contains_key("140"));
+    assert_eq!(enriched["140"].name, "Location");
+    assert!(enriched.contains_key("141"));
+    assert_eq!(enriched["141"].name, "Secret");
+    assert!(enriched["141"].hidden);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn search_attributes_json_includes_names() {
+    let cache_dir = tempfile::tempdir().unwrap();
+    let _env_guard = set_cache_dir(cache_dir.path()).await;
+
+    let server = MockServer::start().await;
+
+    // Mock: AQL search with attributes
+    Mock::given(method("POST"))
+        .and(path("/jsm/assets/workspace/ws-123/v1/object/aql"))
+        .and(query_param("includeAttributes", "true"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "startAt": 0,
+            "maxResults": 25,
+            "total": 1,
+            "isLast": true,
+            "values": [
+                {
+                    "id": "70",
+                    "label": "Acme Corp",
+                    "objectKey": "OBJ-70",
+                    "objectType": { "id": "13", "name": "Client" },
+                    "attributes": [
+                        {
+                            "id": "637",
+                            "objectTypeAttributeId": "134",
+                            "objectAttributeValues": [
+                                { "value": "OBJ-70", "displayValue": "OBJ-70" }
+                            ]
+                        },
+                        {
+                            "id": "638",
+                            "objectTypeAttributeId": "140",
+                            "objectAttributeValues": [
+                                { "value": "New York", "displayValue": "New York" }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    // Mock: object type attribute definitions
+    Mock::given(method("GET"))
+        .and(path(
+            "/jsm/assets/workspace/ws-123/v1/objecttype/13/attributes",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {
+                "id": "134",
+                "name": "Key",
+                "system": true,
+                "hidden": false,
+                "label": false,
+                "position": 0
+            },
+            {
+                "id": "140",
+                "name": "Location",
+                "system": false,
+                "hidden": false,
+                "label": false,
+                "position": 5
+            }
+        ])))
+        .mount(&server)
+        .await;
+
+    // Mock: workspace discovery (needed for CLI command)
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/assets/workspace"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 1,
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "values": [{ "workspaceId": "ws-123" }]
+        })))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .args([
+            "--output",
+            "json",
+            "assets",
+            "search",
+            "--attributes",
+            "objectType = Client",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "Expected success, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    let objects = parsed.as_array().expect("array of objects");
+    assert_eq!(objects.len(), 1);
+
+    let attrs = objects[0]["attributes"]
+        .as_array()
+        .expect("attributes array");
+    // System attribute (Key) should be filtered out
+    // Only Location should remain
+    assert_eq!(attrs.len(), 1);
+    assert_eq!(attrs[0]["objectTypeAttribute"]["name"], "Location");
+    assert_eq!(attrs[0]["objectTypeAttribute"]["position"], 5);
+    assert_eq!(
+        attrs[0]["objectAttributeValues"][0]["displayValue"],
+        "New York"
+    );
+}
+
+#[tokio::test]
+async fn cli_json_filter_excludes_system_and_hidden_attributes() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/jsm/assets/workspace/ws-123/v1/object/88/attributes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {
+                "id": "637",
+                "objectTypeAttributeId": "134",
+                "objectTypeAttribute": {
+                    "id": "134",
+                    "name": "Key",
+                    "system": true,
+                    "hidden": false,
+                    "label": false,
+                    "position": 0
+                },
+                "objectAttributeValues": [
+                    { "value": "OBJ-88", "displayValue": "OBJ-88" }
+                ]
+            },
+            {
+                "id": "640",
+                "objectTypeAttributeId": "135",
+                "objectTypeAttribute": {
+                    "id": "135",
+                    "name": "Name",
+                    "system": false,
+                    "hidden": false,
+                    "label": true,
+                    "position": 1
+                },
+                "objectAttributeValues": [
+                    { "value": "Acme Corp", "displayValue": "Acme Corp" }
+                ]
+            },
+            {
+                "id": "641",
+                "objectTypeAttributeId": "140",
+                "objectTypeAttribute": {
+                    "id": "140",
+                    "name": "Location",
+                    "system": false,
+                    "hidden": false,
+                    "label": false,
+                    "position": 5
+                },
+                "objectAttributeValues": [
+                    { "value": "New York, NY", "displayValue": "New York, NY" }
+                ]
+            },
+            {
+                "id": "642",
+                "objectTypeAttributeId": "141",
+                "objectTypeAttribute": {
+                    "id": "141",
+                    "name": "Internal Notes",
+                    "system": false,
+                    "hidden": true,
+                    "label": false,
+                    "position": 6
+                },
+                "objectAttributeValues": [
+                    { "value": "secret", "displayValue": "secret" }
+                ]
+            }
+        ])))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".into());
+    let mut attrs = client.get_object_attributes("ws-123", "88").await.unwrap();
+
+    // Apply the same filter used by handle_view for JSON output
+    attrs.retain(|a| !a.object_type_attribute.system && !a.object_type_attribute.hidden);
+    attrs.sort_by_key(|a| a.object_type_attribute.position);
+
+    // System (Key) and hidden (Internal Notes) are excluded
+    assert_eq!(attrs.len(), 2);
+    assert_eq!(attrs[0].object_type_attribute.name, "Name");
+    assert_eq!(attrs[1].object_type_attribute.name, "Location");
+    assert_eq!(
+        attrs[1].values[0].display_value.as_deref(),
+        Some("New York, NY")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn search_attributes_table_shows_inline_values() {
+    let cache_dir = tempfile::tempdir().unwrap();
+    let _env_guard = set_cache_dir(cache_dir.path()).await;
+
+    let server = MockServer::start().await;
+
+    // Mock: AQL search with attributes
+    Mock::given(method("POST"))
+        .and(path("/jsm/assets/workspace/ws-123/v1/object/aql"))
+        .and(query_param("includeAttributes", "true"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "startAt": 0,
+            "maxResults": 25,
+            "total": 1,
+            "isLast": true,
+            "values": [
+                {
+                    "id": "70",
+                    "label": "Acme Corp",
+                    "objectKey": "OBJ-70",
+                    "objectType": { "id": "13", "name": "Client" },
+                    "attributes": [
+                        {
+                            "id": "637",
+                            "objectTypeAttributeId": "134",
+                            "objectAttributeValues": [
+                                { "value": "OBJ-70", "displayValue": "OBJ-70" }
+                            ]
+                        },
+                        {
+                            "id": "639",
+                            "objectTypeAttributeId": "142",
+                            "objectAttributeValues": [
+                                { "value": "10", "displayValue": "10" }
+                            ]
+                        },
+                        {
+                            "id": "638",
+                            "objectTypeAttributeId": "140",
+                            "objectAttributeValues": [
+                                { "value": "New York", "displayValue": "New York" }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    // Mock: object type attribute definitions
+    Mock::given(method("GET"))
+        .and(path(
+            "/jsm/assets/workspace/ws-123/v1/objecttype/13/attributes",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {
+                "id": "134",
+                "name": "Key",
+                "system": true,
+                "hidden": false,
+                "label": false,
+                "position": 0
+            },
+            {
+                "id": "142",
+                "name": "Seats",
+                "system": false,
+                "hidden": false,
+                "label": false,
+                "position": 4
+            },
+            {
+                "id": "140",
+                "name": "Location",
+                "system": false,
+                "hidden": false,
+                "label": false,
+                "position": 5
+            }
+        ])))
+        .mount(&server)
+        .await;
+
+    // Mock: workspace discovery
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/assets/workspace"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 1,
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "values": [{ "workspaceId": "ws-123" }]
+        })))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .args(["assets", "search", "--attributes", "objectType = Client"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "Expected success, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Table should contain the Attributes column with inline values
+    // Seats (position 4) comes before Location (position 5)
+    assert!(
+        stdout.contains("Seats: 10"),
+        "Expected 'Seats: 10' in table, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("Location: New York"),
+        "Expected 'Location: New York' in table, got: {stdout}"
+    );
+    // System attribute Key should NOT appear
+    assert!(
+        !stdout.contains("Key: OBJ-70"),
+        "System attribute Key should be filtered, got: {stdout}"
+    );
+    // Should have Attributes header instead of Created/Updated
+    assert!(
+        stdout.contains("Attributes"),
+        "Expected 'Attributes' header in table, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("Created"),
+        "Should not have Created column, got: {stdout}"
     );
 }

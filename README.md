@@ -138,7 +138,7 @@ jr issue comment KEY-123 "Deployed to staging"
 | `jr worklog list KEY` | List worklogs |
 | `jr queue list`                  | List JSM queues for the project's service desk |
 | `jr queue view <name>`           | View issues in a queue (partial name match)    |
-| `jr assets search <AQL>`        | Search assets via AQL query                    |
+| `jr assets search <AQL>`        | Search assets via AQL query (`--attributes` resolves names) |
 | `jr assets view <key>`          | View asset details (key or numeric ID)         |
 | `jr assets tickets <key>`       | Show Jira issues connected to an asset (`--open`, `--status`, `--limit`) |
 | `jr team list` | List available teams (`--refresh` to force update) |

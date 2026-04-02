@@ -28,11 +28,15 @@ impl JiraClient {
     /// from the system keychain.
     pub fn from_config(config: &Config, verbose: bool) -> anyhow::Result<Self> {
         let base_url = config.base_url()?;
-        let instance_url = if let Some(url) = config.global.instance.url.as_ref() {
+
+        // JR_BASE_URL overrides all URL targets (used by integration tests to inject wiremock).
+        let test_override = std::env::var("JR_BASE_URL").ok();
+
+        let instance_url = if let Some(ref override_url) = test_override {
+            // Test mode: route all traffic (including instance and assets) to the mock server.
+            override_url.trim_end_matches('/').to_string()
+        } else if let Some(url) = config.global.instance.url.as_ref() {
             url.trim_end_matches('/').to_string()
-        } else if std::env::var("JR_BASE_URL").is_ok() {
-            // When JR_BASE_URL overrides and no instance URL is configured, use base_url (tests).
-            base_url.clone()
         } else {
             return Err(JrError::ConfigError(
                 "No Jira instance configured. Run \"jr init\" first.".into(),
@@ -67,12 +71,17 @@ impl JiraClient {
 
         let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
 
-        let assets_base_url = config.global.instance.cloud_id.as_ref().map(|cloud_id| {
-            format!(
-                "https://api.atlassian.com/ex/jira/{}/jsm/assets",
-                urlencoding::encode(cloud_id)
-            )
-        });
+        let assets_base_url = if let Some(ref override_url) = test_override {
+            // Test mode: assets API goes to the mock server under /jsm/assets.
+            Some(format!("{}/jsm/assets", override_url.trim_end_matches('/')))
+        } else {
+            config.global.instance.cloud_id.as_ref().map(|cloud_id| {
+                format!(
+                    "https://api.atlassian.com/ex/jira/{}/jsm/assets",
+                    urlencoding::encode(cloud_id)
+                )
+            })
+        };
 
         Ok(Self {
             client,
