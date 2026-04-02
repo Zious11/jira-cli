@@ -170,33 +170,37 @@ async fn handle_search(
 /// Format attributes as inline `Name: Value` pairs for table display.
 ///
 /// Filters out system, hidden, and label attributes. Sorts by position.
+/// Attributes without a matching definition fall back to showing the raw ID.
 /// Multi-value attributes use the first displayValue (or value as fallback).
 fn format_inline_attributes(
     attributes: &[AssetAttribute],
     attr_map: &HashMap<String, CachedObjectTypeAttr>,
 ) -> String {
-    let mut displayable: Vec<(&AssetAttribute, &CachedObjectTypeAttr)> = attributes
+    // Pair each attribute with its definition (or None for unknown)
+    let mut pairs: Vec<(&AssetAttribute, Option<&CachedObjectTypeAttr>)> = attributes
         .iter()
-        .filter_map(|a| {
-            attr_map.get(&a.object_type_attribute_id).and_then(|def| {
-                if def.system || def.hidden || def.label {
-                    None
-                } else {
-                    Some((a, def))
-                }
-            })
+        .filter(|a| {
+            match attr_map.get(&a.object_type_attribute_id) {
+                Some(def) => !def.system && !def.hidden && !def.label,
+                None => true, // keep unknown attributes (graceful degradation)
+            }
         })
+        .map(|a| (a, attr_map.get(&a.object_type_attribute_id)))
         .collect();
-    displayable.sort_by_key(|(_, def)| def.position);
+    // Known attributes sorted by position; unknown appended at end
+    pairs.sort_by_key(|(_, def)| def.map(|d| d.position).unwrap_or(i32::MAX));
 
-    displayable
+    pairs
         .iter()
         .filter_map(|(attr, def)| {
             let value = attr
                 .values
                 .first()
                 .and_then(|v| v.display_value.as_deref().or(v.value.as_deref()));
-            value.map(|v| format!("{}: {}", def.name, v))
+            let name = def
+                .map(|d| d.name.as_str())
+                .unwrap_or(&attr.object_type_attribute_id);
+            value.map(|v| format!("{}: {}", name, v))
         })
         .collect::<Vec<_>>()
         .join(" | ")

@@ -10,11 +10,30 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 /// manipulate the env var must hold this mutex for the entire test duration.
 static ENV_MUTEX: Mutex<()> = Mutex::const_new(());
 
-async fn set_cache_dir(dir: &std::path::Path) -> tokio::sync::MutexGuard<'static, ()> {
+/// RAII guard that restores XDG_CACHE_HOME to its previous value on drop.
+struct CacheDirGuard {
+    prev: Option<std::ffi::OsString>,
+    _lock: tokio::sync::MutexGuard<'static, ()>,
+}
+
+impl Drop for CacheDirGuard {
+    fn drop(&mut self) {
+        // SAFETY: _lock (ENV_MUTEX) is still held while we restore the env var.
+        unsafe {
+            match &self.prev {
+                Some(prev) => std::env::set_var("XDG_CACHE_HOME", prev),
+                None => std::env::remove_var("XDG_CACHE_HOME"),
+            }
+        }
+    }
+}
+
+async fn set_cache_dir(dir: &std::path::Path) -> CacheDirGuard {
     let guard = ENV_MUTEX.lock().await;
-    // SAFETY: ENV_MUTEX guard is held by caller for the entire test duration.
+    // SAFETY: ENV_MUTEX guard is held for the entire test duration via CacheDirGuard.
+    let prev = std::env::var_os("XDG_CACHE_HOME");
     unsafe { std::env::set_var("XDG_CACHE_HOME", dir) };
-    guard
+    CacheDirGuard { prev, _lock: guard }
 }
 
 #[tokio::test]
