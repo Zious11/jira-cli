@@ -1112,3 +1112,87 @@ async fn schemas_json_lists_all_schemas() {
     assert_eq!(arr[0]["objectSchemaKey"], "ITSM");
     assert_eq!(arr[1]["name"], "Human Resources");
 }
+
+#[tokio::test]
+async fn types_json_lists_all_types() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/assets/workspace"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 1,
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "values": [{ "workspaceId": "ws-123" }]
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path(
+            "/jsm/assets/workspace/ws-123/v1/objectschema/list",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "startAt": 0,
+            "maxResults": 25,
+            "total": 1,
+            "isLast": true,
+            "values": [{
+                "id": "6",
+                "name": "ITSM",
+                "objectSchemaKey": "ITSM",
+                "status": "Ok",
+                "objectCount": 95,
+                "objectTypeCount": 2
+            }]
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path(
+            "/jsm/assets/workspace/ws-123/v1/objectschema/6/objecttypes/flat",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {
+                "id": "19",
+                "name": "Employee",
+                "position": 0,
+                "objectCount": 42,
+                "objectSchemaId": "6",
+                "inherited": false,
+                "abstractObjectType": false
+            },
+            {
+                "id": "23",
+                "name": "Office",
+                "description": "Physical office.",
+                "position": 2,
+                "objectCount": 5,
+                "objectSchemaId": "6",
+                "inherited": false,
+                "abstractObjectType": false
+            }
+        ])))
+        .mount(&server)
+        .await;
+
+    let _guard = set_cache_dir(&tempfile::tempdir().unwrap().keep()).await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["assets", "types", "--output", "json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 2);
+    assert_eq!(arr[0]["name"], "Employee");
+    assert_eq!(arr[0]["schemaName"], "ITSM");
+    assert_eq!(arr[1]["name"], "Office");
+}

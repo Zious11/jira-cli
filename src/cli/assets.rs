@@ -441,6 +441,42 @@ async fn handle_tickets(
     Ok(())
 }
 
+/// Resolve a --schema flag to a single schema, matching by ID (exact) or name (partial).
+fn resolve_schema<'a>(
+    input: &str,
+    schemas: &'a [crate::types::assets::ObjectSchema],
+) -> Result<&'a crate::types::assets::ObjectSchema> {
+    // Try exact ID match first
+    if let Some(s) = schemas.iter().find(|s| s.id == input) {
+        return Ok(s);
+    }
+    // Partial match on name
+    let names: Vec<String> = schemas.iter().map(|s| s.name.clone()).collect();
+    match partial_match::partial_match(input, &names) {
+        MatchResult::Exact(name) => {
+            Ok(schemas.iter().find(|s| s.name == name).unwrap())
+        }
+        MatchResult::Ambiguous(matches) => Err(JrError::UserError(format!(
+            "Ambiguous schema \"{}\". Matches: {}",
+            input,
+            matches.join(", ")
+        ))
+        .into()),
+        MatchResult::None(all) => {
+            let available = if all.is_empty() {
+                "none".to_string()
+            } else {
+                all.join(", ")
+            };
+            Err(JrError::UserError(format!(
+                "No schema matching \"{}\". Available: {}",
+                input, available
+            ))
+            .into())
+        }
+    }
+}
+
 async fn handle_schemas(
     workspace_id: &str,
     output_format: &OutputFormat,
@@ -471,12 +507,84 @@ async fn handle_schemas(
 }
 
 async fn handle_types(
-    _workspace_id: &str,
-    _schema: Option<String>,
-    _output_format: &OutputFormat,
-    _client: &JiraClient,
+    workspace_id: &str,
+    schema_filter: Option<String>,
+    output_format: &OutputFormat,
+    client: &JiraClient,
 ) -> Result<()> {
-    todo!("handle_types")
+    let schemas = client.list_object_schemas(workspace_id).await?;
+    if schemas.is_empty() {
+        return Err(
+            JrError::UserError("No asset schemas found in this workspace.".into()).into(),
+        );
+    }
+
+    let target_schemas: Vec<&crate::types::assets::ObjectSchema> = match &schema_filter {
+        Some(input) => vec![resolve_schema(input, &schemas)?],
+        None => schemas.iter().collect(),
+    };
+
+    // Build a map of schema_id → schema_name for injection
+    let schema_names: HashMap<&str, &str> = schemas
+        .iter()
+        .map(|s| (s.id.as_str(), s.name.as_str()))
+        .collect();
+
+    let mut all_types = Vec::new();
+    for schema in &target_schemas {
+        let types = client
+            .list_object_types(workspace_id, &schema.id)
+            .await?;
+        all_types.extend(types);
+    }
+
+    match output_format {
+        OutputFormat::Json => {
+            // Inject schemaName into each entry
+            let mut json_types: Vec<serde_json::Value> = Vec::new();
+            for t in &all_types {
+                let mut val = serde_json::to_value(t)?;
+                if let Some(map) = val.as_object_mut() {
+                    let schema_name = schema_names
+                        .get(t.object_schema_id.as_str())
+                        .unwrap_or(&"");
+                    map.insert(
+                        "schemaName".to_string(),
+                        serde_json::Value::String(schema_name.to_string()),
+                    );
+                }
+                json_types.push(val);
+            }
+            println!("{}", output::render_json(&json_types)?);
+        }
+        OutputFormat::Table => {
+            let rows: Vec<Vec<String>> = all_types
+                .iter()
+                .map(|t| {
+                    let schema_name = schema_names
+                        .get(t.object_schema_id.as_str())
+                        .unwrap_or(&"\u{2014}");
+                    vec![
+                        t.id.clone(),
+                        t.name.clone(),
+                        schema_name.to_string(),
+                        t.description
+                            .clone()
+                            .unwrap_or_else(|| "\u{2014}".into()),
+                        t.object_count.to_string(),
+                    ]
+                })
+                .collect();
+
+            output::print_output(
+                output_format,
+                &["ID", "Name", "Schema", "Description", "Objects"],
+                &rows,
+                &all_types,
+            )?;
+        }
+    }
+    Ok(())
 }
 
 async fn handle_schema(
