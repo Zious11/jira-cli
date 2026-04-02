@@ -674,3 +674,75 @@ async fn test_edit_issue_description_with_other_fields() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn test_search_assignable_users_single() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::user_search_response(vec![("acc-assign-1", "Jane Doe", true)]),
+        ))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let users = client
+        .search_assignable_users("Jane", "FOO-1")
+        .await
+        .unwrap();
+    assert_eq!(users.len(), 1);
+    assert_eq!(users[0].account_id, "acc-assign-1");
+    assert_eq!(users[0].display_name, "Jane Doe");
+}
+
+#[tokio::test]
+async fn test_search_assignable_users_empty() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/search"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::user_search_response(vec![])),
+        )
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let users = client
+        .search_assignable_users("Nobody", "FOO-1")
+        .await
+        .unwrap();
+    assert!(users.is_empty());
+}
+
+#[tokio::test]
+async fn test_search_assignable_users_paginated_response() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "total": 1,
+            "values": [
+                {
+                    "accountId": "acc-paged-assign",
+                    "displayName": "Paged Assignee",
+                    "emailAddress": "paged@test.com",
+                    "active": true
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let users = client
+        .search_assignable_users("Paged", "FOO-1")
+        .await
+        .unwrap();
+    assert_eq!(users.len(), 1);
+    assert_eq!(users[0].account_id, "acc-paged-assign");
+}
