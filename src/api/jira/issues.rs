@@ -42,6 +42,9 @@ impl JiraClient {
             "resolution",
             "components",
             "fixVersions",
+            "labels",
+            "parent",
+            "issuelinks",
         ];
         fields.extend_from_slice(extra_fields);
 
