@@ -1,10 +1,43 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 const CACHE_TTL_DAYS: i64 = 7;
+
+/// Implemented by cache structs that carry a timestamp for TTL checks.
+pub(crate) trait Expiring {
+    fn fetched_at(&self) -> DateTime<Utc>;
+}
+
+/// Read a whole-file cache. Returns `Ok(None)` on missing, expired, or corrupt
+/// (unparseable) files. Propagates I/O errors.
+fn read_cache<T: DeserializeOwned + Expiring>(filename: &str) -> Result<Option<T>> {
+    let path = cache_dir().join(filename);
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let cache: T = match serde_json::from_str(&content) {
+        Ok(c) => c,
+        Err(_) => return Ok(None),
+    };
+    if (Utc::now() - cache.fetched_at()).num_days() >= CACHE_TTL_DAYS {
+        return Ok(None);
+    }
+    Ok(Some(cache))
+}
+
+/// Write a whole-file cache. Creates the cache directory if needed.
+fn write_cache<T: Serialize>(filename: &str, data: &T) -> Result<()> {
+    let dir = cache_dir();
+    std::fs::create_dir_all(&dir)?;
+    let content = serde_json::to_string_pretty(data)?;
+    std::fs::write(dir.join(filename), content)?;
+    Ok(())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachedTeam {
@@ -16,6 +49,12 @@ pub struct CachedTeam {
 pub struct TeamCache {
     pub fetched_at: DateTime<Utc>,
     pub teams: Vec<CachedTeam>,
+}
+
+impl Expiring for TeamCache {
+    fn fetched_at(&self) -> DateTime<Utc> {
+        self.fetched_at
+    }
 }
 
 pub fn cache_dir() -> PathBuf {
@@ -30,34 +69,17 @@ pub fn cache_dir() -> PathBuf {
 }
 
 pub fn read_team_cache() -> Result<Option<TeamCache>> {
-    let path = cache_dir().join("teams.json");
-    if !path.exists() {
-        return Ok(None);
-    }
-
-    let content = std::fs::read_to_string(&path)?;
-    let cache: TeamCache = serde_json::from_str(&content)?;
-
-    let age = Utc::now() - cache.fetched_at;
-    if age.num_days() >= CACHE_TTL_DAYS {
-        return Ok(None);
-    }
-
-    Ok(Some(cache))
+    read_cache("teams.json")
 }
 
 pub fn write_team_cache(teams: &[CachedTeam]) -> Result<()> {
-    let dir = cache_dir();
-    std::fs::create_dir_all(&dir)?;
-
-    let cache = TeamCache {
-        fetched_at: Utc::now(),
-        teams: teams.to_vec(),
-    };
-
-    let content = serde_json::to_string_pretty(&cache)?;
-    std::fs::write(dir.join("teams.json"), content)?;
-    Ok(())
+    write_cache(
+        "teams.json",
+        &TeamCache {
+            fetched_at: Utc::now(),
+            teams: teams.to_vec(),
+        },
+    )
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,6 +91,10 @@ pub struct ProjectMeta {
     pub fetched_at: DateTime<Utc>,
 }
 
+/// Read cached project metadata for a specific project key.
+///
+/// Keyed cache — not genericized because TTL is checked per-entry
+/// (`ProjectMeta.fetched_at`), unlike whole-file caches.
 pub fn read_project_meta(project_key: &str) -> Result<Option<ProjectMeta>> {
     let path = cache_dir().join("project_meta.json");
     if !path.exists() {
@@ -76,7 +102,10 @@ pub fn read_project_meta(project_key: &str) -> Result<Option<ProjectMeta>> {
     }
 
     let content = std::fs::read_to_string(&path)?;
-    let map: HashMap<String, ProjectMeta> = serde_json::from_str(&content)?;
+    let map: HashMap<String, ProjectMeta> = match serde_json::from_str(&content) {
+        Ok(m) => m,
+        Err(_) => return Ok(None),
+    };
 
     match map.get(project_key) {
         Some(meta) => {
@@ -91,6 +120,9 @@ pub fn read_project_meta(project_key: &str) -> Result<Option<ProjectMeta>> {
     }
 }
 
+/// Write cached project metadata for a specific project key.
+///
+/// Merges into the existing map file, preserving entries for other projects.
 pub fn write_project_meta(project_key: &str, meta: &ProjectMeta) -> Result<()> {
     let dir = cache_dir();
     std::fs::create_dir_all(&dir)?;
@@ -118,35 +150,24 @@ pub struct WorkspaceCache {
     pub fetched_at: DateTime<Utc>,
 }
 
+impl Expiring for WorkspaceCache {
+    fn fetched_at(&self) -> DateTime<Utc> {
+        self.fetched_at
+    }
+}
+
 pub fn read_workspace_cache() -> Result<Option<WorkspaceCache>> {
-    let path = cache_dir().join("workspace.json");
-    if !path.exists() {
-        return Ok(None);
-    }
-
-    let content = std::fs::read_to_string(&path)?;
-    let cache: WorkspaceCache = serde_json::from_str(&content)?;
-
-    let age = Utc::now() - cache.fetched_at;
-    if age.num_days() >= CACHE_TTL_DAYS {
-        return Ok(None);
-    }
-
-    Ok(Some(cache))
+    read_cache("workspace.json")
 }
 
 pub fn write_workspace_cache(workspace_id: &str) -> Result<()> {
-    let dir = cache_dir();
-    std::fs::create_dir_all(&dir)?;
-
-    let cache = WorkspaceCache {
-        workspace_id: workspace_id.to_string(),
-        fetched_at: Utc::now(),
-    };
-
-    let content = serde_json::to_string_pretty(&cache)?;
-    std::fs::write(dir.join("workspace.json"), content)?;
-    Ok(())
+    write_cache(
+        "workspace.json",
+        &WorkspaceCache {
+            workspace_id: workspace_id.to_string(),
+            fetched_at: Utc::now(),
+        },
+    )
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -155,38 +176,24 @@ pub struct CmdbFieldsCache {
     pub fetched_at: DateTime<Utc>,
 }
 
+impl Expiring for CmdbFieldsCache {
+    fn fetched_at(&self) -> DateTime<Utc> {
+        self.fetched_at
+    }
+}
+
 pub fn read_cmdb_fields_cache() -> Result<Option<CmdbFieldsCache>> {
-    let path = cache_dir().join("cmdb_fields.json");
-    if !path.exists() {
-        return Ok(None);
-    }
-
-    let content = std::fs::read_to_string(&path)?;
-    let cache: CmdbFieldsCache = match serde_json::from_str(&content) {
-        Ok(c) => c,
-        Err(_) => return Ok(None),
-    };
-
-    let age = Utc::now() - cache.fetched_at;
-    if age.num_days() >= CACHE_TTL_DAYS {
-        return Ok(None);
-    }
-
-    Ok(Some(cache))
+    read_cache("cmdb_fields.json")
 }
 
 pub fn write_cmdb_fields_cache(fields: &[(String, String)]) -> Result<()> {
-    let dir = cache_dir();
-    std::fs::create_dir_all(&dir)?;
-
-    let cache = CmdbFieldsCache {
-        fields: fields.to_vec(),
-        fetched_at: Utc::now(),
-    };
-
-    let content = serde_json::to_string_pretty(&cache)?;
-    std::fs::write(dir.join("cmdb_fields.json"), content)?;
-    Ok(())
+    write_cache(
+        "cmdb_fields.json",
+        &CmdbFieldsCache {
+            fields: fields.to_vec(),
+            fetched_at: Utc::now(),
+        },
+    )
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -209,6 +216,11 @@ pub struct ObjectTypeAttrCache {
     pub types: HashMap<String, Vec<CachedObjectTypeAttr>>,
 }
 
+/// Read cached attributes for a specific object type.
+///
+/// Keyed cache — not genericized because TTL is checked per-file
+/// (`ObjectTypeAttrCache.fetched_at`) but lookup is per-key, with a different
+/// return type (`Vec<CachedObjectTypeAttr>`) than the stored wrapper struct.
 pub fn read_object_type_attr_cache(
     object_type_id: &str,
 ) -> Result<Option<Vec<CachedObjectTypeAttr>>> {
@@ -231,6 +243,9 @@ pub fn read_object_type_attr_cache(
     Ok(cache.types.get(object_type_id).cloned())
 }
 
+/// Write cached attributes for a specific object type.
+///
+/// Merges into the existing map file, preserving entries for other object types.
 pub fn write_object_type_attr_cache(
     object_type_id: &str,
     attrs: &[CachedObjectTypeAttr],
@@ -272,12 +287,20 @@ mod tests {
     static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     fn with_temp_cache<F: FnOnce()>(f: F) {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        // Recover from poison: catch_unwind below ensures env cleanup completed
+        // even if a prior test panicked, so the guarded state is consistent.
+        let guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().unwrap();
-        // SAFETY: test holds ENV_MUTEX, so no concurrent env access.
+        // SAFETY: ENV_MUTEX serialises all tests that touch XDG_CACHE_HOME;
+        // the variable is only read inside cache functions called within this
+        // lock, so no concurrent env access occurs.
         unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
-        f();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
         unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+        drop(guard);
+        if let Err(e) = result {
+            std::panic::resume_unwind(e);
+        }
     }
 
     #[test]
@@ -631,6 +654,60 @@ mod tests {
 
             let result = read_object_type_attr_cache("23").unwrap();
             assert!(result.is_none(), "corrupt cache should return None");
+        });
+    }
+
+    #[test]
+    fn corrupt_team_cache_returns_none() {
+        with_temp_cache(|| {
+            let dir = cache_dir();
+            std::fs::create_dir_all(&dir).unwrap();
+
+            // Garbage data
+            std::fs::write(dir.join("teams.json"), "not json").unwrap();
+            let result = read_team_cache().unwrap();
+            assert!(result.is_none(), "garbage data should return None");
+
+            // Valid JSON, wrong shape
+            std::fs::write(dir.join("teams.json"), r#"{"unexpected": true}"#).unwrap();
+            let result = read_team_cache().unwrap();
+            assert!(result.is_none(), "wrong-shape JSON should return None");
+        });
+    }
+
+    #[test]
+    fn corrupt_workspace_cache_returns_none() {
+        with_temp_cache(|| {
+            let dir = cache_dir();
+            std::fs::create_dir_all(&dir).unwrap();
+
+            // Garbage data
+            std::fs::write(dir.join("workspace.json"), "not json").unwrap();
+            let result = read_workspace_cache().unwrap();
+            assert!(result.is_none(), "garbage data should return None");
+
+            // Valid JSON, wrong shape
+            std::fs::write(dir.join("workspace.json"), r#"{"unexpected": true}"#).unwrap();
+            let result = read_workspace_cache().unwrap();
+            assert!(result.is_none(), "wrong-shape JSON should return None");
+        });
+    }
+
+    #[test]
+    fn corrupt_project_meta_returns_none() {
+        with_temp_cache(|| {
+            let dir = cache_dir();
+            std::fs::create_dir_all(&dir).unwrap();
+
+            // Garbage data
+            std::fs::write(dir.join("project_meta.json"), "not json").unwrap();
+            let result = read_project_meta("ANY").unwrap();
+            assert!(result.is_none(), "garbage data should return None");
+
+            // Valid JSON, wrong shape
+            std::fs::write(dir.join("project_meta.json"), r#"{"unexpected": true}"#).unwrap();
+            let result = read_project_meta("ANY").unwrap();
+            assert!(result.is_none(), "wrong-shape JSON should return None");
         });
     }
 }
