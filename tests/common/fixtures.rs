@@ -42,6 +42,18 @@ pub fn transitions_response(transitions: Vec<(&str, &str)>) -> Value {
     })
 }
 
+/// Transitions response with target status names.
+/// Each tuple is (transition_id, transition_name, target_status_name).
+pub fn transitions_response_with_status(transitions: Vec<(&str, &str, &str)>) -> Value {
+    json!({
+        "transitions": transitions.iter().map(|(id, name, status_name)| json!({
+            "id": id,
+            "name": name,
+            "to": {"name": status_name}
+        })).collect::<Vec<_>>()
+    })
+}
+
 pub fn error_response(messages: &[&str]) -> Value {
     json!({ "errorMessages": messages })
 }
