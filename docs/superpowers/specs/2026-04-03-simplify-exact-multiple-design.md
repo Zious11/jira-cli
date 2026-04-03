@@ -21,7 +21,7 @@ Validated with Perplexity: simplifying to `ExactMultiple(String)` aligns with Ru
 Two changes, one PR:
 
 1. **Simplify variant** — `ExactMultiple(Vec<String>)` to `ExactMultiple(String)` (#127)
-2. **Replace unreachable arms** — 6 silent take-first arms become `unreachable!()` (#126)
+2. **Replace silent take-first arms** — 6 arms updated: 1 with `unreachable!()` (code-enforced dedup), 5 with graceful fallback (treat like `Exact`) (#126)
 
 Plus cleanup of one dead code path in `queue.rs`.
 
@@ -51,26 +51,30 @@ To:
 n if n > 1 => return MatchResult::ExactMultiple(exact_matches.into_iter().next().unwrap()),
 ```
 
-### Change 2: Replace 6 unreachable arms
+### Change 2: Replace 6 silent take-first arms
 
-All sites where candidates are provably pre-deduplicated upstream. Each arm becomes:
+One site uses `unreachable!()` because its dedup is case-insensitive (matching `partial_match`'s behavior). The other 5 use graceful fallback (treat `ExactMultiple` like `Exact`) because their dedup is case-sensitive — if Jira ever returns case-variant duplicates, `ExactMultiple` could fire.
 
-```rust
-MatchResult::ExactMultiple(_) => {
-    unreachable!("ExactMultiple should not occur: candidates are deduplicated")
-}
-```
-
-Affected sites:
+**`unreachable!()` (code-enforced, case-insensitive dedup):**
 
 | File | Line | Dedup mechanism |
 |------|------|-----------------|
-| `src/cli/issue/workflow.rs` | ~143 | `HashSet` collects unique `(name, idx)` pairs |
-| `src/cli/issue/list.rs` | ~181 | Statuses from project endpoint (unique by definition) |
-| `src/cli/issue/links.rs` | ~64 | Link types unique in Jira by design |
-| `src/cli/issue/links.rs` | ~136 | Link types unique in Jira by design |
-| `src/cli/assets.rs` | ~334 | `HashSet` dedup on ticket statuses |
-| `src/cli/assets.rs` | ~668 | `.sort(); .dedup()` on object type names |
+| `src/cli/issue/workflow.rs` | ~143 | `HashSet` with `to_lowercase()` keys |
+
+**Graceful fallback (case-sensitive dedup or API guarantee only):**
+
+```rust
+// Treat like Exact — take the representative name
+MatchResult::ExactMultiple(name) => name,
+```
+
+| File | Line | Dedup mechanism |
+|------|------|-----------------|
+| `src/cli/issue/list.rs` | ~181 | `HashSet` / `sort()+dedup()` (case-sensitive) |
+| `src/cli/issue/links.rs` | ~64 | Link types unique per Jira API (no code dedup) |
+| `src/cli/issue/links.rs` | ~136 | Link types unique per Jira API (no code dedup) |
+| `src/cli/assets.rs` | ~334 | `HashSet` (case-sensitive) |
+| `src/cli/assets.rs` | ~668 | `.sort(); .dedup()` (case-sensitive) |
 
 ### Change 3: Update 2 filtering callers
 

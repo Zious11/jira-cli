@@ -159,6 +159,13 @@ git commit -m "refactor: simplify ExactMultiple variant from Vec<String> to Stri
 
 ### Task 2: Replace 6 unreachable ExactMultiple arms and update 2 filtering callers
 
+> **Implementation note:** During PR review, it was identified that 5 of the 6 dedup
+> sites use case-sensitive dedup while `partial_match` operates case-insensitively.
+> Only `workflow.rs` (which uses `to_lowercase()` keys in its HashSet) is truly
+> unreachable. The other 5 sites were changed to graceful fallback
+> (`MatchResult::ExactMultiple(name) => name`) instead of `unreachable!()`.
+> Steps 2-5 and 7 below show the original plan; the actual implementation differs.
+
 **Files:**
 - Modify: `src/cli/issue/workflow.rs:143-157`
 - Modify: `src/cli/issue/list.rs:181-184`
