@@ -34,11 +34,11 @@ pub(super) async fn resolve_team_field(
     let team_names: Vec<String> = teams.iter().map(|t| t.name.clone()).collect();
     match crate::partial_match::partial_match(team_name, &team_names) {
         crate::partial_match::MatchResult::Exact(matched_name) => {
-            let team = teams
+            let idx = teams
                 .iter()
-                .find(|t| t.name == matched_name)
+                .position(|t| t.name == matched_name)
                 .expect("matched name must exist in teams");
-            Ok((field_id, team.id.clone()))
+            Ok((field_id, teams[idx].id.clone()))
         }
         crate::partial_match::MatchResult::ExactMultiple(_) => {
             let name_lower = team_name.to_lowercase();
@@ -83,11 +83,11 @@ pub(super) async fn resolve_team_field(
                 .items(&matches)
                 .interact()?;
             let selected_name = &matches[selection];
-            let team = teams
+            let idx = teams
                 .iter()
-                .find(|t| &t.name == selected_name)
+                .position(|t| t.name == *selected_name)
                 .expect("selected name must exist in teams");
-            Ok((field_id, team.id.clone()))
+            Ok((field_id, teams[idx].id.clone()))
         }
         crate::partial_match::MatchResult::None(_) => {
             anyhow::bail!(
@@ -162,11 +162,11 @@ pub(super) async fn resolve_user(
         .collect();
     match crate::partial_match::partial_match(name, &display_names) {
         crate::partial_match::MatchResult::Exact(matched_name) => {
-            let user = active_users
+            let idx = active_users
                 .iter()
-                .find(|u| u.display_name == matched_name)
+                .position(|u| u.display_name == matched_name)
                 .expect("matched name must exist in active_users");
-            Ok(user.account_id.clone())
+            Ok(active_users[idx].account_id.clone())
         }
         crate::partial_match::MatchResult::ExactMultiple(_) => {
             // Multiple users share the same display name — disambiguate
@@ -218,11 +218,11 @@ pub(super) async fn resolve_user(
                 .items(&matches)
                 .interact()?;
             let selected_name = &matches[selection];
-            let user = active_users
+            let idx = active_users
                 .iter()
-                .find(|u| &u.display_name == selected_name)
+                .position(|u| u.display_name == *selected_name)
                 .expect("selected name must exist in active_users");
-            Ok(user.account_id.clone())
+            Ok(active_users[idx].account_id.clone())
         }
         crate::partial_match::MatchResult::None(_) => {
             anyhow::bail!(
@@ -269,11 +269,14 @@ pub(super) async fn resolve_assignee(
     let display_names: Vec<String> = users.iter().map(|u| u.display_name.clone()).collect();
     match crate::partial_match::partial_match(name, &display_names) {
         crate::partial_match::MatchResult::Exact(matched_name) => {
-            let user = users
+            let idx = users
                 .iter()
-                .find(|u| u.display_name == matched_name)
+                .position(|u| u.display_name == matched_name)
                 .expect("matched name must exist in users");
-            Ok((user.account_id.clone(), user.display_name.clone()))
+            Ok((
+                users[idx].account_id.clone(),
+                users[idx].display_name.clone(),
+            ))
         }
         crate::partial_match::MatchResult::ExactMultiple(_) => {
             let name_lower = name.to_lowercase();
@@ -326,11 +329,14 @@ pub(super) async fn resolve_assignee(
                 .items(&matches)
                 .interact()?;
             let selected_name = &matches[selection];
-            let user = users
+            let idx = users
                 .iter()
-                .find(|u| &u.display_name == selected_name)
+                .position(|u| u.display_name == *selected_name)
                 .expect("selected name must exist in users");
-            Ok((user.account_id.clone(), user.display_name.clone()))
+            Ok((
+                users[idx].account_id.clone(),
+                users[idx].display_name.clone(),
+            ))
         }
         crate::partial_match::MatchResult::None(all_names) => {
             anyhow::bail!(
@@ -385,11 +391,14 @@ pub(super) async fn resolve_assignee_by_project(
     let display_names: Vec<String> = users.iter().map(|u| u.display_name.clone()).collect();
     match crate::partial_match::partial_match(name, &display_names) {
         crate::partial_match::MatchResult::Exact(matched_name) => {
-            let user = users
+            let idx = users
                 .iter()
-                .find(|u| u.display_name == matched_name)
+                .position(|u| u.display_name == matched_name)
                 .expect("matched name must exist in users");
-            Ok((user.account_id.clone(), user.display_name.clone()))
+            Ok((
+                users[idx].account_id.clone(),
+                users[idx].display_name.clone(),
+            ))
         }
         crate::partial_match::MatchResult::ExactMultiple(_) => {
             let name_lower = name.to_lowercase();
@@ -442,11 +451,14 @@ pub(super) async fn resolve_assignee_by_project(
                 .items(&matches)
                 .interact()?;
             let selected_name = &matches[selection];
-            let user = users
+            let idx = users
                 .iter()
-                .find(|u| &u.display_name == selected_name)
+                .position(|u| u.display_name == *selected_name)
                 .expect("selected name must exist in users");
-            Ok((user.account_id.clone(), user.display_name.clone()))
+            Ok((
+                users[idx].account_id.clone(),
+                users[idx].display_name.clone(),
+            ))
         }
         crate::partial_match::MatchResult::None(all_names) => {
             anyhow::bail!(
