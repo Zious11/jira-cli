@@ -30,7 +30,7 @@ impl LinkedAsset {
         }
     }
 
-    /// Name-only display for list tables: "Acme Corp", "OBJ-1", or "#12345 (run \"jr init\" to resolve asset names)".
+    /// Name-only display for list tables: "Acme Corp", "OBJ-1", or "#12345 (run `jr init` to resolve asset names)".
     pub fn display_name_only(&self) -> String {
         self.name
             .as_deref()
