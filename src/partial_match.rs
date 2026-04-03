@@ -101,11 +101,7 @@ mod tests {
 
     #[test]
     fn test_exact_match_duplicate_returns_exact_multiple() {
-        let candidates = vec![
-            "John Smith".into(),
-            "Jane Doe".into(),
-            "John Smith".into(),
-        ];
+        let candidates = vec!["John Smith".into(), "Jane Doe".into(), "John Smith".into()];
         match partial_match("John Smith", &candidates) {
             MatchResult::ExactMultiple(names) => {
                 assert_eq!(names.len(), 2);
@@ -117,10 +113,7 @@ mod tests {
 
     #[test]
     fn test_exact_match_duplicate_case_insensitive() {
-        let candidates = vec![
-            "John Smith".into(),
-            "john smith".into(),
-        ];
+        let candidates = vec!["John Smith".into(), "john smith".into()];
         match partial_match("john smith", &candidates) {
             MatchResult::ExactMultiple(names) => {
                 assert_eq!(names.len(), 2);

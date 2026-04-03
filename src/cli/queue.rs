@@ -164,10 +164,8 @@ async fn resolve_queue_by_name(
         }
         MatchResult::ExactMultiple(names) => {
             // ExactMultiple means partial_match found duplicate candidate strings.
-            let matching: Vec<&crate::types::jsm::Queue> = queues
-                .iter()
-                .filter(|q| names.contains(&q.name))
-                .collect();
+            let matching: Vec<&crate::types::jsm::Queue> =
+                queues.iter().filter(|q| names.contains(&q.name)).collect();
             let ids: Vec<String> = matching.iter().map(|q| q.id.clone()).collect();
             Err(JrError::UserError(format!(
                 "Multiple queues named \"{}\" found (IDs: {}). Use --id {} to specify.",
