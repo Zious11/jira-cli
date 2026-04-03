@@ -34,11 +34,40 @@ pub(super) async fn resolve_team_field(
     let team_names: Vec<String> = teams.iter().map(|t| t.name.clone()).collect();
     match crate::partial_match::partial_match(team_name, &team_names) {
         crate::partial_match::MatchResult::Exact(matched_name) => {
-            let team = teams
+            let idx = teams
                 .iter()
-                .find(|t| t.name == matched_name)
+                .position(|t| t.name == matched_name)
                 .expect("matched name must exist in teams");
-            Ok((field_id, team.id.clone()))
+            Ok((field_id, teams[idx].id.clone()))
+        }
+        crate::partial_match::MatchResult::ExactMultiple(_) => {
+            let name_lower = team_name.to_lowercase();
+            let duplicates: Vec<&crate::cache::CachedTeam> = teams
+                .iter()
+                .filter(|t| t.name.to_lowercase() == name_lower)
+                .collect();
+
+            if no_input {
+                let lines: Vec<String> = duplicates
+                    .iter()
+                    .map(|t| format!("  {} (id: {})", t.name, t.id))
+                    .collect();
+                anyhow::bail!(
+                    "Multiple teams named \"{}\" found:\n{}\nUse a more specific name.",
+                    team_name,
+                    lines.join("\n")
+                );
+            }
+
+            let labels: Vec<String> = duplicates
+                .iter()
+                .map(|t| format!("{} ({})", t.name, t.id))
+                .collect();
+            let selection = dialoguer::Select::new()
+                .with_prompt(format!("Multiple teams named \"{}\"", team_name))
+                .items(&labels)
+                .interact()?;
+            Ok((field_id, duplicates[selection].id.clone()))
         }
         crate::partial_match::MatchResult::Ambiguous(matches) => {
             if no_input {
@@ -54,11 +83,11 @@ pub(super) async fn resolve_team_field(
                 .items(&matches)
                 .interact()?;
             let selected_name = &matches[selection];
-            let team = teams
+            let idx = teams
                 .iter()
-                .find(|t| &t.name == selected_name)
+                .position(|t| t.name == *selected_name)
                 .expect("selected name must exist in teams");
-            Ok((field_id, team.id.clone()))
+            Ok((field_id, teams[idx].id.clone()))
         }
         crate::partial_match::MatchResult::None(_) => {
             anyhow::bail!(
@@ -133,11 +162,53 @@ pub(super) async fn resolve_user(
         .collect();
     match crate::partial_match::partial_match(name, &display_names) {
         crate::partial_match::MatchResult::Exact(matched_name) => {
-            let user = active_users
+            let idx = active_users
                 .iter()
-                .find(|u| u.display_name == matched_name)
+                .position(|u| u.display_name == matched_name)
                 .expect("matched name must exist in active_users");
-            Ok(user.account_id.clone())
+            Ok(active_users[idx].account_id.clone())
+        }
+        crate::partial_match::MatchResult::ExactMultiple(_) => {
+            // Multiple users share the same display name — disambiguate
+            let name_lower = name.to_lowercase();
+            let duplicates: Vec<&crate::types::jira::User> = active_users
+                .iter()
+                .filter(|u| u.display_name.to_lowercase() == name_lower)
+                .collect();
+
+            if no_input {
+                let lines: Vec<String> = duplicates
+                    .iter()
+                    .map(|u| match &u.email_address {
+                        Some(email) => format!(
+                            "  {} ({}, account: {})",
+                            u.display_name, email, u.account_id
+                        ),
+                        None => {
+                            format!("  {} (account: {})", u.display_name, u.account_id)
+                        }
+                    })
+                    .collect();
+                anyhow::bail!(
+                    "Multiple users named \"{}\" found:\n{}\nSpecify the accountId directly or use a more specific name.",
+                    name,
+                    lines.join("\n")
+                );
+            }
+
+            // Interactive: show disambiguation prompt with email or accountId
+            let labels: Vec<String> = duplicates
+                .iter()
+                .map(|u| match &u.email_address {
+                    Some(email) => format!("{} ({})", u.display_name, email),
+                    None => format!("{} ({})", u.display_name, u.account_id),
+                })
+                .collect();
+            let selection = dialoguer::Select::new()
+                .with_prompt(format!("Multiple users named \"{}\"", name))
+                .items(&labels)
+                .interact()?;
+            Ok(duplicates[selection].account_id.clone())
         }
         crate::partial_match::MatchResult::Ambiguous(matches) => {
             if no_input {
@@ -152,11 +223,11 @@ pub(super) async fn resolve_user(
                 .items(&matches)
                 .interact()?;
             let selected_name = &matches[selection];
-            let user = active_users
+            let idx = active_users
                 .iter()
-                .find(|u| &u.display_name == selected_name)
+                .position(|u| u.display_name == *selected_name)
                 .expect("selected name must exist in active_users");
-            Ok(user.account_id.clone())
+            Ok(active_users[idx].account_id.clone())
         }
         crate::partial_match::MatchResult::None(_) => {
             anyhow::bail!(
@@ -203,11 +274,57 @@ pub(super) async fn resolve_assignee(
     let display_names: Vec<String> = users.iter().map(|u| u.display_name.clone()).collect();
     match crate::partial_match::partial_match(name, &display_names) {
         crate::partial_match::MatchResult::Exact(matched_name) => {
-            let user = users
+            let idx = users
                 .iter()
-                .find(|u| u.display_name == matched_name)
+                .position(|u| u.display_name == matched_name)
                 .expect("matched name must exist in users");
-            Ok((user.account_id.clone(), user.display_name.clone()))
+            Ok((
+                users[idx].account_id.clone(),
+                users[idx].display_name.clone(),
+            ))
+        }
+        crate::partial_match::MatchResult::ExactMultiple(_) => {
+            let name_lower = name.to_lowercase();
+            let duplicates: Vec<&crate::types::jira::User> = users
+                .iter()
+                .filter(|u| u.display_name.to_lowercase() == name_lower)
+                .collect();
+
+            if no_input {
+                let lines: Vec<String> = duplicates
+                    .iter()
+                    .map(|u| match &u.email_address {
+                        Some(email) => format!(
+                            "  {} ({}, account: {})",
+                            u.display_name, email, u.account_id
+                        ),
+                        None => {
+                            format!("  {} (account: {})", u.display_name, u.account_id)
+                        }
+                    })
+                    .collect();
+                anyhow::bail!(
+                    "Multiple users named \"{}\" found:\n{}\nSpecify the accountId directly or use a more specific name.",
+                    name,
+                    lines.join("\n")
+                );
+            }
+
+            let labels: Vec<String> = duplicates
+                .iter()
+                .map(|u| match &u.email_address {
+                    Some(email) => format!("{} ({})", u.display_name, email),
+                    None => format!("{} ({})", u.display_name, u.account_id),
+                })
+                .collect();
+            let selection = dialoguer::Select::new()
+                .with_prompt(format!("Multiple users named \"{}\"", name))
+                .items(&labels)
+                .interact()?;
+            Ok((
+                duplicates[selection].account_id.clone(),
+                duplicates[selection].display_name.clone(),
+            ))
         }
         crate::partial_match::MatchResult::Ambiguous(matches) => {
             if no_input {
@@ -222,11 +339,14 @@ pub(super) async fn resolve_assignee(
                 .items(&matches)
                 .interact()?;
             let selected_name = &matches[selection];
-            let user = users
+            let idx = users
                 .iter()
-                .find(|u| &u.display_name == selected_name)
+                .position(|u| u.display_name == *selected_name)
                 .expect("selected name must exist in users");
-            Ok((user.account_id.clone(), user.display_name.clone()))
+            Ok((
+                users[idx].account_id.clone(),
+                users[idx].display_name.clone(),
+            ))
         }
         crate::partial_match::MatchResult::None(all_names) => {
             anyhow::bail!(
@@ -281,11 +401,57 @@ pub(super) async fn resolve_assignee_by_project(
     let display_names: Vec<String> = users.iter().map(|u| u.display_name.clone()).collect();
     match crate::partial_match::partial_match(name, &display_names) {
         crate::partial_match::MatchResult::Exact(matched_name) => {
-            let user = users
+            let idx = users
                 .iter()
-                .find(|u| u.display_name == matched_name)
+                .position(|u| u.display_name == matched_name)
                 .expect("matched name must exist in users");
-            Ok((user.account_id.clone(), user.display_name.clone()))
+            Ok((
+                users[idx].account_id.clone(),
+                users[idx].display_name.clone(),
+            ))
+        }
+        crate::partial_match::MatchResult::ExactMultiple(_) => {
+            let name_lower = name.to_lowercase();
+            let duplicates: Vec<&crate::types::jira::User> = users
+                .iter()
+                .filter(|u| u.display_name.to_lowercase() == name_lower)
+                .collect();
+
+            if no_input {
+                let lines: Vec<String> = duplicates
+                    .iter()
+                    .map(|u| match &u.email_address {
+                        Some(email) => format!(
+                            "  {} ({}, account: {})",
+                            u.display_name, email, u.account_id
+                        ),
+                        None => {
+                            format!("  {} (account: {})", u.display_name, u.account_id)
+                        }
+                    })
+                    .collect();
+                anyhow::bail!(
+                    "Multiple users named \"{}\" found:\n{}\nSpecify the accountId directly or use a more specific name.",
+                    name,
+                    lines.join("\n")
+                );
+            }
+
+            let labels: Vec<String> = duplicates
+                .iter()
+                .map(|u| match &u.email_address {
+                    Some(email) => format!("{} ({})", u.display_name, email),
+                    None => format!("{} ({})", u.display_name, u.account_id),
+                })
+                .collect();
+            let selection = dialoguer::Select::new()
+                .with_prompt(format!("Multiple users named \"{}\"", name))
+                .items(&labels)
+                .interact()?;
+            Ok((
+                duplicates[selection].account_id.clone(),
+                duplicates[selection].display_name.clone(),
+            ))
         }
         crate::partial_match::MatchResult::Ambiguous(matches) => {
             if no_input {
@@ -300,11 +466,14 @@ pub(super) async fn resolve_assignee_by_project(
                 .items(&matches)
                 .interact()?;
             let selected_name = &matches[selection];
-            let user = users
+            let idx = users
                 .iter()
-                .find(|u| &u.display_name == selected_name)
+                .position(|u| u.display_name == *selected_name)
                 .expect("selected name must exist in users");
-            Ok((user.account_id.clone(), user.display_name.clone()))
+            Ok((
+                users[idx].account_id.clone(),
+                users[idx].display_name.clone(),
+            ))
         }
         crate::partial_match::MatchResult::None(all_names) => {
             anyhow::bail!(

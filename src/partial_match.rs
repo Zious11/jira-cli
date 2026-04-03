@@ -1,7 +1,10 @@
 /// Result of attempting a partial match against a list of candidates.
+#[derive(Debug)]
 pub enum MatchResult {
     /// Exactly one match found
     Exact(String),
+    /// Multiple candidates share the same exact (case-insensitive) name
+    ExactMultiple(Vec<String>),
     /// Multiple matches — caller should prompt for disambiguation
     Ambiguous(Vec<String>),
     /// No matches
@@ -12,11 +15,17 @@ pub enum MatchResult {
 pub fn partial_match(input: &str, candidates: &[String]) -> MatchResult {
     let lower_input = input.to_lowercase();
 
-    // Try exact match first (case-insensitive)
-    for candidate in candidates {
-        if candidate.to_lowercase() == lower_input {
-            return MatchResult::Exact(candidate.clone());
-        }
+    // Collect all exact matches (case-insensitive)
+    let exact_matches: Vec<String> = candidates
+        .iter()
+        .filter(|c| c.to_lowercase() == lower_input)
+        .cloned()
+        .collect();
+
+    match exact_matches.len() {
+        1 => return MatchResult::Exact(exact_matches.into_iter().next().unwrap()),
+        n if n > 1 => return MatchResult::ExactMultiple(exact_matches),
+        _ => {}
     }
 
     // Try substring match
@@ -89,6 +98,48 @@ mod tests {
             _ => panic!("Expected unique match"),
         }
     }
+
+    #[test]
+    fn test_exact_match_duplicate_returns_exact_multiple() {
+        let candidates = vec!["John Smith".into(), "Jane Doe".into(), "John Smith".into()];
+        match partial_match("John Smith", &candidates) {
+            MatchResult::ExactMultiple(names) => {
+                assert_eq!(names.len(), 2);
+                assert!(names.iter().all(|n| n == "John Smith"));
+            }
+            other => panic!("Expected ExactMultiple, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_exact_match_duplicate_case_insensitive() {
+        let candidates = vec!["John Smith".into(), "john smith".into()];
+        match partial_match("john smith", &candidates) {
+            MatchResult::ExactMultiple(names) => {
+                assert_eq!(names.len(), 2);
+                // Preserves original casing
+                assert_eq!(names[0], "John Smith");
+                assert_eq!(names[1], "john smith");
+            }
+            other => panic!("Expected ExactMultiple, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_exact_match_three_duplicates() {
+        let candidates = vec![
+            "John Smith".into(),
+            "Jane Doe".into(),
+            "John Smith".into(),
+            "John Smith".into(),
+        ];
+        match partial_match("John Smith", &candidates) {
+            MatchResult::ExactMultiple(names) => {
+                assert_eq!(names.len(), 3);
+            }
+            other => panic!("Expected ExactMultiple, got {:?}", other),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -122,6 +173,27 @@ mod proptests {
             match partial_match(&s, &candidates) {
                 MatchResult::None(all) => prop_assert!(all.is_empty()),
                 _ => prop_assert!(false, "Expected None for empty candidates"),
+            }
+        }
+
+        #[test]
+        fn duplicate_candidates_yield_exact_multiple(idx in 0usize..4) {
+            let base: Vec<String> = vec![
+                "In Progress".into(), "In Review".into(),
+                "Blocked".into(), "Done".into(),
+            ];
+            // Duplicate one candidate
+            let mut candidates = base.clone();
+            candidates.push(base[idx].clone());
+            let input = base[idx].clone();
+            match partial_match(&input, &candidates) {
+                MatchResult::ExactMultiple(names) => {
+                    prop_assert!(names.len() >= 2);
+                    for name in &names {
+                        prop_assert_eq!(name.to_lowercase(), input.to_lowercase());
+                    }
+                }
+                _ => prop_assert!(false, "Expected ExactMultiple for duplicated '{}'", input),
             }
         }
     }
