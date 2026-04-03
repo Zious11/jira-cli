@@ -457,9 +457,17 @@ fn resolve_schema<'a>(
     match partial_match::partial_match(input, &names) {
         MatchResult::Exact(name) => Ok(schemas.iter().find(|s| s.name == name).unwrap()),
         MatchResult::ExactMultiple(names) => {
-            // Duplicate schema names not expected; take first
-            let name = names.into_iter().next().unwrap();
-            Ok(schemas.iter().find(|s| s.name == name).unwrap())
+            let duplicates: Vec<String> = schemas
+                .iter()
+                .filter(|s| names.contains(&s.name))
+                .map(|s| format!("{} (id: {})", s.name, s.id))
+                .collect();
+            Err(JrError::UserError(format!(
+                "Multiple schemas named \"{}\": {}. Use the schema ID instead.",
+                input,
+                duplicates.join(", ")
+            ))
+            .into())
         }
         MatchResult::Ambiguous(matches) => Err(JrError::UserError(format!(
             "Ambiguous schema \"{}\". Matches: {}",
