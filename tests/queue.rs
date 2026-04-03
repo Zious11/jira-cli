@@ -184,3 +184,46 @@ async fn get_queue_issue_keys_paginated() {
     assert_eq!(keys[0], "HELPDESK-2");
     assert_eq!(keys[1], "HELPDESK-1");
 }
+
+#[tokio::test]
+async fn resolve_queue_duplicate_names_error_message() {
+    let server = MockServer::start().await;
+
+    // Two queues with the same name but different IDs
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk/15/queue"))
+        .and(query_param("includeCount", "true"))
+        .and(query_param("start", "0"))
+        .and(query_param("limit", "50"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 2,
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "values": [
+                { "id": "10", "name": "Triage", "issueCount": 5 },
+                { "id": "20", "name": "Triage", "issueCount": 3 }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".into());
+    let result = jr::cli::queue::resolve_queue_by_name("15", "Triage", &client).await;
+
+    let err = result.unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Multiple queues named \"Triage\""),
+        "Expected queue name in error, got: {msg}"
+    );
+    assert!(
+        msg.contains("10, 20"),
+        "Expected both queue IDs in error, got: {msg}"
+    );
+    assert!(
+        msg.contains("Use --id 10 to specify"),
+        "Expected --id suggestion in error, got: {msg}"
+    );
+}

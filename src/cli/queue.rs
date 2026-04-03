@@ -136,7 +136,7 @@ fn reorder_by_queue_position(
     issues
 }
 
-async fn resolve_queue_by_name(
+pub async fn resolve_queue_by_name(
     service_desk_id: &str,
     name: &str,
     client: &JiraClient,
