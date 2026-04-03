@@ -26,7 +26,8 @@ async fn main() {
     let result = run(cli).await;
     if let Err(e) = result {
         let exit_code = e
-            .downcast_ref::<error::JrError>()
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<error::JrError>())
             .map(|je| je.exit_code())
             .unwrap_or(1);
 
