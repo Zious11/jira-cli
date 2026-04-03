@@ -59,8 +59,19 @@ pub(super) async fn handle_move(
         }
     };
 
-    // Idempotent: if already in target status, exit 0
-    if current_status.to_lowercase() == target_status.to_lowercase() {
+    // Idempotent: if already in target status, exit 0.
+    // Check both direct match and whether the input is a transition name whose
+    // target status matches the current status.
+    let current_lower = current_status.to_lowercase();
+    let target_lower = target_status.to_lowercase();
+    let already_in_target = current_lower == target_lower
+        || transitions.iter().any(|t| {
+            t.name.to_lowercase() == target_lower
+                && t.to
+                    .as_ref()
+                    .is_some_and(|s| s.name.to_lowercase() == current_lower)
+        });
+    if already_in_target {
         match output_format {
             OutputFormat::Json => {
                 println!(
@@ -96,10 +107,39 @@ pub(super) async fn handle_move(
     let selected_transition = if let Some(t) = selected_transition {
         t
     } else {
-        // Use partial matching on transition names
-        let transition_names: Vec<String> = transitions.iter().map(|t| t.name.clone()).collect();
-        match partial_match::partial_match(&target_status, &transition_names) {
-            MatchResult::Exact(name) => transitions.iter().find(|t| t.name == name).unwrap(),
+        // Build unified candidate pool: transition names + target status names.
+        // Each candidate maps to its transition index.
+        let mut candidates: Vec<(String, usize)> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for (i, t) in transitions.iter().enumerate() {
+            let t_lower = t.name.to_lowercase();
+            if seen.insert(t_lower) {
+                candidates.push((t.name.clone(), i));
+            }
+            if let Some(ref status) = t.to {
+                let s_lower = status.name.to_lowercase();
+                if seen.insert(s_lower) {
+                    candidates.push((status.name.clone(), i));
+                }
+            }
+        }
+
+        let candidate_names: Vec<String> =
+            candidates.iter().map(|(name, _)| name.clone()).collect();
+        match partial_match::partial_match(&target_status, &candidate_names) {
+            MatchResult::Exact(name) => {
+                let idx = candidates
+                    .iter()
+                    .find(|(n, _)| n == &name)
+                    .map(|(_, i)| *i)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Internal error: matched candidate \"{}\" not found. Please report this as a bug.",
+                            name
+                        )
+                    })?;
+                &transitions[idx]
+            }
             MatchResult::Ambiguous(matches) => {
                 if no_input {
                     bail!(
@@ -123,16 +163,31 @@ pub(super) async fn handle_move(
                 if idx < 1 || idx > matches.len() {
                     return Err(JrError::UserError("Selection out of range".into()).into());
                 }
-                transitions
+                let selected_name = &matches[idx - 1];
+                let tidx = candidates
                     .iter()
-                    .find(|t| t.name == matches[idx - 1])
-                    .unwrap()
+                    .find(|(n, _)| n == selected_name)
+                    .map(|(_, i)| *i)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Internal error: selected candidate \"{}\" not found. Please report this as a bug.",
+                            selected_name
+                        )
+                    })?;
+                &transitions[tidx]
             }
-            MatchResult::None(all) => {
+            MatchResult::None(_) => {
+                let labels: Vec<String> = transitions
+                    .iter()
+                    .map(|t| match t.to.as_ref() {
+                        Some(status) => format!("{} (→ {})", t.name, status.name),
+                        None => t.name.clone(),
+                    })
+                    .collect();
                 bail!(
                     "No transition matching \"{}\". Available: {}",
                     target_status,
-                    all.join(", ")
+                    labels.join(", ")
                 );
             }
         }
