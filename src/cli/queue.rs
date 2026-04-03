@@ -162,6 +162,21 @@ async fn resolve_queue_by_name(
                 Ok(matching[0].id.clone())
             }
         }
+        MatchResult::ExactMultiple(names) => {
+            // ExactMultiple means partial_match found duplicate candidate strings.
+            let matching: Vec<&crate::types::jsm::Queue> = queues
+                .iter()
+                .filter(|q| names.contains(&q.name))
+                .collect();
+            let ids: Vec<String> = matching.iter().map(|q| q.id.clone()).collect();
+            Err(JrError::UserError(format!(
+                "Multiple queues named \"{}\" found (IDs: {}). Use --id {} to specify.",
+                names[0],
+                ids.join(", "),
+                ids[0]
+            ))
+            .into())
+        }
         MatchResult::Ambiguous(matches) => Err(JrError::UserError(format!(
             "\"{}\" matches multiple queues: {}. Be more specific or use --id.",
             name,
@@ -208,6 +223,9 @@ mod tests {
                 } else {
                     Ok(matching[0].id.clone())
                 }
+            }
+            crate::partial_match::MatchResult::ExactMultiple(names) => {
+                Err(format!("duplicate: {}", names.len()))
             }
             crate::partial_match::MatchResult::Ambiguous(m) => {
                 Err(format!("ambiguous: {}", m.len()))

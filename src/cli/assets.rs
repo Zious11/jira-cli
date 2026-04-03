@@ -331,6 +331,10 @@ fn filter_tickets(
 
         let matched = match partial_match::partial_match(status_input, &status_names) {
             MatchResult::Exact(name) => name,
+            MatchResult::ExactMultiple(names) => {
+                // Duplicate status names not expected; take first
+                names.into_iter().next().unwrap()
+            }
             MatchResult::Ambiguous(matches) => {
                 return Err(JrError::UserError(format!(
                     "Ambiguous status \"{}\". Matches: {}",
@@ -452,6 +456,11 @@ fn resolve_schema<'a>(
     let names: Vec<String> = schemas.iter().map(|s| s.name.clone()).collect();
     match partial_match::partial_match(input, &names) {
         MatchResult::Exact(name) => Ok(schemas.iter().find(|s| s.name == name).unwrap()),
+        MatchResult::ExactMultiple(names) => {
+            // Duplicate schema names not expected; take first
+            let name = names.into_iter().next().unwrap();
+            Ok(schemas.iter().find(|s| s.name == name).unwrap())
+        }
         MatchResult::Ambiguous(matches) => Err(JrError::UserError(format!(
             "Ambiguous schema \"{}\". Matches: {}",
             input,
@@ -648,6 +657,10 @@ async fn handle_schema(
     deduped_names.dedup();
     let matched_name = match partial_match::partial_match(type_name, &deduped_names) {
         MatchResult::Exact(name) => name,
+        MatchResult::ExactMultiple(names) => {
+            // Duplicate type names not expected after dedup; take first
+            names.into_iter().next().unwrap()
+        }
         MatchResult::Ambiguous(matches) => {
             return Err(ambiguous_type_error(type_name, &matches, &candidates).into());
         }

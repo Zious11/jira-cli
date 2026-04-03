@@ -40,6 +40,27 @@ pub(super) async fn resolve_team_field(
                 .expect("matched name must exist in teams");
             Ok((field_id, team.id.clone()))
         }
+        crate::partial_match::MatchResult::ExactMultiple(matches) => {
+            // Duplicate team names — Task 3 will add proper deduplication; treat as ambiguous for now
+            if no_input {
+                let quoted: Vec<String> = matches.iter().map(|m| format!("\"{}\"", m)).collect();
+                anyhow::bail!(
+                    "Multiple teams match \"{}\": {}. Use a more specific name.",
+                    team_name,
+                    quoted.join(", ")
+                );
+            }
+            let selection = dialoguer::Select::new()
+                .with_prompt(format!("Multiple teams match \"{team_name}\""))
+                .items(&matches)
+                .interact()?;
+            let selected_name = &matches[selection];
+            let team = teams
+                .iter()
+                .find(|t| &t.name == selected_name)
+                .expect("selected name must exist in teams");
+            Ok((field_id, team.id.clone()))
+        }
         crate::partial_match::MatchResult::Ambiguous(matches) => {
             if no_input {
                 let quoted: Vec<String> = matches.iter().map(|m| format!("\"{}\"", m)).collect();
@@ -139,6 +160,26 @@ pub(super) async fn resolve_user(
                 .expect("matched name must exist in active_users");
             Ok(user.account_id.clone())
         }
+        crate::partial_match::MatchResult::ExactMultiple(matches) => {
+            // Duplicate display names — Task 3 will add proper deduplication; treat as ambiguous for now
+            if no_input {
+                anyhow::bail!(
+                    "Multiple users match \"{}\": {}. Use a more specific name.",
+                    name,
+                    matches.join(", ")
+                );
+            }
+            let selection = dialoguer::Select::new()
+                .with_prompt(format!("Multiple users match \"{name}\""))
+                .items(&matches)
+                .interact()?;
+            let selected_name = &matches[selection];
+            let user = active_users
+                .iter()
+                .find(|u| &u.display_name == selected_name)
+                .expect("selected name must exist in active_users");
+            Ok(user.account_id.clone())
+        }
         crate::partial_match::MatchResult::Ambiguous(matches) => {
             if no_input {
                 anyhow::bail!(
@@ -207,6 +248,26 @@ pub(super) async fn resolve_assignee(
                 .iter()
                 .find(|u| u.display_name == matched_name)
                 .expect("matched name must exist in users");
+            Ok((user.account_id.clone(), user.display_name.clone()))
+        }
+        crate::partial_match::MatchResult::ExactMultiple(matches) => {
+            // Duplicate display names — Task 3 will add proper deduplication; treat as ambiguous for now
+            if no_input {
+                anyhow::bail!(
+                    "Multiple users match \"{}\": {}. Use a more specific name.",
+                    name,
+                    matches.join(", ")
+                );
+            }
+            let selection = dialoguer::Select::new()
+                .with_prompt(format!("Multiple users match \"{name}\""))
+                .items(&matches)
+                .interact()?;
+            let selected_name = &matches[selection];
+            let user = users
+                .iter()
+                .find(|u| &u.display_name == selected_name)
+                .expect("selected name must exist in users");
             Ok((user.account_id.clone(), user.display_name.clone()))
         }
         crate::partial_match::MatchResult::Ambiguous(matches) => {
@@ -285,6 +346,26 @@ pub(super) async fn resolve_assignee_by_project(
                 .iter()
                 .find(|u| u.display_name == matched_name)
                 .expect("matched name must exist in users");
+            Ok((user.account_id.clone(), user.display_name.clone()))
+        }
+        crate::partial_match::MatchResult::ExactMultiple(matches) => {
+            // Duplicate display names — Task 3 will add proper deduplication; treat as ambiguous for now
+            if no_input {
+                anyhow::bail!(
+                    "Multiple users match \"{}\": {}. Use a more specific name.",
+                    name,
+                    matches.join(", ")
+                );
+            }
+            let selection = dialoguer::Select::new()
+                .with_prompt(format!("Multiple users match \"{name}\""))
+                .items(&matches)
+                .interact()?;
+            let selected_name = &matches[selection];
+            let user = users
+                .iter()
+                .find(|u| &u.display_name == selected_name)
+                .expect("selected name must exist in users");
             Ok((user.account_id.clone(), user.display_name.clone()))
         }
         crate::partial_match::MatchResult::Ambiguous(matches) => {
