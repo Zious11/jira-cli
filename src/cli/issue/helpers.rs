@@ -181,7 +181,7 @@ pub(super) async fn resolve_user(
                     .iter()
                     .map(|u| {
                         let label = u.email_address.as_deref().unwrap_or(&u.account_id);
-                        format!("  {} (account: {})", u.display_name, label)
+                        format!("  {} ({})", u.display_name, label)
                     })
                     .collect();
                 anyhow::bail!(
@@ -287,7 +287,7 @@ pub(super) async fn resolve_assignee(
                     .iter()
                     .map(|u| {
                         let label = u.email_address.as_deref().unwrap_or(&u.account_id);
-                        format!("  {} (account: {})", u.display_name, label)
+                        format!("  {} ({})", u.display_name, label)
                     })
                     .collect();
                 anyhow::bail!(
@@ -403,7 +403,7 @@ pub(super) async fn resolve_assignee_by_project(
                     .iter()
                     .map(|u| {
                         let label = u.email_address.as_deref().unwrap_or(&u.account_id);
-                        format!("  {} (account: {})", u.display_name, label)
+                        format!("  {} ({})", u.display_name, label)
                     })
                     .collect();
                 anyhow::bail!(
