@@ -3,7 +3,7 @@
 pub enum MatchResult {
     /// Exactly one match found
     Exact(String),
-    /// Multiple candidates share the same exact (case-insensitive) name — carries one representative
+    /// Multiple candidates share the same exact (case-insensitive) name — carries the first matching candidate
     ExactMultiple(String),
     /// Multiple matches — caller should prompt for disambiguation
     Ambiguous(Vec<String>),
