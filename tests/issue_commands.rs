@@ -1127,3 +1127,339 @@ async fn test_create_issue_assignee_not_found() {
         .unwrap();
     assert!(users.is_empty());
 }
+
+#[tokio::test]
+async fn test_move_by_transition_name() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1/transitions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::transitions_response_with_status(vec![
+                ("21", "Complete", "Completed"),
+                ("31", "Review", "In Review"),
+            ]),
+        ))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(common::fixtures::issue_response(
+                "FOO-1",
+                "Test issue",
+                "To Do",
+            )),
+        )
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/FOO-1/transitions"))
+        .and(body_partial_json(
+            serde_json::json!({"transition": {"id": "21"}}),
+        ))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .arg("--no-input")
+        .arg("issue")
+        .arg("move")
+        .arg("FOO-1")
+        .arg("Complete")
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "Expected success, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("Moved FOO-1"),
+        "Expected move confirmation in stdout: {stdout}"
+    );
+}
+
+#[tokio::test]
+async fn test_move_by_status_name() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1/transitions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::transitions_response_with_status(vec![
+                ("21", "Complete", "Completed"),
+                ("31", "Review", "In Review"),
+            ]),
+        ))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(common::fixtures::issue_response(
+                "FOO-1",
+                "Test issue",
+                "To Do",
+            )),
+        )
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/FOO-1/transitions"))
+        .and(body_partial_json(
+            serde_json::json!({"transition": {"id": "21"}}),
+        ))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .arg("--no-input")
+        .arg("issue")
+        .arg("move")
+        .arg("FOO-1")
+        .arg("Completed")
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "Expected success, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("Moved FOO-1"),
+        "Expected move confirmation in stdout: {stdout}"
+    );
+}
+
+#[tokio::test]
+async fn test_move_dedup_same_transition_and_status_name() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1/transitions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::transitions_response_with_status(vec![
+                ("21", "In Progress", "In Progress"),
+                ("31", "Done", "Done"),
+            ]),
+        ))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(common::fixtures::issue_response(
+                "FOO-1",
+                "Test issue",
+                "To Do",
+            )),
+        )
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/FOO-1/transitions"))
+        .and(body_partial_json(
+            serde_json::json!({"transition": {"id": "31"}}),
+        ))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .arg("--no-input")
+        .arg("issue")
+        .arg("move")
+        .arg("FOO-1")
+        .arg("Done")
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "Expected success, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("Moved FOO-1"),
+        "Expected move confirmation in stdout: {stdout}"
+    );
+}
+
+#[tokio::test]
+async fn test_move_ambiguous_across_transition_and_status_names() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1/transitions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::transitions_response_with_status(vec![
+                ("21", "Reopen", "Open"),
+                ("31", "Review", "In Review"),
+            ]),
+        ))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(common::fixtures::issue_response(
+                "FOO-1",
+                "Test issue",
+                "Closed",
+            )),
+        )
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .arg("--no-input")
+        .arg("issue")
+        .arg("move")
+        .arg("FOO-1")
+        .arg("Re")
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure, stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("Ambiguous"),
+        "Expected ambiguity error in stderr: {stderr}"
+    );
+}
+
+#[tokio::test]
+async fn test_move_no_match_shows_status_names() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1/transitions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::transitions_response_with_status(vec![
+                ("21", "Complete", "Completed"),
+                ("31", "Review", "In Review"),
+            ]),
+        ))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(common::fixtures::issue_response(
+                "FOO-1",
+                "Test issue",
+                "To Do",
+            )),
+        )
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .arg("--no-input")
+        .arg("issue")
+        .arg("move")
+        .arg("FOO-1")
+        .arg("Nonexistent")
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure, stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("Complete (→ Completed)"),
+        "Expected enriched error format in stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("Review (→ In Review)"),
+        "Expected enriched error format in stderr: {stderr}"
+    );
+}
+
+#[tokio::test]
+async fn test_move_idempotent_with_status_name() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1/transitions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::transitions_response_with_status(vec![(
+                "21",
+                "Complete",
+                "Completed",
+            )]),
+        ))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(common::fixtures::issue_response(
+                "FOO-1",
+                "Test issue",
+                "Completed",
+            )),
+        )
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .arg("--no-input")
+        .arg("issue")
+        .arg("move")
+        .arg("FOO-1")
+        .arg("Completed")
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "Expected success (idempotent), stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("already in status"),
+        "Expected idempotent message in stdout: {stdout}"
+    );
+}
