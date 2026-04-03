@@ -331,9 +331,8 @@ fn filter_tickets(
 
         let matched = match partial_match::partial_match(status_input, &status_names) {
             MatchResult::Exact(name) => name,
-            MatchResult::ExactMultiple(_) => {
-                unreachable!("ExactMultiple should not occur: statuses are deduplicated")
-            }
+            // Case-sensitive dedup upstream; treat like Exact if case-variant duplicates slip through
+            MatchResult::ExactMultiple(name) => name,
             MatchResult::Ambiguous(matches) => {
                 return Err(JrError::UserError(format!(
                     "Ambiguous status \"{}\". Matches: {}",
@@ -665,9 +664,8 @@ async fn handle_schema(
     deduped_names.dedup();
     let matched_name = match partial_match::partial_match(type_name, &deduped_names) {
         MatchResult::Exact(name) => name,
-        MatchResult::ExactMultiple(_) => {
-            unreachable!("ExactMultiple should not occur: type names are deduplicated")
-        }
+        // Case-sensitive dedup upstream; treat like Exact if case-variant duplicates slip through
+        MatchResult::ExactMultiple(name) => name,
         MatchResult::Ambiguous(matches) => {
             return Err(ambiguous_type_error(type_name, &matches, &candidates).into());
         }
