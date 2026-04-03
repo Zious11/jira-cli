@@ -261,8 +261,7 @@ pub(super) async fn handle_list(
                     }
                 }
                 Err(e) => {
-                    if let Some(JrError::ApiError { status: 404, .. }) =
-                        e.downcast_ref::<JrError>()
+                    if let Some(JrError::ApiError { status: 404, .. }) = e.downcast_ref::<JrError>()
                     {
                         return Err(JrError::UserError(format!(
                             "Board {} not found or not accessible. \

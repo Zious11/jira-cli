@@ -206,12 +206,13 @@ async fn issue_list_no_active_sprint_falls_back_to_project_jql() {
     // Search endpoint returns issues (fallback JQL works)
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(common::fixtures::issue_search_response(vec![
-                    common::fixtures::issue_response("PROJ-1", "Test Issue", "To Do"),
-                ])),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response(vec![common::fixtures::issue_response(
+                "PROJ-1",
+                "Test Issue",
+                "To Do",
+            )]),
+        ))
         .mount(&server)
         .await;
 
