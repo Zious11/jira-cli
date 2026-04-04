@@ -16,7 +16,7 @@ Add `--account-id` as a mutually exclusive alternative to `--to` on both `issue 
 
 **Why mutually exclusive flags instead of auto-detection:** Jira accountIds are opaque strings with no documented stable format. Auto-detecting whether a `--to` value is a name or an accountId would be fragile and could misinterpret display names as IDs. Popular CLIs (kubectl, docker) auto-detect because their ID formats are well-defined; Jira's are not. A separate flag is explicit and unambiguous.
 
-**Why not client-side validation:** The Jira API returns a clear 404 error ("The user with account ID '...' does not exist") for invalid accountIds. Client-side format validation would be redundant and could reject valid IDs if Atlassian changes the format.
+**Why not client-side validation:** The Jira API returns clear errors for invalid accountIds — 404 on the assign endpoint ("The user with account ID '...' does not exist") and 400 on the create endpoint ("User '...' cannot be assigned issues"). Client-side format validation would be redundant and could reject valid IDs if Atlassian changes the format.
 
 ## Design
 
@@ -142,7 +142,7 @@ The existing idempotent check in `handle_assign` compares `assignee.account_id =
 - `resolve_assignee`, `resolve_assignee_by_project` functions — unchanged
 - `resolve_user` (used by `issue list --user`) — unchanged, separate concern
 - `issue list --user` — unchanged (no `--account-id` for JQL filtering)
-- Error messages — unchanged (Jira API provides clear 404 for invalid accountIds)
+- Error messages — unchanged (Jira API provides clear errors for invalid accountIds: 404 on assign, 400 on create)
 
 ## Testing
 
