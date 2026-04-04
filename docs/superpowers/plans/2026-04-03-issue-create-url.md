@@ -27,7 +27,7 @@
 - Modify: `src/cli/issue/create.rs:136-143`
 - Modify: `tests/issue_commands.rs` (append new test)
 
-- [ ] **Step 1: Write the failing integration test**
+- [ ] **Step 1: Write the integration test for URL construction building blocks**
 
 Add this test at the end of `tests/issue_commands.rs`:
 
@@ -74,7 +74,7 @@ async fn test_create_issue_response_includes_browse_url() {
 
 Run: `cargo test --test issue_commands test_create_issue_response_includes_browse_url`
 
-Expected: PASS. This test validates the building blocks (API response + `instance_url()`) exist and work. The test passes because it's testing existing infrastructure — the URL construction logic.
+Expected: PASS. This test validates the building blocks (`create_issue` API response + `instance_url()`) that the production code depends on for URL construction.
 
 - [ ] **Step 3: Implement the table output change**
 

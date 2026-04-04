@@ -100,10 +100,12 @@ println!("{}", serde_json::to_string_pretty(&json_response)?);
 
 ## Testing
 
-One integration test added to `tests/issue_commands.rs` that:
-1. Mounts a wiremock mock for `POST /rest/api/3/issue` returning `{"key": "TEST-1"}`
-2. Calls `handle_create` with table output and verifies stdout contains both `Created issue TEST-1` and the browse URL
-3. Calls with JSON output and verifies the response includes both `key` and `url` fields
+One integration test added to `tests/issue_commands.rs` that validates the building blocks at the API layer:
+1. Mounts a wiremock mock for `POST /rest/api/3/issue` returning `{"key": "URL-1"}`
+2. Calls `JiraClient::create_issue` directly and verifies the key is returned
+3. Verifies the browse URL can be constructed from `client.instance_url()` and the key
+
+This follows the codebase convention of testing the API layer via wiremock and verifying CLI output formatting via live testing.
 
 ## Files modified
 
