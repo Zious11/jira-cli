@@ -232,7 +232,8 @@ async fn resolve_queue_duplicate_names_error_message() {
 async fn resolve_queue_mixed_case_duplicate_names_error_message() {
     let server = MockServer::start().await;
 
-    // Two queues with the same name but different casing
+    // Two queues whose names differ only in casing — unlike the exact-duplicate
+    // test above, this exercises the to_lowercase() normalization path
     Mock::given(method("GET"))
         .and(path("/rest/servicedeskapi/servicedesk/15/queue"))
         .and(query_param("includeCount", "true"))
@@ -253,8 +254,8 @@ async fn resolve_queue_mixed_case_duplicate_names_error_message() {
 
     let client =
         jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".into());
-    // Lowercase input — matches neither stored name exactly,
-    // forcing both sides of to_lowercase() to do work
+    // Lowercase input — differs in casing from both stored names,
+    // so to_lowercase() must normalize both input and candidates
     let result = jr::cli::queue::resolve_queue_by_name("15", "triage", &client).await;
 
     let err = result.unwrap_err();
