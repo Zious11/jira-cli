@@ -246,8 +246,11 @@ pub enum IssueCommand {
         #[arg(long)]
         parent: Option<String>,
         /// Assign to user (name/email, or "me" for self)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "account_id")]
         to: Option<String>,
+        /// Assign to this Jira accountId directly (bypasses name search)
+        #[arg(long, conflicts_with = "to")]
+        account_id: Option<String>,
     },
     /// View issue details
     View {
