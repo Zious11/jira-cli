@@ -309,8 +309,11 @@ pub enum IssueCommand {
         /// Issue key
         key: String,
         /// Assign to this user (omit to assign to self)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "account_id")]
         to: Option<String>,
+        /// Assign to this Jira accountId directly (bypasses name search)
+        #[arg(long, conflicts_with_all = ["to", "unassign"])]
+        account_id: Option<String>,
         /// Remove assignee
         #[arg(long)]
         unassign: bool,

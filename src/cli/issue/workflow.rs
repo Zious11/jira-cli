@@ -279,7 +279,13 @@ pub(super) async fn handle_assign(
     client: &JiraClient,
     no_input: bool,
 ) -> Result<()> {
-    let IssueCommand::Assign { key, to, unassign } = command else {
+    let IssueCommand::Assign {
+        key,
+        to,
+        account_id,
+        unassign,
+    } = command
+    else {
         unreachable!()
     };
 
@@ -304,7 +310,9 @@ pub(super) async fn handle_assign(
     }
 
     // Resolve account ID and display name
-    let (account_id, display_name) = if let Some(ref user_query) = to {
+    let (account_id, display_name) = if let Some(ref id) = account_id {
+        (id.clone(), id.clone())
+    } else if let Some(ref user_query) = to {
         helpers::resolve_assignee(client, user_query, &key, no_input).await?
     } else {
         let me = client.get_myself().await?;

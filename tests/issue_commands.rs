@@ -1559,3 +1559,62 @@ async fn test_create_issue_response_includes_browse_url() {
         "Expected browse URL to contain /browse/URL-1, got: {browse_url}"
     );
 }
+
+#[tokio::test]
+async fn test_assign_issue_with_account_id() {
+    let server = MockServer::start().await;
+
+    // Mock GET issue — currently unassigned
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/ACC-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_response_with_assignee(
+                "ACC-1",
+                "Test assign by accountId",
+                None,
+            ),
+        ))
+        .mount(&server)
+        .await;
+
+    // Mock PUT assignee — verify accountId in request body
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/ACC-1/assignee"))
+        .and(body_partial_json(serde_json::json!({
+            "accountId": "direct-account-id-456"
+        })))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".into());
+
+    // Assign directly by accountId — no user search mock needed
+    client
+        .assign_issue("ACC-1", Some("direct-account-id-456"))
+        .await
+        .unwrap();
+
+    // Verify idempotent check works: mock issue as already assigned
+    let server2 = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/ACC-2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_response_with_assignee(
+                "ACC-2",
+                "Already assigned",
+                Some(("direct-account-id-456", "direct-account-id-456")),
+            ),
+        ))
+        .mount(&server2)
+        .await;
+
+    let client2 =
+        jr::api::client::JiraClient::new_for_test(server2.uri(), "Basic dGVzdDp0ZXN0".into());
+
+    let issue = client2.get_issue("ACC-2", &[]).await.unwrap();
+    let assignee = issue.fields.assignee.unwrap();
+    assert_eq!(assignee.account_id, "direct-account-id-456");
+}
