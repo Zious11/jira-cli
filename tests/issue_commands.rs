@@ -996,7 +996,7 @@ async fn test_create_issue_with_assignee() {
                 "project": {"key": "FOO"},
                 "issuetype": {"name": "Task"},
                 "summary": "Test with assignee",
-                "assignee": {"id": "acc-jane-123"}
+                "assignee": {"accountId": "acc-jane-123"}
             }
         })))
         .respond_with(
@@ -1024,7 +1024,7 @@ async fn test_create_issue_with_assignee() {
         "issuetype": {"name": "Task"},
         "summary": "Test with assignee",
     });
-    fields["assignee"] = serde_json::json!({"id": users[0].account_id});
+    fields["assignee"] = serde_json::json!({"accountId": users[0].account_id});
 
     let response = client.create_issue(fields).await.unwrap();
     assert_eq!(response.key, "FOO-99");
@@ -1046,7 +1046,7 @@ async fn test_create_issue_with_assignee_me() {
         .and(path("/rest/api/3/issue"))
         .and(body_partial_json(serde_json::json!({
             "fields": {
-                "assignee": {"id": "abc123"}
+                "assignee": {"accountId": "abc123"}
             }
         })))
         .respond_with(
@@ -1069,7 +1069,7 @@ async fn test_create_issue_with_assignee_me() {
         "issuetype": {"name": "Task"},
         "summary": "Assigned to me",
     });
-    fields["assignee"] = serde_json::json!({"id": me.account_id});
+    fields["assignee"] = serde_json::json!({"accountId": me.account_id});
 
     let response = client.create_issue(fields).await.unwrap();
     assert_eq!(response.key, "FOO-100");
@@ -1126,6 +1126,43 @@ async fn test_create_issue_assignee_not_found() {
         .await
         .unwrap();
     assert!(users.is_empty());
+}
+
+#[tokio::test]
+async fn test_create_issue_with_account_id() {
+    let server = MockServer::start().await;
+
+    // Mock create issue — verify assignee uses accountId format
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": {
+                "project": {"key": "FOO"},
+                "issuetype": {"name": "Task"},
+                "summary": "Assigned by accountId",
+                "assignee": {"accountId": "direct-acct-789"}
+            }
+        })))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .set_body_json(common::fixtures::create_issue_response("FOO-200")),
+        )
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+
+    // Build fields with accountId directly — no user search mock needed
+    let mut fields = serde_json::json!({
+        "project": {"key": "FOO"},
+        "issuetype": {"name": "Task"},
+        "summary": "Assigned by accountId",
+    });
+    fields["assignee"] = serde_json::json!({"accountId": "direct-acct-789"});
+
+    let response = client.create_issue(fields).await.unwrap();
+    assert_eq!(response.key, "FOO-200");
 }
 
 #[tokio::test]
@@ -1558,4 +1595,63 @@ async fn test_create_issue_response_includes_browse_url() {
         browse_url.contains("/browse/URL-1"),
         "Expected browse URL to contain /browse/URL-1, got: {browse_url}"
     );
+}
+
+#[tokio::test]
+async fn test_assign_issue_with_account_id() {
+    let server = MockServer::start().await;
+
+    // Mock GET issue — currently unassigned
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/ACC-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_response_with_assignee(
+                "ACC-1",
+                "Test assign by accountId",
+                None,
+            ),
+        ))
+        .mount(&server)
+        .await;
+
+    // Mock PUT assignee — verify accountId in request body
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/ACC-1/assignee"))
+        .and(body_partial_json(serde_json::json!({
+            "accountId": "direct-account-id-456"
+        })))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".into());
+
+    // Assign directly by accountId — no user search mock needed
+    client
+        .assign_issue("ACC-1", Some("direct-account-id-456"))
+        .await
+        .unwrap();
+
+    // Verify fixture correctly represents an already-assigned issue
+    let server2 = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/ACC-2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_response_with_assignee(
+                "ACC-2",
+                "Already assigned",
+                Some(("direct-account-id-456", "direct-account-id-456")),
+            ),
+        ))
+        .mount(&server2)
+        .await;
+
+    let client2 =
+        jr::api::client::JiraClient::new_for_test(server2.uri(), "Basic dGVzdDp0ZXN0".into());
+
+    let issue = client2.get_issue("ACC-2", &[]).await.unwrap();
+    let assignee = issue.fields.assignee.unwrap();
+    assert_eq!(assignee.account_id, "direct-account-id-456");
 }
