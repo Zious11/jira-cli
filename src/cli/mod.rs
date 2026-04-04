@@ -311,7 +311,7 @@ pub enum IssueCommand {
     Assign {
         /// Issue key
         key: String,
-        /// Assign to this user (omit to assign to self)
+        /// Assign to this user (name/email, or "me" for self; omit to assign to self)
         #[arg(long, conflicts_with = "account_id")]
         to: Option<String>,
         /// Assign to this Jira accountId directly (bypasses name search)
