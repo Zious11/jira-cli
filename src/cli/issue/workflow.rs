@@ -309,7 +309,9 @@ pub(super) async fn handle_assign(
         return Ok(());
     }
 
-    // Resolve account ID and display name
+    // Resolve account ID and display name.
+    // When --account-id is provided, no search is performed so the raw
+    // account ID is used as the display name (no name available).
     let (account_id, display_name) = if let Some(ref id) = account_id {
         (id.clone(), id.clone())
     } else if let Some(ref user_query) = to {

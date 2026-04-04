@@ -1633,7 +1633,7 @@ async fn test_assign_issue_with_account_id() {
         .await
         .unwrap();
 
-    // Verify idempotent check works: mock issue as already assigned
+    // Verify fixture correctly represents an already-assigned issue
     let server2 = MockServer::start().await;
 
     Mock::given(method("GET"))
