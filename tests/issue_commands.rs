@@ -1655,3 +1655,38 @@ async fn test_assign_issue_with_account_id() {
     let assignee = issue.fields.assignee.unwrap();
     assert_eq!(assignee.account_id, "direct-account-id-456");
 }
+
+#[tokio::test]
+async fn test_assign_issue_invalid_account_id_returns_error() {
+    let server = MockServer::start().await;
+
+    // Mock PUT assignee returning 404 with Jira error body for invalid accountId
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/ERR-1/assignee"))
+        .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+            "errorMessages": ["User 'bogus-account-id' does not exist."]
+        })))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".into());
+
+    let result = client.assign_issue("ERR-1", Some("bogus-account-id")).await;
+
+    let err = result.unwrap_err();
+
+    // Verify correct error variant and status code structurally
+    assert!(
+        err.downcast_ref::<jr::error::JrError>()
+            .is_some_and(|e| matches!(e, jr::error::JrError::ApiError { status: 404, .. })),
+        "Expected JrError::ApiError with status 404, got: {err}"
+    );
+
+    // Verify Jira error message was extracted from the JSON body
+    let msg = err.to_string();
+    assert!(
+        msg.contains("does not exist"),
+        "Expected Jira error message in error, got: {msg}"
+    );
+}
