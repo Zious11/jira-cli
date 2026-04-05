@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use serde_json::json;
+use super::json_output;
 
 use crate::api::client::JiraClient;
 use crate::cli::{IssueCommand, OutputFormat};
@@ -93,12 +93,11 @@ pub(super) async fn handle_link(
         OutputFormat::Json => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&json!({
-                    "key1": key1,
-                    "key2": key2,
-                    "type": resolved_name,
-                    "linked": true
-                }))?
+                serde_json::to_string_pretty(&json_output::link_response(
+                    &key1,
+                    &key2,
+                    &resolved_name,
+                ))?
             );
         }
         OutputFormat::Table => {
@@ -190,10 +189,7 @@ pub(super) async fn handle_unlink(
             OutputFormat::Json => {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&json!({
-                        "unlinked": false,
-                        "count": 0
-                    }))?
+                    serde_json::to_string_pretty(&json_output::unlink_response(false, 0))?
                 );
             }
             OutputFormat::Table => {
@@ -212,10 +208,7 @@ pub(super) async fn handle_unlink(
         OutputFormat::Json => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&json!({
-                    "unlinked": true,
-                    "count": count
-                }))?
+                serde_json::to_string_pretty(&json_output::unlink_response(true, count))?
             );
         }
         OutputFormat::Table => {

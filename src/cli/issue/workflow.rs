@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use serde_json::json;
+use super::json_output;
 
 use crate::adf;
 use crate::api::client::JiraClient;
@@ -76,11 +76,11 @@ pub(super) async fn handle_move(
             OutputFormat::Json => {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&json!({
-                        "key": key,
-                        "status": current_status,
-                        "changed": false
-                    }))?
+                    serde_json::to_string_pretty(&json_output::move_response(
+                        &key,
+                        &current_status,
+                        false,
+                    ))?
                 );
             }
             OutputFormat::Table => {
@@ -221,11 +221,9 @@ pub(super) async fn handle_move(
         OutputFormat::Json => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&json!({
-                    "key": key,
-                    "status": new_status,
-                    "changed": true
-                }))?
+                serde_json::to_string_pretty(&json_output::move_response(
+                    &key, new_status, true,
+                ))?
             );
         }
         OutputFormat::Table => {
@@ -295,11 +293,7 @@ pub(super) async fn handle_assign(
             OutputFormat::Json => {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&json!({
-                        "key": key,
-                        "assignee": null,
-                        "changed": true
-                    }))?
+                    serde_json::to_string_pretty(&json_output::unassign_response(&key))?
                 );
             }
             OutputFormat::Table => {
@@ -329,12 +323,13 @@ pub(super) async fn handle_assign(
                 OutputFormat::Json => {
                     println!(
                         "{}",
-                        serde_json::to_string_pretty(&json!({
-                            "key": key,
-                            "assignee": display_name,
-                            "assignee_account_id": account_id,
-                            "changed": false
-                        }))?
+                        serde_json::to_string_pretty(
+                            &json_output::assign_unchanged_response(
+                                &key,
+                                &display_name,
+                                &account_id,
+                            ),
+                        )?
                     );
                 }
                 OutputFormat::Table => {
@@ -354,12 +349,11 @@ pub(super) async fn handle_assign(
         OutputFormat::Json => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&json!({
-                    "key": key,
-                    "assignee": display_name,
-                    "assignee_account_id": account_id,
-                    "changed": true
-                }))?
+                serde_json::to_string_pretty(&json_output::assign_changed_response(
+                    &key,
+                    &display_name,
+                    &account_id,
+                ))?
             );
         }
         OutputFormat::Table => {

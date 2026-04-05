@@ -1,8 +1,3 @@
-// These functions are staged for use in the next task (wiring handler files).
-// They are not yet called but will be consumed when workflow.rs, create.rs, and links.rs
-// are updated to use builder functions instead of inline json!({}) calls.
-#![allow(dead_code)]
-
 use serde_json::{Value, json};
 
 /// JSON response for `issue move` — both changed and idempotent cases.

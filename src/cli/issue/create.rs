@@ -9,6 +9,7 @@ use crate::error::JrError;
 use crate::output;
 
 use super::helpers;
+use super::json_output;
 
 pub(super) async fn handle_create(
     command: IssueCommand,
@@ -272,7 +273,7 @@ pub(super) async fn handle_edit(
                 OutputFormat::Json => {
                     println!(
                         "{}",
-                        serde_json::to_string_pretty(&json!({ "key": key, "updated": true }))?
+                        serde_json::to_string_pretty(&json_output::edit_response(&key))?
                     );
                 }
                 OutputFormat::Table => {
@@ -295,7 +296,7 @@ pub(super) async fn handle_edit(
         OutputFormat::Json => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&json!({ "key": key, "updated": true }))?
+                serde_json::to_string_pretty(&json_output::edit_response(&key))?
             );
         }
         OutputFormat::Table => {
