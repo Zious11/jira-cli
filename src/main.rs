@@ -114,7 +114,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 let config = config::Config::load()?;
                 let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
                 cli::issue::handle(
-                    command,
+                    *command,
                     &cli.output,
                     &config,
                     &client,

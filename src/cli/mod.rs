@@ -69,7 +69,7 @@ pub enum Command {
     /// Manage issues
     Issue {
         #[command(subcommand)]
-        command: IssueCommand,
+        command: Box<IssueCommand>,
     },
     /// Manage boards
     Board {
