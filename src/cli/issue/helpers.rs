@@ -138,7 +138,7 @@ fn disambiguate_user(
     name: &str,
     no_input: bool,
     empty_msg: &str,
-    none_msg: &str,
+    none_msg_fn: impl Fn(&[String]) -> String,
 ) -> Result<(String, String)> {
     if users.is_empty() {
         anyhow::bail!("{}", empty_msg);
@@ -226,7 +226,7 @@ fn disambiguate_user(
             ))
         }
         crate::partial_match::MatchResult::None(all_names) => {
-            anyhow::bail!("{} Found: {}", none_msg, all_names.join(", "));
+            anyhow::bail!("{}", none_msg_fn(&all_names));
         }
     }
 }
@@ -262,8 +262,8 @@ pub(super) async fn resolve_user(
             "No active user found matching \"{}\". The user may be deactivated.",
             name
         ),
-        &format!(
-            "No active user found matching \"{}\".",
+        |_all_names| format!(
+            "No active user found matching \"{}\". The user may be deactivated.",
             name
         ),
     )?;
@@ -298,9 +298,9 @@ pub(super) async fn resolve_assignee(
             "No assignable user matching \"{}\" on issue {}. The user may not exist or may lack permission for this project. Try a different name or check spelling.",
             name, issue_key,
         ),
-        &format!(
-            "No assignable user with a name matching \"{}\" on issue {}.",
-            name, issue_key,
+        |all_names| format!(
+            "No assignable user with a name matching \"{}\" on issue {}. Found: {}",
+            name, issue_key, all_names.join(", "),
         ),
     )
 }
@@ -324,6 +324,9 @@ pub(super) async fn resolve_assignee_by_project(
         return Ok((me.account_id, me.display_name));
     }
 
+    // The multiProjectSearch endpoint returns only users eligible for assignment,
+    // which should exclude deactivated users. No client-side active filter needed
+    // (consistent with resolve_assignee for issue-scoped search).
     let users = client
         .search_assignable_users_by_project(name, project_key)
         .await?;
@@ -336,9 +339,9 @@ pub(super) async fn resolve_assignee_by_project(
             "No assignable user matching \"{}\" in project {}. The user may not exist or may lack permission for this project. Try a different name or check spelling.",
             name, project_key,
         ),
-        &format!(
-            "No assignable user with a name matching \"{}\" in project {}.",
-            name, project_key,
+        |all_names| format!(
+            "No assignable user with a name matching \"{}\" in project {}. Found: {}",
+            name, project_key, all_names.join(", "),
         ),
     )
 }
