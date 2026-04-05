@@ -262,10 +262,12 @@ pub(super) async fn resolve_user(
             "No active user found matching \"{}\". The user may be deactivated.",
             name
         ),
-        |_all_names| format!(
-            "No active user found matching \"{}\". The user may be deactivated.",
-            name
-        ),
+        |_all_names| {
+            format!(
+                "No active user found matching \"{}\". The user may be deactivated.",
+                name
+            )
+        },
     )?;
     Ok(account_id)
 }
@@ -298,10 +300,14 @@ pub(super) async fn resolve_assignee(
             "No assignable user matching \"{}\" on issue {}. The user may not exist or may lack permission for this project. Try a different name or check spelling.",
             name, issue_key,
         ),
-        |all_names| format!(
-            "No assignable user with a name matching \"{}\" on issue {}. Found: {}",
-            name, issue_key, all_names.join(", "),
-        ),
+        |all_names| {
+            format!(
+                "No assignable user with a name matching \"{}\" on issue {}. Found: {}",
+                name,
+                issue_key,
+                all_names.join(", "),
+            )
+        },
     )
 }
 
@@ -339,10 +345,14 @@ pub(super) async fn resolve_assignee_by_project(
             "No assignable user matching \"{}\" in project {}. The user may not exist or may lack permission for this project. Try a different name or check spelling.",
             name, project_key,
         ),
-        |all_names| format!(
-            "No assignable user with a name matching \"{}\" in project {}. Found: {}",
-            name, project_key, all_names.join(", "),
-        ),
+        |all_names| {
+            format!(
+                "No assignable user with a name matching \"{}\" in project {}. Found: {}",
+                name,
+                project_key,
+                all_names.join(", "),
+            )
+        },
     )
 }
 
