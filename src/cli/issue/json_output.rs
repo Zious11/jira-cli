@@ -95,6 +95,11 @@ mod tests {
     }
 
     #[test]
+    fn test_unassign_unchanged() {
+        assert_json_snapshot!(unassign_response("TEST-1", false));
+    }
+
+    #[test]
     fn test_edit() {
         assert_json_snapshot!(edit_response("TEST-1"));
     }
