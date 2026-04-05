@@ -87,6 +87,7 @@ async fn resolve_scrum_board(
     Ok(board_id)
 }
 
+/// JSON response for `sprint add`.
 fn sprint_add_response(sprint_id: u64, issues: &[String]) -> serde_json::Value {
     json!({
         "sprint_id": sprint_id,
@@ -95,6 +96,7 @@ fn sprint_add_response(sprint_id: u64, issues: &[String]) -> serde_json::Value {
     })
 }
 
+/// JSON response for `sprint remove`.
 fn sprint_remove_response(issues: &[String]) -> serde_json::Value {
     json!({
         "issues": issues,
@@ -142,10 +144,7 @@ async fn handle_remove(
 
     match output_format {
         OutputFormat::Json => {
-            println!(
-                "{}",
-                output::render_json(&sprint_remove_response(&issues))?
-            );
+            println!("{}", output::render_json(&sprint_remove_response(&issues))?);
         }
         OutputFormat::Table => {
             output::print_success(&format!("Moved {} issue(s) to backlog", issues.len()));

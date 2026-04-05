@@ -1,5 +1,5 @@
-use anyhow::{Result, bail};
 use super::json_output;
+use anyhow::{Result, bail};
 
 use crate::api::client::JiraClient;
 use crate::cli::{IssueCommand, OutputFormat};

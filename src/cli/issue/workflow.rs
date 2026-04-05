@@ -1,5 +1,5 @@
-use anyhow::{Result, bail};
 use super::json_output;
+use anyhow::{Result, bail};
 
 use crate::adf;
 use crate::api::client::JiraClient;
@@ -221,9 +221,7 @@ pub(super) async fn handle_move(
         OutputFormat::Json => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&json_output::move_response(
-                    &key, new_status, true,
-                ))?
+                serde_json::to_string_pretty(&json_output::move_response(&key, new_status, true,))?
             );
         }
         OutputFormat::Table => {
@@ -323,13 +321,11 @@ pub(super) async fn handle_assign(
                 OutputFormat::Json => {
                     println!(
                         "{}",
-                        serde_json::to_string_pretty(
-                            &json_output::assign_unchanged_response(
-                                &key,
-                                &display_name,
-                                &account_id,
-                            ),
-                        )?
+                        serde_json::to_string_pretty(&json_output::assign_unchanged_response(
+                            &key,
+                            &display_name,
+                            &account_id,
+                        ),)?
                     );
                 }
                 OutputFormat::Table => {

@@ -20,11 +20,7 @@ pub(crate) fn assign_changed_response(key: &str, display_name: &str, account_id:
 }
 
 /// JSON response for `issue assign` when already assigned to the target user.
-pub(crate) fn assign_unchanged_response(
-    key: &str,
-    display_name: &str,
-    account_id: &str,
-) -> Value {
+pub(crate) fn assign_unchanged_response(key: &str, display_name: &str, account_id: &str) -> Value {
     json!({
         "key": key,
         "assignee": display_name,

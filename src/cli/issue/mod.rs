@@ -2,7 +2,7 @@ mod assets;
 mod create;
 mod format;
 mod helpers;
-pub(crate) mod json_output;
+mod json_output;
 mod links;
 mod list;
 mod workflow;
