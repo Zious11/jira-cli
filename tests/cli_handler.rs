@@ -755,3 +755,89 @@ async fn test_handler_list_asset_name_no_match_errors() {
             "No assets matching \"Nonexistent\" found",
         ));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_handler_list_asset_key_passthrough_skips_assets_api() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+
+    // Direct asset keys should NOT trigger workspace discovery
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/assets/workspace"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "size": 1, "start": 0, "limit": 50, "isLastPage": true,
+            "values": [{ "workspaceId": "ws-123" }]
+        })))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    // Direct asset keys should NOT trigger AQL search
+    Mock::given(method("POST"))
+        .and(path("/jsm/assets/workspace/ws-123/v1/object/aql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "startAt": 0, "maxResults": 25, "total": 0, "isLast": true, "values": []
+        })))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    // CMDB fields discovery (still needed for build_asset_clause)
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {
+                "id": "customfield_10191",
+                "name": "Client",
+                "custom": true,
+                "schema": {
+                    "type": "any",
+                    "custom": "com.atlassian.jira.plugins.cmdb:cmdb-object-cftype",
+                    "customId": 10191
+                }
+            }
+        ])))
+        .mount(&server)
+        .await;
+
+    // Project check
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/PROJ"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "key": "PROJ", "id": "10000", "name": "Test Project"
+        })))
+        .mount(&server)
+        .await;
+
+    // Issue search — verify JQL uses provided key OBJ-18 directly
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(serde_json::json!({
+            "jql": "project = \"PROJ\" AND \"Client\" IN aqlFunction(\"Key = \\\"OBJ-18\\\"\") ORDER BY updated DESC"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response(vec![common::fixtures::issue_response(
+                "PROJ-1", "Test issue", "To Do",
+            )]),
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .args([
+            "issue",
+            "list",
+            "--project",
+            "PROJ",
+            "--asset",
+            "OBJ-18",
+            "--no-input",
+        ])
+        .assert()
+        .success();
+}

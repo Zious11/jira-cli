@@ -94,14 +94,7 @@ pub(super) async fn handle_list(
         crate::jql::validate_duration(d).map_err(JrError::UserError)?;
     }
 
-    // Resolve --asset: key passthrough or name → key via AQL search
-    let asset_key = if let Some(raw) = asset_key {
-        Some(helpers::resolve_asset(client, &raw, no_input).await?)
-    } else {
-        None
-    };
-
-    // Validate date filter flags early
+    // Validate date filter flags early (before any network calls)
     let created_after_date = if let Some(ref d) = created_after {
         Some(crate::jql::validate_date(d).map_err(JrError::UserError)?)
     } else {
@@ -134,6 +127,13 @@ pub(super) async fn handle_list(
         let next_day = d + chrono::Days::new(1);
         format!("updated < \"{}\"", next_day)
     });
+
+    // Resolve --asset: key passthrough or name → key via AQL search
+    let asset_key = if let Some(raw) = asset_key {
+        Some(helpers::resolve_asset(client, &raw, no_input).await?)
+    } else {
+        None
+    };
 
     // Resolve --assignee and --reporter to JQL values
     let assignee_jql = if let Some(ref name) = assignee {
