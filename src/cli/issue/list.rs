@@ -75,6 +75,10 @@ pub(super) async fn handle_list(
         points: show_points,
         assets: show_assets,
         asset: asset_key,
+        created_after,
+        created_before,
+        updated_after,
+        updated_before,
     } = command
     else {
         unreachable!()
@@ -94,6 +98,40 @@ pub(super) async fn handle_list(
     if let Some(ref key) = asset_key {
         crate::jql::validate_asset_key(key).map_err(JrError::UserError)?;
     }
+
+    // Validate date filter flags early
+    let created_after_date = if let Some(ref d) = created_after {
+        Some(crate::jql::validate_date(d).map_err(JrError::UserError)?)
+    } else {
+        None
+    };
+    let created_before_date = if let Some(ref d) = created_before {
+        Some(crate::jql::validate_date(d).map_err(JrError::UserError)?)
+    } else {
+        None
+    };
+    let updated_after_date = if let Some(ref d) = updated_after {
+        Some(crate::jql::validate_date(d).map_err(JrError::UserError)?)
+    } else {
+        None
+    };
+    let updated_before_date = if let Some(ref d) = updated_before {
+        Some(crate::jql::validate_date(d).map_err(JrError::UserError)?)
+    } else {
+        None
+    };
+
+    // Build date filter JQL clauses
+    let created_after_clause = created_after_date.map(|d| format!("created >= \"{}\"", d));
+    let created_before_clause = created_before_date.map(|d| {
+        let next_day = d + chrono::Days::new(1);
+        format!("created < \"{}\"", next_day)
+    });
+    let updated_after_clause = updated_after_date.map(|d| format!("updated >= \"{}\"", d));
+    let updated_before_clause = updated_before_date.map(|d| {
+        let next_day = d + chrono::Days::new(1);
+        format!("updated < \"{}\"", next_day)
+    });
 
     // Resolve --assignee and --reporter to JQL values
     let assignee_jql = if let Some(ref name) = assignee {
@@ -207,15 +245,19 @@ pub(super) async fn handle_list(
     };
 
     // Build filter clauses from all flag values
-    let filter_parts = build_filter_clauses(
-        assignee_jql.as_deref(),
-        reporter_jql.as_deref(),
-        resolved_status.as_deref(),
-        team_clause.as_deref(),
-        recent.as_deref(),
+    let filter_parts = build_filter_clauses(FilterOptions {
+        assignee_jql: assignee_jql.as_deref(),
+        reporter_jql: reporter_jql.as_deref(),
+        status: resolved_status.as_deref(),
+        team_clause: team_clause.as_deref(),
+        recent: recent.as_deref(),
         open,
-        asset_clause.as_deref(),
-    );
+        asset_clause: asset_clause.as_deref(),
+        created_after_clause: created_after_clause.as_deref(),
+        created_before_clause: created_before_clause.as_deref(),
+        updated_after_clause: updated_after_clause.as_deref(),
+        updated_before_clause: updated_before_clause.as_deref(),
+    });
 
     // Build base JQL + order by
     let (base_parts, order_by): (Vec<String>, &str) = if let Some(ref raw_jql) = jql {
@@ -297,7 +339,7 @@ pub(super) async fn handle_list(
     // Guard against unbounded query
     if all_parts.is_empty() {
         return Err(JrError::UserError(
-            "No project or filters specified. Use --project, --assignee, --reporter, --status, --open, --team, --recent, --asset, or --jql. \
+            "No project or filters specified. Use --project, --assignee, --reporter, --status, --open, --team, --recent, --created-after, --created-before, --updated-after, --updated-before, --asset, or --jql. \
              You can also set a default project in .jr.toml or run \"jr init\"."
                 .into(),
         )
@@ -487,37 +529,57 @@ fn resolve_show_points(show_points: bool, sp_field_id: Option<&str>) -> Option<&
     }
 }
 
-/// Build JQL filter clauses from resolved flag values.
-fn build_filter_clauses(
-    assignee_jql: Option<&str>,
-    reporter_jql: Option<&str>,
-    status: Option<&str>,
-    team_clause: Option<&str>,
-    recent: Option<&str>,
+/// Options bag for `build_filter_clauses` — groups all resolved JQL filter
+/// fragments so the function stays within clippy's argument-count limit.
+struct FilterOptions<'a> {
+    assignee_jql: Option<&'a str>,
+    reporter_jql: Option<&'a str>,
+    status: Option<&'a str>,
+    team_clause: Option<&'a str>,
+    recent: Option<&'a str>,
     open: bool,
-    asset_clause: Option<&str>,
-) -> Vec<String> {
+    asset_clause: Option<&'a str>,
+    created_after_clause: Option<&'a str>,
+    created_before_clause: Option<&'a str>,
+    updated_after_clause: Option<&'a str>,
+    updated_before_clause: Option<&'a str>,
+}
+
+/// Build JQL filter clauses from resolved flag values.
+fn build_filter_clauses(opts: FilterOptions<'_>) -> Vec<String> {
     let mut parts = Vec::new();
-    if let Some(a) = assignee_jql {
+    if let Some(a) = opts.assignee_jql {
         parts.push(format!("assignee = {a}"));
     }
-    if let Some(r) = reporter_jql {
+    if let Some(r) = opts.reporter_jql {
         parts.push(format!("reporter = {r}"));
     }
-    if let Some(s) = status {
+    if let Some(s) = opts.status {
         parts.push(format!("status = \"{}\"", crate::jql::escape_value(s)));
     }
-    if open {
+    if opts.open {
         parts.push("statusCategory != Done".to_string());
     }
-    if let Some(t) = team_clause {
+    if let Some(t) = opts.team_clause {
         parts.push(t.to_string());
     }
-    if let Some(d) = recent {
+    if let Some(d) = opts.recent {
         parts.push(format!("created >= -{d}"));
     }
-    if let Some(a) = asset_clause {
+    if let Some(a) = opts.asset_clause {
         parts.push(a.to_string());
+    }
+    if let Some(c) = opts.created_after_clause {
+        parts.push(c.to_string());
+    }
+    if let Some(c) = opts.created_before_clause {
+        parts.push(c.to_string());
+    }
+    if let Some(c) = opts.updated_after_clause {
+        parts.push(c.to_string());
+    }
+    if let Some(c) = opts.updated_before_clause {
+        parts.push(c.to_string());
     }
     parts
 }
@@ -880,42 +942,73 @@ mod tests {
 
     #[test]
     fn build_jql_parts_assignee_me() {
-        let parts =
-            build_filter_clauses(Some("currentUser()"), None, None, None, None, false, None);
+        let parts = build_filter_clauses(FilterOptions {
+            assignee_jql: Some("currentUser()"),
+            reporter_jql: None,
+            status: None,
+            team_clause: None,
+            recent: None,
+            open: false,
+            asset_clause: None,
+            created_after_clause: None,
+            created_before_clause: None,
+            updated_after_clause: None,
+            updated_before_clause: None,
+        });
         assert_eq!(parts, vec!["assignee = currentUser()"]);
     }
 
     #[test]
     fn build_jql_parts_reporter_account_id() {
-        let parts = build_filter_clauses(
-            None,
-            Some("5b10ac8d82e05b22cc7d4ef5"),
-            None,
-            None,
-            None,
-            false,
-            None,
-        );
+        let parts = build_filter_clauses(FilterOptions {
+            assignee_jql: None,
+            reporter_jql: Some("5b10ac8d82e05b22cc7d4ef5"),
+            status: None,
+            team_clause: None,
+            recent: None,
+            open: false,
+            asset_clause: None,
+            created_after_clause: None,
+            created_before_clause: None,
+            updated_after_clause: None,
+            updated_before_clause: None,
+        });
         assert_eq!(parts, vec!["reporter = 5b10ac8d82e05b22cc7d4ef5"]);
     }
 
     #[test]
     fn build_jql_parts_recent() {
-        let parts = build_filter_clauses(None, None, None, None, Some("7d"), false, None);
+        let parts = build_filter_clauses(FilterOptions {
+            assignee_jql: None,
+            reporter_jql: None,
+            status: None,
+            team_clause: None,
+            recent: Some("7d"),
+            open: false,
+            asset_clause: None,
+            created_after_clause: None,
+            created_before_clause: None,
+            updated_after_clause: None,
+            updated_before_clause: None,
+        });
         assert_eq!(parts, vec!["created >= -7d"]);
     }
 
     #[test]
     fn build_jql_parts_all_filters() {
-        let parts = build_filter_clauses(
-            Some("currentUser()"),
-            Some("currentUser()"),
-            Some("In Progress"),
-            Some(r#"customfield_10001 = "uuid-123""#),
-            Some("30d"),
-            false,
-            None,
-        );
+        let parts = build_filter_clauses(FilterOptions {
+            assignee_jql: Some("currentUser()"),
+            reporter_jql: Some("currentUser()"),
+            status: Some("In Progress"),
+            team_clause: Some(r#"customfield_10001 = "uuid-123""#),
+            recent: Some("30d"),
+            open: false,
+            asset_clause: None,
+            created_after_clause: None,
+            created_before_clause: None,
+            updated_after_clause: None,
+            updated_before_clause: None,
+        });
         assert_eq!(parts.len(), 5);
         assert!(parts.contains(&"assignee = currentUser()".to_string()));
         assert!(parts.contains(&"reporter = currentUser()".to_string()));
@@ -926,13 +1019,37 @@ mod tests {
 
     #[test]
     fn build_jql_parts_empty() {
-        let parts = build_filter_clauses(None, None, None, None, None, false, None);
+        let parts = build_filter_clauses(FilterOptions {
+            assignee_jql: None,
+            reporter_jql: None,
+            status: None,
+            team_clause: None,
+            recent: None,
+            open: false,
+            asset_clause: None,
+            created_after_clause: None,
+            created_before_clause: None,
+            updated_after_clause: None,
+            updated_before_clause: None,
+        });
         assert!(parts.is_empty());
     }
 
     #[test]
     fn build_jql_parts_jql_plus_status_compose() {
-        let filter = build_filter_clauses(None, None, Some("Done"), None, None, false, None);
+        let filter = build_filter_clauses(FilterOptions {
+            assignee_jql: None,
+            reporter_jql: None,
+            status: Some("Done"),
+            team_clause: None,
+            recent: None,
+            open: false,
+            asset_clause: None,
+            created_after_clause: None,
+            created_before_clause: None,
+            updated_after_clause: None,
+            updated_before_clause: None,
+        });
         let mut all_parts = vec!["type = Bug".to_string()];
         all_parts.extend(filter);
         let jql = all_parts.join(" AND ");
@@ -941,27 +1058,55 @@ mod tests {
 
     #[test]
     fn build_jql_parts_status_escaping() {
-        let parts = build_filter_clauses(
-            None,
-            None,
-            Some(r#"He said "hi" \o/"#),
-            None,
-            None,
-            false,
-            None,
-        );
+        let parts = build_filter_clauses(FilterOptions {
+            assignee_jql: None,
+            reporter_jql: None,
+            status: Some(r#"He said "hi" \o/"#),
+            team_clause: None,
+            recent: None,
+            open: false,
+            asset_clause: None,
+            created_after_clause: None,
+            created_before_clause: None,
+            updated_after_clause: None,
+            updated_before_clause: None,
+        });
         assert_eq!(parts, vec![r#"status = "He said \"hi\" \\o/""#.to_string()]);
     }
 
     #[test]
     fn build_jql_parts_open() {
-        let parts = build_filter_clauses(None, None, None, None, None, true, None);
+        let parts = build_filter_clauses(FilterOptions {
+            assignee_jql: None,
+            reporter_jql: None,
+            status: None,
+            team_clause: None,
+            recent: None,
+            open: true,
+            asset_clause: None,
+            created_after_clause: None,
+            created_before_clause: None,
+            updated_after_clause: None,
+            updated_before_clause: None,
+        });
         assert_eq!(parts, vec!["statusCategory != Done"]);
     }
 
     #[test]
     fn build_jql_parts_open_with_assignee() {
-        let parts = build_filter_clauses(Some("currentUser()"), None, None, None, None, true, None);
+        let parts = build_filter_clauses(FilterOptions {
+            assignee_jql: Some("currentUser()"),
+            reporter_jql: None,
+            status: None,
+            team_clause: None,
+            recent: None,
+            open: true,
+            asset_clause: None,
+            created_after_clause: None,
+            created_before_clause: None,
+            updated_after_clause: None,
+            updated_before_clause: None,
+        });
         assert_eq!(parts.len(), 2);
         assert!(parts.contains(&"assignee = currentUser()".to_string()));
         assert!(parts.contains(&"statusCategory != Done".to_string()));
@@ -969,15 +1114,19 @@ mod tests {
 
     #[test]
     fn build_jql_parts_all_filters_with_open() {
-        let parts = build_filter_clauses(
-            Some("currentUser()"),
-            Some("currentUser()"),
-            None, // status conflicts with open, so None here
-            Some(r#"customfield_10001 = "uuid-123""#),
-            Some("30d"),
-            true,
-            None,
-        );
+        let parts = build_filter_clauses(FilterOptions {
+            assignee_jql: Some("currentUser()"),
+            reporter_jql: Some("currentUser()"),
+            status: None, // status conflicts with open, so None here
+            team_clause: Some(r#"customfield_10001 = "uuid-123""#),
+            recent: Some("30d"),
+            open: true,
+            asset_clause: None,
+            created_after_clause: None,
+            created_before_clause: None,
+            updated_after_clause: None,
+            updated_before_clause: None,
+        });
         assert_eq!(parts.len(), 5);
         assert!(parts.contains(&"assignee = currentUser()".to_string()));
         assert!(parts.contains(&"reporter = currentUser()".to_string()));
@@ -989,25 +1138,99 @@ mod tests {
     #[test]
     fn build_jql_parts_asset_clause() {
         let clause = r#""Client" IN aqlFunction("Key = \"CUST-5\"")"#;
-        let parts = build_filter_clauses(None, None, None, None, None, false, Some(clause));
+        let parts = build_filter_clauses(FilterOptions {
+            assignee_jql: None,
+            reporter_jql: None,
+            status: None,
+            team_clause: None,
+            recent: None,
+            open: false,
+            asset_clause: Some(clause),
+            created_after_clause: None,
+            created_before_clause: None,
+            updated_after_clause: None,
+            updated_before_clause: None,
+        });
         assert_eq!(parts, vec![clause.to_string()]);
     }
 
     #[test]
     fn build_jql_parts_asset_with_assignee() {
         let clause = r#""Client" IN aqlFunction("Key = \"CUST-5\"")"#;
-        let parts = build_filter_clauses(
-            Some("currentUser()"),
-            None,
-            None,
-            None,
-            None,
-            false,
-            Some(clause),
-        );
+        let parts = build_filter_clauses(FilterOptions {
+            assignee_jql: Some("currentUser()"),
+            reporter_jql: None,
+            status: None,
+            team_clause: None,
+            recent: None,
+            open: false,
+            asset_clause: Some(clause),
+            created_after_clause: None,
+            created_before_clause: None,
+            updated_after_clause: None,
+            updated_before_clause: None,
+        });
         assert_eq!(parts.len(), 2);
         assert!(parts.contains(&"assignee = currentUser()".to_string()));
         assert!(parts.contains(&clause.to_string()));
+    }
+
+    #[test]
+    fn build_jql_parts_created_after_clause() {
+        let parts = build_filter_clauses(FilterOptions {
+            assignee_jql: None,
+            reporter_jql: None,
+            status: None,
+            team_clause: None,
+            recent: None,
+            open: false,
+            asset_clause: None,
+            created_after_clause: Some("created >= \"2026-03-18\""),
+            created_before_clause: None,
+            updated_after_clause: None,
+            updated_before_clause: None,
+        });
+        assert_eq!(parts, vec!["created >= \"2026-03-18\""]);
+    }
+
+    #[test]
+    fn build_jql_parts_updated_after_and_before_clauses() {
+        let parts = build_filter_clauses(FilterOptions {
+            assignee_jql: None,
+            reporter_jql: None,
+            status: None,
+            team_clause: None,
+            recent: None,
+            open: false,
+            asset_clause: None,
+            created_after_clause: None,
+            created_before_clause: None,
+            updated_after_clause: Some("updated >= \"2026-03-01\""),
+            updated_before_clause: Some("updated < \"2026-04-01\""),
+        });
+        assert_eq!(parts.len(), 2);
+        assert!(parts.contains(&"updated >= \"2026-03-01\"".to_string()));
+        assert!(parts.contains(&"updated < \"2026-04-01\"".to_string()));
+    }
+
+    #[test]
+    fn build_jql_parts_created_date_range() {
+        let parts = build_filter_clauses(FilterOptions {
+            assignee_jql: None,
+            reporter_jql: None,
+            status: None,
+            team_clause: None,
+            recent: None,
+            open: false,
+            asset_clause: None,
+            created_after_clause: Some("created >= \"2026-03-01\""),
+            created_before_clause: Some("created < \"2026-04-01\""),
+            updated_after_clause: None,
+            updated_before_clause: None,
+        });
+        assert_eq!(parts.len(), 2);
+        assert!(parts.contains(&"created >= \"2026-03-01\"".to_string()));
+        assert!(parts.contains(&"created < \"2026-04-01\"".to_string()));
     }
 
     #[test]

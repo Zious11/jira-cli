@@ -81,6 +81,16 @@ pub fn build_asset_clause(asset_key: &str, cmdb_fields: &[(String, String)]) -> 
     }
 }
 
+/// Validate and parse an absolute date string in ISO 8601 format (YYYY-MM-DD).
+///
+/// Returns the parsed `NaiveDate` on success. The caller needs the parsed date
+/// to compute +1 day for `--before` flag JQL generation.
+pub fn validate_date(s: &str) -> Result<chrono::NaiveDate, String> {
+    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|_| {
+        format!("Invalid date \"{s}\". Expected format: YYYY-MM-DD (e.g., 2026-03-18).")
+    })
+}
+
 /// Strip `ORDER BY` clause from JQL for use with count-only endpoints.
 ///
 /// The approximate-count endpoint only needs the WHERE clause. ORDER BY is
@@ -295,6 +305,55 @@ mod tests {
             clause,
             r#""My \"Assets\"" IN aqlFunction("Key = \"OBJ-1\"")"#
         );
+    }
+
+    #[test]
+    fn validate_date_valid_simple() {
+        let d = validate_date("2026-03-18").unwrap();
+        assert_eq!(d.to_string(), "2026-03-18");
+    }
+
+    #[test]
+    fn validate_date_valid_leap_day() {
+        let d = validate_date("2024-02-29").unwrap();
+        assert_eq!(d.to_string(), "2024-02-29");
+    }
+
+    #[test]
+    fn validate_date_invalid_format_slash() {
+        let err = validate_date("2026/03/18").unwrap_err();
+        assert!(err.contains("Invalid date"));
+        assert!(err.contains("YYYY-MM-DD"));
+    }
+
+    #[test]
+    fn validate_date_invalid_format_us() {
+        let err = validate_date("03-18-2026").unwrap_err();
+        assert!(err.contains("Invalid date"));
+    }
+
+    #[test]
+    fn validate_date_impossible_feb30() {
+        let err = validate_date("2026-02-30").unwrap_err();
+        assert!(err.contains("Invalid date"));
+    }
+
+    #[test]
+    fn validate_date_impossible_month13() {
+        let err = validate_date("2026-13-01").unwrap_err();
+        assert!(err.contains("Invalid date"));
+    }
+
+    #[test]
+    fn validate_date_empty() {
+        let err = validate_date("").unwrap_err();
+        assert!(err.contains("Invalid date"));
+    }
+
+    #[test]
+    fn validate_date_non_leap_feb29() {
+        let err = validate_date("2026-02-29").unwrap_err();
+        assert!(err.contains("Invalid date"));
     }
 }
 

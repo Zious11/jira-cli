@@ -69,7 +69,7 @@ pub enum Command {
     /// Manage issues
     Issue {
         #[command(subcommand)]
-        command: IssueCommand,
+        command: Box<IssueCommand>,
     },
     /// Manage boards
     Board {
@@ -209,6 +209,18 @@ pub enum IssueCommand {
         /// Filter by linked asset object key (e.g., CUST-5)
         #[arg(long)]
         asset: Option<String>,
+        /// Show issues created on or after this date (YYYY-MM-DD)
+        #[arg(long, conflicts_with = "recent")]
+        created_after: Option<String>,
+        /// Show issues created on or before this date (YYYY-MM-DD)
+        #[arg(long)]
+        created_before: Option<String>,
+        /// Show issues updated on or after this date (YYYY-MM-DD)
+        #[arg(long)]
+        updated_after: Option<String>,
+        /// Show issues updated on or before this date (YYYY-MM-DD)
+        #[arg(long)]
+        updated_before: Option<String>,
     },
     /// Create a new issue
     Create {

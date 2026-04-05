@@ -315,3 +315,20 @@ fn test_sprint_current_all_and_limit_conflict() {
         .failure()
         .stderr(predicate::str::contains("cannot be used with"));
 }
+
+#[test]
+fn test_issue_list_created_after_and_recent_conflict() {
+    Command::cargo_bin("jr")
+        .unwrap()
+        .args([
+            "issue",
+            "list",
+            "--created-after",
+            "2026-03-18",
+            "--recent",
+            "7d",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be used with"));
+}
