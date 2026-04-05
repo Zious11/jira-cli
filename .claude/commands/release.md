@@ -115,12 +115,7 @@ If already on `develop` or `main`, skip to Stage 2.
 10. Push the tag to trigger the release workflow
 11. Print: "Release vX.Y.Z tagged and pushed. GitHub Actions will build and publish binaries."
 12. Provide the releases URL
-13. Clean up dev tags for this release cycle:
-    ```
-    git tag -l "vX.Y.Z-dev.*" | xargs -I {} git push origin :refs/tags/{}
-    git tag -l "vX.Y.Z-dev.*" | xargs git tag -d
-    ```
-14. Merge `main` back into `develop` and bump to next dev version:
+13. Merge `main` back into `develop` and bump to next dev version:
     - Checkout `develop` and pull latest
     - Merge `main` into `develop`: `git merge main`
     - If conflicts, resolve and commit
