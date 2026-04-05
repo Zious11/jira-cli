@@ -1176,6 +1176,64 @@ mod tests {
     }
 
     #[test]
+    fn build_jql_parts_created_after_clause() {
+        let parts = build_filter_clauses(FilterOptions {
+            assignee_jql: None,
+            reporter_jql: None,
+            status: None,
+            team_clause: None,
+            recent: None,
+            open: false,
+            asset_clause: None,
+            created_after_clause: Some("created >= \"2026-03-18\""),
+            created_before_clause: None,
+            updated_after_clause: None,
+            updated_before_clause: None,
+        });
+        assert_eq!(parts, vec!["created >= \"2026-03-18\""]);
+    }
+
+    #[test]
+    fn build_jql_parts_updated_after_and_before_clauses() {
+        let parts = build_filter_clauses(FilterOptions {
+            assignee_jql: None,
+            reporter_jql: None,
+            status: None,
+            team_clause: None,
+            recent: None,
+            open: false,
+            asset_clause: None,
+            created_after_clause: None,
+            created_before_clause: None,
+            updated_after_clause: Some("updated >= \"2026-03-01\""),
+            updated_before_clause: Some("updated < \"2026-04-01\""),
+        });
+        assert_eq!(parts.len(), 2);
+        assert!(parts.contains(&"updated >= \"2026-03-01\"".to_string()));
+        assert!(parts.contains(&"updated < \"2026-04-01\"".to_string()));
+    }
+
+    #[test]
+    fn build_jql_parts_created_date_range() {
+        let parts = build_filter_clauses(FilterOptions {
+            assignee_jql: None,
+            reporter_jql: None,
+            status: None,
+            team_clause: None,
+            recent: None,
+            open: false,
+            asset_clause: None,
+            created_after_clause: Some("created >= \"2026-03-01\""),
+            created_before_clause: Some("created < \"2026-04-01\""),
+            updated_after_clause: None,
+            updated_before_clause: None,
+        });
+        assert_eq!(parts.len(), 2);
+        assert!(parts.contains(&"created >= \"2026-03-01\"".to_string()));
+        assert!(parts.contains(&"created < \"2026-04-01\"".to_string()));
+    }
+
+    #[test]
     fn build_jql_base_parts_jql_with_project() {
         let (parts, order_by) = build_jql_base_parts("priority = Highest", Some("PROJ"));
         assert_eq!(
