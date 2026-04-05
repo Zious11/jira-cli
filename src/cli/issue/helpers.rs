@@ -356,6 +356,127 @@ pub(super) async fn resolve_assignee_by_project(
     )
 }
 
+/// Resolve an `--asset` flag value to an object key.
+///
+/// - Value matches `SCHEMA-NUMBER` key pattern → return as-is (no API call)
+/// - Otherwise → search Assets by name via AQL, disambiguate if multiple matches
+///
+/// Returns the resolved object key (e.g., `"OBJ-18"`).
+pub(super) async fn resolve_asset(
+    client: &JiraClient,
+    input: &str,
+    no_input: bool,
+) -> Result<String> {
+    // Key pattern → passthrough (no API call)
+    if crate::jql::validate_asset_key(input).is_ok() {
+        return Ok(input.to_string());
+    }
+
+    // Name search: fetch workspace ID, then AQL search
+    let workspace_id =
+        crate::api::assets::workspace::get_or_fetch_workspace_id(client).await?;
+    let escaped = crate::jql::escape_value(input);
+    let aql = format!("Name like \"{}\"", escaped);
+    let results = client
+        .search_assets(&workspace_id, &aql, Some(25), false)
+        .await?;
+
+    if results.is_empty() {
+        anyhow::bail!(
+            "No assets matching \"{}\" found. Check the name and try again.",
+            input
+        );
+    }
+
+    if results.len() == 1 {
+        return Ok(results.into_iter().next().unwrap().object_key);
+    }
+
+    // Multiple results — disambiguate via partial_match on labels
+    let labels: Vec<String> = results.iter().map(|a| a.label.clone()).collect();
+    match crate::partial_match::partial_match(input, &labels) {
+        crate::partial_match::MatchResult::Exact(matched_label) => {
+            let asset = results
+                .iter()
+                .find(|a| a.label == matched_label)
+                .expect("matched label must exist in results");
+            Ok(asset.object_key.clone())
+        }
+        crate::partial_match::MatchResult::ExactMultiple(_) => {
+            // Multiple assets with same label — need key to disambiguate
+            let label_lower = input.to_lowercase();
+            let duplicates: Vec<_> = results
+                .iter()
+                .filter(|a| a.label.to_lowercase() == label_lower)
+                .collect();
+
+            if no_input {
+                let lines: Vec<String> = duplicates
+                    .iter()
+                    .map(|a| format!("  {} ({})", a.object_key, a.label))
+                    .collect();
+                anyhow::bail!(
+                    "Multiple assets match \"{}\":\n{}\nUse a more specific name or pass the object key directly.",
+                    input,
+                    lines.join("\n")
+                );
+            }
+
+            let items: Vec<String> = duplicates
+                .iter()
+                .map(|a| format!("{} ({})", a.object_key, a.label))
+                .collect();
+            let selection = dialoguer::Select::new()
+                .with_prompt(format!("Multiple assets match \"{}\"", input))
+                .items(&items)
+                .interact()?;
+            Ok(duplicates[selection].object_key.clone())
+        }
+        crate::partial_match::MatchResult::Ambiguous(matches) => {
+            let filtered: Vec<_> = results
+                .iter()
+                .filter(|a| matches.contains(&a.label))
+                .collect();
+
+            if no_input {
+                let lines: Vec<String> = filtered
+                    .iter()
+                    .map(|a| format!("  {} ({})", a.object_key, a.label))
+                    .collect();
+                anyhow::bail!(
+                    "Multiple assets match \"{}\":\n{}\nUse a more specific name or pass the object key directly.",
+                    input,
+                    lines.join("\n")
+                );
+            }
+
+            let items: Vec<String> = filtered
+                .iter()
+                .map(|a| format!("{} ({})", a.object_key, a.label))
+                .collect();
+            let selection = dialoguer::Select::new()
+                .with_prompt(format!("Multiple assets match \"{}\"", input))
+                .items(&items)
+                .interact()?;
+            Ok(filtered[selection].object_key.clone())
+        }
+        crate::partial_match::MatchResult::None(_) => {
+            // AQL returned results but partial_match found no substring match.
+            // This shouldn't normally happen (AQL already filtered by Name like),
+            // but handle gracefully.
+            let lines: Vec<String> = results
+                .iter()
+                .map(|a| format!("  {} ({})", a.object_key, a.label))
+                .collect();
+            anyhow::bail!(
+                "No assets with a name matching \"{}\" found. Similar results:\n{}\nUse the object key directly.",
+                input,
+                lines.join("\n")
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
