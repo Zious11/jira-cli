@@ -379,4 +379,94 @@ mod tests {
     fn is_me_keyword_not_me() {
         assert!(!is_me_keyword("Jane"));
     }
+
+    // ── disambiguate_user tests ──────────────────────────────────────
+
+    fn make_user(account_id: &str, display_name: &str) -> User {
+        User {
+            account_id: account_id.to_string(),
+            display_name: display_name.to_string(),
+            email_address: None,
+            active: Some(true),
+        }
+    }
+
+    fn make_user_with_email(account_id: &str, display_name: &str, email: &str) -> User {
+        User {
+            account_id: account_id.to_string(),
+            display_name: display_name.to_string(),
+            email_address: Some(email.to_string()),
+            active: Some(true),
+        }
+    }
+
+    fn dummy_none_msg(all_names: &[String]) -> String {
+        format!("No match. Found: {}", all_names.join(", "))
+    }
+
+    #[test]
+    fn disambiguate_empty_list_returns_error() {
+        let result = disambiguate_user(&[], "Jane", true, "No users found", dummy_none_msg);
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("No users found"));
+    }
+
+    #[test]
+    fn disambiguate_single_user_returns_directly() {
+        let users = vec![make_user("acc-1", "Jane Doe")];
+        let (id, name) = disambiguate_user(&users, "Jane", true, "empty", dummy_none_msg).unwrap();
+        assert_eq!(id, "acc-1");
+        assert_eq!(name, "Jane Doe");
+    }
+
+    #[test]
+    fn disambiguate_exact_match() {
+        let users = vec![
+            make_user("acc-1", "Jane Doe"),
+            make_user("acc-2", "Janet Smith"),
+        ];
+        let (id, name) =
+            disambiguate_user(&users, "Jane Doe", true, "empty", dummy_none_msg).unwrap();
+        assert_eq!(id, "acc-1");
+        assert_eq!(name, "Jane Doe");
+    }
+
+    #[test]
+    fn disambiguate_exact_multiple_no_input_errors_with_details() {
+        let users = vec![
+            make_user_with_email("acc-1", "Jane Doe", "jane1@example.com"),
+            make_user("acc-2", "Jane Doe"),
+        ];
+        let result = disambiguate_user(&users, "Jane Doe", true, "empty", dummy_none_msg);
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Multiple users named \"Jane Doe\""));
+        assert!(msg.contains("jane1@example.com"));
+        assert!(msg.contains("acc-2"));
+    }
+
+    #[test]
+    fn disambiguate_ambiguous_no_input_errors_with_candidates() {
+        let users = vec![
+            make_user("acc-1", "Jane Doe"),
+            make_user("acc-2", "Jane Smith"),
+        ];
+        let result = disambiguate_user(&users, "Jane", true, "empty", dummy_none_msg);
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Multiple users match \"Jane\""));
+        assert!(msg.contains("Jane Doe"));
+        assert!(msg.contains("Jane Smith"));
+    }
+
+    #[test]
+    fn disambiguate_no_match_uses_none_msg_fn() {
+        let users = vec![make_user("acc-1", "Alice"), make_user("acc-2", "Bob")];
+        let result = disambiguate_user(&users, "Zara", true, "empty", dummy_none_msg);
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("No match. Found:"));
+        assert!(msg.contains("Alice"));
+        assert!(msg.contains("Bob"));
+    }
 }
