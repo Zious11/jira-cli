@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use dialoguer::{Input, Password};
 
 use crate::api::auth;
@@ -9,11 +9,13 @@ use crate::output;
 pub async fn login_token() -> Result<()> {
     let email: String = dialoguer::Input::new()
         .with_prompt("Jira email")
-        .interact_text()?;
+        .interact_text()
+        .context("failed to read Jira email")?;
 
     let token: String = dialoguer::Password::new()
         .with_prompt("API token")
-        .interact()?;
+        .interact()
+        .context("failed to read API token")?;
 
     auth::store_api_token(&email, &token)?;
     println!("Credentials stored in keychain.");
@@ -28,11 +30,13 @@ pub async fn login_oauth() -> Result<()> {
 
     let client_id: String = Input::new()
         .with_prompt("OAuth Client ID")
-        .interact_text()?;
+        .interact_text()
+        .context("failed to read OAuth client ID")?;
 
     let client_secret: String = Password::new()
         .with_prompt("OAuth Client Secret")
-        .interact()?;
+        .interact()
+        .context("failed to read OAuth client secret")?;
 
     // Store OAuth app credentials in keychain
     crate::api::auth::store_oauth_app_credentials(&client_id, &client_secret)?;

@@ -1,5 +1,5 @@
 use super::json_output;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 use crate::api::client::JiraClient;
 use crate::cli::{IssueCommand, OutputFormat};
@@ -74,7 +74,8 @@ pub(super) async fn handle_link(
             let selection = dialoguer::Select::new()
                 .with_prompt(format!("Multiple types match \"{link_type_name}\""))
                 .items(&matches)
-                .interact()?;
+                .interact()
+                .context("failed to prompt for link type selection")?;
             matches[selection].clone()
         }
         MatchResult::None(_) => {
@@ -143,7 +144,8 @@ pub(super) async fn handle_unlink(
                 let selection = dialoguer::Select::new()
                     .with_prompt(format!("Multiple types match \"{type_name}\""))
                     .items(&matches)
-                    .interact()?;
+                    .interact()
+                    .context("failed to prompt for link type selection")?;
                 matches[selection].clone()
             }
             MatchResult::None(_) => {

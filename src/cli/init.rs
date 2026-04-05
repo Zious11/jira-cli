@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use dialoguer::{Confirm, Input, Select};
 
 use crate::config::{
@@ -12,7 +12,8 @@ pub async fn handle() -> Result<()> {
     // Step 1: Instance URL
     let url: String = Input::new()
         .with_prompt("Jira instance URL (e.g., https://yourorg.atlassian.net)")
-        .interact_text()?;
+        .interact_text()
+        .context("failed to read Jira instance URL")?;
     let url = url.trim_end_matches('/').to_string();
 
     // Step 2: Auth method
@@ -21,7 +22,8 @@ pub async fn handle() -> Result<()> {
         .with_prompt("Authentication method")
         .items(&auth_methods)
         .default(0)
-        .interact()?;
+        .interact()
+        .context("failed to prompt for authentication method")?;
 
     let global = GlobalConfig {
         instance: InstanceConfig {
@@ -58,7 +60,8 @@ pub async fn handle() -> Result<()> {
     let setup_project = Confirm::new()
         .with_prompt("Configure this directory as a Jira project?")
         .default(true)
-        .interact()?;
+        .interact()
+        .context("failed to prompt for project setup")?;
 
     if setup_project {
         let boards = client.list_boards(None, None).await?;
@@ -72,10 +75,14 @@ pub async fn handle() -> Result<()> {
             let board_choice = Select::new()
                 .with_prompt("Select board")
                 .items(&board_names)
-                .interact()?;
+                .interact()
+                .context("failed to prompt for board selection")?;
             let selected_board = &boards[board_choice];
 
-            let project_key: String = Input::new().with_prompt("Project key").interact_text()?;
+            let project_key: String = Input::new()
+                .with_prompt("Project key")
+                .interact_text()
+                .context("failed to read project key")?;
 
             let project_config = format!(
                 "project = \"{}\"\nboard_id = {}\n",
@@ -118,7 +125,8 @@ pub async fn handle() -> Result<()> {
                     let selection = Select::new()
                         .with_prompt("Multiple story points fields found. Select one")
                         .items(&names)
-                        .interact()?;
+                        .interact()
+                        .context("failed to prompt for story points field selection")?;
                     Some(matches[selection].0.clone())
                 }
             };

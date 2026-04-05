@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::api::client::JiraClient;
 use crate::config::Config;
@@ -67,7 +67,8 @@ pub(super) async fn resolve_team_field(
             let selection = dialoguer::Select::new()
                 .with_prompt(format!("Multiple teams named \"{}\"", team_name))
                 .items(&labels)
-                .interact()?;
+                .interact()
+                .context("failed to prompt for team selection")?;
             Ok((field_id, duplicates[selection].id.clone()))
         }
         crate::partial_match::MatchResult::Ambiguous(matches) => {
@@ -82,7 +83,8 @@ pub(super) async fn resolve_team_field(
             let selection = dialoguer::Select::new()
                 .with_prompt(format!("Multiple teams match \"{team_name}\""))
                 .items(&matches)
-                .interact()?;
+                .interact()
+                .context("failed to prompt for team selection")?;
             let selected_name = &matches[selection];
             let idx = teams
                 .iter()
@@ -115,7 +117,8 @@ pub(super) fn resolve_story_points_field_id(config: &Config) -> Result<String> {
 pub(super) fn prompt_input(prompt: &str) -> Result<String> {
     let input: String = dialoguer::Input::new()
         .with_prompt(prompt)
-        .interact_text()?;
+        .interact_text()
+        .context("failed to read user input")?;
     Ok(input)
 }
 
@@ -197,7 +200,8 @@ fn disambiguate_user(
             let selection = dialoguer::Select::new()
                 .with_prompt(format!("Multiple users named \"{}\"", name))
                 .items(&labels)
-                .interact()?;
+                .interact()
+                .context("failed to prompt for user selection")?;
             Ok((
                 duplicates[selection].account_id.clone(),
                 duplicates[selection].display_name.clone(),
@@ -214,7 +218,8 @@ fn disambiguate_user(
             let selection = dialoguer::Select::new()
                 .with_prompt(format!("Multiple users match \"{name}\""))
                 .items(&matches)
-                .interact()?;
+                .interact()
+                .context("failed to prompt for user selection")?;
             let selected_name = &matches[selection];
             let idx = users
                 .iter()
@@ -428,7 +433,8 @@ pub(super) async fn resolve_asset(
             let selection = dialoguer::Select::new()
                 .with_prompt(format!("Multiple assets match \"{}\"", input))
                 .items(&items)
-                .interact()?;
+                .interact()
+                .context("failed to prompt for asset selection")?;
             Ok(duplicates[selection].object_key.clone())
         }
         crate::partial_match::MatchResult::Ambiguous(matches) => {
@@ -456,7 +462,8 @@ pub(super) async fn resolve_asset(
             let selection = dialoguer::Select::new()
                 .with_prompt(format!("Multiple assets match \"{}\"", input))
                 .items(&items)
-                .interact()?;
+                .interact()
+                .context("failed to prompt for asset selection")?;
             Ok(filtered[selection].object_key.clone())
         }
         crate::partial_match::MatchResult::None(_) => {
