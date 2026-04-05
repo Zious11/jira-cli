@@ -373,8 +373,7 @@ pub(super) async fn resolve_asset(
     }
 
     // Name search: fetch workspace ID, then AQL search
-    let workspace_id =
-        crate::api::assets::workspace::get_or_fetch_workspace_id(client).await?;
+    let workspace_id = crate::api::assets::workspace::get_or_fetch_workspace_id(client).await?;
     let escaped = crate::jql::escape_value(input);
     let aql = format!("Name like \"{}\"", escaped);
     let results = client
