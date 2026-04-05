@@ -3867,7 +3867,7 @@ async fn fields(
 ) -> Result<()> {
     let project_key = project
         .or_else(|| config.project_key(project_override))
-        .ok_or_else(|| anyhow::anyhow!("No project specified. Use 'jr project fields FOO' or configure .jr.toml"))?;
+        .ok_or_else(|| anyhow::anyhow!("No project specified. Use 'jr project fields --project FOO' or configure .jr.toml"))?;
 
     let issue_types = client.get_project_issue_types(&project_key).await?;
     let priorities = client.get_priorities().await?;

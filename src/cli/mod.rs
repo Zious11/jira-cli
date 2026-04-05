@@ -1,8 +1,10 @@
+pub mod assets;
 pub mod auth;
 pub mod board;
 pub mod init;
 pub mod issue;
 pub mod project;
+pub mod queue;
 pub mod sprint;
 pub mod team;
 pub mod worklog;
@@ -46,6 +48,11 @@ pub enum OutputFormat {
 pub enum Command {
     /// Initialize jr configuration
     Init,
+    /// Manage Assets/CMDB objects
+    Assets {
+        #[command(subcommand)]
+        command: AssetsCommand,
+    },
     /// Manage authentication
     Auth {
         #[command(subcommand)]
@@ -62,7 +69,7 @@ pub enum Command {
     /// Manage issues
     Issue {
         #[command(subcommand)]
-        command: IssueCommand,
+        command: Box<IssueCommand>,
     },
     /// Manage boards
     Board {
@@ -84,11 +91,69 @@ pub enum Command {
         #[command(subcommand)]
         command: TeamCommand,
     },
+    /// Manage JSM queues
+    Queue {
+        #[command(subcommand)]
+        command: QueueCommand,
+    },
     /// Generate shell completions
     Completion {
         /// Shell to generate completions for
         #[arg(value_enum)]
         shell: clap_complete::Shell,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AssetsCommand {
+    /// Search assets with AQL query
+    Search {
+        /// AQL query (e.g. "objectType = Client")
+        query: String,
+        /// Maximum number of results
+        #[arg(long)]
+        limit: Option<u32>,
+        /// Include object attributes in output
+        #[arg(long)]
+        attributes: bool,
+    },
+    /// View asset details
+    View {
+        /// Object key (e.g. OBJ-1) or numeric ID
+        key: String,
+        /// Omit object attributes from output
+        #[arg(long)]
+        no_attributes: bool,
+    },
+    /// Show Jira issues connected to an asset
+    Tickets {
+        /// Object key (e.g. OBJ-1) or numeric ID
+        key: String,
+        /// Maximum number of tickets to show
+        #[arg(long)]
+        limit: Option<u32>,
+        /// Show only open tickets (excludes Done status category)
+        #[arg(long, conflicts_with = "status")]
+        open: bool,
+        /// Filter by status (partial match supported)
+        #[arg(long, conflicts_with = "open")]
+        status: Option<String>,
+    },
+    /// List object schemas in the workspace
+    Schemas,
+    /// List object types (all schemas or filtered)
+    Types {
+        /// Filter by schema (partial name match or exact ID)
+        #[arg(long)]
+        schema: Option<String>,
+    },
+    /// Show attributes for an object type
+    Schema {
+        /// Object type name (partial match supported)
+        name: String,
+        /// Filter by schema (partial name match or exact ID)
+        #[arg(long)]
+        schema: Option<String>,
     },
 }
 
@@ -120,9 +185,42 @@ pub enum IssueCommand {
         /// Maximum number of results
         #[arg(long)]
         limit: Option<u32>,
+        /// Fetch all results (no default limit)
+        #[arg(long, conflicts_with = "limit")]
+        all: bool,
+        /// Filter by assignee ("me" for current user, or a name to search)
+        #[arg(long)]
+        assignee: Option<String>,
+        /// Filter by reporter ("me" for current user, or a name to search)
+        #[arg(long)]
+        reporter: Option<String>,
+        /// Show issues created within duration (e.g., 7d, 4w, 2M)
+        #[arg(long)]
+        recent: Option<String>,
+        /// Show only open issues (excludes Done status category)
+        #[arg(long, conflicts_with = "status")]
+        open: bool,
         /// Show story points column
         #[arg(long)]
         points: bool,
+        /// Show linked assets column
+        #[arg(long)]
+        assets: bool,
+        /// Filter by linked asset object key (e.g., CUST-5)
+        #[arg(long)]
+        asset: Option<String>,
+        /// Show issues created on or after this date (YYYY-MM-DD)
+        #[arg(long, conflicts_with = "recent")]
+        created_after: Option<String>,
+        /// Show issues created on or before this date (YYYY-MM-DD)
+        #[arg(long)]
+        created_before: Option<String>,
+        /// Show issues updated on or after this date (YYYY-MM-DD)
+        #[arg(long)]
+        updated_after: Option<String>,
+        /// Show issues updated on or before this date (YYYY-MM-DD)
+        #[arg(long)]
+        updated_before: Option<String>,
     },
     /// Create a new issue
     Create {
@@ -136,10 +234,10 @@ pub enum IssueCommand {
         #[arg(short, long)]
         summary: Option<String>,
         /// Description
-        #[arg(short, long)]
+        #[arg(short, long, conflicts_with = "description_stdin")]
         description: Option<String>,
         /// Read description from stdin (for piping)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "description")]
         description_stdin: bool,
         /// Priority
         #[arg(long)]
@@ -159,6 +257,12 @@ pub enum IssueCommand {
         /// Parent issue key (e.g., for subtasks or stories under epics)
         #[arg(long)]
         parent: Option<String>,
+        /// Assign to user (name/email, or "me" for self)
+        #[arg(long, conflicts_with = "account_id")]
+        to: Option<String>,
+        /// Assign to this Jira accountId directly (bypasses name search)
+        #[arg(long, conflicts_with = "to")]
+        account_id: Option<String>,
     },
     /// View issue details
     View {
@@ -193,6 +297,15 @@ pub enum IssueCommand {
         /// Parent issue key
         #[arg(long)]
         parent: Option<String>,
+        /// Description
+        #[arg(short, long, conflicts_with = "description_stdin")]
+        description: Option<String>,
+        /// Read description from stdin (for piping)
+        #[arg(long, conflicts_with = "description")]
+        description_stdin: bool,
+        /// Interpret description as Markdown
+        #[arg(long)]
+        markdown: bool,
     },
     /// Transition issue to a new status
     Move {
@@ -210,11 +323,14 @@ pub enum IssueCommand {
     Assign {
         /// Issue key
         key: String,
-        /// Assign to this user (omit to assign to self)
-        #[arg(long)]
+        /// Assign to this user (name/email, or "me" for self; omit to assign to self)
+        #[arg(long, conflicts_with_all = ["account_id", "unassign"])]
         to: Option<String>,
+        /// Assign to this Jira accountId directly (bypasses name search)
+        #[arg(long, conflicts_with_all = ["to", "unassign"])]
+        account_id: Option<String>,
         /// Remove assignee
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["to", "account_id"])]
         unassign: bool,
     },
     /// Add a comment
@@ -271,31 +387,94 @@ pub enum IssueCommand {
     },
     /// List available link types
     LinkTypes,
+    /// Show assets linked to an issue
+    Assets {
+        /// Issue key (e.g., FOO-123)
+        key: String,
+    },
 }
 
 #[derive(Subcommand)]
 pub enum ProjectCommand {
-    /// Show valid issue types, priorities, and statuses
-    Fields {
-        /// Project key (uses configured project if omitted)
-        project: Option<String>,
+    /// List accessible projects
+    List {
+        /// Filter by project type (software, service_desk, business)
+        #[arg(long = "type")]
+        project_type: Option<String>,
+        /// Maximum number of results (default: 50)
+        #[arg(long)]
+        limit: Option<u32>,
+        /// Fetch all projects (paginate through all pages)
+        #[arg(long, conflicts_with = "limit")]
+        all: bool,
     },
+    /// Show valid issue types, priorities, and statuses
+    Fields,
 }
 
 #[derive(Subcommand)]
 pub enum BoardCommand {
     /// List boards
-    List,
+    List {
+        /// Filter by board type
+        #[arg(long = "type", value_parser = clap::builder::PossibleValuesParser::new(["scrum", "kanban"]))]
+        board_type: Option<String>,
+    },
     /// View current board issues
-    View,
+    View {
+        /// Board ID (overrides board_id in .jr.toml)
+        #[arg(long)]
+        board: Option<u64>,
+        /// Maximum number of issues to return
+        #[arg(long)]
+        limit: Option<u32>,
+        /// Fetch all results (no default limit)
+        #[arg(long, conflicts_with = "limit")]
+        all: bool,
+    },
 }
 
 #[derive(Subcommand)]
 pub enum SprintCommand {
     /// List sprints
-    List,
+    List {
+        /// Board ID (overrides board_id in .jr.toml)
+        #[arg(long)]
+        board: Option<u64>,
+    },
     /// Show current sprint issues
-    Current,
+    Current {
+        /// Board ID (overrides board_id in .jr.toml)
+        #[arg(long)]
+        board: Option<u64>,
+        /// Maximum number of issues to return
+        #[arg(long)]
+        limit: Option<u32>,
+        /// Fetch all results (no default limit)
+        #[arg(long, conflicts_with = "limit")]
+        all: bool,
+    },
+    /// Add issues to a sprint
+    Add {
+        /// Sprint ID (from `jr sprint list`)
+        #[arg(long, required_unless_present = "current")]
+        sprint: Option<u64>,
+        /// Use the active sprint instead of specifying an ID
+        #[arg(long, conflicts_with = "sprint")]
+        current: bool,
+        /// Issue keys to add (e.g. FOO-1 FOO-2)
+        #[arg(required = true, num_args = 1..)]
+        issues: Vec<String>,
+        /// Board ID (used with --current to resolve the active sprint)
+        #[arg(long)]
+        board: Option<u64>,
+    },
+    /// Remove issues from sprint (moves to backlog)
+    Remove {
+        /// Issue keys to remove (e.g. FOO-1 FOO-2)
+        #[arg(required = true, num_args = 1..)]
+        issues: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -325,4 +504,55 @@ pub enum WorklogCommand {
         /// Issue key
         key: String,
     },
+}
+
+#[derive(Subcommand)]
+pub enum QueueCommand {
+    /// List queues for the service desk
+    List,
+    /// View issues in a queue
+    View {
+        /// Queue name (partial match supported)
+        name: Option<String>,
+        /// Queue ID (use if name is ambiguous)
+        #[arg(long)]
+        id: Option<String>,
+        /// Maximum number of issues to return
+        #[arg(long)]
+        limit: Option<u32>,
+    },
+}
+
+pub(crate) const DEFAULT_LIMIT: u32 = 30;
+
+/// Resolve the effective limit from CLI flags.
+///
+/// Returns `None` when `--all` is set (no limit), otherwise returns the
+/// explicit `--limit` value or the default.
+pub(crate) fn resolve_effective_limit(limit: Option<u32>, all: bool) -> Option<u32> {
+    if all {
+        None
+    } else {
+        Some(limit.unwrap_or(DEFAULT_LIMIT))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn effective_limit_defaults_to_30() {
+        assert_eq!(resolve_effective_limit(None, false), Some(30));
+    }
+
+    #[test]
+    fn effective_limit_respects_explicit_limit() {
+        assert_eq!(resolve_effective_limit(Some(50), false), Some(50));
+    }
+
+    #[test]
+    fn effective_limit_all_returns_none() {
+        assert_eq!(resolve_effective_limit(None, true), None);
+    }
 }

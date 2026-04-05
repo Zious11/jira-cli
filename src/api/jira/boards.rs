@@ -5,16 +5,29 @@ use anyhow::Result;
 
 impl JiraClient {
     /// List all boards accessible to the authenticated user.
-    pub async fn list_boards(&self) -> Result<Vec<Board>> {
+    ///
+    /// Optionally filter by `project_key` (`projectKeyOrId` query param) and/or
+    /// `board_type` (`type` query param, e.g. `"scrum"` or `"kanban"`).
+    pub async fn list_boards(
+        &self,
+        project_key: Option<&str>,
+        board_type: Option<&str>,
+    ) -> Result<Vec<Board>> {
         let mut all_boards: Vec<Board> = Vec::new();
         let mut start_at: u32 = 0;
         let max_results: u32 = 50;
 
         loop {
-            let path = format!(
+            let mut path = format!(
                 "/rest/agile/1.0/board?startAt={}&maxResults={}",
                 start_at, max_results
             );
+            if let Some(pk) = project_key {
+                path.push_str(&format!("&projectKeyOrId={}", urlencoding::encode(pk)));
+            }
+            if let Some(bt) = board_type {
+                path.push_str(&format!("&type={}", urlencoding::encode(bt)));
+            }
             let page: OffsetPage<Board> = self.get(&path).await?;
             let has_more = page.has_more();
             let next = page.next_start();

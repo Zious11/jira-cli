@@ -1,0 +1,11 @@
+---
+source: src/cli/sprint.rs
+expression: "sprint_remove_response(&[\"TEST-1\".to_string(), \"TEST-2\".to_string()])"
+---
+{
+  "issues": [
+    "TEST-1",
+    "TEST-2"
+  ],
+  "removed": true
+}

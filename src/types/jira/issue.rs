@@ -62,7 +62,15 @@ pub struct IssueFields {
     pub issue_type: Option<IssueType>,
     pub priority: Option<Priority>,
     pub assignee: Option<User>,
+    pub reporter: Option<User>,
     pub project: Option<IssueProject>,
+    pub created: Option<String>,
+    pub updated: Option<String>,
+    pub resolution: Option<Resolution>,
+    #[serde(default)]
+    pub components: Option<Vec<Component>>,
+    #[serde(rename = "fixVersions", default)]
+    pub fix_versions: Option<Vec<Version>>,
     #[serde(default)]
     pub labels: Option<Vec<String>>,
     pub parent: Option<ParentIssue>,
@@ -104,6 +112,24 @@ pub struct Priority {
 pub struct IssueProject {
     pub key: String,
     pub name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
+pub struct Resolution {
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
+pub struct Component {
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
+pub struct Version {
+    pub name: String,
+    pub released: Option<bool>,
+    #[serde(rename = "releaseDate")]
+    pub release_date: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -259,5 +285,103 @@ mod tests {
         let json = json!({"summary": "test", "issuelinks": []});
         let fields: IssueFields = serde_json::from_value(json).unwrap();
         assert_eq!(fields.issuelinks.unwrap().len(), 0);
+    }
+
+    #[test]
+    fn new_fields_present() {
+        let json = json!({
+            "summary": "test",
+            "created": "2026-03-20T14:32:00.000+0000",
+            "updated": "2026-03-25T09:15:22.000+0000",
+            "reporter": {"accountId": "abc123", "displayName": "Jane Smith"},
+            "resolution": {"name": "Fixed"},
+            "components": [{"name": "Backend"}, {"name": "API"}],
+            "fixVersions": [{"name": "v2.0", "released": false, "releaseDate": "2026-04-01"}]
+        });
+        let fields: IssueFields = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            fields.created.as_deref(),
+            Some("2026-03-20T14:32:00.000+0000")
+        );
+        assert_eq!(
+            fields.updated.as_deref(),
+            Some("2026-03-25T09:15:22.000+0000")
+        );
+        let reporter = fields.reporter.unwrap();
+        assert_eq!(reporter.display_name, "Jane Smith");
+        assert_eq!(reporter.account_id, "abc123");
+        assert_eq!(fields.resolution.unwrap().name, "Fixed");
+        let components = fields.components.unwrap();
+        assert_eq!(components.len(), 2);
+        assert_eq!(components[0].name, "Backend");
+        assert_eq!(components[1].name, "API");
+        let versions = fields.fix_versions.unwrap();
+        assert_eq!(versions.len(), 1);
+        assert_eq!(versions[0].name, "v2.0");
+        assert_eq!(versions[0].released, Some(false));
+        assert_eq!(versions[0].release_date.as_deref(), Some("2026-04-01"));
+        // New typed fields should NOT appear in extra
+        assert!(!fields.extra.contains_key("created"));
+        assert!(!fields.extra.contains_key("updated"));
+        assert!(!fields.extra.contains_key("reporter"));
+        assert!(!fields.extra.contains_key("resolution"));
+        assert!(!fields.extra.contains_key("components"));
+        assert!(!fields.extra.contains_key("fixVersions"));
+    }
+
+    #[test]
+    fn new_fields_absent() {
+        let json = json!({"summary": "test"});
+        let fields: IssueFields = serde_json::from_value(json).unwrap();
+        assert!(fields.created.is_none());
+        assert!(fields.updated.is_none());
+        assert!(fields.reporter.is_none());
+        assert!(fields.resolution.is_none());
+        assert!(fields.components.is_none());
+        assert!(fields.fix_versions.is_none());
+    }
+
+    #[test]
+    fn new_fields_null() {
+        let json = json!({
+            "summary": "test",
+            "created": null,
+            "updated": null,
+            "reporter": null,
+            "resolution": null,
+            "components": null,
+            "fixVersions": null
+        });
+        let fields: IssueFields = serde_json::from_value(json).unwrap();
+        assert!(fields.created.is_none());
+        assert!(fields.updated.is_none());
+        assert!(fields.reporter.is_none());
+        assert!(fields.resolution.is_none());
+        assert!(fields.components.is_none());
+        assert!(fields.fix_versions.is_none());
+    }
+
+    #[test]
+    fn components_empty_array() {
+        let json = json!({"summary": "test", "components": []});
+        let fields: IssueFields = serde_json::from_value(json).unwrap();
+        assert_eq!(fields.components, Some(vec![]));
+    }
+
+    #[test]
+    fn fix_versions_empty_array() {
+        let json = json!({"summary": "test", "fixVersions": []});
+        let fields: IssueFields = serde_json::from_value(json).unwrap();
+        assert_eq!(fields.fix_versions, Some(vec![]));
+    }
+
+    #[test]
+    fn version_optional_fields_absent() {
+        let json = json!({"summary": "test", "fixVersions": [{"name": "v1.0"}]});
+        let fields: IssueFields = serde_json::from_value(json).unwrap();
+        let v = &fields.fix_versions.unwrap()[0];
+        assert_eq!(v.name, "v1.0");
+        assert!(v.released.is_none());
+        assert!(v.release_date.is_none());
     }
 }

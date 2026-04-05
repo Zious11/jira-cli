@@ -4,6 +4,7 @@ pub mod issues;
 pub mod links;
 pub mod projects;
 pub mod sprints;
+pub mod statuses;
 pub mod teams;
 pub mod users;
 pub mod worklogs;

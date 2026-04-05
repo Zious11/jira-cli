@@ -1,4 +1,5 @@
 use anyhow::{Result, bail};
+use serde_json::json;
 
 use crate::api::client::JiraClient;
 use crate::cli::{OutputFormat, SprintCommand};
@@ -12,12 +13,67 @@ pub async fn handle(
     config: &Config,
     client: &JiraClient,
     output_format: &OutputFormat,
+    project_override: Option<&str>,
 ) -> Result<()> {
-    let board_id = config.project.board_id.ok_or_else(|| {
-        anyhow::anyhow!("No board_id configured. Set board_id in .jr.toml or run \"jr init\".")
-    })?;
+    match command {
+        SprintCommand::List { board } => {
+            let board_id = resolve_scrum_board(config, client, board, project_override).await?;
+            handle_list(board_id, client, output_format).await
+        }
+        SprintCommand::Current {
+            board, limit, all, ..
+        } => {
+            let board_id = resolve_scrum_board(config, client, board, project_override).await?;
+            handle_current(board_id, client, output_format, config, limit, all).await
+        }
+        SprintCommand::Add {
+            sprint,
+            current,
+            issues,
+            board,
+        } => {
+            if issues.len() > MAX_SPRINT_ISSUES {
+                bail!(
+                    "Too many issues (got {}). Maximum is {} per operation.",
+                    issues.len(),
+                    MAX_SPRINT_ISSUES
+                );
+            }
+            let sprint_id = if current {
+                let board_id = resolve_scrum_board(config, client, board, project_override).await?;
+                let sprints = client.list_sprints(board_id, Some("active")).await?;
+                if sprints.is_empty() {
+                    bail!("No active sprint found for board {}.", board_id);
+                }
+                sprints[0].id
+            } else {
+                sprint.expect("clap enforces --sprint when --current is absent")
+            };
+            handle_add(sprint_id, issues, output_format, client).await
+        }
+        SprintCommand::Remove { issues } => {
+            if issues.len() > MAX_SPRINT_ISSUES {
+                bail!(
+                    "Too many issues (got {}). Maximum is {} per operation.",
+                    issues.len(),
+                    MAX_SPRINT_ISSUES
+                );
+            }
+            handle_remove(issues, output_format, client).await
+        }
+    }
+}
 
-    // Guard: sprints only make sense for scrum boards
+/// Resolve board ID and verify it's a scrum board.
+async fn resolve_scrum_board(
+    config: &Config,
+    client: &JiraClient,
+    board: Option<u64>,
+    project_override: Option<&str>,
+) -> Result<u64> {
+    let board_id =
+        crate::cli::board::resolve_board_id(config, client, board, project_override, true).await?;
+
     let board_config = client.get_board_config(board_id).await?;
     let board_type = board_config.board_type.to_lowercase();
     if board_type != "scrum" {
@@ -28,10 +84,74 @@ pub async fn handle(
         );
     }
 
-    match command {
-        SprintCommand::List => handle_list(board_id, client, output_format).await,
-        SprintCommand::Current => handle_current(board_id, client, output_format, config).await,
+    Ok(board_id)
+}
+
+/// JSON response for `sprint add`.
+fn sprint_add_response(sprint_id: u64, issues: &[String]) -> serde_json::Value {
+    json!({
+        "sprint_id": sprint_id,
+        "issues": issues,
+        "added": true
+    })
+}
+
+/// JSON response for `sprint remove`.
+fn sprint_remove_response(issues: &[String]) -> serde_json::Value {
+    json!({
+        "issues": issues,
+        "removed": true
+    })
+}
+
+const MAX_SPRINT_ISSUES: usize = 50;
+
+/// Add issues to a sprint.
+async fn handle_add(
+    sprint_id: u64,
+    issues: Vec<String>,
+    output_format: &OutputFormat,
+    client: &JiraClient,
+) -> Result<()> {
+    client.add_issues_to_sprint(sprint_id, &issues).await?;
+
+    match output_format {
+        OutputFormat::Json => {
+            println!(
+                "{}",
+                output::render_json(&sprint_add_response(sprint_id, &issues))?
+            );
+        }
+        OutputFormat::Table => {
+            output::print_success(&format!(
+                "Added {} issue(s) to sprint {}",
+                issues.len(),
+                sprint_id
+            ));
+        }
     }
+
+    Ok(())
+}
+
+/// Remove issues from all sprints, moving them to the backlog.
+async fn handle_remove(
+    issues: Vec<String>,
+    output_format: &OutputFormat,
+    client: &JiraClient,
+) -> Result<()> {
+    client.move_issues_to_backlog(&issues).await?;
+
+    match output_format {
+        OutputFormat::Json => {
+            println!("{}", output::render_json(&sprint_remove_response(&issues))?);
+        }
+        OutputFormat::Table => {
+            output::print_success(&format!("Moved {} issue(s) to backlog", issues.len()));
+        }
+    }
+
+    Ok(())
 }
 
 async fn handle_list(
@@ -98,7 +218,10 @@ async fn handle_current(
     client: &JiraClient,
     output_format: &OutputFormat,
     config: &Config,
+    limit: Option<u32>,
+    all: bool,
 ) -> Result<()> {
+    let effective_limit = crate::cli::resolve_effective_limit(limit, all);
     let sprints = client.list_sprints(board_id, Some("active")).await?;
 
     if sprints.is_empty() {
@@ -108,7 +231,12 @@ async fn handle_current(
     let sprint = &sprints[0];
     let sp_field_id = config.global.fields.story_points_field_id.as_deref();
     let extra: Vec<&str> = sp_field_id.iter().copied().collect();
-    let issues = client.get_sprint_issues(sprint.id, None, &extra).await?;
+    let result = client
+        .get_sprint_issues(sprint.id, None, effective_limit, &extra)
+        .await?;
+    let issues = result.issues;
+    let has_more = result.has_more;
+    let issue_count = issues.len();
 
     let sprint_summary = sp_field_id.map(|field_id| compute_sprint_summary(&issues, field_id));
 
@@ -150,15 +278,22 @@ async fn handle_current(
 
             let rows: Vec<Vec<String>> = issues
                 .iter()
-                .map(|issue| super::issue::format_issue_row(issue, sp_field_id))
+                .map(|issue| super::issue::format_issue_row(issue, sp_field_id, None))
                 .collect();
             output::print_output(
                 output_format,
-                &super::issue::issue_table_headers(sp_field_id.is_some()),
+                &super::issue::issue_table_headers(sp_field_id.is_some(), false),
                 &rows,
                 &issues,
             )?;
         }
+    }
+
+    if has_more && !all {
+        eprintln!(
+            "Showing {} results. Use --limit or --all to see more.",
+            issue_count
+        );
     }
 
     Ok(())
@@ -235,5 +370,21 @@ mod tests {
         assert_eq!(total, 0.0);
         assert_eq!(completed, 0.0);
         assert_eq!(unestimated, 0);
+    }
+
+    #[test]
+    fn test_sprint_add_response() {
+        insta::assert_json_snapshot!(sprint_add_response(
+            100,
+            &["TEST-1".to_string(), "TEST-2".to_string()]
+        ));
+    }
+
+    #[test]
+    fn test_sprint_remove_response() {
+        insta::assert_json_snapshot!(sprint_remove_response(&[
+            "TEST-1".to_string(),
+            "TEST-2".to_string()
+        ]));
     }
 }

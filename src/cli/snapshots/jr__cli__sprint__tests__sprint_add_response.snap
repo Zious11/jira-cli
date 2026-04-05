@@ -1,0 +1,12 @@
+---
+source: src/cli/sprint.rs
+expression: "sprint_add_response(100, &[\"TEST-1\".to_string(), \"TEST-2\".to_string()])"
+---
+{
+  "added": true,
+  "issues": [
+    "TEST-1",
+    "TEST-2"
+  ],
+  "sprint_id": 100
+}

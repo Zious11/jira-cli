@@ -1,0 +1,9 @@
+---
+source: src/cli/issue/json_output.rs
+expression: "unassign_response(\"TEST-1\", true)"
+---
+{
+  "assignee": null,
+  "changed": true,
+  "key": "TEST-1"
+}

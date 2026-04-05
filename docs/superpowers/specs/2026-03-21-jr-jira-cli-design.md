@@ -34,7 +34,7 @@ jr auth login                        # Authenticate (OAuth 2.0 or API token)
 jr auth login --token                # Authenticate with API token
 jr auth status                       # Show current auth state
 jr me                                # Show current user info
-jr project fields FOO                # List valid issue types, priorities, statuses for a project
+jr project fields --project FOO      # List valid issue types, priorities, statuses for a project
 ```
 
 ### Issues
@@ -406,7 +406,7 @@ This allows AI agents to capture created keys and IDs for follow-up commands.
 
 ### Project Field Discovery
 
-`jr project fields FOO --output json` returns valid issue types, priorities, and statuses for a project. AI agents use this to know what values are valid before creating or editing issues, avoiding trial-and-error guessing.
+`jr project fields --project FOO --output json` returns valid issue types, priorities, and statuses for a project. AI agents use this to know what values are valid before creating or editing issues, avoiding trial-and-error guessing.
 
 ### Querying Transitions Without Moving
 

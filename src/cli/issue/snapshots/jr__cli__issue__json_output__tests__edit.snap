@@ -1,0 +1,8 @@
+---
+source: src/cli/issue/json_output.rs
+expression: "edit_response(\"TEST-1\")"
+---
+{
+  "key": "TEST-1",
+  "updated": true
+}

@@ -32,16 +32,18 @@ impl JiraClient {
         Ok(all_sprints)
     }
 
-    /// Get issues in a specific sprint, with optional JQL filter.
+    /// Get issues in a specific sprint, with optional JQL filter and optional limit.
     pub async fn get_sprint_issues(
         &self,
         sprint_id: u64,
         jql: Option<&str>,
+        limit: Option<u32>,
         extra_fields: &[&str],
-    ) -> Result<Vec<Issue>> {
+    ) -> Result<SprintIssuesResult> {
         let mut all_issues: Vec<Issue> = Vec::new();
         let mut start_at: u32 = 0;
         let max_results: u32 = 50;
+        let mut result_has_more = false;
 
         loop {
             let mut path = format!(
@@ -58,16 +60,50 @@ impl JiraClient {
                 path.push_str(&format!("&jql={}", urlencoding::encode(q)));
             }
             let page: OffsetPage<Issue> = self.get(&path).await?;
-            let has_more = page.has_more();
+            let page_has_more = page.has_more();
             let next = page.next_start();
             all_issues.extend(page.issues.unwrap_or_default());
 
-            if !has_more {
+            // Early-stop: if we have enough issues, truncate and break
+            if let Some(max) = limit {
+                if all_issues.len() >= max as usize {
+                    result_has_more = all_issues.len() > max as usize || page_has_more;
+                    all_issues.truncate(max as usize);
+                    break;
+                }
+            }
+
+            if !page_has_more {
                 break;
             }
             start_at = next;
         }
 
-        Ok(all_issues)
+        Ok(SprintIssuesResult {
+            issues: all_issues,
+            has_more: result_has_more,
+        })
     }
+
+    /// Add issues to a sprint. Max 50 issues per call.
+    /// POST /rest/agile/1.0/sprint/{sprintId}/issue → 204 No Content
+    pub async fn add_issues_to_sprint(&self, sprint_id: u64, issues: &[String]) -> Result<()> {
+        let path = format!("/rest/agile/1.0/sprint/{}/issue", sprint_id);
+        let body = serde_json::json!({ "issues": issues });
+        self.post_no_content(&path, &body).await
+    }
+
+    /// Move issues to the backlog (removes from all sprints). Max 50 issues per call.
+    /// POST /rest/agile/1.0/backlog/issue → 204 No Content
+    pub async fn move_issues_to_backlog(&self, issues: &[String]) -> Result<()> {
+        let path = "/rest/agile/1.0/backlog/issue";
+        let body = serde_json::json!({ "issues": issues });
+        self.post_no_content(path, &body).await
+    }
+}
+
+/// Result of fetching sprint issues with optional limit.
+pub struct SprintIssuesResult {
+    pub issues: Vec<Issue>,
+    pub has_more: bool,
 }

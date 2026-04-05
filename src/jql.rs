@@ -7,6 +7,105 @@ pub fn escape_value(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+/// Validate a JQL relative date duration string.
+///
+/// JQL relative dates use the format `<digits><unit>` where unit is one of:
+/// `y` (years), `M` (months), `w` (weeks), `d` (days), `h` (hours), `m` (minutes).
+/// Units are case-sensitive — `M` is months, `m` is minutes.
+/// Combined units like `4w2d` are not supported by Jira.
+pub fn validate_duration(s: &str) -> Result<(), String> {
+    if s.len() < 2 {
+        return Err(format!(
+            "Invalid duration '{s}'. Use a number followed by y, M, w, d, h, or m (e.g., 7d, 4w, 2M)."
+        ));
+    }
+    let (digits, unit) = s.split_at(s.len() - 1);
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+        return Err(format!(
+            "Invalid duration '{s}'. Use a number followed by y, M, w, d, h, or m (e.g., 7d, 4w, 2M)."
+        ));
+    }
+    if !matches!(unit, "y" | "M" | "w" | "d" | "h" | "m") {
+        return Err(format!(
+            "Invalid duration '{s}'. Use a number followed by y, M, w, d, h, or m (e.g., 7d, 4w, 2M)."
+        ));
+    }
+    Ok(())
+}
+
+/// Validate an asset object key matches the SCHEMA-NUMBER format.
+///
+/// Asset keys follow the `<alphanumeric>-<digits>` format (e.g., CUST-5, SRV-42, ITSM-123).
+pub fn validate_asset_key(key: &str) -> Result<(), String> {
+    let Some((prefix, number)) = key.split_once('-') else {
+        return Err(format!(
+            "Invalid asset key \"{key}\". Expected format: SCHEMA-NUMBER (e.g., CUST-5, SRV-42)."
+        ));
+    };
+    if prefix.is_empty()
+        || !prefix.chars().all(|c| c.is_ascii_alphanumeric())
+        || number.is_empty()
+        || !number.chars().all(|c| c.is_ascii_digit())
+    {
+        return Err(format!(
+            "Invalid asset key \"{key}\". Expected format: SCHEMA-NUMBER (e.g., CUST-5, SRV-42)."
+        ));
+    }
+    Ok(())
+}
+
+/// Build a JQL clause that filters issues by a linked asset object key.
+///
+/// Uses `aqlFunction()` with the human-readable field name (required by Jira Cloud).
+/// When multiple CMDB fields exist, OR them together and wrap in parentheses.
+pub fn build_asset_clause(asset_key: &str, cmdb_fields: &[(String, String)]) -> String {
+    debug_assert!(
+        !cmdb_fields.is_empty(),
+        "cmdb_fields must not be empty — callers should check before calling"
+    );
+    let clauses: Vec<String> = cmdb_fields
+        .iter()
+        .map(|(_, name)| {
+            format!(
+                "\"{}\" IN aqlFunction(\"Key = \\\"{}\\\"\")",
+                escape_value(name),
+                escape_value(asset_key),
+            )
+        })
+        .collect();
+
+    if clauses.len() == 1 {
+        clauses.into_iter().next().unwrap()
+    } else {
+        format!("({})", clauses.join(" OR "))
+    }
+}
+
+/// Validate and parse an absolute date string in ISO 8601 format (YYYY-MM-DD).
+///
+/// Returns the parsed `NaiveDate` on success. The caller needs the parsed date
+/// to compute +1 day for `--before` flag JQL generation.
+pub fn validate_date(s: &str) -> Result<chrono::NaiveDate, String> {
+    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|_| {
+        format!("Invalid date \"{s}\". Expected format: YYYY-MM-DD (e.g., 2026-03-18).")
+    })
+}
+
+/// Strip `ORDER BY` clause from JQL for use with count-only endpoints.
+///
+/// The approximate-count endpoint only needs the WHERE clause. ORDER BY is
+/// meaningless for a count and may cause issues with bounded-JQL validation.
+pub fn strip_order_by(jql: &str) -> &str {
+    let upper = jql.to_ascii_uppercase();
+    if let Some(pos) = upper.find(" ORDER BY") {
+        jql[..pos].trim_end()
+    } else if upper.starts_with("ORDER BY") {
+        ""
+    } else {
+        jql
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -34,6 +133,227 @@ mod tests {
     #[test]
     fn trailing_backslash() {
         assert_eq!(escape_value(r"foo\"), r"foo\\");
+    }
+
+    #[test]
+    fn strip_order_by_removes_clause() {
+        assert_eq!(
+            strip_order_by("project = PROJ ORDER BY updated DESC"),
+            "project = PROJ"
+        );
+    }
+
+    #[test]
+    fn strip_order_by_no_clause() {
+        assert_eq!(strip_order_by("project = PROJ"), "project = PROJ");
+    }
+
+    #[test]
+    fn strip_order_by_case_insensitive() {
+        assert_eq!(
+            strip_order_by("project = PROJ order by rank ASC"),
+            "project = PROJ"
+        );
+    }
+
+    #[test]
+    fn strip_order_by_trims_whitespace() {
+        assert_eq!(
+            strip_order_by("project = PROJ   ORDER BY rank ASC"),
+            "project = PROJ"
+        );
+    }
+
+    #[test]
+    fn strip_order_by_at_position_zero() {
+        assert_eq!(strip_order_by("ORDER BY created DESC"), "");
+    }
+
+    #[test]
+    fn strip_order_by_at_position_zero_lowercase() {
+        assert_eq!(strip_order_by("order by rank ASC"), "");
+    }
+
+    #[test]
+    fn validate_duration_valid_days() {
+        assert!(validate_duration("7d").is_ok());
+    }
+
+    #[test]
+    fn validate_duration_valid_weeks() {
+        assert!(validate_duration("4w").is_ok());
+    }
+
+    #[test]
+    fn validate_duration_valid_months_uppercase() {
+        assert!(validate_duration("2M").is_ok());
+    }
+
+    #[test]
+    fn validate_duration_valid_years() {
+        assert!(validate_duration("1y").is_ok());
+    }
+
+    #[test]
+    fn validate_duration_valid_hours() {
+        assert!(validate_duration("5h").is_ok());
+    }
+
+    #[test]
+    fn validate_duration_valid_minutes() {
+        assert!(validate_duration("10m").is_ok());
+    }
+
+    #[test]
+    fn validate_duration_valid_zero() {
+        assert!(validate_duration("0d").is_ok());
+    }
+
+    #[test]
+    fn validate_duration_invalid_unit() {
+        assert!(validate_duration("7x").is_err());
+    }
+
+    #[test]
+    fn validate_duration_reversed() {
+        assert!(validate_duration("d7").is_err());
+    }
+
+    #[test]
+    fn validate_duration_empty() {
+        assert!(validate_duration("").is_err());
+    }
+
+    #[test]
+    fn validate_duration_combined_units() {
+        assert!(validate_duration("4w2d").is_err());
+    }
+
+    #[test]
+    fn validate_duration_no_digits() {
+        assert!(validate_duration("d").is_err());
+    }
+
+    #[test]
+    fn validate_asset_key_valid_simple() {
+        assert!(validate_asset_key("CUST-5").is_ok());
+    }
+
+    #[test]
+    fn validate_asset_key_valid_long() {
+        assert!(validate_asset_key("SRV-42").is_ok());
+    }
+
+    #[test]
+    fn validate_asset_key_valid_itsm() {
+        assert!(validate_asset_key("ITSM-123").is_ok());
+    }
+
+    #[test]
+    fn validate_asset_key_invalid_no_number() {
+        assert!(validate_asset_key("CUST-").is_err());
+    }
+
+    #[test]
+    fn validate_asset_key_invalid_no_prefix() {
+        assert!(validate_asset_key("-5").is_err());
+    }
+
+    #[test]
+    fn validate_asset_key_invalid_no_hyphen() {
+        assert!(validate_asset_key("foo").is_err());
+    }
+
+    #[test]
+    fn validate_asset_key_invalid_empty() {
+        assert!(validate_asset_key("").is_err());
+    }
+
+    #[test]
+    fn validate_asset_key_invalid_spaces() {
+        assert!(validate_asset_key("CU ST-5").is_err());
+    }
+
+    #[test]
+    fn build_asset_clause_single_field() {
+        let fields = vec![("customfield_10191".to_string(), "Client".to_string())];
+        let clause = build_asset_clause("CUST-5", &fields);
+        assert_eq!(clause, r#""Client" IN aqlFunction("Key = \"CUST-5\"")"#);
+    }
+
+    #[test]
+    fn build_asset_clause_multiple_fields() {
+        let fields = vec![
+            ("customfield_10191".to_string(), "Client".to_string()),
+            ("customfield_10245".to_string(), "Server".to_string()),
+        ];
+        let clause = build_asset_clause("SRV-42", &fields);
+        assert_eq!(
+            clause,
+            r#"("Client" IN aqlFunction("Key = \"SRV-42\"") OR "Server" IN aqlFunction("Key = \"SRV-42\""))"#
+        );
+    }
+
+    #[test]
+    fn build_asset_clause_field_name_with_quotes() {
+        let fields = vec![(
+            "customfield_10191".to_string(),
+            r#"My "Assets""#.to_string(),
+        )];
+        let clause = build_asset_clause("OBJ-1", &fields);
+        assert_eq!(
+            clause,
+            r#""My \"Assets\"" IN aqlFunction("Key = \"OBJ-1\"")"#
+        );
+    }
+
+    #[test]
+    fn validate_date_valid_simple() {
+        let d = validate_date("2026-03-18").unwrap();
+        assert_eq!(d.to_string(), "2026-03-18");
+    }
+
+    #[test]
+    fn validate_date_valid_leap_day() {
+        let d = validate_date("2024-02-29").unwrap();
+        assert_eq!(d.to_string(), "2024-02-29");
+    }
+
+    #[test]
+    fn validate_date_invalid_format_slash() {
+        let err = validate_date("2026/03/18").unwrap_err();
+        assert!(err.contains("Invalid date"));
+        assert!(err.contains("YYYY-MM-DD"));
+    }
+
+    #[test]
+    fn validate_date_invalid_format_us() {
+        let err = validate_date("03-18-2026").unwrap_err();
+        assert!(err.contains("Invalid date"));
+    }
+
+    #[test]
+    fn validate_date_impossible_feb30() {
+        let err = validate_date("2026-02-30").unwrap_err();
+        assert!(err.contains("Invalid date"));
+    }
+
+    #[test]
+    fn validate_date_impossible_month13() {
+        let err = validate_date("2026-13-01").unwrap_err();
+        assert!(err.contains("Invalid date"));
+    }
+
+    #[test]
+    fn validate_date_empty() {
+        let err = validate_date("").unwrap_err();
+        assert!(err.contains("Invalid date"));
+    }
+
+    #[test]
+    fn validate_date_non_leap_feb29() {
+        let err = validate_date("2026-02-29").unwrap_err();
+        assert!(err.contains("Invalid date"));
     }
 }
 

@@ -1,0 +1,10 @@
+---
+source: src/cli/issue/json_output.rs
+expression: "link_response(\"TEST-1\", \"TEST-2\", \"Blocks\")"
+---
+{
+  "key1": "TEST-1",
+  "key2": "TEST-2",
+  "linked": true,
+  "type": "Blocks"
+}

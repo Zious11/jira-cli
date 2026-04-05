@@ -1,9 +1,43 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 const CACHE_TTL_DAYS: i64 = 7;
+
+/// Implemented by cache structs that carry a timestamp for TTL checks.
+pub(crate) trait Expiring {
+    fn fetched_at(&self) -> DateTime<Utc>;
+}
+
+/// Read a whole-file cache. Returns `Ok(None)` on missing, expired, or corrupt
+/// (unparseable) files. Propagates I/O errors.
+fn read_cache<T: DeserializeOwned + Expiring>(filename: &str) -> Result<Option<T>> {
+    let path = cache_dir().join(filename);
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let cache: T = match serde_json::from_str(&content) {
+        Ok(c) => c,
+        Err(_) => return Ok(None),
+    };
+    if (Utc::now() - cache.fetched_at()).num_days() >= CACHE_TTL_DAYS {
+        return Ok(None);
+    }
+    Ok(Some(cache))
+}
+
+/// Write a whole-file cache. Creates the cache directory if needed.
+fn write_cache<T: Serialize>(filename: &str, data: &T) -> Result<()> {
+    let dir = cache_dir();
+    std::fs::create_dir_all(&dir)?;
+    let content = serde_json::to_string_pretty(data)?;
+    std::fs::write(dir.join(filename), content)?;
+    Ok(())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachedTeam {
@@ -15,6 +49,12 @@ pub struct CachedTeam {
 pub struct TeamCache {
     pub fetched_at: DateTime<Utc>,
     pub teams: Vec<CachedTeam>,
+}
+
+impl Expiring for TeamCache {
+    fn fetched_at(&self) -> DateTime<Utc> {
+        self.fetched_at
+    }
 }
 
 pub fn cache_dir() -> PathBuf {
@@ -29,33 +69,212 @@ pub fn cache_dir() -> PathBuf {
 }
 
 pub fn read_team_cache() -> Result<Option<TeamCache>> {
-    let path = cache_dir().join("teams.json");
+    read_cache("teams.json")
+}
+
+pub fn write_team_cache(teams: &[CachedTeam]) -> Result<()> {
+    write_cache(
+        "teams.json",
+        &TeamCache {
+            fetched_at: Utc::now(),
+            teams: teams.to_vec(),
+        },
+    )
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectMeta {
+    pub project_type: String,
+    pub simplified: bool,
+    pub project_id: String,
+    pub service_desk_id: Option<String>,
+    pub fetched_at: DateTime<Utc>,
+}
+
+/// Read cached project metadata for a specific project key.
+///
+/// Keyed cache — not genericized because TTL is checked per-entry
+/// (`ProjectMeta.fetched_at`), unlike whole-file caches.
+pub fn read_project_meta(project_key: &str) -> Result<Option<ProjectMeta>> {
+    let path = cache_dir().join("project_meta.json");
     if !path.exists() {
         return Ok(None);
     }
 
     let content = std::fs::read_to_string(&path)?;
-    let cache: TeamCache = serde_json::from_str(&content)?;
+    let map: HashMap<String, ProjectMeta> = match serde_json::from_str(&content) {
+        Ok(m) => m,
+        Err(_) => return Ok(None),
+    };
+
+    match map.get(project_key) {
+        Some(meta) => {
+            let age = Utc::now() - meta.fetched_at;
+            if age.num_days() >= CACHE_TTL_DAYS {
+                Ok(None)
+            } else {
+                Ok(Some(meta.clone()))
+            }
+        }
+        None => Ok(None),
+    }
+}
+
+/// Write cached project metadata for a specific project key.
+///
+/// Merges into the existing map file, preserving entries for other projects.
+pub fn write_project_meta(project_key: &str, meta: &ProjectMeta) -> Result<()> {
+    let dir = cache_dir();
+    std::fs::create_dir_all(&dir)?;
+
+    let path = dir.join("project_meta.json");
+
+    // Read existing map or start fresh
+    let mut map: HashMap<String, ProjectMeta> = if path.exists() {
+        let content = std::fs::read_to_string(&path)?;
+        serde_json::from_str(&content).unwrap_or_default()
+    } else {
+        HashMap::new()
+    };
+
+    map.insert(project_key.to_string(), meta.clone());
+
+    let content = serde_json::to_string_pretty(&map)?;
+    std::fs::write(&path, content)?;
+    Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WorkspaceCache {
+    pub workspace_id: String,
+    pub fetched_at: DateTime<Utc>,
+}
+
+impl Expiring for WorkspaceCache {
+    fn fetched_at(&self) -> DateTime<Utc> {
+        self.fetched_at
+    }
+}
+
+pub fn read_workspace_cache() -> Result<Option<WorkspaceCache>> {
+    read_cache("workspace.json")
+}
+
+pub fn write_workspace_cache(workspace_id: &str) -> Result<()> {
+    write_cache(
+        "workspace.json",
+        &WorkspaceCache {
+            workspace_id: workspace_id.to_string(),
+            fetched_at: Utc::now(),
+        },
+    )
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CmdbFieldsCache {
+    pub fields: Vec<(String, String)>,
+    pub fetched_at: DateTime<Utc>,
+}
+
+impl Expiring for CmdbFieldsCache {
+    fn fetched_at(&self) -> DateTime<Utc> {
+        self.fetched_at
+    }
+}
+
+pub fn read_cmdb_fields_cache() -> Result<Option<CmdbFieldsCache>> {
+    read_cache("cmdb_fields.json")
+}
+
+pub fn write_cmdb_fields_cache(fields: &[(String, String)]) -> Result<()> {
+    write_cache(
+        "cmdb_fields.json",
+        &CmdbFieldsCache {
+            fields: fields.to_vec(),
+            fetched_at: Utc::now(),
+        },
+    )
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedObjectTypeAttr {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub system: bool,
+    #[serde(default)]
+    pub hidden: bool,
+    #[serde(default)]
+    pub label: bool,
+    #[serde(default)]
+    pub position: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ObjectTypeAttrCache {
+    pub fetched_at: DateTime<Utc>,
+    pub types: HashMap<String, Vec<CachedObjectTypeAttr>>,
+}
+
+/// Read cached attributes for a specific object type.
+///
+/// Keyed cache — not genericized because TTL is checked per-file
+/// (`ObjectTypeAttrCache.fetched_at`) but lookup is per-key, with a different
+/// return type (`Vec<CachedObjectTypeAttr>`) than the stored wrapper struct.
+pub fn read_object_type_attr_cache(
+    object_type_id: &str,
+) -> Result<Option<Vec<CachedObjectTypeAttr>>> {
+    let path = cache_dir().join("object_type_attrs.json");
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let content = std::fs::read_to_string(&path)?;
+    let cache: ObjectTypeAttrCache = match serde_json::from_str(&content) {
+        Ok(c) => c,
+        Err(_) => return Ok(None),
+    };
 
     let age = Utc::now() - cache.fetched_at;
     if age.num_days() >= CACHE_TTL_DAYS {
         return Ok(None);
     }
 
-    Ok(Some(cache))
+    Ok(cache.types.get(object_type_id).cloned())
 }
 
-pub fn write_team_cache(teams: &[CachedTeam]) -> Result<()> {
+/// Write cached attributes for a specific object type.
+///
+/// Merges into the existing map file, preserving entries for other object types.
+pub fn write_object_type_attr_cache(
+    object_type_id: &str,
+    attrs: &[CachedObjectTypeAttr],
+) -> Result<()> {
     let dir = cache_dir();
     std::fs::create_dir_all(&dir)?;
 
-    let cache = TeamCache {
-        fetched_at: Utc::now(),
-        teams: teams.to_vec(),
+    let path = dir.join("object_type_attrs.json");
+
+    let mut cache: ObjectTypeAttrCache = if path.exists() {
+        let content = std::fs::read_to_string(&path)?;
+        serde_json::from_str(&content).unwrap_or(ObjectTypeAttrCache {
+            fetched_at: Utc::now(),
+            types: HashMap::new(),
+        })
+    } else {
+        ObjectTypeAttrCache {
+            fetched_at: Utc::now(),
+            types: HashMap::new(),
+        }
     };
 
+    cache
+        .types
+        .insert(object_type_id.to_string(), attrs.to_vec());
+    cache.fetched_at = Utc::now();
+
     let content = serde_json::to_string_pretty(&cache)?;
-    std::fs::write(dir.join("teams.json"), content)?;
+    std::fs::write(&path, content)?;
     Ok(())
 }
 
@@ -68,12 +287,20 @@ mod tests {
     static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     fn with_temp_cache<F: FnOnce()>(f: F) {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        // Recover from poison: catch_unwind below ensures env cleanup completed
+        // even if a prior test panicked, so the guarded state is consistent.
+        let guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().unwrap();
-        // SAFETY: test holds ENV_MUTEX, so no concurrent env access.
+        // SAFETY: ENV_MUTEX serialises all tests that touch XDG_CACHE_HOME;
+        // the variable is only read inside cache functions called within this
+        // lock, so no concurrent env access occurs.
         unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
-        f();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
         unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+        drop(guard);
+        if let Err(e) = result {
+            std::panic::resume_unwind(e);
+        }
     }
 
     #[test]
@@ -144,6 +371,343 @@ mod tests {
             let cache = read_team_cache().unwrap().expect("cache should be valid");
             assert_eq!(cache.teams.len(), 1);
             assert_eq!(cache.teams[0].name, "Recent");
+        });
+    }
+
+    #[test]
+    fn read_missing_project_meta_returns_none() {
+        with_temp_cache(|| {
+            let result = read_project_meta("NOEXIST").unwrap();
+            assert!(result.is_none());
+        });
+    }
+
+    #[test]
+    fn write_then_read_project_meta() {
+        with_temp_cache(|| {
+            let meta = ProjectMeta {
+                project_type: "service_desk".into(),
+                simplified: false,
+                project_id: "10042".into(),
+                service_desk_id: Some("15".into()),
+                fetched_at: Utc::now(),
+            };
+            write_project_meta("HELPDESK", &meta).unwrap();
+
+            let loaded = read_project_meta("HELPDESK")
+                .unwrap()
+                .expect("should exist");
+            assert_eq!(loaded.project_type, "service_desk");
+            assert_eq!(loaded.service_desk_id.as_deref(), Some("15"));
+            assert_eq!(loaded.project_id, "10042");
+            assert!(!loaded.simplified);
+        });
+    }
+
+    #[test]
+    fn expired_project_meta_returns_none() {
+        with_temp_cache(|| {
+            let meta = ProjectMeta {
+                project_type: "service_desk".into(),
+                simplified: false,
+                project_id: "10042".into(),
+                service_desk_id: Some("15".into()),
+                fetched_at: Utc::now() - chrono::Duration::days(8),
+            };
+            write_project_meta("HELPDESK", &meta).unwrap();
+
+            let result = read_project_meta("HELPDESK").unwrap();
+            assert!(result.is_none(), "expired project meta should return None");
+        });
+    }
+
+    #[test]
+    fn project_meta_multiple_projects() {
+        with_temp_cache(|| {
+            let jsm = ProjectMeta {
+                project_type: "service_desk".into(),
+                simplified: false,
+                project_id: "10042".into(),
+                service_desk_id: Some("15".into()),
+                fetched_at: Utc::now(),
+            };
+            let software = ProjectMeta {
+                project_type: "software".into(),
+                simplified: true,
+                project_id: "10001".into(),
+                service_desk_id: None,
+                fetched_at: Utc::now(),
+            };
+            write_project_meta("HELPDESK", &jsm).unwrap();
+            write_project_meta("DEV", &software).unwrap();
+
+            let jsm_loaded = read_project_meta("HELPDESK")
+                .unwrap()
+                .expect("should exist");
+            assert_eq!(jsm_loaded.project_type, "service_desk");
+
+            let sw_loaded = read_project_meta("DEV").unwrap().expect("should exist");
+            assert_eq!(sw_loaded.project_type, "software");
+            assert!(sw_loaded.service_desk_id.is_none());
+        });
+    }
+
+    #[test]
+    fn read_missing_workspace_cache_returns_none() {
+        with_temp_cache(|| {
+            let result = read_workspace_cache().unwrap();
+            assert!(result.is_none());
+        });
+    }
+
+    #[test]
+    fn write_then_read_workspace_cache() {
+        with_temp_cache(|| {
+            write_workspace_cache("abc-123-def").unwrap();
+
+            let cache = read_workspace_cache().unwrap().expect("should exist");
+            assert_eq!(cache.workspace_id, "abc-123-def");
+        });
+    }
+
+    #[test]
+    fn expired_workspace_cache_returns_none() {
+        with_temp_cache(|| {
+            let expired = WorkspaceCache {
+                workspace_id: "old-id".into(),
+                fetched_at: Utc::now() - chrono::Duration::days(8),
+            };
+            let dir = cache_dir();
+            std::fs::create_dir_all(&dir).unwrap();
+            let content = serde_json::to_string_pretty(&expired).unwrap();
+            std::fs::write(dir.join("workspace.json"), content).unwrap();
+
+            let result = read_workspace_cache().unwrap();
+            assert!(
+                result.is_none(),
+                "expired workspace cache should return None"
+            );
+        });
+    }
+
+    #[test]
+    fn read_missing_cmdb_fields_cache_returns_none() {
+        with_temp_cache(|| {
+            let result = read_cmdb_fields_cache().unwrap();
+            assert!(result.is_none());
+        });
+    }
+
+    #[test]
+    fn write_then_read_cmdb_fields_cache() {
+        with_temp_cache(|| {
+            write_cmdb_fields_cache(&[
+                ("customfield_10191".into(), "Client".into()),
+                ("customfield_10245".into(), "Hardware".into()),
+            ])
+            .unwrap();
+
+            let cache = read_cmdb_fields_cache().unwrap().expect("should exist");
+            assert_eq!(
+                cache.fields,
+                vec![
+                    ("customfield_10191".to_string(), "Client".to_string()),
+                    ("customfield_10245".to_string(), "Hardware".to_string()),
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn expired_cmdb_fields_cache_returns_none() {
+        with_temp_cache(|| {
+            let expired = CmdbFieldsCache {
+                fields: vec![("customfield_10191".into(), "Client".into())],
+                fetched_at: Utc::now() - chrono::Duration::days(8),
+            };
+            let dir = cache_dir();
+            std::fs::create_dir_all(&dir).unwrap();
+            let content = serde_json::to_string_pretty(&expired).unwrap();
+            std::fs::write(dir.join("cmdb_fields.json"), content).unwrap();
+
+            let result = read_cmdb_fields_cache().unwrap();
+            assert!(
+                result.is_none(),
+                "expired cmdb fields cache should return None"
+            );
+        });
+    }
+
+    #[test]
+    fn read_missing_object_type_attr_cache_returns_none() {
+        with_temp_cache(|| {
+            let result = read_object_type_attr_cache("23").unwrap();
+            assert!(result.is_none());
+        });
+    }
+
+    #[test]
+    fn write_then_read_object_type_attr_cache() {
+        with_temp_cache(|| {
+            let attrs = vec![
+                CachedObjectTypeAttr {
+                    id: "134".into(),
+                    name: "Key".into(),
+                    system: true,
+                    hidden: false,
+                    label: false,
+                    position: 0,
+                },
+                CachedObjectTypeAttr {
+                    id: "135".into(),
+                    name: "Name".into(),
+                    system: false,
+                    hidden: false,
+                    label: true,
+                    position: 1,
+                },
+            ];
+            write_object_type_attr_cache("23", &attrs).unwrap();
+
+            let loaded = read_object_type_attr_cache("23")
+                .unwrap()
+                .expect("should exist");
+            assert_eq!(loaded.len(), 2);
+            assert_eq!(loaded[0].name, "Key");
+            assert!(loaded[0].system);
+            assert_eq!(loaded[1].name, "Name");
+            assert!(loaded[1].label);
+        });
+    }
+
+    #[test]
+    fn expired_object_type_attr_cache_returns_none() {
+        with_temp_cache(|| {
+            let expired = ObjectTypeAttrCache {
+                fetched_at: Utc::now() - chrono::Duration::days(8),
+                types: {
+                    let mut m = HashMap::new();
+                    m.insert(
+                        "23".to_string(),
+                        vec![CachedObjectTypeAttr {
+                            id: "134".into(),
+                            name: "Key".into(),
+                            system: true,
+                            hidden: false,
+                            label: false,
+                            position: 0,
+                        }],
+                    );
+                    m
+                },
+            };
+            let dir = cache_dir();
+            std::fs::create_dir_all(&dir).unwrap();
+            let content = serde_json::to_string_pretty(&expired).unwrap();
+            std::fs::write(dir.join("object_type_attrs.json"), content).unwrap();
+
+            let result = read_object_type_attr_cache("23").unwrap();
+            assert!(result.is_none(), "expired cache should return None");
+        });
+    }
+
+    #[test]
+    fn object_type_attr_cache_multiple_types() {
+        with_temp_cache(|| {
+            let attrs_a = vec![CachedObjectTypeAttr {
+                id: "134".into(),
+                name: "Key".into(),
+                system: true,
+                hidden: false,
+                label: false,
+                position: 0,
+            }];
+            let attrs_b = vec![CachedObjectTypeAttr {
+                id: "200".into(),
+                name: "Hostname".into(),
+                system: false,
+                hidden: false,
+                label: false,
+                position: 3,
+            }];
+            write_object_type_attr_cache("23", &attrs_a).unwrap();
+            write_object_type_attr_cache("45", &attrs_b).unwrap();
+
+            let loaded_a = read_object_type_attr_cache("23")
+                .unwrap()
+                .expect("type 23 should exist");
+            assert_eq!(loaded_a[0].name, "Key");
+
+            let loaded_b = read_object_type_attr_cache("45")
+                .unwrap()
+                .expect("type 45 should exist");
+            assert_eq!(loaded_b[0].name, "Hostname");
+        });
+    }
+
+    #[test]
+    fn object_type_attr_cache_corrupt_returns_none() {
+        with_temp_cache(|| {
+            let dir = cache_dir();
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("object_type_attrs.json"), "not json").unwrap();
+
+            let result = read_object_type_attr_cache("23").unwrap();
+            assert!(result.is_none(), "corrupt cache should return None");
+        });
+    }
+
+    #[test]
+    fn corrupt_team_cache_returns_none() {
+        with_temp_cache(|| {
+            let dir = cache_dir();
+            std::fs::create_dir_all(&dir).unwrap();
+
+            // Garbage data
+            std::fs::write(dir.join("teams.json"), "not json").unwrap();
+            let result = read_team_cache().unwrap();
+            assert!(result.is_none(), "garbage data should return None");
+
+            // Valid JSON, wrong shape
+            std::fs::write(dir.join("teams.json"), r#"{"unexpected": true}"#).unwrap();
+            let result = read_team_cache().unwrap();
+            assert!(result.is_none(), "wrong-shape JSON should return None");
+        });
+    }
+
+    #[test]
+    fn corrupt_workspace_cache_returns_none() {
+        with_temp_cache(|| {
+            let dir = cache_dir();
+            std::fs::create_dir_all(&dir).unwrap();
+
+            // Garbage data
+            std::fs::write(dir.join("workspace.json"), "not json").unwrap();
+            let result = read_workspace_cache().unwrap();
+            assert!(result.is_none(), "garbage data should return None");
+
+            // Valid JSON, wrong shape
+            std::fs::write(dir.join("workspace.json"), r#"{"unexpected": true}"#).unwrap();
+            let result = read_workspace_cache().unwrap();
+            assert!(result.is_none(), "wrong-shape JSON should return None");
+        });
+    }
+
+    #[test]
+    fn corrupt_project_meta_returns_none() {
+        with_temp_cache(|| {
+            let dir = cache_dir();
+            std::fs::create_dir_all(&dir).unwrap();
+
+            // Garbage data
+            std::fs::write(dir.join("project_meta.json"), "not json").unwrap();
+            let result = read_project_meta("ANY").unwrap();
+            assert!(result.is_none(), "garbage data should return None");
+
+            // Valid JSON, wrong shape
+            std::fs::write(dir.join("project_meta.json"), r#"{"unexpected": true}"#).unwrap();
+            let result = read_project_meta("ANY").unwrap();
+            assert!(result.is_none(), "wrong-shape JSON should return None");
         });
     }
 }

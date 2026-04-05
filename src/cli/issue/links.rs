@@ -1,5 +1,5 @@
+use super::json_output;
 use anyhow::{Result, bail};
-use serde_json::json;
 
 use crate::api::client::JiraClient;
 use crate::cli::{IssueCommand, OutputFormat};
@@ -61,6 +61,8 @@ pub(super) async fn handle_link(
     let type_names: Vec<String> = link_types.iter().map(|lt| lt.name.clone()).collect();
     let resolved_name = match partial_match::partial_match(&link_type_name, &type_names) {
         MatchResult::Exact(name) => name,
+        // Link types are unique per Jira API; treat like Exact if duplicates ever occur
+        MatchResult::ExactMultiple(name) => name,
         MatchResult::Ambiguous(matches) => {
             if no_input {
                 bail!(
@@ -91,12 +93,11 @@ pub(super) async fn handle_link(
         OutputFormat::Json => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&json!({
-                    "key1": key1,
-                    "key2": key2,
-                    "type": resolved_name,
-                    "linked": true
-                }))?
+                serde_json::to_string_pretty(&json_output::link_response(
+                    &key1,
+                    &key2,
+                    &resolved_name,
+                ))?
             );
         }
         OutputFormat::Table => {
@@ -129,6 +130,8 @@ pub(super) async fn handle_unlink(
         let type_names: Vec<String> = link_types.iter().map(|lt| lt.name.clone()).collect();
         let resolved = match partial_match::partial_match(type_name, &type_names) {
             MatchResult::Exact(name) => name,
+            // Link types are unique per Jira API; treat like Exact if duplicates ever occur
+            MatchResult::ExactMultiple(name) => name,
             MatchResult::Ambiguous(matches) => {
                 if no_input {
                     bail!(
@@ -186,10 +189,7 @@ pub(super) async fn handle_unlink(
             OutputFormat::Json => {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&json!({
-                        "unlinked": false,
-                        "count": 0
-                    }))?
+                    serde_json::to_string_pretty(&json_output::unlink_response(false, 0))?
                 );
             }
             OutputFormat::Table => {
@@ -208,10 +208,7 @@ pub(super) async fn handle_unlink(
         OutputFormat::Json => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&json!({
-                    "unlinked": true,
-                    "count": count
-                }))?
+                serde_json::to_string_pretty(&json_output::unlink_response(true, count))?
             );
         }
         OutputFormat::Table => {

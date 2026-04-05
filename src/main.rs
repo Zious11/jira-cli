@@ -26,7 +26,8 @@ async fn main() {
     let result = run(cli).await;
     if let Err(e) = result {
         let exit_code = e
-            .downcast_ref::<error::JrError>()
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<error::JrError>())
             .map(|je| je.exit_code())
             .unwrap_or(1);
 
@@ -63,6 +64,11 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         match cli.command {
             cli::Command::Completion { .. } => unreachable!(),
             cli::Command::Init => cli::init::handle().await,
+            cli::Command::Assets { command } => {
+                let config = config::Config::load()?;
+                let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
+                cli::assets::handle(command, &cli.output, &client).await
+            }
             cli::Command::Auth { command } => match command {
                 cli::AuthCommand::Login { oauth } => {
                     if oauth {
@@ -108,7 +114,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 let config = config::Config::load()?;
                 let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
                 cli::issue::handle(
-                    command,
+                    *command,
                     &cli.output,
                     &config,
                     &client,
@@ -121,12 +127,26 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             cli::Command::Board { command } => {
                 let config = config::Config::load()?;
                 let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
-                cli::board::handle(command, &config, &client, &cli.output).await
+                cli::board::handle(
+                    command,
+                    &config,
+                    &client,
+                    &cli.output,
+                    cli.project.as_deref(),
+                )
+                .await
             }
             cli::Command::Sprint { command } => {
                 let config = config::Config::load()?;
                 let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
-                cli::sprint::handle(command, &config, &client, &cli.output).await
+                cli::sprint::handle(
+                    command,
+                    &config,
+                    &client,
+                    &cli.output,
+                    cli.project.as_deref(),
+                )
+                .await
             }
             cli::Command::Worklog { command } => {
                 let config = config::Config::load()?;
@@ -137,6 +157,18 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 let config = config::Config::load()?;
                 let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
                 cli::team::handle(command, &cli.output, &config, &client).await
+            }
+            cli::Command::Queue { command } => {
+                let config = config::Config::load()?;
+                let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
+                cli::queue::handle(
+                    command,
+                    &cli.output,
+                    &config,
+                    &client,
+                    cli.project.as_deref(),
+                )
+                .await
             }
         }
     };

@@ -13,3 +13,5 @@ Thumbs.db
 
 # Worktrees
 .trees/
+.worktrees/
+.claude/worktrees/

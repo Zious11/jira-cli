@@ -1,6 +1,8 @@
+mod assets;
 mod create;
 mod format;
 mod helpers;
+mod json_output;
 mod links;
 mod list;
 mod workflow;
@@ -58,7 +60,7 @@ pub async fn handle(
             workflow::handle_transitions(command, output_format, client).await
         }
         IssueCommand::Assign { .. } => {
-            workflow::handle_assign(command, output_format, client).await
+            workflow::handle_assign(command, output_format, client, no_input).await
         }
         IssueCommand::Comment { .. } => {
             workflow::handle_comment(command, output_format, client).await
@@ -74,5 +76,8 @@ pub async fn handle(
             links::handle_unlink(command, output_format, client, no_input).await
         }
         IssueCommand::LinkTypes => links::handle_link_types(output_format, client).await,
+        IssueCommand::Assets { key } => {
+            assets::handle_issue_assets(&key, output_format, client).await
+        }
     }
 }

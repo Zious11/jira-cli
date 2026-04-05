@@ -1,6 +1,6 @@
 [package]
 name = "jr"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 description = "A fast CLI for Jira Cloud"
 repository = "https://github.com/Zious11/jira-cli"
@@ -30,6 +30,7 @@ tokio = { version = "1", features = ["full"] }
 toml = "1"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
+futures = { version = "0.3", default-features = false, features = ["async-await"] }
 urlencoding = "2"
 
 [dev-dependencies]

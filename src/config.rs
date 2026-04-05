@@ -5,6 +5,8 @@ use figment::{
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::error::JrError;
+
 #[derive(Debug, Deserialize, Serialize, Default)]
 pub struct FieldsConfig {
     pub team_field_id: Option<String>,
@@ -95,7 +97,7 @@ impl Config {
         }
 
         let url = self.global.instance.url.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("No Jira instance configured. Run \"jr init\" first.")
+            JrError::ConfigError("No Jira instance configured. Run \"jr init\" first.".into())
         })?;
 
         if let Some(cloud_id) = &self.global.instance.cloud_id {
@@ -110,6 +112,10 @@ impl Config {
         cli_override
             .map(String::from)
             .or_else(|| self.project.project.clone())
+    }
+
+    pub fn board_id(&self, cli_override: Option<u64>) -> Option<u64> {
+        cli_override.or(self.project.board_id)
     }
 
     pub fn save_global(&self) -> anyhow::Result<()> {
@@ -233,6 +239,24 @@ mod tests {
         };
         assert_eq!(config.project_key(Some("BAR")), Some("BAR".into()));
         assert_eq!(config.project_key(None), Some("FOO".into()));
+    }
+
+    #[test]
+    fn test_board_id_cli_override() {
+        let config = Config {
+            global: GlobalConfig::default(),
+            project: ProjectConfig {
+                project: None,
+                board_id: Some(42),
+            },
+        };
+        // CLI override wins
+        assert_eq!(config.board_id(Some(99)), Some(99));
+        // Config fallback
+        assert_eq!(config.board_id(None), Some(42));
+        // Neither set
+        let empty = Config::default();
+        assert_eq!(empty.board_id(None), None);
     }
 
     #[test]

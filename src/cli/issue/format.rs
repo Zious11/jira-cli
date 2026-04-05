@@ -1,16 +1,23 @@
+use crate::types::assets::LinkedAsset;
+use crate::types::assets::linked::format_linked_assets_short;
 use crate::types::jira::Issue;
 
 /// Format issue rows for table output.
 pub fn format_issue_rows_public(issues: &[Issue]) -> Vec<Vec<String>> {
     issues
         .iter()
-        .map(|issue| format_issue_row(issue, None))
+        .map(|issue| format_issue_row(issue, None, None))
         .collect()
 }
 
-/// Build a single table row for an issue, optionally including story points.
-pub fn format_issue_row(issue: &Issue, sp_field_id: Option<&str>) -> Vec<String> {
-    let col_count = if sp_field_id.is_some() { 7 } else { 6 };
+/// Build a single table row for an issue, optionally including story points and linked assets.
+pub fn format_issue_row(
+    issue: &Issue,
+    sp_field_id: Option<&str>,
+    assets: Option<&[LinkedAsset]>,
+) -> Vec<String> {
+    let col_count =
+        6 + if sp_field_id.is_some() { 1 } else { 0 } + if assets.is_some() { 1 } else { 0 };
     let mut row = Vec::with_capacity(col_count);
     row.push(issue.key.clone());
     row.push(
@@ -54,19 +61,25 @@ pub fn format_issue_row(issue: &Issue, sp_field_id: Option<&str>) -> Vec<String>
             .map(|a| a.display_name.clone())
             .unwrap_or_else(|| "Unassigned".into()),
     );
+    if let Some(linked) = assets {
+        row.push(format_linked_assets_short(linked));
+    }
     row.push(issue.fields.summary.clone());
     row
 }
 
 /// Headers matching `format_issue_row` output.
-pub fn issue_table_headers(show_points: bool) -> Vec<&'static str> {
+pub fn issue_table_headers(show_points: bool, show_assets: bool) -> Vec<&'static str> {
+    let mut headers = vec!["Key", "Type", "Status", "Priority"];
     if show_points {
-        vec![
-            "Key", "Type", "Status", "Priority", "Points", "Assignee", "Summary",
-        ]
-    } else {
-        vec!["Key", "Type", "Status", "Priority", "Assignee", "Summary"]
+        headers.push("Points");
     }
+    headers.push("Assignee");
+    if show_assets {
+        headers.push("Assets");
+    }
+    headers.push("Summary");
+    headers
 }
 
 pub fn format_points(value: f64) -> String {

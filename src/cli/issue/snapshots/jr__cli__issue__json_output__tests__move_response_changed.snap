@@ -1,0 +1,9 @@
+---
+source: src/cli/issue/json_output.rs
+expression: "move_response(\"TEST-1\", \"In Progress\", true)"
+---
+{
+  "changed": true,
+  "key": "TEST-1",
+  "status": "In Progress"
+}

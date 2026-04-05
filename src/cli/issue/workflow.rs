@@ -1,9 +1,10 @@
+use super::json_output;
 use anyhow::{Result, bail};
-use serde_json::json;
 
 use crate::adf;
 use crate::api::client::JiraClient;
 use crate::cli::{IssueCommand, OutputFormat};
+use crate::error::JrError;
 use crate::output;
 use crate::partial_match::{self, MatchResult};
 
@@ -58,17 +59,28 @@ pub(super) async fn handle_move(
         }
     };
 
-    // Idempotent: if already in target status, exit 0
-    if current_status.to_lowercase() == target_status.to_lowercase() {
+    // Idempotent: if already in target status, exit 0.
+    // Check both direct match and whether the input is a transition name whose
+    // target status matches the current status.
+    let current_lower = current_status.to_lowercase();
+    let target_lower = target_status.to_lowercase();
+    let already_in_target = current_lower == target_lower
+        || transitions.iter().any(|t| {
+            t.name.to_lowercase() == target_lower
+                && t.to
+                    .as_ref()
+                    .is_some_and(|s| s.name.to_lowercase() == current_lower)
+        });
+    if already_in_target {
         match output_format {
             OutputFormat::Json => {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&json!({
-                        "key": key,
-                        "status": current_status,
-                        "changed": false
-                    }))?
+                    serde_json::to_string_pretty(&json_output::move_response(
+                        &key,
+                        &current_status,
+                        false,
+                    ))?
                 );
             }
             OutputFormat::Table => {
@@ -95,10 +107,53 @@ pub(super) async fn handle_move(
     let selected_transition = if let Some(t) = selected_transition {
         t
     } else {
-        // Use partial matching on transition names
-        let transition_names: Vec<String> = transitions.iter().map(|t| t.name.clone()).collect();
-        match partial_match::partial_match(&target_status, &transition_names) {
-            MatchResult::Exact(name) => transitions.iter().find(|t| t.name == name).unwrap(),
+        // Build unified candidate pool: transition names + target status names.
+        // Each candidate maps to its transition index.
+        let mut candidates: Vec<(String, usize)> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for (i, t) in transitions.iter().enumerate() {
+            let t_lower = t.name.to_lowercase();
+            if seen.insert(t_lower) {
+                candidates.push((t.name.clone(), i));
+            }
+            if let Some(ref status) = t.to {
+                let s_lower = status.name.to_lowercase();
+                if seen.insert(s_lower) {
+                    candidates.push((status.name.clone(), i));
+                }
+            }
+        }
+
+        let candidate_names: Vec<String> =
+            candidates.iter().map(|(name, _)| name.clone()).collect();
+        match partial_match::partial_match(&target_status, &candidate_names) {
+            MatchResult::Exact(name) => {
+                let idx = candidates
+                    .iter()
+                    .find(|(n, _)| n == &name)
+                    .map(|(_, i)| *i)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Internal error: matched candidate \"{}\" not found. Please report this as a bug.",
+                            name
+                        )
+                    })?;
+                &transitions[idx]
+            }
+            // Case-insensitive dedup upstream; treat like Exact if case-variant duplicates slip through
+            MatchResult::ExactMultiple(name) => {
+                let idx = candidates
+                    .iter()
+                    .find(|(n, _)| n == &name)
+                    .map(|(_, i)| *i)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Internal error: matched candidate \"{}\" not found. Please report this as a bug.",
+                            name
+                        )
+                    })?;
+                &transitions[idx]
+            }
             MatchResult::Ambiguous(matches) => {
                 if no_input {
                     bail!(
@@ -118,20 +173,35 @@ pub(super) async fn handle_move(
                 let choice = helpers::prompt_input("Select (number)")?;
                 let idx: usize = choice
                     .parse()
-                    .map_err(|_| anyhow::anyhow!("Invalid selection"))?;
+                    .map_err(|_| JrError::UserError("Invalid selection".into()))?;
                 if idx < 1 || idx > matches.len() {
-                    bail!("Selection out of range");
+                    return Err(JrError::UserError("Selection out of range".into()).into());
                 }
-                transitions
+                let selected_name = &matches[idx - 1];
+                let tidx = candidates
                     .iter()
-                    .find(|t| t.name == matches[idx - 1])
-                    .unwrap()
+                    .find(|(n, _)| n == selected_name)
+                    .map(|(_, i)| *i)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Internal error: selected candidate \"{}\" not found. Please report this as a bug.",
+                            selected_name
+                        )
+                    })?;
+                &transitions[tidx]
             }
-            MatchResult::None(all) => {
+            MatchResult::None(_) => {
+                let labels: Vec<String> = transitions
+                    .iter()
+                    .map(|t| match t.to.as_ref() {
+                        Some(status) => format!("{} (→ {})", t.name, status.name),
+                        None => t.name.clone(),
+                    })
+                    .collect();
                 bail!(
                     "No transition matching \"{}\". Available: {}",
                     target_status,
-                    all.join(", ")
+                    labels.join(", ")
                 );
             }
         }
@@ -151,11 +221,7 @@ pub(super) async fn handle_move(
         OutputFormat::Json => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&json!({
-                    "key": key,
-                    "status": new_status,
-                    "changed": true
-                }))?
+                serde_json::to_string_pretty(&json_output::move_response(&key, new_status, true,))?
             );
         }
         OutputFormat::Table => {
@@ -207,22 +273,42 @@ pub(super) async fn handle_assign(
     command: IssueCommand,
     output_format: &OutputFormat,
     client: &JiraClient,
+    no_input: bool,
 ) -> Result<()> {
-    let IssueCommand::Assign { key, to, unassign } = command else {
+    let IssueCommand::Assign {
+        key,
+        to,
+        account_id,
+        unassign,
+    } = command
+    else {
         unreachable!()
     };
 
     if unassign {
+        // Idempotent: check if already unassigned
+        let issue = client.get_issue(&key, &[]).await?;
+        if issue.fields.assignee.is_none() {
+            match output_format {
+                OutputFormat::Json => {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&json_output::unassign_response(&key, false))?
+                    );
+                }
+                OutputFormat::Table => {
+                    output::print_success(&format!("{} is already unassigned", key));
+                }
+            }
+            return Ok(());
+        }
+
         client.assign_issue(&key, None).await?;
         match output_format {
             OutputFormat::Json => {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&json!({
-                        "key": key,
-                        "assignee": null,
-                        "changed": true
-                    }))?
+                    serde_json::to_string_pretty(&json_output::unassign_response(&key, true))?
                 );
             }
             OutputFormat::Table => {
@@ -232,38 +318,43 @@ pub(super) async fn handle_assign(
         return Ok(());
     }
 
-    let account_id = if let Some(ref user_query) = to {
-        // Assign to another user — use the provided value as account ID
-        user_query.clone()
+    // Resolve account ID and display name.
+    // When --account-id is provided, no search is performed so the raw
+    // account ID is used as the display name (no name available).
+    let (account_id, display_name) = if let Some(ref id) = account_id {
+        (id.clone(), id.clone())
+    } else if let Some(ref user_query) = to {
+        helpers::resolve_assignee(client, user_query, &key, no_input).await?
     } else {
-        // Assign to self
         let me = client.get_myself().await?;
-
-        // Idempotent: check if already assigned to self
-        let issue = client.get_issue(&key, &[]).await?;
-        if let Some(ref assignee) = issue.fields.assignee {
-            if assignee.account_id == me.account_id {
-                match output_format {
-                    OutputFormat::Json => {
-                        println!(
-                            "{}",
-                            serde_json::to_string_pretty(&json!({
-                                "key": key,
-                                "assignee": me.display_name,
-                                "changed": false
-                            }))?
-                        );
-                    }
-                    OutputFormat::Table => {
-                        output::print_success(&format!("{} is already assigned to you", key));
-                    }
-                }
-                return Ok(());
-            }
-        }
-
-        me.account_id
+        (me.account_id, me.display_name)
     };
+
+    // Idempotent: check if already assigned to target user
+    let issue = client.get_issue(&key, &[]).await?;
+    if let Some(ref assignee) = issue.fields.assignee {
+        if assignee.account_id == account_id {
+            match output_format {
+                OutputFormat::Json => {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&json_output::assign_unchanged_response(
+                            &key,
+                            &display_name,
+                            &account_id,
+                        ),)?
+                    );
+                }
+                OutputFormat::Table => {
+                    output::print_success(&format!(
+                        "{} is already assigned to {}",
+                        key, display_name
+                    ));
+                }
+            }
+            return Ok(());
+        }
+    }
 
     client.assign_issue(&key, Some(&account_id)).await?;
 
@@ -271,15 +362,15 @@ pub(super) async fn handle_assign(
         OutputFormat::Json => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&json!({
-                    "key": key,
-                    "assignee": account_id,
-                    "changed": true
-                }))?
+                serde_json::to_string_pretty(&json_output::assign_changed_response(
+                    &key,
+                    &display_name,
+                    &account_id,
+                ))?
             );
         }
         OutputFormat::Table => {
-            output::print_success(&format!("Assigned {} to {}", key, account_id));
+            output::print_success(&format!("Assigned {} to {}", key, display_name));
         }
     }
 

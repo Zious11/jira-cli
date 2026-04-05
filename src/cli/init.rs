@@ -61,7 +61,7 @@ pub async fn handle() -> Result<()> {
         .interact()?;
 
     if setup_project {
-        let boards = client.list_boards().await?;
+        let boards = client.list_boards(None, None).await?;
         if boards.is_empty() {
             println!("No boards found. You can configure .jr.toml manually.");
         } else {

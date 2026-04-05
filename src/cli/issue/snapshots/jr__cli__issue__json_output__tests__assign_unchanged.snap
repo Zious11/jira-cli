@@ -1,0 +1,10 @@
+---
+source: src/cli/issue/json_output.rs
+expression: "assign_unchanged_response(\"TEST-1\", \"Jane Doe\", \"abc123\")"
+---
+{
+  "assignee": "Jane Doe",
+  "assignee_account_id": "abc123",
+  "changed": false,
+  "key": "TEST-1"
+}

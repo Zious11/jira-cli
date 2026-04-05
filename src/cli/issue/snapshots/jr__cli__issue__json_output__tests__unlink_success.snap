@@ -1,0 +1,8 @@
+---
+source: src/cli/issue/json_output.rs
+expression: "unlink_response(true, 2)"
+---
+{
+  "count": 2,
+  "unlinked": true
+}

@@ -5,9 +5,11 @@ use crate::adf;
 use crate::api::client::JiraClient;
 use crate::cli::{IssueCommand, OutputFormat};
 use crate::config::Config;
+use crate::error::JrError;
 use crate::output;
 
 use super::helpers;
+use super::json_output;
 
 pub(super) async fn handle_create(
     command: IssueCommand,
@@ -29,6 +31,8 @@ pub(super) async fn handle_create(
         points,
         markdown,
         parent,
+        to,
+        account_id,
     } = command
     else {
         unreachable!()
@@ -45,7 +49,11 @@ pub(super) async fn handle_create(
             }
         })
         .ok_or_else(|| {
-            anyhow::anyhow!("Project key is required. Use --project or configure .jr.toml")
+            JrError::UserError(
+                "Project key is required. Use --project or configure .jr.toml. \
+                 Run \"jr project list\" to see available projects."
+                    .into(),
+            )
         })?;
 
     // Resolve issue type
@@ -57,7 +65,7 @@ pub(super) async fn handle_create(
                 helpers::prompt_input("Issue type (e.g., Task, Bug, Story)").ok()
             }
         })
-        .ok_or_else(|| anyhow::anyhow!("Issue type is required. Use --type"))?;
+        .ok_or_else(|| JrError::UserError("Issue type is required. Use --type".into()))?;
 
     // Resolve summary
     let summary_text = summary
@@ -68,7 +76,7 @@ pub(super) async fn handle_create(
                 helpers::prompt_input("Summary").ok()
             }
         })
-        .ok_or_else(|| anyhow::anyhow!("Summary is required. Use --summary"))?;
+        .ok_or_else(|| JrError::UserError("Summary is required. Use --summary".into()))?;
 
     // Resolve description
     let desc_text = if description_stdin {
@@ -118,14 +126,32 @@ pub(super) async fn handle_create(
         fields["parent"] = json!({"key": parent_key});
     }
 
+    if let Some(ref id) = account_id {
+        fields["assignee"] = json!({"accountId": id});
+    } else if let Some(ref user_query) = to {
+        let (acct_id, _display_name) =
+            helpers::resolve_assignee_by_project(client, user_query, &project_key, no_input)
+                .await?;
+        fields["assignee"] = json!({"accountId": acct_id});
+    }
+
     let response = client.create_issue(fields).await?;
+
+    let browse_url = format!(
+        "{}/browse/{}",
+        client.instance_url().trim_end_matches('/'),
+        response.key
+    );
 
     match output_format {
         OutputFormat::Json => {
-            println!("{}", serde_json::to_string_pretty(&response)?);
+            let mut json_response = serde_json::to_value(&response)?;
+            json_response["url"] = json!(browse_url);
+            println!("{}", serde_json::to_string_pretty(&json_response)?);
         }
         OutputFormat::Table => {
             output::print_success(&format!("Created issue {}", response.key));
+            println!("{}", browse_url);
         }
     }
 
@@ -149,6 +175,9 @@ pub(super) async fn handle_edit(
         points,
         no_points,
         parent,
+        description,
+        description_stdin,
+        markdown,
     } = command
     else {
         unreachable!()
@@ -156,6 +185,25 @@ pub(super) async fn handle_edit(
 
     let mut fields = json!({});
     let mut has_updates = false;
+
+    // Resolve description
+    let desc_text = if description_stdin {
+        let mut buf = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;
+        Some(buf)
+    } else {
+        description
+    };
+
+    if let Some(ref text) = desc_text {
+        let adf_body = if markdown {
+            adf::markdown_to_adf(text)
+        } else {
+            adf::text_to_adf(text)
+        };
+        fields["description"] = adf_body;
+        has_updates = true;
+    }
 
     if let Some(ref s) = summary {
         fields["summary"] = json!(s);
@@ -225,7 +273,7 @@ pub(super) async fn handle_edit(
                 OutputFormat::Json => {
                     println!(
                         "{}",
-                        serde_json::to_string_pretty(&json!({ "key": key, "updated": true }))?
+                        serde_json::to_string_pretty(&json_output::edit_response(&key))?
                     );
                 }
                 OutputFormat::Table => {
@@ -238,7 +286,7 @@ pub(super) async fn handle_edit(
 
     if !has_updates {
         bail!(
-            "No fields specified to update. Use --summary, --type, --priority, --label, --team, --points, --no-points, or --parent."
+            "No fields specified to update. Use --summary, --type, --priority, --label, --team, --points, --no-points, --parent, --description, or --description-stdin."
         );
     }
 
@@ -248,7 +296,7 @@ pub(super) async fn handle_edit(
         OutputFormat::Json => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&json!({ "key": key, "updated": true }))?
+                serde_json::to_string_pretty(&json_output::edit_response(&key))?
             );
         }
         OutputFormat::Table => {
@@ -257,4 +305,25 @@ pub(super) async fn handle_edit(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::error::JrError;
+
+    #[test]
+    fn missing_project_returns_user_error() {
+        let result: Option<String> = None;
+        let err = result
+            .ok_or_else(|| {
+                JrError::UserError(
+                    "Project key is required. Use --project or configure .jr.toml. \
+                     Run \"jr project list\" to see available projects."
+                        .into(),
+                )
+            })
+            .unwrap_err();
+        assert_eq!(err.exit_code(), 64);
+        assert!(err.to_string().contains("Project key is required"));
+    }
 }

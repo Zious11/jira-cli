@@ -14,39 +14,55 @@ src/
 │   ├── issue/           # issue commands (split by operation theme)
 │   │   ├── mod.rs       # dispatch + re-exports
 │   │   ├── format.rs    # row formatting, headers, points display
-│   │   ├── list.rs      # list + view + comments (read operations)
+│   │   ├── list.rs      # list + view + comments (read operations, unified JQL composition)
 │   │   ├── create.rs    # create + edit (field-building)
 │   │   ├── workflow.rs  # move + transitions + assign + comment + open
 │   │   ├── links.rs     # link + unlink + link-types
-│   │   └── helpers.rs   # team/points resolution, prompts
+│   │   ├── helpers.rs   # team/points resolution, user resolution, prompts
+│   │   └── assets.rs    # linked assets (issue→asset lookup)
+│   ├── assets.rs        # assets search/view/tickets/schemas/types/schema (search enrichment, schema discovery)
 │   ├── board.rs         # board list/view
-│   ├── sprint.rs        # sprint list/current (scrum-only, errors on kanban)
+│   ├── sprint.rs        # sprint list/current/add/remove (scrum-only, errors on kanban)
 │   ├── worklog.rs       # worklog add/list
 │   ├── team.rs          # team list (with cache + lazy org discovery)
 │   ├── auth.rs          # auth login (API token default, --oauth for OAuth 2.0), auth status
 │   ├── init.rs          # Interactive setup (prefetches org metadata + team cache + story points field)
-│   └── project.rs       # project fields (issue types, priorities for a project)
+│   ├── project.rs       # project fields (types, priorities, statuses, CMDB fields)
+│   └── queue.rs         # queue list/view (JSM service desks)
 ├── api/
 │   ├── client.rs        # JiraClient — HTTP methods, auth headers, rate limit retry, 429/401 handling
 │   ├── auth.rs          # OAuth 2.0 flow, API token storage, keychain read/write, token refresh
 │   ├── pagination.rs    # Offset-based (most endpoints) + cursor-based (JQL search)
 │   ├── rate_limit.rs    # Retry-After parsing
+│   ├── assets/          # Assets/CMDB API call implementations
+│   │   ├── workspace.rs     # workspace ID discovery + cache
+│   │   ├── linked.rs        # CMDB field discovery, asset extraction/enrichment (per-field + JSON)
+│   │   ├── objects.rs       # AQL search, get object, resolve key
+│   │   └── tickets.rs       # connected tickets
 │   └── jira/            # Jira-specific API call implementations (one file per resource)
 │       ├── issues.rs    # search, get, create, edit, list comments
 │       ├── boards.rs    # list boards, get board config
 │       ├── sprints.rs   # list sprints, get sprint issues
-│       ├── fields.rs    # list fields, story points field discovery
+│       ├── fields.rs    # list fields, story points + CMDB field discovery
+│       ├── statuses.rs  # get all statuses (global, not project-scoped)
 │       ├── links.rs     # create/delete issue links, list link types
 │       ├── teams.rs     # org metadata (GraphQL), list teams
 │       ├── worklogs.rs  # add/list worklogs
 │       ├── projects.rs  # project details
-│       └── users.rs     # current user, assignable users
+│       └── users.rs     # current user, user search, assignable users
+│   ├── jsm/             # JSM-specific API call implementations
+│   │   ├── servicedesks.rs  # list service desks, project meta orchestration
+│   │   └── queues.rs        # list queues, get queue issues
+├── types/assets/        # Serde structs for Assets API responses (AssetObject, ConnectedTicket, LinkedAsset, etc.)
 ├── types/jira/          # Serde structs for API responses (Issue, Board, Sprint, User, Team, etc.)
-├── cache.rs             # XDG cache (~/.cache/jr/) — team list with 7-day TTL
+├── types/jsm/           # Serde structs for JSM API responses (ServiceDesk, Queue, etc.)
+├── cache.rs             # XDG cache (~/.cache/jr/) — team list, project meta, workspace ID (all 7-day TTL)
 ├── config.rs            # Global (~/.config/jr/config.toml) + per-project (.jr.toml), figment layering
 ├── output.rs            # Table (comfy-table) and JSON formatting
 ├── adf.rs               # Atlassian Document Format: text→ADF, markdown→ADF, ADF→text
 ├── duration.rs          # Worklog duration parser (2h, 1h30m, 1d, 1w)
+├── lib.rs               # Crate root (re-exports for integration tests)
+├── jql.rs               # JQL utilities: escaping, validation, asset clause builder
 ├── partial_match.rs     # Case-insensitive substring matching with disambiguation
 └── error.rs             # JrError enum with exit codes (0/1/2/64/78/130)
 ```
@@ -93,8 +109,7 @@ See `docs/adr/` for detailed rationale:
 
 - **v1 design spec:** `docs/superpowers/specs/2026-03-21-jr-jira-cli-design.md`
 - **v1 implementation plan:** `docs/superpowers/plans/2026-03-21-jr-implementation.md`
-- **Feature specs (post-v1):** `docs/specs/{feature-name}.md`
-- **Team assignment spec:** `docs/specs/team-assignment.md`
+- **Feature specs (post-v1):** `docs/specs/` — one spec per feature, read before implementing
 
 When adding a new feature:
 1. Read this file
@@ -102,6 +117,13 @@ When adding a new feature:
 3. Read relevant ADRs
 4. Create a feature spec in `docs/specs/` before implementing
 5. Follow TDD — write tests first
+
+## Gotchas
+
+- **Cache format changes:** `~/.cache/jr/cmdb_fields.json` stores `(id, name)` tuples. Old format (ID-only) causes deserialization failure, handled as cache miss. If you change cache structs, old caches auto-expire (7-day TTL) or fail gracefully.
+- **`list.rs` is large (~970 lines):** Contains both `handle_list` and `handle_view` plus all JQL composition logic. If modifying, read the full function you're changing — context matters.
+- **`aqlFunction()` not `assetsQuery()`:** The Jira Assets JQL function is `aqlFunction()`. It requires the human-readable field **name**, not `cf[ID]` or `customfield_NNNNN`. AQL attribute for object key is `Key` (not `objectKey` — that's the JSON field name).
+- **Status category colors are fixed:** `green` = Done, `yellow` = In Progress, `blue-gray` = To Do. These mappings are hardcoded in Jira Cloud across all instances. Used by `--open` filtering.
 
 ## AI Agent Notes
 
