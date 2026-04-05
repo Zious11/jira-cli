@@ -5,6 +5,29 @@ use anyhow::Result;
 use serde::Deserialize;
 use serde_json::Value;
 
+/// Default fields requested when fetching issues (search and get).
+///
+/// Both `search_issues` and `get_issue` use this list so they stay in sync.
+/// Callers can request additional fields via `extra_fields` parameters.
+const BASE_ISSUE_FIELDS: &[&str] = &[
+    "summary",
+    "status",
+    "issuetype",
+    "priority",
+    "assignee",
+    "reporter",
+    "project",
+    "description",
+    "created",
+    "updated",
+    "resolution",
+    "components",
+    "fixVersions",
+    "labels",
+    "parent",
+    "issuelinks",
+];
+
 /// Result of a paginated issue search, including whether more results exist.
 pub struct SearchResult {
     pub issues: Vec<Issue>,
@@ -28,24 +51,7 @@ impl JiraClient {
         let mut all_issues: Vec<Issue> = Vec::new();
         let mut next_page_token: Option<String> = None;
 
-        let mut fields = vec![
-            "summary",
-            "status",
-            "issuetype",
-            "priority",
-            "assignee",
-            "reporter",
-            "project",
-            "description",
-            "created",
-            "updated",
-            "resolution",
-            "components",
-            "fixVersions",
-            "labels",
-            "parent",
-            "issuelinks",
-        ];
+        let mut fields = BASE_ISSUE_FIELDS.to_vec();
         fields.extend_from_slice(extra_fields);
 
         let mut more_available = false;
@@ -102,16 +108,12 @@ impl JiraClient {
 
     /// Get a single issue by key.
     pub async fn get_issue(&self, key: &str, extra_fields: &[&str]) -> Result<Issue> {
-        let mut fields =
-            "summary,status,issuetype,priority,assignee,reporter,project,description,labels,parent,issuelinks,created,updated,resolution,components,fixVersions".to_string();
-        for f in extra_fields {
-            fields.push(',');
-            fields.push_str(f);
-        }
+        let mut fields: Vec<&str> = BASE_ISSUE_FIELDS.to_vec();
+        fields.extend_from_slice(extra_fields);
         let path = format!(
             "/rest/api/3/issue/{}?fields={}",
             urlencoding::encode(key),
-            fields
+            fields.join(",")
         );
         self.get(&path).await
     }
