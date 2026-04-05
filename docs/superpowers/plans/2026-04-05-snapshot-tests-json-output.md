@@ -175,11 +175,11 @@ Run: `cargo test --lib json_output`
 
 Expected: All 9 tests **FAIL** — this is expected on first run. insta writes `.snap.new` files to `src/cli/issue/snapshots/` but does not auto-accept them.
 
-Accept the new snapshots:
+Accept the new snapshots (requires `cargo-insta` — install with `cargo install cargo-insta` if not present):
 
-Run: `cargo insta accept`
+Run: `cargo insta test --accept --lib -- json_output`
 
-(If `cargo-insta` is not installed, use: `INSTA_UPDATE=always cargo test --lib json_output`)
+This runs the tests and auto-accepts all new snapshots in one step.
 
 Verify snapshots exist:
 
@@ -187,7 +187,7 @@ Run: `ls src/cli/issue/snapshots/`
 
 Expected: 9 `.snap` files like `jr__cli__issue__json_output__tests__test_move_response_changed.snap`.
 
-Re-run to confirm tests pass with accepted snapshots:
+Confirm tests now pass cleanly:
 
 Run: `cargo test --lib json_output`
 
@@ -528,13 +528,11 @@ Expected: The 2 new snapshot tests **FAIL** (first run, no `.snap` files yet). E
 
 Accept the new snapshots:
 
-Run: `cargo insta accept`
-
-(If `cargo-insta` is not installed, use: `INSTA_UPDATE=always cargo test --lib sprint`)
+Run: `cargo insta test --accept --lib -- sprint`
 
 Verify: `ls src/cli/snapshots/` should show 2 new `.snap` files.
 
-Re-run to confirm:
+Confirm tests pass cleanly:
 
 Run: `cargo test --lib sprint`
 
