@@ -32,7 +32,7 @@ Handler tests require async runtime + wiremock mocks for every test. The JSON bu
 
 ### Modified files
 
-- `src/cli/issue/mod.rs` — Add `pub(crate) mod json_output;`
+- `src/cli/issue/mod.rs` — Add `mod json_output;`
 - `src/cli/issue/workflow.rs` — Replace inline `json!()` in `handle_move` and `handle_assign` with calls to `json_output::*`
 - `src/cli/issue/create.rs` — Replace inline `json!()` in `handle_edit` with call to `json_output::edit_response`
 - `src/cli/issue/links.rs` — Replace inline `json!()` in `handle_link` and `handle_unlink` with calls to `json_output::*`

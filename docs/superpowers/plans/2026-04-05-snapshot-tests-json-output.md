@@ -15,7 +15,7 @@
 | File | Role | Action |
 |------|------|--------|
 | `src/cli/issue/json_output.rs` | Builder functions for issue command JSON responses + snapshot tests | Create |
-| `src/cli/issue/mod.rs` | Issue module declarations | Modify: add `pub(crate) mod json_output;` |
+| `src/cli/issue/mod.rs` | Issue module declarations | Modify: add `mod json_output;` |
 | `src/cli/issue/workflow.rs` | Move + assign handlers | Modify: replace inline `json!()` with builder calls |
 | `src/cli/issue/create.rs` | Edit handler | Modify: replace inline `json!()` with builder call |
 | `src/cli/issue/links.rs` | Link + unlink handlers | Modify: replace inline `json!()` with builder calls |
@@ -156,14 +156,14 @@ mod tests {
 
 - [ ] **Step 2: Add the module declaration to `src/cli/issue/mod.rs`**
 
-In `src/cli/issue/mod.rs`, add `pub(crate) mod json_output;` after the existing module declarations. The top of the file should become:
+In `src/cli/issue/mod.rs`, add `mod json_output;` after the existing module declarations. The top of the file should become:
 
 ```rust
 mod assets;
 mod create;
 mod format;
 mod helpers;
-pub(crate) mod json_output;
+mod json_output;
 mod links;
 mod list;
 mod workflow;
@@ -185,7 +185,7 @@ Verify snapshots exist:
 
 Run: `ls src/cli/issue/snapshots/`
 
-Expected: 9 `.snap` files like `jr__cli__issue__json_output__tests__test_move_response_changed.snap`.
+Expected: 9 `.snap` files like `jr__cli__issue__json_output__tests__move_response_changed.snap`.
 
 Confirm tests now pass cleanly:
 
