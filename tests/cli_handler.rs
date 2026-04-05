@@ -321,3 +321,143 @@ async fn test_handler_create_basic() {
         .stdout(predicate::str::contains("\"key\": \"HDL-102\""))
         .stdout(predicate::str::contains("\"url\":"));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_handler_assign_to_me() {
+    let server = MockServer::start().await;
+
+    // This test covers the explicit `--to me` keyword path (resolve_assignee → is_me_keyword).
+    // test_handler_assign_self covers the no-flag default path (handler calls get_myself directly).
+
+    // Mock GET myself — resolve_assignee() detects "me" keyword via is_me_keyword() and calls get_myself()
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/myself"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(common::fixtures::user_response()))
+        .mount(&server)
+        .await;
+
+    // Mock GET issue — currently unassigned
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/HDL-6"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_response_with_assignee("HDL-6", "Assign to me test", None),
+        ))
+        .mount(&server)
+        .await;
+
+    // Mock PUT assignee
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/HDL-6/assignee"))
+        .and(body_partial_json(serde_json::json!({
+            "accountId": "abc123"
+        })))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    jr_cmd(&server.uri())
+        .args(["issue", "assign", "HDL-6", "--to", "me"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"changed\": true"))
+        .stdout(predicate::str::contains("\"key\": \"HDL-6\""))
+        .stdout(predicate::str::contains("\"assignee\": \"Test User\""))
+        .stdout(predicate::str::contains(
+            "\"assignee_account_id\": \"abc123\"",
+        ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_handler_create_to_me() {
+    let server = MockServer::start().await;
+
+    // Mock GET myself — resolve_assignee_by_project() detects "me" keyword via is_me_keyword() and calls get_myself()
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/myself"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(common::fixtures::user_response()))
+        .mount(&server)
+        .await;
+
+    // Mock POST create issue — verify "me" keyword resolves to accountId via get_myself()
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": {
+                "project": {"key": "HDL"},
+                "issuetype": {"name": "Task"},
+                "summary": "Created with --to me",
+                "assignee": {"accountId": "abc123"}
+            }
+        })))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .set_body_json(common::fixtures::create_issue_response("HDL-200")),
+        )
+        .mount(&server)
+        .await;
+
+    jr_cmd(&server.uri())
+        .args([
+            "issue",
+            "create",
+            "-p",
+            "HDL",
+            "-t",
+            "Task",
+            "-s",
+            "Created with --to me",
+            "--to",
+            "me",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"key\": \"HDL-200\""))
+        .stdout(predicate::str::contains("\"url\":"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_handler_assign_idempotent_with_name_search() {
+    let server = MockServer::start().await;
+
+    // Mock assignable user search — returns Jane Doe
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/search"))
+        .and(query_param("query", "Jane"))
+        .and(query_param("issueKey", "HDL-7"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::user_search_response(vec![("acc-jane-456", "Jane Doe", true)]),
+        ))
+        .mount(&server)
+        .await;
+
+    // Mock GET issue — already assigned to Jane Doe (same account ID)
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/HDL-7"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_response_with_assignee(
+                "HDL-7",
+                "Already assigned to Jane",
+                Some(("acc-jane-456", "Jane Doe")),
+            ),
+        ))
+        .mount(&server)
+        .await;
+
+    // PUT assignee should NOT be called — already assigned to target
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/HDL-7/assignee"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    jr_cmd(&server.uri())
+        .args(["issue", "assign", "HDL-7", "--to", "Jane"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"changed\": false"))
+        .stdout(predicate::str::contains("\"key\": \"HDL-7\""))
+        .stdout(predicate::str::contains(
+            "\"assignee_account_id\": \"acc-jane-456\"",
+        ));
+}
