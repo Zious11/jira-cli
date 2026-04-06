@@ -639,12 +639,7 @@ pub(super) async fn handle_comments(
 
     match output_format {
         OutputFormat::Json => {
-            let headers = if has_visibility {
-                vec!["Author", "Date", "Visibility", "Body"]
-            } else {
-                vec!["Author", "Date", "Body"]
-            };
-            output::print_output(output_format, &headers, &[], &comments)?;
+            output::print_output(output_format, &[], &[], &comments)?;
         }
         OutputFormat::Table => {
             let (headers, rows) = if has_visibility {
