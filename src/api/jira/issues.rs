@@ -190,7 +190,10 @@ impl JiraClient {
                 }
                 None => max_page_size,
             };
-            let path = format!("{}?startAt={}&maxResults={}", base, start_at, page_size);
+            let path = format!(
+                "{}?startAt={}&maxResults={}&expand=properties",
+                base, start_at, page_size
+            );
             let page: OffsetPage<Comment> = self.get(&path).await?;
             let has_more = page.has_more();
             let next = page.next_start();

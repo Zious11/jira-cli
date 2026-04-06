@@ -13,6 +13,7 @@ async fn list_comments_returns_all_comments() {
         .and(path("/rest/api/3/issue/FOO-1/comment"))
         .and(query_param("startAt", "0"))
         .and(query_param("maxResults", "100"))
+        .and(query_param("expand", "properties"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "comments": [
                 {
@@ -51,6 +52,7 @@ async fn list_comments_empty() {
         .and(path("/rest/api/3/issue/FOO-2/comment"))
         .and(query_param("startAt", "0"))
         .and(query_param("maxResults", "100"))
+        .and(query_param("expand", "properties"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "comments": [],
             "startAt": 0,
@@ -74,6 +76,7 @@ async fn list_comments_with_limit() {
         .and(path("/rest/api/3/issue/FOO-3/comment"))
         .and(query_param("startAt", "0"))
         .and(query_param("maxResults", "1"))
+        .and(query_param("expand", "properties"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "comments": [
                 {
@@ -106,6 +109,7 @@ async fn list_comments_paginated() {
         .and(path("/rest/api/3/issue/FOO-4/comment"))
         .and(query_param("startAt", "0"))
         .and(query_param("maxResults", "100"))
+        .and(query_param("expand", "properties"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "comments": [
                 {
@@ -127,6 +131,7 @@ async fn list_comments_paginated() {
         .and(path("/rest/api/3/issue/FOO-4/comment"))
         .and(query_param("startAt", "1"))
         .and(query_param("maxResults", "100"))
+        .and(query_param("expand", "properties"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "comments": [
                 {
