@@ -914,7 +914,7 @@ async fn test_handler_comments_shows_visibility_column_for_jsm() {
                 {
                     "id": "10001",
                     "author": { "accountId": "abc", "displayName": "Agent", "active": true },
-                    "body": { "type": "doc", "version": 1, "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Internal note" }] }] },
+                    "body": { "type": "doc", "version": 1, "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Agent investigation notes" }] }] },
                     "created": "2026-04-05T10:00:00.000+0000",
                     "properties": [{"key": "sd.public.comment", "value": {"internal": true}}]
                 },
@@ -940,6 +940,7 @@ async fn test_handler_comments_shows_visibility_column_for_jsm() {
         .args(["issue", "comments", "HELP-42", "--no-input"])
         .assert()
         .success()
+        .stdout(predicates::prelude::predicate::str::contains("Visibility"))
         .stdout(predicates::prelude::predicate::str::contains("Internal"))
         .stdout(predicates::prelude::predicate::str::contains("External"));
 }
