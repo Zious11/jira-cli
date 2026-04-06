@@ -348,6 +348,9 @@ pub enum IssueCommand {
         /// Read comment from stdin (for piping)
         #[arg(long)]
         stdin: bool,
+        /// Mark comment as internal (agent-only, not visible to customers on JSM projects)
+        #[arg(long)]
+        internal: bool,
     },
     /// List comments on an issue
     Comments {

@@ -390,6 +390,7 @@ pub(super) async fn handle_comment(
         markdown,
         file,
         stdin,
+        internal,
     } = command
     else {
         unreachable!()
@@ -419,7 +420,7 @@ pub(super) async fn handle_comment(
         adf::text_to_adf(&text)
     };
 
-    let comment = client.add_comment(&key, adf_body, false).await?;
+    let comment = client.add_comment(&key, adf_body, internal).await?;
 
     match output_format {
         OutputFormat::Json => {
