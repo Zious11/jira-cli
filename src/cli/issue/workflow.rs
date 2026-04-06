@@ -419,7 +419,7 @@ pub(super) async fn handle_comment(
         adf::text_to_adf(&text)
     };
 
-    let comment = client.add_comment(&key, adf_body).await?;
+    let comment = client.add_comment(&key, adf_body, false).await?;
 
     match output_format {
         OutputFormat::Json => {

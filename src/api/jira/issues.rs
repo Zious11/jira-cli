@@ -156,9 +156,19 @@ impl JiraClient {
     }
 
     /// Add a comment to an issue.
-    pub async fn add_comment(&self, key: &str, body: Value) -> Result<Comment> {
+    ///
+    /// When `internal` is true, sets the `sd.public.comment` entity property
+    /// to mark the comment as internal (agent-only) on JSM projects.
+    /// On non-JSM projects, the property is silently accepted with no effect.
+    pub async fn add_comment(&self, key: &str, body: Value, internal: bool) -> Result<Comment> {
         let path = format!("/rest/api/3/issue/{}/comment", urlencoding::encode(key));
-        let payload = serde_json::json!({ "body": body });
+        let mut payload = serde_json::json!({ "body": body });
+        if internal {
+            payload["properties"] = serde_json::json!([{
+                "key": "sd.public.comment",
+                "value": { "internal": true }
+            }]);
+        }
         self.post(&path, &payload).await
     }
 
