@@ -1164,6 +1164,11 @@ async fn test_handler_api_custom_content_type_overrides_default() {
         content_type_values[0], "application/vnd.atlassian.custom+json",
         "user-supplied Content-Type must override the default"
     );
+    // Defensive: verify application/json is NOT present alongside the custom value
+    assert!(
+        !content_type_values.iter().any(|v| v == "application/json"),
+        "default application/json should have been replaced, got {content_type_values:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1257,4 +1262,50 @@ async fn test_handler_api_stdin_body() {
         .write_stdin(r#"{"from":"stdin"}"#)
         .assert()
         .success();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_handler_api_401_returns_not_authenticated() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/myself"))
+        .respond_with(
+            ResponseTemplate::new(401)
+                .set_body_string(r#"{"errorMessages":["Client must be authenticated"]}"#),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    jr_api_cmd(&server.uri())
+        .args(["api", "/rest/api/3/myself"])
+        .assert()
+        .failure()
+        // 401 → JrError::NotAuthenticated, which has display "Not authenticated..."
+        .stderr(predicate::str::contains("Not authenticated"))
+        // Body is still printed to stdout before the status check
+        .stdout(predicate::str::contains("Client must be authenticated"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_handler_api_stdout_byte_exact() {
+    let server = MockServer::start().await;
+
+    // Deliberately non-pretty-printed JSON to verify raw byte passthrough
+    let exact_body = r#"{"key":"PROJ-1","custom":"no reformatting"}"#;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/myself"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(exact_body))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    jr_api_cmd(&server.uri())
+        .args(["api", "/rest/api/3/myself"])
+        .assert()
+        .success()
+        // Byte-exact: no trailing newline, no pretty-printing
+        .stdout(predicate::eq(exact_body));
 }

@@ -216,11 +216,15 @@ impl JiraClient {
     }
 
     /// Send a pre-built request without parsing non-2xx responses into errors.
-    /// Retries 429 up to MAX_RETRIES times. Returns the raw Response for ANY status.
     ///
-    /// Used by `jr api` (the raw passthrough command) where the caller needs
-    /// the full response body regardless of HTTP status. Auth header is already
-    /// set on the request by `client.request()`.
+    /// Retries 429 up to MAX_RETRIES times using `Retry-After`. Returns the raw
+    /// `Response` for ANY HTTP status (2xx, 4xx, 5xx), including after exhausting
+    /// 429 retries — callers MUST check `response.status()` to detect errors.
+    /// Network-level failures are still returned as `Err(JrError::NetworkError)`.
+    ///
+    /// Used by `jr api` (the raw passthrough command) where the caller needs the
+    /// full response body regardless of HTTP status. Auth header is already set
+    /// on the request by `client.request()`.
     pub async fn send_raw(&self, request: reqwest::Request) -> anyhow::Result<Response> {
         let mut last_response: Option<Response> = None;
 
@@ -373,10 +377,16 @@ impl JiraClient {
 }
 
 /// Extract a human-readable error message from a Jira error response body.
-/// Matches the behavior of the old `parse_error` body handling:
-/// 1. Try `errorMessages` array → join with "; "
-/// 2. Try `message` string
-/// 3. Fall back to the raw body string
+///
+/// Precedence:
+/// 1. Non-empty `errorMessages` array → joined with "; "
+/// 2. `message` string field
+/// 3. Raw body as a string (fallback)
+///
+/// Note: Jira's common validation error format
+/// `{"errorMessages":[],"errors":{"field":"msg"}}` is not parsed — it falls
+/// through to the raw body. Expanding `errors` object support is tracked
+/// as a follow-up enhancement.
 pub fn extract_error_message(body: &[u8]) -> String {
     let body_str = match std::str::from_utf8(body) {
         Ok(s) => s,

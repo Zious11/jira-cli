@@ -123,22 +123,19 @@ pub async fn handle_api(
     header: Vec<String>,
     client: &JiraClient,
 ) -> Result<()> {
-    // 1. Normalize the path
     let normalized_path = normalize_path(&path)?;
 
-    // 2. Resolve the body (reads real stdin in production)
+    // Reads real stdin in production; resolve_body takes impl Read for testing.
     let body = resolve_body(data.as_deref(), std::io::stdin().lock())?;
 
-    // 3. Parse custom headers (rejects Authorization)
     let custom_headers: Vec<(HeaderName, HeaderValue)> = header
         .iter()
         .map(|h| parse_header(h))
         .collect::<Result<Vec<_>>>()?;
 
-    // 4. Build the request using the shared client helper, then .build() to get
-    //    a concrete Request we can modify via headers_mut().insert().
-    //    This avoids RequestBuilder::header()'s append semantics which would
-    //    duplicate Content-Type when the user supplies their own.
+    // Use .build() + headers_mut().insert() for replace semantics, so user
+    // headers (applied last) override any defaults like Content-Type.
+    // RequestBuilder::header() would append and produce duplicates.
     let mut req = client.request(method.into(), &normalized_path).build()?;
 
     if let Some(body_str) = body {
@@ -151,17 +148,15 @@ pub async fn handle_api(
         req.headers_mut().insert(name, value);
     }
 
-    // 5. Send via send_raw — preserves non-2xx responses
     let response = client.send_raw(req).await?;
     let status = response.status();
     let body_bytes = response.bytes().await?;
 
-    // 6. Print response body to stdout (raw bytes, no reformatting).
-    //    Matches gh api behavior: no trailing newline added — preserves
-    //    exact server bytes for file redirection.
+    // Print response body to stdout (raw bytes, no reformatting).
+    // Matches gh api behavior: no trailing newline added — preserves
+    // exact server bytes for file redirection.
     std::io::stdout().write_all(&body_bytes)?;
 
-    // 7. Handle status code
     if status.is_success() {
         Ok(())
     } else if status.as_u16() == 401 {
@@ -256,6 +251,14 @@ mod tests {
         assert!(err.to_string().contains("Authorization"));
         let err = parse_header("AUTHORIZATION: Bearer foo").unwrap_err();
         assert!(err.to_string().contains("Authorization"));
+    }
+
+    #[test]
+    fn test_parse_header_rejects_crlf_injection() {
+        // HTTP header injection via CRLF is a well-known attack vector.
+        // HeaderValue::from_str rejects control characters (visible ASCII only).
+        let err = parse_header("X-Foo: bar\r\nInjected: evil").unwrap_err();
+        assert!(err.to_string().contains("Invalid header value"));
     }
 
     use std::io::Cursor;
