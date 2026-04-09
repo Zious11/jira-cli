@@ -224,9 +224,9 @@ pub async fn send_raw(&self, request: reqwest::Request) -> anyhow::Result<reqwes
 | Header missing `:` | `Header must be in 'Key: Value' format (got: <value>)` | 64 |
 | Header key is empty | `Header key cannot be empty` | 64 |
 | User-supplied `Authorization` header | `Cannot override the Authorization header — auth is managed by jr` | 64 |
-| `@file` does not exist | Propagated from `std::fs::read_to_string` (`No such file or directory`) | 1 |
+| `@file` does not exist | Propagated I/O error from `std::fs::read_to_string` via `JrError::Io` (for example, `No such file or directory`) | 1 |
 | 401 response | `Not authenticated. Run "jr auth login" to connect.` | 2 |
-| Other HTTP error | `Error: <errorMessages or message> (HTTP <status>)` on stderr, body on stdout | 1 |
+| Other HTTP error | `Error: API error (<status>): <errorMessages or message>` on stderr, body on stdout | 1 |
 
 ## Testing
 
@@ -293,9 +293,9 @@ assert_eq!(content_type_count, 1);
 
 ### Stdin Testing Approach
 
-The `resolve_body` function takes `stdin: impl Read` so unit tests pass a `Cursor` with synthetic content. `handle_api()` calls `std::io::stdin().lock()` internally and passes the result to `resolve_body()` — this matches the existing codebase pattern (`src/cli/issue/workflow.rs:402`, `src/cli/issue/create.rs:84`) where handlers call `stdin()` directly without dependency injection.
+The `resolve_body` function takes `stdin: impl Read` so unit tests can pass a `Cursor` with synthetic content. `handle_api()` calls `std::io::stdin().lock()` internally and passes the result to `resolve_body()` — this matches the existing codebase pattern (`src/cli/issue/workflow.rs:402`, `src/cli/issue/create.rs:84`) where handlers call `stdin()` directly without dependency injection.
 
-Handler tests do NOT cover the `@-` stdin path (since the handler reads real stdin); that path is fully covered by the `test_resolve_body_at_dash_reads_stdin` unit test. No subprocess tests needed.
+This PR uses layered coverage for stdin behavior: unit tests exercise `resolve_body()` directly (including `@-`) with synthetic readers, and `tests/cli_handler.rs` also adds subprocess coverage via `Command::cargo_bin("jr")` to validate the real CLI entrypoint. That subprocess coverage includes an `@-` stdin case, so the end-to-end stdin path is tested as implemented, not just the helper in isolation.
 
 ### Test Data
 

@@ -39,7 +39,8 @@ impl From<HttpMethod> for Method {
 /// - Reject absolute URLs (starting with `http://` or `https://`)
 pub fn normalize_path(raw: &str) -> Result<String> {
     let trimmed = raw.trim();
-    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
         return Err(JrError::UserError(
             "Use a path like /rest/api/3/... — do not include the instance URL".into(),
         )
@@ -202,6 +203,19 @@ mod tests {
     #[test]
     fn test_normalize_path_rejects_https_url() {
         let err = normalize_path("https://site.atlassian.net/rest/api/3/myself").unwrap_err();
+        assert!(err.to_string().contains("do not include the instance URL"));
+    }
+
+    #[test]
+    fn test_normalize_path_rejects_uppercase_https() {
+        // RFC 3986: URL schemes are case-insensitive.
+        let err = normalize_path("HTTPS://site.atlassian.net/rest/api/3/myself").unwrap_err();
+        assert!(err.to_string().contains("do not include the instance URL"));
+    }
+
+    #[test]
+    fn test_normalize_path_rejects_mixed_case_http() {
+        let err = normalize_path("Http://site.atlassian.net/foo").unwrap_err();
         assert!(err.to_string().contains("do not include the instance URL"));
     }
 

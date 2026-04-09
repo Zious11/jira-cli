@@ -226,12 +226,13 @@ impl JiraClient {
     /// full response body regardless of HTTP status. Auth header is already set
     /// on the request by `client.request()`.
     pub async fn send_raw(&self, request: reqwest::Request) -> anyhow::Result<Response> {
-        let mut last_response: Option<Response> = None;
-
         for attempt in 0..=MAX_RETRIES {
-            let req = request
-                .try_clone()
-                .expect("request should be cloneable (no streaming body)");
+            let req = request.try_clone().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "request cannot be retried because it is not cloneable \
+                     (for example, it may use a streaming body)"
+                )
+            })?;
 
             if self.verbose {
                 eprintln!("[verbose] {} {}", req.method(), req.url());
@@ -258,8 +259,9 @@ impl JiraClient {
                         MAX_RETRIES
                     );
                 }
+                // Drop the 429 response before sleeping so its body isn't held open
+                drop(response);
                 tokio::time::sleep(Duration::from_secs(delay)).await;
-                last_response = Some(response);
                 continue;
             }
 
@@ -267,8 +269,7 @@ impl JiraClient {
             return Ok(response);
         }
 
-        // Exhausted retries — return the last 429 response to the caller
-        Ok(last_response.expect("retry loop always sets last_response on 429"))
+        unreachable!("loop iterates 0..=MAX_RETRIES; final iteration returns")
     }
 
     /// Parse an error response into a `JrError`.
