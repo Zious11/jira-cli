@@ -20,6 +20,16 @@ fn jr_cmd(server_uri: &str) -> Command {
     cmd
 }
 
+/// Build a `jr` command pre-configured for handler-level testing of `jr api`.
+/// Unlike `jr_cmd`, does not set `--output json` since `jr api` ignores it.
+fn jr_api_cmd(server_uri: &str) -> Command {
+    let mut cmd = Command::cargo_bin("jr").unwrap();
+    cmd.env("JR_BASE_URL", server_uri)
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .arg("--no-input");
+    cmd
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_handler_assign_with_account_id() {
     let server = MockServer::start().await;
@@ -992,4 +1002,259 @@ async fn test_handler_comments_hides_visibility_column_for_non_jsm() {
         !stdout.contains("Internal"),
         "Non-JSM comments should not show Internal, got: {stdout}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_handler_api_get_success() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/myself"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"accountId":"abc-123","displayName":"Test User"}"#),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    jr_api_cmd(&server.uri())
+        .args(["api", "/rest/api/3/myself"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"accountId\":\"abc-123\""))
+        .stdout(predicate::str::contains("\"displayName\":\"Test User\""));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_handler_api_post_with_inline_data() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue"))
+        .and(body_partial_json(
+            serde_json::json!({"fields": {"summary": "Test"}}),
+        ))
+        .respond_with(ResponseTemplate::new(201).set_body_string(r#"{"key":"PROJ-1"}"#))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    jr_api_cmd(&server.uri())
+        .args([
+            "api",
+            "/rest/api/3/issue",
+            "--method",
+            "post",
+            "--data",
+            r#"{"fields":{"summary":"Test"}}"#,
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"key\":\"PROJ-1\""));
+
+    // Verify exactly one Content-Type header on the received request
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    let content_type_count = requests[0]
+        .headers
+        .iter()
+        .filter(|(name, _)| name.as_str().eq_ignore_ascii_case("content-type"))
+        .count();
+    assert_eq!(
+        content_type_count, 1,
+        "expected exactly one Content-Type header, got {content_type_count}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_handler_api_put_with_method_flag() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/PROJ-1/assignee"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    jr_api_cmd(&server.uri())
+        .args([
+            "api",
+            "/rest/api/3/issue/PROJ-1/assignee",
+            "-X",
+            "put",
+            "-d",
+            r#"{"accountId":"abc-123"}"#,
+        ])
+        .assert()
+        .success();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_handler_api_custom_header_passes_through() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk/1/organization"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"values":[]}"#))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    jr_api_cmd(&server.uri())
+        .args([
+            "api",
+            "/rest/servicedeskapi/servicedesk/1/organization",
+            "-H",
+            "X-ExperimentalApi: opt-in",
+        ])
+        .assert()
+        .success();
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    let has_experimental_header = requests[0].headers.iter().any(|(name, value)| {
+        name.as_str().eq_ignore_ascii_case("x-experimentalapi") && value.as_bytes() == b"opt-in"
+    });
+    assert!(has_experimental_header, "X-ExperimentalApi header missing");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_handler_api_custom_content_type_overrides_default() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/thing"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Note: body must still be valid JSON (we validate at resolve_body stage).
+    // The Content-Type override is tested separately from the JSON validation.
+    jr_api_cmd(&server.uri())
+        .args([
+            "api",
+            "/rest/api/3/thing",
+            "-X",
+            "post",
+            "-d",
+            r#"{"ok":true}"#,
+            "-H",
+            "Content-Type: application/vnd.atlassian.custom+json",
+        ])
+        .assert()
+        .success();
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    let content_type_values: Vec<String> = requests[0]
+        .headers
+        .iter()
+        .filter(|(name, _)| name.as_str().eq_ignore_ascii_case("content-type"))
+        .map(|(_, value)| String::from_utf8_lossy(value.as_bytes()).to_string())
+        .collect();
+    assert_eq!(
+        content_type_values.len(),
+        1,
+        "expected exactly one Content-Type, got {content_type_values:?}"
+    );
+    assert_eq!(
+        content_type_values[0], "application/vnd.atlassian.custom+json",
+        "user-supplied Content-Type must override the default"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_handler_api_error_response_body_to_stdout() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/MISSING-1"))
+        .respond_with(
+            ResponseTemplate::new(404)
+                .set_body_string(r#"{"errorMessages":["Issue does not exist"],"errors":{}}"#),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    jr_api_cmd(&server.uri())
+        .args(["api", "/rest/api/3/issue/MISSING-1"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("Issue does not exist"))
+        // main.rs prints "Error: {e}" where e is JrError::ApiError with Display
+        // "API error ({status}): {message}" — stderr contains "(404)" and the extracted message
+        .stderr(predicate::str::contains("(404)"))
+        .stderr(predicate::str::contains("Issue does not exist"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_handler_api_path_normalization_missing_slash() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/myself"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"ok":true}"#))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // No leading slash — should still work
+    jr_api_cmd(&server.uri())
+        .args(["api", "rest/api/3/myself"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"ok\":true"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_handler_api_rejects_absolute_url() {
+    let server = MockServer::start().await;
+    // No mock defined — if the handler tries to hit the network, it will fail
+
+    jr_api_cmd(&server.uri())
+        .args(["api", "https://example.atlassian.net/rest/api/3/myself"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("do not include the instance URL"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_handler_api_rejects_authorization_header() {
+    let server = MockServer::start().await;
+
+    jr_api_cmd(&server.uri())
+        .args([
+            "api",
+            "/rest/api/3/myself",
+            "-H",
+            "Authorization: Bearer pwned",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Cannot override the Authorization header",
+        ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_handler_api_stdin_body() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/thing"))
+        .and(body_partial_json(serde_json::json!({"from":"stdin"})))
+        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    jr_api_cmd(&server.uri())
+        .args(["api", "/rest/api/3/thing", "-X", "post", "-d", "@-"])
+        .write_stdin(r#"{"from":"stdin"}"#)
+        .assert()
+        .success();
 }
