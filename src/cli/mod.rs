@@ -97,6 +97,23 @@ pub enum Command {
         #[command(subcommand)]
         command: QueueCommand,
     },
+    /// Make a raw authenticated HTTP request to the Jira REST API.
+    Api {
+        /// API path (leading slash optional). Example: /rest/api/3/myself
+        path: String,
+
+        /// HTTP method
+        #[arg(short = 'X', long, value_enum, default_value_t = api::HttpMethod::Get)]
+        method: api::HttpMethod,
+
+        /// Request body: inline JSON, @file to read from a file, or @- to read from stdin
+        #[arg(short = 'd', long)]
+        data: Option<String>,
+
+        /// Custom header in "Key: Value" format (repeatable)
+        #[arg(short = 'H', long = "header")]
+        header: Vec<String>,
+    },
     /// Generate shell completions
     Completion {
         /// Shell to generate completions for

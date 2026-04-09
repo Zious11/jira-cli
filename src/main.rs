@@ -170,6 +170,16 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 )
                 .await
             }
+            cli::Command::Api {
+                path,
+                method,
+                data,
+                header,
+            } => {
+                let config = config::Config::load()?;
+                let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
+                cli::api::handle_api(path, method, data, header, &client).await
+            }
         }
     };
 

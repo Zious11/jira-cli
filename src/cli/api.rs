@@ -4,6 +4,7 @@
 //! stored credentials, modeled on `gh api`. Supports method override,
 //! request body (inline / file / stdin), and custom headers.
 
+use crate::api::client::JiraClient;
 use crate::error::JrError;
 use anyhow::Result;
 use clap::ValueEnum;
@@ -109,6 +110,21 @@ pub fn resolve_body<R: Read>(arg: Option<&str>, mut stdin: R) -> Result<Option<S
         .map_err(|e| JrError::UserError(format!("Request body is not valid JSON: {e}")))?;
 
     Ok(Some(body))
+}
+
+/// Main entry point for `jr api`.
+///
+/// Takes the parsed CLI arguments, performs validation, builds an HTTP request,
+/// sends it via `JiraClient::send_raw`, and prints the response body to stdout.
+pub async fn handle_api(
+    _path: String,
+    _method: HttpMethod,
+    _data: Option<String>,
+    _header: Vec<String>,
+    _client: &JiraClient,
+) -> Result<()> {
+    // Implemented in Task 7
+    Ok(())
 }
 
 #[cfg(test)]
