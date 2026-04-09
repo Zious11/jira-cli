@@ -1309,7 +1309,10 @@ async fn test_handler_api_error_response_body_to_stdout() {
         .assert()
         .failure()
         .stdout(predicate::str::contains("Issue does not exist"))
-        .stderr(predicate::str::contains("HTTP 404"));
+        // main.rs prints "Error: {e}" where e is JrError::ApiError with Display
+        // "API error ({status}): {message}" — stderr contains "(404)" and the extracted message
+        .stderr(predicate::str::contains("(404)"))
+        .stderr(predicate::str::contains("Issue does not exist"));
 }
 ```
 
