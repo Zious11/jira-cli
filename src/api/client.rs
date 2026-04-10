@@ -381,14 +381,16 @@ impl JiraClient {
 ///
 /// Precedence:
 /// 1. Non-empty `errorMessages` array → joined with "; "
-/// 2. `message` string field
-/// 3. Raw body as a string (fallback)
-///
-/// Note: Jira's common validation error format
-/// `{"errorMessages":[],"errors":{"field":"msg"}}` is not parsed — it falls
-/// through to the raw body. Expanding `errors` object support is tracked
-/// as a follow-up enhancement.
+/// 2. Non-empty `errors` object (field-level validation) → "field: msg; field2: msg2"
+/// 3. `message` string field
+/// 4. `errorMessage` string field (singular, seen in some JSM endpoints)
+/// 5. Empty body → "<empty response body>"
+/// 6. Raw body as a string (fallback)
 pub fn extract_error_message(body: &[u8]) -> String {
+    if body.is_empty() {
+        return "<empty response body>".to_string();
+    }
+
     let body_str = match std::str::from_utf8(body) {
         Ok(s) => s,
         Err(_) => return String::from_utf8_lossy(body).into_owned(),
@@ -401,7 +403,20 @@ pub fn extract_error_message(body: &[u8]) -> String {
                 return messages.join("; ");
             }
         }
+        if let Some(errors) = json.get("errors").and_then(|v| v.as_object()) {
+            if !errors.is_empty() {
+                let mut pairs: Vec<String> = errors
+                    .iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| format!("{k}: {s}")))
+                    .collect();
+                pairs.sort();
+                return pairs.join("; ");
+            }
+        }
         if let Some(msg) = json.get("message").and_then(|v| v.as_str()) {
+            return msg.to_string();
+        }
+        if let Some(msg) = json.get("errorMessage").and_then(|v| v.as_str()) {
             return msg.to_string();
         }
     }

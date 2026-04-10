@@ -308,7 +308,7 @@ All JSON is synthetic. No real project keys, org IDs, account IDs, or instance U
 - **Body size:** The entire body is read into memory before sending. Not suitable for very large payloads (multi-MB uploads) — but Jira's standard API is not typically used for large payloads.
 - **Streaming responses:** `jr api` reads the entire response into memory before printing. Fine for JSON payloads; not suitable for streaming endpoints (Jira has none in practice).
 - **`@` prefix in filenames:** A filename literally starting with `@` must be passed as `./@file.json` to avoid being interpreted as a nested reference. Matches curl's behavior.
-- **Error message extraction is incomplete (pre-existing):** `extract_error_message` preserves the existing `parse_error` behavior — it handles `errorMessages` array and `message` string but not `errorMessage` (singular JSM field), `errors` object (field-level validation), or `status-code` + `message` format. Expanding format coverage is tracked as a follow-up enhancement, not in scope for this PR.
+- **Error message extraction:** `extract_error_message` now handles `errorMessages` array, `errors` object (field-level validation), `message` string, `errorMessage` singular, and empty bodies. See #171.
 
 ## Out of Scope
 
