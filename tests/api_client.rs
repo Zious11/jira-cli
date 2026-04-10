@@ -130,15 +130,7 @@ fn test_extract_error_message_errors_object_multiple_fields() {
     let body =
         br#"{"errorMessages":[],"errors":{"summary":"is required","priority":"is required"}}"#;
     let result = extract_error_message(body);
-    // Both fields present, joined with "; " (order may vary due to JSON object)
-    assert!(
-        result.contains("summary: is required"),
-        "expected 'summary: is required' in '{result}'"
-    );
-    assert!(
-        result.contains("priority: is required"),
-        "expected 'priority: is required' in '{result}'"
-    );
+    assert_eq!(result, "priority: is required; summary: is required");
 }
 
 #[test]

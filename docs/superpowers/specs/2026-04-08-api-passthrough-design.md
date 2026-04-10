@@ -289,7 +289,7 @@ assert_eq!(content_type_count, 1);
 | `test_extract_error_message_from_error_messages` | `{"errorMessages":["foo","bar"]}` → `"foo; bar"` |
 | `test_extract_error_message_from_message_field` | `{"message":"foo"}` → `"foo"` |
 | `test_extract_error_message_from_plain_text` | `"not json"` → `"not json"` (fallback) |
-| `test_extract_error_message_from_empty_body` | `""` → `""` (fallback) |
+| `test_extract_error_message_from_empty_body` | `""` → `"<empty response body>"` |
 
 ### Stdin Testing Approach
 
