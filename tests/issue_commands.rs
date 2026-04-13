@@ -1214,14 +1214,13 @@ async fn test_move_by_transition_name() {
         .unwrap();
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         output.status.success(),
         "Expected success, stderr: {stderr}"
     );
     assert!(
-        stdout.contains("Moved FOO-1"),
-        "Expected move confirmation in stdout: {stdout}"
+        stderr.contains("Moved FOO-1"),
+        "Expected move confirmation in stderr: {stderr}"
     );
 }
 
@@ -1274,14 +1273,13 @@ async fn test_move_by_status_name() {
         .unwrap();
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         output.status.success(),
         "Expected success, stderr: {stderr}"
     );
     assert!(
-        stdout.contains("Moved FOO-1"),
-        "Expected move confirmation in stdout: {stdout}"
+        stderr.contains("Moved FOO-1"),
+        "Expected move confirmation in stderr: {stderr}"
     );
 }
 
@@ -1334,14 +1332,13 @@ async fn test_move_dedup_same_transition_and_status_name() {
         .unwrap();
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         output.status.success(),
         "Expected success, stderr: {stderr}"
     );
     assert!(
-        stdout.contains("Moved FOO-1"),
-        "Expected move confirmation in stdout: {stdout}"
+        stderr.contains("Moved FOO-1"),
+        "Expected move confirmation in stderr: {stderr}"
     );
 }
 
@@ -1490,14 +1487,13 @@ async fn test_move_idempotent_with_status_name() {
         .unwrap();
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         output.status.success(),
         "Expected success (idempotent), stderr: {stderr}"
     );
     assert!(
-        stdout.contains("already in status"),
-        "Expected idempotent message in stdout: {stdout}"
+        stderr.contains("already in status"),
+        "Expected idempotent message in stderr: {stderr}"
     );
 }
 
@@ -1546,14 +1542,13 @@ async fn test_move_idempotent_with_transition_name() {
         .unwrap();
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         output.status.success(),
         "Expected success (idempotent via transition name), stderr: {stderr}"
     );
     assert!(
-        stdout.contains("already in status"),
-        "Expected idempotent message in stdout: {stdout}"
+        stderr.contains("already in status"),
+        "Expected idempotent message in stderr: {stderr}"
     );
 }
 

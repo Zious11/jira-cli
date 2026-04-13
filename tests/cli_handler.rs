@@ -1380,3 +1380,35 @@ async fn test_send_warns_on_429_retry_exhaustion() {
         .stderr(predicate::str::contains("warning: rate limited by Jira"))
         .stderr(predicate::str::contains("3 retries"));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_create_table_mode_outputs_to_stderr() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue"))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .set_body_json(common::fixtures::create_issue_response("HDL-300")),
+        )
+        .mount(&server)
+        .await;
+
+    // Use jr_api_cmd (no --output json) to test Table mode
+    jr_api_cmd(&server.uri())
+        .args([
+            "issue",
+            "create",
+            "-p",
+            "HDL",
+            "-t",
+            "Task",
+            "-s",
+            "Table mode test",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("Created issue HDL-300"))
+        .stderr(predicate::str::contains("/browse/HDL-300"));
+}

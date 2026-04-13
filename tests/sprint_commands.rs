@@ -254,10 +254,10 @@ async fn sprint_add_with_sprint_id() {
         "Expected success, got: {:?}",
         output
     );
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stdout.contains("Added 2 issue(s) to sprint 100"),
-        "Expected success message, got: {stdout}"
+        stderr.contains("Added 2 issue(s) to sprint 100"),
+        "Expected success message, got: {stderr}"
     );
 }
 
@@ -320,10 +320,10 @@ async fn sprint_remove_moves_to_backlog() {
         "Expected success, got: {:?}",
         output
     );
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stdout.contains("Moved 2 issue(s) to backlog"),
-        "Expected success message, got: {stdout}"
+        stderr.contains("Moved 2 issue(s) to backlog"),
+        "Expected success message, got: {stderr}"
     );
 }
 
@@ -386,9 +386,9 @@ async fn sprint_add_with_current_flag() {
         "Expected success, got: {:?}",
         output
     );
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stdout.contains("Added 2 issue(s) to sprint 100"),
-        "Expected success message, got: {stdout}"
+        stderr.contains("Added 2 issue(s) to sprint 100"),
+        "Expected success message, got: {stderr}"
     );
 }

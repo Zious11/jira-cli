@@ -43,7 +43,7 @@ pub fn print_output<T: Serialize>(
 }
 
 pub fn print_success(msg: &str) {
-    println!("{}", msg.green());
+    eprintln!("{}", msg.green());
 }
 
 pub fn print_error(msg: &str) {

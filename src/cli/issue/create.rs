@@ -151,7 +151,7 @@ pub(super) async fn handle_create(
         }
         OutputFormat::Table => {
             output::print_success(&format!("Created issue {}", response.key));
-            println!("{}", browse_url);
+            eprintln!("{}", browse_url);
         }
     }
 
