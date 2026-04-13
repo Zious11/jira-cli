@@ -206,7 +206,7 @@ impl JiraClient {
                 );
             }
 
-            // For non-429 errors, parse and return the error
+            // Parse and return any error response (including 429 after exhausting retries)
             if response.status().is_client_error() || response.status().is_server_error() {
                 return Err(Self::parse_error(response).await);
             }
