@@ -7,7 +7,7 @@ use crate::config::{
 use crate::{api, output};
 
 pub async fn handle() -> Result<()> {
-    println!("Setting up jr — Jira CLI\n");
+    eprintln!("Setting up jr — Jira CLI\n");
 
     // Step 1: Instance URL
     let url: String = Input::new()
@@ -66,7 +66,7 @@ pub async fn handle() -> Result<()> {
     if setup_project {
         let boards = client.list_boards(None, None).await?;
         if boards.is_empty() {
-            println!("No boards found. You can configure .jr.toml manually.");
+            eprintln!("No boards found. You can configure .jr.toml manually.");
         } else {
             let board_names: Vec<String> = boards
                 .iter()

@@ -18,15 +18,15 @@ pub async fn login_token() -> Result<()> {
         .context("failed to read API token")?;
 
     auth::store_api_token(&email, &token)?;
-    println!("Credentials stored in keychain.");
+    eprintln!("Credentials stored in keychain.");
     Ok(())
 }
 
 /// Run the OAuth 2.0 (3LO) login flow and persist site configuration.
 /// Prompts the user for their own OAuth app credentials.
 pub async fn login_oauth() -> Result<()> {
-    println!("OAuth 2.0 requires your own Atlassian OAuth app.");
-    println!("Create one at: https://developer.atlassian.com/console/myapps/\n");
+    eprintln!("OAuth 2.0 requires your own Atlassian OAuth app.");
+    eprintln!("Create one at: https://developer.atlassian.com/console/myapps/\n");
 
     let client_id: String = Input::new()
         .with_prompt("OAuth Client ID")
