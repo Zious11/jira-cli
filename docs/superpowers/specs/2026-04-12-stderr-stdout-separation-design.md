@@ -39,6 +39,7 @@ Five additional `println!` calls are human status messages, not data:
 | `auth status` output (Instance, Auth method, Credentials) | Command's primary data output, not a status message |
 | `project fields` output | Data |
 | `"No results found."` in `print_output` | Empty data result; scripts expect `cmd \| wc -l` to return 0 |
+| `open --url-only` URL | Data output — the command's sole purpose is to emit the URL for piping |
 
 ### Stream Model
 
@@ -49,6 +50,12 @@ After this change, the stream model is:
 | **Table — read commands** (list, view) | Table data | Warnings, verbose logs |
 | **Table — write commands** (create, edit, move) | Nothing | Confirmations, URLs |
 | **JSON — all commands** | Structured JSON | Warnings, verbose logs |
+
+### Breaking Change
+
+This is a **behavioral change** for Table-mode write commands. Any script or pipeline that captures stdout from Table-mode write commands (e.g., `jr issue create | grep "Created"`) will stop receiving that output. The migration path is `--output json`, which already exists for all write commands and was always the intended scripting interface. This is a pre-1.0 tool, and this change aligns with the documented project vision (agentic CLI in the spirit of `gh`).
+
+The `open --url-only` command is unaffected — its `println!("{}", url)` is data output and stays on stdout.
 
 ## What Does NOT Change
 
@@ -88,3 +95,5 @@ Uses existing `jr_cmd` helper with no `--output json` flag, matching established
 - **Perplexity:** Confirmed `auth status`-style config display belongs on stdout (primary command output)
 - **Context7 (colored):** `eprintln!` with `.green()` works identically to `println!`; no special handling needed
 - **Context7 (comfy-table):** `Table::to_string()` returns `String` — no stream interaction; `print_output` controls the stream
+- **Perplexity:** Identified edge cases for stdout→stderr migration (breaking scripts, CI log capture); mitigated by pre-1.0 status and existing `--output json` scripting path
+- **Local verification:** All `println!` calls in write-command Table-mode paths are either `print_success` (covered by core change) or JSON-mode data (stays stdout); no gaps in change list
