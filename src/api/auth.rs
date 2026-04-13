@@ -129,8 +129,8 @@ pub async fn oauth_login(client_id: &str, client_secret: &str) -> Result<OAuthRe
         urlencoding::encode(SCOPES),
     );
 
-    println!("Opening browser for authorization...");
-    println!("If browser doesn't open, visit: {auth_url}");
+    eprintln!("Opening browser for authorization...");
+    eprintln!("If browser doesn't open, visit: {auth_url}");
     let _ = open::that(&auth_url);
 
     // 2. Listen for the OAuth callback.
