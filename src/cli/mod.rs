@@ -8,6 +8,7 @@ pub mod project;
 pub mod queue;
 pub mod sprint;
 pub mod team;
+pub mod user;
 pub mod worklog;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -91,6 +92,11 @@ pub enum Command {
     Team {
         #[command(subcommand)]
         command: TeamCommand,
+    },
+    /// Manage users
+    User {
+        #[command(subcommand)]
+        command: UserCommand,
     },
     /// Manage JSM queues
     Queue {
@@ -505,6 +511,52 @@ pub enum TeamCommand {
         /// Force refresh from API, ignoring cache
         #[arg(long)]
         refresh: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum UserCommand {
+    /// Search for users by display name or email
+    ///
+    /// Results depend on the "Browse users and groups" global permission.
+    /// Empty results may indicate either no matches or missing permission.
+    /// Email is hidden when the target user's privacy settings opt out.
+    Search {
+        /// Search string (matches displayName and emailAddress substrings)
+        query: String,
+        /// Cap the number of results shown (default 30). Applies to both
+        /// table rows and JSON array length; does not reduce the API fetch.
+        #[arg(long)]
+        limit: Option<u32>,
+        /// Disable the default local cap. Jira still returns a single page
+        /// (up to 50 results by default, capped at 100 server-side).
+        #[arg(long, conflicts_with = "limit")]
+        all: bool,
+    },
+    /// List users assignable to a project
+    ///
+    /// Results depend on the "Browse users and groups" global permission.
+    List {
+        /// Project key (e.g., FOO)
+        #[arg(long, short = 'p')]
+        project: String,
+        /// Cap the number of results shown (default 30). Applies to both
+        /// table rows and JSON array length; does not reduce the API fetch.
+        #[arg(long)]
+        limit: Option<u32>,
+        /// Disable the default local cap. Jira still returns a single page
+        /// (up to 50 results by default, capped at 100 server-side).
+        #[arg(long, conflicts_with = "limit")]
+        all: bool,
+    },
+    /// Look up a user by accountId
+    ///
+    /// Resolves an accountId to displayName, email (when visible), and
+    /// active status. Use this when you have an accountId and need the
+    /// human-readable identity.
+    View {
+        /// Atlassian accountId
+        account_id: String,
     },
 }
 
