@@ -432,3 +432,15 @@ pub fn create_issue_response(key: &str) -> Value {
         "self": format!("https://test.atlassian.net/rest/api/3/issue/{}", key)
     })
 }
+
+/// Issue response with a team custom field set to a UUID string.
+pub fn issue_response_with_team(
+    key: &str,
+    summary: &str,
+    team_field_id: &str,
+    team_uuid: &str,
+) -> Value {
+    let mut response = issue_response(key, summary, "To Do");
+    response["fields"][team_field_id] = json!(team_uuid);
+    response
+}

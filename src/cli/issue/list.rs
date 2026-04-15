@@ -690,11 +690,15 @@ pub(super) async fn handle_view(
     };
 
     let sp_field_id = config.global.fields.story_points_field_id.as_deref();
+    let team_field_id: Option<&str> = config.global.fields.team_field_id.as_deref();
     let cmdb_fields = get_or_fetch_cmdb_fields(client).await.unwrap_or_default();
     let cmdb_field_id_list = cmdb_field_ids(&cmdb_fields);
     let mut extra: Vec<&str> = sp_field_id.iter().copied().collect();
     for f in &cmdb_field_id_list {
         extra.push(f.as_str());
+    }
+    if let Some(t) = team_field_id {
+        extra.push(t);
     }
     let mut issue = client.get_issue(&key, &extra).await?;
 
@@ -912,6 +916,23 @@ pub(super) async fn handle_view(
                     .map(format::format_points)
                     .unwrap_or_else(|| "(none)".into());
                 rows.push(vec!["Points".into(), points_display]);
+            }
+
+            if let Some(field_id) = team_field_id {
+                if let Some(team_uuid) = issue.fields.team_id(field_id) {
+                    let team_display = match crate::cache::read_team_cache()
+                        .ok()
+                        .flatten()
+                        .and_then(|c| c.teams.into_iter().find(|t| t.id == team_uuid))
+                    {
+                        Some(cached) => cached.name,
+                        None => format!(
+                            "{} (name not cached — run 'jr team list --refresh')",
+                            team_uuid
+                        ),
+                    };
+                    rows.push(vec!["Team".into(), team_display]);
+                }
             }
 
             rows.push(vec!["Description".into(), desc_text]);
