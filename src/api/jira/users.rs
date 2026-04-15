@@ -78,11 +78,51 @@ impl JiraClient {
         };
         Ok(users)
     }
+
+    /// Fetch a single user by accountId.
+    ///
+    /// Returns a `JrError::ApiError { status: 404, .. }` when the accountId
+    /// does not exist. Email may be omitted from the response based on the
+    /// target user's profile-visibility settings.
+    pub async fn get_user(&self, account_id: &str) -> Result<User> {
+        let path = format!(
+            "/rest/api/3/user?accountId={}",
+            urlencoding::encode(account_id)
+        );
+        self.get(&path).await
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::types::jira::User;
+
+    #[test]
+    fn single_user_response_deserializes() {
+        let json = r#"{
+            "accountId": "5b10ac8d82e05b22cc7d4349",
+            "displayName": "Jane Smith",
+            "emailAddress": "jane@acme.io",
+            "active": true
+        }"#;
+        let user: User = serde_json::from_str(json).unwrap();
+        assert_eq!(user.account_id, "5b10ac8d82e05b22cc7d4349");
+        assert_eq!(user.display_name, "Jane Smith");
+        assert_eq!(user.email_address.as_deref(), Some("jane@acme.io"));
+        assert_eq!(user.active, Some(true));
+    }
+
+    #[test]
+    fn single_user_without_email_deserializes() {
+        let json = r#"{
+            "accountId": "abc",
+            "displayName": "Privacy User",
+            "active": true
+        }"#;
+        let user: User = serde_json::from_str(json).unwrap();
+        assert_eq!(user.account_id, "abc");
+        assert!(user.email_address.is_none());
+    }
 
     #[test]
     fn multi_project_search_response_deserializes() {
