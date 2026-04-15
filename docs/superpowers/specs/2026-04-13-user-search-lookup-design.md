@@ -106,7 +106,7 @@ Help text for `search` and `list` includes a note:
 src/cli/user.rs       — handler + formatting (NEW)
 src/cli/mod.rs        — register `pub mod user;`, add `User { command: UserCommand }` variant and `UserCommand` enum
 src/api/jira/users.rs — add `get_user(account_id)` method (~10 lines)
-src/main.rs           — dispatch `Command::User { command } => cli::user::handle(cli, command).await`
+src/main.rs           — dispatch `Command::User { command } => cli::user::handle(command, &cli.output, &client).await`
 tests/user_commands.rs — integration tests (NEW)
 ```
 
@@ -117,20 +117,19 @@ The handler file follows the same shape as `src/cli/team.rs` or `src/cli/project
 Integration tests in `tests/user_commands.rs` using wiremock:
 
 1. `search` — query matches two users → table has both rows, JSON is an array of 2
-2. `search` — empty result → stdout empty in table mode, "No users found." on stderr, exit 0
-3. `search --limit 5` — passes `maxResults=5` to API
-4. `search --all` — paginates through multiple pages
-5. `list --project FOO` — calls `/user/assignable/multiProjectSearch` with correct projectKeys
+2. `search` — empty result → `"No results found."` on stdout (via `output::print_output`), exit 0
+3. `search --limit N` — truncates output locally to N rows; does not pass `maxResults` to the API
+4. `search --all` — disables the local default cap but does not paginate beyond Jira's single page
+5. `list --project FOO` — calls `/user/assignable/multiProjectSearch` with correct `projectKeys`
 6. `list` with no `--project` → clap error, exit 64
 7. `view <accountId>` — success, table view shows labeled rows
-8. `view <accountId>` — 404 → friendly error, exit 1
-9. `view <accountId> --output json` — emits the full user object
-10. Privacy case — user with no `emailAddress` field → table shows `—`, JSON shows field absent
-11. Verify snapshot tests of table output match (using `insta` consistent with other commands)
+8. `view <accountId>` — 404 → friendly `User with accountId 'X' not found.` error, exit 1
+9. `view <accountId> --output json` — emits the full `User` object
+10. Privacy case — user response without `emailAddress` → table shows `—`, JSON serializes `"emailAddress": null` (present but null, not absent)
 
 Unit tests inline in `src/cli/user.rs`:
-- Row-formatting helper handles missing email
-- Active indicator maps correctly
+- `format_user_row` renders `—` when `email_address` is `None`
+- `format_active` maps `Some(true)` → `✓`, `Some(false)` → `✗`, `None` → `—`
 
 ## What stays out of scope
 

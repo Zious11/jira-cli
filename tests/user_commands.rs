@@ -262,7 +262,7 @@ async fn user_view_hidden_email_renders_dash() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn user_view_json_hidden_email_omits_field() {
+async fn user_view_json_hidden_email_is_null() {
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
