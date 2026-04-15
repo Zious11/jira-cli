@@ -826,8 +826,8 @@ Any failure in Steps 5.1–5.4 means returning to the failing task to correct th
 | `✓`/`✗` for active | Task 3 (`format_active`) |
 | View uses labeled Field/Value rows | Task 3 (`handle_view`) |
 | JSON mode: raw user(s) | Task 3 (`print_output` passes `&user` / `&users`) |
-| 404 on view → friendly "not found" error, exit 1 | Task 3 (`handle_view`), Task 4 (Step 4.1 404 test) |
-| 400 also treated as "not found" | Task 3 (`handle_view`) |
+| 404 on view → friendly "not found" error, exit 64 via `JrError::UserError` | Task 3 (`handle_view`), Task 4 (Step 4.1 404 test) |
+| 400 also treated as "not found" (same exit 64) | Task 3 (`handle_view`) |
 | Empty search result → "No results found." | Task 4 (Step 4.1 empty test) — uses `output::print_output` default behavior |
 | Help text: GDPR caveat | Task 2 (Step 2.3 doc comments on `Search` and `List`) |
 | Integration tests with wiremock | Task 4 (all) |
