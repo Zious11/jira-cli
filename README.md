@@ -147,6 +147,9 @@ jr issue comment KEY-123 "Deployed to staging"
 | `jr assets types [--schema]`    | List object types (all or filtered by schema)  |
 | `jr assets schema <TYPE>`       | Show attributes for an object type (partial match) |
 | `jr team list` | List available teams (`--refresh` to force update) |
+| `jr user search <query>` | Search users by display name or email (`--limit`/`--all`) |
+| `jr user list --project FOO` | List users assignable to a project (`--limit`/`--all`) |
+| `jr user view <accountId>` | Look up a single user by accountId |
 | `jr project list` | List accessible projects (`--type`, `--limit`/`--all`) |
 | `jr project fields --project FOO` | Show valid issue types, priorities, statuses, and asset custom fields |
 | `jr completion bash\|zsh\|fish` | Generate shell completions |

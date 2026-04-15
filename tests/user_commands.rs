@@ -286,9 +286,11 @@ async fn user_view_json_hidden_email_omits_field() {
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(parsed["accountId"], "private-user");
     assert_eq!(parsed["displayName"], "Private Person");
+    let email = parsed
+        .get("emailAddress")
+        .expect("emailAddress key should be present (serialized as null), not omitted");
     assert!(
-        parsed["emailAddress"].is_null(),
-        "emailAddress should be null (not the em-dash placeholder) when privacy hides it, got: {}",
-        parsed["emailAddress"]
+        email.is_null(),
+        "emailAddress should serialize to JSON null when privacy hides it (not the em-dash placeholder), got: {email}"
     );
 }

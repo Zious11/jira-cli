@@ -81,9 +81,10 @@ impl JiraClient {
 
     /// Fetch a single user by accountId.
     ///
-    /// Returns a `JrError::ApiError { status: 404, .. }` when the accountId
-    /// does not exist. Email may be omitted from the response based on the
-    /// target user's profile-visibility settings.
+    /// Returns a `JrError::ApiError { status: 404 | 400, .. }` when the
+    /// accountId is unknown or malformed — Jira is inconsistent which it
+    /// returns. Email may be omitted from the response based on the target
+    /// user's profile-visibility settings.
     pub async fn get_user(&self, account_id: &str) -> Result<User> {
         let path = format!(
             "/rest/api/3/user?accountId={}",

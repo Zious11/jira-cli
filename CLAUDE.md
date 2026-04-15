@@ -25,6 +25,7 @@ src/
 │   ├── sprint.rs        # sprint list/current/add/remove (scrum-only, errors on kanban)
 │   ├── worklog.rs       # worklog add/list
 │   ├── team.rs          # team list (with cache + lazy org discovery)
+│   ├── user.rs          # user search/list/view (thin wrapper over api/jira/users.rs)
 │   ├── auth.rs          # auth login (API token default, --oauth for OAuth 2.0), auth status
 │   ├── init.rs          # Interactive setup (prefetches org metadata + team cache + story points field)
 │   ├── project.rs       # project fields (types, priorities, statuses, CMDB fields)
@@ -49,7 +50,7 @@ src/
 │       ├── teams.rs     # org metadata (GraphQL), list teams
 │       ├── worklogs.rs  # add/list worklogs
 │       ├── projects.rs  # project details
-│       └── users.rs     # current user, user search, assignable users
+│       └── users.rs     # current user, user search, assignable users, single-user lookup
 │   ├── jsm/             # JSM-specific API call implementations
 │   │   ├── servicedesks.rs  # list service desks, project meta orchestration
 │   │   └── queues.rs        # list queues, get queue issues

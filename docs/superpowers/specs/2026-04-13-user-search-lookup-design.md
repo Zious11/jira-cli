@@ -52,8 +52,8 @@ Pattern matches `get_myself` (same file, line 6).
 
 | Flag | Commands | Behavior |
 |---|---|---|
-| `--limit <N>` | `search`, `list` | Default 30 via `DEFAULT_LIMIT`. Conflicts with `--all`. |
-| `--all` | `search`, `list` | Fetch all pages. No default limit. |
+| `--limit <N>` | `search`, `list` | Cap the number of rows shown (default 30 via `DEFAULT_LIMIT`). Applied client-side after the Jira response — does not reduce the API fetch. Conflicts with `--all`. |
+| `--all` | `search`, `list` | Disable the default local cap. Jira still returns a single page (default 50, server-capped at 100). True multi-page pagination is a separate follow-up — see the "What stays out of scope" section. |
 | global `--output {table,json}` | all three | Inherited from root CLI. |
 | global `--no-color`, `--no-input`, `--verbose` | all three | Inherited. |
 
@@ -75,25 +75,23 @@ John Archive        | —                   | ✗      | 557058:def456...
 - Missing email displays as `—`.
 - Active uses `✓` / `✗` with color.
 
-**Table mode** for `view`: labeled rows like `jr issue view` detail view:
+**Table mode** for `view`: labeled rows like `jr issue view` detail view — the four fields surfaced by the `User` type:
 
 ```
-Account ID:   5b10ac8d82e05b22cc7d4349
+Account ID:   acc-xyz-1234
 Display Name: Jane Smith
 Email:        jane@acme.io
 Active:       ✓
-Time Zone:    America/Los_Angeles
-Account Type: atlassian
 ```
 
-**JSON mode:** raw `User` objects (already serializable via `src/types/jira/user.rs`). Array for `search`/`list`, single object for `view`.
+**JSON mode:** raw `User` objects serialized via `src/types/jira/user.rs`. Array for `search`/`list`, single object for `view`. When privacy hides the email, `emailAddress` is emitted as JSON `null` (the field is present, not absent) — `Option<String>` serializes without `skip_serializing_if`.
 
 ### Error handling
 
 | Scenario | HTTP | jr behavior |
 |---|---|---|
 | `view`: unknown accountId | 404 (or 400 — Jira is inconsistent across accountId formats) | `Error: User with accountId 'X' not found.` — exit 1. Match on either status in the handler; rely on wiremock tests to lock in behavior against a real response shape. |
-| `search`/`list`: no matches | 200 empty array | `No users found.` on stderr — exit 0 (matches `issue list` convention) |
+| `search`/`list`: no matches | 200 empty array | `"No results found."` on stdout via `output::print_output` — exit 0 (matches `issue list` convention) |
 | `search`/`list`: caller lacks "Browse users and groups" | 200 empty array | Same as "no matches" — API silently returns empty. Help text warns of this. |
 | `view`: caller lacks permission | 403 | Propagated through existing error handling with "permission" guidance |
 | Network/auth failures | existing | Existing client error handling (401 retry, rate limit, etc.) |
@@ -145,11 +143,12 @@ Unit tests inline in `src/cli/user.rs`:
 | User list caching | Users join/leave frequently; cache would be stale |
 | accountId truncation | Codebase convention is full IDs |
 | Auto-disambiguation on `view` by name | Keeps `view` deterministic — `search` is for fuzzy lookup |
+| True multi-page pagination for `search`/`list` | Both endpoints support `startAt`/`maxResults` but currently the client calls them once without either. `--all` disables the local cap but cannot exceed Jira's single-page default (50, capped at 100). Filed as a follow-up issue so the client method change can be planned alongside callers like `issue assign --to`. |
 
 ## Alignment with project conventions
 
 - **Thin client, no abstraction layer** — reuses existing `search_users` / `search_assignable_users_by_project`, adds one sibling method.
-- **Machine-output-first** — all three commands return `--output json`; empty-result message is on stderr, not stdout.
+- **Machine-output-first** — all three commands return `--output json`. The empty-result message (`"No results found."`) stays on stdout via `output::print_output`, consistent with the rest of the CLI.
 - **Non-interactive by default** — no prompts; every option has a flag equivalent.
 - **Idempotent read operations** — all three are pure GETs.
 - **Pipe-friendly** — `jr user search jane --output json | jq '.[0].accountId' | xargs jr user view` works cleanly.
