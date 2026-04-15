@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use colored::Colorize;
 
 use crate::api::client::JiraClient;
@@ -67,7 +67,10 @@ async fn handle_view(
         Err(e) => {
             if let Some(JrError::ApiError { status, .. }) = e.downcast_ref::<JrError>() {
                 if *status == 404 || *status == 400 {
-                    return Err(anyhow!("User with accountId '{account_id}' not found."));
+                    return Err(JrError::UserError(format!(
+                        "User with accountId '{account_id}' not found."
+                    ))
+                    .into());
                 }
             }
             return Err(e);

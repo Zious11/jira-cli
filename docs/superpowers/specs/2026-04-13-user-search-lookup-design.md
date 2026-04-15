@@ -90,7 +90,7 @@ Active:       ✓
 
 | Scenario | HTTP | jr behavior |
 |---|---|---|
-| `view`: unknown accountId | 404 (or 400 — Jira is inconsistent across accountId formats) | `Error: User with accountId 'X' not found.` — exit 1. Match on either status in the handler; rely on wiremock tests to lock in behavior against a real response shape. |
+| `view`: unknown accountId | 404 (or 400 — Jira is inconsistent across accountId formats) | `Error: User with accountId 'X' not found.` — exit 64 via `JrError::UserError` (matches codebase convention for user-input errors; see `src/cli/assets.rs` and `src/api/jsm/servicedesks.rs`). Match on either status in the handler; wiremock test locks the exit code. |
 | `search`/`list`: no matches | 200 empty array | `"No results found."` on stdout via `output::print_output` — exit 0 (matches `issue list` convention) |
 | `search`/`list`: caller lacks "Browse users and groups" | 200 empty array | Same as "no matches" — API silently returns empty. Help text warns of this. |
 | `view`: caller lacks permission | 403 | Propagated through existing error handling with "permission" guidance |

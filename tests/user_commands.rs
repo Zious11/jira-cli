@@ -142,6 +142,7 @@ async fn user_list_by_project_returns_users() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
         .and(query_param("projectKeys", "FOO"))
+        .and(query_param("query", ""))
         .respond_with(ResponseTemplate::new(200).set_body_json(
             fixtures::multi_project_user_search_response(vec![
                 ("acc-1", "Alice"),
@@ -230,7 +231,12 @@ async fn user_view_404_shows_friendly_error() {
         .output()
         .unwrap();
 
-    assert!(!output.status.success());
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "view on unknown accountId should exit 64 (JrError::UserError convention), got: {:?}",
+        output.status.code()
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("User with accountId 'does-not-exist' not found"),
