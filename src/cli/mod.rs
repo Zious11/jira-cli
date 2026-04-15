@@ -524,8 +524,8 @@ pub enum UserCommand {
     Search {
         /// Search string (matches displayName and emailAddress substrings)
         query: String,
-        /// Cap the number of rows shown (default 30). Caps the single Jira
-        /// page locally; does not reduce the API fetch.
+        /// Cap the number of results shown (default 30). Applies to both
+        /// table rows and JSON array length; does not reduce the API fetch.
         #[arg(long)]
         limit: Option<u32>,
         /// Disable the default local cap. Jira still returns a single page
@@ -540,8 +540,8 @@ pub enum UserCommand {
         /// Project key (e.g., FOO)
         #[arg(long, short = 'p')]
         project: String,
-        /// Cap the number of rows shown (default 30). Caps the single Jira
-        /// page locally; does not reduce the API fetch.
+        /// Cap the number of results shown (default 30). Applies to both
+        /// table rows and JSON array length; does not reduce the API fetch.
         #[arg(long)]
         limit: Option<u32>,
         /// Disable the default local cap. Jira still returns a single page
