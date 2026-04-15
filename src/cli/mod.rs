@@ -547,11 +547,11 @@ pub enum UserCommand {
     },
     /// Look up a user by accountId
     ///
-    /// Returns full user details (displayName, email when visible, active,
-    /// timeZone). Use this to resolve accountIds surfaced in JSON output
-    /// from other commands (e.g., `jr issue view --output json`).
+    /// Resolves an accountId to displayName, email (when visible), and
+    /// active status. Use this when you have an accountId and need the
+    /// human-readable identity.
     View {
-        /// Atlassian accountId (e.g., 5b10ac8d82e05b22cc7d4349)
+        /// Atlassian accountId
         account_id: String,
     },
 }

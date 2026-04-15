@@ -260,3 +260,35 @@ async fn user_view_hidden_email_renders_dash() {
         .stdout(predicate::str::contains("Private Person"))
         .stdout(predicate::str::contains("—"));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_view_json_hidden_email_omits_field() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user"))
+        .and(query_param("accountId", "private-user"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "accountId": "private-user",
+            "displayName": "Private Person",
+            "active": true
+        })))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args(["--output", "json", "user", "view", "private-user"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(parsed["accountId"], "private-user");
+    assert_eq!(parsed["displayName"], "Private Person");
+    assert!(
+        parsed["emailAddress"].is_null(),
+        "emailAddress should be null (not the em-dash placeholder) when privacy hides it, got: {}",
+        parsed["emailAddress"]
+    );
+}
