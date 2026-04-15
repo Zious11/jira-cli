@@ -47,6 +47,7 @@ async fn user_search_empty_result_prints_no_results() {
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/user/search"))
+        .and(query_param("query", "nobody"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
         .mount(&server)
         .await;
@@ -64,6 +65,7 @@ async fn user_search_json_output_is_array() {
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/user/search"))
+        .and(query_param("query", "jane"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(fixtures::user_search_response(vec![(
                 "acc-1",
@@ -93,6 +95,7 @@ async fn user_search_limit_truncates_results() {
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/user/search"))
+        .and(query_param("query", "alice"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(fixtures::user_search_response(vec![
                 ("acc-1", "Alice One", true),
