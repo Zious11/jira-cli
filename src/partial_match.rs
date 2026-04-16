@@ -5,7 +5,8 @@ pub enum MatchResult {
     Exact(String),
     /// Multiple candidates share the same exact (case-insensitive) name — carries the first matching candidate
     ExactMultiple(String),
-    /// Multiple matches — caller should prompt for disambiguation
+    /// Non-exact matches (one or more substring hits) — caller should prompt
+    /// for disambiguation (TTY) or error with the candidate list (--no-input)
     Ambiguous(Vec<String>),
     /// No matches
     None(Vec<String>),
@@ -37,7 +38,6 @@ pub fn partial_match(input: &str, candidates: &[String]) -> MatchResult {
 
     match matches.len() {
         0 => MatchResult::None(candidates.to_vec()),
-        1 => MatchResult::Exact(matches.into_iter().next().unwrap()),
         _ => MatchResult::Ambiguous(matches),
     }
 }
@@ -64,10 +64,14 @@ mod tests {
     }
 
     #[test]
-    fn test_partial_match_unique() {
+    fn test_partial_match_single_substring_is_ambiguous() {
+        // Single substring hits route through Ambiguous so callers can
+        // prompt (TTY) or error (--no-input) — never silently resolve.
         match partial_match("prog", &candidates()) {
-            MatchResult::Exact(s) => assert_eq!(s, "In Progress"),
-            _ => panic!("Expected unique match"),
+            MatchResult::Ambiguous(matches) => {
+                assert_eq!(matches, vec!["In Progress".to_string()]);
+            }
+            other => panic!("Expected Ambiguous, got {:?}", other),
         }
     }
 
@@ -92,10 +96,12 @@ mod tests {
     }
 
     #[test]
-    fn test_blocked_unique() {
+    fn test_blocked_single_substring_is_ambiguous() {
         match partial_match("block", &candidates()) {
-            MatchResult::Exact(s) => assert_eq!(s, "Blocked"),
-            _ => panic!("Expected unique match"),
+            MatchResult::Ambiguous(matches) => {
+                assert_eq!(matches, vec!["Blocked".to_string()]);
+            }
+            other => panic!("Expected Ambiguous, got {:?}", other),
         }
     }
 

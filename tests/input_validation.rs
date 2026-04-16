@@ -121,7 +121,7 @@ async fn invalid_status_with_project_returns_no_match() {
 }
 
 #[tokio::test]
-async fn valid_status_partial_match_resolves() {
+async fn valid_status_single_substring_is_ambiguous() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/rest/api/3/project/PROJ/statuses"))
@@ -154,8 +154,13 @@ async fn valid_status_partial_match_resolves() {
 
     let result = jr::partial_match::partial_match("in prog", &names);
     match result {
-        jr::partial_match::MatchResult::Exact(name) => assert_eq!(name, "In Progress"),
-        other => panic!("Expected Exact, got {:?}", std::mem::discriminant(&other)),
+        jr::partial_match::MatchResult::Ambiguous(matches) => {
+            assert_eq!(matches, vec!["In Progress".to_string()]);
+        }
+        other => panic!(
+            "Expected Ambiguous, got {:?}",
+            std::mem::discriminant(&other)
+        ),
     }
 }
 

@@ -30,6 +30,31 @@ fn jr_api_cmd(server_uri: &str) -> Command {
     cmd
 }
 
+/// Build a `jr` command with explicit XDG overrides for cache and config dirs.
+///
+/// Required for tests that need to pre-populate the team cache or set a custom
+/// config (e.g. `team_field_id`). Use `.env()` on the spawned `Command`
+/// instead of `std::env::set_var` so these overrides stay isolated to this
+/// child process and do not mutate the test process's global environment,
+/// which can cause interference when tests run in parallel.
+fn jr_cmd_with_xdg(
+    server_uri: &str,
+    cache_dir: &std::path::Path,
+    config_dir: &std::path::Path,
+) -> Command {
+    let mut cmd = Command::cargo_bin("jr").unwrap();
+    cmd.env("JR_BASE_URL", server_uri)
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir)
+        .env("XDG_CONFIG_HOME", config_dir)
+        .arg("--no-input")
+        .arg("--output")
+        .arg("table");
+    cmd
+}
+
+const TEST_TEAM_FIELD_ID: &str = "customfield_10100";
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_handler_assign_with_account_id() {
     let server = MockServer::start().await;
@@ -1411,4 +1436,183 @@ async fn test_create_table_mode_outputs_to_stderr() {
         .stdout(predicate::str::is_empty())
         .stderr(predicate::str::contains("Created issue HDL-300"))
         .stderr(predicate::str::contains("/browse/HDL-300"));
+}
+
+/// Helper: pre-populate team cache at the given XDG cache dir root.
+fn write_test_team_cache(cache_home: &std::path::Path) {
+    let teams_dir = cache_home.join("jr");
+    std::fs::create_dir_all(&teams_dir).unwrap();
+    let cache = jr::cache::TeamCache {
+        fetched_at: chrono::Utc::now(),
+        teams: vec![
+            jr::cache::CachedTeam {
+                id: "team-uuid-abc".into(),
+                name: "Platform".into(),
+            },
+            jr::cache::CachedTeam {
+                id: "team-uuid-platform-ops".into(),
+                name: "Platform Ops".into(),
+            },
+        ],
+    };
+    std::fs::write(
+        teams_dir.join("teams.json"),
+        serde_json::to_string(&cache).unwrap(),
+    )
+    .unwrap();
+}
+
+/// Helper: write a config.toml with team_field_id set to TEST_TEAM_FIELD_ID.
+fn write_test_config_with_team_field(config_home: &std::path::Path) {
+    let conf_dir = config_home.join("jr");
+    std::fs::create_dir_all(&conf_dir).unwrap();
+    std::fs::write(
+        conf_dir.join("config.toml"),
+        format!("[fields]\nteam_field_id = \"{TEST_TEAM_FIELD_ID}\"\n"),
+    )
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_view_renders_team_name_when_cached() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/HDL-500"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_response_with_team(
+                "HDL-500",
+                "Team cached",
+                TEST_TEAM_FIELD_ID,
+                "team-uuid-abc",
+            ),
+        ))
+        .mount(&server)
+        .await;
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_test_team_cache(cache_dir.path());
+    write_test_config_with_team_field(config_dir.path());
+
+    jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["issue", "view", "HDL-500"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Team"))
+        .stdout(predicate::str::contains("Platform"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_view_renders_team_uuid_fallback_when_not_cached() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/HDL-501"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_response_with_team(
+                "HDL-501",
+                "Team uncached",
+                TEST_TEAM_FIELD_ID,
+                "team-uuid-unknown",
+            ),
+        ))
+        .mount(&server)
+        .await;
+
+    // Empty cache dir (no teams.json) — UUID should appear with fallback text.
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_test_config_with_team_field(config_dir.path());
+
+    jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["issue", "view", "HDL-501"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Team"))
+        .stdout(predicate::str::contains("team-uuid-unknown"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_view_omits_team_row_when_field_unconfigured() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/HDL-502"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(common::fixtures::issue_response(
+                "HDL-502",
+                "No team field",
+                "To Do",
+            )),
+        )
+        .mount(&server)
+        .await;
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    // Write a config without team_field_id (empty [fields] section)
+    let conf_dir = config_dir.path().join("jr");
+    std::fs::create_dir_all(&conf_dir).unwrap();
+    std::fs::write(conf_dir.join("config.toml"), "[fields]\n").unwrap();
+
+    jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["issue", "view", "HDL-502"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No team field")) // summary present
+        .stdout(predicate::str::contains("│ Team").not());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_view_omits_team_row_when_field_absent_from_response() {
+    // Table mode: team_field_id IS configured, but the Jira response does not
+    // include that custom field on the issue. The Team row must be omitted —
+    // team_id() returns None when the key is missing, and the outer
+    // `if let Some(team_uuid)` guard skips rendering entirely.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/ABC-123"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(common::fixtures::issue_response(
+                "ABC-123",
+                "No team set",
+                "To Do",
+            )),
+        )
+        .mount(&server)
+        .await;
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_test_team_cache(cache_dir.path());
+    write_test_config_with_team_field(config_dir.path());
+
+    jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["issue", "view", "ABC-123"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No team set")) // summary present
+        .stdout(predicate::str::contains("│ Team").not()) // no Team field row in table
+        .stdout(predicate::str::contains(TEST_TEAM_FIELD_ID).not()); // no field ID leaking
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_edit_team_substring_rejects_under_no_input() {
+    // Single-hit substring must NOT silently resolve under --no-input.
+    //
+    // Cache contains "Platform Ops" (id: team-uuid-platform-ops). Passing --team Ops
+    // matches only "Platform Ops" as a substring → partial_match returns Ambiguous →
+    // resolve_team_field bails with an error before any HTTP call is made.
+    let server = MockServer::start().await;
+    // Intentionally no PUT or GET mocks — the command must fail before hitting the wire.
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_test_team_cache(cache_dir.path());
+    write_test_config_with_team_field(config_dir.path());
+
+    jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["issue", "edit", "HDL-600", "--team", "Ops"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Multiple teams match"))
+        .stderr(predicate::str::contains("Platform Ops"));
 }

@@ -83,6 +83,10 @@ impl IssueFields {
     pub fn story_points(&self, field_id: &str) -> Option<f64> {
         self.extra.get(field_id)?.as_f64()
     }
+
+    pub fn team_id(&self, field_id: &str) -> Option<String> {
+        self.extra.get(field_id)?.as_str().map(String::from)
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -169,6 +173,36 @@ pub struct CreateIssueResponse {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn fields_with_extra(key: &str, value: serde_json::Value) -> IssueFields {
+        let mut fields = IssueFields::default();
+        fields.extra.insert(key.to_string(), value);
+        fields
+    }
+
+    #[test]
+    fn team_id_reads_string_value() {
+        let fields = fields_with_extra(
+            "customfield_10001",
+            json!("36885b3c-1bf0-4f85-a357-c5b858c31de4"),
+        );
+        assert_eq!(
+            fields.team_id("customfield_10001"),
+            Some("36885b3c-1bf0-4f85-a357-c5b858c31de4".to_string())
+        );
+    }
+
+    #[test]
+    fn team_id_returns_none_for_null_value() {
+        let fields = fields_with_extra("customfield_10001", json!(null));
+        assert_eq!(fields.team_id("customfield_10001"), None);
+    }
+
+    #[test]
+    fn team_id_returns_none_for_missing_key() {
+        let fields = IssueFields::default();
+        assert_eq!(fields.team_id("customfield_10001"), None);
+    }
 
     #[test]
     fn story_points_present() {
