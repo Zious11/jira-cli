@@ -15,11 +15,13 @@ pub fn text_to_adf(text: &str) -> Value {
     })
 }
 
-use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{
+    CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd, TextMergeStream,
+};
 
 pub fn markdown_to_adf(markdown: &str) -> Value {
     let options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH;
-    let parser = Parser::new_ext(markdown, options);
+    let parser = TextMergeStream::new(Parser::new_ext(markdown, options));
     let mut builder = AdfBuilder::new();
     for event in parser {
         builder.process(event);
@@ -112,6 +114,9 @@ impl AdfBuilder {
                 }
                 self.push_mark(json!({ "type": "link", "attrs": attrs }));
             }
+            // Explicit for documentation; the final catch-all also handles this,
+            // but images are visibly named as intentionally suppressed per the
+            // spec's Feature Mapping (ADF `media` nodes require pre-upload).
             Tag::Image { .. } => self.push(NodeKind::Sink),
             _ => self.push(NodeKind::Sink),
         }
@@ -198,51 +203,11 @@ impl AdfBuilder {
                 return;
             }
         }
-        // Coalesce with the previous sibling text node when marks match. This keeps
-        // the output compact (e.g. when pulldown-cmark splits an escape sequence
-        // like `\*not italic\*` into two text events, both land in one text node).
-        if self.try_extend_prev_text(text) {
-            return;
-        }
         let mut node = json!({ "type": "text", "text": text });
         if !self.active_marks.is_empty() {
             node["marks"] = json!(self.active_marks);
         }
         self.append_child(node);
-    }
-
-    fn try_extend_prev_text(&mut self, text: &str) -> bool {
-        let siblings = match self.stack.last_mut() {
-            Some(top) => &mut top.children,
-            None => &mut self.root,
-        };
-        let Some(prev) = siblings.last_mut() else {
-            return false;
-        };
-        if prev.get("type").and_then(|t| t.as_str()) != Some("text") {
-            return false;
-        }
-        let prev_marks = prev.get("marks");
-        let same_marks = match (prev_marks, self.active_marks.is_empty()) {
-            (None, true) => true,
-            (Some(existing), false) => existing.as_array().is_some_and(|arr| {
-                arr.len() == self.active_marks.len()
-                    && arr.iter().zip(&self.active_marks).all(|(a, b)| a == b)
-            }),
-            _ => false,
-        };
-        if !same_marks {
-            return false;
-        }
-        if let Some(existing_text) = prev
-            .get_mut("text")
-            .and_then(|t| t.as_str().map(String::from))
-        {
-            let combined = existing_text + text;
-            prev["text"] = json!(combined);
-            return true;
-        }
-        false
     }
 
     fn push_code(&mut self, text: &str) {
@@ -546,23 +511,29 @@ mod tests {
 
     #[test]
     fn test_markdown_mixed_marks() {
-        // "**bold *italic* bold**" — nested emphasis should produce two separate
-        // text nodes with overlapping/non-overlapping marks as pulldown-cmark parses them.
         let adf = markdown_to_adf("**bold _italic_ bold**");
         let content = adf["content"][0]["content"].as_array().unwrap();
-        // At minimum, every text node here should have the `strong` mark.
+        // Every text node in this paragraph should carry `strong` (outer).
         assert!(
             content.iter().all(|n| n["marks"]
                 .as_array()
                 .is_some_and(|m| m.iter().any(|mk| mk["type"] == "strong"))),
             "every text node should carry strong, got: {content:?}"
         );
-        // And at least one node should also carry `em`.
+        // The node containing "italic" should also carry `em`.
+        let italic_node = content
+            .iter()
+            .find(|n| n["text"] == "italic")
+            .expect("expected a text node for 'italic'");
+        let italic_marks: Vec<&str> = italic_node["marks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|m| m["type"].as_str())
+            .collect();
         assert!(
-            content.iter().any(|n| n["marks"]
-                .as_array()
-                .is_some_and(|m| m.iter().any(|mk| mk["type"] == "em"))),
-            "expected at least one node with em + strong, got: {content:?}"
+            italic_marks.contains(&"strong") && italic_marks.contains(&"em"),
+            "expected strong + em on the italic node, got: {italic_marks:?}"
         );
     }
 
