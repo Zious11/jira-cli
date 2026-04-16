@@ -405,7 +405,7 @@ async fn test_view_omits_team_row_when_field_unconfigured() {
 
 - `src/cache.rs:60-68` — `cache_dir()` honors `XDG_CACHE_HOME`.
 - `src/config.rs:130-140` — config loader honors `XDG_CONFIG_HOME`.
-- **CRITICAL** — `cli_handler.rs` tests spawn the `jr` binary via `assert_cmd::Command::cargo_bin("jr")`. Env vars set via `std::env::set_var` in the test body do **not** propagate to the spawned child (Perplexity-validated 2026-04-15). The existing `project_meta.rs` pattern uses `set_var` because it invokes `jr::` library functions in-process — that pattern is **not applicable here**. Instead, pass XDG vars explicitly via `.env()` on the `Command` builder:
+- **CRITICAL** — `cli_handler.rs` tests spawn the `jr` binary via `assert_cmd::Command::cargo_bin("jr")`. While env vars set via `std::env::set_var` are inherited by spawned children at process spawn, `set_var` mutates process-global state and can cause cross-test interference when tests run in parallel. The existing `project_meta.rs` pattern uses `set_var` because it invokes `jr::` library functions in-process — that pattern is **not applicable here**. For these spawned-binary tests, pass XDG vars explicitly via `.env()` on the `Command` builder so each command gets isolated environment configuration:
 
 ```rust
 let cache_dir = tempfile::tempdir().unwrap();

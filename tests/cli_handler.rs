@@ -33,10 +33,10 @@ fn jr_api_cmd(server_uri: &str) -> Command {
 /// Build a `jr` command with explicit XDG overrides for cache and config dirs.
 ///
 /// Required for tests that need to pre-populate the team cache or set a custom
-/// config (e.g. `team_field_id`). Env vars set via `std::env::set_var` do NOT
-/// propagate to spawned child processes — must use `.env()` on the Command.
-///
-/// Uses table output mode so the rendered team row is testable.
+/// config (e.g. `team_field_id`). Use `.env()` on the spawned `Command`
+/// instead of `std::env::set_var` so these overrides stay isolated to this
+/// child process and do not mutate the test process's global environment,
+/// which can cause interference when tests run in parallel.
 fn jr_cmd_with_xdg(
     server_uri: &str,
     cache_dir: &std::path::Path,
@@ -47,7 +47,9 @@ fn jr_cmd_with_xdg(
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir)
         .env("XDG_CONFIG_HOME", config_dir)
-        .arg("--no-input");
+        .arg("--no-input")
+        .arg("--output")
+        .arg("table");
     cmd
 }
 

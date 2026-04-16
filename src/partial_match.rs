@@ -5,7 +5,8 @@ pub enum MatchResult {
     Exact(String),
     /// Multiple candidates share the same exact (case-insensitive) name — carries the first matching candidate
     ExactMultiple(String),
-    /// Multiple matches — caller should prompt for disambiguation
+    /// Non-exact matches (one or more substring hits) — caller should prompt
+    /// for disambiguation (TTY) or error with the candidate list (--no-input)
     Ambiguous(Vec<String>),
     /// No matches
     None(Vec<String>),
