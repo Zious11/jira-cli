@@ -15,132 +15,193 @@ pub fn text_to_adf(text: &str) -> Value {
     })
 }
 
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+
 pub fn markdown_to_adf(markdown: &str) -> Value {
-    let mut content: Vec<Value> = Vec::new();
-    let mut in_code_block = false;
-    let mut code_lines: Vec<String> = Vec::new();
-    let mut list_items: Vec<Value> = Vec::new();
+    let options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH;
+    let parser = Parser::new_ext(markdown, options);
+    let mut builder = AdfBuilder::new();
+    for event in parser {
+        builder.process(event);
+    }
+    json!({
+        "version": 1,
+        "type": "doc",
+        "content": builder.finish(),
+    })
+}
 
-    for line in markdown.lines() {
-        if line.trim_start().starts_with("```") {
-            if in_code_block {
-                content.push(json!({
-                    "type": "codeBlock",
-                    "content": [{ "type": "text", "text": code_lines.join("\n") }]
-                }));
-                code_lines.clear();
-                in_code_block = false;
-            } else {
-                flush_list(&mut list_items, &mut content);
-                in_code_block = true;
-            }
-            continue;
-        }
+struct AdfBuilder {
+    root: Vec<Value>,
+    stack: Vec<PartialNode>,
+    active_marks: Vec<Value>,
+    // Task 3 will add `in_table_head: bool` here for GFM table header tracking.
+}
 
-        if in_code_block {
-            code_lines.push(line.to_string());
-            continue;
-        }
+struct PartialNode {
+    kind: NodeKind,
+    children: Vec<Value>,
+}
 
-        if !line.trim_start().starts_with("- ") && !list_items.is_empty() {
-            flush_list(&mut list_items, &mut content);
-        }
+enum NodeKind {
+    Paragraph,
+    Heading(u8),
+    BlockQuote,
+    CodeBlock { language: Option<String> },
+    BulletList,
+    OrderedList { start: u64 },
+    ListItem,
+    Sink,
+}
 
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
+// Tasks 2 and 3 will extend this enum with:
+// - `InlineMark` (Task 2) for Strong/Emphasis/Strikethrough/Link container tracking
+// - `Table`, `TableRow`, `TableCell { is_header: bool }` (Task 3) for GFM tables
 
-        if let Some(heading) = parse_heading(trimmed) {
-            content.push(heading);
-        } else if let Some(stripped) = trimmed.strip_prefix("- ") {
-            list_items.push(json!({
-                "type": "listItem",
-                "content": [{
-                    "type": "paragraph",
-                    "content": parse_inline(stripped)
-                }]
-            }));
-        } else {
-            content.push(json!({
-                "type": "paragraph",
-                "content": parse_inline(trimmed)
-            }));
+impl AdfBuilder {
+    fn new() -> Self {
+        Self {
+            root: Vec::new(),
+            stack: Vec::new(),
+            active_marks: Vec::new(),
         }
     }
 
-    flush_list(&mut list_items, &mut content);
+    fn process(&mut self, event: Event<'_>) {
+        match event {
+            Event::Start(tag) => self.start(tag),
+            Event::End(tag_end) => self.end(tag_end),
+            Event::Text(text) => self.push_text(text.as_ref()),
+            Event::Code(text) => self.push_code(text.as_ref()),
+            Event::Html(html) | Event::InlineHtml(html) => self.push_text(html.as_ref()),
+            Event::SoftBreak => self.push_text(" "),
+            Event::HardBreak => self.append_child(json!({ "type": "hardBreak" })),
+            Event::Rule => self.append_child(json!({ "type": "rule" })),
+            _ => {}
+        }
+    }
 
-    json!({ "version": 1, "type": "doc", "content": content })
-}
+    fn start(&mut self, tag: Tag<'_>) {
+        match tag {
+            Tag::Paragraph => self.push(NodeKind::Paragraph),
+            Tag::Heading { level, .. } => self.push(NodeKind::Heading(heading_level_to_u8(level))),
+            Tag::BlockQuote(_) => self.push(NodeKind::BlockQuote),
+            Tag::CodeBlock(kind) => {
+                let language = match kind {
+                    CodeBlockKind::Fenced(lang) if !lang.is_empty() => Some(lang.into_string()),
+                    _ => None,
+                };
+                self.push(NodeKind::CodeBlock { language });
+            }
+            Tag::List(None) => self.push(NodeKind::BulletList),
+            Tag::List(Some(start)) => self.push(NodeKind::OrderedList { start }),
+            Tag::Item => self.push(NodeKind::ListItem),
+            Tag::Image { .. } => self.push(NodeKind::Sink),
+            _ => self.push(NodeKind::Sink),
+        }
+    }
 
-fn flush_list(items: &mut Vec<Value>, content: &mut Vec<Value>) {
-    if !items.is_empty() {
-        content.push(json!({
-            "type": "bulletList",
-            "content": std::mem::take(items)
+    fn end(&mut self, _tag_end: TagEnd) {
+        let Some(partial) = self.stack.pop() else {
+            return;
+        };
+        let PartialNode { kind, children } = partial;
+        let node = match kind {
+            NodeKind::Paragraph => Some(json!({ "type": "paragraph", "content": children })),
+            NodeKind::Heading(level) => Some(json!({
+                "type": "heading",
+                "attrs": { "level": level },
+                "content": children,
+            })),
+            NodeKind::BlockQuote => Some(json!({ "type": "blockquote", "content": children })),
+            NodeKind::CodeBlock { language } => {
+                let mut node = json!({ "type": "codeBlock", "content": children });
+                if let Some(lang) = language {
+                    node["attrs"] = json!({ "language": lang });
+                }
+                Some(node)
+            }
+            NodeKind::BulletList => Some(json!({ "type": "bulletList", "content": children })),
+            NodeKind::OrderedList { start } => {
+                let mut node = json!({ "type": "orderedList", "content": children });
+                if start != 1 {
+                    node["attrs"] = json!({ "order": start });
+                }
+                Some(node)
+            }
+            NodeKind::ListItem => Some(json!({ "type": "listItem", "content": children })),
+            NodeKind::Sink => None,
+        };
+        if let Some(node) = node {
+            self.append_child(node);
+        }
+    }
+
+    fn push(&mut self, kind: NodeKind) {
+        self.stack.push(PartialNode {
+            kind,
+            children: Vec::new(),
+        });
+    }
+
+    fn append_child(&mut self, node: Value) {
+        if let Some(top) = self.stack.last_mut() {
+            if !matches!(top.kind, NodeKind::Sink) {
+                top.children.push(node);
+            }
+        } else {
+            self.root.push(node);
+        }
+    }
+
+    fn push_text(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        if let Some(top) = self.stack.last() {
+            if matches!(top.kind, NodeKind::Sink) {
+                return;
+            }
+        }
+        let mut node = json!({ "type": "text", "text": text });
+        if !self.active_marks.is_empty() {
+            node["marks"] = json!(self.active_marks);
+        }
+        self.append_child(node);
+    }
+
+    fn push_code(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        if let Some(top) = self.stack.last() {
+            if matches!(top.kind, NodeKind::Sink) {
+                return;
+            }
+        }
+        let mut marks = self.active_marks.clone();
+        marks.push(json!({ "type": "code" }));
+        self.append_child(json!({
+            "type": "text",
+            "text": text,
+            "marks": marks,
         }));
     }
-}
 
-fn parse_heading(line: &str) -> Option<Value> {
-    let level = line.chars().take_while(|c| *c == '#').count();
-    if (1..=6).contains(&level) && line.len() > level && line.as_bytes()[level] == b' ' {
-        let text = &line[level + 1..];
-        Some(json!({
-            "type": "heading",
-            "attrs": { "level": level },
-            "content": [{ "type": "text", "text": text }]
-        }))
-    } else {
-        None
+    fn finish(self) -> Vec<Value> {
+        self.root
     }
 }
 
-fn parse_inline(text: &str) -> Vec<Value> {
-    let mut result = Vec::new();
-    let mut remaining = text;
-
-    while !remaining.is_empty() {
-        if let Some(pos) = remaining.find("**") {
-            if pos > 0 {
-                result.push(json!({"type": "text", "text": &remaining[..pos]}));
-            }
-            let after = &remaining[pos + 2..];
-            if let Some(end) = after.find("**") {
-                result.push(json!({
-                    "type": "text", "text": &after[..end],
-                    "marks": [{"type": "strong"}]
-                }));
-                remaining = &after[end + 2..];
-                continue;
-            }
-        }
-
-        if let Some(pos) = remaining.find('`') {
-            if pos > 0 {
-                result.push(json!({"type": "text", "text": &remaining[..pos]}));
-            }
-            let after = &remaining[pos + 1..];
-            if let Some(end) = after.find('`') {
-                result.push(json!({
-                    "type": "text", "text": &after[..end],
-                    "marks": [{"type": "code"}]
-                }));
-                remaining = &after[end + 1..];
-                continue;
-            }
-        }
-
-        result.push(json!({"type": "text", "text": remaining}));
-        break;
+fn heading_level_to_u8(level: HeadingLevel) -> u8 {
+    match level {
+        HeadingLevel::H1 => 1,
+        HeadingLevel::H2 => 2,
+        HeadingLevel::H3 => 3,
+        HeadingLevel::H4 => 4,
+        HeadingLevel::H5 => 5,
+        HeadingLevel::H6 => 6,
     }
-
-    if result.is_empty() {
-        result.push(json!({"type": "text", "text": text}));
-    }
-
-    result
 }
 
 pub fn adf_to_text(adf: &Value) -> String {
@@ -271,6 +332,95 @@ mod tests {
         let input = "## Root cause\n\nThe auth module had a **critical bug** in `validate_token`.\n\n- Missing null check\n- Wrong error type\n\n```rust\nfn validate() -> bool {\n    true\n}\n```";
         let adf = markdown_to_adf(input);
         insta::assert_json_snapshot!("markdown_complex_to_adf", adf);
+    }
+
+    #[test]
+    fn test_markdown_ordered_list_sets_order_when_start_is_not_one() {
+        let adf = markdown_to_adf("5. first\n6. second");
+        assert_eq!(adf["content"][0]["type"], "orderedList");
+        assert_eq!(adf["content"][0]["attrs"]["order"], 5);
+        assert_eq!(adf["content"][0]["content"][0]["type"], "listItem");
+    }
+
+    #[test]
+    fn test_markdown_ordered_list_omits_order_when_start_is_one() {
+        let adf = markdown_to_adf("1. alpha\n2. beta");
+        assert_eq!(adf["content"][0]["type"], "orderedList");
+        assert!(adf["content"][0]["attrs"].is_null());
+    }
+
+    #[test]
+    fn test_markdown_hard_break() {
+        let adf = markdown_to_adf("line one  \nline two");
+        let para = &adf["content"][0];
+        assert_eq!(para["type"], "paragraph");
+        let contents = para["content"].as_array().unwrap();
+        assert!(contents.iter().any(|n| n["type"] == "hardBreak"));
+    }
+
+    #[test]
+    fn test_markdown_horizontal_rule() {
+        let adf = markdown_to_adf("above\n\n---\n\nbelow");
+        let has_rule = adf["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["type"] == "rule");
+        assert!(has_rule, "expected a rule node, got: {adf}");
+    }
+
+    #[test]
+    fn test_markdown_soft_break_becomes_space() {
+        let adf = markdown_to_adf("first line\nsecond line");
+        let para = &adf["content"][0];
+        let text = para["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|n| n["text"].as_str())
+            .collect::<String>();
+        assert_eq!(text, "first line second line");
+    }
+
+    #[test]
+    fn test_markdown_nested_bullet_list() {
+        let adf = markdown_to_adf("- outer\n  - inner");
+        let outer_list = &adf["content"][0];
+        assert_eq!(outer_list["type"], "bulletList");
+        let outer_item = &outer_list["content"][0];
+        assert_eq!(outer_item["type"], "listItem");
+        let has_inner = outer_item["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["type"] == "bulletList");
+        assert!(has_inner, "expected nested bulletList, got: {outer_item}");
+    }
+
+    #[test]
+    fn test_markdown_blockquote_wraps_children() {
+        let adf = markdown_to_adf("> quoted text");
+        let bq = &adf["content"][0];
+        assert_eq!(bq["type"], "blockquote");
+        let para = &bq["content"][0];
+        assert_eq!(para["type"], "paragraph");
+        assert_eq!(para["content"][0]["text"], "quoted text");
+    }
+
+    #[test]
+    fn test_markdown_code_block_with_language() {
+        let adf = markdown_to_adf("```rust\nfn x() {}\n```");
+        let block = &adf["content"][0];
+        assert_eq!(block["type"], "codeBlock");
+        assert_eq!(block["attrs"]["language"], "rust");
+        assert_eq!(block["content"][0]["text"], "fn x() {}\n");
+    }
+
+    #[test]
+    fn test_markdown_empty_input() {
+        let adf = markdown_to_adf("");
+        assert_eq!(adf["type"], "doc");
+        assert_eq!(adf["content"], json!([]));
     }
 
     #[test]

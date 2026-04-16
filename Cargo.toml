@@ -32,6 +32,7 @@ base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 futures = { version = "0.3", default-features = false, features = ["async-await"] }
 urlencoding = "2"
+pulldown-cmark = { version = "0.13", default-features = false }
 
 [dev-dependencies]
 assert_cmd = "2"
