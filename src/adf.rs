@@ -411,7 +411,34 @@ mod tests {
 
     #[test]
     fn test_markdown_to_adf_snapshot() {
-        let input = "## Root cause\n\nThe auth module had a **critical bug** in `validate_token`.\n\n- Missing null check\n- Wrong error type\n\n```rust\nfn validate() -> bool {\n    true\n}\n```";
+        let input = concat!(
+            "# Header 1\n",
+            "\n",
+            "Paragraph with **bold**, *italic*, ~~strike~~, `inline code`, and a ",
+            "[link](https://example.com \"title\").\n",
+            "\n",
+            "## Header 2\n",
+            "\n",
+            "- bullet one\n",
+            "- bullet two\n",
+            "  - nested bullet\n",
+            "\n",
+            "1. ordered\n",
+            "2. items\n",
+            "\n",
+            "> blockquoted text\n",
+            "\n",
+            "| Col A | Col B |\n",
+            "| ----- | ----- |\n",
+            "| a1    | b1    |\n",
+            "| a2    | b2    |\n",
+            "\n",
+            "---\n",
+            "\n",
+            "```rust\n",
+            "fn validate() -> bool { true }\n",
+            "```\n",
+        );
         let adf = markdown_to_adf(input);
         insta::assert_json_snapshot!("markdown_complex_to_adf", adf);
     }
@@ -630,5 +657,89 @@ mod tests {
         });
         let text = adf_to_text(&adf);
         insta::assert_snapshot!("adf_to_text_complex", text);
+    }
+
+    #[test]
+    fn test_markdown_image_is_skipped() {
+        let adf = markdown_to_adf("before ![alt](https://example.com/img.png) after");
+        let para_text: String = adf["content"][0]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|n| n["text"].as_str())
+            .collect::<String>();
+        // Image should be omitted — only the surrounding text remains.
+        assert!(para_text.contains("before"), "got: {para_text:?}");
+        assert!(para_text.contains("after"), "got: {para_text:?}");
+        assert!(
+            !para_text.contains("img.png"),
+            "image URL should not leak: {para_text:?}"
+        );
+        // No image nodes emitted.
+        let has_image = adf.to_string().contains("\"image\"") || adf.to_string().contains("media");
+        assert!(!has_image, "no image/media nodes should be emitted: {adf}");
+    }
+
+    #[test]
+    fn test_markdown_task_list_syntax_preserved_as_text() {
+        // ENABLE_TASKLISTS is not set, so `[x]` renders as literal text inside a bullet item.
+        // pulldown-cmark emits text directly inside the listItem (no paragraph wrapper
+        // for tight lists), so we collect text nodes from the item's direct children.
+        let adf = markdown_to_adf("- [x] done task\n- [ ] pending task");
+        let list = &adf["content"][0];
+        assert_eq!(list["type"], "bulletList");
+        let items = list["content"].as_array().unwrap();
+        let text = |item: &Value| -> String {
+            item["content"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|n| {
+                    // Tight list: text nodes sit directly inside listItem.
+                    // Loose list: text nodes are wrapped in a paragraph.
+                    if let Some(t) = n["text"].as_str() {
+                        Some(t.to_string())
+                    } else {
+                        n["content"].as_array().map(|children| {
+                            children
+                                .iter()
+                                .filter_map(|c| c["text"].as_str())
+                                .collect::<String>()
+                        })
+                    }
+                })
+                .collect()
+        };
+        assert!(text(&items[0]).contains("[x]"), "got: {}", text(&items[0]));
+        assert!(text(&items[0]).contains("done task"));
+        assert!(text(&items[1]).contains("[ ]"));
+        assert!(text(&items[1]).contains("pending task"));
+    }
+
+    #[test]
+    fn test_markdown_table_cell_with_inline_formatting() {
+        // Verify marks (Task 2) compose correctly with table cells (Task 3).
+        // Structure: doc > table > tableRow > tableHeader > paragraph > text.
+        let adf = markdown_to_adf("| **bold** | [link](https://x) |\n| - | - |\n| a | b |");
+        let header_row = &adf["content"][0]["content"][0];
+        assert_eq!(header_row["type"], "tableRow");
+
+        // First header cell -> paragraph -> text "bold" with strong mark.
+        let first_header_cell = &header_row["content"][0];
+        assert_eq!(first_header_cell["type"], "tableHeader");
+        let first_header_para = &first_header_cell["content"][0];
+        assert_eq!(first_header_para["type"], "paragraph");
+        let bold_text = &first_header_para["content"][0];
+        assert_eq!(bold_text["text"], "bold");
+        assert_eq!(bold_text["marks"][0]["type"], "strong");
+
+        // Second header cell -> paragraph -> text "link" with link mark.
+        let second_header_cell = &header_row["content"][1];
+        assert_eq!(second_header_cell["type"], "tableHeader");
+        let second_header_para = &second_header_cell["content"][0];
+        let link_text = &second_header_para["content"][0];
+        assert_eq!(link_text["text"], "link");
+        assert_eq!(link_text["marks"][0]["type"], "link");
+        assert_eq!(link_text["marks"][0]["attrs"]["href"], "https://x");
     }
 }
