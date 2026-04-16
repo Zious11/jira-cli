@@ -52,6 +52,9 @@ enum NodeKind {
     OrderedList { start: u64 },
     ListItem,
     Sink,
+    // Container for inline marks. Has no ADF node; just manages the active_marks stack
+    // so End events pop cleanly.
+    InlineMark,
 }
 
 // Tasks 2 and 3 will extend this enum with:
@@ -96,6 +99,19 @@ impl AdfBuilder {
             Tag::List(None) => self.push(NodeKind::BulletList),
             Tag::List(Some(start)) => self.push(NodeKind::OrderedList { start }),
             Tag::Item => self.push(NodeKind::ListItem),
+            Tag::Strong => self.push_mark(json!({ "type": "strong" })),
+            Tag::Emphasis => self.push_mark(json!({ "type": "em" })),
+            Tag::Strikethrough => self.push_mark(json!({ "type": "strike" })),
+            Tag::Link {
+                dest_url, title, ..
+            } => {
+                let mut attrs = serde_json::Map::new();
+                attrs.insert("href".to_string(), json!(dest_url.as_ref()));
+                if !title.is_empty() {
+                    attrs.insert("title".to_string(), json!(title.as_ref()));
+                }
+                self.push_mark(json!({ "type": "link", "attrs": attrs }));
+            }
             Tag::Image { .. } => self.push(NodeKind::Sink),
             _ => self.push(NodeKind::Sink),
         }
@@ -130,6 +146,16 @@ impl AdfBuilder {
                 Some(node)
             }
             NodeKind::ListItem => Some(json!({ "type": "listItem", "content": children })),
+            NodeKind::InlineMark => {
+                self.pop_mark();
+                // InlineMark is a transparent container: splice its collected text
+                // nodes (already tagged with marks via active_marks at the time of
+                // push_text) into the parent, rather than discarding them.
+                for child in children {
+                    self.append_child(child);
+                }
+                None
+            }
             NodeKind::Sink => None,
         };
         if let Some(node) = node {
@@ -142,6 +168,15 @@ impl AdfBuilder {
             kind,
             children: Vec::new(),
         });
+    }
+
+    fn push_mark(&mut self, mark: Value) {
+        self.active_marks.push(mark);
+        self.push(NodeKind::InlineMark);
+    }
+
+    fn pop_mark(&mut self) {
+        self.active_marks.pop();
     }
 
     fn append_child(&mut self, node: Value) {
@@ -163,11 +198,51 @@ impl AdfBuilder {
                 return;
             }
         }
+        // Coalesce with the previous sibling text node when marks match. This keeps
+        // the output compact (e.g. when pulldown-cmark splits an escape sequence
+        // like `\*not italic\*` into two text events, both land in one text node).
+        if self.try_extend_prev_text(text) {
+            return;
+        }
         let mut node = json!({ "type": "text", "text": text });
         if !self.active_marks.is_empty() {
             node["marks"] = json!(self.active_marks);
         }
         self.append_child(node);
+    }
+
+    fn try_extend_prev_text(&mut self, text: &str) -> bool {
+        let siblings = match self.stack.last_mut() {
+            Some(top) => &mut top.children,
+            None => &mut self.root,
+        };
+        let Some(prev) = siblings.last_mut() else {
+            return false;
+        };
+        if prev.get("type").and_then(|t| t.as_str()) != Some("text") {
+            return false;
+        }
+        let prev_marks = prev.get("marks");
+        let same_marks = match (prev_marks, self.active_marks.is_empty()) {
+            (None, true) => true,
+            (Some(existing), false) => existing.as_array().is_some_and(|arr| {
+                arr.len() == self.active_marks.len()
+                    && arr.iter().zip(&self.active_marks).all(|(a, b)| a == b)
+            }),
+            _ => false,
+        };
+        if !same_marks {
+            return false;
+        }
+        if let Some(existing_text) = prev
+            .get_mut("text")
+            .and_then(|t| t.as_str().map(String::from))
+        {
+            let combined = existing_text + text;
+            prev["text"] = json!(combined);
+            return true;
+        }
+        false
     }
 
     fn push_code(&mut self, text: &str) {
@@ -421,6 +496,83 @@ mod tests {
         let adf = markdown_to_adf("");
         assert_eq!(adf["type"], "doc");
         assert_eq!(adf["content"], json!([]));
+    }
+
+    #[test]
+    fn test_markdown_italic_to_em_mark() {
+        let adf = markdown_to_adf("*italic words*");
+        let text_node = &adf["content"][0]["content"][0];
+        assert_eq!(text_node["type"], "text");
+        assert_eq!(text_node["text"], "italic words");
+        assert_eq!(text_node["marks"][0]["type"], "em");
+    }
+
+    #[test]
+    fn test_markdown_bold_to_strong_mark() {
+        let adf = markdown_to_adf("**bold words**");
+        let text_node = &adf["content"][0]["content"][0];
+        assert_eq!(text_node["text"], "bold words");
+        assert_eq!(text_node["marks"][0]["type"], "strong");
+    }
+
+    #[test]
+    fn test_markdown_strikethrough_to_strike_mark() {
+        let adf = markdown_to_adf("~~gone~~");
+        let text_node = &adf["content"][0]["content"][0];
+        assert_eq!(text_node["text"], "gone");
+        assert_eq!(text_node["marks"][0]["type"], "strike");
+    }
+
+    #[test]
+    fn test_markdown_link_preserves_href_and_no_title() {
+        let adf = markdown_to_adf("[jr](https://example.com/jr)");
+        let text_node = &adf["content"][0]["content"][0];
+        assert_eq!(text_node["text"], "jr");
+        let mark = &text_node["marks"][0];
+        assert_eq!(mark["type"], "link");
+        assert_eq!(mark["attrs"]["href"], "https://example.com/jr");
+        // Title is absent when not provided in markdown.
+        assert!(mark["attrs"]["title"].is_null());
+    }
+
+    #[test]
+    fn test_markdown_link_preserves_href_and_title() {
+        let adf = markdown_to_adf(r#"[jr](https://example.com/jr "JR docs")"#);
+        let mark = &adf["content"][0]["content"][0]["marks"][0];
+        assert_eq!(mark["type"], "link");
+        assert_eq!(mark["attrs"]["href"], "https://example.com/jr");
+        assert_eq!(mark["attrs"]["title"], "JR docs");
+    }
+
+    #[test]
+    fn test_markdown_mixed_marks() {
+        // "**bold *italic* bold**" — nested emphasis should produce two separate
+        // text nodes with overlapping/non-overlapping marks as pulldown-cmark parses them.
+        let adf = markdown_to_adf("**bold _italic_ bold**");
+        let content = adf["content"][0]["content"].as_array().unwrap();
+        // At minimum, every text node here should have the `strong` mark.
+        assert!(
+            content.iter().all(|n| n["marks"]
+                .as_array()
+                .is_some_and(|m| m.iter().any(|mk| mk["type"] == "strong"))),
+            "every text node should carry strong, got: {content:?}"
+        );
+        // And at least one node should also carry `em`.
+        assert!(
+            content.iter().any(|n| n["marks"]
+                .as_array()
+                .is_some_and(|m| m.iter().any(|mk| mk["type"] == "em"))),
+            "expected at least one node with em + strong, got: {content:?}"
+        );
+    }
+
+    #[test]
+    fn test_markdown_escape_literal_asterisk() {
+        let adf = markdown_to_adf(r"\*not italic\*");
+        let text_node = &adf["content"][0]["content"][0];
+        assert_eq!(text_node["text"], "*not italic*");
+        // No em mark because backslash escapes the asterisks.
+        assert!(text_node["marks"].is_null());
     }
 
     #[test]
