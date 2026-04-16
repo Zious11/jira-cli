@@ -920,16 +920,26 @@ pub(super) async fn handle_view(
 
             if let Some(field_id) = team_field_id {
                 if let Some(team_uuid) = issue.fields.team_id(field_id) {
-                    let team_display = match crate::cache::read_team_cache()
-                        .ok()
-                        .flatten()
-                        .and_then(|c| c.teams.into_iter().find(|t| t.id == team_uuid))
-                    {
-                        Some(cached) => cached.name,
-                        None => format!(
+                    let team_display = match crate::cache::read_team_cache() {
+                        Ok(Some(c)) => c
+                            .teams
+                            .into_iter()
+                            .find(|t| t.id == team_uuid)
+                            .map(|t| t.name)
+                            .unwrap_or_else(|| {
+                                format!(
+                                    "{} (name not cached — run 'jr team list --refresh')",
+                                    team_uuid
+                                )
+                            }),
+                        Ok(None) => format!(
                             "{} (name not cached — run 'jr team list --refresh')",
                             team_uuid
                         ),
+                        Err(e) => {
+                            eprintln!("warning: failed to read team cache: {e}");
+                            format!("{} (team cache unreadable)", team_uuid)
+                        }
                     };
                     rows.push(vec!["Team".into(), team_display]);
                 }

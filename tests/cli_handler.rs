@@ -48,7 +48,6 @@ fn jr_cmd_with_xdg(
         .env("XDG_CACHE_HOME", cache_dir)
         .env("XDG_CONFIG_HOME", config_dir)
         .arg("--no-input");
-    // Default output is table; no --output flag so we get the rendered table.
     cmd
 }
 
@@ -1472,13 +1471,8 @@ fn write_test_config_with_team_field(config_home: &std::path::Path) {
     .unwrap();
 }
 
-/// Team view tests use table mode (no --output flag) so that the Team row
-/// rendering is tested end-to-end, not just the raw JSON passthrough.
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_view_renders_team_name_when_cached() {
-    // Table mode: when team_field_id is configured and the UUID is in the local
-    // team cache, the view should display the resolved team name ("Platform").
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/HDL-500"))
@@ -1508,8 +1502,6 @@ async fn test_view_renders_team_name_when_cached() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_view_renders_team_uuid_fallback_when_not_cached() {
-    // Table mode: when team_field_id is configured but the UUID is not in the
-    // team cache, the view should display the raw UUID with a fallback hint.
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/HDL-501"))
@@ -1539,8 +1531,6 @@ async fn test_view_renders_team_uuid_fallback_when_not_cached() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_view_omits_team_row_when_field_unconfigured() {
-    // Table mode: when team_field_id is not configured, no "Team" row should
-    // appear. Confirms no crash and no team-related output.
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/HDL-502"))
@@ -1565,7 +1555,8 @@ async fn test_view_omits_team_row_when_field_unconfigured() {
         .args(["issue", "view", "HDL-502"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("No team field")); // summary present
+        .stdout(predicate::str::contains("No team field")) // summary present
+        .stdout(predicate::str::contains("│ Team").not());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1603,8 +1594,7 @@ async fn test_view_omits_team_row_when_field_absent_from_response() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_edit_team_substring_rejects_under_no_input() {
-    // Locks the guarantee that a single-hit substring does NOT silently resolve
-    // under --no-input (the old 1 => Exact behavior from before Task 1).
+    // Single-hit substring must NOT silently resolve under --no-input.
     //
     // Cache contains "Platform Ops" (id: team-uuid-platform-ops). Passing --team Ops
     // matches only "Platform Ops" as a substring → partial_match returns Ambiguous →
