@@ -8,11 +8,11 @@
 
 | Command | Call site |
 |---|---|
-| `jr issue comment --markdown` | `src/cli/issue/workflow.rs:417-420` |
-| `jr issue create --markdown` (description) | `src/cli/issue/create.rs:98-102` |
-| `jr issue edit --markdown` (description) | `src/cli/issue/create.rs:199-202` |
+| `jr issue comment --markdown` | `cli/issue/workflow.rs` (`handle_comment`) |
+| `jr issue create --markdown` (description) | `cli/issue/create.rs` (`handle_create`) |
+| `jr issue edit --markdown` (description) | `cli/issue/create.rs` (`handle_edit`) |
 
-All three route through `adf::markdown_to_adf()`. Today that function is a hand-rolled line-by-line parser (`src/adf.rs:18-144`) that handles only a partial subset of markdown: headings, bullet lists, code blocks, bold (`**`), inline code (`` ` ``).
+All three routed through `adf::markdown_to_adf()`. Before this change, that function was a hand-rolled line-by-line parser in `src/adf.rs` that handled only a partial subset of markdown: headings, bullet lists, code blocks, bold (`**`), inline code (`` ` ``).
 
 **What is silently dropped:**
 
@@ -28,19 +28,19 @@ All three route through `adf::markdown_to_adf()`. Today that function is a hand-
 - Escape sequences (`\*not italic\*`)
 - Interleaved inline marks (`**bold _italic_ bold**`)
 
-Each of these falls through to literal text inside a single `paragraph > text` node, which Jira renders as raw source syntax. The issue's "wiki markup" half is out of scope — `jr` has never claimed wiki markup support, and the `--markdown` flag only covers markdown.
+Each of these fell through to literal text inside a single `paragraph > text` node, which Jira rendered as raw source syntax. The issue's "wiki markup" half is out of scope — `jr` has never claimed wiki markup support, and the `--markdown` flag only covers markdown.
 
-The bug's blast radius is all three commands simultaneously. A user running `jr issue create --markdown` today gets a broken description stored on the issue exactly as badly as `jr issue comment --markdown` gets a broken comment body.
+The bug's blast radius was all three commands simultaneously. A user running `jr issue create --markdown` got a broken description stored on the issue exactly as badly as `jr issue comment --markdown` produced a broken comment body.
 
 ## Design
 
 ### Core Change
 
-Replace the internals of `adf::markdown_to_adf()` with a `pulldown_cmark::Parser` event stream and a stateful `AdfBuilder`. The public signature stays `fn markdown_to_adf(markdown: &str) -> serde_json::Value` — callers at `workflow.rs:417`, `create.rs:98`, `create.rs:199` don't change.
+Replace the internals of `adf::markdown_to_adf()` with a `pulldown_cmark::Parser` event stream and a stateful `AdfBuilder`. The public signature stays `fn markdown_to_adf(markdown: &str) -> serde_json::Value` — the three callers in `workflow.rs` and `create.rs` don't change.
 
 **Dependency:** `pulldown-cmark = { version = "0.13", default-features = false }` added to `Cargo.toml`. Default features (`simd`, `html`, `serde`) are unused by our event-iteration path; disabling them keeps the dep light.
 
-**Why pulldown-cmark vs extending the hand-rolled parser:** the existing parser has correctness gaps even in code paths we already ship (`parse_inline` at `adf.rs:100-144` can only match the first delimiter of each type, no escape handling, emphasis vs bold disambiguation collides with `*` / `**`). Adding each missing feature (links, italics, tables, nested lists, escape sequences, left/right flanking rules) means re-implementing CommonMark by hand — the spec pulldown-cmark already passes. Used by rustdoc and mdbook; de facto Rust CommonMark parser.
+**Why pulldown-cmark vs extending the hand-rolled parser:** the old parser had correctness gaps even in the features it claimed to support (its `parse_inline` helper could only match the first delimiter of each type, had no escape handling, and its emphasis-vs-bold disambiguation collided on `*` / `**`). Adding each missing feature (links, italics, tables, nested lists, escape sequences, left/right flanking rules) would have meant re-implementing CommonMark by hand — the spec pulldown-cmark already passes. Used by rustdoc and mdbook; de facto Rust CommonMark parser.
 
 **Why pulldown-cmark vs comrak:** comrak bundles an HTML renderer we'd never use and is heavier. markdown-rs (mdast) is less mature. pulldown-cmark's event-driven API maps cleanly to building an ADF tree.
 
@@ -223,9 +223,9 @@ Infallible signature — `markdown_to_adf(&str) → Value` does not return `Resu
   - Malformed tables revert to paragraph at the parser level — no `Tag::Table` event emitted
 - **Local verification (2026-04-16):** `cargo search pulldown-cmark` confirms latest `0.13.3`; project MSRV `rust-version = "1.85"` (`Cargo.toml:7`) well above pulldown-cmark's 1.74 requirement
 - **Codebase audit:**
-  - All three `--markdown` call sites (`workflow.rs:417-420`, `create.rs:98-102`, `create.rs:199-202`) use the identical `if markdown { markdown_to_adf } else { text_to_adf }` pattern — one rewrite fixes all three
-  - `adf_to_text` read-path (`list.rs:651,666,756`) operates on ADF `Value`s; no coupling to the write-path parser shape
-  - Existing insta snapshot lives at `src/snapshots/jr__adf__tests__markdown_complex_to_adf.snap` — regeneration on first test run is the convention
+  - All three `--markdown` call sites (in `cli/issue/workflow.rs` and `cli/issue/create.rs`) use the identical `if markdown { markdown_to_adf } else { text_to_adf }` pattern — one rewrite fixes all three
+  - The `adf_to_text` read-path (invoked from `cli/issue/list.rs` when displaying comments and descriptions) operates on ADF `Value`s; no coupling to the write-path parser shape
+  - The insta snapshot at `src/snapshots/jr__adf__tests__markdown_complex_to_adf.snap` is regenerated on first test run per the codebase convention
 
 ## Out of Scope (Follow-Ups)
 
