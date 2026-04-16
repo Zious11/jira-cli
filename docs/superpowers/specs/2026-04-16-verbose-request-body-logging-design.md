@@ -19,7 +19,7 @@ This is the same diagnostic gap that obscured #181 (silent team mis-resolution) 
 
 ### Core Change
 
-In `src/api/client.rs`, both `send()` and `send_raw()` already build a clone of the request for inspection (`req.try_clone().and_then(|r| r.build().ok())`). Extend that block to also log the body when present:
+In `src/api/client.rs`, `send()` already clones-and-builds the `RequestBuilder` for inspection (`req.try_clone().and_then(|r| r.build().ok())`), and `send_raw()` already operates on a pre-built `reqwest::Request`. Extend each verbose block to also log the body when present:
 
 ```rust
 // before (src/api/client.rs:170-174)
@@ -95,10 +95,11 @@ The issue accepts either `--verbose` or a new `--debug` flag. Sticking with `--v
 
 ## Testing
 
-**Handler tests** (in `tests/cli_handler.rs` since this is end-to-end CLI behavior, not a unit boundary):
+**Handler tests** (in `tests/cli_handler.rs` since this is end-to-end CLI behavior, not a unit boundary). All three are built on top of the existing `jr_cmd` / `jr_api_cmd` helpers with `.arg("--verbose")` appended (clap global flags can appear before the subcommand in any order):
 
-1. **`test_verbose_logs_request_body_for_put`** — wiremock 204 for `PUT /rest/api/3/issue/HDL-1`, run `jr --verbose issue edit HDL-1 -s "new summary"`, assert stderr contains both `[verbose] PUT` and `[verbose] body: {"fields":` (substring match — exact serialized form depends on serde struct field order, so substring is more robust than exact-equality).
-2. **`test_verbose_omits_body_line_for_get`** — wiremock 200 for `GET /rest/api/3/issue/HDL-1`, run `jr --verbose issue view HDL-1 --output json`, assert stderr contains `[verbose] GET` and does **not** contain `[verbose] body:`.
+1. **`test_verbose_logs_request_body_for_put`** — wiremock 204 for `PUT /rest/api/3/issue/HDL-1` (with a `body_partial_json({"fields":{"summary":"new summary"}})` matcher pinning the wire payload), run `jr --no-input --output json --verbose issue edit HDL-1 --summary "new summary"`, assert stderr contains `[verbose] PUT`, `[verbose] body:`, and the substring `"summary":"new summary"` (substring match — exact serialized form depends on serde field order, so substring is more robust than exact-equality).
+2. **`test_verbose_omits_body_line_for_get`** — wiremock 200 for `GET /rest/api/3/issue/HDL-1`, run `jr --no-input --output json --verbose issue view HDL-1`, assert stderr contains `[verbose] GET` and does **not** contain `[verbose] body:`.
+3. **`test_verbose_logs_request_body_for_send_raw`** — wiremock 204 for `POST /rest/api/3/issue/HDL-1/transitions`, run `jr --no-input --verbose api /rest/api/3/issue/HDL-1/transitions -X post -d '{"transition":{"id":"31"}}'`, assert stderr contains `[verbose] POST` and the literal `[verbose] body: {"transition":{"id":"31"}}`. Covers the `send_raw()` path used by `jr api` (independent of `send()`).
 
 No new unit tests in `client.rs`. The verbose-logging branch has no return value or business logic — it's pure I/O. End-to-end tests are the right level.
 

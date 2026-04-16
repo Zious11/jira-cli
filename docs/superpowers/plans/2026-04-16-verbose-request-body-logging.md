@@ -24,8 +24,8 @@ No new source code files or modules. No fixture changes — the existing `issue_
 ### Task 1: TDD — verbose mode logs request body
 
 **Files:**
-- Modify: `src/api/client.rs:170-174` and `src/api/client.rs:244-246`
-- Modify: `tests/cli_handler.rs` (append two tests)
+- Modify: `src/api/client.rs:170-174` (`send`) and `src/api/client.rs:244-246` (`send_raw`)
+- Modify: `tests/cli_handler.rs` (append three tests: PUT body, GET body absent, `send_raw` body via `jr api`)
 
 - [ ] **Step 1.1: Write the failing test for PUT body**
 
@@ -87,15 +87,52 @@ async fn test_verbose_omits_body_line_for_get() {
 
 `predicate::str::contains(...).not()` is the established negation pattern (predicates 3.x; already in use in this codebase via `predicates::prelude::*`).
 
-- [ ] **Step 1.3: Run both tests to verify they fail**
+- [ ] **Step 1.2b: Write the failing test for `send_raw` body (jr api)**
+
+`send_raw()` is a separate code path used by `jr api` and is not covered by the PUT test (which goes through `send()`). Append:
+
+```rust
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_verbose_logs_request_body_for_send_raw() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/HDL-1/transitions"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    jr_api_cmd(&server.uri())
+        .arg("--verbose")
+        .args([
+            "api",
+            "/rest/api/3/issue/HDL-1/transitions",
+            "-X",
+            "post",
+            "-d",
+            r#"{"transition":{"id":"31"}}"#,
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("[verbose] POST"))
+        .stderr(predicate::str::contains(
+            "[verbose] body: {\"transition\":{\"id\":\"31\"}}",
+        ));
+}
+```
+
+Note `jr_api_cmd` (not `jr_cmd`) — `jr api` does not accept `--output json` so the helper without that flag is appropriate. The `-d` payload is asserted byte-exact in stderr because `send_raw` does not re-serialize the body.
+
+- [ ] **Step 1.3: Run all three tests to verify they fail**
 
 Run:
 ```bash
-cargo test --test cli_handler test_verbose_logs_request_body_for_put -- --nocapture
-cargo test --test cli_handler test_verbose_omits_body_line_for_get -- --nocapture
+cargo test --test cli_handler test_verbose -- --nocapture
 ```
 
 Expected for `test_verbose_logs_request_body_for_put`: **FAIL** at the `"[verbose] body:"` assertion — current code only prints `[verbose] PUT <url>`, no body line.
+
+Expected for `test_verbose_logs_request_body_for_send_raw`: **FAIL** at the `"[verbose] body:"` assertion for the same reason.
 
 Expected for `test_verbose_omits_body_line_for_get`: **PASS** unexpectedly (the body line is already absent because no body is logged today). This is OK — keep the test as a regression guard for after the change.
 
@@ -154,15 +191,14 @@ Replace with:
 
 Note the difference: `send_raw` already has a built `reqwest::Request` (not a `RequestBuilder`), so `req.body()` works directly without the `try_clone().build()` dance.
 
-- [ ] **Step 1.6: Run both tests to verify they pass**
+- [ ] **Step 1.6: Run all three tests to verify they pass**
 
 Run:
 ```bash
-cargo test --test cli_handler test_verbose_logs_request_body_for_put -- --nocapture
-cargo test --test cli_handler test_verbose_omits_body_line_for_get -- --nocapture
+cargo test --test cli_handler test_verbose -- --nocapture
 ```
 
-Expected: both **PASS**.
+Expected: all three **PASS**.
 
 If `test_verbose_logs_request_body_for_put` still fails on the substring `"\"summary\":\"new summary\""`, dump the captured stderr (visible with `--nocapture`) and check whether serde produced spaces around the colon (e.g. `"summary": "new summary"`). If so, change the assertion to use a less brittle substring like `predicate::str::contains("new summary")` rather than weakening the structural check — but only after confirming the actual format. (`serde_json` defaults to compact, no spaces, so this should not be needed.)
 
