@@ -1623,6 +1623,9 @@ async fn test_verbose_logs_request_body_for_put() {
 
     Mock::given(method("PUT"))
         .and(path("/rest/api/3/issue/HDL-1"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": {"summary": "new summary"}
+        })))
         .respond_with(ResponseTemplate::new(204))
         .mount(&server)
         .await;
@@ -1641,6 +1644,38 @@ async fn test_verbose_logs_request_body_for_put() {
         .stderr(predicate::str::contains("[verbose] PUT"))
         .stderr(predicate::str::contains("[verbose] body:"))
         .stderr(predicate::str::contains("\"summary\":\"new summary\""));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_verbose_logs_request_body_for_send_raw() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/HDL-1/transitions"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .arg("--no-input")
+        .arg("--verbose")
+        .args([
+            "api",
+            "/rest/api/3/issue/HDL-1/transitions",
+            "-X",
+            "post",
+            "-d",
+            r#"{"transition":{"id":"31"}}"#,
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("[verbose] POST"))
+        .stderr(predicate::str::contains(
+            "[verbose] body: {\"transition\":{\"id\":\"31\"}}",
+        ));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

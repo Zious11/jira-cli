@@ -13,7 +13,7 @@ Updated <KEY>
 
 When a Jira mutation silently drops a value (e.g. unknown team UUID, unsettable custom field), the user has no way to confirm what payload was actually sent. The only fallback is to hand-trace the source or reach for `curl` with raw credentials — both defeat the purpose of a CLI wrapper.
 
-This is the same diagnostic gap that obscured #181 (silent team mis-resolution) for users in the field. Atlassian's `PUT /rest/api/3/issue/{key}` returns **200 with no `warningMessages`** when fields are ignored ("Fields that are not settable will be ignored", per Atlassian REST v3 intro docs), so the response provides no signal either. The request body is the minimum information needed to debug from the client side.
+This is the same diagnostic gap that obscured #181 (silent team mis-resolution) for users in the field. Atlassian's `PUT /rest/api/3/issue/{key}` returns **204 No Content with an empty body and no `warningMessages`** when fields are ignored ("Fields that are not settable will be ignored", per Atlassian REST v3 intro docs), so the response provides no signal either. The request body is the minimum information needed to debug from the client side.
 
 ## Design
 

@@ -50,7 +50,7 @@ async fn test_verbose_logs_request_body_for_put() {
         .arg("--verbose")
         .arg("--output")
         .arg("json")
-        .args(["issue", "edit", "HDL-1", "-s", "new summary"])
+        .args(["issue", "edit", "HDL-1", "--summary", "new summary"])
         .assert()
         .success()
         .stderr(predicate::str::contains("[verbose] PUT"))
