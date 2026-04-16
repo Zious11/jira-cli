@@ -1,6 +1,5 @@
 ---
 source: src/adf.rs
-assertion_line: 492
 expression: adf
 ---
 {

@@ -1,3 +1,6 @@
+use pulldown_cmark::{
+    CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd, TextMergeStream,
+};
 use serde_json::{Value, json};
 
 pub fn text_to_adf(text: &str) -> Value {
@@ -14,10 +17,6 @@ pub fn text_to_adf(text: &str) -> Value {
         ]
     })
 }
-
-use pulldown_cmark::{
-    CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd, TextMergeStream,
-};
 
 pub fn markdown_to_adf(markdown: &str) -> Value {
     let options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH;
