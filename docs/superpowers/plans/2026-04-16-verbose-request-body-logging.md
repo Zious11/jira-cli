@@ -6,7 +6,7 @@
 
 **Architecture:** Two surgical edits to existing `if self.verbose { ... }` blocks in `src/api/client.rs` (`send` and `send_raw`). Use `reqwest::Body::as_bytes()` on the buffered JSON body produced by `RequestBuilder::json()`, format as `[verbose] body: {...}` on stderr. Three new handler tests in `tests/cli_handler.rs` lock the behavior end-to-end (PUT body present, GET body absent, `send_raw` body via `jr api`).
 
-**Tech Stack:** Rust, reqwest 0.12 (async), assert_cmd + predicates, wiremock
+**Tech Stack:** Rust, reqwest 0.13 (async), assert_cmd + predicates, wiremock
 
 ---
 
@@ -42,14 +42,8 @@ async fn test_verbose_logs_request_body_for_put() {
         .mount(&server)
         .await;
 
-    Command::cargo_bin("jr")
-        .unwrap()
-        .env("JR_BASE_URL", server.uri())
-        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
-        .arg("--no-input")
+    jr_cmd(&server.uri())
         .arg("--verbose")
-        .arg("--output")
-        .arg("json")
         .args(["issue", "edit", "HDL-1", "--summary", "new summary"])
         .assert()
         .success()
@@ -59,7 +53,7 @@ async fn test_verbose_logs_request_body_for_put() {
 }
 ```
 
-This test does NOT use the `jr_cmd` helper because that helper hardcodes `--output json` and we need to insert `--verbose` between the global flags and the subcommand. Building the command inline keeps the flag order explicit.
+Uses the `jr_cmd(&server.uri())` helper and appends `.arg("--verbose")` — clap global flags can appear before the subcommand in any order, so there is no need to reconstruct the command from scratch.
 
 The third `stderr` assertion (`"\"summary\":\"new summary\""`) is the strict check: it confirms the body line really contains the JSON the CLI sent, not just the prefix. Substring match (no leading `{`) tolerates whatever wrapping serde produces around it (e.g. `{"fields":{...}}`).
 
@@ -81,14 +75,8 @@ async fn test_verbose_omits_body_line_for_get() {
         .mount(&server)
         .await;
 
-    Command::cargo_bin("jr")
-        .unwrap()
-        .env("JR_BASE_URL", server.uri())
-        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
-        .arg("--no-input")
+    jr_cmd(&server.uri())
         .arg("--verbose")
-        .arg("--output")
-        .arg("json")
         .args(["issue", "view", "HDL-1"])
         .assert()
         .success()

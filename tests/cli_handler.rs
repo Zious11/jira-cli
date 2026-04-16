@@ -1630,14 +1630,8 @@ async fn test_verbose_logs_request_body_for_put() {
         .mount(&server)
         .await;
 
-    Command::cargo_bin("jr")
-        .unwrap()
-        .env("JR_BASE_URL", server.uri())
-        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
-        .arg("--no-input")
+    jr_cmd(&server.uri())
         .arg("--verbose")
-        .arg("--output")
-        .arg("json")
         .args(["issue", "edit", "HDL-1", "--summary", "new summary"])
         .assert()
         .success()
@@ -1656,11 +1650,7 @@ async fn test_verbose_logs_request_body_for_send_raw() {
         .mount(&server)
         .await;
 
-    Command::cargo_bin("jr")
-        .unwrap()
-        .env("JR_BASE_URL", server.uri())
-        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
-        .arg("--no-input")
+    jr_api_cmd(&server.uri())
         .arg("--verbose")
         .args([
             "api",
@@ -1694,14 +1684,8 @@ async fn test_verbose_omits_body_line_for_get() {
         .mount(&server)
         .await;
 
-    Command::cargo_bin("jr")
-        .unwrap()
-        .env("JR_BASE_URL", server.uri())
-        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
-        .arg("--no-input")
+    jr_cmd(&server.uri())
         .arg("--verbose")
-        .arg("--output")
-        .arg("json")
         .args(["issue", "view", "HDL-1"])
         .assert()
         .success()
