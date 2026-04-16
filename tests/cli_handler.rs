@@ -1616,3 +1616,60 @@ async fn test_edit_team_substring_rejects_under_no_input() {
         .stderr(predicate::str::contains("Multiple teams match"))
         .stderr(predicate::str::contains("Platform Ops"));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_verbose_logs_request_body_for_put() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/HDL-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .arg("--no-input")
+        .arg("--verbose")
+        .arg("--output")
+        .arg("json")
+        .args(["issue", "edit", "HDL-1", "--summary", "new summary"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("[verbose] PUT"))
+        .stderr(predicate::str::contains("[verbose] body:"))
+        .stderr(predicate::str::contains("\"summary\":\"new summary\""));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_verbose_omits_body_line_for_get() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/HDL-1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(common::fixtures::issue_response(
+                "HDL-1",
+                "old summary",
+                "To Do",
+            )),
+        )
+        .mount(&server)
+        .await;
+
+    Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .arg("--no-input")
+        .arg("--verbose")
+        .arg("--output")
+        .arg("json")
+        .args(["issue", "view", "HDL-1"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("[verbose] GET"))
+        .stderr(predicate::str::contains("[verbose] body:").not());
+}

@@ -170,6 +170,9 @@ impl JiraClient {
             if self.verbose {
                 if let Some(ref r) = req.try_clone().and_then(|r| r.build().ok()) {
                     eprintln!("[verbose] {} {}", r.method(), r.url());
+                    if let Some(bytes) = r.body().and_then(|b| b.as_bytes()) {
+                        eprintln!("[verbose] body: {}", String::from_utf8_lossy(bytes));
+                    }
                 }
             }
 
@@ -243,6 +246,9 @@ impl JiraClient {
 
             if self.verbose {
                 eprintln!("[verbose] {} {}", req.method(), req.url());
+                if let Some(bytes) = req.body().and_then(|b| b.as_bytes()) {
+                    eprintln!("[verbose] body: {}", String::from_utf8_lossy(bytes));
+                }
             }
 
             let response = match self.client.execute(req).await {
