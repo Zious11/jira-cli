@@ -1567,3 +1567,36 @@ async fn test_view_omits_team_row_when_field_unconfigured() {
         .success()
         .stdout(predicate::str::contains("No team field")); // summary present
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_view_omits_team_row_when_field_absent_from_response() {
+    // Table mode: team_field_id IS configured, but the Jira response does not
+    // include that custom field on the issue. The Team row must be omitted —
+    // team_id() returns None when the key is missing, and the outer
+    // `if let Some(team_uuid)` guard skips rendering entirely.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/ABC-123"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(common::fixtures::issue_response(
+                "ABC-123",
+                "No team set",
+                "To Do",
+            )),
+        )
+        .mount(&server)
+        .await;
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_test_team_cache(cache_dir.path());
+    write_test_config_with_team_field(config_dir.path());
+
+    jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["issue", "view", "ABC-123"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No team set")) // summary present
+        .stdout(predicate::str::contains("│ Team").not()) // no Team field row in table
+        .stdout(predicate::str::contains(TEST_TEAM_FIELD_ID).not()); // no field ID leaking
+}
