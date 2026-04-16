@@ -162,42 +162,52 @@ impl AdfBuilder {
                 }
                 Some(node)
             }
-            NodeKind::ListItem => Some(json!({ "type": "listItem", "content": children })),
+            NodeKind::ListItem => {
+                // ADF requires listItem content to be block-level (paragraph,
+                // bulletList, orderedList, codeBlock, mediaSingle). pulldown-cmark
+                // emits Text events directly inside Item for tight lists, and a
+                // nested list appears as a block sibling after those inlines.
+                let wrapped = wrap_inlines_as_blocks(
+                    children,
+                    &[
+                        "paragraph",
+                        "bulletList",
+                        "orderedList",
+                        "codeBlock",
+                        "mediaSingle",
+                    ],
+                );
+                Some(json!({ "type": "listItem", "content": wrapped }))
+            }
             NodeKind::Table => Some(json!({ "type": "table", "content": children })),
             NodeKind::TableRow => Some(json!({ "type": "tableRow", "content": children })),
             NodeKind::TableCell { is_header } => {
-                // ADF requires cells to wrap content in a block (paragraph).
-                // pulldown-cmark emits Text events directly inside TableCell
-                // without a Paragraph wrapper, so we wrap here.
+                // ADF requires cells to wrap content in a block. pulldown-cmark
+                // emits Text events directly inside TableCell without a Paragraph
+                // wrapper, so we wrap here.
                 let cell_type = if is_header {
                     "tableHeader"
                 } else {
                     "tableCell"
                 };
-                let wrapped_content = if children.iter().all(|n| {
-                    n["type"].as_str().is_some_and(|t| {
-                        matches!(
-                            t,
-                            "paragraph"
-                                | "bulletList"
-                                | "orderedList"
-                                | "blockquote"
-                                | "codeBlock"
-                                | "heading"
-                        )
-                    })
-                }) {
-                    children
-                } else {
-                    vec![json!({ "type": "paragraph", "content": children })]
-                };
-                Some(json!({ "type": cell_type, "content": wrapped_content }))
+                let wrapped = wrap_inlines_as_blocks(
+                    children,
+                    &[
+                        "paragraph",
+                        "bulletList",
+                        "orderedList",
+                        "blockquote",
+                        "codeBlock",
+                        "heading",
+                    ],
+                );
+                Some(json!({ "type": cell_type, "content": wrapped }))
             }
             NodeKind::InlineMark => {
                 self.pop_mark();
-                // InlineMark is a transparent container: splice its collected text
-                // nodes (already tagged with marks via active_marks at the time of
-                // push_text) into the parent, rather than discarding them.
+                // InlineMark has no ADF node of its own. Splice children (already
+                // tagged with marks at `push_text` time, plus any nested text or
+                // hardBreak nodes from inner mark spans) into the parent.
                 for child in children {
                     self.append_child(child);
                 }
@@ -273,6 +283,45 @@ impl AdfBuilder {
     fn finish(self) -> Vec<Value> {
         self.root
     }
+}
+
+/// Group a mixed list of inline and block nodes into pure block-level output.
+///
+/// ADF requires `listItem`, `tableCell`, and `tableHeader` content to be
+/// block-level (paragraph, lists, codeBlock, etc.). pulldown-cmark emits
+/// inline events (Text, hardBreak) directly inside tight list items and
+/// table cells without a paragraph wrapper, and nested block structures can
+/// appear alongside inline content (e.g., a tight list item with a nested
+/// bullet list: `[Text("outer"), bulletList]`).
+///
+/// Each run of consecutive inline nodes is wrapped in its own paragraph;
+/// block nodes (matching `block_types`) pass through as siblings. An empty
+/// input produces a single empty paragraph so the output always satisfies
+/// ADF's "at least one block" requirement.
+fn wrap_inlines_as_blocks(children: Vec<Value>, block_types: &[&str]) -> Vec<Value> {
+    if children.is_empty() {
+        return vec![json!({ "type": "paragraph", "content": [] })];
+    }
+    let is_block = |n: &Value| n["type"].as_str().is_some_and(|t| block_types.contains(&t));
+    let mut result: Vec<Value> = Vec::new();
+    let mut inline_run: Vec<Value> = Vec::new();
+    for child in children {
+        if is_block(&child) {
+            if !inline_run.is_empty() {
+                result.push(json!({
+                    "type": "paragraph",
+                    "content": std::mem::take(&mut inline_run),
+                }));
+            }
+            result.push(child);
+        } else {
+            inline_run.push(child);
+        }
+    }
+    if !inline_run.is_empty() {
+        result.push(json!({ "type": "paragraph", "content": inline_run }));
+    }
+    result
 }
 
 fn heading_level_to_u8(level: HeadingLevel) -> u8 {
@@ -530,6 +579,55 @@ mod tests {
         let adf = markdown_to_adf("");
         assert_eq!(adf["type"], "doc");
         assert_eq!(adf["content"], json!([]));
+    }
+
+    #[test]
+    fn test_markdown_inline_code_mark_and_composition() {
+        // Plain inline code: emits text with a `code` mark.
+        let adf = markdown_to_adf("see `foo` here");
+        let code_node = adf["content"][0]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["text"] == "foo")
+            .expect("expected a text node for 'foo'");
+        assert_eq!(code_node["marks"][0]["type"], "code");
+
+        // Inline code inside bold: composes both marks on the same text node.
+        let adf = markdown_to_adf("**bold `code` bold**");
+        let code_node = adf["content"][0]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["text"] == "code")
+            .expect("expected a text node for 'code'");
+        let mark_types: Vec<&str> = code_node["marks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|m| m["type"].as_str())
+            .collect();
+        assert!(
+            mark_types.contains(&"code") && mark_types.contains(&"strong"),
+            "expected code + strong on the inline-code inside bold, got: {mark_types:?}"
+        );
+    }
+
+    #[test]
+    fn test_markdown_inline_html_becomes_literal_text() {
+        // ENABLE_HTML is not set in Options; pulldown-cmark still emits Html/InlineHtml
+        // events which we forward to push_text so the literal source is preserved.
+        let adf = markdown_to_adf("before <span>x</span> after");
+        let para_text: String = adf["content"][0]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|n| n["text"].as_str())
+            .collect();
+        assert!(
+            para_text.contains("<span>") && para_text.contains("</span>"),
+            "HTML should pass through as literal text, got: {para_text:?}"
+        );
     }
 
     #[test]

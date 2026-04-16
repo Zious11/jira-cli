@@ -1,6 +1,6 @@
 ---
 source: src/adf.rs
-assertion_line: 443
+assertion_line: 492
 expression: adf
 ---
 {
@@ -112,8 +112,13 @@ expression: adf
         {
           "content": [
             {
-              "text": "bullet one",
-              "type": "text"
+              "content": [
+                {
+                  "text": "bullet one",
+                  "type": "text"
+                }
+              ],
+              "type": "paragraph"
             }
           ],
           "type": "listItem"
@@ -121,16 +126,26 @@ expression: adf
         {
           "content": [
             {
-              "text": "bullet two",
-              "type": "text"
+              "content": [
+                {
+                  "text": "bullet two",
+                  "type": "text"
+                }
+              ],
+              "type": "paragraph"
             },
             {
               "content": [
                 {
                   "content": [
                     {
-                      "text": "nested bullet",
-                      "type": "text"
+                      "content": [
+                        {
+                          "text": "nested bullet",
+                          "type": "text"
+                        }
+                      ],
+                      "type": "paragraph"
                     }
                   ],
                   "type": "listItem"
@@ -149,8 +164,13 @@ expression: adf
         {
           "content": [
             {
-              "text": "ordered",
-              "type": "text"
+              "content": [
+                {
+                  "text": "ordered",
+                  "type": "text"
+                }
+              ],
+              "type": "paragraph"
             }
           ],
           "type": "listItem"
@@ -158,8 +178,13 @@ expression: adf
         {
           "content": [
             {
-              "text": "items",
-              "type": "text"
+              "content": [
+                {
+                  "text": "items",
+                  "type": "text"
+                }
+              ],
+              "type": "paragraph"
             }
           ],
           "type": "listItem"
