@@ -181,7 +181,7 @@ Kept tests: the existing `test_markdown_heading`, `test_markdown_list`, `test_ma
 
 **Snapshot test:** `test_markdown_to_adf_snapshot` (existing) — updated to exercise the union of features in one realistic prose block. Catches regressions from pulldown-cmark version bumps and builder refactors. Snapshot file regenerates on first run.
 
-**Integration tests:** `tests/issue_commands.rs:589,631,671` use `jr::adf::markdown_to_adf()` as the wiremock `body_partial_json` matcher source-of-truth. They auto-track whatever the new implementation emits — no test code change needed. They verify the full CLI → client → HTTP path ships the new ADF shape.
+**Integration tests:** `tests/issue_commands.rs:631` uses `jr::adf::markdown_to_adf()` as the wiremock `body_partial_json` matcher source-of-truth for the `--markdown` write path. (Sibling tests at `:589` and `:671` exercise `text_to_adf` and are unaffected.) The markdown test auto-tracks whatever the new implementation emits — no test code change needed. It verifies the full CLI → client → HTTP path ships the new ADF shape.
 
 **No proptest.** The codebase uses proptest only for pure symbolic round-trip functions (`partial_match`, `jql`, `duration`). Markdown→ADF is stateful event-driven; pulldown-cmark already passes the CommonMark spec suite upstream. Our responsibility is the mapping, not the parser.
 

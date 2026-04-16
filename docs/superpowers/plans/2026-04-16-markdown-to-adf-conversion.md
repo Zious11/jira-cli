@@ -19,7 +19,7 @@
 | `src/adf.rs #[cfg(test)]` | Add ~13 new feature-focused unit tests; regenerate the existing `test_markdown_to_adf_snapshot` |
 | `src/snapshots/jr__adf__tests__markdown_complex_to_adf.snap` | Regenerated (accepted via `cargo insta accept`) |
 
-No new files, no new modules. `tests/issue_commands.rs` is unchanged — its three call sites (`:589,:631,:671`) import `jr::adf::markdown_to_adf` and use it as the wiremock matcher's source-of-truth, so they auto-track whatever the new implementation emits.
+No new files, no new modules. `tests/issue_commands.rs` is unchanged — its markdown call site (`:631`) imports `jr::adf::markdown_to_adf` and uses it as the wiremock matcher's source-of-truth, so it auto-tracks whatever the new implementation emits. (Sibling tests at `:589` and `:671` use `text_to_adf` and are unaffected.)
 
 ## Task Decomposition
 
