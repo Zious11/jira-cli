@@ -225,9 +225,11 @@ mod tests {
     }
 
     #[test]
-    fn partial_match() {
+    fn single_substring_is_ambiguous() {
+        // Single substring hits are now Ambiguous — callers must use the exact name.
         let queues = vec![make_queue("10", "Triage"), make_queue("20", "In Progress")];
-        assert_eq!(find_queue_id("tri", &queues).unwrap(), "10");
+        let err = find_queue_id("tri", &queues).unwrap_err();
+        assert!(err.starts_with("ambiguous"), "got: {err}");
     }
 
     #[test]

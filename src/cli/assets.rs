@@ -827,14 +827,17 @@ mod tests {
     }
 
     #[test]
-    fn filter_status_partial_match() {
+    fn filter_status_single_substring_is_ambiguous() {
+        // Single substring hits are now Ambiguous — callers must use the exact name.
         let tickets = vec![
             make_ticket("A-1", "In Progress", "yellow"),
             make_ticket("A-2", "Done", "green"),
         ];
-        let result = filter_tickets(tickets, false, Some("prog")).unwrap();
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].key, "A-1");
+        let result = filter_tickets(tickets, false, Some("prog"));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Ambiguous"), "got: {err}");
+        assert!(err.contains("In Progress"), "got: {err}");
     }
 
     #[test]
@@ -988,10 +991,13 @@ mod tests {
     }
 
     #[test]
-    fn resolve_schema_partial_name_match() {
+    fn resolve_schema_single_substring_is_ambiguous() {
+        // Single substring hits are now Ambiguous — callers must use the exact name.
         let schemas = vec![make_schema("10", "ITSM Assets"), make_schema("20", "HR")];
-        let result = super::resolve_schema("itsm", &schemas).unwrap();
-        assert_eq!(result.id, "10");
+        let err = super::resolve_schema("itsm", &schemas).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Ambiguous"), "got: {msg}");
+        assert!(msg.contains("ITSM Assets"), "got: {msg}");
     }
 
     #[test]
