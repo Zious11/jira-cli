@@ -73,7 +73,7 @@ pub fn filter_story_points_fields(fields: &[Field]) -> Vec<(String, String)> {
         })
         .collect();
 
-    matches.sort_by(|a, b| b.2.cmp(&a.2));
+    matches.sort_by_key(|m| std::cmp::Reverse(m.2));
     matches
         .into_iter()
         .map(|(id, name, _)| (id, name))

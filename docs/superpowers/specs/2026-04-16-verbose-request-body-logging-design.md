@@ -91,7 +91,7 @@ The issue accepts either `--verbose` or a new `--debug` flag. Sticking with `--v
 |------|--------|
 | `src/api/client.rs` | `send()` (~line 170): extend verbose block with body line |
 | `src/api/client.rs` | `send_raw()` (~line 244): extend verbose block with body line |
-| `tests/cli_handler.rs` | Add 2 handler tests: PUT body appears in stderr under `--verbose`; GET body line omitted |
+| `tests/cli_handler.rs` | Add 3 handler tests: PUT body appears in stderr under `--verbose`; GET body line omitted; `send_raw` (used by `jr api`) emits the literal `-d` payload |
 
 ## Testing
 
@@ -121,7 +121,7 @@ No new unit tests in `client.rs`. The verbose-logging branch has no return value
 ## Validation
 
 - **Context7 (`/websites/rs_reqwest`):** `reqwest::Body::as_bytes(&self) -> Option<&[u8]>` exists on the async type and returns `Some(&[u8])` for buffered bodies. `.json(body)` produces a buffered body via `serde_json::to_vec`. The existing `try_clone().build()` pattern in `client.rs:171` is the supported way to produce an inspectable `Request` from a `RequestBuilder`.
-- **Perplexity (2026-04-16):** Atlassian docs confirm `PUT /rest/api/3/issue/{key}` returns 200 with no `warningMessages` and no error indicators when fields are silently ignored. The request body is the only client-side signal available.
+- **Perplexity (2026-04-16):** Atlassian docs confirm `PUT /rest/api/3/issue/{key}` returns 204 No Content (per JRACLOUD-37536) with no `warningMessages` and no error indicators when fields are silently ignored. The request body is the only client-side signal available.
 - **Perplexity (2026-04-16):** `curl -v` does NOT print request bodies (uses `--trace-ascii` for that); `httpie -v` shows headers, `-vv` adds bodies; `kubectl` reserves bodies for `-v=8+`; `gh -v` does not print bodies. Convention is bodies-out-of-verbose for tools whose `-v` already includes TLS/headers/timings. Our `--verbose` is currently empty of that detail, so the convention argument doesn't bind here.
 - **Codebase audit:** all OAuth credential exchanges (`src/api/auth.rs:163-186, 222-244`) use a separate `reqwest::Client::new()` and never traverse `JiraClient::send()`. The verbose-logging path will not see `client_secret` or `refresh_token` payloads.
 - **Codebase audit:** `src/api/client.rs:170-174, 244-246` are the only `[verbose]` log sites for outgoing requests. No third site to update.

@@ -4,7 +4,7 @@
 
 **Goal:** Print the JSON request body alongside the existing `[verbose] METHOD URL` line whenever `--verbose` is set, so users can debug Jira's silent field drops without reaching for `curl`.
 
-**Architecture:** Two surgical edits to existing `if self.verbose { ... }` blocks in `src/api/client.rs` (`send` and `send_raw`). Use `reqwest::Body::as_bytes()` on the buffered JSON body produced by `RequestBuilder::json()`, format as `[verbose] body: {...}` on stderr. Two new handler tests in `tests/cli_handler.rs` lock the behavior end-to-end.
+**Architecture:** Two surgical edits to existing `if self.verbose { ... }` blocks in `src/api/client.rs` (`send` and `send_raw`). Use `reqwest::Body::as_bytes()` on the buffered JSON body produced by `RequestBuilder::json()`, format as `[verbose] body: {...}` on stderr. Three new handler tests in `tests/cli_handler.rs` lock the behavior end-to-end (PUT body present, GET body absent, `send_raw` body via `jr api`).
 
 **Tech Stack:** Rust, reqwest 0.12 (async), assert_cmd + predicates, wiremock
 
@@ -15,9 +15,9 @@
 | File | Action | Responsibility |
 |------|--------|----------------|
 | `src/api/client.rs` | Modify | Extend the existing `if self.verbose { ... }` block at line 170 (`send`) to also `eprintln!` the body bytes when present. Same change at line 244 (`send_raw`). |
-| `tests/cli_handler.rs` | Append | Two handler tests asserting that `--verbose` prints the body for PUT/POST and omits the body line for GET. |
+| `tests/cli_handler.rs` | Append | Three handler tests asserting that `--verbose` prints the body for PUT (via `send`), omits the body line for GET, and prints the body for POST through `send_raw` (via `jr api`). |
 
-No new files. No new modules. No fixture changes — the existing `issue_response("HDL-1", "old summary", "To Do")` fixture is enough for the GET test.
+No new source code files or modules. No fixture changes — the existing `issue_response("HDL-1", "old summary", "To Do")` fixture is enough for the GET test.
 
 ---
 
