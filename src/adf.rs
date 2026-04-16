@@ -163,17 +163,25 @@ impl AdfBuilder {
                 Some(node)
             }
             NodeKind::ListItem => {
-                // ADF requires listItem content to be block-level (paragraph,
-                // bulletList, orderedList, codeBlock, mediaSingle). pulldown-cmark
-                // emits Text events directly inside Item for tight lists, and a
-                // nested list appears as a block sibling after those inlines.
+                // The documented ADF listItem schema lists paragraph, bulletList,
+                // orderedList, codeBlock, and mediaSingle as accepted content.
+                // pulldown-cmark, however, legitimately emits blockquote, heading,
+                // table, and rule inside Item for markdown like `- > quoted` or
+                // `- # heading`. We recognize those as blocks (don't wrap them in a
+                // paragraph — that would produce `paragraph > blockquote`, invalid
+                // at a lower level than `listItem > blockquote`). Jira's renderer
+                // handles the latter shape leniently; the former it does not.
                 let wrapped = wrap_inlines_as_blocks(
                     children,
                     &[
                         "paragraph",
                         "bulletList",
                         "orderedList",
+                        "blockquote",
                         "codeBlock",
+                        "heading",
+                        "table",
+                        "rule",
                         "mediaSingle",
                     ],
                 );
@@ -611,6 +619,22 @@ mod tests {
             mark_types.contains(&"code") && mark_types.contains(&"strong"),
             "expected code + strong on the inline-code inside bold, got: {mark_types:?}"
         );
+    }
+
+    #[test]
+    fn test_markdown_blockquote_inside_list_item_is_nested_not_paragraph_wrapped() {
+        // `- > quoted` → pulldown-cmark emits blockquote inside Item. The block
+        // must be a direct child of the listItem; wrapping in a paragraph would
+        // produce `paragraph > blockquote`, which violates paragraph's inline-only
+        // content rule at a lower level than `listItem > blockquote` does.
+        let adf = markdown_to_adf("- > quoted text");
+        let item = &adf["content"][0]["content"][0];
+        assert_eq!(item["type"], "listItem");
+        let first_child = &item["content"][0];
+        assert_eq!(first_child["type"], "blockquote");
+        let inner_para = &first_child["content"][0];
+        assert_eq!(inner_para["type"], "paragraph");
+        assert_eq!(inner_para["content"][0]["text"], "quoted text");
     }
 
     #[test]
