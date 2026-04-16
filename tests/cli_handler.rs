@@ -1600,3 +1600,27 @@ async fn test_view_omits_team_row_when_field_absent_from_response() {
         .stdout(predicate::str::contains("│ Team").not()) // no Team field row in table
         .stdout(predicate::str::contains(TEST_TEAM_FIELD_ID).not()); // no field ID leaking
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_edit_team_substring_rejects_under_no_input() {
+    // Locks the guarantee that a single-hit substring does NOT silently resolve
+    // under --no-input (the old 1 => Exact behavior from before Task 1).
+    //
+    // Cache contains "Platform Ops" (id: team-uuid-platform-ops). Passing --team Ops
+    // matches only "Platform Ops" as a substring → partial_match returns Ambiguous →
+    // resolve_team_field bails with an error before any HTTP call is made.
+    let server = MockServer::start().await;
+    // Intentionally no PUT or GET mocks — the command must fail before hitting the wire.
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_test_team_cache(cache_dir.path());
+    write_test_config_with_team_field(config_dir.path());
+
+    jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["issue", "edit", "HDL-600", "--team", "Ops"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Multiple teams match"))
+        .stderr(predicate::str::contains("Platform Ops"));
+}
