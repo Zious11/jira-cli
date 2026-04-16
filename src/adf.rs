@@ -37,7 +37,7 @@ struct AdfBuilder {
     root: Vec<Value>,
     stack: Vec<PartialNode>,
     active_marks: Vec<Value>,
-    // Task 3 will add `in_table_head: bool` here for GFM table header tracking.
+    in_table_head: bool,
 }
 
 struct PartialNode {
@@ -57,11 +57,10 @@ enum NodeKind {
     // Container for inline marks. Has no ADF node; just manages the active_marks stack
     // so End events pop cleanly.
     InlineMark,
+    Table,
+    TableRow,
+    TableCell { is_header: bool },
 }
-
-// Tasks 2 and 3 will extend this enum with:
-// - `InlineMark` (Task 2) for Strong/Emphasis/Strikethrough/Link container tracking
-// - `Table`, `TableRow`, `TableCell { is_header: bool }` (Task 3) for GFM tables
 
 impl AdfBuilder {
     fn new() -> Self {
@@ -69,6 +68,7 @@ impl AdfBuilder {
             root: Vec::new(),
             stack: Vec::new(),
             active_marks: Vec::new(),
+            in_table_head: false,
         }
     }
 
@@ -114,6 +114,15 @@ impl AdfBuilder {
                 }
                 self.push_mark(json!({ "type": "link", "attrs": attrs }));
             }
+            Tag::Table(_) => self.push(NodeKind::Table),
+            Tag::TableHead => {
+                self.in_table_head = true;
+                self.push(NodeKind::TableRow);
+            }
+            Tag::TableRow => self.push(NodeKind::TableRow),
+            Tag::TableCell => self.push(NodeKind::TableCell {
+                is_header: self.in_table_head,
+            }),
             // Explicit for documentation; the final catch-all also handles this,
             // but images are visibly named as intentionally suppressed per the
             // spec's Feature Mapping (ADF `media` nodes require pre-upload).
@@ -122,7 +131,10 @@ impl AdfBuilder {
         }
     }
 
-    fn end(&mut self, _tag_end: TagEnd) {
+    fn end(&mut self, tag_end: TagEnd) {
+        if matches!(tag_end, TagEnd::TableHead) {
+            self.in_table_head = false;
+        }
         let Some(partial) = self.stack.pop() else {
             return;
         };
@@ -151,6 +163,36 @@ impl AdfBuilder {
                 Some(node)
             }
             NodeKind::ListItem => Some(json!({ "type": "listItem", "content": children })),
+            NodeKind::Table => Some(json!({ "type": "table", "content": children })),
+            NodeKind::TableRow => Some(json!({ "type": "tableRow", "content": children })),
+            NodeKind::TableCell { is_header } => {
+                // ADF requires cells to wrap content in a block (paragraph).
+                // pulldown-cmark emits Text events directly inside TableCell
+                // without a Paragraph wrapper, so we wrap here.
+                let cell_type = if is_header {
+                    "tableHeader"
+                } else {
+                    "tableCell"
+                };
+                let wrapped_content = if children.iter().all(|n| {
+                    n["type"].as_str().is_some_and(|t| {
+                        matches!(
+                            t,
+                            "paragraph"
+                                | "bulletList"
+                                | "orderedList"
+                                | "blockquote"
+                                | "codeBlock"
+                                | "heading"
+                        )
+                    })
+                }) {
+                    children
+                } else {
+                    vec![json!({ "type": "paragraph", "content": children })]
+                };
+                Some(json!({ "type": cell_type, "content": wrapped_content }))
+            }
             NodeKind::InlineMark => {
                 self.pop_mark();
                 // InlineMark is a transparent container: splice its collected text
@@ -544,6 +586,32 @@ mod tests {
         assert_eq!(text_node["text"], "*not italic*");
         // No em mark because backslash escapes the asterisks.
         assert!(text_node["marks"].is_null());
+    }
+
+    #[test]
+    fn test_markdown_table_cells_and_headers() {
+        let input = "| foo | bar |\n| --- | --- |\n| baz | qux |";
+        let adf = markdown_to_adf(input);
+        let table = &adf["content"][0];
+        assert_eq!(table["type"], "table");
+
+        let rows = table["content"].as_array().unwrap();
+        assert_eq!(rows.len(), 2, "expected 2 tableRows (header + body)");
+
+        // Header row's cells should be tableHeader.
+        let header_cells = rows[0]["content"].as_array().unwrap();
+        assert_eq!(header_cells[0]["type"], "tableHeader");
+        assert_eq!(header_cells[1]["type"], "tableHeader");
+
+        // Body row's cells should be tableCell.
+        let body_cells = rows[1]["content"].as_array().unwrap();
+        assert_eq!(body_cells[0]["type"], "tableCell");
+        assert_eq!(body_cells[1]["type"], "tableCell");
+
+        // Cells wrap their content in a paragraph, per ADF convention.
+        let first_header_text = &header_cells[0]["content"][0];
+        assert_eq!(first_header_text["type"], "paragraph");
+        assert_eq!(first_header_text["content"][0]["text"], "foo");
     }
 
     #[test]
