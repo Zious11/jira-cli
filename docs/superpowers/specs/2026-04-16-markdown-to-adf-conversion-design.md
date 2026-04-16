@@ -125,7 +125,7 @@ Inline marks use a parallel `active_marks` list. When `Text(s)` fires while mark
 | `Start(Tag::Image { .. })` through `End(TagEnd::Image)` | Skip — suppress events between until end | Jira Cloud `media` nodes require pre-upload to the media API with a returned media ID; external URLs aren't reliably supported in comments |
 | `Html(s)` / `InlineHtml(s)` | Emit as literal text via `Text(s)` handling | Preserves user intent without attempting unsafe HTML-to-ADF mapping |
 | `FootnoteReference(_)` / `Start(Tag::FootnoteDefinition(_))` | Skip | ADF has no native footnote nodes; would require embedding as inline links, low ROI |
-| `TaskListMarker(checked)` | Prepend `[x] ` or `[ ] ` to the containing list item's first paragraph text | `taskList`/`taskItem`/`blockTaskItem` ADF support is Confluence-centric; safer to render as text marker inside a regular `bulletList` |
+| `- [x] task` / `- [ ] task` (GFM task list syntax) | `ENABLE_TASKLISTS` left unset — pulldown-cmark parses `[x]` and `[ ]` as literal text inside the list item, producing a regular `bulletList` with the brackets preserved in-text | ADF's `taskList`/`taskItem` / `blockTaskItem` schema support for Jira (vs Confluence) is unclear per available docs. Letting the brackets render as text is equivalent to manual prefixing but requires no extra event handling |
 | `Tag::DefinitionList` / `DefinitionListTitle` / `DefinitionListDefinition` | Not enabled via Options — events won't fire | Out of scope for scope (b) |
 | `Start(Tag::MetadataBlock(_))` | Not enabled via Options — events won't fire | Out of scope |
 
@@ -173,7 +173,7 @@ New tests:
 - `test_markdown_table_cells_and_headers` — verify first row uses `tableHeader`, subsequent rows `tableCell`
 - `test_markdown_image_is_skipped`
 - `test_markdown_soft_break_becomes_space`
-- `test_markdown_task_list_marker_becomes_text_prefix`
+- `test_markdown_task_list_syntax_preserved_as_text` — `- [x] foo` ends up as a bullet item containing literal `[x] foo`
 - `test_markdown_escape_literal_asterisk`
 - `test_markdown_mixed_marks` — `**bold _italic_ bold**` preserves nested marks
 
