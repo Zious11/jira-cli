@@ -1616,3 +1616,79 @@ async fn test_edit_team_substring_rejects_under_no_input() {
         .stderr(predicate::str::contains("Multiple teams match"))
         .stderr(predicate::str::contains("Platform Ops"));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_verbose_logs_request_body_for_put() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/HDL-1"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": {"summary": "new summary"}
+        })))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    jr_cmd(&server.uri())
+        .arg("--verbose")
+        .args(["issue", "edit", "HDL-1", "--summary", "new summary"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("[verbose] PUT"))
+        .stderr(predicate::str::contains("[verbose] body:"))
+        .stderr(predicate::str::contains("\"summary\":\"new summary\""));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_verbose_logs_request_body_for_send_raw() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/HDL-1/transitions"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    jr_api_cmd(&server.uri())
+        .arg("--verbose")
+        .args([
+            "api",
+            "/rest/api/3/issue/HDL-1/transitions",
+            "-X",
+            "post",
+            "-d",
+            r#"{"transition":{"id":"31"}}"#,
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("[verbose] POST"))
+        .stderr(predicate::str::contains(
+            "[verbose] body: {\"transition\":{\"id\":\"31\"}}",
+        ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_verbose_omits_body_line_for_get() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/HDL-1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(common::fixtures::issue_response(
+                "HDL-1",
+                "old summary",
+                "To Do",
+            )),
+        )
+        .mount(&server)
+        .await;
+
+    jr_cmd(&server.uri())
+        .arg("--verbose")
+        .args(["issue", "view", "HDL-1"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("[verbose] GET"))
+        .stderr(predicate::str::contains("[verbose] body:").not());
+}
