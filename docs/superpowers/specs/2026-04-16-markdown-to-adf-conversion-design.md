@@ -49,6 +49,9 @@ Replace the internals of `adf::markdown_to_adf()` with a `pulldown_cmark::Parser
 ```
 &str
   ↓ Parser::new_ext(input, Options::ENABLE_TABLES | ENABLE_STRIKETHROUGH)
+  ↓ TextMergeStream::new(...)        // merges adjacent Event::Text runs so
+                                      // marks and escape sequences coalesce
+                                      // into a single text node
   ↓ Iterator<Event<'_>>
   ↓ AdfBuilder.process(event) for each event
   ↓ Vec<Value> (root block-level nodes)
@@ -71,9 +74,10 @@ struct AdfBuilder {
 struct PartialNode {
     kind: NodeKind,                // Which ADF node this will become
     children: Vec<Value>,
-    attrs: Option<Map<String, Value>>,
 }
 ```
+
+Attributes (heading level, code block language, ordered-list `order`, tableCell `is_header`) are carried on the `NodeKind` variant itself (e.g. `Heading(u8)`, `CodeBlock { language }`, `OrderedList { start }`, `TableCell { is_header }`) rather than on a separate `attrs` field, so the emission logic in `end()` can destructure the kind and build the final JSON object in one step.
 
 `Event::Start(Tag::X)` pushes a `PartialNode`. `Event::End(TagEnd::X)` pops the stack, wraps `children` into the partial's content, and appends the completed `Value` to the parent's children (or to `root` if the stack is empty). Text / inline events append leaves to the current top-of-stack's children.
 
