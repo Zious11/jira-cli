@@ -191,6 +191,18 @@ pub enum AuthCommand {
     },
     /// Show authentication status
     Status,
+    /// Clear stored credentials and re-run the login flow.
+    ///
+    /// On macOS, run this after upgrading `jr` (e.g., `brew upgrade`, binary
+    /// replacement). The legacy Keychain ACL is bound to the original binary's
+    /// identity; this command deletes the entries so the new binary becomes
+    /// the creator of fresh entries, avoiding repeated "allow access"
+    /// prompts. See issue #207.
+    Refresh {
+        /// Use OAuth 2.0 instead of API token (matches `jr auth login --oauth`)
+        #[arg(long)]
+        oauth: bool,
+    },
 }
 
 #[derive(Subcommand)]
