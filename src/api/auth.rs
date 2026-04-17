@@ -5,7 +5,18 @@ use keyring::Entry;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener as AsyncTcpListener;
 
-const SERVICE_NAME: &str = "jr-jira-cli";
+/// Default keychain service name for `jr` credentials. `JR_SERVICE_NAME`
+/// can override this at runtime; it is primarily used by tests to avoid
+/// touching a developer's real keychain.
+const DEFAULT_SERVICE_NAME: &str = "jr-jira-cli";
+
+/// Resolve the keychain service name, honoring `JR_SERVICE_NAME` whenever
+/// it is set. All keychain operations go through this, so changing it also
+/// changes where credentials are stored and loaded (for example, tests can
+/// scope their own namespace with `"jr-jira-cli-test"`).
+fn service_name() -> String {
+    std::env::var("JR_SERVICE_NAME").unwrap_or_else(|_| DEFAULT_SERVICE_NAME.to_string())
+}
 
 /// Key names stored in the system keychain.
 const KEY_EMAIL: &str = "email";
@@ -16,7 +27,7 @@ const KEY_OAUTH_REFRESH: &str = "oauth-refresh-token";
 const SCOPES: &str = "read:jira-work write:jira-work read:jira-user offline_access";
 
 fn entry(key: &str) -> Result<Entry> {
-    Entry::new(SERVICE_NAME, key).context("Failed to access keychain")
+    Entry::new(&service_name(), key).context("Failed to access keychain")
 }
 
 /// Store an API token and associated email in the system keychain.
@@ -59,20 +70,22 @@ pub fn load_oauth_tokens() -> Result<(String, String)> {
 
 /// Store OAuth app credentials (client_id and client_secret) in the system keychain.
 pub fn store_oauth_app_credentials(client_id: &str, client_secret: &str) -> Result<()> {
-    let entry = Entry::new(SERVICE_NAME, "oauth_client_id")?;
+    let service = service_name();
+    let entry = Entry::new(&service, "oauth_client_id")?;
     entry.set_password(client_id)?;
-    let entry = Entry::new(SERVICE_NAME, "oauth_client_secret")?;
+    let entry = Entry::new(&service, "oauth_client_secret")?;
     entry.set_password(client_secret)?;
     Ok(())
 }
 
 /// Load OAuth app credentials (client_id and client_secret) from the system keychain.
 pub fn load_oauth_app_credentials() -> Result<(String, String)> {
-    let id_entry = Entry::new(SERVICE_NAME, "oauth_client_id")?;
+    let service = service_name();
+    let id_entry = Entry::new(&service, "oauth_client_id")?;
     let id = id_entry
         .get_password()
         .context("No OAuth app credentials found. Run \"jr auth login --oauth\" and provide your client_id and client_secret.")?;
-    let secret_entry = Entry::new(SERVICE_NAME, "oauth_client_secret")?;
+    let secret_entry = Entry::new(&service, "oauth_client_secret")?;
     let secret = secret_entry
         .get_password()
         .context("No OAuth app credentials found.")?;
@@ -80,7 +93,15 @@ pub fn load_oauth_app_credentials() -> Result<(String, String)> {
 }
 
 /// Remove all stored credentials from the system keychain.
-pub fn clear_credentials() {
+///
+/// `NoEntry` results are treated as success (the entry was already absent,
+/// which is the expected case on a fresh install or after a prior clear).
+/// Any other failure (permission denied, ACL mismatch, platform error) is
+/// aggregated and returned so callers can decide whether to proceed — for
+/// example, `jr auth refresh` needs to know if the clear actually happened
+/// before reporting the refresh as successful.
+pub fn clear_credentials() -> Result<()> {
+    let mut failures: Vec<String> = Vec::new();
     for key in [
         KEY_EMAIL,
         KEY_API_TOKEN,
@@ -89,9 +110,27 @@ pub fn clear_credentials() {
         "oauth_client_id",
         "oauth_client_secret",
     ] {
-        if let Ok(e) = entry(key) {
-            let _ = e.delete_credential();
+        match entry(key) {
+            Ok(e) => match e.delete_credential() {
+                Ok(()) | Err(keyring::Error::NoEntry) => {}
+                Err(err) => failures.push(format!("{key}: {err}")),
+            },
+            Err(err) => failures.push(format!("{key}: {err}")),
         }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "failed to clear {} keychain {}: {}",
+            failures.len(),
+            if failures.len() == 1 {
+                "entry"
+            } else {
+                "entries"
+            },
+            failures.join("; ")
+        ))
     }
 }
 
