@@ -431,8 +431,21 @@ impl AdfRenderer {
                 self.output.push_str(&prefix);
                 self.render_children(node);
             }
+            "rule" => {
+                self.output.push_str("---\n");
+            }
+            "hardBreak" => {
+                self.output.push('\n');
+            }
             "codeBlock" => {
-                self.output.push_str("```\n");
+                let lang = node
+                    .get("attrs")
+                    .and_then(|a| a.get("language"))
+                    .and_then(|l| l.as_str())
+                    .unwrap_or("");
+                self.output.push_str("```");
+                self.output.push_str(lang);
+                self.output.push('\n');
                 self.render_children(node);
                 self.output.push_str("\n```\n");
             }
@@ -1165,5 +1178,63 @@ mod tests {
         let text = adf_to_text(&adf);
         assert!(text.contains("1. outer"), "got: {text:?}");
         assert!(text.contains("  - inner"), "got: {text:?}");
+    }
+
+    #[test]
+    fn test_render_rule() {
+        let adf = json!({
+            "type": "doc",
+            "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": "above"}]},
+                {"type": "rule"},
+                {"type": "paragraph", "content": [{"type": "text", "text": "below"}]}
+            ]
+        });
+        let text = adf_to_text(&adf);
+        assert!(text.contains("---"), "expected rule line, got: {text:?}");
+        assert!(text.contains("above"));
+        assert!(text.contains("below"));
+    }
+
+    #[test]
+    fn test_render_hard_break_inserts_newline() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "line one"},
+                {"type": "hardBreak"},
+                {"type": "text", "text": "line two"}
+            ]}]
+        });
+        let text = adf_to_text(&adf);
+        assert!(text.contains("line one\nline two"), "got: {text:?}");
+    }
+
+    #[test]
+    fn test_render_code_block_with_language() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "codeBlock",
+                "attrs": {"language": "rust"},
+                "content": [{"type": "text", "text": "fn x() {}"}]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        assert!(text.contains("```rust"), "expected rust fence, got: {text:?}");
+        assert!(text.contains("fn x() {}"));
+    }
+
+    #[test]
+    fn test_render_code_block_without_language() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "codeBlock",
+                "content": [{"type": "text", "text": "plain"}]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        assert!(text.contains("```\nplain"), "expected empty fence, got: {text:?}");
     }
 }
