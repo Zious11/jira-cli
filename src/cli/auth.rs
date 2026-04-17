@@ -151,7 +151,7 @@ pub async fn refresh_credentials(
     oauth_override: bool,
     output: &crate::cli::OutputFormat,
 ) -> Result<()> {
-    let config = Config::load().unwrap_or_default();
+    let config = Config::load()?;
     let flow = chosen_flow(&config, oauth_override);
 
     auth::clear_credentials();
@@ -175,7 +175,9 @@ pub async fn refresh_credentials(
 
     match output {
         crate::cli::OutputFormat::Json => {
-            println!("{}", refresh_success_payload(flow));
+            let payload = serde_json::to_string_pretty(&refresh_success_payload(flow))
+                .context("failed to serialize refresh success payload as JSON")?;
+            println!("{payload}");
         }
         crate::cli::OutputFormat::Table => {
             eprintln!("Credentials refreshed. {REFRESH_HELP_LINE}");

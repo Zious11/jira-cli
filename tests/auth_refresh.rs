@@ -47,6 +47,10 @@ fn auth_refresh_non_interactive_fails_without_panic() {
     // than a panic or abort. If login gains non-interactive flag
     // equivalents later, tighten this to assert the specific exit code and
     // the "Credentials were cleared" recovery message.
+    //
+    // `JR_SERVICE_NAME` scopes the keychain service so `auth::clear_credentials()`
+    // inside the subprocess never touches the developer's real `jr-jira-cli`
+    // entries when `cargo test` runs locally.
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
 
@@ -54,6 +58,7 @@ fn auth_refresh_non_interactive_fails_without_panic() {
         .unwrap()
         .env("XDG_CACHE_HOME", cache_dir.path())
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_SERVICE_NAME", "jr-jira-cli-test")
         .args(["auth", "refresh"])
         .write_stdin("")
         .output()

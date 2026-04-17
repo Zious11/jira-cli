@@ -5,7 +5,16 @@ use keyring::Entry;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener as AsyncTcpListener;
 
-const SERVICE_NAME: &str = "jr-jira-cli";
+/// Default keychain service name for `jr` credentials. Tests override this
+/// via `JR_SERVICE_NAME` to avoid touching a developer's real keychain.
+const DEFAULT_SERVICE_NAME: &str = "jr-jira-cli";
+
+/// Resolve the keychain service name, honoring the `JR_SERVICE_NAME`
+/// test-only override. All keychain operations go through this so test
+/// processes can scope their own namespace (e.g., `"jr-jira-cli-test"`).
+fn service_name() -> String {
+    std::env::var("JR_SERVICE_NAME").unwrap_or_else(|_| DEFAULT_SERVICE_NAME.to_string())
+}
 
 /// Key names stored in the system keychain.
 const KEY_EMAIL: &str = "email";
@@ -16,7 +25,7 @@ const KEY_OAUTH_REFRESH: &str = "oauth-refresh-token";
 const SCOPES: &str = "read:jira-work write:jira-work read:jira-user offline_access";
 
 fn entry(key: &str) -> Result<Entry> {
-    Entry::new(SERVICE_NAME, key).context("Failed to access keychain")
+    Entry::new(&service_name(), key).context("Failed to access keychain")
 }
 
 /// Store an API token and associated email in the system keychain.
@@ -59,20 +68,22 @@ pub fn load_oauth_tokens() -> Result<(String, String)> {
 
 /// Store OAuth app credentials (client_id and client_secret) in the system keychain.
 pub fn store_oauth_app_credentials(client_id: &str, client_secret: &str) -> Result<()> {
-    let entry = Entry::new(SERVICE_NAME, "oauth_client_id")?;
+    let service = service_name();
+    let entry = Entry::new(&service, "oauth_client_id")?;
     entry.set_password(client_id)?;
-    let entry = Entry::new(SERVICE_NAME, "oauth_client_secret")?;
+    let entry = Entry::new(&service, "oauth_client_secret")?;
     entry.set_password(client_secret)?;
     Ok(())
 }
 
 /// Load OAuth app credentials (client_id and client_secret) from the system keychain.
 pub fn load_oauth_app_credentials() -> Result<(String, String)> {
-    let id_entry = Entry::new(SERVICE_NAME, "oauth_client_id")?;
+    let service = service_name();
+    let id_entry = Entry::new(&service, "oauth_client_id")?;
     let id = id_entry
         .get_password()
         .context("No OAuth app credentials found. Run \"jr auth login --oauth\" and provide your client_id and client_secret.")?;
-    let secret_entry = Entry::new(SERVICE_NAME, "oauth_client_secret")?;
+    let secret_entry = Entry::new(&service, "oauth_client_secret")?;
     let secret = secret_entry
         .get_password()
         .context("No OAuth app credentials found.")?;
