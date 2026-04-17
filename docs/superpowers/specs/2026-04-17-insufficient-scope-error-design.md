@@ -31,16 +31,18 @@ No API/CLI surface changes. No new dependencies. No caller updates needed — al
 ```rust
 #[error(
     "Insufficient token scope: {message}\n\n\
-     The Atlassian API gateway rejects granular-scoped tokens on POST requests \
-     (while PUT/GET succeed). Workarounds:\n  \
+     The Atlassian API gateway rejects granular-scoped personal tokens on POST \
+     requests (while PUT/GET succeed). Workarounds:\n  \
      • Use a classic token with \"write:jira-work\" scope instead of granular scopes, or\n  \
-     • Use OAuth 2.0 (run \"jr auth login --oauth\")\n\
+     • Try OAuth 2.0 (run \"jr auth login --oauth\") — may avoid this bug, not verified\n\
      See https://github.com/Zious11/jira-cli/issues/185 for details."
 )]
 InsufficientScope { message: String },
 ```
 
 The raw gateway `message` is stored verbatim so it surfaces in logs, `--verbose` output, and any future structured-JSON error path. Exit code `2` parallels `NotAuthenticated` — both represent "credentials need user attention."
+
+**OAuth hedge language:** the issue body admits OAuth-as-workaround is untested. The error text reflects that honestly with "may avoid this bug, not verified" — discoverable without over-promising. If OAuth turns out to share the bug, affected users hit the same error with OAuth selected, and `#185` becomes the place to update either the text or the recommendation.
 
 ## Dispatch logic
 
