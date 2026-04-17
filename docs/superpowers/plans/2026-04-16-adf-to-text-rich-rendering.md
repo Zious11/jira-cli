@@ -4,7 +4,7 @@
 
 **Goal:** Replace the free `render_node`/`render_children` pair in `src/adf.rs` with a stateful `AdfRenderer` struct supporting ordered-list numbering (respecting `attrs.order`), inline marks (`strong`/`em`/`strike`/`code`/`link`), blockquote line prefixing (including nested `> > `), `rule` as `---`, `hardBreak` as `\n`, `codeBlock` with language fence, pipe-style tables with header separator, and graceful fallback for unknown nodes.
 
-**Architecture:** Stateful visitor struct `AdfRenderer { output, list_stack, blockquote_depth }` mirroring the existing write-path `AdfBuilder` pattern. Blockquote prefixing uses a split-and-prefix pass after rendering children into `output`, so all descendant content gets prefixed uniformly. Marks apply inside-out by iterating `node.marks[]` in array order (last mark outermost). Tables emit pipe-row markdown with a `| --- | --- |` separator line after any row containing a `tableHeader` cell.
+**Architecture:** Stateful visitor struct `AdfRenderer { output, list_stack }` mirroring the existing write-path `AdfBuilder` pattern. Blockquote prefixing uses a split-and-prefix pass after rendering children into `output`, so all descendant content gets prefixed uniformly. Marks apply inside-out by iterating `node.marks[]` in array order (last mark outermost). Tables emit pipe-row markdown with a `| --- | --- |` separator line after any row containing a `tableHeader` cell.
 
 **Tech Stack:** Rust 2024 (edition), MSRV 1.85, `serde_json::Value` for ADF traversal, `insta` for snapshots. No new crate dependencies.
 
@@ -31,7 +31,6 @@ pub fn adf_to_text(adf: &Value) -> String {
 struct AdfRenderer {
     output: String,
     list_stack: Vec<ListFrame>,
-    blockquote_depth: usize,
 }
 
 enum ListFrame {
@@ -44,7 +43,6 @@ impl AdfRenderer {
         Self {
             output: String::new(),
             list_stack: Vec::new(),
-            blockquote_depth: 0,
         }
     }
 
@@ -546,25 +544,34 @@ Insert a new arm in `render_node` above the fallback `_`:
 
 ```rust
             "blockquote" => {
-                self.blockquote_depth += 1;
                 let start = self.output.len();
                 self.render_children(node);
-                self.blockquote_depth -= 1;
 
                 // Prefix every line in the just-rendered segment with "> ".
-                // A single "> " is added per nesting level; nested blockquotes
-                // accumulate to "> > " on each line when their own prefix pass
-                // runs during unwind.
+                // Internal blank lines get bare ">" (no trailing space),
+                // trailing empties are trimmed. Nested blockquotes accumulate
+                // to "> > " automatically because each outer level re-prefixes
+                // its inner level's already-prefixed output on unwind — no
+                // depth counter is needed.
                 let rendered = self.output.split_off(start);
+                let mut lines: Vec<&str> = rendered.split('\n').collect();
+                while lines.last() == Some(&"") {
+                    lines.pop();
+                }
                 let prefix = "> ";
-                for (i, line) in rendered.split('\n').enumerate() {
+                for (i, line) in lines.iter().enumerate() {
                     if i > 0 {
                         self.output.push('\n');
                     }
-                    if !line.is_empty() {
+                    if line.is_empty() {
+                        self.output.push('>');
+                    } else {
                         self.output.push_str(prefix);
                         self.output.push_str(line);
                     }
+                }
+                if !lines.is_empty() {
+                    self.output.push('\n');
                 }
             }
 ```
@@ -1172,7 +1179,7 @@ sequences for structural equivalence."
 **No placeholders:** searched for TBD/TODO/"fill in"/"add appropriate"/"handle edge cases" — none present.
 
 **Type consistency:**
-- `AdfRenderer` fields: `output: String`, `list_stack: Vec<ListFrame>`, `blockquote_depth: usize` — consistent across tasks.
+- `AdfRenderer` fields: `output: String`, `list_stack: Vec<ListFrame>` — consistent across tasks. `blockquote_depth` was scoped out during implementation (stack-unwind re-prefix needs no depth counter).
 - `ListFrame` variants: `Bullet`, `Ordered { next_index: u64 }` — consistent.
 - Method names: `new`, `render_doc`, `render_node`, `render_children`, `render_cell_inline`, `finish` — consistent.
 - `apply_marks(&str, Option<&Vec<Value>>)` helper signature used only in Task 3's `"text"` arm.

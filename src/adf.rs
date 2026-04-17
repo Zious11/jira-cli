@@ -565,8 +565,8 @@ impl AdfRenderer {
             match child_type {
                 "paragraph" => {
                     // Paragraph inside a cell: render its inline children
-                    // directly, substituting any hardBreak with a space so the
-                    // pipe-row structure stays on one line.
+                    // directly. `hardBreak` becomes a space; text nodes are
+                    // sanitized for cell-unsafe characters (pipes, newlines).
                     if let Some(cc) = child.get("content").and_then(|c| c.as_array()) {
                         for inline in cc {
                             self.render_inline_in_cell(inline);
@@ -574,25 +574,40 @@ impl AdfRenderer {
                     }
                 }
                 "hardBreak" => self.output.push(' '),
-                _ => self.render_node(child),
+                _ => self.render_inline_in_cell(child),
             }
         }
     }
 
-    /// Like `render_node`, but when the node is a `hardBreak` emit a space
-    /// instead of a newline. Used inside table cells to keep rows single-line.
+    /// Render an inline node in cell mode: `hardBreak` becomes a space, and
+    /// text nodes are sanitized so pipes don't introduce false column
+    /// separators and embedded newlines don't break the row structure. Marks
+    /// are applied to the sanitized text so the escape survives mark wrapping.
     fn render_inline_in_cell(&mut self, node: &Value) {
         let t = node.get("type").and_then(|t| t.as_str()).unwrap_or("");
-        if t == "hardBreak" {
-            self.output.push(' ');
-        } else {
-            self.render_node(node);
+        match t {
+            "hardBreak" => self.output.push(' '),
+            "text" => {
+                let text = node.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                let sanitized = sanitize_table_cell_text(text);
+                let marks = node.get("marks").and_then(|m| m.as_array());
+                self.output.push_str(&apply_marks(&sanitized, marks));
+            }
+            _ => self.render_node(node),
         }
     }
 
     fn finish(self) -> String {
         self.output.trim_end().to_string()
     }
+}
+
+/// Escape pipe characters and collapse embedded newlines in text that will
+/// be rendered inside a markdown table cell. Without this, a literal `|` in a
+/// cell's text would be read as an extra column separator, and an embedded
+/// `\n` would break the pipe row into multiple lines.
+fn sanitize_table_cell_text(text: &str) -> String {
+    text.replace(['\r', '\n'], " ").replace('|', r"\|")
 }
 
 /// Wrap an inline-code span using a delimiter long enough to contain any
@@ -620,15 +635,35 @@ fn wrap_code_span(text: &str) -> String {
     }
 }
 
-/// Wrap `text` with markdown-style syntax for each mark, innermost-first.
+/// Wrap `text` with markdown-style syntax for each mark. `code` is always
+/// applied innermost regardless of its position in the `marks` array, because
+/// the content of an inline-code span is literal and cannot itself carry
+/// other markdown syntax. The remaining marks then wrap the code span in
+/// array order.
+///
+/// This matters because the write-path `AdfBuilder::push_code` appends
+/// `{type: "code"}` to the active marks *after* any other marks, so on
+/// roundtrip we see `marks: [strong, code]` for `**`\x`**`; applying marks
+/// strictly in order would produce `` `**x**` `` (code outermost),
+/// losing the bold semantics.
+///
 /// Unknown mark types pass through without added syntax.
 fn apply_marks(text: &str, marks: Option<&Vec<Value>>) -> String {
-    let mut result = text.to_string();
-    let Some(marks) = marks else { return result };
+    let Some(marks) = marks else {
+        return text.to_string();
+    };
+    let has_code = marks
+        .iter()
+        .any(|m| m.get("type").and_then(|t| t.as_str()) == Some("code"));
+    let mut result = if has_code {
+        wrap_code_span(text)
+    } else {
+        text.to_string()
+    };
     for mark in marks {
         let mark_type = mark.get("type").and_then(|t| t.as_str()).unwrap_or("");
         result = match mark_type {
-            "code" => wrap_code_span(&result),
+            "code" => result, // handled above as innermost
             "em" => format!("*{result}*"),
             "strong" => format!("**{result}**"),
             "strike" => format!("~~{result}~~"),
@@ -1609,5 +1644,63 @@ mod tests {
         let text = adf_to_text(&adf);
         // The cell content must stay on a single pipe row — no embedded newline.
         assert!(text.contains("| line one line two |"), "got: {text:?}");
+    }
+
+    #[test]
+    fn test_render_strong_with_code_applies_code_innermost() {
+        // Matches the write-path's marks ordering: strong + code produces
+        // marks = [strong, code]. Output must be **`code`** not `**code**`.
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "x", "marks": [{"type": "strong"}, {"type": "code"}]}
+            ]}]
+        });
+        let text = adf_to_text(&adf);
+        assert_eq!(text, "**`x`**");
+    }
+
+    #[test]
+    fn test_render_table_cell_escapes_pipe_in_text() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "table",
+                "content": [{
+                    "type": "tableRow",
+                    "content": [{
+                        "type": "tableCell",
+                        "content": [{"type": "paragraph", "content": [
+                            {"type": "text", "text": "a|b"}
+                        ]}]
+                    }]
+                }]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        // Pipe inside the cell must be escaped so it doesn't introduce a
+        // false column break.
+        assert!(text.contains(r"| a\|b |"), "got: {text:?}");
+    }
+
+    #[test]
+    fn test_render_table_cell_collapses_newlines_in_text() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "table",
+                "content": [{
+                    "type": "tableRow",
+                    "content": [{
+                        "type": "tableCell",
+                        "content": [{"type": "paragraph", "content": [
+                            {"type": "text", "text": "line\nwrap"}
+                        ]}]
+                    }]
+                }]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        assert!(text.contains("| line wrap |"), "got: {text:?}");
     }
 }

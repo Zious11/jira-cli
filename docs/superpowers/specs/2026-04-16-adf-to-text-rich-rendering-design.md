@@ -42,7 +42,6 @@ The struct carries the mutable state the new behavior needs — ordered-list cou
 struct AdfRenderer {
     output: String,
     list_stack: Vec<ListFrame>,
-    blockquote_depth: usize,
 }
 
 enum ListFrame {
@@ -53,7 +52,7 @@ enum ListFrame {
 
 - `list_stack.len()` replaces the old `depth: usize` parameter. Indent level for `listItem` is `list_stack.len() - 1`.
 - Each `listItem` under `ListFrame::Ordered` increments `next_index` after rendering.
-- `blockquote_depth` tracks nested `blockquote` nesting; prefix rendered into each line as `"> " * blockquote_depth`.
+- Nested `blockquote` nesting is handled by an unwind-time re-prefix pass (see the "Blockquote line-prefixing" section below) — no depth counter is needed; each enclosing blockquote re-prefixes its children's already-prefixed output on the way out.
 
 ### Feature mapping
 
@@ -65,7 +64,7 @@ enum ListFrame {
 | `bulletList` | push `ListFrame::Bullet`, render children, pop |
 | `orderedList` (`attrs.order`) | push `ListFrame::Ordered { next_index: order.filter(|&n| n >= 1).unwrap_or(1) }`, render children, pop. Jira treats `order=0`, negative, or missing as "start at 1"; the filter matches that contract. |
 | `listItem` | `"  "` × `(list_stack.len() - 1)` + prefix (`- ` or `{n}. `) + children. **No trailing `\n`** — the enclosed `paragraph` (schema-guaranteed: `listItem` content is block-only per ADF spec, and the write path already wraps inline in paragraphs) contributes its own trailing `\n`. Nested list children use their own indentation chain. Increment the counter after rendering if the enclosing frame is `Ordered`. |
-| `blockquote` | increment `blockquote_depth`, render children, decrement. Every rendered line contributed while `blockquote_depth > 0` gets prefixed with `"> "` × depth. |
+| `blockquote` | record the current `output.len()`, render children, then on unwind prefix every line of the just-rendered segment with `"> "` (empty lines get `">"`, trailing empties are trimmed). Nested blockquotes accumulate to `"> > "` automatically because each outer level re-prefixes its inner level's already-prefixed output. |
 | `codeBlock` (`attrs.language`) | ` ```{lang}` fence line (empty lang = plain ` ``` `), code content, ` ``` ` close fence, `\n`. |
 | `rule` | `---\n` |
 | `hardBreak` | `\n`. Trailing-two-spaces (`  \n`) form is a markdown-source convention; plain text doesn't need it. |
@@ -122,7 +121,7 @@ adf_to_text(&Value)
 
 ### Blockquote line-prefixing
 
-Implementation: before rendering a blockquote's children, record `output.len()`. After rendering, split the appended segment on `\n` and prefix each line with `"> "` × `blockquote_depth`. This means the prefix applies uniformly to paragraph text, nested list items, code blocks, and anything else rendered within. Nesting compounds (`> > `) because each enclosing blockquote applies its own prefix on unwind.
+Implementation: before rendering a blockquote's children, record `output.len()`. After rendering, split the appended segment on `\n`, trim trailing empty lines, then prefix each remaining line with `"> "` (or bare `">"` for internal blank lines). This means the prefix applies uniformly to paragraph text, nested list items, code blocks, and anything else rendered within. Nesting compounds (`> > `) because each enclosing blockquote re-applies its own prefix on unwind — no depth counter is needed.
 
 ## Testing
 
