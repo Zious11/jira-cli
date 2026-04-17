@@ -303,3 +303,114 @@ async fn user_view_json_hidden_email_is_null() {
         "emailAddress should serialize to JSON null when privacy hides it (not the em-dash placeholder), got: {email}"
     );
 }
+
+// ─── Error-path coverage (#187) ─────────────────────────────────────────────
+
+#[tokio::test]
+async fn user_search_server_error_surfaces_friendly_message() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/search"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(serde_json::json!({
+            "errorMessages": ["Internal server error"],
+            "errors": {}
+        })))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args(["user", "search", "test"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure, got stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "5xx should exit 1, got: {:?}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("API error (500)"),
+        "Expected 'API error (500)' in stderr, got: {stderr}"
+    );
+    assert!(!stderr.contains("panic"), "stderr leaked a panic: {stderr}");
+}
+
+#[tokio::test]
+async fn user_search_unauthorized_dispatches_reauth_message() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/search"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+            "errorMessages": ["Client must be authenticated to access this resource."],
+            "errors": {}
+        })))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args(["user", "search", "test"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure, got stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "401 should exit 2, got: {:?}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("Not authenticated"),
+        "Expected 'Not authenticated' in stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("jr auth login"),
+        "Expected 'jr auth login' suggestion in stderr, got: {stderr}"
+    );
+    assert!(!stderr.contains("panic"), "stderr leaked a panic: {stderr}");
+}
+
+#[tokio::test]
+async fn user_search_network_drop_surfaces_reach_error() {
+    // Privileged port 1 — connect-refused from any unprivileged process.
+    let output = jr_cmd("http://127.0.0.1:1")
+        .args(["user", "search", "test"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure, got stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "Net-drop should exit 1, got: {:?}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("Could not reach"),
+        "Expected 'Could not reach' in stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("check your connection"),
+        "Expected 'check your connection' in stderr, got: {stderr}"
+    );
+    assert!(!stderr.contains("panic"), "stderr leaked a panic: {stderr}");
+}

@@ -290,3 +290,122 @@ async fn resolve_board_errors_without_project_or_board() {
         "should suggest --project, got: {msg}"
     );
 }
+
+// ─── Error-path coverage (#187) ─────────────────────────────────────────────
+
+#[tokio::test]
+async fn board_list_server_error_surfaces_friendly_message() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/board"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(serde_json::json!({
+            "errorMessages": ["Internal server error"],
+            "errors": {}
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["board", "list"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure, got stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "5xx should exit 1, got: {:?}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("API error (500)"),
+        "Expected 'API error (500)' in stderr, got: {stderr}"
+    );
+    assert!(!stderr.contains("panic"), "stderr leaked a panic: {stderr}");
+}
+
+#[tokio::test]
+async fn board_list_unauthorized_dispatches_reauth_message() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/board"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+            "errorMessages": ["Client must be authenticated to access this resource."],
+            "errors": {}
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["board", "list"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure, got stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "401 should exit 2, got: {:?}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("Not authenticated"),
+        "Expected 'Not authenticated' in stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("jr auth login"),
+        "Expected 'jr auth login' suggestion in stderr, got: {stderr}"
+    );
+    assert!(!stderr.contains("panic"), "stderr leaked a panic: {stderr}");
+}
+
+#[tokio::test]
+async fn board_list_network_drop_surfaces_reach_error() {
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", "http://127.0.0.1:1")
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["board", "list"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure, got stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "Net-drop should exit 1, got: {:?}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("Could not reach"),
+        "Expected 'Could not reach' in stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("check your connection"),
+        "Expected 'check your connection' in stderr, got: {stderr}"
+    );
+    assert!(!stderr.contains("panic"), "stderr leaked a panic: {stderr}");
+}

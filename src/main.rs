@@ -78,6 +78,9 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                     }
                 }
                 cli::AuthCommand::Status => cli::auth::status().await,
+                cli::AuthCommand::Refresh { oauth } => {
+                    cli::auth::refresh_credentials(oauth, &cli.output).await
+                }
             },
             cli::Command::Me => {
                 let config = config::Config::load()?;

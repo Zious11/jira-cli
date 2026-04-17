@@ -5,59 +5,28 @@ use assert_cmd::Command;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-#[tokio::test]
-async fn test_add_worklog() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/rest/api/3/issue/FOO-1/worklog"))
-        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
-            "id": "12345",
-            "timeSpentSeconds": 7200,
-            "timeSpent": "2h",
-            "author": {"accountId": "abc", "displayName": "Test User"}
-        })))
-        .mount(&server)
-        .await;
-
-    let client =
-        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
-    let worklog = client.add_worklog("FOO-1", 7200, None).await.unwrap();
-    assert_eq!(worklog.time_spent_seconds, Some(7200));
+/// Write a minimal jr config to a temp XDG_CONFIG_HOME so the subprocess
+/// doesn't read the user's real config.
+fn write_minimal_config(config_home: &std::path::Path, url: &str) {
+    let dir = config_home.join("jr");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("config.toml"),
+        format!("[instance]\nurl = \"{url}\"\n"),
+    )
+    .unwrap();
 }
 
 #[tokio::test]
-async fn test_list_worklogs() {
+async fn assets_search_server_error_surfaces_friendly_message() {
     let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    // Fail on the workspace-discovery call (first in the assets chain).
     Mock::given(method("GET"))
-        .and(path("/rest/api/3/issue/FOO-1/worklog"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "startAt": 0, "maxResults": 50, "total": 1,
-            "worklogs": [{
-                "id": "12345",
-                "timeSpentSeconds": 3600,
-                "timeSpent": "1h",
-                "author": {"accountId": "abc", "displayName": "Test User"},
-                "started": "2026-03-21T10:00:00.000+0000"
-            }]
-        })))
-        .mount(&server)
-        .await;
-
-    let client =
-        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
-    let worklogs = client.list_worklogs("FOO-1").await.unwrap();
-    assert_eq!(worklogs.len(), 1);
-    assert_eq!(worklogs[0].time_spent_seconds, Some(3600));
-}
-
-// ─── Error-path coverage (#187) ─────────────────────────────────────────────
-
-#[tokio::test]
-async fn worklog_list_server_error_surfaces_friendly_message() {
-    let server = MockServer::start().await;
-
-    Mock::given(method("GET"))
-        .and(path("/rest/api/3/issue/PROJ-1/worklog"))
+        .and(path("/rest/servicedeskapi/assets/workspace"))
         .respond_with(ResponseTemplate::new(500).set_body_json(serde_json::json!({
             "errorMessages": ["Internal server error"],
             "errors": {}
@@ -69,7 +38,9 @@ async fn worklog_list_server_error_surfaces_friendly_message() {
         .unwrap()
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
-        .args(["worklog", "list", "PROJ-1"])
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args(["assets", "search", "Key = X"])
         .output()
         .unwrap();
 
@@ -93,11 +64,14 @@ async fn worklog_list_server_error_surfaces_friendly_message() {
 }
 
 #[tokio::test]
-async fn worklog_list_unauthorized_dispatches_reauth_message() {
+async fn assets_search_unauthorized_dispatches_reauth_message() {
     let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
 
     Mock::given(method("GET"))
-        .and(path("/rest/api/3/issue/PROJ-1/worklog"))
+        .and(path("/rest/servicedeskapi/assets/workspace"))
         .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
             "errorMessages": ["Client must be authenticated to access this resource."],
             "errors": {}
@@ -109,7 +83,9 @@ async fn worklog_list_unauthorized_dispatches_reauth_message() {
         .unwrap()
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
-        .args(["worklog", "list", "PROJ-1"])
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args(["assets", "search", "Key = X"])
         .output()
         .unwrap();
 
@@ -137,13 +113,19 @@ async fn worklog_list_unauthorized_dispatches_reauth_message() {
 }
 
 #[tokio::test]
-async fn worklog_list_network_drop_surfaces_reach_error() {
+async fn assets_search_network_drop_surfaces_reach_error() {
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), "http://127.0.0.1:1");
+
     // Privileged port 1 — connect-refused from any unprivileged process.
     let output = Command::cargo_bin("jr")
         .unwrap()
         .env("JR_BASE_URL", "http://127.0.0.1:1")
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
-        .args(["worklog", "list", "PROJ-1"])
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args(["assets", "search", "Key = X"])
         .output()
         .unwrap();
 

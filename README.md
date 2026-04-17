@@ -53,6 +53,27 @@ brew install zious11/tap/jr
 cargo install jr-cli
 ```
 
+## macOS: after upgrading the binary
+
+When `jr` is replaced at its installed path — via `brew upgrade`, manual
+`cp`, or `curl | tar` — macOS's legacy Keychain Services treats the new
+binary as a different application and can prompt up to 4 times per
+command indefinitely.
+
+Fix:
+
+```bash
+jr auth refresh
+```
+
+This clears the stored credentials and re-runs the login flow so the
+new binary becomes the creator of fresh Keychain entries. **Click
+"Always Allow"** on the two prompts macOS shows during re-store —
+otherwise future commands will prompt again.
+
+Tracked in [#207](https://github.com/Zious11/jira-cli/issues/207). A
+longer-term fix (Developer ID signing) is tracked as a separate issue.
+
 ## Quick Start
 
 ```bash

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use crate::api::client::JiraClient;
 use crate::cache::{self, CachedTeam};
@@ -57,10 +57,7 @@ pub async fn fetch_and_cache_teams(
 ) -> Result<Vec<CachedTeam>> {
     let org_id = resolve_org_id(config, client).await?;
 
-    let api_teams = client
-        .list_teams(&org_id)
-        .await
-        .context("Failed to fetch teams from API")?;
+    let api_teams = client.list_teams(&org_id).await?;
 
     let cached: Vec<CachedTeam> = api_teams
         .into_iter()
