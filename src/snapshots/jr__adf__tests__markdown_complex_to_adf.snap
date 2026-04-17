@@ -6,11 +6,11 @@ expression: adf
   "content": [
     {
       "attrs": {
-        "level": 2
+        "level": 1
       },
       "content": [
         {
-          "text": "Root cause",
+          "text": "Header 1",
           "type": "text"
         }
       ],
@@ -19,7 +19,7 @@ expression: adf
     {
       "content": [
         {
-          "text": "The auth module had a ",
+          "text": "Paragraph with ",
           "type": "text"
         },
         {
@@ -28,11 +28,37 @@ expression: adf
               "type": "strong"
             }
           ],
-          "text": "critical bug",
+          "text": "bold",
           "type": "text"
         },
         {
-          "text": " in ",
+          "text": ", ",
+          "type": "text"
+        },
+        {
+          "marks": [
+            {
+              "type": "em"
+            }
+          ],
+          "text": "italic",
+          "type": "text"
+        },
+        {
+          "text": ", ",
+          "type": "text"
+        },
+        {
+          "marks": [
+            {
+              "type": "strike"
+            }
+          ],
+          "text": "strike",
+          "type": "text"
+        },
+        {
+          "text": ", ",
           "type": "text"
         },
         {
@@ -41,7 +67,24 @@ expression: adf
               "type": "code"
             }
           ],
-          "text": "validate_token",
+          "text": "inline code",
+          "type": "text"
+        },
+        {
+          "text": ", and a ",
+          "type": "text"
+        },
+        {
+          "marks": [
+            {
+              "attrs": {
+                "href": "https://example.com",
+                "title": "title"
+              },
+              "type": "link"
+            }
+          ],
+          "text": "link",
           "type": "text"
         },
         {
@@ -52,13 +95,25 @@ expression: adf
       "type": "paragraph"
     },
     {
+      "attrs": {
+        "level": 2
+      },
+      "content": [
+        {
+          "text": "Header 2",
+          "type": "text"
+        }
+      ],
+      "type": "heading"
+    },
+    {
       "content": [
         {
           "content": [
             {
               "content": [
                 {
-                  "text": "Missing null check",
+                  "text": "bullet one",
                   "type": "text"
                 }
               ],
@@ -72,11 +127,30 @@ expression: adf
             {
               "content": [
                 {
-                  "text": "Wrong error type",
+                  "text": "bullet two",
                   "type": "text"
                 }
               ],
               "type": "paragraph"
+            },
+            {
+              "content": [
+                {
+                  "content": [
+                    {
+                      "content": [
+                        {
+                          "text": "nested bullet",
+                          "type": "text"
+                        }
+                      ],
+                      "type": "paragraph"
+                    }
+                  ],
+                  "type": "listItem"
+                }
+              ],
+              "type": "bulletList"
             }
           ],
           "type": "listItem"
@@ -87,7 +161,164 @@ expression: adf
     {
       "content": [
         {
-          "text": "fn validate() -> bool {\n    true\n}",
+          "content": [
+            {
+              "content": [
+                {
+                  "text": "ordered",
+                  "type": "text"
+                }
+              ],
+              "type": "paragraph"
+            }
+          ],
+          "type": "listItem"
+        },
+        {
+          "content": [
+            {
+              "content": [
+                {
+                  "text": "items",
+                  "type": "text"
+                }
+              ],
+              "type": "paragraph"
+            }
+          ],
+          "type": "listItem"
+        }
+      ],
+      "type": "orderedList"
+    },
+    {
+      "content": [
+        {
+          "content": [
+            {
+              "text": "blockquoted text",
+              "type": "text"
+            }
+          ],
+          "type": "paragraph"
+        }
+      ],
+      "type": "blockquote"
+    },
+    {
+      "content": [
+        {
+          "content": [
+            {
+              "content": [
+                {
+                  "content": [
+                    {
+                      "text": "Col A",
+                      "type": "text"
+                    }
+                  ],
+                  "type": "paragraph"
+                }
+              ],
+              "type": "tableHeader"
+            },
+            {
+              "content": [
+                {
+                  "content": [
+                    {
+                      "text": "Col B",
+                      "type": "text"
+                    }
+                  ],
+                  "type": "paragraph"
+                }
+              ],
+              "type": "tableHeader"
+            }
+          ],
+          "type": "tableRow"
+        },
+        {
+          "content": [
+            {
+              "content": [
+                {
+                  "content": [
+                    {
+                      "text": "a1",
+                      "type": "text"
+                    }
+                  ],
+                  "type": "paragraph"
+                }
+              ],
+              "type": "tableCell"
+            },
+            {
+              "content": [
+                {
+                  "content": [
+                    {
+                      "text": "b1",
+                      "type": "text"
+                    }
+                  ],
+                  "type": "paragraph"
+                }
+              ],
+              "type": "tableCell"
+            }
+          ],
+          "type": "tableRow"
+        },
+        {
+          "content": [
+            {
+              "content": [
+                {
+                  "content": [
+                    {
+                      "text": "a2",
+                      "type": "text"
+                    }
+                  ],
+                  "type": "paragraph"
+                }
+              ],
+              "type": "tableCell"
+            },
+            {
+              "content": [
+                {
+                  "content": [
+                    {
+                      "text": "b2",
+                      "type": "text"
+                    }
+                  ],
+                  "type": "paragraph"
+                }
+              ],
+              "type": "tableCell"
+            }
+          ],
+          "type": "tableRow"
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "type": "rule"
+    },
+    {
+      "attrs": {
+        "language": "rust"
+      },
+      "content": [
+        {
+          "text": "fn validate() -> bool { true }\n",
           "type": "text"
         }
       ],
