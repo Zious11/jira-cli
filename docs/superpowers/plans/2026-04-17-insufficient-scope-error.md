@@ -21,11 +21,13 @@ cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings && cargo
 
 | File | Change | Purpose |
 |---|---|---|
-| `src/error.rs` | Modify (+~15 lines, +1 unit test) | New `JrError::InsufficientScope` variant + exit-code arm + test |
+| `src/error.rs` | Modify (+~15 lines, +2 unit tests) | New `JrError::InsufficientScope` variant + exit-code arm + exit-code and Display unit tests |
 | `src/api/client.rs` | Modify `parse_error` (lines 295-309, replace 14 lines with ~18) | Read body first, branch on 401 + substring match |
-| `tests/api_client.rs` | Modify (+2 integration tests, no imports needed) | Positive scope-mismatch test + explicit negative fall-through test |
+| `tests/api_client.rs` | Modify (+4 integration tests, no imports needed) | Positive scope-mismatch, fall-through boundary, case-insensitive match, non-401 status-gate |
+| `docs/superpowers/specs/2026-04-17-insufficient-scope-error-design.md` | New | Design spec referenced by this plan |
+| `docs/superpowers/plans/2026-04-17-insufficient-scope-error.md` | New | This implementation plan |
 
-No new files. No new dependencies. No changes to `Cargo.toml`.
+No new Rust/source files. Documentation files added: this plan and the linked design spec. No new dependencies. No changes to `Cargo.toml`.
 
 ---
 
