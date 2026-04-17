@@ -407,6 +407,9 @@ impl AdfRenderer {
                 self.list_stack.pop();
             }
             "orderedList" => {
+                // Treat missing, 0, or negative `attrs.order` as "start at 1" —
+                // matches Jira's own renderer, which ignores invalid HTML
+                // `<ol start>` values the same way.
                 let start = node
                     .get("attrs")
                     .and_then(|a| a.get("order"))
@@ -457,9 +460,11 @@ impl AdfRenderer {
                 self.blockquote_depth -= 1;
 
                 // Prefix every line in the just-rendered segment with "> ".
-                // A single "> " is added per nesting level; nested blockquotes
-                // accumulate to "> > " on each line when their own prefix pass
-                // runs during unwind.
+                // Nesting accumulates ("> > inner") because each level's prefix
+                // pass runs on unwind, re-prefixing the output its children's
+                // inner passes already produced — `blockquote_depth` is tracked
+                // for state but not consulted here; the prefix is always a
+                // single "> " regardless of depth.
                 let rendered = self.output.split_off(start);
                 let prefix = "> ";
                 for (i, line) in rendered.split('\n').enumerate() {
