@@ -38,3 +38,36 @@ fn auth_refresh_oauth_help_is_accepted() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn auth_refresh_non_interactive_fails_without_panic() {
+    // With stdin closed and no JR_AUTH_HEADER/JR_BASE_URL overrides, the
+    // underlying login_token() dialoguer prompts will hit EOF and return an
+    // io::UnexpectedEof. The refresh command should exit non-zero without
+    // panicking. This matches current `jr auth login` behavior (a known
+    // limitation tracked as a separate issue) — the test pins that we
+    // inherit it without a panic or crash.
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args(["auth", "refresh"])
+        .write_stdin("")
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        !output.status.success(),
+        "auth refresh with closed stdin should fail, got stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        !stderr.contains("panic"),
+        "stderr leaked a panic: {stderr}"
+    );
+}
