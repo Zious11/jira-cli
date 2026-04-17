@@ -1620,6 +1620,103 @@ mod tests {
     }
 
     #[test]
+    fn test_adf_to_text_empty_doc() {
+        // `{"type": "doc", "content": []}` has no children — the renderer
+        // iterates an empty array and `finish()` returns an empty string.
+        // Pinned here so a future refactor that starts emitting a placeholder
+        // for empty documents trips a test instead of silently changing output.
+        let adf = json!({"type": "doc", "content": []});
+        assert_eq!(adf_to_text(&adf), "");
+    }
+
+    #[test]
+    fn test_render_blockquote_with_empty_paragraph_produces_no_output() {
+        // A blockquote whose only child is an empty paragraph currently
+        // produces no output: the paragraph emits just its trailing newline,
+        // and the blockquote's trailing-empty-lines trim pops both lines off,
+        // leaving nothing to prefix. This is a quirk of the current contract
+        // rather than a "correct" answer — the pinned behavior here lets a
+        // future decision to instead emit a bare `> ` marker surface as a
+        // test failure rather than a silent change.
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "blockquote",
+                "content": [{"type": "paragraph", "content": []}]
+            }]
+        });
+        assert_eq!(adf_to_text(&adf), "");
+    }
+
+    #[test]
+    fn test_render_consecutive_hard_breaks_produce_multiple_newlines() {
+        // Each `hardBreak` pushes a `\n`, so two consecutive ones inside a
+        // paragraph leave a blank line between the surrounding text spans.
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "paragraph",
+                "content": [
+                    {"type": "text", "text": "a"},
+                    {"type": "hardBreak"},
+                    {"type": "hardBreak"},
+                    {"type": "text", "text": "b"}
+                ]
+            }]
+        });
+        assert_eq!(adf_to_text(&adf), "a\n\nb");
+    }
+
+    #[test]
+    fn test_render_marks_code_and_strong() {
+        // `[code, strong]` is the shape the write-path emits for `**`x`**` —
+        // `push_code` appends `{type: "code"}` after active marks. The `code`
+        // mark is applied innermost regardless of array position, so bold
+        // wraps the code span rather than the other way around.
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "x", "marks": [
+                    {"type": "code"}, {"type": "strong"}
+                ]}
+            ]}]
+        });
+        assert_eq!(adf_to_text(&adf), "**`x`**");
+    }
+
+    #[test]
+    fn test_render_marks_strike_and_em() {
+        // Non-code marks wrap in array order: `strike` first (innermost),
+        // then `em` outside it.
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "x", "marks": [
+                    {"type": "strike"}, {"type": "em"}
+                ]}
+            ]}]
+        });
+        assert_eq!(adf_to_text(&adf), "*~~x~~*");
+    }
+
+    #[test]
+    fn test_render_marks_link_and_strong() {
+        // `link` wraps the raw text first so `strong` can wrap the resulting
+        // `[text](href)` span. Swapping the order would put the `**` inside
+        // the link label, which no markdown renderer handles consistently.
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "x", "marks": [
+                    {"type": "link", "attrs": {"href": "https://example.com/jr"}},
+                    {"type": "strong"}
+                ]}
+            ]}]
+        });
+        assert_eq!(adf_to_text(&adf), "**[x](https://example.com/jr)**");
+    }
+
+    #[test]
     fn test_render_hard_break_in_table_cell_becomes_space() {
         let adf = json!({
             "type": "doc",
