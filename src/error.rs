@@ -5,6 +5,16 @@ pub enum JrError {
     #[error("Not authenticated. Run \"jr auth login\" to connect.")]
     NotAuthenticated,
 
+    #[error(
+        "Insufficient token scope: {message}\n\n\
+         The Atlassian API gateway rejects granular-scoped personal tokens on POST \
+         requests (while PUT/GET succeed). Workarounds:\n  \
+         • Use a classic token with \"write:jira-work\" scope instead of granular scopes, or\n  \
+         • Try OAuth 2.0 (run \"jr auth login --oauth\") — may avoid this bug, not verified\n\n\
+         See https://github.com/Zious11/jira-cli/issues/185 for details."
+    )]
+    InsufficientScope { message: String },
+
     #[error("Could not reach {0} — check your connection")]
     NetworkError(String),
 
@@ -34,6 +44,7 @@ impl JrError {
     pub fn exit_code(&self) -> i32 {
         match self {
             JrError::NotAuthenticated => 2,
+            JrError::InsufficientScope { .. } => 2,
             JrError::ConfigError(_) => 78,
             JrError::UserError(_) => 64,
             JrError::Interrupted => 130,
@@ -69,6 +80,36 @@ mod tests {
         assert_eq!(
             JrError::UserError("Invalid selection".into()).to_string(),
             "Invalid selection"
+        );
+    }
+
+    #[test]
+    fn insufficient_scope_exit_code() {
+        assert_eq!(
+            JrError::InsufficientScope {
+                message: "Unauthorized; scope does not match".into()
+            }
+            .exit_code(),
+            2
+        );
+    }
+
+    #[test]
+    fn insufficient_scope_display_includes_workarounds() {
+        let err = JrError::InsufficientScope {
+            message: "Unauthorized; scope does not match".into(),
+        };
+        let s = err.to_string();
+        assert!(s.contains("Insufficient token scope"), "got: {s}");
+        assert!(
+            s.contains("Unauthorized; scope does not match"),
+            "raw message should be included: {s}"
+        );
+        assert!(s.contains("write:jira-work"), "workaround missing: {s}");
+        assert!(s.contains("OAuth 2.0"), "workaround missing: {s}");
+        assert!(
+            s.contains("github.com/Zious11/jira-cli/issues/185"),
+            "issue link missing: {s}"
         );
     }
 }
