@@ -96,6 +96,53 @@ async fn test_401_returns_not_authenticated() {
     );
 }
 
+#[tokio::test]
+async fn test_401_scope_mismatch_returns_insufficient_scope() {
+    // Atlassian API gateway rejects granular-scoped personal tokens on POST
+    // requests with this exact body shape. The error must surface actionable
+    // workaround guidance instead of the generic "Not authenticated" message.
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+            "code": 401,
+            "message": "Unauthorized; scope does not match"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = JiraClient::new_for_test(server.uri(), "Basic granular-token".to_string());
+
+    let err = client
+        .post::<serde_json::Value, _>(
+            "/rest/api/3/issue",
+            &serde_json::json!({"fields": {"summary": "test"}}),
+        )
+        .await
+        .unwrap_err();
+
+    let s = err.to_string();
+    assert!(
+        s.contains("Insufficient token scope"),
+        "expected distinct scope error, got: {s}"
+    );
+    assert!(
+        s.contains("Unauthorized; scope does not match"),
+        "raw gateway message should be preserved: {s}"
+    );
+    assert!(
+        s.contains("write:jira-work"),
+        "classic-scope workaround missing: {s}"
+    );
+    assert!(s.contains("OAuth 2.0"), "OAuth workaround missing: {s}");
+    assert!(
+        s.contains("github.com/Zious11/jira-cli/issues/185"),
+        "issue link missing: {s}"
+    );
+}
+
 #[test]
 fn test_extract_error_message_from_error_messages_array() {
     let body =
