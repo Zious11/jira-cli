@@ -180,6 +180,80 @@ async fn test_401_without_scope_mismatch_falls_through_to_not_authenticated() {
     );
 }
 
+#[tokio::test]
+async fn test_401_scope_mismatch_matches_case_insensitively() {
+    // Gateway message is stable lowercase today, but `parse_error` matches
+    // case-insensitively via `to_ascii_lowercase()`. Pin that behavior so a
+    // future drop of the lowercase call trips a test instead of silently
+    // narrowing the match.
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+            "code": 401,
+            "message": "Unauthorized; Scope Does Not Match"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = JiraClient::new_for_test(server.uri(), "Basic granular-token".to_string());
+
+    let err = client
+        .post::<serde_json::Value, _>(
+            "/rest/api/3/issue",
+            &serde_json::json!({"fields": {"summary": "test"}}),
+        )
+        .await
+        .unwrap_err();
+
+    let s = err.to_string();
+    assert!(
+        s.contains("Insufficient token scope"),
+        "case-insensitive substring match should still dispatch to InsufficientScope: {s}"
+    );
+}
+
+#[tokio::test]
+async fn test_non_401_with_scope_substring_does_not_dispatch_to_insufficient_scope() {
+    // The scope-mismatch dispatch is gated on status == 401. A 403 (or any
+    // other 4xx/5xx) whose body happens to contain "scope does not match"
+    // must fall through to the generic ApiError path — pins the status gate
+    // so a future broadening of the match to all statuses trips a test.
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+            "code": 403,
+            "message": "Forbidden: scope does not match policy"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = JiraClient::new_for_test(server.uri(), "Basic granular-token".to_string());
+
+    let err = client
+        .post::<serde_json::Value, _>(
+            "/rest/api/3/issue",
+            &serde_json::json!({"fields": {"summary": "test"}}),
+        )
+        .await
+        .unwrap_err();
+
+    let s = err.to_string();
+    assert!(
+        !s.contains("Insufficient token scope"),
+        "non-401 status must NOT dispatch to InsufficientScope: {s}"
+    );
+    assert!(
+        s.contains("API error (403)"),
+        "expected generic ApiError for non-401 status: {s}"
+    );
+}
+
 #[test]
 fn test_extract_error_message_from_error_messages_array() {
     let body =
