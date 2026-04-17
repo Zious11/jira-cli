@@ -511,11 +511,13 @@ impl AdfRenderer {
                 self.render_cell_inline(node);
             }
             _ => {
+                // Unknown node: recurse into content if present, otherwise
+                // drop silently. Per the #202 spec, this avoids debug strings
+                // like "[unsupported: type]" reaching user output while still
+                // salvaging the text content of container nodes like panel or
+                // nestedExpand.
                 if node.get("content").is_some() {
                     self.render_children(node);
-                } else {
-                    self.output
-                        .push_str(&format!("[unsupported: {node_type}]"));
                 }
             }
         }
@@ -634,12 +636,29 @@ mod tests {
     }
 
     #[test]
-    fn test_adf_to_text_unsupported() {
+    fn test_render_unknown_leaf_drops_silently() {
         let adf = json!({
             "type": "doc",
             "content": [{ "type": "mediaGroup" }]
         });
-        assert!(adf_to_text(&adf).contains("[unsupported: mediaGroup]"));
+        assert_eq!(adf_to_text(&adf), "");
+    }
+
+    #[test]
+    fn test_render_unknown_container_recurses() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "panel",
+                "attrs": {"panelType": "info"},
+                "content": [
+                    {"type": "paragraph", "content": [{"type": "text", "text": "inside panel"}]}
+                ]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        assert!(text.contains("inside panel"), "got: {text:?}");
+        assert!(!text.contains("[unsupported"), "no debug string: {text:?}");
     }
 
     #[test]
