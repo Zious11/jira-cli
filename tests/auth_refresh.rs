@@ -66,8 +66,5 @@ fn auth_refresh_non_interactive_fails_without_panic() {
         "auth refresh with closed stdin should fail, got stdout: {}",
         String::from_utf8_lossy(&output.stdout)
     );
-    assert!(
-        !stderr.contains("panic"),
-        "stderr leaked a panic: {stderr}"
-    );
+    assert!(!stderr.contains("panic"), "stderr leaked a panic: {stderr}");
 }
