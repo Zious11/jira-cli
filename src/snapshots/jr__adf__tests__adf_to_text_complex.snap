@@ -3,6 +3,16 @@ source: src/adf.rs
 expression: text
 ---
 ## Summary
-This is a description.
-- Item one
-- Item two
+A **bold** word, an *italic* word, a [link](https://example.com), and `code`.
+- first bullet
+- second bullet
+  3. three
+  4. four
+> quoted thought
+---
+```rust
+fn main() { println!("hi"); }
+```
+| k | v |
+| --- | --- |
+| a | 1 |

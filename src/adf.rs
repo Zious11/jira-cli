@@ -343,70 +343,342 @@ fn heading_level_to_u8(level: HeadingLevel) -> u8 {
 }
 
 pub fn adf_to_text(adf: &Value) -> String {
-    let mut output = String::new();
-    if let Some(content) = adf.get("content").and_then(|c| c.as_array()) {
-        for node in content {
-            render_node(node, &mut output, 0);
-        }
-    }
-    output.trim_end().to_string()
+    let mut r = AdfRenderer::new();
+    r.render_doc(adf);
+    r.finish()
 }
 
-fn render_node(node: &Value, output: &mut String, depth: usize) {
-    let node_type = node.get("type").and_then(|t| t.as_str()).unwrap_or("");
-    match node_type {
-        "text" => {
-            if let Some(text) = node.get("text").and_then(|t| t.as_str()) {
-                output.push_str(text);
+struct AdfRenderer {
+    output: String,
+    list_stack: Vec<ListFrame>,
+}
+
+enum ListFrame {
+    Bullet,
+    Ordered { next_index: u64 },
+}
+
+impl AdfRenderer {
+    fn new() -> Self {
+        Self {
+            output: String::new(),
+            list_stack: Vec::new(),
+        }
+    }
+
+    fn render_doc(&mut self, adf: &Value) {
+        if let Some(content) = adf.get("content").and_then(|c| c.as_array()) {
+            for node in content {
+                self.render_node(node);
             }
         }
-        "paragraph" => {
-            render_children(node, output, depth);
-            output.push('\n');
-        }
-        "heading" => {
-            let level = node
-                .get("attrs")
-                .and_then(|a| a.get("level"))
-                .and_then(|l| l.as_u64())
-                .unwrap_or(1) as usize;
-            for _ in 0..level {
-                output.push('#');
+    }
+
+    fn render_node(&mut self, node: &Value) {
+        let node_type = node.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        match node_type {
+            "text" => {
+                let text = node.get("text").and_then(|t| t.as_str()).unwrap_or("");
+                let marks = node.get("marks").and_then(|m| m.as_array());
+                self.output.push_str(&apply_marks(text, marks));
             }
-            output.push(' ');
-            render_children(node, output, depth);
-            output.push('\n');
-        }
-        "bulletList" | "orderedList" => {
-            render_children(node, output, depth);
-        }
-        "listItem" => {
-            let indent = "  ".repeat(depth);
-            output.push_str(&indent);
-            output.push_str("- ");
-            render_children(node, output, depth + 1);
-        }
-        "codeBlock" => {
-            output.push_str("```\n");
-            render_children(node, output, depth);
-            output.push_str("\n```\n");
-        }
-        _ => {
-            if node.get("content").is_some() {
-                render_children(node, output, depth);
-            } else {
-                output.push_str(&format!("[unsupported: {node_type}]"));
+            "paragraph" => {
+                self.render_children(node);
+                self.output.push('\n');
+            }
+            "heading" => {
+                let level = node
+                    .get("attrs")
+                    .and_then(|a| a.get("level"))
+                    .and_then(|l| l.as_u64())
+                    .unwrap_or(1) as usize;
+                for _ in 0..level {
+                    self.output.push('#');
+                }
+                self.output.push(' ');
+                self.render_children(node);
+                self.output.push('\n');
+            }
+            "bulletList" => {
+                self.list_stack.push(ListFrame::Bullet);
+                self.render_children(node);
+                self.list_stack.pop();
+            }
+            "orderedList" => {
+                // Treat missing, 0, or negative `attrs.order` as "start at 1" —
+                // matches Jira's own renderer, which ignores invalid HTML
+                // `<ol start>` values the same way.
+                let start = node
+                    .get("attrs")
+                    .and_then(|a| a.get("order"))
+                    .and_then(|o| o.as_u64())
+                    .filter(|&n| n >= 1)
+                    .unwrap_or(1);
+                self.list_stack
+                    .push(ListFrame::Ordered { next_index: start });
+                self.render_children(node);
+                self.list_stack.pop();
+            }
+            "listItem" => {
+                let indent = "  ".repeat(self.list_stack.len().saturating_sub(1));
+                self.output.push_str(&indent);
+                let prefix = match self.list_stack.last_mut() {
+                    Some(ListFrame::Ordered { next_index }) => {
+                        let n = *next_index;
+                        *next_index += 1;
+                        format!("{n}. ")
+                    }
+                    _ => "- ".to_string(),
+                };
+                self.output.push_str(&prefix);
+                self.render_children(node);
+            }
+            "rule" => {
+                self.output.push_str("---\n");
+            }
+            "hardBreak" => {
+                self.output.push('\n');
+            }
+            "codeBlock" => {
+                let lang = node
+                    .get("attrs")
+                    .and_then(|a| a.get("language"))
+                    .and_then(|l| l.as_str())
+                    .unwrap_or("");
+                self.output.push_str("```");
+                self.output.push_str(lang);
+                self.output.push('\n');
+                self.render_children(node);
+                self.output.push_str("\n```\n");
+            }
+            "blockquote" => {
+                let start = self.output.len();
+                self.render_children(node);
+
+                // Prefix every line in the just-rendered segment with "> ".
+                // Nesting accumulates ("> > inner") because each level's prefix
+                // pass runs on unwind, re-prefixing the output its children's
+                // inner passes already produced — so a fixed "> " is correct at
+                // every level; no depth counter is needed.
+                let rendered = self.output.split_off(start);
+                // Collect lines, trim trailing empties (they'd produce a dangling
+                // "> " at the very end). Middle empty lines are preserved and
+                // prefixed with "> " so the blockquote context isn't broken by
+                // the blank-line-between-paragraphs pattern (e.g., a multi-line
+                // code block inside a blockquote).
+                let mut lines: Vec<&str> = rendered.split('\n').collect();
+                while lines.last() == Some(&"") {
+                    lines.pop();
+                }
+                let prefix = "> ";
+                for (i, line) in lines.iter().enumerate() {
+                    if i > 0 {
+                        self.output.push('\n');
+                    }
+                    if line.is_empty() {
+                        // Blank line inside the quote: emit just ">" (no trailing
+                        // space) — matches the conventional `>\n` markdown form
+                        // and preserves block-quote continuity.
+                        self.output.push('>');
+                    } else {
+                        self.output.push_str(prefix);
+                        self.output.push_str(line);
+                    }
+                }
+                if !lines.is_empty() {
+                    self.output.push('\n');
+                }
+            }
+            "table" => {
+                self.render_children(node);
+                self.output.push('\n');
+            }
+            "tableRow" => {
+                let cells: &[Value] = node
+                    .get("content")
+                    .and_then(|c| c.as_array())
+                    .map(|v| v.as_slice())
+                    .unwrap_or(&[]);
+                let cell_count = cells.len();
+                let mut has_header = false;
+                self.output.push_str("| ");
+                for (i, cell) in cells.iter().enumerate() {
+                    if i > 0 {
+                        self.output.push_str(" | ");
+                    }
+                    if cell.get("type").and_then(|t| t.as_str()) == Some("tableHeader") {
+                        has_header = true;
+                    }
+                    self.render_cell_inline(cell);
+                }
+                self.output.push_str(" |\n");
+                if has_header {
+                    self.output.push_str("| ");
+                    for i in 0..cell_count {
+                        if i > 0 {
+                            self.output.push_str(" | ");
+                        }
+                        self.output.push_str("---");
+                    }
+                    self.output.push_str(" |\n");
+                }
+            }
+            "tableCell" | "tableHeader" => {
+                // Should not be reached directly — tableRow invokes render_cell_inline
+                // on its cells. Fall through to flat rendering defensively.
+                self.render_cell_inline(node);
+            }
+            _ => {
+                // Unknown node: recurse into content if present, otherwise
+                // drop silently. Per the #202 spec, this avoids debug strings
+                // like "[unsupported: type]" reaching user output while still
+                // salvaging the text content of container nodes like panel or
+                // nestedExpand.
+                if node.get("content").is_some() {
+                    self.render_children(node);
+                }
             }
         }
+    }
+
+    fn render_children(&mut self, node: &Value) {
+        if let Some(content) = node.get("content").and_then(|c| c.as_array()) {
+            for child in content {
+                self.render_node(child);
+            }
+        }
+    }
+
+    /// Render a tableCell/tableHeader's children in "flat" mode: a paragraph's
+    /// inline content is emitted without its trailing newline (which would
+    /// break the "| cell | cell |" row structure). Other block types inside
+    /// a cell (rare but legal per the schema) fall back to normal rendering.
+    fn render_cell_inline(&mut self, cell: &Value) {
+        let Some(content) = cell.get("content").and_then(|c| c.as_array()) else {
+            return;
+        };
+        for (i, child) in content.iter().enumerate() {
+            if i > 0 {
+                self.output.push(' ');
+            }
+            let child_type = child.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            match child_type {
+                "paragraph" => {
+                    // Paragraph inside a cell: render its inline children
+                    // directly. `hardBreak` becomes a space; text nodes are
+                    // sanitized for cell-unsafe characters (pipes, newlines).
+                    if let Some(cc) = child.get("content").and_then(|c| c.as_array()) {
+                        for inline in cc {
+                            self.render_inline_in_cell(inline);
+                        }
+                    }
+                }
+                "hardBreak" => self.output.push(' '),
+                _ => self.render_inline_in_cell(child),
+            }
+        }
+    }
+
+    /// Render an inline node in cell mode: `hardBreak` becomes a space, and
+    /// text nodes are sanitized so pipes don't introduce false column
+    /// separators and embedded newlines don't break the row structure. Marks
+    /// are applied to the sanitized text so the escape survives mark wrapping.
+    fn render_inline_in_cell(&mut self, node: &Value) {
+        let t = node.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        match t {
+            "hardBreak" => self.output.push(' '),
+            "text" => {
+                let text = node.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                let sanitized = sanitize_table_cell_text(text);
+                let marks = node.get("marks").and_then(|m| m.as_array());
+                self.output.push_str(&apply_marks(&sanitized, marks));
+            }
+            _ => self.render_node(node),
+        }
+    }
+
+    fn finish(self) -> String {
+        self.output.trim_end().to_string()
     }
 }
 
-fn render_children(node: &Value, output: &mut String, depth: usize) {
-    if let Some(content) = node.get("content").and_then(|c| c.as_array()) {
-        for child in content {
-            render_node(child, output, depth);
+/// Escape pipe characters and collapse embedded newlines in text that will
+/// be rendered inside a markdown table cell. Without this, a literal `|` in a
+/// cell's text would be read as an extra column separator, and an embedded
+/// `\n` would break the pipe row into multiple lines.
+fn sanitize_table_cell_text(text: &str) -> String {
+    text.replace(['\r', '\n'], " ").replace('|', r"\|")
+}
+
+/// Wrap an inline-code span using a delimiter long enough to contain any
+/// backtick runs in `text` (CommonMark rule: delimiter must have more
+/// backticks than the longest run inside). If the content begins or ends
+/// with a backtick, a single space is padded on each side so the delimiter
+/// can't "glue" to the content.
+fn wrap_code_span(text: &str) -> String {
+    let mut longest_run = 0usize;
+    let mut current = 0usize;
+    for ch in text.chars() {
+        if ch == '`' {
+            current += 1;
+            longest_run = longest_run.max(current);
+        } else {
+            current = 0;
         }
     }
+    let delim = "`".repeat(longest_run + 1);
+    let needs_pad = text.starts_with('`') || text.ends_with('`');
+    if needs_pad {
+        format!("{delim} {text} {delim}")
+    } else {
+        format!("{delim}{text}{delim}")
+    }
+}
+
+/// Wrap `text` with markdown-style syntax for each mark. `code` is always
+/// applied innermost regardless of its position in the `marks` array, because
+/// the content of an inline-code span is literal and cannot itself carry
+/// other markdown syntax. The remaining marks then wrap the code span in
+/// array order.
+///
+/// This matters because the write-path `AdfBuilder::push_code` appends
+/// `{type: "code"}` to the active marks *after* any other marks, so on
+/// roundtrip we see `marks: [strong, code]` for `**`\x`**`; applying marks
+/// strictly in order would produce `` `**x**` `` (code outermost),
+/// losing the bold semantics.
+///
+/// Unknown mark types pass through without added syntax.
+fn apply_marks(text: &str, marks: Option<&Vec<Value>>) -> String {
+    let Some(marks) = marks else {
+        return text.to_string();
+    };
+    let has_code = marks
+        .iter()
+        .any(|m| m.get("type").and_then(|t| t.as_str()) == Some("code"));
+    let mut result = if has_code {
+        wrap_code_span(text)
+    } else {
+        text.to_string()
+    };
+    for mark in marks {
+        let mark_type = mark.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        result = match mark_type {
+            "code" => result, // handled above as innermost
+            "em" => format!("*{result}*"),
+            "strong" => format!("**{result}**"),
+            "strike" => format!("~~{result}~~"),
+            "link" => {
+                let href = mark
+                    .get("attrs")
+                    .and_then(|a| a.get("href"))
+                    .and_then(|h| h.as_str())
+                    .unwrap_or("");
+                format!("[{result}]({href})")
+            }
+            _ => result,
+        };
+    }
+    result
 }
 
 #[cfg(test)]
@@ -457,12 +729,29 @@ mod tests {
     }
 
     #[test]
-    fn test_adf_to_text_unsupported() {
+    fn test_render_unknown_leaf_drops_silently() {
         let adf = json!({
             "type": "doc",
             "content": [{ "type": "mediaGroup" }]
         });
-        assert!(adf_to_text(&adf).contains("[unsupported: mediaGroup]"));
+        assert_eq!(adf_to_text(&adf), "");
+    }
+
+    #[test]
+    fn test_render_unknown_container_recurses() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "panel",
+                "attrs": {"panelType": "info"},
+                "content": [
+                    {"type": "paragraph", "content": [{"type": "text", "text": "inside panel"}]}
+                ]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        assert!(text.contains("inside panel"), "got: {text:?}");
+        assert!(!text.contains("[unsupported"), "no debug string: {text:?}");
     }
 
     #[test]
@@ -768,11 +1057,48 @@ mod tests {
             "type": "doc",
             "version": 1,
             "content": [
-                {"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": "Summary"}]},
-                {"type": "paragraph", "content": [{"type": "text", "text": "This is a description."}]},
+                {"type": "heading", "attrs": {"level": 2}, "content": [
+                    {"type": "text", "text": "Summary"}
+                ]},
+                {"type": "paragraph", "content": [
+                    {"type": "text", "text": "A "},
+                    {"type": "text", "text": "bold", "marks": [{"type": "strong"}]},
+                    {"type": "text", "text": " word, an "},
+                    {"type": "text", "text": "italic", "marks": [{"type": "em"}]},
+                    {"type": "text", "text": " word, a "},
+                    {"type": "text", "text": "link", "marks": [
+                        {"type": "link", "attrs": {"href": "https://example.com"}}
+                    ]},
+                    {"type": "text", "text": ", and "},
+                    {"type": "text", "text": "code", "marks": [{"type": "code"}]},
+                    {"type": "text", "text": "."}
+                ]},
                 {"type": "bulletList", "content": [
-                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Item one"}]}]},
-                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Item two"}]}]}
+                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "first bullet"}]}]},
+                    {"type": "listItem", "content": [
+                        {"type": "paragraph", "content": [{"type": "text", "text": "second bullet"}]},
+                        {"type": "orderedList", "attrs": {"order": 3}, "content": [
+                            {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "three"}]}]},
+                            {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "four"}]}]}
+                        ]}
+                    ]}
+                ]},
+                {"type": "blockquote", "content": [
+                    {"type": "paragraph", "content": [{"type": "text", "text": "quoted thought"}]}
+                ]},
+                {"type": "rule"},
+                {"type": "codeBlock", "attrs": {"language": "rust"}, "content": [
+                    {"type": "text", "text": "fn main() { println!(\"hi\"); }"}
+                ]},
+                {"type": "table", "content": [
+                    {"type": "tableRow", "content": [
+                        {"type": "tableHeader", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "k"}]}]},
+                        {"type": "tableHeader", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "v"}]}]}
+                    ]},
+                    {"type": "tableRow", "content": [
+                        {"type": "tableCell", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "a"}]}]},
+                        {"type": "tableCell", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "1"}]}]}
+                    ]}
                 ]}
             ]
         });
@@ -838,6 +1164,73 @@ mod tests {
     }
 
     #[test]
+    fn test_render_table_pipe_format() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "table",
+                "content": [
+                    {"type": "tableRow", "content": [
+                        {"type": "tableHeader", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "h1"}]}]},
+                        {"type": "tableHeader", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "h2"}]}]},
+                    ]},
+                    {"type": "tableRow", "content": [
+                        {"type": "tableCell", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "a"}]}]},
+                        {"type": "tableCell", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "b"}]}]},
+                    ]},
+                ]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        assert!(text.contains("| h1 | h2 |"), "header row missing: {text:?}");
+        assert!(
+            text.contains("| --- | --- |"),
+            "separator missing: {text:?}"
+        );
+        assert!(text.contains("| a | b |"), "body row missing: {text:?}");
+    }
+
+    #[test]
+    fn test_render_table_mixed_header_cell_row_still_emits_separator() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "table",
+                "content": [
+                    {"type": "tableRow", "content": [
+                        {"type": "tableHeader", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "h"}]}]},
+                        {"type": "tableCell", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "c"}]}]},
+                    ]},
+                ]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        assert!(text.contains("| h | c |"), "row missing: {text:?}");
+        assert!(
+            text.contains("| --- | --- |"),
+            "separator missing: {text:?}"
+        );
+    }
+
+    #[test]
+    fn test_render_table_cell_flattens_paragraph() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "table",
+                "content": [{
+                    "type": "tableRow",
+                    "content": [
+                        {"type": "tableCell", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "just text"}]}]}
+                    ]
+                }]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        assert!(text.contains("| just text |"), "cell not flat: {text:?}");
+    }
+
+    #[test]
     fn test_markdown_table_cell_with_inline_formatting() {
         // Verify marks (Task 2) compose correctly with table cells (Task 3).
         // Structure: doc > table > tableRow > tableHeader > paragraph > text.
@@ -862,5 +1255,452 @@ mod tests {
         assert_eq!(link_text["text"], "link");
         assert_eq!(link_text["marks"][0]["type"], "link");
         assert_eq!(link_text["marks"][0]["attrs"]["href"], "https://x");
+    }
+
+    #[test]
+    fn test_render_blockquote_prefixes_each_line() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "blockquote",
+                "content": [
+                    {"type": "paragraph", "content": [{"type": "text", "text": "line one"}]},
+                    {"type": "paragraph", "content": [{"type": "text", "text": "line two"}]}
+                ]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        for line in text.lines() {
+            assert!(line.starts_with("> "), "line should be prefixed: {line:?}");
+        }
+        assert!(text.contains("> line one"));
+        assert!(text.contains("> line two"));
+    }
+
+    #[test]
+    fn test_render_nested_blockquote() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "blockquote",
+                "content": [{
+                    "type": "blockquote",
+                    "content": [
+                        {"type": "paragraph", "content": [{"type": "text", "text": "inner"}]}
+                    ]
+                }]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        assert!(text.contains("> > inner"), "got: {text:?}");
+    }
+
+    #[test]
+    fn test_render_strong_mark() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "bold", "marks": [{"type": "strong"}]}
+            ]}]
+        });
+        assert_eq!(adf_to_text(&adf), "**bold**");
+    }
+
+    #[test]
+    fn test_render_em_mark() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "em", "marks": [{"type": "em"}]}
+            ]}]
+        });
+        assert_eq!(adf_to_text(&adf), "*em*");
+    }
+
+    #[test]
+    fn test_render_strike_mark() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "gone", "marks": [{"type": "strike"}]}
+            ]}]
+        });
+        assert_eq!(adf_to_text(&adf), "~~gone~~");
+    }
+
+    #[test]
+    fn test_render_code_mark() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "x", "marks": [{"type": "code"}]}
+            ]}]
+        });
+        assert_eq!(adf_to_text(&adf), "`x`");
+    }
+
+    #[test]
+    fn test_render_link_preserves_href() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "jr", "marks": [
+                    {"type": "link", "attrs": {"href": "https://example.com/jr"}}
+                ]}
+            ]}]
+        });
+        assert_eq!(adf_to_text(&adf), "[jr](https://example.com/jr)");
+    }
+
+    #[test]
+    fn test_render_link_missing_href_defaults_empty() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "jr", "marks": [{"type": "link"}]}
+            ]}]
+        });
+        assert_eq!(adf_to_text(&adf), "[jr]()");
+    }
+
+    #[test]
+    fn test_render_multiple_marks_deterministic_order() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "foo", "marks": [{"type": "strong"}, {"type": "em"}]}
+            ]}]
+        });
+        assert_eq!(adf_to_text(&adf), "***foo***");
+    }
+
+    #[test]
+    fn test_render_unknown_mark_drops_syntax() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "plain", "marks": [{"type": "underline"}]}
+            ]}]
+        });
+        assert_eq!(adf_to_text(&adf), "plain");
+    }
+
+    #[test]
+    fn test_render_ordered_list_numeric_prefix() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "orderedList",
+                "content": [
+                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "alpha"}]}]},
+                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "beta"}]}]},
+                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "gamma"}]}]},
+                ]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        assert!(text.contains("1. alpha"), "got: {text:?}");
+        assert!(text.contains("2. beta"), "got: {text:?}");
+        assert!(text.contains("3. gamma"), "got: {text:?}");
+    }
+
+    #[test]
+    fn test_render_ordered_list_respects_attrs_order() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "orderedList",
+                "attrs": {"order": 5},
+                "content": [
+                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "five"}]}]},
+                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "six"}]}]},
+                ]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        assert!(text.contains("5. five"), "got: {text:?}");
+        assert!(text.contains("6. six"), "got: {text:?}");
+    }
+
+    #[test]
+    fn test_render_ordered_list_order_zero_defaults_to_one() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "orderedList",
+                "attrs": {"order": 0},
+                "content": [
+                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "only"}]}]},
+                ]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        assert!(text.contains("1. only"), "got: {text:?}");
+    }
+
+    #[test]
+    fn test_render_mixed_nested_lists() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "orderedList",
+                "content": [{
+                    "type": "listItem",
+                    "content": [
+                        {"type": "paragraph", "content": [{"type": "text", "text": "outer"}]},
+                        {"type": "bulletList", "content": [{
+                            "type": "listItem",
+                            "content": [{"type": "paragraph", "content": [{"type": "text", "text": "inner"}]}]
+                        }]}
+                    ]
+                }]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        assert!(text.contains("1. outer"), "got: {text:?}");
+        assert!(text.contains("  - inner"), "got: {text:?}");
+    }
+
+    #[test]
+    fn test_render_rule() {
+        let adf = json!({
+            "type": "doc",
+            "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": "above"}]},
+                {"type": "rule"},
+                {"type": "paragraph", "content": [{"type": "text", "text": "below"}]}
+            ]
+        });
+        let text = adf_to_text(&adf);
+        assert!(text.contains("---"), "expected rule line, got: {text:?}");
+        assert!(text.contains("above"));
+        assert!(text.contains("below"));
+    }
+
+    #[test]
+    fn test_render_hard_break_inserts_newline() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "line one"},
+                {"type": "hardBreak"},
+                {"type": "text", "text": "line two"}
+            ]}]
+        });
+        let text = adf_to_text(&adf);
+        assert!(text.contains("line one\nline two"), "got: {text:?}");
+    }
+
+    #[test]
+    fn test_render_code_block_with_language() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "codeBlock",
+                "attrs": {"language": "rust"},
+                "content": [{"type": "text", "text": "fn x() {}"}]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        assert!(
+            text.contains("```rust"),
+            "expected rust fence, got: {text:?}"
+        );
+        assert!(text.contains("fn x() {}"));
+    }
+
+    #[test]
+    fn test_render_code_block_without_language() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "codeBlock",
+                "content": [{"type": "text", "text": "plain"}]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        assert!(
+            text.contains("```\nplain"),
+            "expected empty fence, got: {text:?}"
+        );
+    }
+
+    #[test]
+    fn test_markdown_to_adf_to_text_roundtrip() {
+        let input = concat!(
+            "# Heading\n",
+            "\n",
+            "Paragraph with **bold** and *italic* and `code`.\n",
+            "\n",
+            "- a\n",
+            "- b\n",
+            "\n",
+            "1. one\n",
+            "2. two\n",
+            "\n",
+            "> quote\n",
+        );
+        let adf_original = markdown_to_adf(input);
+        let text = adf_to_text(&adf_original);
+        let adf_reparsed = markdown_to_adf(&text);
+
+        let types_original = collect_node_types(&adf_original);
+        let types_reparsed = collect_node_types(&adf_reparsed);
+        assert_eq!(
+            types_original, types_reparsed,
+            "node-type structure should roundtrip"
+        );
+    }
+
+    /// Walk the ADF tree depth-first and collect each node's `type` field.
+    /// Used to assert structural (not textual) equivalence on roundtrip.
+    fn collect_node_types(adf: &Value) -> Vec<String> {
+        let mut types = Vec::new();
+        walk_types(adf, &mut types);
+        types
+    }
+
+    fn walk_types(node: &Value, out: &mut Vec<String>) {
+        if let Some(t) = node.get("type").and_then(|t| t.as_str()) {
+            out.push(t.to_string());
+        }
+        if let Some(content) = node.get("content").and_then(|c| c.as_array()) {
+            for child in content {
+                walk_types(child, out);
+            }
+        }
+    }
+
+    #[test]
+    fn test_render_code_mark_with_backtick_in_content() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "foo`bar", "marks": [{"type": "code"}]}
+            ]}]
+        });
+        let text = adf_to_text(&adf);
+        assert_eq!(text, "``foo`bar``");
+    }
+
+    #[test]
+    fn test_render_code_mark_with_leading_trailing_backtick_pads() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "`x`", "marks": [{"type": "code"}]}
+            ]}]
+        });
+        let text = adf_to_text(&adf);
+        assert_eq!(text, "`` `x` ``");
+    }
+
+    #[test]
+    fn test_render_blockquote_with_internal_blank_line_keeps_prefix() {
+        // Blockquote containing a codeBlock whose content has a blank line.
+        // The blank line inside the quote must get a ">" prefix so the
+        // blockquote context isn't broken.
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "blockquote",
+                "content": [{
+                    "type": "codeBlock",
+                    "content": [{"type": "text", "text": "line 1\n\nline 3"}]
+                }]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        for line in text.lines() {
+            assert!(
+                line.starts_with('>'),
+                "every rendered line inside the blockquote should begin with '>': {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_render_hard_break_in_table_cell_becomes_space() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "table",
+                "content": [{
+                    "type": "tableRow",
+                    "content": [{
+                        "type": "tableCell",
+                        "content": [{
+                            "type": "paragraph",
+                            "content": [
+                                {"type": "text", "text": "line one"},
+                                {"type": "hardBreak"},
+                                {"type": "text", "text": "line two"}
+                            ]
+                        }]
+                    }]
+                }]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        // The cell content must stay on a single pipe row — no embedded newline.
+        assert!(text.contains("| line one line two |"), "got: {text:?}");
+    }
+
+    #[test]
+    fn test_render_strong_with_code_applies_code_innermost() {
+        // Matches the write-path's marks ordering: strong + code produces
+        // marks = [strong, code]. Output must be **`code`** not `**code**`.
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "x", "marks": [{"type": "strong"}, {"type": "code"}]}
+            ]}]
+        });
+        let text = adf_to_text(&adf);
+        assert_eq!(text, "**`x`**");
+    }
+
+    #[test]
+    fn test_render_table_cell_escapes_pipe_in_text() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "table",
+                "content": [{
+                    "type": "tableRow",
+                    "content": [{
+                        "type": "tableCell",
+                        "content": [{"type": "paragraph", "content": [
+                            {"type": "text", "text": "a|b"}
+                        ]}]
+                    }]
+                }]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        // Pipe inside the cell must be escaped so it doesn't introduce a
+        // false column break.
+        assert!(text.contains(r"| a\|b |"), "got: {text:?}");
+    }
+
+    #[test]
+    fn test_render_table_cell_collapses_newlines_in_text() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "table",
+                "content": [{
+                    "type": "tableRow",
+                    "content": [{
+                        "type": "tableCell",
+                        "content": [{"type": "paragraph", "content": [
+                            {"type": "text", "text": "line\nwrap"}
+                        ]}]
+                    }]
+                }]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        assert!(text.contains("| line wrap |"), "got: {text:?}");
     }
 }
