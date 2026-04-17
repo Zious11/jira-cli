@@ -1,3 +1,13 @@
+//! Error-path coverage (#187) for `jr issue view`.
+//!
+//! Note: `handle_view` in `src/cli/issue/list.rs` calls
+//! `get_or_fetch_cmdb_fields(client).await.unwrap_or_default()` BEFORE fetching
+//! the issue. On a cache miss that call hits `/rest/api/3/field`, but
+//! `unwrap_or_default()` swallows any error, so only the `/rest/api/3/issue/...`
+//! endpoint needs mocking. If that swallow is ever removed (e.g. CMDB errors
+//! propagate), these tests must also mock `/rest/api/3/field` or set
+//! `XDG_CACHE_HOME` to a prewarmed tempdir.
+
 #[allow(dead_code)]
 mod common;
 
@@ -6,58 +16,11 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
-async fn test_add_worklog() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/rest/api/3/issue/FOO-1/worklog"))
-        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
-            "id": "12345",
-            "timeSpentSeconds": 7200,
-            "timeSpent": "2h",
-            "author": {"accountId": "abc", "displayName": "Test User"}
-        })))
-        .mount(&server)
-        .await;
-
-    let client =
-        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
-    let worklog = client.add_worklog("FOO-1", 7200, None).await.unwrap();
-    assert_eq!(worklog.time_spent_seconds, Some(7200));
-}
-
-#[tokio::test]
-async fn test_list_worklogs() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/rest/api/3/issue/FOO-1/worklog"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "startAt": 0, "maxResults": 50, "total": 1,
-            "worklogs": [{
-                "id": "12345",
-                "timeSpentSeconds": 3600,
-                "timeSpent": "1h",
-                "author": {"accountId": "abc", "displayName": "Test User"},
-                "started": "2026-03-21T10:00:00.000+0000"
-            }]
-        })))
-        .mount(&server)
-        .await;
-
-    let client =
-        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
-    let worklogs = client.list_worklogs("FOO-1").await.unwrap();
-    assert_eq!(worklogs.len(), 1);
-    assert_eq!(worklogs[0].time_spent_seconds, Some(3600));
-}
-
-// ─── Error-path coverage (#187) ─────────────────────────────────────────────
-
-#[tokio::test]
-async fn worklog_list_server_error_surfaces_friendly_message() {
+async fn issue_view_server_error_surfaces_friendly_message() {
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
-        .and(path("/rest/api/3/issue/PROJ-1/worklog"))
+        .and(path("/rest/api/3/issue/PROJ-1"))
         .respond_with(ResponseTemplate::new(500).set_body_json(serde_json::json!({
             "errorMessages": ["Internal server error"],
             "errors": {}
@@ -69,7 +32,7 @@ async fn worklog_list_server_error_surfaces_friendly_message() {
         .unwrap()
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
-        .args(["worklog", "list", "PROJ-1"])
+        .args(["issue", "view", "PROJ-1"])
         .output()
         .unwrap();
 
@@ -93,11 +56,11 @@ async fn worklog_list_server_error_surfaces_friendly_message() {
 }
 
 #[tokio::test]
-async fn worklog_list_unauthorized_dispatches_reauth_message() {
+async fn issue_view_unauthorized_dispatches_reauth_message() {
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
-        .and(path("/rest/api/3/issue/PROJ-1/worklog"))
+        .and(path("/rest/api/3/issue/PROJ-1"))
         .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
             "errorMessages": ["Client must be authenticated to access this resource."],
             "errors": {}
@@ -109,7 +72,7 @@ async fn worklog_list_unauthorized_dispatches_reauth_message() {
         .unwrap()
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
-        .args(["worklog", "list", "PROJ-1"])
+        .args(["issue", "view", "PROJ-1"])
         .output()
         .unwrap();
 
@@ -137,13 +100,13 @@ async fn worklog_list_unauthorized_dispatches_reauth_message() {
 }
 
 #[tokio::test]
-async fn worklog_list_network_drop_surfaces_reach_error() {
+async fn issue_view_network_drop_surfaces_reach_error() {
     // Privileged port 1 — connect-refused from any unprivileged process.
     let output = Command::cargo_bin("jr")
         .unwrap()
         .env("JR_BASE_URL", "http://127.0.0.1:1")
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
-        .args(["worklog", "list", "PROJ-1"])
+        .args(["issue", "view", "PROJ-1"])
         .output()
         .unwrap();
 

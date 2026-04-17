@@ -1,6 +1,7 @@
 #[allow(dead_code)]
 mod common;
 
+use assert_cmd::Command;
 use serde_json::json;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -154,4 +155,124 @@ async fn list_comments_paginated() {
     assert_eq!(comments.len(), 2);
     assert_eq!(comments[0].id.as_deref(), Some("10001"));
     assert_eq!(comments[1].id.as_deref(), Some("10002"));
+}
+
+// ─── Error-path coverage (#187) ─────────────────────────────────────────────
+
+#[tokio::test]
+async fn issue_comments_server_error_surfaces_friendly_message() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-1/comment"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(serde_json::json!({
+            "errorMessages": ["Internal server error"],
+            "errors": {}
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "comments", "PROJ-1"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure, got stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "5xx should exit 1, got: {:?}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("API error (500)"),
+        "Expected 'API error (500)' in stderr, got: {stderr}"
+    );
+    assert!(!stderr.contains("panic"), "stderr leaked a panic: {stderr}");
+}
+
+#[tokio::test]
+async fn issue_comments_unauthorized_dispatches_reauth_message() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-1/comment"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+            "errorMessages": ["Client must be authenticated to access this resource."],
+            "errors": {}
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "comments", "PROJ-1"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure, got stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "401 should exit 2, got: {:?}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("Not authenticated"),
+        "Expected 'Not authenticated' in stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("jr auth login"),
+        "Expected 'jr auth login' suggestion in stderr, got: {stderr}"
+    );
+    assert!(!stderr.contains("panic"), "stderr leaked a panic: {stderr}");
+}
+
+#[tokio::test]
+async fn issue_comments_network_drop_surfaces_reach_error() {
+    // Privileged port 1 — connect-refused from any unprivileged process.
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", "http://127.0.0.1:1")
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "comments", "PROJ-1"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure, got stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "Net-drop should exit 1, got: {:?}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("Could not reach"),
+        "Expected 'Could not reach' in stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("check your connection"),
+        "Expected 'check your connection' in stderr, got: {stderr}"
+    );
+    assert!(!stderr.contains("panic"), "stderr leaked a panic: {stderr}");
 }

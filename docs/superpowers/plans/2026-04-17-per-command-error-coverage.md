@@ -2,9 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add 32 integration tests across 11 files (10 existing + 2 new) that pin per-command error propagation for 5xx, 401, and network-drop. No production code changes.
+**Goal:** Add 32 integration tests across 11 files (10 existing + 2 new) that pin per-command error propagation for 5xx, 401, and network-drop. Primarily test-only; one small production change landed mid-plan (`src/api/jira/teams.rs` + `src/cli/team.rs` — three `.context()` wrappers removed to unblock the `jr team list` 401 test, see commit `2c5809e`).
 
-**Architecture:** Each test spawns the `jr` binary via `assert_cmd::Command`, injects a wiremock URL via `JR_BASE_URL` + a dummy Basic auth header via `JR_AUTH_HEADER`, mounts one error mock (or drops the server for net-drop), and asserts `status.code()` + stderr contains/NOT-contains. Canonical Jira error body shape is `{"errorMessages": ["..."], "errors": {}}`. No shared test harness — tests follow the same skeleton inline for grep-ability, matching the existing `tests/issue_list_errors.rs` precedent.
+**Architecture:** Each test spawns the `jr` binary via `assert_cmd::Command`, injects a wiremock URL via `JR_BASE_URL` + a dummy Basic auth header via `JR_AUTH_HEADER`, mounts one error mock (5xx/401) OR points at a guaranteed-dead port (net-drop), and asserts `status.code()` + stderr contains/NOT-contains. Canonical Jira error body shape is `{"errorMessages": ["..."], "errors": {}}`. No shared test harness — tests follow the same skeleton inline for grep-ability, matching the existing `tests/issue_list_errors.rs` precedent.
+
+> **Net-drop pattern correction (mid-plan):** Initial drafts used `let uri = server.uri(); drop(server);` to simulate a closed port. **Empirically verified false in wiremock 0.6:** the async background task does not finish shutting down synchronously with `Drop`, so the next request returns 404 instead of ECONNREFUSED. **The pattern used instead is `.env("JR_BASE_URL", "http://127.0.0.1:1")`** — port 1 is in the privileged range (<1024), so listening there requires root. Nothing is listening on `127.0.0.1:1` in standard CI or developer environments, so user-level connects get ECONNREFUSED in practice. This is not an ironclad guarantee (if a root-level daemon ever binds it, the test would behave differently), but it's more reliable than the async `drop(server)` race and doesn't require binding a real socket. An alternative approach — bind a `TcpListener` to `127.0.0.1:0`, read the port, drop the listener, then connect — is not strictly more reliable either (TIME_WAIT and process races can still interfere). **Task 1 incorporates this correction in commit `5623cab`, and all subsequent Task N net-drop snippets use the port-1 form.**
 
 **Tech Stack:** Rust 2024, wiremock 0.6, assert_cmd 2, tempfile 3, tokio (test runtime).
 
@@ -111,13 +113,11 @@ async fn board_list_unauthorized_dispatches_reauth_message() {
 
 #[tokio::test]
 async fn board_list_network_drop_surfaces_reach_error() {
-    let server = MockServer::start().await;
-    let uri = server.uri();
-    drop(server); // Port closes; reqwest gets connection refused.
+    // Privileged port 1 — connect-refused from any unprivileged process.
 
     let output = Command::cargo_bin("jr")
         .unwrap()
-        .env("JR_BASE_URL", uri)
+        .env("JR_BASE_URL", "http://127.0.0.1:1")
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .args(["board", "list"])
         .output()
@@ -221,13 +221,11 @@ async fn sprint_current_unauthorized_dispatches_reauth_message() {
 
 #[tokio::test]
 async fn sprint_current_network_drop_surfaces_reach_error() {
-    let server = MockServer::start().await;
-    let uri = server.uri();
-    drop(server);
+    // Privileged port 1 — connect-refused from any unprivileged process.
 
     let output = Command::cargo_bin("jr")
         .unwrap()
-        .env("JR_BASE_URL", uri)
+        .env("JR_BASE_URL", "http://127.0.0.1:1")
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .args(["--project", "PROJ", "sprint", "current"])
         .output()
@@ -324,11 +322,9 @@ async fn user_search_unauthorized_dispatches_reauth_message() {
 
 #[tokio::test]
 async fn user_search_network_drop_surfaces_reach_error() {
-    let server = MockServer::start().await;
-    let uri = server.uri();
-    drop(server);
+    // Privileged port 1 — connect-refused from any unprivileged process.
 
-    let output = jr_cmd(&uri)
+    let output = jr_cmd("http://127.0.0.1:1")
         .args(["user", "search", "test"])
         .output()
         .unwrap();
@@ -430,13 +426,11 @@ async fn worklog_list_unauthorized_dispatches_reauth_message() {
 
 #[tokio::test]
 async fn worklog_list_network_drop_surfaces_reach_error() {
-    let server = MockServer::start().await;
-    let uri = server.uri();
-    drop(server);
+    // Privileged port 1 — connect-refused from any unprivileged process.
 
     let output = Command::cargo_bin("jr")
         .unwrap()
-        .env("JR_BASE_URL", uri)
+        .env("JR_BASE_URL", "http://127.0.0.1:1")
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .args(["worklog", "list", "PROJ-1"])
         .output()
@@ -567,14 +561,12 @@ async fn team_list_unauthorized_dispatches_reauth_message() {
 
 #[tokio::test]
 async fn team_list_network_drop_surfaces_reach_error() {
-    let server = MockServer::start().await;
-    let uri = server.uri();
-    drop(server);
+    // Privileged port 1 — connect-refused from any unprivileged process.
     let cache_dir = tempfile::tempdir().unwrap();
 
     let output = Command::cargo_bin("jr")
         .unwrap()
-        .env("JR_BASE_URL", uri)
+        .env("JR_BASE_URL", "http://127.0.0.1:1")
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
         .args(["team", "list"])
@@ -698,15 +690,13 @@ async fn queue_list_unauthorized_dispatches_reauth_message() {
 
 #[tokio::test]
 async fn queue_list_network_drop_surfaces_reach_error() {
-    let server = MockServer::start().await;
-    let uri = server.uri();
-    drop(server);
+    // Privileged port 1 — connect-refused from any unprivileged process.
     let project_dir = tempfile::tempdir().unwrap();
     std::fs::write(project_dir.path().join(".jr.toml"), "project = \"PROJ\"\n").unwrap();
 
     let output = Command::cargo_bin("jr")
         .unwrap()
-        .env("JR_BASE_URL", uri)
+        .env("JR_BASE_URL", "http://127.0.0.1:1")
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .current_dir(project_dir.path())
         .args(["queue", "list"])
@@ -812,13 +802,11 @@ async fn project_list_unauthorized_dispatches_reauth_message() {
 
 #[tokio::test]
 async fn project_list_network_drop_surfaces_reach_error() {
-    let server = MockServer::start().await;
-    let uri = server.uri();
-    drop(server);
+    // Privileged port 1 — connect-refused from any unprivileged process.
 
     let output = Command::cargo_bin("jr")
         .unwrap()
-        .env("JR_BASE_URL", uri)
+        .env("JR_BASE_URL", "http://127.0.0.1:1")
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .args(["project", "list"])
         .output()
@@ -921,13 +909,11 @@ async fn issue_comments_unauthorized_dispatches_reauth_message() {
 
 #[tokio::test]
 async fn issue_comments_network_drop_surfaces_reach_error() {
-    let server = MockServer::start().await;
-    let uri = server.uri();
-    drop(server);
+    // Privileged port 1 — connect-refused from any unprivileged process.
 
     let output = Command::cargo_bin("jr")
         .unwrap()
-        .env("JR_BASE_URL", uri)
+        .env("JR_BASE_URL", "http://127.0.0.1:1")
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .args(["issue", "comments", "PROJ-1"])
         .output()
@@ -1011,9 +997,7 @@ async fn issue_list_unauthorized_dispatches_reauth_message() {
 
 #[tokio::test]
 async fn issue_list_network_drop_surfaces_reach_error() {
-    let server = MockServer::start().await;
-    let uri = server.uri();
-    drop(server);
+    // Privileged port 1 — connect-refused from any unprivileged process.
 
     let project_dir = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -1024,7 +1008,7 @@ async fn issue_list_network_drop_surfaces_reach_error() {
 
     let output = Command::cargo_bin("jr")
         .unwrap()
-        .env("JR_BASE_URL", uri)
+        .env("JR_BASE_URL", "http://127.0.0.1:1")
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .current_dir(project_dir.path())
         .args(["issue", "list"])
@@ -1140,14 +1124,12 @@ async fn assets_search_unauthorized_dispatches_reauth_message() {
 
 #[tokio::test]
 async fn assets_search_network_drop_surfaces_reach_error() {
-    let server = MockServer::start().await;
-    let uri = server.uri();
-    drop(server);
+    // Privileged port 1 — connect-refused from any unprivileged process.
     let cache_dir = tempfile::tempdir().unwrap();
 
     let output = Command::cargo_bin("jr")
         .unwrap()
-        .env("JR_BASE_URL", uri)
+        .env("JR_BASE_URL", "http://127.0.0.1:1")
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
         .args(["assets", "search", "Key = X"])
@@ -1256,13 +1238,11 @@ async fn issue_view_unauthorized_dispatches_reauth_message() {
 
 #[tokio::test]
 async fn issue_view_network_drop_surfaces_reach_error() {
-    let server = MockServer::start().await;
-    let uri = server.uri();
-    drop(server);
+    // Privileged port 1 — connect-refused from any unprivileged process.
 
     let output = Command::cargo_bin("jr")
         .unwrap()
-        .env("JR_BASE_URL", uri)
+        .env("JR_BASE_URL", "http://127.0.0.1:1")
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .args(["issue", "view", "PROJ-1"])
         .output()

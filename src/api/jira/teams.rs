@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use crate::api::client::JiraClient;
 use crate::types::jira::{
@@ -17,8 +17,7 @@ impl JiraClient {
         });
         let resp: GraphqlResponse<TenantContextData> = self
             .post_to_instance("/gateway/api/graphql", &query)
-            .await
-            .context("Failed to query org metadata via GraphQL")?;
+            .await?;
 
         resp.data
             .and_then(|d| d.tenant_contexts.into_iter().next())
@@ -41,10 +40,7 @@ impl JiraClient {
                 path.push_str(&format!("?cursor={}", urlencoding::encode(c)));
             }
 
-            let resp: TeamsResponse = self
-                .get_from_instance(&path)
-                .await
-                .context("Failed to list teams")?;
+            let resp: TeamsResponse = self.get_from_instance(&path).await?;
 
             all_teams.extend(resp.entities);
 
