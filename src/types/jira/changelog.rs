@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 /// A single entry in an issue's changelog — one actor, one timestamp,
 /// one or more field-level changes.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct ChangelogEntry {
     pub id: String,
     /// May be `null` for automation, workflow post-functions, or migrated data.

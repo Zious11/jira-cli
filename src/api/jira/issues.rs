@@ -172,6 +172,37 @@ impl JiraClient {
         self.post(&path, &payload).await
     }
 
+    /// Fetch the full audit changelog for an issue.
+    ///
+    /// Offset-paginated under `values[]` (`OffsetPage::items()` already prefers
+    /// this key). Always fetches every page; sort/filter/truncate are the
+    /// caller's responsibility — the Jira changelog endpoint supports no
+    /// server-side filters and does not guarantee sort order.
+    pub async fn get_changelog(
+        &self,
+        key: &str,
+    ) -> Result<Vec<crate::types::jira::ChangelogEntry>> {
+        let base = format!("/rest/api/3/issue/{}/changelog", urlencoding::encode(key));
+        let mut all = Vec::new();
+        let mut start_at = 0u32;
+        let max_page_size: u32 = 100;
+
+        loop {
+            let path = format!("{}?startAt={}&maxResults={}", base, start_at, max_page_size);
+            let page: OffsetPage<crate::types::jira::ChangelogEntry> = self.get(&path).await?;
+            let has_more = page.has_more();
+            let next = page.next_start();
+            all.extend(page.values.unwrap_or_default());
+
+            if !has_more {
+                break;
+            }
+            start_at = next;
+        }
+
+        Ok(all)
+    }
+
     /// List comments on an issue with auto-pagination.
     pub async fn list_comments(&self, key: &str, limit: Option<u32>) -> Result<Vec<Comment>> {
         let base = format!("/rest/api/3/issue/{}/comment", urlencoding::encode(key));
