@@ -378,9 +378,9 @@ impl AdfRenderer {
         let node_type = node.get("type").and_then(|t| t.as_str()).unwrap_or("");
         match node_type {
             "text" => {
-                if let Some(text) = node.get("text").and_then(|t| t.as_str()) {
-                    self.output.push_str(text);
-                }
+                let text = node.get("text").and_then(|t| t.as_str()).unwrap_or("");
+                let marks = node.get("marks").and_then(|m| m.as_array());
+                self.output.push_str(&apply_marks(text, marks));
             }
             "paragraph" => {
                 self.render_children(node);
@@ -456,6 +456,32 @@ impl AdfRenderer {
     fn finish(self) -> String {
         self.output.trim_end().to_string()
     }
+}
+
+/// Wrap `text` with markdown-style syntax for each mark, innermost-first.
+/// Unknown mark types pass through without added syntax.
+fn apply_marks(text: &str, marks: Option<&Vec<Value>>) -> String {
+    let mut result = text.to_string();
+    let Some(marks) = marks else { return result };
+    for mark in marks {
+        let mark_type = mark.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        result = match mark_type {
+            "code" => format!("`{result}`"),
+            "em" => format!("*{result}*"),
+            "strong" => format!("**{result}**"),
+            "strike" => format!("~~{result}~~"),
+            "link" => {
+                let href = mark
+                    .get("attrs")
+                    .and_then(|a| a.get("href"))
+                    .and_then(|h| h.as_str())
+                    .unwrap_or("");
+                format!("[{result}]({href})")
+            }
+            _ => result,
+        };
+    }
+    result
 }
 
 #[cfg(test)]
@@ -911,6 +937,96 @@ mod tests {
         assert_eq!(link_text["text"], "link");
         assert_eq!(link_text["marks"][0]["type"], "link");
         assert_eq!(link_text["marks"][0]["attrs"]["href"], "https://x");
+    }
+
+    #[test]
+    fn test_render_strong_mark() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "bold", "marks": [{"type": "strong"}]}
+            ]}]
+        });
+        assert_eq!(adf_to_text(&adf), "**bold**");
+    }
+
+    #[test]
+    fn test_render_em_mark() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "em", "marks": [{"type": "em"}]}
+            ]}]
+        });
+        assert_eq!(adf_to_text(&adf), "*em*");
+    }
+
+    #[test]
+    fn test_render_strike_mark() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "gone", "marks": [{"type": "strike"}]}
+            ]}]
+        });
+        assert_eq!(adf_to_text(&adf), "~~gone~~");
+    }
+
+    #[test]
+    fn test_render_code_mark() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "x", "marks": [{"type": "code"}]}
+            ]}]
+        });
+        assert_eq!(adf_to_text(&adf), "`x`");
+    }
+
+    #[test]
+    fn test_render_link_preserves_href() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "jr", "marks": [
+                    {"type": "link", "attrs": {"href": "https://example.com/jr"}}
+                ]}
+            ]}]
+        });
+        assert_eq!(adf_to_text(&adf), "[jr](https://example.com/jr)");
+    }
+
+    #[test]
+    fn test_render_link_missing_href_defaults_empty() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "jr", "marks": [{"type": "link"}]}
+            ]}]
+        });
+        assert_eq!(adf_to_text(&adf), "[jr]()");
+    }
+
+    #[test]
+    fn test_render_multiple_marks_deterministic_order() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "foo", "marks": [{"type": "strong"}, {"type": "em"}]}
+            ]}]
+        });
+        assert_eq!(adf_to_text(&adf), "***foo***");
+    }
+
+    #[test]
+    fn test_render_unknown_mark_drops_syntax() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "plain", "marks": [{"type": "underline"}]}
+            ]}]
+        });
+        assert_eq!(adf_to_text(&adf), "plain");
     }
 
     #[test]
