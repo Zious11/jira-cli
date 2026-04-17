@@ -50,7 +50,7 @@ jr auth refresh [--oauth]
 **Behavior:**
 
 1. Load the global config (`Config::load()`). Extract `config.global.instance.auth_method`; default `"api_token"` if unset (matches `src/api/client.rs:51` behavior).
-2. Call `auth::clear_credentials()` — best-effort deletion of all 6 keychain entries (`email`, `api-token`, `oauth-access-token`, `oauth-refresh-token`, `oauth_client_id`, `oauth_client_secret`). Already wraps each delete in `if let Ok`, so missing entries do not fail the refresh.
+2. Call `auth::clear_credentials()?` — deletes all 6 keychain entries (`email`, `api-token`, `oauth-access-token`, `oauth-refresh-token`, `oauth_client_id`, `oauth_client_secret`). `NoEntry` is treated as success (expected on fresh installs); any other failure (permission denied, ACL mismatch, platform error) aggregates and propagates before the login step runs — otherwise refresh would report success while stale entries still cause the prompt storm.
 3. Dispatch:
    - `--oauth` flag set, OR `auth_method == "oauth"` → `login_oauth()`.
    - Otherwise → `login_token()`.
@@ -73,7 +73,7 @@ jr auth refresh [--oauth]
 | `src/cli/auth.rs` inline tests | Extract a `chosen_flow(config, oauth_override) -> AuthFlow` helper; unit-test the four combinations. |
 | `tests/auth_refresh.rs` (NEW) | 3 integration tests — smoke (`--help`), flag parity (`--oauth` accepted), non-interactive failure mode (stdin closed → non-zero exit, not a panic). |
 
-No changes to `Cargo.toml`, no new dependencies, no changes to `src/api/*` or the keychain backend. Pure surface-area addition.
+No changes to `Cargo.toml`, no new dependencies, no changes to the keychain backend itself. `src/api/auth.rs` gets two small, orthogonal updates during PR review: a `JR_SERVICE_NAME` env override on the service name (lets tests scope their own namespace and avoid wiping a developer's real keychain), and `clear_credentials()` changes from `()` to `Result<()>` so refresh can surface deletion failures to the user.
 
 ### JSON output
 
@@ -81,7 +81,7 @@ When `--output json` is set globally, success emits `{"status":"refreshed","auth
 
 ### Error handling
 
-- `clear_credentials()` swallows per-entry errors; a missing entry is normal during refresh.
+- `clear_credentials()` returns `Result<()>`. `NoEntry` is treated as success (expected for any entry that doesn't exist yet). Real errors (permission denied, ACL mismatch, platform failures) aggregate into a single `anyhow::Error` that `refresh_credentials` propagates via `?` — this prevents reporting a successful refresh while stale entries remain on macOS ACL failures.
 - The re-login step propagates `anyhow::Error` via `?`. If `dialoguer::Input::interact_text()` returns an EOF error (stdin closed / non-TTY), it propagates naturally — the process exits non-zero. No new handling required; this matches `jr auth login` today.
 - Ctrl+C during the prompt produces SIGINT → exit 130 via the existing Ctrl+C handler in `main.rs`.
 

@@ -5,13 +5,15 @@ use keyring::Entry;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener as AsyncTcpListener;
 
-/// Default keychain service name for `jr` credentials. Tests override this
-/// via `JR_SERVICE_NAME` to avoid touching a developer's real keychain.
+/// Default keychain service name for `jr` credentials. `JR_SERVICE_NAME`
+/// can override this at runtime; it is primarily used by tests to avoid
+/// touching a developer's real keychain.
 const DEFAULT_SERVICE_NAME: &str = "jr-jira-cli";
 
-/// Resolve the keychain service name, honoring the `JR_SERVICE_NAME`
-/// test-only override. All keychain operations go through this so test
-/// processes can scope their own namespace (e.g., `"jr-jira-cli-test"`).
+/// Resolve the keychain service name, honoring `JR_SERVICE_NAME` whenever
+/// it is set. All keychain operations go through this, so changing it also
+/// changes where credentials are stored and loaded (for example, tests can
+/// scope their own namespace with `"jr-jira-cli-test"`).
 fn service_name() -> String {
     std::env::var("JR_SERVICE_NAME").unwrap_or_else(|_| DEFAULT_SERVICE_NAME.to_string())
 }
@@ -91,7 +93,15 @@ pub fn load_oauth_app_credentials() -> Result<(String, String)> {
 }
 
 /// Remove all stored credentials from the system keychain.
-pub fn clear_credentials() {
+///
+/// `NoEntry` results are treated as success (the entry was already absent,
+/// which is the expected case on a fresh install or after a prior clear).
+/// Any other failure (permission denied, ACL mismatch, platform error) is
+/// aggregated and returned so callers can decide whether to proceed — for
+/// example, `jr auth refresh` needs to know if the clear actually happened
+/// before reporting the refresh as successful.
+pub fn clear_credentials() -> Result<()> {
+    let mut failures: Vec<String> = Vec::new();
     for key in [
         KEY_EMAIL,
         KEY_API_TOKEN,
@@ -100,9 +110,27 @@ pub fn clear_credentials() {
         "oauth_client_id",
         "oauth_client_secret",
     ] {
-        if let Ok(e) = entry(key) {
-            let _ = e.delete_credential();
+        match entry(key) {
+            Ok(e) => match e.delete_credential() {
+                Ok(()) | Err(keyring::Error::NoEntry) => {}
+                Err(err) => failures.push(format!("{key}: {err}")),
+            },
+            Err(err) => failures.push(format!("{key}: {err}")),
         }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "failed to clear {} keychain {}: {}",
+            failures.len(),
+            if failures.len() == 1 {
+                "entry"
+            } else {
+                "entries"
+            },
+            failures.join("; ")
+        ))
     }
 }
 

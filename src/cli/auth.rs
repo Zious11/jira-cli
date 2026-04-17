@@ -154,7 +154,9 @@ pub async fn refresh_credentials(
     let config = Config::load()?;
     let flow = chosen_flow(&config, oauth_override);
 
-    auth::clear_credentials();
+    auth::clear_credentials().context(
+        "failed to clear stored credentials before refresh — keychain may still hold stale entries",
+    )?;
 
     let login_result = match flow {
         AuthFlow::Token => login_token().await,
