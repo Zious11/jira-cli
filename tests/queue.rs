@@ -279,7 +279,7 @@ async fn resolve_queue_mixed_case_duplicate_names_error_message() {
 
 /// Write a minimal jr config to a temp XDG_CONFIG_HOME so the subprocess
 /// finds a URL while JR_BASE_URL / JR_AUTH_HEADER override the real values.
-fn write_minimal_queue_config(config_home: &std::path::Path, url: &str) {
+fn write_minimal_config(config_home: &std::path::Path, url: &str) {
     let dir = config_home.join("jr");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
@@ -294,7 +294,7 @@ async fn queue_list_server_error_surfaces_friendly_message() {
     let server = MockServer::start().await;
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
-    write_minimal_queue_config(config_dir.path(), &server.uri());
+    write_minimal_config(config_dir.path(), &server.uri());
 
     // Fail the FIRST call in the queue-list chain:
     // require_service_desk → get_or_fetch_project_meta → GET /rest/api/3/project/{key}
@@ -341,7 +341,7 @@ async fn queue_list_unauthorized_dispatches_reauth_message() {
     let server = MockServer::start().await;
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
-    write_minimal_queue_config(config_dir.path(), &server.uri());
+    write_minimal_config(config_dir.path(), &server.uri());
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/project/PROJ"))
@@ -389,7 +389,7 @@ async fn queue_list_unauthorized_dispatches_reauth_message() {
 async fn queue_list_network_drop_surfaces_reach_error() {
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
-    write_minimal_queue_config(config_dir.path(), "http://127.0.0.1:1");
+    write_minimal_config(config_dir.path(), "http://127.0.0.1:1");
 
     // Privileged port 1 — connect-refused from any unprivileged process.
     let output = Command::cargo_bin("jr")
