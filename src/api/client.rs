@@ -293,17 +293,29 @@ impl JiraClient {
     }
 
     /// Parse an error response into a `JrError`.
+    ///
+    /// Always reads the response body first, then branches on status. On 401, if
+    /// the body's message contains `"scope does not match"` (case-insensitive,
+    /// ASCII), returns `JrError::InsufficientScope` with the raw gateway message
+    /// — matches the Atlassian API gateway's rejection shape for granular-scoped
+    /// personal tokens on POST requests (see issue #185). Any other 401 falls
+    /// through to `NotAuthenticated`; non-401 4xx/5xx returns `ApiError`.
     async fn parse_error(response: Response) -> anyhow::Error {
         let status = response.status().as_u16();
-
-        if status == 401 {
-            return JrError::NotAuthenticated.into();
-        }
-
         let message = match response.bytes().await {
             Ok(body) => extract_error_message(&body),
             Err(e) => format!("Could not read error response: {e}"),
         };
+
+        if status == 401 {
+            if message
+                .to_ascii_lowercase()
+                .contains("scope does not match")
+            {
+                return JrError::InsufficientScope { message }.into();
+            }
+            return JrError::NotAuthenticated.into();
+        }
 
         JrError::ApiError { status, message }.into()
     }
