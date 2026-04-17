@@ -1701,9 +1701,10 @@ mod tests {
 
     #[test]
     fn test_render_marks_link_and_strong() {
-        // `link` wraps the raw text first so `strong` can wrap the resulting
-        // `[text](href)` span. Swapping the order would put the `**` inside
-        // the link label, which no markdown renderer handles consistently.
+        // `link` precedes `strong` in the marks array, so `apply_marks` wraps
+        // `link` first (producing `[x](href)`) and then `strong` around that.
+        // `link` has no code-style special case, so the result is purely
+        // order-driven.
         let adf = json!({
             "type": "doc",
             "content": [{"type": "paragraph", "content": [
@@ -1714,6 +1715,46 @@ mod tests {
             ]}]
         });
         assert_eq!(adf_to_text(&adf), "**[x](https://example.com/jr)**");
+    }
+
+    #[test]
+    fn test_render_marks_strong_and_code_reverse_order_equivalent() {
+        // `[strong, code]` is the exact shape the write-path emits: the
+        // `AdfBuilder::push_code` helper appends `{type: "code"}` *after*
+        // any active marks. `apply_marks` treats `code` as innermost
+        // regardless of array position, so this must produce the same
+        // result as the `[code, strong]` variant — any divergence would
+        // break roundtrip fidelity for `**`x`**`.
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "x", "marks": [
+                    {"type": "strong"}, {"type": "code"}
+                ]}
+            ]}]
+        });
+        assert_eq!(adf_to_text(&adf), "**`x`**");
+    }
+
+    #[test]
+    fn test_render_trailing_hard_breaks_stripped_by_finish() {
+        // `finish()` calls `trim_end()` on the accumulated output. The
+        // paragraph's own trailing `\n` and any trailing `hardBreak` newlines
+        // are all whitespace, so they're stripped together. This pins the
+        // "no stray blank lines at end of doc" contract — the more brittle
+        // complement to the interior-hardBreak test above.
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "paragraph",
+                "content": [
+                    {"type": "text", "text": "a"},
+                    {"type": "hardBreak"},
+                    {"type": "hardBreak"}
+                ]
+            }]
+        });
+        assert_eq!(adf_to_text(&adf), "a");
     }
 
     #[test]
