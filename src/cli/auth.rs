@@ -6,8 +6,11 @@ use crate::config::Config;
 use crate::output;
 
 /// Which auth flow `jr auth refresh` should dispatch to.
+///
+/// Internal detail of the `refresh` command; kept module-private so it
+/// isn't part of the crate's public library API surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AuthFlow {
+enum AuthFlow {
     Token,
     OAuth,
 }
@@ -16,7 +19,7 @@ impl AuthFlow {
     /// Canonical string form used in config (`auth_method`) and in the
     /// `--output json` success payload. Single source of truth for the label
     /// so a future rename (e.g., `"api_token"` → `"basic"`) has one edit site.
-    pub fn label(self) -> &'static str {
+    fn label(self) -> &'static str {
         match self {
             AuthFlow::Token => "api_token",
             AuthFlow::OAuth => "oauth",
@@ -31,7 +34,7 @@ impl AuthFlow {
 /// 2. Config `auth_method == "oauth"` → OAuth.
 /// 3. Anything else (including unset) → Token. Matches the `api_token`
 ///    default that `JiraClient::from_config` applies when no method is set.
-pub fn chosen_flow(config: &Config, oauth_override: bool) -> AuthFlow {
+fn chosen_flow(config: &Config, oauth_override: bool) -> AuthFlow {
     if oauth_override {
         return AuthFlow::OAuth;
     }
