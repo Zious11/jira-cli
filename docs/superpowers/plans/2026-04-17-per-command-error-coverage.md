@@ -4,7 +4,9 @@
 
 **Goal:** Add 32 integration tests across 11 files (10 existing + 2 new) that pin per-command error propagation for 5xx, 401, and network-drop. No production code changes.
 
-**Architecture:** Each test spawns the `jr` binary via `assert_cmd::Command`, injects a wiremock URL via `JR_BASE_URL` + a dummy Basic auth header via `JR_AUTH_HEADER`, mounts one error mock (or drops the server for net-drop), and asserts `status.code()` + stderr contains/NOT-contains. Canonical Jira error body shape is `{"errorMessages": ["..."], "errors": {}}`. No shared test harness — tests follow the same skeleton inline for grep-ability, matching the existing `tests/issue_list_errors.rs` precedent.
+**Architecture:** Each test spawns the `jr` binary via `assert_cmd::Command`, injects a wiremock URL via `JR_BASE_URL` + a dummy Basic auth header via `JR_AUTH_HEADER`, mounts one error mock (5xx/401) OR points at a guaranteed-dead port (net-drop), and asserts `status.code()` + stderr contains/NOT-contains. Canonical Jira error body shape is `{"errorMessages": ["..."], "errors": {}}`. No shared test harness — tests follow the same skeleton inline for grep-ability, matching the existing `tests/issue_list_errors.rs` precedent.
+
+> **Net-drop pattern correction (mid-plan):** Initial drafts used `let uri = server.uri(); drop(server);` to simulate a closed port. **Empirically verified false in wiremock 0.6:** the async background task does not finish shutting down synchronously with `Drop`, so the next request returns 404 instead of ECONNREFUSED. **The correct pattern is `.env("JR_BASE_URL", "http://127.0.0.1:1")`** — port 1 is privileged (<1024) and can only be bound by root, so user-level connects are guaranteed to get ECONNREFUSED. **All Task N net-drop snippets below should use port 1, not `drop(server)`. Task 1 already incorporates this correction in commit `5623cab`.** Ignore the stale `drop(server)` snippets in the later tasks — use port 1 instead.
 
 **Tech Stack:** Rust 2024, wiremock 0.6, assert_cmd 2, tempfile 3, tokio (test runtime).
 

@@ -79,12 +79,10 @@ async fn <cmd>_server_error_surfaces_friendly_message() {
 ```rust
 #[tokio::test]
 async fn <cmd>_network_drop_surfaces_reach_error() {
-    let server = MockServer::start().await;
-    let uri = server.uri();
-    drop(server); // port closes; subsequent connects get ECONNREFUSED
-
+    // Point at privileged port 1 — connect-refused from any unprivileged
+    // process. No MockServer needed; see "Network-drop pattern" caveat below.
     let output = Command::cargo_bin("jr").unwrap()
-        .env("JR_BASE_URL", uri)
+        .env("JR_BASE_URL", "http://127.0.0.1:1")
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .args(["<cmd>", ...]).output().unwrap();
 
@@ -110,7 +108,7 @@ The negative assertions (`!contains("panic")`) are the point of this audit: sile
 
 **"401 mid-session" is client-indistinguishable from initial 401.** Perplexity research (community.developer.atlassian.com) confirms Jira Cloud's response body for an expired-token 401 is the same `{"errorMessages": [...], "errors": {}}` shape as for an invalid-credential 401. The client cannot distinguish between "token never worked" and "token just expired" without external state. This spec therefore tests "endpoint returns 401" — which is the only distinction CLI behavior depends on. If stateful expiry detection ever becomes desirable, it would be a separate feature (likely involving a `/rest/api/3/myself` pre-flight check), not a test-coverage gap.
 
-**Wiremock `drop(server)` is the idiomatic network-drop pattern.** Confirmed via the wiremock-rs README ("When a `MockServer` instance goes out of scope, the corresponding HTTP server running in the background is shut down to free up the port it was using"). Wiremock has no built-in "close connection mid-request" API; drop-before-request is the supported pattern. Risk of OS port reuse in the tiny window between `drop(server)` and the client's connect is bounded by the OS ephemeral-port pool (macOS 49152-65535 = 16,384 ports; Linux typically 32768-60999 = 28,232 ports) and the narrow millisecond window — essentially unreachable in practice. If a reused port ever produced a spurious 200 response, the `.contains("Could not reach")` assertion fails loudly instead of silently passing.
+**Network-drop pattern: privileged port 1, not `drop(server)`.** Initial design used `let uri = server.uri(); drop(server);` based on the wiremock-rs README claim that dropping the `MockServer` shuts down the background HTTP server. **Empirically verified false in wiremock 0.6:** after `drop(server)`, the next request to the same URI returns 404 (the async background task has not finished shutting down when the sync `Drop` returns). Verified with a standalone reproducer: server dropped, client connects to the stored URI, gets 404 instead of ECONNREFUSED. `drop` is synchronous and cannot await async cleanup. Using `http://127.0.0.1:1` instead — port 1 is in the privileged range (<1024) and can only be bound by root, so any user-level connect is guaranteed to get ECONNREFUSED. This maps cleanly to `JrError::NetworkError` ("Could not reach ..."). No MockServer, no wiremock race, no ephemeral-port reuse concern. Documented here because this is a non-obvious gotcha that will surprise future readers.
 
 **429 retry-exhaustion path is explicitly out of scope.** It's tested at the client layer in `src/api/rate_limit.rs` and re-testing per-command would only exercise the same `send_with_retry` code path.
 
