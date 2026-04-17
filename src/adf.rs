@@ -351,7 +351,6 @@ pub fn adf_to_text(adf: &Value) -> String {
 struct AdfRenderer {
     output: String,
     list_stack: Vec<ListFrame>,
-    blockquote_depth: usize,
 }
 
 enum ListFrame {
@@ -364,7 +363,6 @@ impl AdfRenderer {
         Self {
             output: String::new(),
             list_stack: Vec::new(),
-            blockquote_depth: 0,
         }
     }
 
@@ -454,17 +452,14 @@ impl AdfRenderer {
                 self.output.push_str("\n```\n");
             }
             "blockquote" => {
-                self.blockquote_depth += 1;
                 let start = self.output.len();
                 self.render_children(node);
-                self.blockquote_depth -= 1;
 
                 // Prefix every line in the just-rendered segment with "> ".
                 // Nesting accumulates ("> > inner") because each level's prefix
                 // pass runs on unwind, re-prefixing the output its children's
-                // inner passes already produced — `blockquote_depth` is tracked
-                // for state but not consulted here; the prefix is always a
-                // single "> " regardless of depth.
+                // inner passes already produced — so a fixed "> " is correct at
+                // every level; no depth counter is needed.
                 let rendered = self.output.split_off(start);
                 let prefix = "> ";
                 for (i, line) in rendered.split('\n').enumerate() {
@@ -482,11 +477,11 @@ impl AdfRenderer {
                 self.output.push('\n');
             }
             "tableRow" => {
-                let cells = node
+                let cells: &[Value] = node
                     .get("content")
                     .and_then(|c| c.as_array())
-                    .cloned()
-                    .unwrap_or_default();
+                    .map(|v| v.as_slice())
+                    .unwrap_or(&[]);
                 let cell_count = cells.len();
                 let mut has_header = false;
                 self.output.push_str("| ");
