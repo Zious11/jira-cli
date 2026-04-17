@@ -67,7 +67,7 @@ Stack-based builder — the idiomatic pattern for event-stream → tree conversi
 struct AdfBuilder {
     root: Vec<Value>,              // Top-level block nodes
     stack: Vec<PartialNode>,       // Open containers (Heading, Paragraph, List, Item, BlockQuote, Table, Row, Cell, ...)
-    active_marks: Vec<Value>,      // Currently-open inline marks (strong, em, code, strike, link)
+    active_marks: Vec<Value>,      // Currently-open inline marks (strong, em, strike, link). The `code` mark is not tracked here — it attaches per-event in `push_code`.
     in_table_head: bool,           // For distinguishing tableHeader from tableCell
 }
 
@@ -117,7 +117,7 @@ Inline marks use a parallel `active_marks` list. When `Text(s)` fires while mark
 | Event | ADF handling |
 |---|---|
 | `Text(s)` | Append `{"type":"text","text":s, "marks"?: [...active_marks]}` to current container |
-| `Code(s)` | Append `{"type":"text","text":s,"marks":[{"type":"code"}, ...active_marks]}` |
+| `Code(s)` | Append `{"type":"text","text":s,"marks":[...active_marks, {"type":"code"}]}` |
 | `SoftBreak` | Emit a single space — ADF has no soft-break node |
 | `HardBreak` | Emit `{"type":"hardBreak"}` |
 | `Rule` | Emit `{"type":"rule"}` at block level |
