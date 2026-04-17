@@ -461,15 +461,32 @@ impl AdfRenderer {
                 // inner passes already produced — so a fixed "> " is correct at
                 // every level; no depth counter is needed.
                 let rendered = self.output.split_off(start);
+                // Collect lines, trim trailing empties (they'd produce a dangling
+                // "> " at the very end). Middle empty lines are preserved and
+                // prefixed with "> " so the blockquote context isn't broken by
+                // the blank-line-between-paragraphs pattern (e.g., a multi-line
+                // code block inside a blockquote).
+                let mut lines: Vec<&str> = rendered.split('\n').collect();
+                while lines.last() == Some(&"") {
+                    lines.pop();
+                }
                 let prefix = "> ";
-                for (i, line) in rendered.split('\n').enumerate() {
+                for (i, line) in lines.iter().enumerate() {
                     if i > 0 {
                         self.output.push('\n');
                     }
-                    if !line.is_empty() {
+                    if line.is_empty() {
+                        // Blank line inside the quote: emit just ">" (no trailing
+                        // space) — matches the conventional `>\n` markdown form
+                        // and preserves block-quote continuity.
+                        self.output.push('>');
+                    } else {
                         self.output.push_str(prefix);
                         self.output.push_str(line);
                     }
+                }
+                if !lines.is_empty() {
+                    self.output.push('\n');
                 }
             }
             "table" => {
@@ -547,19 +564,59 @@ impl AdfRenderer {
             let child_type = child.get("type").and_then(|t| t.as_str()).unwrap_or("");
             match child_type {
                 "paragraph" => {
+                    // Paragraph inside a cell: render its inline children
+                    // directly, substituting any hardBreak with a space so the
+                    // pipe-row structure stays on one line.
                     if let Some(cc) = child.get("content").and_then(|c| c.as_array()) {
                         for inline in cc {
-                            self.render_node(inline);
+                            self.render_inline_in_cell(inline);
                         }
                     }
                 }
+                "hardBreak" => self.output.push(' '),
                 _ => self.render_node(child),
             }
         }
     }
 
+    /// Like `render_node`, but when the node is a `hardBreak` emit a space
+    /// instead of a newline. Used inside table cells to keep rows single-line.
+    fn render_inline_in_cell(&mut self, node: &Value) {
+        let t = node.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        if t == "hardBreak" {
+            self.output.push(' ');
+        } else {
+            self.render_node(node);
+        }
+    }
+
     fn finish(self) -> String {
         self.output.trim_end().to_string()
+    }
+}
+
+/// Wrap an inline-code span using a delimiter long enough to contain any
+/// backtick runs in `text` (CommonMark rule: delimiter must have more
+/// backticks than the longest run inside). If the content begins or ends
+/// with a backtick, a single space is padded on each side so the delimiter
+/// can't "glue" to the content.
+fn wrap_code_span(text: &str) -> String {
+    let mut longest_run = 0usize;
+    let mut current = 0usize;
+    for ch in text.chars() {
+        if ch == '`' {
+            current += 1;
+            longest_run = longest_run.max(current);
+        } else {
+            current = 0;
+        }
+    }
+    let delim = "`".repeat(longest_run + 1);
+    let needs_pad = text.starts_with('`') || text.ends_with('`');
+    if needs_pad {
+        format!("{delim} {text} {delim}")
+    } else {
+        format!("{delim}{text}{delim}")
     }
 }
 
@@ -571,7 +628,7 @@ fn apply_marks(text: &str, marks: Option<&Vec<Value>>) -> String {
     for mark in marks {
         let mark_type = mark.get("type").and_then(|t| t.as_str()).unwrap_or("");
         result = match mark_type {
-            "code" => format!("`{result}`"),
+            "code" => wrap_code_span(&result),
             "em" => format!("*{result}*"),
             "strong" => format!("**{result}**"),
             "strike" => format!("~~{result}~~"),
@@ -1477,5 +1534,80 @@ mod tests {
                 walk_types(child, out);
             }
         }
+    }
+
+    #[test]
+    fn test_render_code_mark_with_backtick_in_content() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "foo`bar", "marks": [{"type": "code"}]}
+            ]}]
+        });
+        let text = adf_to_text(&adf);
+        assert_eq!(text, "``foo`bar``");
+    }
+
+    #[test]
+    fn test_render_code_mark_with_leading_trailing_backtick_pads() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "`x`", "marks": [{"type": "code"}]}
+            ]}]
+        });
+        let text = adf_to_text(&adf);
+        assert_eq!(text, "`` `x` ``");
+    }
+
+    #[test]
+    fn test_render_blockquote_with_internal_blank_line_keeps_prefix() {
+        // Blockquote containing a codeBlock whose content has a blank line.
+        // The blank line inside the quote must get a ">" prefix so the
+        // blockquote context isn't broken.
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "blockquote",
+                "content": [{
+                    "type": "codeBlock",
+                    "content": [{"type": "text", "text": "line 1\n\nline 3"}]
+                }]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        for line in text.lines() {
+            assert!(
+                line.starts_with('>'),
+                "every rendered line inside the blockquote should begin with '>': {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_render_hard_break_in_table_cell_becomes_space() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "table",
+                "content": [{
+                    "type": "tableRow",
+                    "content": [{
+                        "type": "tableCell",
+                        "content": [{
+                            "type": "paragraph",
+                            "content": [
+                                {"type": "text", "text": "line one"},
+                                {"type": "hardBreak"},
+                                {"type": "text", "text": "line two"}
+                            ]
+                        }]
+                    }]
+                }]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        // The cell content must stay on a single pipe row — no embedded newline.
+        assert!(text.contains("| line one line two |"), "got: {text:?}");
     }
 }
