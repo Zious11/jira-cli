@@ -1620,6 +1620,126 @@ mod tests {
     }
 
     #[test]
+    fn test_adf_to_text_empty_doc() {
+        // `{"type": "doc", "content": []}` has no children — the renderer
+        // iterates an empty array and `finish()` returns an empty string.
+        // Pinned here so a future refactor that starts emitting a placeholder
+        // for empty documents trips a test instead of silently changing output.
+        let adf = json!({"type": "doc", "content": []});
+        assert_eq!(adf_to_text(&adf), "");
+    }
+
+    #[test]
+    fn test_render_blockquote_with_empty_paragraph_produces_no_output() {
+        // A blockquote whose only child is an empty paragraph currently
+        // produces no output: the paragraph emits just its trailing newline,
+        // and the blockquote's trailing-empty-lines trim pops both lines off,
+        // leaving nothing to prefix. This is a quirk of the current contract
+        // rather than a "correct" answer — the pinned behavior here lets a
+        // future decision to instead emit a bare `> ` marker surface as a
+        // test failure rather than a silent change.
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "blockquote",
+                "content": [{"type": "paragraph", "content": []}]
+            }]
+        });
+        assert_eq!(adf_to_text(&adf), "");
+    }
+
+    #[test]
+    fn test_render_consecutive_hard_breaks_produce_multiple_newlines() {
+        // Each `hardBreak` pushes a `\n`, so two consecutive ones inside a
+        // paragraph leave a blank line between the surrounding text spans.
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "paragraph",
+                "content": [
+                    {"type": "text", "text": "a"},
+                    {"type": "hardBreak"},
+                    {"type": "hardBreak"},
+                    {"type": "text", "text": "b"}
+                ]
+            }]
+        });
+        assert_eq!(adf_to_text(&adf), "a\n\nb");
+    }
+
+    #[test]
+    fn test_render_marks_code_and_strong() {
+        // The write-path emits `[strong, code]` for `**`x`**` because
+        // `push_code` appends `{type: "code"}` after active marks. This test
+        // covers the reverse-order case: even when the array is
+        // `[code, strong]`, the `code` mark is applied innermost, so bold
+        // wraps the code span rather than the other way around.
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "x", "marks": [
+                    {"type": "code"}, {"type": "strong"}
+                ]}
+            ]}]
+        });
+        assert_eq!(adf_to_text(&adf), "**`x`**");
+    }
+
+    #[test]
+    fn test_render_marks_strike_and_em() {
+        // Non-code marks wrap in array order: `strike` first (innermost),
+        // then `em` outside it.
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "x", "marks": [
+                    {"type": "strike"}, {"type": "em"}
+                ]}
+            ]}]
+        });
+        assert_eq!(adf_to_text(&adf), "*~~x~~*");
+    }
+
+    #[test]
+    fn test_render_marks_link_and_strong() {
+        // `link` precedes `strong` in the marks array, so `apply_marks` wraps
+        // `link` first (producing `[x](href)`) and then `strong` around that.
+        // `link` has no code-style special case, so the result is purely
+        // order-driven.
+        let adf = json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "x", "marks": [
+                    {"type": "link", "attrs": {"href": "https://example.com/jr"}},
+                    {"type": "strong"}
+                ]}
+            ]}]
+        });
+        assert_eq!(adf_to_text(&adf), "**[x](https://example.com/jr)**");
+    }
+
+    #[test]
+    fn test_render_trailing_hard_breaks_stripped_by_finish() {
+        // `finish()` calls `trim_end()` on the accumulated output. The
+        // paragraph's own trailing `\n` and any trailing `hardBreak` newlines
+        // are all whitespace, so they're stripped together. This pins the
+        // "no stray blank lines at end of doc" contract — the more brittle
+        // complement to the interior-hardBreak test above.
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "paragraph",
+                "content": [
+                    {"type": "text", "text": "a"},
+                    {"type": "hardBreak"},
+                    {"type": "hardBreak"}
+                ]
+            }]
+        });
+        assert_eq!(adf_to_text(&adf), "a");
+    }
+
+    #[test]
     fn test_render_hard_break_in_table_cell_becomes_space() {
         let adf = json!({
             "type": "doc",
