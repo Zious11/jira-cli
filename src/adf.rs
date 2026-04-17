@@ -355,7 +355,7 @@ struct AdfRenderer {
 
 enum ListFrame {
     Bullet,
-    // `Ordered { next_index: u64 }` variant added in Task 2 alongside its first use.
+    Ordered { next_index: u64 },
 }
 
 impl AdfRenderer {
@@ -399,15 +399,34 @@ impl AdfRenderer {
                 self.render_children(node);
                 self.output.push('\n');
             }
-            "bulletList" | "orderedList" => {
+            "bulletList" => {
                 self.list_stack.push(ListFrame::Bullet);
+                self.render_children(node);
+                self.list_stack.pop();
+            }
+            "orderedList" => {
+                let start = node
+                    .get("attrs")
+                    .and_then(|a| a.get("order"))
+                    .and_then(|o| o.as_u64())
+                    .filter(|&n| n >= 1)
+                    .unwrap_or(1);
+                self.list_stack.push(ListFrame::Ordered { next_index: start });
                 self.render_children(node);
                 self.list_stack.pop();
             }
             "listItem" => {
                 let indent = "  ".repeat(self.list_stack.len().saturating_sub(1));
                 self.output.push_str(&indent);
-                self.output.push_str("- ");
+                let prefix = match self.list_stack.last_mut() {
+                    Some(ListFrame::Ordered { next_index }) => {
+                        let n = *next_index;
+                        *next_index += 1;
+                        format!("{n}. ")
+                    }
+                    _ => "- ".to_string(),
+                };
+                self.output.push_str(&prefix);
                 self.render_children(node);
             }
             "codeBlock" => {
@@ -892,5 +911,81 @@ mod tests {
         assert_eq!(link_text["text"], "link");
         assert_eq!(link_text["marks"][0]["type"], "link");
         assert_eq!(link_text["marks"][0]["attrs"]["href"], "https://x");
+    }
+
+    #[test]
+    fn test_render_ordered_list_numeric_prefix() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "orderedList",
+                "content": [
+                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "alpha"}]}]},
+                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "beta"}]}]},
+                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "gamma"}]}]},
+                ]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        assert!(text.contains("1. alpha"), "got: {text:?}");
+        assert!(text.contains("2. beta"), "got: {text:?}");
+        assert!(text.contains("3. gamma"), "got: {text:?}");
+    }
+
+    #[test]
+    fn test_render_ordered_list_respects_attrs_order() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "orderedList",
+                "attrs": {"order": 5},
+                "content": [
+                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "five"}]}]},
+                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "six"}]}]},
+                ]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        assert!(text.contains("5. five"), "got: {text:?}");
+        assert!(text.contains("6. six"), "got: {text:?}");
+    }
+
+    #[test]
+    fn test_render_ordered_list_order_zero_defaults_to_one() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "orderedList",
+                "attrs": {"order": 0},
+                "content": [
+                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "only"}]}]},
+                ]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        assert!(text.contains("1. only"), "got: {text:?}");
+    }
+
+    #[test]
+    fn test_render_mixed_nested_lists() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "orderedList",
+                "content": [{
+                    "type": "listItem",
+                    "content": [
+                        {"type": "paragraph", "content": [{"type": "text", "text": "outer"}]},
+                        {"type": "bulletList", "content": [{
+                            "type": "listItem",
+                            "content": [{"type": "paragraph", "content": [{"type": "text", "text": "inner"}]}]
+                        }]}
+                    ]
+                }]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        assert!(text.contains("1. outer"), "got: {text:?}");
+        assert!(text.contains("  - inner"), "got: {text:?}");
     }
 }
