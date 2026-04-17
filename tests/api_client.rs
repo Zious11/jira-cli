@@ -143,6 +143,43 @@ async fn test_401_scope_mismatch_returns_insufficient_scope() {
     );
 }
 
+#[tokio::test]
+async fn test_401_without_scope_mismatch_falls_through_to_not_authenticated() {
+    // 401 responses whose body does NOT contain "scope does not match" (e.g.,
+    // expired session, bad credentials) must continue to return the generic
+    // NotAuthenticated error. Pins the dispatch boundary intentionally so a
+    // future tightening of the substring match surfaces as a test failure
+    // instead of a silent behavior change.
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/myself"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+            "code": 401,
+            "message": "Session expired"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = JiraClient::new_for_test(server.uri(), "Basic expired-session".to_string());
+
+    let err = client
+        .get::<serde_json::Value>("/rest/api/3/myself")
+        .await
+        .unwrap_err();
+
+    let s = err.to_string();
+    assert!(
+        s.contains("Not authenticated"),
+        "expected generic 401 fall-through, got: {s}"
+    );
+    assert!(
+        !s.contains("Insufficient token scope"),
+        "must NOT dispatch to InsufficientScope without the substring: {s}"
+    );
+}
+
 #[test]
 fn test_extract_error_message_from_error_messages_array() {
     let body =
