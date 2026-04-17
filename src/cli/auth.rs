@@ -107,6 +107,55 @@ pub async fn status() -> Result<()> {
     Ok(())
 }
 
+/// Clear all stored credentials and re-run the login flow so the current
+/// binary re-registers as the creator of fresh keychain entries.
+///
+/// On macOS this is the recovery path for the legacy Keychain ACL/partition
+/// invalidation that occurs after `jr` is replaced at its installed path
+/// (e.g., `brew upgrade`). See spec at
+/// `docs/superpowers/specs/2026-04-17-keychain-prompts-207-design.md`.
+pub async fn refresh_credentials(
+    oauth_override: bool,
+    output: &crate::cli::OutputFormat,
+) -> Result<()> {
+    let config = Config::load().unwrap_or_default();
+    let flow = chosen_flow(&config, oauth_override);
+
+    auth::clear_credentials();
+
+    match flow {
+        AuthFlow::Token => login_token().await?,
+        AuthFlow::OAuth => login_oauth().await?,
+    }
+
+    let method_label = match flow {
+        AuthFlow::Token => "api_token",
+        AuthFlow::OAuth => "oauth",
+    };
+
+    match output {
+        crate::cli::OutputFormat::Json => {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "status": "refreshed",
+                    "auth_method": method_label,
+                })
+            );
+        }
+        crate::cli::OutputFormat::Table => {
+            // No table row payload on success — the stderr help line below is
+            // the primary user-visible output for the non-JSON case.
+        }
+    }
+
+    eprintln!(
+        "Credentials refreshed. If prompted to allow keychain access, choose \"Always Allow\" so future commands run silently."
+    );
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
