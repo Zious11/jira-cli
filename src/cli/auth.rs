@@ -5,6 +5,30 @@ use crate::api::auth;
 use crate::config::Config;
 use crate::output;
 
+/// Which auth flow `jr auth refresh` should dispatch to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthFlow {
+    Token,
+    OAuth,
+}
+
+/// Decide which login flow to run based on config + explicit override.
+///
+/// Order of precedence:
+/// 1. `oauth_override = true` → always OAuth (user passed `--oauth`).
+/// 2. Config `auth_method == "oauth"` → OAuth.
+/// 3. Anything else (including unset, which matches `JiraClient::from_config`'s
+///    `api_token` default at `src/api/client.rs:51`) → Token.
+pub fn chosen_flow(config: &Config, oauth_override: bool) -> AuthFlow {
+    if oauth_override {
+        return AuthFlow::OAuth;
+    }
+    match config.global.instance.auth_method.as_deref() {
+        Some("oauth") => AuthFlow::OAuth,
+        _ => AuthFlow::Token,
+    }
+}
+
 /// Prompt for email and API token, then store in keychain.
 pub async fn login_token() -> Result<()> {
     let email: String = dialoguer::Input::new()
@@ -81,4 +105,49 @@ pub async fn status() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Config, GlobalConfig, InstanceConfig};
+
+    fn config_with_auth_method(method: Option<&str>) -> Config {
+        Config {
+            global: GlobalConfig {
+                instance: InstanceConfig {
+                    url: Some("https://example.atlassian.net".into()),
+                    cloud_id: None,
+                    org_id: None,
+                    auth_method: method.map(str::to_string),
+                },
+                ..Default::default()
+            },
+            project: Default::default(),
+        }
+    }
+
+    #[test]
+    fn chosen_flow_defaults_to_token_when_unset() {
+        let config = config_with_auth_method(None);
+        assert_eq!(chosen_flow(&config, false), AuthFlow::Token);
+    }
+
+    #[test]
+    fn chosen_flow_uses_token_for_explicit_api_token() {
+        let config = config_with_auth_method(Some("api_token"));
+        assert_eq!(chosen_flow(&config, false), AuthFlow::Token);
+    }
+
+    #[test]
+    fn chosen_flow_uses_oauth_when_config_says_so() {
+        let config = config_with_auth_method(Some("oauth"));
+        assert_eq!(chosen_flow(&config, false), AuthFlow::OAuth);
+    }
+
+    #[test]
+    fn chosen_flow_oauth_override_wins_over_config() {
+        let config = config_with_auth_method(Some("api_token"));
+        assert_eq!(chosen_flow(&config, true), AuthFlow::OAuth);
+    }
 }
