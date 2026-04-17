@@ -97,3 +97,31 @@ async fn get_changelog_auto_paginates_across_pages() {
     assert_eq!(entries[0].id, "1");
     assert_eq!(entries[1].id, "2");
 }
+
+use assert_cmd::Command;
+
+#[test]
+fn changelog_help_lists_subcommand() {
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .args(["issue", "changelog", "--help"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "--help should exit 0, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--limit"), "help missing --limit: {stdout}");
+    assert!(stdout.contains("--all"), "help missing --all: {stdout}");
+    assert!(stdout.contains("--field"), "help missing --field: {stdout}");
+    assert!(
+        stdout.contains("--author"),
+        "help missing --author: {stdout}"
+    );
+    assert!(
+        stdout.contains("--reverse"),
+        "help missing --reverse: {stdout}"
+    );
+}

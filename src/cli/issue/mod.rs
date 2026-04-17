@@ -1,4 +1,5 @@
 mod assets;
+mod changelog;
 mod create;
 mod format;
 mod helpers;
@@ -68,6 +69,7 @@ pub async fn handle(
         IssueCommand::Comments { key, limit } => {
             list::handle_comments(&key, limit, output_format, client).await
         }
+        IssueCommand::Changelog { .. } => changelog::handle(command, output_format, client).await,
         IssueCommand::Open { .. } => workflow::handle_open(command, client).await,
         IssueCommand::Link { .. } => {
             links::handle_link(command, output_format, client, no_input).await
