@@ -343,69 +343,99 @@ fn heading_level_to_u8(level: HeadingLevel) -> u8 {
 }
 
 pub fn adf_to_text(adf: &Value) -> String {
-    let mut output = String::new();
-    if let Some(content) = adf.get("content").and_then(|c| c.as_array()) {
-        for node in content {
-            render_node(node, &mut output, 0);
-        }
-    }
-    output.trim_end().to_string()
+    let mut r = AdfRenderer::new();
+    r.render_doc(adf);
+    r.finish()
 }
 
-fn render_node(node: &Value, output: &mut String, depth: usize) {
-    let node_type = node.get("type").and_then(|t| t.as_str()).unwrap_or("");
-    match node_type {
-        "text" => {
-            if let Some(text) = node.get("text").and_then(|t| t.as_str()) {
-                output.push_str(text);
-            }
+struct AdfRenderer {
+    output: String,
+    list_stack: Vec<ListFrame>,
+}
+
+enum ListFrame {
+    Bullet,
+    // `Ordered { next_index: u64 }` variant added in Task 2 alongside its first use.
+}
+
+impl AdfRenderer {
+    fn new() -> Self {
+        Self {
+            output: String::new(),
+            list_stack: Vec::new(),
         }
-        "paragraph" => {
-            render_children(node, output, depth);
-            output.push('\n');
-        }
-        "heading" => {
-            let level = node
-                .get("attrs")
-                .and_then(|a| a.get("level"))
-                .and_then(|l| l.as_u64())
-                .unwrap_or(1) as usize;
-            for _ in 0..level {
-                output.push('#');
-            }
-            output.push(' ');
-            render_children(node, output, depth);
-            output.push('\n');
-        }
-        "bulletList" | "orderedList" => {
-            render_children(node, output, depth);
-        }
-        "listItem" => {
-            let indent = "  ".repeat(depth);
-            output.push_str(&indent);
-            output.push_str("- ");
-            render_children(node, output, depth + 1);
-        }
-        "codeBlock" => {
-            output.push_str("```\n");
-            render_children(node, output, depth);
-            output.push_str("\n```\n");
-        }
-        _ => {
-            if node.get("content").is_some() {
-                render_children(node, output, depth);
-            } else {
-                output.push_str(&format!("[unsupported: {node_type}]"));
+    }
+
+    fn render_doc(&mut self, adf: &Value) {
+        if let Some(content) = adf.get("content").and_then(|c| c.as_array()) {
+            for node in content {
+                self.render_node(node);
             }
         }
     }
-}
 
-fn render_children(node: &Value, output: &mut String, depth: usize) {
-    if let Some(content) = node.get("content").and_then(|c| c.as_array()) {
-        for child in content {
-            render_node(child, output, depth);
+    fn render_node(&mut self, node: &Value) {
+        let node_type = node.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        match node_type {
+            "text" => {
+                if let Some(text) = node.get("text").and_then(|t| t.as_str()) {
+                    self.output.push_str(text);
+                }
+            }
+            "paragraph" => {
+                self.render_children(node);
+                self.output.push('\n');
+            }
+            "heading" => {
+                let level = node
+                    .get("attrs")
+                    .and_then(|a| a.get("level"))
+                    .and_then(|l| l.as_u64())
+                    .unwrap_or(1) as usize;
+                for _ in 0..level {
+                    self.output.push('#');
+                }
+                self.output.push(' ');
+                self.render_children(node);
+                self.output.push('\n');
+            }
+            "bulletList" | "orderedList" => {
+                self.list_stack.push(ListFrame::Bullet);
+                self.render_children(node);
+                self.list_stack.pop();
+            }
+            "listItem" => {
+                let indent = "  ".repeat(self.list_stack.len().saturating_sub(1));
+                self.output.push_str(&indent);
+                self.output.push_str("- ");
+                self.render_children(node);
+            }
+            "codeBlock" => {
+                self.output.push_str("```\n");
+                self.render_children(node);
+                self.output.push_str("\n```\n");
+            }
+            _ => {
+                if node.get("content").is_some() {
+                    self.render_children(node);
+                } else {
+                    self.output
+                        .push_str(&format!("[unsupported: {node_type}]"));
+                }
+            }
         }
+    }
+
+    fn render_children(&mut self, node: &Value) {
+        if let Some(content) = node.get("content").and_then(|c| c.as_array()) {
+            for child in content {
+                self.render_node(child);
+            }
+        }
+    }
+
+    fn finish(self) -> String {
+        self.output.trim_end().to_string()
     }
 }
 
