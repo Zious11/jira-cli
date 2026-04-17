@@ -63,8 +63,8 @@ enum ListFrame {
 | `paragraph` | children, then `\n` |
 | `heading` (`attrs.level`) | `#` repeated `level` times, then space, then children, then `\n`. Required per schema; defaults to `level=1` defensively against corrupted input only. |
 | `bulletList` | push `ListFrame::Bullet`, render children, pop |
-| `orderedList` (`attrs.order`) | push `ListFrame::Ordered { next_index: order.unwrap_or(1) }`, render children, pop |
-| `listItem` | `"  "` × `(list_stack.len() - 1)` + prefix (`- ` or `{n}. `) + children + `\n`. Increment counter if the enclosing frame is `Ordered`. |
+| `orderedList` (`attrs.order`) | push `ListFrame::Ordered { next_index: order.filter(|&n| n >= 1).unwrap_or(1) }`, render children, pop. Jira treats `order=0`, negative, or missing as "start at 1"; the filter matches that contract. |
+| `listItem` | `"  "` × `(list_stack.len() - 1)` + prefix (`- ` or `{n}. `) + children. **No trailing `\n`** — the enclosed `paragraph` (schema-guaranteed: `listItem` content is block-only per ADF spec, and the write path already wraps inline in paragraphs) contributes its own trailing `\n`. Nested list children use their own indentation chain. Increment the counter after rendering if the enclosing frame is `Ordered`. |
 | `blockquote` | increment `blockquote_depth`, render children, decrement. Every rendered line contributed while `blockquote_depth > 0` gets prefixed with `"> "` × depth. |
 | `codeBlock` (`attrs.language`) | ` ```{lang}` fence line (empty lang = plain ` ``` `), code content, ` ``` ` close fence, `\n`. |
 | `rule` | `---\n` |
@@ -179,7 +179,7 @@ Two small tests replace the old one.
 One UX: best-effort render; never panic, never return an error, never emit debug syntax.
 
 - Use `serde_json::Value::get` + typed accessors (`.as_str`, `.as_array`, `.as_u64`) returning `Option`; chain with `.and_then` and default with `.unwrap_or` / `.unwrap_or_default`. No `.unwrap()` or `.expect()` anywhere in the renderer.
-- Missing optional fields (`codeBlock.attrs.language`, link `attrs.title`) → sensible empty default.
+- Missing optional fields (`codeBlock.attrs.language`, link `attrs.title`, `orderedList.attrs.order`) → sensible empty default. For `orderedList.attrs.order`, additionally filter out values `< 1` (Jira renders these as "start at 1", matching HTML's behavior with invalid `<ol start>`).
 - Missing required fields (`heading.attrs.level`, `link.attrs.href`) → defensive fallback (`level=1`, empty href). The ADF schema requires these; the fallback exists as defense-in-depth against corrupted input, not a normal path.
 - Malformed value types (e.g., `text` field on text node is an object not string) → treat as empty text. Matches the write-path's tolerance for unexpected event shapes.
 
