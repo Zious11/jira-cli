@@ -471,6 +471,45 @@ impl AdfRenderer {
                     }
                 }
             }
+            "table" => {
+                self.render_children(node);
+                self.output.push('\n');
+            }
+            "tableRow" => {
+                let cells = node
+                    .get("content")
+                    .and_then(|c| c.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                let cell_count = cells.len();
+                let mut has_header = false;
+                self.output.push_str("| ");
+                for (i, cell) in cells.iter().enumerate() {
+                    if i > 0 {
+                        self.output.push_str(" | ");
+                    }
+                    if cell.get("type").and_then(|t| t.as_str()) == Some("tableHeader") {
+                        has_header = true;
+                    }
+                    self.render_cell_inline(cell);
+                }
+                self.output.push_str(" |\n");
+                if has_header {
+                    self.output.push_str("| ");
+                    for i in 0..cell_count {
+                        if i > 0 {
+                            self.output.push_str(" | ");
+                        }
+                        self.output.push_str("---");
+                    }
+                    self.output.push_str(" |\n");
+                }
+            }
+            "tableCell" | "tableHeader" => {
+                // Should not be reached directly — tableRow invokes render_cell_inline
+                // on its cells. Fall through to flat rendering defensively.
+                self.render_cell_inline(node);
+            }
             _ => {
                 if node.get("content").is_some() {
                     self.render_children(node);
@@ -486,6 +525,32 @@ impl AdfRenderer {
         if let Some(content) = node.get("content").and_then(|c| c.as_array()) {
             for child in content {
                 self.render_node(child);
+            }
+        }
+    }
+
+    /// Render a tableCell/tableHeader's children in "flat" mode: a paragraph's
+    /// inline content is emitted without its trailing newline (which would
+    /// break the "| cell | cell |" row structure). Other block types inside
+    /// a cell (rare but legal per the schema) fall back to normal rendering.
+    fn render_cell_inline(&mut self, cell: &Value) {
+        let Some(content) = cell.get("content").and_then(|c| c.as_array()) else {
+            return;
+        };
+        for (i, child) in content.iter().enumerate() {
+            if i > 0 {
+                self.output.push(' ');
+            }
+            let child_type = child.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            match child_type {
+                "paragraph" => {
+                    if let Some(cc) = child.get("content").and_then(|c| c.as_array()) {
+                        for inline in cc {
+                            self.render_node(inline);
+                        }
+                    }
+                }
+                _ => self.render_node(child),
             }
         }
     }
@@ -947,6 +1012,67 @@ mod tests {
         assert!(text(&items[0]).contains("done task"));
         assert!(text(&items[1]).contains("[ ]"));
         assert!(text(&items[1]).contains("pending task"));
+    }
+
+    #[test]
+    fn test_render_table_pipe_format() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "table",
+                "content": [
+                    {"type": "tableRow", "content": [
+                        {"type": "tableHeader", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "h1"}]}]},
+                        {"type": "tableHeader", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "h2"}]}]},
+                    ]},
+                    {"type": "tableRow", "content": [
+                        {"type": "tableCell", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "a"}]}]},
+                        {"type": "tableCell", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "b"}]}]},
+                    ]},
+                ]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        assert!(text.contains("| h1 | h2 |"), "header row missing: {text:?}");
+        assert!(text.contains("| --- | --- |"), "separator missing: {text:?}");
+        assert!(text.contains("| a | b |"), "body row missing: {text:?}");
+    }
+
+    #[test]
+    fn test_render_table_mixed_header_cell_row_still_emits_separator() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "table",
+                "content": [
+                    {"type": "tableRow", "content": [
+                        {"type": "tableHeader", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "h"}]}]},
+                        {"type": "tableCell", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "c"}]}]},
+                    ]},
+                ]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        assert!(text.contains("| h | c |"), "row missing: {text:?}");
+        assert!(text.contains("| --- | --- |"), "separator missing: {text:?}");
+    }
+
+    #[test]
+    fn test_render_table_cell_flattens_paragraph() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "table",
+                "content": [{
+                    "type": "tableRow",
+                    "content": [
+                        {"type": "tableCell", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "just text"}]}]}
+                    ]
+                }]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        assert!(text.contains("| just text |"), "cell not flat: {text:?}");
     }
 
     #[test]
