@@ -413,7 +413,8 @@ impl AdfRenderer {
                     .and_then(|o| o.as_u64())
                     .filter(|&n| n >= 1)
                     .unwrap_or(1);
-                self.list_stack.push(ListFrame::Ordered { next_index: start });
+                self.list_stack
+                    .push(ListFrame::Ordered { next_index: start });
                 self.render_children(node);
                 self.list_stack.pop();
             }
@@ -964,11 +965,48 @@ mod tests {
             "type": "doc",
             "version": 1,
             "content": [
-                {"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": "Summary"}]},
-                {"type": "paragraph", "content": [{"type": "text", "text": "This is a description."}]},
+                {"type": "heading", "attrs": {"level": 2}, "content": [
+                    {"type": "text", "text": "Summary"}
+                ]},
+                {"type": "paragraph", "content": [
+                    {"type": "text", "text": "A "},
+                    {"type": "text", "text": "bold", "marks": [{"type": "strong"}]},
+                    {"type": "text", "text": " word, an "},
+                    {"type": "text", "text": "italic", "marks": [{"type": "em"}]},
+                    {"type": "text", "text": " word, a "},
+                    {"type": "text", "text": "link", "marks": [
+                        {"type": "link", "attrs": {"href": "https://example.com"}}
+                    ]},
+                    {"type": "text", "text": ", and "},
+                    {"type": "text", "text": "code", "marks": [{"type": "code"}]},
+                    {"type": "text", "text": "."}
+                ]},
                 {"type": "bulletList", "content": [
-                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Item one"}]}]},
-                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Item two"}]}]}
+                    {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "first bullet"}]}]},
+                    {"type": "listItem", "content": [
+                        {"type": "paragraph", "content": [{"type": "text", "text": "second bullet"}]},
+                        {"type": "orderedList", "attrs": {"order": 3}, "content": [
+                            {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "three"}]}]},
+                            {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "four"}]}]}
+                        ]}
+                    ]}
+                ]},
+                {"type": "blockquote", "content": [
+                    {"type": "paragraph", "content": [{"type": "text", "text": "quoted thought"}]}
+                ]},
+                {"type": "rule"},
+                {"type": "codeBlock", "attrs": {"language": "rust"}, "content": [
+                    {"type": "text", "text": "fn main() { println!(\"hi\"); }"}
+                ]},
+                {"type": "table", "content": [
+                    {"type": "tableRow", "content": [
+                        {"type": "tableHeader", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "k"}]}]},
+                        {"type": "tableHeader", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "v"}]}]}
+                    ]},
+                    {"type": "tableRow", "content": [
+                        {"type": "tableCell", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "a"}]}]},
+                        {"type": "tableCell", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "1"}]}]}
+                    ]}
                 ]}
             ]
         });
@@ -1053,7 +1091,10 @@ mod tests {
         });
         let text = adf_to_text(&adf);
         assert!(text.contains("| h1 | h2 |"), "header row missing: {text:?}");
-        assert!(text.contains("| --- | --- |"), "separator missing: {text:?}");
+        assert!(
+            text.contains("| --- | --- |"),
+            "separator missing: {text:?}"
+        );
         assert!(text.contains("| a | b |"), "body row missing: {text:?}");
     }
 
@@ -1073,7 +1114,10 @@ mod tests {
         });
         let text = adf_to_text(&adf);
         assert!(text.contains("| h | c |"), "row missing: {text:?}");
-        assert!(text.contains("| --- | --- |"), "separator missing: {text:?}");
+        assert!(
+            text.contains("| --- | --- |"),
+            "separator missing: {text:?}"
+        );
     }
 
     #[test]
@@ -1366,7 +1410,10 @@ mod tests {
             }]
         });
         let text = adf_to_text(&adf);
-        assert!(text.contains("```rust"), "expected rust fence, got: {text:?}");
+        assert!(
+            text.contains("```rust"),
+            "expected rust fence, got: {text:?}"
+        );
         assert!(text.contains("fn x() {}"));
     }
 
@@ -1380,6 +1427,55 @@ mod tests {
             }]
         });
         let text = adf_to_text(&adf);
-        assert!(text.contains("```\nplain"), "expected empty fence, got: {text:?}");
+        assert!(
+            text.contains("```\nplain"),
+            "expected empty fence, got: {text:?}"
+        );
+    }
+
+    #[test]
+    fn test_markdown_to_adf_to_text_roundtrip() {
+        let input = concat!(
+            "# Heading\n",
+            "\n",
+            "Paragraph with **bold** and *italic* and `code`.\n",
+            "\n",
+            "- a\n",
+            "- b\n",
+            "\n",
+            "1. one\n",
+            "2. two\n",
+            "\n",
+            "> quote\n",
+        );
+        let adf_original = markdown_to_adf(input);
+        let text = adf_to_text(&adf_original);
+        let adf_reparsed = markdown_to_adf(&text);
+
+        let types_original = collect_node_types(&adf_original);
+        let types_reparsed = collect_node_types(&adf_reparsed);
+        assert_eq!(
+            types_original, types_reparsed,
+            "node-type structure should roundtrip"
+        );
+    }
+
+    /// Walk the ADF tree depth-first and collect each node's `type` field.
+    /// Used to assert structural (not textual) equivalence on roundtrip.
+    fn collect_node_types(adf: &Value) -> Vec<String> {
+        let mut types = Vec::new();
+        walk_types(adf, &mut types);
+        types
+    }
+
+    fn walk_types(node: &Value, out: &mut Vec<String>) {
+        if let Some(t) = node.get("type").and_then(|t| t.as_str()) {
+            out.push(t.to_string());
+        }
+        if let Some(content) = node.get("content").and_then(|c| c.as_array()) {
+            for child in content {
+                walk_types(child, out);
+            }
+        }
     }
 }
