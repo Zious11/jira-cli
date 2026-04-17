@@ -32,7 +32,7 @@ Three shapes were considered (see Rejected alternatives). Chosen: **one 5xx + on
 | `tests/worklog_commands.rs` | 4 | `jr worklog list` | inline |
 | `tests/team_commands.rs` | 4 | `jr team list` | inline |
 | `tests/queue.rs` | 14 | `jr queue list` | inline |
-| `tests/project_commands.rs` | 14 | `jr project statuses` | inline |
+| `tests/project_commands.rs` | 14 | `jr project list` | inline |
 | `tests/comments.rs` | 8 | `jr issue comments` | inline |
 | `tests/assets.rs` | 38 | `jr assets search` | **new `tests/assets_errors.rs`** |
 | `tests/issue_commands.rs` | 98 | `jr issue view` | **new `tests/issue_view_errors.rs`** |
@@ -132,7 +132,7 @@ The negative assertions (`!contains("panic")`) are the point of this audit: sile
 - `tests/worklog_commands.rs` — +3 inline tests for `jr worklog list`.
 - `tests/team_commands.rs` — +3 inline tests for `jr team list`.
 - `tests/queue.rs` — +3 inline tests for `jr queue list`.
-- `tests/project_commands.rs` — +3 inline tests for `jr project statuses`.
+- `tests/project_commands.rs` — +3 inline tests for `jr project list`.
 - `tests/comments.rs` — +3 inline tests for `jr issue comments`.
 - `tests/issue_list_errors.rs` — +2 inline tests (401 + network-drop) for `jr issue list`; 5xx already covered.
 - `tests/assets_errors.rs` — NEW file, 3 tests for `jr assets search`.
