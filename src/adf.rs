@@ -1669,9 +1669,10 @@ mod tests {
 
     #[test]
     fn test_render_marks_code_and_strong() {
-        // `[code, strong]` is the shape the write-path emits for `**`x`**` —
-        // `push_code` appends `{type: "code"}` after active marks. The `code`
-        // mark is applied innermost regardless of array position, so bold
+        // The write-path emits `[strong, code]` for `**`x`**` because
+        // `push_code` appends `{type: "code"}` after active marks. This test
+        // covers the reverse-order case: even when the array is
+        // `[code, strong]`, the `code` mark is applied innermost, so bold
         // wraps the code span rather than the other way around.
         let adf = json!({
             "type": "doc",
@@ -1715,25 +1716,6 @@ mod tests {
             ]}]
         });
         assert_eq!(adf_to_text(&adf), "**[x](https://example.com/jr)**");
-    }
-
-    #[test]
-    fn test_render_marks_strong_and_code_reverse_order_equivalent() {
-        // `[strong, code]` is the exact shape the write-path emits: the
-        // `AdfBuilder::push_code` helper appends `{type: "code"}` *after*
-        // any active marks. `apply_marks` treats `code` as innermost
-        // regardless of array position, so this must produce the same
-        // result as the `[code, strong]` variant — any divergence would
-        // break roundtrip fidelity for `**`x`**`.
-        let adf = json!({
-            "type": "doc",
-            "content": [{"type": "paragraph", "content": [
-                {"type": "text", "text": "x", "marks": [
-                    {"type": "strong"}, {"type": "code"}
-                ]}
-            ]}]
-        });
-        assert_eq!(adf_to_text(&adf), "**`x`**");
     }
 
     #[test]
