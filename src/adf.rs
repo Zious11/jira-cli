@@ -351,6 +351,7 @@ pub fn adf_to_text(adf: &Value) -> String {
 struct AdfRenderer {
     output: String,
     list_stack: Vec<ListFrame>,
+    blockquote_depth: usize,
 }
 
 enum ListFrame {
@@ -363,6 +364,7 @@ impl AdfRenderer {
         Self {
             output: String::new(),
             list_stack: Vec::new(),
+            blockquote_depth: 0,
         }
     }
 
@@ -433,6 +435,28 @@ impl AdfRenderer {
                 self.output.push_str("```\n");
                 self.render_children(node);
                 self.output.push_str("\n```\n");
+            }
+            "blockquote" => {
+                self.blockquote_depth += 1;
+                let start = self.output.len();
+                self.render_children(node);
+                self.blockquote_depth -= 1;
+
+                // Prefix every line in the just-rendered segment with "> ".
+                // A single "> " is added per nesting level; nested blockquotes
+                // accumulate to "> > " on each line when their own prefix pass
+                // runs during unwind.
+                let rendered = self.output.split_off(start);
+                let prefix = "> ";
+                for (i, line) in rendered.split('\n').enumerate() {
+                    if i > 0 {
+                        self.output.push('\n');
+                    }
+                    if !line.is_empty() {
+                        self.output.push_str(prefix);
+                        self.output.push_str(line);
+                    }
+                }
             }
             _ => {
                 if node.get("content").is_some() {
@@ -937,6 +961,44 @@ mod tests {
         assert_eq!(link_text["text"], "link");
         assert_eq!(link_text["marks"][0]["type"], "link");
         assert_eq!(link_text["marks"][0]["attrs"]["href"], "https://x");
+    }
+
+    #[test]
+    fn test_render_blockquote_prefixes_each_line() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "blockquote",
+                "content": [
+                    {"type": "paragraph", "content": [{"type": "text", "text": "line one"}]},
+                    {"type": "paragraph", "content": [{"type": "text", "text": "line two"}]}
+                ]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        for line in text.lines() {
+            assert!(line.starts_with("> "), "line should be prefixed: {line:?}");
+        }
+        assert!(text.contains("> line one"));
+        assert!(text.contains("> line two"));
+    }
+
+    #[test]
+    fn test_render_nested_blockquote() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "blockquote",
+                "content": [{
+                    "type": "blockquote",
+                    "content": [
+                        {"type": "paragraph", "content": [{"type": "text", "text": "inner"}]}
+                    ]
+                }]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        assert!(text.contains("> > inner"), "got: {text:?}");
     }
 
     #[test]
