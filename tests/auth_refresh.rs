@@ -41,12 +41,12 @@ fn auth_refresh_oauth_help_is_accepted() {
 
 #[test]
 fn auth_refresh_non_interactive_fails_without_panic() {
-    // With stdin closed and no JR_AUTH_HEADER/JR_BASE_URL overrides, the
-    // underlying login_token() dialoguer prompts will hit EOF and return an
-    // io::UnexpectedEof. The refresh command should exit non-zero without
-    // panicking. This matches current `jr auth login` behavior (a known
-    // limitation tracked as a separate issue) — the test pins that we
-    // inherit it without a panic or crash.
+    // Pin: with stdin closed, `jr auth refresh` must exit non-zero without
+    // panicking. The dialoguer prompts inside login_token hit EOF and return
+    // io::UnexpectedEof, which should propagate as a normal error rather
+    // than a panic or abort. If login gains non-interactive flag
+    // equivalents later, tighten this to assert the specific exit code and
+    // the "Credentials were cleared" recovery message.
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
 

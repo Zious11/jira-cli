@@ -12,13 +12,25 @@ pub enum AuthFlow {
     OAuth,
 }
 
+impl AuthFlow {
+    /// Canonical string form used in config (`auth_method`) and in the
+    /// `--output json` success payload. Single source of truth for the label
+    /// so a future rename (e.g., `"api_token"` → `"basic"`) has one edit site.
+    pub fn label(self) -> &'static str {
+        match self {
+            AuthFlow::Token => "api_token",
+            AuthFlow::OAuth => "oauth",
+        }
+    }
+}
+
 /// Decide which login flow to run based on config + explicit override.
 ///
 /// Order of precedence:
 /// 1. `oauth_override = true` → always OAuth (user passed `--oauth`).
 /// 2. Config `auth_method == "oauth"` → OAuth.
-/// 3. Anything else (including unset, which matches `JiraClient::from_config`'s
-///    `api_token` default at `src/api/client.rs:51`) → Token.
+/// 3. Anything else (including unset) → Token. Matches the `api_token`
+///    default that `JiraClient::from_config` applies when no method is set.
 pub fn chosen_flow(config: &Config, oauth_override: bool) -> AuthFlow {
     if oauth_override {
         return AuthFlow::OAuth;
@@ -107,6 +119,22 @@ pub async fn status() -> Result<()> {
     Ok(())
 }
 
+/// Post-refresh guidance shown to humans (stderr, Table mode) and embedded
+/// in the JSON payload (`next_step`). Click "Always Allow" on the keychain
+/// write prompts so future commands run silently.
+const REFRESH_HELP_LINE: &str = "If prompted to allow keychain access, choose \"Always Allow\" so future commands run silently.";
+
+/// Build the `--output json` success payload. Extracted for unit-testing the
+/// shape (status key, auth_method label, next_step guidance) without needing
+/// to drive the full login flow.
+fn refresh_success_payload(flow: AuthFlow) -> serde_json::Value {
+    serde_json::json!({
+        "status": "refreshed",
+        "auth_method": flow.label(),
+        "next_step": REFRESH_HELP_LINE,
+    })
+}
+
 /// Clear all stored credentials and re-run the login flow so the current
 /// binary re-registers as the creator of fresh keychain entries.
 ///
@@ -114,6 +142,11 @@ pub async fn status() -> Result<()> {
 /// invalidation that occurs after `jr` is replaced at its installed path
 /// (e.g., `brew upgrade`). See spec at
 /// `docs/superpowers/specs/2026-04-17-keychain-prompts-207-design.md`.
+///
+/// Ordering is clear-then-login. If the login step fails (e.g., EOF on stdin,
+/// network error during OAuth), the user is warned that credentials are gone
+/// and told exactly which `jr auth login` invocation will restore them,
+/// before the error is propagated.
 pub async fn refresh_credentials(
     oauth_override: bool,
     output: &crate::cli::OutputFormat,
@@ -123,35 +156,31 @@ pub async fn refresh_credentials(
 
     auth::clear_credentials();
 
-    match flow {
-        AuthFlow::Token => login_token().await?,
-        AuthFlow::OAuth => login_oauth().await?,
-    }
-
-    let method_label = match flow {
-        AuthFlow::Token => "api_token",
-        AuthFlow::OAuth => "oauth",
+    let login_result = match flow {
+        AuthFlow::Token => login_token().await,
+        AuthFlow::OAuth => login_oauth().await,
     };
+
+    if let Err(err) = login_result {
+        let login_cmd = match flow {
+            AuthFlow::Token => "jr auth login",
+            AuthFlow::OAuth => "jr auth login --oauth",
+        };
+        eprintln!(
+            "Credentials were cleared, but the login flow did not complete. \
+             Run `{login_cmd}` to restore access."
+        );
+        return Err(err);
+    }
 
     match output {
         crate::cli::OutputFormat::Json => {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "status": "refreshed",
-                    "auth_method": method_label,
-                })
-            );
+            println!("{}", refresh_success_payload(flow));
         }
         crate::cli::OutputFormat::Table => {
-            // No table row payload on success — the stderr help line below is
-            // the primary user-visible output for the non-JSON case.
+            eprintln!("Credentials refreshed. {REFRESH_HELP_LINE}");
         }
     }
-
-    eprintln!(
-        "Credentials refreshed. If prompted to allow keychain access, choose \"Always Allow\" so future commands run silently."
-    );
 
     Ok(())
 }
@@ -198,5 +227,33 @@ mod tests {
     fn chosen_flow_oauth_override_wins_over_config() {
         let config = config_with_auth_method(Some("api_token"));
         assert_eq!(chosen_flow(&config, true), AuthFlow::OAuth);
+    }
+
+    #[test]
+    fn auth_flow_labels_match_config_and_json_conventions() {
+        assert_eq!(AuthFlow::Token.label(), "api_token");
+        assert_eq!(AuthFlow::OAuth.label(), "oauth");
+    }
+
+    #[test]
+    fn refresh_payload_pins_token_shape() {
+        let payload = refresh_success_payload(AuthFlow::Token);
+        assert_eq!(payload["status"], "refreshed");
+        assert_eq!(payload["auth_method"], "api_token");
+        assert!(
+            payload["next_step"]
+                .as_str()
+                .unwrap()
+                .contains("Always Allow"),
+            "next_step should guide the user to click Always Allow, got: {}",
+            payload["next_step"]
+        );
+    }
+
+    #[test]
+    fn refresh_payload_pins_oauth_shape() {
+        let payload = refresh_success_payload(AuthFlow::OAuth);
+        assert_eq!(payload["status"], "refreshed");
+        assert_eq!(payload["auth_method"], "oauth");
     }
 }
