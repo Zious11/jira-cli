@@ -1,6 +1,6 @@
 //! Error-path coverage (#187) for `jr issue view`.
 //!
-//! Note: `handle_view` (src/cli/issue/list.rs:694) calls
+//! Note: `handle_view` in `src/cli/issue/list.rs` calls
 //! `get_or_fetch_cmdb_fields(client).await.unwrap_or_default()` BEFORE fetching
 //! the issue. On a cache miss that call hits `/rest/api/3/field`, but
 //! `unwrap_or_default()` swallows any error, so only the `/rest/api/3/issue/...`
