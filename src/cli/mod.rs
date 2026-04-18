@@ -412,8 +412,8 @@ pub enum IssueCommand {
         /// Filter by author ("me" for current user, or a name/accountId)
         ///
         /// "me" is reserved and resolves to the current user. AccountIds
-        /// (values containing ':' or ≥12 characters from letters, digits,
-        /// '-', '_' including at least one digit) are matched exactly;
+        /// (values containing ':' or ≥12 characters of letters, digits,
+        /// '-', or '_', and at least one digit) are matched exactly;
         /// other values match as a case-insensitive substring of
         /// displayName or accountId.
         #[arg(long)]
