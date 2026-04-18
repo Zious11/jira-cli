@@ -51,7 +51,7 @@ jr issue changelog FOO-1 --output json
 | `--limit N` | `u32` | 30 | Cap post-filter rows. Conflicts with `--all`. `0` returns empty. |
 | `--all` | flag | off | No output truncation (still always fetches every page). Conflicts with `--limit`. |
 | `--field <NAME>` | repeatable | — | Client-side filter by field name (case-insensitive substring). |
-| `--author <ME\|NAME\|ACCOUNTID>` | `String` | — | Client-side filter. `me` resolves via `/myself`. Names match `displayName` substring. Bare accountId matched literally. |
+| `--author <ME\|NAME\|ACCOUNTID>` | `String` | — | Client-side filter. `me` resolves via `/myself`. Name forms match `displayName` OR `accountId` substring (case-insensitive). AccountId-shaped values (contains `:` OR ≥12 alphanumeric chars) match `accountId` literally. |
 | `--reverse` | flag | off | Render oldest-first instead of default newest-first. |
 
 Global `--output`, `--no-color`, `--no-input` already in scope.
@@ -216,8 +216,10 @@ DATE              AUTHOR          FIELD        FROM              TO
 }
 ```
 
-**Empty result:** table prints header + `No changelog entries.`; JSON emits
-`{ "key": "FOO-123", "entries": [] }`. Both exit 0.
+**Empty result:** table prints the project-standard `No results found.`
+message (from the shared `output::print_output` helper, matching every
+other `jr` subcommand). JSON emits `{ "key": "FOO-123", "entries": [] }`.
+Both exit 0.
 
 ## Error Handling
 
