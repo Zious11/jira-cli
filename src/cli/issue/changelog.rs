@@ -1,13 +1,203 @@
 use anyhow::Result;
+use chrono::DateTime;
+use serde::Serialize;
 
 use crate::api::client::JiraClient;
 use crate::cli::{IssueCommand, OutputFormat};
+use crate::output;
+use crate::types::jira::ChangelogEntry;
+
+const NULL_GLYPH: &str = "—";
+const SYSTEM_AUTHOR: &str = "(system)";
+
+/// Shape of the JSON output body. Keeps the `key` alongside entries so
+/// consumers always know which issue a response belongs to.
+#[derive(Serialize)]
+struct ChangelogOutput<'a> {
+    key: &'a str,
+    entries: &'a [ChangelogEntry],
+}
 
 pub(super) async fn handle(
-    _command: IssueCommand,
-    _output_format: &OutputFormat,
-    _client: &JiraClient,
+    command: IssueCommand,
+    output_format: &OutputFormat,
+    client: &JiraClient,
 ) -> Result<()> {
-    // Implemented in Task 4.
-    unimplemented!("changelog handler — see Task 4")
+    let IssueCommand::Changelog {
+        key,
+        limit: _,
+        all: _,
+        field: _,
+        author: _,
+        reverse: _,
+    } = command
+    else {
+        unreachable!("handler only called for IssueCommand::Changelog")
+    };
+
+    let mut entries = client.get_changelog(&key).await?;
+
+    // Sort newest-first (default). Stable sort keeps original API order as a
+    // tiebreaker when `created` timestamps tie.
+    entries.sort_by(|a, b| b.created.cmp(&a.created));
+
+    match output_format {
+        OutputFormat::Json => {
+            println!(
+                "{}",
+                output::render_json(&ChangelogOutput {
+                    key: &key,
+                    entries: &entries
+                })?
+            );
+        }
+        OutputFormat::Table => {
+            let headers = &["DATE", "AUTHOR", "FIELD", "FROM", "TO"];
+            let rows = build_rows(&entries);
+            output::print_output(output_format, headers, &rows, &entries)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Flatten `entries` into one row per `ChangelogItem`, preserving the
+/// caller's sort order. Each row becomes `[date, author, field, from, to]`.
+fn build_rows(entries: &[ChangelogEntry]) -> Vec<Vec<String>> {
+    let mut rows = Vec::new();
+    for entry in entries {
+        let date = format_date(&entry.created);
+        let author = entry
+            .author
+            .as_ref()
+            .map(|a| a.display_name.clone())
+            .unwrap_or_else(|| SYSTEM_AUTHOR.to_string());
+        for item in &entry.items {
+            rows.push(vec![
+                date.clone(),
+                author.clone(),
+                item.field.clone(),
+                from_to_display(item.from_string.as_deref(), item.from.as_deref()),
+                from_to_display(item.to_string.as_deref(), item.to.as_deref()),
+            ]);
+        }
+    }
+    rows
+}
+
+/// Parse a Jira ISO-8601 timestamp and render as `YYYY-MM-DD HH:MM` in the
+/// user's local time zone. Falls back to the raw string if parsing fails.
+fn format_date(iso: &str) -> String {
+    DateTime::parse_from_rfc3339(iso)
+        .or_else(|_| DateTime::parse_from_str(iso, "%Y-%m-%dT%H:%M:%S%.3f%z"))
+        .map(|dt| {
+            dt.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|_| iso.to_string())
+}
+
+/// Prefer the human-readable string; fall back to the raw id; default to
+/// the em-dash null marker for empty/missing values.
+fn from_to_display(string: Option<&str>, raw: Option<&str>) -> String {
+    let pick = string.or(raw).map(str::trim).unwrap_or("");
+    if pick.is_empty() {
+        NULL_GLYPH.to_string()
+    } else {
+        pick.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::jira::{ChangelogItem, User};
+
+    fn entry(
+        id: &str,
+        created: &str,
+        author: Option<&str>,
+        items: Vec<ChangelogItem>,
+    ) -> ChangelogEntry {
+        ChangelogEntry {
+            id: id.to_string(),
+            author: author.map(|name| User {
+                account_id: format!("acc-{name}"),
+                display_name: name.to_string(),
+                email_address: None,
+                active: Some(true),
+            }),
+            created: created.to_string(),
+            items,
+        }
+    }
+
+    fn item(field: &str, from_s: Option<&str>, to_s: Option<&str>) -> ChangelogItem {
+        ChangelogItem {
+            field: field.to_string(),
+            fieldtype: "jira".into(),
+            from: None,
+            from_string: from_s.map(String::from),
+            to: None,
+            to_string: to_s.map(String::from),
+        }
+    }
+
+    #[test]
+    fn build_rows_flattens_items_in_order() {
+        let entries = vec![entry(
+            "1",
+            "2026-04-16T14:02:00.000+0000",
+            Some("Alice"),
+            vec![
+                item("status", Some("To Do"), Some("In Progress")),
+                item("resolution", None, Some("Done")),
+            ],
+        )];
+        let rows = build_rows(&entries);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0][2], "status");
+        assert_eq!(rows[1][2], "resolution");
+    }
+
+    #[test]
+    fn build_rows_uses_system_for_null_author() {
+        let entries = vec![entry(
+            "1",
+            "2026-04-16T14:02:00.000+0000",
+            None,
+            vec![item("assignee", None, Some("Alice"))],
+        )];
+        let rows = build_rows(&entries);
+        assert_eq!(rows[0][1], SYSTEM_AUTHOR);
+    }
+
+    #[test]
+    fn from_to_display_renders_em_dash_for_empty() {
+        assert_eq!(from_to_display(None, None), NULL_GLYPH);
+        assert_eq!(from_to_display(Some(""), None), NULL_GLYPH);
+        assert_eq!(from_to_display(None, Some("")), NULL_GLYPH);
+    }
+
+    #[test]
+    fn from_to_display_prefers_string_over_raw() {
+        assert_eq!(from_to_display(Some("Done"), Some("10000")), "Done");
+        assert_eq!(from_to_display(None, Some("10000")), "10000");
+    }
+
+    #[test]
+    fn format_date_converts_rfc3339_to_local() {
+        // Just verify the shape; actual local conversion depends on runner TZ.
+        let formatted = format_date("2026-04-16T14:02:11.000+0000");
+        // YYYY-MM-DD HH:MM is 16 chars.
+        assert_eq!(formatted.len(), 16, "got: {formatted}");
+        assert!(formatted.starts_with("2026-04-"), "got: {formatted}");
+    }
+
+    #[test]
+    fn format_date_falls_back_to_raw_on_parse_failure() {
+        let garbage = "not-a-date";
+        assert_eq!(format_date(garbage), garbage);
+    }
 }
