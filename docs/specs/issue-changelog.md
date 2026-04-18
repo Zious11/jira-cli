@@ -51,7 +51,7 @@ jr issue changelog FOO-1 --output json
 | `--limit N` | `u32` | 30 | Cap post-filter rows. Conflicts with `--all`. `0` returns empty. |
 | `--all` | flag | off | No output truncation (still always fetches every page). Conflicts with `--limit`. |
 | `--field <NAME>` | repeatable | — | Client-side filter by field name (case-insensitive substring). |
-| `--author <ME\|NAME\|ACCOUNTID>` | `String` | — | Client-side filter. `me` resolves via `/myself`. Name forms match `displayName` OR `accountId` substring (case-insensitive). AccountId-shaped values (contains `:` OR ≥12 alphanumeric chars) match `accountId` literally. |
+| `--author <ME\|NAME\|ACCOUNTID>` | `String` | — | Client-side filter. `me` resolves via `/myself` (case-insensitive, via `helpers::is_me_keyword`). Name forms match `displayName` OR `accountId` substring (case-insensitive). AccountId-shaped values (contains `:` OR ≥12 chars from `[A-Za-z0-9_-]`) match `accountId` literally. |
 | `--reverse` | flag | off | Render oldest-first instead of default newest-first. |
 
 Global `--output`, `--no-color`, `--no-input` already in scope.
@@ -154,7 +154,7 @@ and truncate happen in the handler after fetch (see semantics above).
 ### Handler flow (`src/cli/issue/changelog.rs`)
 
 1. Parse args from `IssueCommand::Changelog`.
-2. Resolve `--author me` → accountId via `client.get_current_user()`
+2. Resolve `--author me` → accountId via `client.get_myself()`
    (only if the flag is set).
 3. Call `client.get_changelog(key)` — fetches all pages.
 4. Sort entries by `created`: DESC by default, ASC with `--reverse`.
@@ -225,14 +225,17 @@ Both exit 0.
 
 | Case | Exit | Message | Hint |
 |------|------|---------|------|
-| 404 (issue not found) | 2 | `Issue FOO-123 not found` | `Check the key and your project access` |
-| 403 (no permission) | 2 | `No access to FOO-123 changelog` | `Browse Projects permission is required` |
-| 401 (auth) | handled centrally by `JiraClient` | — | — |
-| `--author me` unauthenticated | bubbles up auth error | — | `Run jr auth login` |
+| 404 (issue not found) | 1 | generic API error (`API error (404): ...`) | — |
+| 403 (no permission) | 1 | generic API error (`API error (403): ...`) | — |
+| 401 (auth) | 2 | `Not authenticated. Run "jr auth login" to connect.` | handled centrally by `JiraClient` |
+| `--author me` unauthenticated | 2 | bubbles up as `NotAuthenticated` | `Run jr auth login` |
 | No entries after filter | 0 | empty render | — |
 | `--limit 0` | 0 | empty render | — (post-fetch truncation to 0 rows) |
 
-All mapped to `JrError` variants already in use.
+All routed through the existing `JrError` mappings in `src/error.rs`.
+`401` is intercepted centrally and mapped to `NotAuthenticated` (exit 2)
+with the re-auth hint; other HTTP failures bubble up as `ApiError`
+(exit 1) with the generic `API error (<status>): <body>` format.
 
 ## Changes by File
 
@@ -244,8 +247,7 @@ All mapped to `JrError` variants already in use.
 | `src/api/jira/issues.rs` | Add `get_changelog` to `impl JiraClient` |
 | `src/types/jira/changelog.rs` | NEW — `ChangelogEntry`, `ChangelogItem` |
 | `src/types/jira/mod.rs` | `pub mod changelog; pub use changelog::*;` |
-| `tests/issue_changelog.rs` | NEW — integration tests |
-| `tests/common/fixtures.rs` | Add a `changelog_response_page` fixture builder (new helper for this endpoint's response shape) |
+| `tests/issue_changelog.rs` | NEW — integration tests (wiremock + assert_cmd, with inline JSON fixtures rather than a shared helper) |
 
 ## Testing Strategy
 
