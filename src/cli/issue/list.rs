@@ -650,6 +650,7 @@ pub(super) async fn handle_comments(
             output::print_output(output_format, &[], &[], &comments)?;
         }
         OutputFormat::Table => {
+            let verbose = client.verbose();
             let (headers, rows) = if has_visibility {
                 let rows: Vec<Vec<String>> = comments
                     .iter()
@@ -658,12 +659,8 @@ pub(super) async fn handle_comments(
                         let created = c.created.as_deref();
                         let body_text = c.body.as_ref().map(adf::adf_to_text);
                         let visibility = comment_visibility(c).unwrap_or("External");
-                        let mut row = format_comment_row(
-                            author,
-                            created,
-                            body_text.as_deref(),
-                            client.verbose(),
-                        );
+                        let mut row =
+                            format_comment_row(author, created, body_text.as_deref(), verbose);
                         // Insert Visibility before Body (index 2)
                         row.insert(2, visibility.to_string());
                         row
@@ -677,7 +674,7 @@ pub(super) async fn handle_comments(
                         let author = c.author.as_ref().map(|a| a.display_name.as_str());
                         let created = c.created.as_deref();
                         let body_text = c.body.as_ref().map(adf::adf_to_text);
-                        format_comment_row(author, created, body_text.as_deref(), client.verbose())
+                        format_comment_row(author, created, body_text.as_deref(), verbose)
                     })
                     .collect();
                 (vec!["Author", "Date", "Body"], rows)
