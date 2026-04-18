@@ -197,6 +197,19 @@ impl JiraClient {
             if !has_more {
                 break;
             }
+            // Guard against an API response that advertises more pages but
+            // returns a page that wouldn't advance `startAt` — otherwise we'd
+            // infinite-loop on a malformed/empty page (JRACLOUD-94357-class
+            // schema-drift scenarios). Surface as an explicit error instead.
+            if next <= start_at {
+                return Err(anyhow::anyhow!(
+                    "Jira changelog pagination did not advance (startAt {} → {}) \
+                     despite has_more=true. The server returned a malformed page; \
+                     retry later or report to Jira support.",
+                    start_at,
+                    next
+                ));
+            }
             start_at = next;
         }
 
