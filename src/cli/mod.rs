@@ -403,7 +403,7 @@ pub enum IssueCommand {
         /// Maximum number of rows (default 30). Applies post-filter.
         #[arg(long, conflicts_with = "all")]
         limit: Option<u32>,
-        /// No output truncation (still always fetches all pages)
+        /// Show all rows (disable the default 30-row limit)
         #[arg(long, conflicts_with = "limit")]
         all: bool,
         /// Filter by field name; repeatable (case-insensitive substring)

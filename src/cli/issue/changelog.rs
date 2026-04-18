@@ -53,8 +53,8 @@ pub(super) async fn handle(
         entries.sort_by(|a, b| b.created.cmp(&a.created));
     }
 
-    // --author filter: drops entries with no author when set, unless
-    // the needle matches the null placeholder (we don't support that).
+    // --author filter: entries with no author never match (we don't
+    // support matching against null explicitly).
     if let Some(needle) = &author_needle {
         entries.retain(|e| author_matches(e.author.as_ref(), needle));
     }
@@ -108,7 +108,7 @@ enum AuthorNeedle {
 
 /// Classify a user-supplied `--author` value. We treat a value as an
 /// accountId if it looks like one (no whitespace, has a colon or is
-/// entirely alphanumeric+dashes and ≥12 chars). Otherwise it's a name
+/// entirely alphanumeric, dash, or underscore, and ≥12 chars). Otherwise it's a name
 /// substring.
 ///
 /// The API's accountId format varies (`public cloud` uses
