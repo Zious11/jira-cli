@@ -27,7 +27,7 @@ pub(super) async fn handle(
         key,
         limit: _,
         all: _,
-        field: _,
+        field,
         author: _,
         reverse,
     } = command
@@ -43,6 +43,19 @@ pub(super) async fn handle(
         entries.sort_by(|a, b| a.created.cmp(&b.created));
     } else {
         entries.sort_by(|a, b| b.created.cmp(&a.created));
+    }
+
+    // Field filter: drop items whose field doesn't match any --field needle.
+    // An entry with zero surviving items is dropped entirely.
+    if !field.is_empty() {
+        let needles: Vec<String> = field.iter().map(|f| f.to_lowercase()).collect();
+        for entry in entries.iter_mut() {
+            entry.items.retain(|it| {
+                let haystack = it.field.to_lowercase();
+                needles.iter().any(|n| haystack.contains(n))
+            });
+        }
+        entries.retain(|e| !e.items.is_empty());
     }
 
     match output_format {
@@ -203,5 +216,33 @@ mod tests {
     fn format_date_falls_back_to_raw_on_parse_failure() {
         let garbage = "not-a-date";
         assert_eq!(format_date(garbage), garbage);
+    }
+
+    #[test]
+    fn field_filter_semantics_at_item_level() {
+        // Directly test the closure-equivalent logic by building entries.
+        let mut entries = vec![entry(
+            "1",
+            "2026-04-16T14:02:00.000+0000",
+            Some("Alice"),
+            vec![
+                item("status", Some("To Do"), Some("Done")),
+                item("resolution", None, Some("Fixed")),
+            ],
+        )];
+
+        // Simulate the filter logic.
+        let needles = ["status"];
+        for e in entries.iter_mut() {
+            e.items.retain(|it| {
+                let h = it.field.to_lowercase();
+                needles.iter().any(|n| h.contains(&n.to_lowercase()))
+            });
+        }
+        entries.retain(|e| !e.items.is_empty());
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].items.len(), 1);
+        assert_eq!(entries[0].items[0].field, "status");
     }
 }

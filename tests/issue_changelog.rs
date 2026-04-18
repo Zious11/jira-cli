@@ -297,3 +297,79 @@ async fn changelog_reverse_renders_oldest_first() {
         "expected labels (older) before status (newer), got:\n{stdout}"
     );
 }
+
+#[tokio::test]
+async fn changelog_field_filter_keeps_only_matching_items() {
+    let server = MockServer::start().await;
+
+    // Single entry with TWO items; --field status should keep only one row.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1/changelog"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "startAt": 0, "maxResults": 100, "total": 1, "isLast": true,
+            "values": [{
+                "id": "1",
+                "author": { "accountId": "a", "displayName": "Alice", "active": true },
+                "created": "2026-04-16T14:02:00.000+0000",
+                "items": [
+                    {"field": "status", "fieldtype": "jira",
+                     "from": "1", "fromString": "To Do",
+                     "to": "3", "toString": "In Progress"},
+                    {"field": "resolution", "fieldtype": "jira",
+                     "from": null, "fromString": null,
+                     "to": "10000", "toString": "Done"}
+                ]
+            }]
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "changelog", "FOO-1", "--field", "status"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("status"), "status row missing: {stdout}");
+    assert!(
+        !stdout.contains("resolution"),
+        "resolution row should be filtered out: {stdout}"
+    );
+}
+
+#[tokio::test]
+async fn changelog_field_filter_is_case_insensitive_and_substring() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1/changelog"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "startAt": 0, "maxResults": 100, "total": 1, "isLast": true,
+            "values": [{
+                "id": "1",
+                "author": { "accountId": "a", "displayName": "Alice", "active": true },
+                "created": "2026-04-16T14:02:00.000+0000",
+                "items": [
+                    {"field": "Story Points", "fieldtype": "custom",
+                     "from": null, "fromString": "3", "to": null, "toString": "5"}
+                ]
+            }]
+        })))
+        .mount(&server)
+        .await;
+
+    // "points" matches "Story Points" via case-insensitive substring.
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "changelog", "FOO-1", "--field", "points"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Story Points"));
+}
