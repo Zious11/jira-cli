@@ -309,7 +309,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_author_colon_prefixed_short_is_accountid() {
+    fn classify_author_colon_forces_accountid_regardless_of_heuristics() {
         // Colon wins the branch regardless of length/digits.
         match classify_author("557058:f58131cb-b67d-43c7") {
             AuthorNeedle::AccountId(s) => assert_eq!(s, "557058:f58131cb-b67d-43c7"),
