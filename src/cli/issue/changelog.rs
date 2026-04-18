@@ -133,6 +133,7 @@ fn classify_author(raw: &str) -> AuthorNeedle {
     let trimmed = raw.trim();
     let looks_like_account_id = trimmed.contains(':')
         || (trimmed.len() >= 12
+            && trimmed.chars().any(|c| c.is_ascii_digit())
             && trimmed
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
