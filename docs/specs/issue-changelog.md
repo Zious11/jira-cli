@@ -275,14 +275,18 @@ TDD: write tests first. Use wiremock for integration, `insta` for snapshots.
   when they share an entry.
 - `--author me` → mock `/myself` stub + changelog stub; confirms filter.
 - `--reverse` → entries rendered oldest-first.
-- 404 / 403 → correct exit code + message.
+- 404 / 401 / network → correct exit code + message.
 - Empty response → exit 0 with empty-state render.
-- Non-TTY: same JSON output as TTY (`--output json` forced).
+- Non-TTY: stdin not being a TTY auto-enables `--no-input`; output
+  format is unchanged unless explicitly selected (e.g., via
+  `--output json`).
 
 ### Snapshot tests (`insta`)
 
-- Table output for representative multi-entry, multi-item response.
-- JSON output structure.
+- JSON output structure — pinned via `assert_json_snapshot!` so
+  schema changes are visible at review time. Table output uses
+  `contains` assertions rather than snapshots (matching the
+  project's existing pattern for CLI table tests).
 
 No proptest: data shape is small and exhaustively enumerable.
 
