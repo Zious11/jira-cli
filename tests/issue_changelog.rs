@@ -687,8 +687,8 @@ async fn changelog_all_disables_truncation() {
     // Row count includes header + separator lines; just look for v0 and v39.
     assert!(
         stdout.contains("v0"),
-        "missing v0: first 32 chars:\n{}",
-        &stdout[..stdout.len().min(120)]
+        "missing v0: first 120 bytes (or full output if mid-codepoint):\n{}",
+        stdout.get(..120).unwrap_or(&stdout)
     );
     assert!(
         stdout.contains("v39"),
