@@ -1261,3 +1261,118 @@ async fn changelog_author_me_is_case_insensitive() {
         "Someone Else should be filtered: {stdout}"
     );
 }
+
+#[tokio::test]
+async fn changelog_verbose_logs_parse_failure_once() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/BAD-1/changelog"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "values": [
+                {
+                    "id": "1",
+                    "author": {
+                        "accountId": "u1",
+                        "displayName": "Alice",
+                        "emailAddress": null,
+                        "active": true
+                    },
+                    "created": "not-a-date",
+                    "items": [{
+                        "field": "status",
+                        "fieldtype": "jira",
+                        "from": null, "fromString": "To Do",
+                        "to": null, "toString": "In Progress"
+                    }]
+                },
+                {
+                    "id": "2",
+                    "author": {
+                        "accountId": "u1",
+                        "displayName": "Alice",
+                        "emailAddress": null,
+                        "active": true
+                    },
+                    "created": "still-not-a-date",
+                    "items": [{
+                        "field": "status",
+                        "fieldtype": "jira",
+                        "from": null, "fromString": "In Progress",
+                        "to": null, "toString": "Done"
+                    }]
+                }
+            ],
+            "startAt": 0,
+            "maxResults": 100,
+            "total": 2,
+            "isLast": true
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "changelog", "BAD-1", "--verbose"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let count = stderr.matches("timestamp failed to parse").count();
+    assert_eq!(
+        count, 1,
+        "expected exactly one parse-failure log across 2 bad entries, got {count}. stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("[verbose] changelog"),
+        "expected [verbose] changelog prefix in stderr, got:\n{stderr}"
+    );
+}
+
+#[tokio::test]
+async fn changelog_parse_failure_silent_without_verbose() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/BAD-2/changelog"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "values": [{
+                "id": "1",
+                "author": {
+                    "accountId": "u1",
+                    "displayName": "Alice",
+                    "emailAddress": null,
+                    "active": true
+                },
+                "created": "not-a-date",
+                "items": [{
+                    "field": "status",
+                    "fieldtype": "jira",
+                    "from": null, "fromString": "A",
+                    "to": null, "toString": "B"
+                }]
+            }],
+            "startAt": 0,
+            "maxResults": 100,
+            "total": 1,
+            "isLast": true
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "changelog", "BAD-2"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("failed to parse"),
+        "expected no verbose parse-failure output without --verbose, got:\n{stderr}"
+    );
+}
