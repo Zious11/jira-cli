@@ -133,6 +133,16 @@ The dedup logic is 3 lines; integration coverage through the full
 CLI pipeline is the idiomatic vehicle in this project (see existing
 assert_cmd usage across tests/comments.rs, tests/issue_changelog.rs).
 
+**Maintainer caveat:** the per-call-site `static AtomicBool` is shared
+across parallel tests *within the same test binary*. The integration
+tests in this spec use `assert_cmd::Command::cargo_bin(...)` which
+spawns a fresh subprocess per invocation, so statics are re-initialized
+each run — safe. A future direct unit test that calls
+`format_date(..., true)` from multiple tests would see cross-test
+pollution; either refactor the helper to take the flag by reference
+(so each test provides its own), or run that test suite with
+`--test-threads=1`.
+
 ## Files touched
 
 | File | Change |
