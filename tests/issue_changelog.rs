@@ -1320,6 +1320,12 @@ async fn changelog_verbose_logs_parse_failure_once() {
         .unwrap();
 
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "jr exited non-zero ({:?}). stdout:\n{stdout}\nstderr:\n{stderr}",
+        output.status.code()
+    );
     let count = stderr.matches("timestamp failed to parse").count();
     assert_eq!(
         count, 1,
@@ -1371,6 +1377,12 @@ async fn changelog_parse_failure_silent_without_verbose() {
         .unwrap();
 
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "jr exited non-zero ({:?}). stdout:\n{stdout}\nstderr:\n{stderr}",
+        output.status.code()
+    );
     assert!(
         !stderr.contains("failed to parse"),
         "expected no verbose parse-failure output without --verbose, got:\n{stderr}"
@@ -1455,6 +1467,11 @@ async fn changelog_verbose_mixed_good_bad_entries() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "jr exited non-zero ({:?}). stdout:\n{stdout}\nstderr:\n{stderr}",
+        output.status.code()
+    );
 
     let fail_count = stderr.matches("timestamp failed to parse").count();
     assert_eq!(

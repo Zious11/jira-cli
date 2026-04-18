@@ -331,14 +331,20 @@ async fn comments_verbose_logs_parse_failure_once() {
         .unwrap();
 
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "jr exited non-zero ({:?}). stdout:\n{stdout}\nstderr:\n{stderr}",
+        output.status.code()
+    );
     let count = stderr.matches("timestamp failed to parse").count();
     assert_eq!(
         count, 1,
         "expected exactly one parse-failure log across 2 bad comments, got {count}. stderr:\n{stderr}"
     );
     assert!(
-        stderr.contains("[verbose] comment"),
-        "expected [verbose] comment prefix in stderr, got:\n{stderr}"
+        stderr.contains("[verbose] date"),
+        "expected [verbose] date prefix in stderr, got:\n{stderr}"
     );
 }
 
@@ -383,6 +389,12 @@ async fn comments_parse_failure_silent_without_verbose() {
         .unwrap();
 
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "jr exited non-zero ({:?}). stdout:\n{stdout}\nstderr:\n{stderr}",
+        output.status.code()
+    );
     assert!(
         !stderr.contains("failed to parse"),
         "expected no verbose parse-failure output without --verbose, got:\n{stderr}"

@@ -127,33 +127,40 @@ Parallel pair: `comments_verbose_logs_parse_failure_once` +
 `comments_parse_failure_silent_without_verbose` using the comments
 endpoint and a malformed `"created"`.
 
-### No unit tests
+### Test strategy
 
-The dedup logic is 3 lines; integration coverage through the full
-CLI pipeline is the idiomatic vehicle in this project (see existing
-assert_cmd usage across tests/comments.rs, tests/issue_changelog.rs).
+End-to-end assertions live as integration tests, since the user-visible
+requirement is CLI stderr/stdout behavior through the full pipeline
+(see existing `assert_cmd` usage across `tests/comments.rs` and
+`tests/issue_changelog.rs`). In addition, one small unit test in
+`src/observability.rs` (`verbose_false_leaves_flag_untouched`) pins the
+short-circuit ordering: `verbose == false` must return before touching
+the dedup flag at all.
 
 **Maintainer caveat:** the per-call-site `static AtomicBool` is shared
-across parallel tests *within the same test binary*. The integration
-tests in this spec use `assert_cmd::Command::cargo_bin(...)` which
-spawns a fresh subprocess per invocation, so statics are re-initialized
-each run — safe. A future direct unit test that calls
-`format_date(..., true)` from multiple tests would see cross-test
-pollution; either refactor the helper to take the flag by reference
-(so each test provides its own), or run that test suite with
-`--test-threads=1`.
+across parallel tests *within the same test binary* when those tests
+exercise a path that can mutate the static. The integration tests in
+this spec use `assert_cmd::Command::cargo_bin(...)`, which spawns a
+fresh subprocess per invocation, so statics are re-initialized each
+run — safe. The existing unit test is also safe because it only
+exercises the `verbose == false` short-circuit path and therefore
+leaves the shared flag untouched. Any additional unit test that calls
+a `...(..., true)` path against the same call-site static from
+multiple tests would see cross-test pollution; either refactor the
+helper to take the flag by reference (so each test provides its own),
+or run that affected test suite with `--test-threads=1`.
 
 ## Files touched
 
 | File | Change |
 |---|---|
 | `src/lib.rs` | `mod observability;` |
-| `src/observability.rs` | **new**, ~15 lines with one pub(crate) fn |
+| `src/observability.rs` | **new**, one pub(crate) fn + one inline unit test |
 | `src/api/client.rs` | `pub fn verbose(&self) -> bool` getter |
 | `src/cli/issue/changelog.rs` | `format_date` + `build_rows` gain `verbose: bool`; `handle` passes `client.verbose()` |
 | `src/cli/issue/list.rs` | `format_comment_date` + `format_comment_row` gain `verbose: bool`; comments callers pass `client.verbose()` |
-| `tests/issue_changelog.rs` | 2 new tests |
-| `tests/comments.rs` | 2 new tests |
+| `tests/issue_changelog.rs` | 3 new tests (verbose logs once, silent without verbose, mixed good/bad rows) |
+| `tests/comments.rs` | 2 new tests (verbose logs once, silent without verbose) |
 
 ## Out of scope
 

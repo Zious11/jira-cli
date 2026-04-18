@@ -597,7 +597,9 @@ fn format_comment_date(iso: &str, verbose: bool) -> String {
     {
         Ok(dt) => dt.format("%Y-%m-%d %H:%M").to_string(),
         Err(_) => {
-            crate::observability::log_parse_failure_once(&LOGGED, "comment", iso, verbose);
+            // Label is "date" (not "comment") because this formatter is also
+            // used by `handle_view` for the Created/Updated timestamp rows.
+            crate::observability::log_parse_failure_once(&LOGGED, "date", iso, verbose);
             iso.to_string()
         }
     }
