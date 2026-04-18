@@ -174,10 +174,10 @@ impl JiraClient {
 
     /// Fetch the full audit changelog for an issue.
     ///
-    /// Offset-paginated under `values[]` (`OffsetPage::items()` already prefers
-    /// this key). Always fetches every page; sort/filter/truncate are the
-    /// caller's responsibility — the Jira changelog endpoint supports no
-    /// server-side filters and does not guarantee sort order.
+    /// Offset-paginated under `values[]`. Always fetches every page;
+    /// sort/filter/truncate are the caller's responsibility — the Jira
+    /// changelog endpoint supports no server-side filters and does not
+    /// guarantee sort order.
     pub async fn get_changelog(
         &self,
         key: &str,

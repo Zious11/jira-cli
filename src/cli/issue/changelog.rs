@@ -7,6 +7,8 @@ use crate::cli::{IssueCommand, OutputFormat};
 use crate::output;
 use crate::types::jira::ChangelogEntry;
 
+use super::helpers;
+
 const NULL_GLYPH: &str = "—";
 const SYSTEM_AUTHOR: &str = "(system)";
 
@@ -35,9 +37,10 @@ pub(super) async fn handle(
         unreachable!("handler only called for IssueCommand::Changelog")
     };
 
-    // Resolve --author "me" up-front; other forms compare directly.
+    // Resolve --author "me" (case-insensitive, shared with other commands
+    // via `helpers::is_me_keyword`) up-front; other forms compare directly.
     let author_needle = match author.as_deref() {
-        Some("me") => Some(AuthorNeedle::AccountId(
+        Some(raw) if helpers::is_me_keyword(raw) => Some(AuthorNeedle::AccountId(
             client.get_myself().await?.account_id,
         )),
         Some(raw) => Some(classify_author(raw)),
