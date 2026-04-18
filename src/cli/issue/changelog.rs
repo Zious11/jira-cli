@@ -103,7 +103,7 @@ pub(super) async fn handle(
         }
         OutputFormat::Table => {
             let headers = &["DATE", "AUTHOR", "FIELD", "FROM", "TO"];
-            let rows = build_rows(&entries);
+            let rows = build_rows(&entries, client.verbose());
             output::print_output(output_format, headers, &rows, &entries)?;
         }
     }
@@ -159,10 +159,10 @@ fn author_matches(author: Option<&crate::types::jira::User>, needle: &AuthorNeed
 
 /// Flatten `entries` into one row per `ChangelogItem`, preserving the
 /// caller's sort order. Each row becomes `[date, author, field, from, to]`.
-fn build_rows(entries: &[ChangelogEntry]) -> Vec<Vec<String>> {
+fn build_rows(entries: &[ChangelogEntry], verbose: bool) -> Vec<Vec<String>> {
     let mut rows = Vec::new();
     for entry in entries {
-        let date = format_date(&entry.created);
+        let date = format_date(&entry.created, verbose);
         let author = entry
             .author
             .as_ref()
@@ -193,15 +193,22 @@ fn parse_created(iso: &str) -> Option<DateTime<chrono::FixedOffset>> {
 }
 
 /// Render a Jira ISO-8601 timestamp as `YYYY-MM-DD HH:MM` in the user's
-/// local time zone. Falls back to the raw string if parsing fails.
-fn format_date(iso: &str) -> String {
-    parse_created(iso)
-        .map(|dt| {
-            dt.with_timezone(&chrono::Local)
-                .format("%Y-%m-%d %H:%M")
-                .to_string()
-        })
-        .unwrap_or_else(|| iso.to_string())
+/// local time zone. Falls back to the raw string on parse failure; when
+/// `verbose` is true, emits a one-shot `[verbose]` stderr note the first
+/// time parsing fails in this process.
+fn format_date(iso: &str, verbose: bool) -> String {
+    use std::sync::atomic::AtomicBool;
+    static LOGGED: AtomicBool = AtomicBool::new(false);
+    match parse_created(iso) {
+        Some(dt) => dt
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M")
+            .to_string(),
+        None => {
+            crate::observability::log_parse_failure_once(&LOGGED, "changelog", iso, verbose);
+            iso.to_string()
+        }
+    }
 }
 
 /// Truncate entries so the total row count (sum of items across all
@@ -413,7 +420,7 @@ mod tests {
                 item("resolution", None, Some("Done")),
             ],
         )];
-        let rows = build_rows(&entries);
+        let rows = build_rows(&entries, false);
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0][2], "status");
         assert_eq!(rows[1][2], "resolution");
@@ -427,7 +434,7 @@ mod tests {
             None,
             vec![item("assignee", None, Some("Alice"))],
         )];
-        let rows = build_rows(&entries);
+        let rows = build_rows(&entries, false);
         assert_eq!(rows[0][1], SYSTEM_AUTHOR);
     }
 
@@ -455,7 +462,7 @@ mod tests {
     #[test]
     fn format_date_converts_rfc3339_to_local() {
         // Just verify the shape; actual local conversion depends on runner TZ.
-        let formatted = format_date("2026-04-16T14:02:11.000+0000");
+        let formatted = format_date("2026-04-16T14:02:11.000+0000", false);
         // YYYY-MM-DD HH:MM is 16 chars.
         assert_eq!(formatted.len(), 16, "got: {formatted}");
         assert!(formatted.starts_with("2026-04-"), "got: {formatted}");
@@ -464,7 +471,7 @@ mod tests {
     #[test]
     fn format_date_falls_back_to_raw_on_parse_failure() {
         let garbage = "not-a-date";
-        assert_eq!(format_date(garbage), garbage);
+        assert_eq!(format_date(garbage, false), garbage);
     }
 
     #[test]

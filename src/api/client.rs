@@ -107,6 +107,12 @@ impl JiraClient {
         }
     }
 
+    /// Whether the client was constructed with `--verbose` enabled.
+    /// Handlers use this to gate optional diagnostic output.
+    pub fn verbose(&self) -> bool {
+        self.verbose
+    }
+
     /// Perform a GET request and deserialize the JSON response.
     pub async fn get<T: DeserializeOwned>(&self, path: &str) -> anyhow::Result<T> {
         let url = format!("{}{}", self.base_url, path);
