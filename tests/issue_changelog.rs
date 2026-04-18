@@ -1462,13 +1462,13 @@ async fn changelog_verbose_mixed_good_bad_entries() {
         "expected exactly one parse-failure log across 1 bad entry among 3, got {fail_count}. stderr:\n{stderr}"
     );
 
-    // Parseable rows must still render properly in the table — presence of
-    // `2026-03-20` and `2026-03-21` (in some local-time rendering) would
-    // be fragile across timezones; instead assert that the status/resolution
-    // fields from the good rows appear in stdout.
+    // Parseable rows must still render. Use `Unresolved` from the good
+    // id=3 row — it appears in no other row's fromString/toString, so
+    // its presence uniquely proves id=3 rendered. Avoiding date
+    // substrings keeps this timezone-independent.
     assert!(
-        stdout.contains("In Progress") || stdout.contains("Unresolved"),
-        "expected good-row field content in stdout, got:\n{stdout}"
+        stdout.contains("Unresolved"),
+        "expected good-row field content ('Unresolved' from id=3) in stdout, got:\n{stdout}"
     );
     // The raw bad timestamp string surfaces in the date column of the bad row.
     assert!(
