@@ -25,8 +25,8 @@ pub(super) async fn handle(
 ) -> Result<()> {
     let IssueCommand::Changelog {
         key,
-        limit: _,
-        all: _,
+        limit,
+        all,
         field,
         author,
         reverse,
@@ -69,6 +69,13 @@ pub(super) async fn handle(
             });
         }
         entries.retain(|e| !e.items.is_empty());
+    }
+
+    // Truncate to cap rows (one row per ChangelogItem), unless --all is set.
+    // `--limit` applies to ROWS, not entries — a user asking for `--limit 10`
+    // expects 10 rows in the table. Defaults to `cli::DEFAULT_LIMIT` (30).
+    if let Some(n) = crate::cli::resolve_effective_limit(limit, all) {
+        truncate_to_rows(&mut entries, n as usize);
     }
 
     match output_format {
@@ -168,6 +175,30 @@ fn format_date(iso: &str) -> String {
                 .to_string()
         })
         .unwrap_or_else(|_| iso.to_string())
+}
+
+/// Truncate entries so the total row count (sum of items across all
+/// surviving entries) does not exceed `cap`. Trims the last entry's
+/// items if necessary rather than dropping a whole entry with only
+/// some items over the cap.
+fn truncate_to_rows(entries: &mut Vec<ChangelogEntry>, cap: usize) {
+    if cap == 0 {
+        entries.clear();
+        return;
+    }
+    let mut running = 0usize;
+    for i in 0..entries.len() {
+        let n = entries[i].items.len();
+        if running + n <= cap {
+            running += n;
+            continue;
+        }
+        // Partially trim this entry, drop everything after.
+        let keep = cap - running;
+        entries[i].items.truncate(keep);
+        entries.truncate(if keep == 0 { i } else { i + 1 });
+        return;
+    }
 }
 
 /// Prefer the human-readable string; fall back to the raw id; default to
@@ -321,6 +352,60 @@ mod tests {
     fn format_date_falls_back_to_raw_on_parse_failure() {
         let garbage = "not-a-date";
         assert_eq!(format_date(garbage), garbage);
+    }
+
+    #[test]
+    fn truncate_to_rows_handles_cap_zero() {
+        let mut entries = vec![entry(
+            "1",
+            "2026-04-16T14:02:00.000+0000",
+            Some("A"),
+            vec![item("status", None, Some("Done"))],
+        )];
+        truncate_to_rows(&mut entries, 0);
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn truncate_to_rows_trims_last_entry_partially() {
+        let mut entries = vec![
+            entry(
+                "1",
+                "2026-04-16T14:02:00.000+0000",
+                Some("A"),
+                vec![
+                    item("status", None, Some("Done")),
+                    item("resolution", None, Some("Fixed")),
+                ],
+            ),
+            entry(
+                "2",
+                "2026-04-15T00:00:00.000+0000",
+                Some("A"),
+                vec![item("labels", None, Some("x"))],
+            ),
+        ];
+        // cap = 2 → keep both items of entry 1, drop entry 2 entirely.
+        truncate_to_rows(&mut entries, 2);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].items.len(), 2);
+    }
+
+    #[test]
+    fn truncate_to_rows_partial_trim_inside_entry() {
+        let mut entries = vec![entry(
+            "1",
+            "2026-04-16T14:02:00.000+0000",
+            Some("A"),
+            vec![
+                item("status", None, Some("Done")),
+                item("resolution", None, Some("Fixed")),
+                item("labels", None, Some("x")),
+            ],
+        )];
+        truncate_to_rows(&mut entries, 2);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].items.len(), 2);
     }
 
     #[test]

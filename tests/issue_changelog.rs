@@ -559,3 +559,185 @@ async fn changelog_author_null_filtered_out_when_flag_set() {
     );
     assert!(stdout.contains("Alice"));
 }
+
+#[tokio::test]
+async fn changelog_limit_truncates_after_sort() {
+    let server = MockServer::start().await;
+
+    // Three entries; we expect --limit 2 to keep the two newest.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1/changelog"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "startAt": 0, "maxResults": 100, "total": 3, "isLast": true,
+            "values": [
+                {
+                    "id": "1",
+                    "author": { "accountId": "a", "displayName": "Alice", "active": true },
+                    "created": "2026-04-10T00:00:00.000+0000",
+                    "items": [{"field": "labels", "fieldtype": "jira",
+                               "from": "", "to": "oldest"}]
+                },
+                {
+                    "id": "2",
+                    "author": { "accountId": "a", "displayName": "Alice", "active": true },
+                    "created": "2026-04-15T00:00:00.000+0000",
+                    "items": [{"field": "labels", "fieldtype": "jira",
+                               "from": "", "to": "middle"}]
+                },
+                {
+                    "id": "3",
+                    "author": { "accountId": "a", "displayName": "Alice", "active": true },
+                    "created": "2026-04-17T00:00:00.000+0000",
+                    "items": [{"field": "labels", "fieldtype": "jira",
+                               "from": "", "to": "newest"}]
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "changelog", "FOO-1", "--limit", "2"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("newest"), "missing newest row: {stdout}");
+    assert!(stdout.contains("middle"), "missing middle row: {stdout}");
+    assert!(
+        !stdout.contains("oldest"),
+        "oldest row should be truncated: {stdout}"
+    );
+}
+
+#[tokio::test]
+async fn changelog_limit_zero_renders_empty() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1/changelog"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "startAt": 0, "maxResults": 100, "total": 1, "isLast": true,
+            "values": [{
+                "id": "1",
+                "author": { "accountId": "a", "displayName": "Alice", "active": true },
+                "created": "2026-04-16T14:02:00.000+0000",
+                "items": [{"field": "status", "fieldtype": "jira",
+                           "from": "1", "fromString": "To Do",
+                           "to": "3", "toString": "Done"}]
+            }]
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "changelog", "FOO-1", "--limit", "0"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "--limit 0 should exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // The project's `print_output` prints "No results found." for empty tables.
+    assert!(stdout.contains("No results found"), "got: {stdout}");
+}
+
+#[tokio::test]
+async fn changelog_all_disables_truncation() {
+    // Generate 40 entries so the default 30 would truncate — verify --all keeps all.
+    let server = MockServer::start().await;
+
+    let values: Vec<serde_json::Value> = (0..40)
+        .map(|i| {
+            json!({
+                "id": format!("{}", i),
+                "author": { "accountId": "a", "displayName": "Alice", "active": true },
+                "created": format!("2026-04-{:02}T00:00:00.000+0000", (i % 28) + 1),
+                "items": [{"field": "labels", "fieldtype": "jira",
+                           "from": "", "to": format!("v{}", i)}]
+            })
+        })
+        .collect();
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1/changelog"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "startAt": 0, "maxResults": 100, "total": 40, "isLast": true,
+            "values": values
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "changelog", "FOO-1", "--all"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Row count includes header + separator lines; just look for v0 and v39.
+    assert!(
+        stdout.contains("v0"),
+        "missing v0: first 32 chars:\n{}",
+        &stdout[..stdout.len().min(120)]
+    );
+    assert!(
+        stdout.contains("v39"),
+        "missing v39 — --all did not disable limit"
+    );
+}
+
+#[tokio::test]
+async fn changelog_default_limit_is_thirty() {
+    let server = MockServer::start().await;
+
+    let values: Vec<serde_json::Value> = (0..40)
+        .map(|i| {
+            json!({
+                "id": format!("{}", i),
+                "author": { "accountId": "a", "displayName": "Alice", "active": true },
+                "created": format!("2026-04-{:02}T00:00:00.000+0000", (i % 28) + 1),
+                "items": [{"field": "labels", "fieldtype": "jira",
+                           "from": "", "to": format!("v{}", i)}]
+            })
+        })
+        .collect();
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1/changelog"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "startAt": 0, "maxResults": 100, "total": 40, "isLast": true,
+            "values": values
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "changelog", "FOO-1"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Default cap = 30 rows → we should NOT see all 40 values.
+    // Count occurrences of "v" followed by digit to estimate.
+    let v_count = stdout.matches("v").filter(|m| !m.is_empty()).count();
+    // Not an exact count (comfy-table decorations use dashes/bars), but a rough
+    // upper bound: should be ≤ ~30 + a handful of decorations.
+    assert!(
+        v_count <= 35,
+        "default limit not applied, saw {v_count} 'v' occurrences"
+    );
+}
