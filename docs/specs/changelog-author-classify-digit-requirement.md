@@ -87,10 +87,10 @@ new rule. Replace:
 
 With:
 
-> AccountIds (values containing ':' or ≥12 characters with at least one
-> digit plus letters, digits, '-', or '_') are matched exactly; other
-> values match as a case-insensitive substring of displayName or
-> accountId.
+> AccountIds (values containing ':' or ≥12 characters of
+> `[A-Za-z0-9_-]` that include at least one digit) are matched
+> exactly; other values match as a case-insensitive substring of
+> displayName or accountId.
 
 Short help (`-h` one-liner) unchanged.
 
