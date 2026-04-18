@@ -18,3 +18,22 @@ pub(crate) fn log_parse_failure_once(flag: &AtomicBool, site: &str, iso: &str, v
         eprintln!("[verbose] {site} timestamp failed to parse: {iso}");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verbose_false_leaves_flag_untouched() {
+        // Pins the short-circuit order: the `verbose` check must happen
+        // BEFORE `flag.swap(...)`. Reversing them would silently burn the
+        // flag on a non-verbose run and suppress the first verbose log
+        // later in the same process.
+        let flag = AtomicBool::new(false);
+        log_parse_failure_once(&flag, "test", "not-a-date", false);
+        assert!(
+            !flag.load(Ordering::Relaxed),
+            "verbose=false must not flip the gate flag"
+        );
+    }
+}

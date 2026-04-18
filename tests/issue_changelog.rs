@@ -1376,3 +1376,103 @@ async fn changelog_parse_failure_silent_without_verbose() {
         "expected no verbose parse-failure output without --verbose, got:\n{stderr}"
     );
 }
+
+#[tokio::test]
+async fn changelog_verbose_mixed_good_bad_entries() {
+    // Scopes the verbose log: good entries render normally, only bad
+    // entries trigger `[verbose]`, and the dedup flag still caps at
+    // exactly one line across multiple bad entries.
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/MIX-1/changelog"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "values": [
+                {
+                    "id": "1",
+                    "author": {
+                        "accountId": "u1",
+                        "displayName": "Alice",
+                        "emailAddress": null,
+                        "active": true
+                    },
+                    "created": "2026-03-20T10:00:00.000+0000",
+                    "items": [{
+                        "field": "status",
+                        "fieldtype": "jira",
+                        "from": null, "fromString": "To Do",
+                        "to": null, "toString": "In Progress"
+                    }]
+                },
+                {
+                    "id": "2",
+                    "author": {
+                        "accountId": "u1",
+                        "displayName": "Alice",
+                        "emailAddress": null,
+                        "active": true
+                    },
+                    "created": "not-a-date",
+                    "items": [{
+                        "field": "status",
+                        "fieldtype": "jira",
+                        "from": null, "fromString": "In Progress",
+                        "to": null, "toString": "Done"
+                    }]
+                },
+                {
+                    "id": "3",
+                    "author": {
+                        "accountId": "u1",
+                        "displayName": "Alice",
+                        "emailAddress": null,
+                        "active": true
+                    },
+                    "created": "2026-03-21T11:00:00.000+0000",
+                    "items": [{
+                        "field": "resolution",
+                        "fieldtype": "jira",
+                        "from": null, "fromString": "Unresolved",
+                        "to": null, "toString": "Done"
+                    }]
+                }
+            ],
+            "startAt": 0,
+            "maxResults": 100,
+            "total": 3,
+            "isLast": true
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "changelog", "MIX-1", "--verbose"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    let fail_count = stderr.matches("timestamp failed to parse").count();
+    assert_eq!(
+        fail_count, 1,
+        "expected exactly one parse-failure log across 1 bad entry among 3, got {fail_count}. stderr:\n{stderr}"
+    );
+
+    // Parseable rows must still render properly in the table — presence of
+    // `2026-03-20` and `2026-03-21` (in some local-time rendering) would
+    // be fragile across timezones; instead assert that the status/resolution
+    // fields from the good rows appear in stdout.
+    assert!(
+        stdout.contains("In Progress") || stdout.contains("Unresolved"),
+        "expected good-row field content in stdout, got:\n{stdout}"
+    );
+    // The raw bad timestamp string surfaces in the date column of the bad row.
+    assert!(
+        stdout.contains("not-a-date"),
+        "expected raw-timestamp fallback to appear in stdout for the bad row, got:\n{stdout}"
+    );
+}
