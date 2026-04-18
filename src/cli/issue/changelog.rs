@@ -207,11 +207,15 @@ fn truncate_to_rows(entries: &mut Vec<ChangelogEntry>, cap: usize) {
 /// Prefer the human-readable string; fall back to the raw id; default to
 /// the em-dash null marker for empty/missing values.
 fn from_to_display(string: Option<&str>, raw: Option<&str>) -> String {
-    let pick = string.or(raw).map(str::trim).unwrap_or("");
-    if pick.is_empty() {
-        NULL_GLYPH.to_string()
-    } else {
-        pick.to_string()
+    // Treat empty/whitespace strings as "absent" so an empty `fromString`
+    // falls through to the raw `from` (or vice-versa) before rendering the
+    // null glyph. Without this, `Some("")` would be "picked" and rendered
+    // as `—`, hiding a meaningful raw value.
+    let s = string.map(str::trim).filter(|t| !t.is_empty());
+    let r = raw.map(str::trim).filter(|t| !t.is_empty());
+    match s.or(r) {
+        Some(value) => value.to_string(),
+        None => NULL_GLYPH.to_string(),
     }
 }
 
@@ -340,6 +344,14 @@ mod tests {
     fn from_to_display_prefers_string_over_raw() {
         assert_eq!(from_to_display(Some("Done"), Some("10000")), "Done");
         assert_eq!(from_to_display(None, Some("10000")), "10000");
+    }
+
+    #[test]
+    fn from_to_display_empty_string_falls_back_to_raw() {
+        // `Some("")` on the string side must not block the fallback to raw —
+        // empty/whitespace strings should be treated as absent.
+        assert_eq!(from_to_display(Some(""), Some("10000")), "10000");
+        assert_eq!(from_to_display(Some("   "), Some("10000")), "10000");
     }
 
     #[test]
