@@ -98,6 +98,40 @@ async fn get_changelog_auto_paginates_across_pages() {
     assert_eq!(entries[1].id, "2");
 }
 
+// Exercises the pagination-advancement guard: a page that advertises
+// `has_more` (total > startAt + maxResults) but reports `maxResults: 0`,
+// which would cause `next_start()` to equal `start_at` and infinite-loop
+// without the guard. Expect an explicit `anyhow` error mentioning the
+// anomaly, not a hang.
+#[tokio::test]
+async fn get_changelog_errors_when_page_fails_to_advance() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-STALE/changelog"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "startAt": 0,
+            "maxResults": 0,
+            "total": 5,
+            "isLast": false,
+            "values": []
+        })))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let err = client
+        .get_changelog("FOO-STALE")
+        .await
+        .expect_err("guard should reject non-advancing page");
+    let message = err.to_string();
+    assert!(
+        message.contains("did not advance") || message.contains("malformed"),
+        "expected guard error message, got: {message}"
+    );
+}
+
 use assert_cmd::Command;
 
 #[test]

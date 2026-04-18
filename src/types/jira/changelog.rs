@@ -17,17 +17,16 @@ pub struct ChangelogEntry {
 
 /// A single field-level change within a `ChangelogEntry`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ChangelogItem {
     pub field: String,
     pub fieldtype: String,
     #[serde(default)]
     pub from: Option<String>,
-    #[serde(default)]
+    #[serde(rename = "fromString", default)]
     pub from_string: Option<String>,
     #[serde(default)]
     pub to: Option<String>,
-    #[serde(default)]
+    #[serde(rename = "toString", default)]
     pub to_string: Option<String>,
 }
 
