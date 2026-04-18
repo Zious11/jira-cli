@@ -412,9 +412,10 @@ pub enum IssueCommand {
         /// Filter by author ("me" for current user, or a name/accountId)
         ///
         /// "me" is reserved and resolves to the current user. AccountIds
-        /// (values containing ':' or ≥12 characters of letters, digits,
-        /// '-', or '_') are matched exactly; other values match as a
-        /// case-insensitive substring of displayName or accountId.
+        /// (values containing ':' or ≥12 characters of `[A-Za-z0-9_-]`
+        /// that include at least one digit) are matched exactly; other
+        /// values match as a case-insensitive substring of displayName
+        /// or accountId.
         #[arg(long)]
         author: Option<String>,
         /// Render oldest-first instead of default newest-first

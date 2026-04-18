@@ -120,19 +120,23 @@ enum AuthorNeedle {
 }
 
 /// Classify a user-supplied `--author` value. We treat a value as an
-/// accountId if it looks like one (no whitespace, has a colon or is
-/// entirely alphanumeric, dash, or underscore, and ≥12 chars). Otherwise it's a name
-/// substring.
+/// accountId if it either contains a colon, or is ≥12 chars of
+/// `[A-Za-z0-9_-]` containing at least one digit. Otherwise it's a
+/// name substring.
 ///
 /// The API's accountId format varies (`public cloud` uses
 /// `557058:...`-style strings; older formats are opaque 24+ char
-/// hex-like blobs). The heuristic below is conservative: a plain English
-/// name like "alice" is always a substring; anything with a colon or
-/// a long alphanumeric blob is treated as literal.
+/// hex-like blobs). Both documented formats guarantee digits, so the
+/// digit requirement distinguishes them from long digit-free display
+/// names like `AlexanderGreene` or `jean-pierre-dupont`. Residual
+/// edge: a 12+ char single-word name that incidentally contains a
+/// digit (e.g. `User12345Name`) still classifies as accountId; see
+/// issue #213 for the rationale.
 fn classify_author(raw: &str) -> AuthorNeedle {
     let trimmed = raw.trim();
     let looks_like_account_id = trimmed.contains(':')
         || (trimmed.len() >= 12
+            && trimmed.chars().any(|c| c.is_ascii_digit())
             && trimmed
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
@@ -265,6 +269,80 @@ mod tests {
         match classify_author("abcdef0123456789deadbeef") {
             AuthorNeedle::AccountId(s) => assert_eq!(s, "abcdef0123456789deadbeef"),
             other => panic!("expected AccountId, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_author_long_alpha_only_name_is_substring() {
+        // 15 chars, no digits — regression guard for #213.
+        match classify_author("AlexanderGreene") {
+            AuthorNeedle::NameSubstring(s) => assert_eq!(s, "alexandergreene"),
+            other => panic!("expected NameSubstring, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_author_long_compound_name_is_substring() {
+        // 18 chars, no digits — regression guard for #213.
+        match classify_author("JoseMariaRodriguez") {
+            AuthorNeedle::NameSubstring(s) => assert_eq!(s, "josemariarodriguez"),
+            other => panic!("expected NameSubstring, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_author_long_hyphenated_name_is_substring() {
+        // 18 chars with dashes, no digits — regression guard for #213.
+        match classify_author("jean-pierre-dupont") {
+            AuthorNeedle::NameSubstring(s) => assert_eq!(s, "jean-pierre-dupont"),
+            other => panic!("expected NameSubstring, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_author_old_hex_accountid_is_accountid() {
+        // 24-char hex — contains digits, no colon.
+        match classify_author("5b10ac8d82e05b22cc7d4ef5") {
+            AuthorNeedle::AccountId(s) => assert_eq!(s, "5b10ac8d82e05b22cc7d4ef5"),
+            other => panic!("expected AccountId, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_author_colon_forces_accountid_regardless_of_heuristics() {
+        // Colon wins the branch regardless of length/digits.
+        match classify_author("557058:f58131cb-b67d-43c7") {
+            AuthorNeedle::AccountId(s) => assert_eq!(s, "557058:f58131cb-b67d-43c7"),
+            other => panic!("expected AccountId, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_author_long_name_with_digit_is_accountid() {
+        // 13 chars with a digit — documented residual edge. Stays AccountId.
+        match classify_author("User12345Name") {
+            AuthorNeedle::AccountId(s) => assert_eq!(s, "User12345Name"),
+            other => panic!("expected AccountId, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_author_short_hyphenated_name_is_substring() {
+        // 11 chars — below the length gate, unaffected by the digit rule.
+        match classify_author("jean-pierre") {
+            AuthorNeedle::NameSubstring(s) => assert_eq!(s, "jean-pierre"),
+            other => panic!("expected NameSubstring, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_author_unknown_placeholder_is_substring() {
+        // 7-char "unknown" — the Jira stub for deleted/migrated users.
+        // Below the length gate; NameSubstring path already matches it
+        // via case-insensitive account_id containment.
+        match classify_author("unknown") {
+            AuthorNeedle::NameSubstring(s) => assert_eq!(s, "unknown"),
+            other => panic!("expected NameSubstring, got {other:?}"),
         }
     }
 
