@@ -396,6 +396,26 @@ pub enum IssueCommand {
         #[arg(long)]
         limit: Option<u32>,
     },
+    /// Show an issue's audit changelog (status/field changes)
+    Changelog {
+        /// Issue key (e.g., FOO-123)
+        key: String,
+        /// Maximum number of rows (default 30). Applies post-filter.
+        #[arg(long, conflicts_with = "all")]
+        limit: Option<u32>,
+        /// Show all rows (disable the default 30-row limit)
+        #[arg(long, conflicts_with = "limit")]
+        all: bool,
+        /// Filter by field name; repeatable (case-insensitive substring)
+        #[arg(long = "field")]
+        field: Vec<String>,
+        /// Filter by author ("me", display name substring, or accountId)
+        #[arg(long)]
+        author: Option<String>,
+        /// Render oldest-first instead of default newest-first
+        #[arg(long)]
+        reverse: bool,
+    },
     /// Open issue in browser
     Open {
         /// Issue key

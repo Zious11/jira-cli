@@ -123,7 +123,7 @@ pub(super) fn prompt_input(prompt: &str) -> Result<String> {
 }
 
 /// Check if a user input string is the "me" keyword (case-insensitive).
-fn is_me_keyword(input: &str) -> bool {
+pub(super) fn is_me_keyword(input: &str) -> bool {
     input.eq_ignore_ascii_case("me")
 }
 

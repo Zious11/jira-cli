@@ -172,6 +172,50 @@ impl JiraClient {
         self.post(&path, &payload).await
     }
 
+    /// Fetch the full audit changelog for an issue.
+    ///
+    /// Offset-paginated under `values[]`. Always fetches every page;
+    /// sort/filter/truncate are the caller's responsibility — the Jira
+    /// changelog endpoint supports no server-side filters and does not
+    /// guarantee sort order.
+    pub async fn get_changelog(
+        &self,
+        key: &str,
+    ) -> Result<Vec<crate::types::jira::ChangelogEntry>> {
+        let base = format!("/rest/api/3/issue/{}/changelog", urlencoding::encode(key));
+        let mut all = Vec::new();
+        let mut start_at = 0u32;
+        let max_page_size: u32 = 100;
+
+        loop {
+            let path = format!("{}?startAt={}&maxResults={}", base, start_at, max_page_size);
+            let page: OffsetPage<crate::types::jira::ChangelogEntry> = self.get(&path).await?;
+            let has_more = page.has_more();
+            let next = page.next_start();
+            all.extend(page.values.unwrap_or_default());
+
+            if !has_more {
+                break;
+            }
+            // Guard against an API response that advertises more pages but
+            // returns a page that wouldn't advance `startAt` — otherwise we'd
+            // infinite-loop on a malformed/empty page (JRACLOUD-94357-class
+            // schema-drift scenarios). Surface as an explicit error instead.
+            if next <= start_at {
+                return Err(anyhow::anyhow!(
+                    "Jira changelog pagination did not advance (startAt {} → {}) \
+                     despite has_more=true. The server returned a malformed page; \
+                     retry later or report to Jira support.",
+                    start_at,
+                    next
+                ));
+            }
+            start_at = next;
+        }
+
+        Ok(all)
+    }
+
     /// List comments on an issue with auto-pagination.
     pub async fn list_comments(&self, key: &str, limit: Option<u32>) -> Result<Vec<Comment>> {
         let base = format!("/rest/api/3/issue/{}/comment", urlencoding::encode(key));
