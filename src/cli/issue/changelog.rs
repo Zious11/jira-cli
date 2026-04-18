@@ -49,11 +49,21 @@ pub(super) async fn handle(
 
     let mut entries = client.get_changelog(&key).await?;
 
-    // Sort.
+    // Sort chronologically by parsed `created`. Unparseable entries fall
+    // back to lexicographic comparison on the raw string, preserving a
+    // deterministic order across re-runs even if a future API response
+    // uses a format we don't recognize yet.
+    let cmp = |a: &ChangelogEntry, b: &ChangelogEntry| match (
+        parse_created(&a.created),
+        parse_created(&b.created),
+    ) {
+        (Some(ax), Some(bx)) => ax.cmp(&bx),
+        _ => a.created.cmp(&b.created),
+    };
     if reverse {
-        entries.sort_by(|a, b| a.created.cmp(&b.created));
+        entries.sort_by(cmp);
     } else {
-        entries.sort_by(|a, b| b.created.cmp(&a.created));
+        entries.sort_by(|a, b| cmp(b, a));
     }
 
     // --author filter: entries with no author never match (we don't
@@ -167,17 +177,27 @@ fn build_rows(entries: &[ChangelogEntry]) -> Vec<Vec<String>> {
     rows
 }
 
-/// Parse a Jira ISO-8601 timestamp and render as `YYYY-MM-DD HH:MM` in the
-/// user's local time zone. Falls back to the raw string if parsing fails.
-fn format_date(iso: &str) -> String {
+/// Parse a Jira ISO-8601 `created` timestamp. Returns `None` if neither
+/// RFC3339 (`+00:00`) nor the Jira-style compact-offset (`+0000`) format
+/// matches. Shared by `format_date` (rendering) and the sort comparator
+/// so mixed offset formats in a single response sort chronologically
+/// rather than lexicographically.
+fn parse_created(iso: &str) -> Option<DateTime<chrono::FixedOffset>> {
     DateTime::parse_from_rfc3339(iso)
         .or_else(|_| DateTime::parse_from_str(iso, "%Y-%m-%dT%H:%M:%S%.3f%z"))
+        .ok()
+}
+
+/// Render a Jira ISO-8601 timestamp as `YYYY-MM-DD HH:MM` in the user's
+/// local time zone. Falls back to the raw string if parsing fails.
+fn format_date(iso: &str) -> String {
+    parse_created(iso)
         .map(|dt| {
             dt.with_timezone(&chrono::Local)
                 .format("%Y-%m-%d %H:%M")
                 .to_string()
         })
-        .unwrap_or_else(|_| iso.to_string())
+        .unwrap_or_else(|| iso.to_string())
 }
 
 /// Truncate entries so the total row count (sum of items across all
@@ -367,6 +387,57 @@ mod tests {
     fn format_date_falls_back_to_raw_on_parse_failure() {
         let garbage = "not-a-date";
         assert_eq!(format_date(garbage), garbage);
+    }
+
+    #[test]
+    fn parse_created_accepts_both_offset_formats() {
+        // Jira-style compact offset.
+        let jira = parse_created("2026-04-16T14:02:11.000+0000").unwrap();
+        // RFC3339 colon offset, same instant.
+        let rfc = parse_created("2026-04-16T14:02:11.000+00:00").unwrap();
+        assert_eq!(jira, rfc);
+    }
+
+    #[test]
+    fn sort_uses_parsed_datetime_across_mixed_offset_formats() {
+        // Two entries one minute apart, but using different offset
+        // formats. Lexicographic comparison of `created` would misorder
+        // them (':' > '0' so "+00:00" sorts after "+0000"), but parsed
+        // DateTime orders them correctly.
+        let older = entry(
+            "older",
+            "2026-04-16T14:02:00.000+0000",
+            Some("A"),
+            vec![item("status", Some("To Do"), Some("Done"))],
+        );
+        let newer = entry(
+            "newer",
+            "2026-04-16T14:03:00.000+00:00",
+            Some("A"),
+            vec![item("status", Some("Done"), Some("Reopened"))],
+        );
+
+        // Start with older before newer (API order).
+        let mut entries = [older.clone(), newer.clone()];
+
+        // Apply the same comparator the handler uses.
+        let cmp = |a: &ChangelogEntry, b: &ChangelogEntry| match (
+            parse_created(&a.created),
+            parse_created(&b.created),
+        ) {
+            (Some(ax), Some(bx)) => ax.cmp(&bx),
+            _ => a.created.cmp(&b.created),
+        };
+
+        // DESC (default): newer first.
+        entries.sort_by(|a, b| cmp(b, a));
+        assert_eq!(entries[0].id, "newer");
+        assert_eq!(entries[1].id, "older");
+
+        // ASC (--reverse): older first.
+        entries.sort_by(cmp);
+        assert_eq!(entries[0].id, "older");
+        assert_eq!(entries[1].id, "newer");
     }
 
     #[test]
