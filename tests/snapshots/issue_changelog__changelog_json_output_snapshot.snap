@@ -1,6 +1,6 @@
 ---
 source: tests/issue_changelog.rs
-assertion_line: 930
+assertion_line: 1036
 expression: parsed
 ---
 {
