@@ -741,3 +741,144 @@ async fn changelog_default_limit_is_thirty() {
         "default limit not applied, saw {v_count} 'v' occurrences"
     );
 }
+
+#[tokio::test]
+async fn changelog_404_surfaces_not_found() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-999/changelog"))
+        .respond_with(ResponseTemplate::new(404).set_body_json(json!({
+            "errorMessages": ["Issue does not exist or you do not have permission to see it."],
+            "errors": {}
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "changelog", "FOO-999"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("404"),
+        "expected status in stderr: {stderr}"
+    );
+    assert!(!stderr.contains("panic"), "stderr leaked a panic: {stderr}");
+}
+
+#[tokio::test]
+async fn changelog_401_suggests_reauth() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1/changelog"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "errorMessages": ["Client must be authenticated to access this resource."],
+            "errors": {}
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "changelog", "FOO-1"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "401 should exit 2, got: {:?}",
+        output.status.code()
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Not authenticated"),
+        "expected 'Not authenticated' in stderr: {stderr}"
+    );
+    assert!(stderr.contains("jr auth login"));
+}
+
+#[tokio::test]
+async fn changelog_network_drop_surfaces_reach_error() {
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", "http://127.0.0.1:1")
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "changelog", "PROJ-1"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Could not reach"),
+        "expected 'Could not reach' in stderr: {stderr}"
+    );
+}
+
+#[tokio::test]
+async fn changelog_empty_response_exit_zero_with_empty_table() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1/changelog"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "startAt": 0, "maxResults": 100, "total": 0, "isLast": true,
+            "values": []
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "changelog", "FOO-1"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "empty response should exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("No results found"),
+        "expected empty-state message: {stdout}"
+    );
+}
+
+#[tokio::test]
+async fn changelog_empty_response_json_has_empty_entries() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1/changelog"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "startAt": 0, "maxResults": 100, "total": 0, "isLast": true,
+            "values": []
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "changelog", "FOO-1", "--output", "json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let parsed: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).unwrap();
+    assert_eq!(parsed["key"], "FOO-1");
+    assert_eq!(parsed["entries"].as_array().unwrap().len(), 0);
+}
