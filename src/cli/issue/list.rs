@@ -589,22 +589,30 @@ fn build_filter_clauses(opts: FilterOptions<'_>) -> Vec<String> {
 
 // ── Comments ─────────────────────────────────────────────────────────
 
-fn format_comment_date(iso: &str) -> String {
-    chrono::DateTime::parse_from_rfc3339(iso)
+fn format_comment_date(iso: &str, verbose: bool) -> String {
+    use std::sync::atomic::AtomicBool;
+    static LOGGED: AtomicBool = AtomicBool::new(false);
+    match chrono::DateTime::parse_from_rfc3339(iso)
         .or_else(|_| chrono::DateTime::parse_from_str(iso, "%Y-%m-%dT%H:%M:%S%.3f%z"))
-        .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
-        .unwrap_or_else(|_| iso.to_string())
+    {
+        Ok(dt) => dt.format("%Y-%m-%d %H:%M").to_string(),
+        Err(_) => {
+            crate::observability::log_parse_failure_once(&LOGGED, "comment", iso, verbose);
+            iso.to_string()
+        }
+    }
 }
 
 fn format_comment_row(
     author_name: Option<&str>,
     created: Option<&str>,
     body_text: Option<&str>,
+    verbose: bool,
 ) -> Vec<String> {
     vec![
         author_name.unwrap_or("(unknown)").to_string(),
         created
-            .map(format_comment_date)
+            .map(|c| format_comment_date(c, verbose))
             .unwrap_or_else(|| "-".into()),
         body_text.unwrap_or("(no content)").to_string(),
     ]
@@ -650,7 +658,12 @@ pub(super) async fn handle_comments(
                         let created = c.created.as_deref();
                         let body_text = c.body.as_ref().map(adf::adf_to_text);
                         let visibility = comment_visibility(c).unwrap_or("External");
-                        let mut row = format_comment_row(author, created, body_text.as_deref());
+                        let mut row = format_comment_row(
+                            author,
+                            created,
+                            body_text.as_deref(),
+                            client.verbose(),
+                        );
                         // Insert Visibility before Body (index 2)
                         row.insert(2, visibility.to_string());
                         row
@@ -664,7 +677,7 @@ pub(super) async fn handle_comments(
                         let author = c.author.as_ref().map(|a| a.display_name.as_str());
                         let created = c.created.as_deref();
                         let body_text = c.body.as_ref().map(adf::adf_to_text);
-                        format_comment_row(author, created, body_text.as_deref())
+                        format_comment_row(author, created, body_text.as_deref(), client.verbose())
                     })
                     .collect();
                 (vec!["Author", "Date", "Body"], rows)
@@ -810,7 +823,7 @@ pub(super) async fn handle_view(
                         .fields
                         .created
                         .as_deref()
-                        .map(format_comment_date)
+                        .map(|c| format_comment_date(c, client.verbose()))
                         .unwrap_or_else(|| "-".into()),
                 ],
                 vec![
@@ -819,7 +832,7 @@ pub(super) async fn handle_view(
                         .fields
                         .updated
                         .as_deref()
-                        .map(format_comment_date)
+                        .map(|c| format_comment_date(c, client.verbose()))
                         .unwrap_or_else(|| "-".into()),
                 ],
                 vec![
@@ -981,7 +994,7 @@ mod tests {
     #[test]
     fn format_comment_date_rfc3339() {
         assert_eq!(
-            format_comment_date("2026-03-20T14:32:00+00:00"),
+            format_comment_date("2026-03-20T14:32:00+00:00", false),
             "2026-03-20 14:32"
         );
     }
@@ -989,25 +1002,30 @@ mod tests {
     #[test]
     fn format_comment_date_jira_offset_no_colon() {
         assert_eq!(
-            format_comment_date("2026-03-20T14:32:00.000+0000"),
+            format_comment_date("2026-03-20T14:32:00.000+0000", false),
             "2026-03-20 14:32"
         );
     }
 
     #[test]
     fn format_comment_date_malformed_returns_raw() {
-        assert_eq!(format_comment_date("not-a-date"), "not-a-date");
+        assert_eq!(format_comment_date("not-a-date", false), "not-a-date");
     }
 
     #[test]
     fn format_comment_row_missing_author() {
-        let row = format_comment_row(None, Some("2026-03-20T14:32:00+00:00"), None);
+        let row = format_comment_row(None, Some("2026-03-20T14:32:00+00:00"), None, false);
         assert_eq!(row[0], "(unknown)");
     }
 
     #[test]
     fn format_comment_row_missing_body() {
-        let row = format_comment_row(Some("Jane Smith"), Some("2026-03-20T14:32:00+00:00"), None);
+        let row = format_comment_row(
+            Some("Jane Smith"),
+            Some("2026-03-20T14:32:00+00:00"),
+            None,
+            false,
+        );
         assert_eq!(row[2], "(no content)");
     }
 
