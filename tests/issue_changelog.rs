@@ -471,8 +471,14 @@ async fn changelog_author_name_substring_case_insensitive() {
     assert!(!stdout.contains("Bob Jones"));
 }
 
+// Short (< 12 chars, no colon) `--author` values go through
+// `AuthorNeedle::NameSubstring`, which matches against both `displayName`
+// and `accountId` — so a short accountId prefix still works. This test
+// locks that behavior in. For the literal-AccountId branch (colon or
+// ≥12 alphanumeric/-/_ chars), see
+// `changelog_author_long_accountid_literal_match` below.
 #[tokio::test]
-async fn changelog_author_accountid_matches_literal() {
+async fn changelog_author_short_value_matches_accountid_substring() {
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
@@ -512,6 +518,72 @@ async fn changelog_author_accountid_matches_literal() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Alice"));
     assert!(!stdout.contains("Bob"));
+}
+
+// Exercises the `AuthorNeedle::AccountId` (literal/exact) branch. The input
+// `557058:abc-def-0123` contains a colon, which `classify_author` routes to
+// AccountId — partial-match against displayName/accountId is NOT attempted.
+#[tokio::test]
+async fn changelog_author_long_accountid_literal_match() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1/changelog"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "startAt": 0, "maxResults": 100, "total": 2, "isLast": true,
+            "values": [
+                {
+                    "id": "1",
+                    "author": {
+                        "accountId": "557058:abc-def-0123",
+                        "displayName": "Alice Smith",
+                        "active": true
+                    },
+                    "created": "2026-04-16T14:02:00.000+0000",
+                    "items": [{"field": "status", "fieldtype": "jira",
+                               "from": "1", "fromString": "To Do",
+                               "to": "3", "toString": "Done"}]
+                },
+                {
+                    "id": "2",
+                    "author": {
+                        "accountId": "557058:abc-def-0999",
+                        "displayName": "Bob Jones",
+                        "active": true
+                    },
+                    "created": "2026-04-15T10:00:00.000+0000",
+                    "items": [{"field": "labels", "fieldtype": "jira",
+                               "from": "", "to": "x"}]
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args([
+            "issue",
+            "changelog",
+            "FOO-1",
+            "--author",
+            "557058:abc-def-0123",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Alice Smith"),
+        "Alice row missing: {stdout}"
+    );
+    assert!(
+        !stdout.contains("Bob Jones"),
+        "Bob row should not match (different accountId): {stdout}"
+    );
 }
 
 #[tokio::test]
