@@ -29,7 +29,7 @@ pub(super) async fn handle(
         all: _,
         field: _,
         author: _,
-        reverse: _,
+        reverse,
     } = command
     else {
         unreachable!("handler only called for IssueCommand::Changelog")
@@ -37,9 +37,13 @@ pub(super) async fn handle(
 
     let mut entries = client.get_changelog(&key).await?;
 
-    // Sort newest-first (default). Stable sort keeps original API order as a
-    // tiebreaker when `created` timestamps tie.
-    entries.sort_by(|a, b| b.created.cmp(&a.created));
+    // Sort by `created`. Stable sort keeps original API order as a tiebreaker
+    // when timestamps tie.
+    if reverse {
+        entries.sort_by(|a, b| a.created.cmp(&b.created));
+    } else {
+        entries.sort_by(|a, b| b.created.cmp(&a.created));
+    }
 
     match output_format {
         OutputFormat::Json => {
