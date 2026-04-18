@@ -882,3 +882,50 @@ async fn changelog_empty_response_json_has_empty_entries() {
     assert_eq!(parsed["key"], "FOO-1");
     assert_eq!(parsed["entries"].as_array().unwrap().len(), 0);
 }
+
+#[tokio::test]
+async fn changelog_json_output_snapshot() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1/changelog"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "startAt": 0, "maxResults": 100, "total": 2, "isLast": true,
+            "values": [
+                {
+                    "id": "2",
+                    "author": { "accountId": "alice", "displayName": "Alice Smith", "active": true },
+                    "created": "2026-04-16T14:02:11.000+0000",
+                    "items": [
+                        {"field": "status", "fieldtype": "jira",
+                         "from": "1", "fromString": "To Do",
+                         "to": "3", "toString": "In Progress"},
+                        {"field": "resolution", "fieldtype": "jira",
+                         "from": null, "fromString": null,
+                         "to": "10000", "toString": "Done"}
+                    ]
+                },
+                {
+                    "id": "1", "author": null,
+                    "created": "2026-04-14T16:02:00.000+0000",
+                    "items": [{"field": "labels", "fieldtype": "jira",
+                               "from": "", "to": "backend"}]
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "changelog", "FOO-1", "--output", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).unwrap();
+    insta::assert_json_snapshot!(parsed);
+}

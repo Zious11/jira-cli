@@ -1,0 +1,53 @@
+---
+source: tests/issue_changelog.rs
+assertion_line: 930
+expression: parsed
+---
+{
+  "entries": [
+    {
+      "author": {
+        "accountId": "alice",
+        "active": true,
+        "displayName": "Alice Smith",
+        "emailAddress": null
+      },
+      "created": "2026-04-16T14:02:11.000+0000",
+      "id": "2",
+      "items": [
+        {
+          "field": "status",
+          "fieldtype": "jira",
+          "from": "1",
+          "fromString": "To Do",
+          "to": "3",
+          "toString": "In Progress"
+        },
+        {
+          "field": "resolution",
+          "fieldtype": "jira",
+          "from": null,
+          "fromString": null,
+          "to": "10000",
+          "toString": "Done"
+        }
+      ]
+    },
+    {
+      "author": null,
+      "created": "2026-04-14T16:02:00.000+0000",
+      "id": "1",
+      "items": [
+        {
+          "field": "labels",
+          "fieldtype": "jira",
+          "from": "",
+          "fromString": null,
+          "to": "backend",
+          "toString": null
+        }
+      ]
+    }
+  ],
+  "key": "FOO-1"
+}
