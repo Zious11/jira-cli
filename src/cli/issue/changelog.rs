@@ -28,31 +28,44 @@ pub(super) async fn handle(
         limit: _,
         all: _,
         field,
-        author: _,
+        author,
         reverse,
     } = command
     else {
         unreachable!("handler only called for IssueCommand::Changelog")
     };
 
+    // Resolve --author "me" up-front; other forms compare directly.
+    let author_needle = match author.as_deref() {
+        Some("me") => Some(AuthorNeedle::AccountId(
+            client.get_myself().await?.account_id,
+        )),
+        Some(raw) => Some(classify_author(raw)),
+        None => None,
+    };
+
     let mut entries = client.get_changelog(&key).await?;
 
-    // Sort by `created`. Stable sort keeps original API order as a tiebreaker
-    // when timestamps tie.
+    // Sort.
     if reverse {
         entries.sort_by(|a, b| a.created.cmp(&b.created));
     } else {
         entries.sort_by(|a, b| b.created.cmp(&a.created));
     }
 
-    // Field filter: drop items whose field doesn't match any --field needle.
-    // An entry with zero surviving items is dropped entirely.
+    // --author filter: drops entries with no author when set, unless
+    // the needle matches the null placeholder (we don't support that).
+    if let Some(needle) = &author_needle {
+        entries.retain(|e| author_matches(e.author.as_ref(), needle));
+    }
+
+    // --field filter: drop items, then empty entries.
     if !field.is_empty() {
         let needles: Vec<String> = field.iter().map(|f| f.to_lowercase()).collect();
         for entry in entries.iter_mut() {
             entry.items.retain(|it| {
-                let haystack = it.field.to_lowercase();
-                needles.iter().any(|n| haystack.contains(n))
+                let h = it.field.to_lowercase();
+                needles.iter().any(|n| h.contains(n))
             });
         }
         entries.retain(|e| !e.items.is_empty());
@@ -76,6 +89,48 @@ pub(super) async fn handle(
     }
 
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+enum AuthorNeedle {
+    /// Exact accountId match (literal input or resolved from "me").
+    AccountId(String),
+    /// Case-insensitive substring match against `displayName` or `accountId`.
+    NameSubstring(String),
+}
+
+/// Classify a user-supplied `--author` value. We treat a value as an
+/// accountId if it looks like one (no whitespace, has a colon or is
+/// entirely alphanumeric+dashes and ≥12 chars). Otherwise it's a name
+/// substring.
+///
+/// The API's accountId format varies (`public cloud` uses
+/// `557058:...`-style strings; older formats are opaque 24+ char
+/// hex-like blobs). The heuristic below is conservative: a plain English
+/// name like "alice" is always a substring; anything with a colon or
+/// a long alphanumeric blob is treated as literal.
+fn classify_author(raw: &str) -> AuthorNeedle {
+    let trimmed = raw.trim();
+    let looks_like_account_id = trimmed.contains(':')
+        || (trimmed.len() >= 12
+            && trimmed
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+    if looks_like_account_id {
+        AuthorNeedle::AccountId(trimmed.to_string())
+    } else {
+        AuthorNeedle::NameSubstring(trimmed.to_lowercase())
+    }
+}
+
+fn author_matches(author: Option<&crate::types::jira::User>, needle: &AuthorNeedle) -> bool {
+    let Some(a) = author else { return false };
+    match needle {
+        AuthorNeedle::AccountId(id) => a.account_id == *id,
+        AuthorNeedle::NameSubstring(n) => {
+            a.display_name.to_lowercase().contains(n) || a.account_id.to_lowercase().contains(n)
+        }
+    }
 }
 
 /// Flatten `entries` into one row per `ChangelogItem`, preserving the
@@ -130,6 +185,56 @@ fn from_to_display(string: Option<&str>, raw: Option<&str>) -> String {
 mod tests {
     use super::*;
     use crate::types::jira::{ChangelogItem, User};
+
+    #[test]
+    fn classify_author_treats_short_name_as_substring() {
+        match classify_author("alice") {
+            AuthorNeedle::NameSubstring(s) => assert_eq!(s, "alice"),
+            other => panic!("expected NameSubstring, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_author_treats_colon_string_as_accountid() {
+        match classify_author("557058:abc-123") {
+            AuthorNeedle::AccountId(s) => assert_eq!(s, "557058:abc-123"),
+            other => panic!("expected AccountId, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_author_treats_long_hex_blob_as_accountid() {
+        match classify_author("abcdef0123456789deadbeef") {
+            AuthorNeedle::AccountId(s) => assert_eq!(s, "abcdef0123456789deadbeef"),
+            other => panic!("expected AccountId, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn author_matches_respects_account_id_exact() {
+        let user = User {
+            account_id: "557058:abc".into(),
+            display_name: "Alice".into(),
+            email_address: None,
+            active: Some(true),
+        };
+        assert!(author_matches(
+            Some(&user),
+            &AuthorNeedle::AccountId("557058:abc".into())
+        ));
+        assert!(!author_matches(
+            Some(&user),
+            &AuthorNeedle::AccountId("other".into())
+        ));
+    }
+
+    #[test]
+    fn author_matches_null_author_always_false() {
+        assert!(!author_matches(
+            None,
+            &AuthorNeedle::NameSubstring("alice".into())
+        ));
+    }
 
     fn entry(
         id: &str,
