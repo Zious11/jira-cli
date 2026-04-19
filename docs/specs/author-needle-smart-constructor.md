@@ -34,6 +34,10 @@ impl LoweredStr {
     fn new(s: &str) -> Self {
         Self(s.to_lowercase())
     }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 impl std::ops::Deref for LoweredStr {
@@ -44,7 +48,7 @@ impl std::ops::Deref for LoweredStr {
 }
 ```
 
-`Deref<Target = str>` is the idiomatic accessor for string newtypes and lets `author_matches` continue to call `contains(&**n)` (or the equivalent) without extra boilerplate.
+Both `Deref<Target = str>` and an explicit `as_str(&self) -> &str` are implemented — the standard Rust newtype pattern, mirroring `String::as_str` and `OsStr::as_str`. `Deref` enables coercion in generic/method-call contexts (e.g. `lowered.len()`); `as_str()` is used at explicit-conversion call sites where clarity matters more than brevity.
 
 ### Enum and smart constructor
 
@@ -91,7 +95,7 @@ The explicit `AuthorNeedle::AccountId(...)` construction in `handle` (currently 
 
 | File | Change |
 |------|--------|
-| `src/cli/issue/changelog.rs` | Add `LoweredStr`; change `NameSubstring(String)` → `NameSubstring(LoweredStr)`; rename `classify_author` → `AuthorNeedle::from_raw`; update `author_matches` needle-access; update unit tests to inspect `&**s` or `s.as_str()` equivalent. |
+| `src/cli/issue/changelog.rs` | Add `LoweredStr`; change `NameSubstring(String)` → `NameSubstring(LoweredStr)`; rename `classify_author` → `AuthorNeedle::from_raw`; update `author_matches` to call `contains(n.as_str())`; update unit tests to compare via `s.as_str()`. |
 
 No other files change. The enum and all related items remain module-private to `changelog.rs`.
 
@@ -113,7 +117,7 @@ The 8 existing unit tests in `src/cli/issue/changelog.rs` (`classify_author_*`) 
 They need mechanical updates:
 
 - Call `AuthorNeedle::from_raw(...)` instead of `classify_author(...)`
-- Compare the `NameSubstring` inner via `&*s` (Deref to `str`) instead of direct `String` equality
+- Compare the `NameSubstring` inner via `s.as_str()` instead of direct `String` equality
 
 Behavior is unchanged, so no new test cases are added. A single new assertion that `LoweredStr::new("MixedCase")` produces `"mixedcase"` is sufficient to pin the invariant (one or two lines added to the existing test block).
 
