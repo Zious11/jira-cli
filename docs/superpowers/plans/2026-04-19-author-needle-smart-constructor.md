@@ -19,17 +19,17 @@
 Land the full refactor in one atomic commit. Attempting to split — e.g. add `LoweredStr` first, then change the variant later — would either leave `LoweredStr` unused (clippy `dead_code`, which CLAUDE.md forbids suppressing) or require a broken-build intermediate commit.
 
 **Files:**
-- Modify: `src/cli/issue/changelog.rs` (current: 114–412)
+- Modify: `src/cli/issue/changelog.rs`
 
 - [ ] **Step 1: Read the current state of the file**
 
-Open `src/cli/issue/changelog.rs` and read from line 1 to the end. The critical regions are:
+Open `src/cli/issue/changelog.rs` and read from top to bottom. The critical regions are:
 
-- Line 43–46: the `handle` function's `Some(raw) => Some(classify_author(raw))` path.
-- Line 114–120: the `AuthorNeedle` enum definition.
-- Line 122–148: the `classify_author` free function and its doc comment.
-- Line 150–158: the `author_matches` function — note `n` is used in `contains(n)` on line 155.
-- Line 256–412 (approximate): the `#[cfg(test)] mod tests` block containing the 11 `from_raw_*` unit tests and the `author_matches_*` tests.
+- The `handle` function branch that maps raw author input into an `AuthorNeedle` (the `Some(raw) => Some(classify_author(raw))` path on the pre-refactor tree).
+- The `AuthorNeedle` enum definition.
+- The `classify_author` free function, which will become the associated smart constructor `AuthorNeedle::from_raw`, along with its doc comment.
+- The `author_matches` function — note where the `NameSubstring` payload is passed into `contains(...)`.
+- The `#[cfg(test)] mod tests` block near the end of the file containing the 11 heuristic unit tests (pre-refactor named `classify_author_*`, renamed in Step 9 to `from_raw_*`) and the `author_matches_*` tests.
 
 Identify every test that destructures `AuthorNeedle::NameSubstring(s)` and asserts on `s` — they will change from `assert_eq!(s, "alice")` (which relies on `String` equality with `&str`) to `assert_eq!(s.as_str(), "alice")`.
 
@@ -91,7 +91,7 @@ use lowered_str::LoweredStr;
 
 - [ ] **Step 5: Change the `NameSubstring` variant to carry `LoweredStr`**
 
-Replace the `AuthorNeedle` enum definition (currently line 114–120):
+Replace the `AuthorNeedle` enum definition:
 
 ```rust
 #[derive(Debug, Clone)]
@@ -121,7 +121,7 @@ enum AuthorNeedle {
 
 - [ ] **Step 6: Convert `classify_author` to the associated function `AuthorNeedle::from_raw`**
 
-Replace the current free function (line 122–148):
+Replace the current free function:
 
 ```rust
 /// Classify a user-supplied `--author` value. ...
@@ -183,7 +183,7 @@ Key differences from the old version:
 
 - [ ] **Step 7: Update the single production caller of `classify_author`**
 
-In `src/cli/issue/changelog.rs` around line 46, the `handle` function has:
+In `src/cli/issue/changelog.rs`, the `handle` function has:
 
 ```rust
         Some(raw) => Some(classify_author(raw)),
@@ -197,7 +197,7 @@ Change it to:
 
 - [ ] **Step 8: Update `author_matches` to call `.as_str()` on the needle**
 
-The current function (line 150–158) ends with:
+The current function ends with:
 
 ```rust
         AuthorNeedle::NameSubstring(n) => {
@@ -218,7 +218,7 @@ where `n: &String`. Since `n` is now `&LoweredStr`, `contains` would require der
 
 Find every occurrence of `classify_author(` in the `#[cfg(test)]` block and replace with `AuthorNeedle::from_raw(`. There are 11 such tests as of the current tree (names matching `from_raw_*`).
 
-Example — the test at line 259–263 currently reads:
+Example — the `classify_author_treats_short_name_as_substring` test currently reads:
 
 ```rust
     #[test]
@@ -265,7 +265,7 @@ The full list of tests to update (all in `src/cli/issue/changelog.rs`'s `mod tes
 
 - [ ] **Step 10: Update the `author_matches_null_author_always_false` test**
 
-This test (around line 375–381) constructs an `AuthorNeedle::NameSubstring` inline:
+This test constructs an `AuthorNeedle::NameSubstring` inline:
 
 ```rust
     #[test]
