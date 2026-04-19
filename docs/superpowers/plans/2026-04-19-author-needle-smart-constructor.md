@@ -350,7 +350,7 @@ newtype whose only constructor lowercases. Rename the classifier free
 function classify_author to the smart-constructor associated function
 AuthorNeedle::from_raw.
 
-Pure internal refactor — no user-facing behavior change. All 10
+Pure internal refactor — no user-facing behavior change. All 11
 existing from_raw_* unit tests still pass unchanged in intent
 (mechanically updated to the new type and name).
 EOF
