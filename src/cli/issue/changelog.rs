@@ -111,11 +111,13 @@ pub(super) async fn handle(
     Ok(())
 }
 
-/// Module-private newtype guaranteeing its contents are lowercased.
-///
-/// Construction is the only lowercasing path — the compiler therefore
-/// enforces the invariant that `author_matches` relies on (haystack is
-/// lowercased, needle must already be lowercased).
+/// Module-private newtype whose `::new` constructor is the only
+/// lowercasing path. The type is kept module-private so outside
+/// callers cannot construct it at all; within this module every
+/// construction goes through `LoweredStr::new` by convention. Together
+/// this carries the invariant that `author_matches` relies on: needle
+/// is lowercased at construction, haystack is lowercased at match
+/// time, so `contains` is sound without re-normalizing the needle.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LoweredStr(String);
 
@@ -142,9 +144,9 @@ enum AuthorNeedle {
     /// Case-sensitive — Jira accountIds are opaque identifiers.
     AccountId(String),
     /// Case-insensitive substring match against `displayName` or `accountId`.
-    /// The inner `LoweredStr` is always lowercased at construction time, so
-    /// `author_matches` can compare against a pre-lowercased haystack without
-    /// re-normalizing the needle.
+    /// The inner `LoweredStr` is lowercased at construction time, so
+    /// `author_matches` lowercases the haystack at match time and compares
+    /// directly without also re-normalizing the needle.
     NameSubstring(LoweredStr),
 }
 
@@ -615,6 +617,11 @@ mod tests {
     fn lowered_str_normalizes_input_on_construction() {
         let lowered = LoweredStr::new("MixedCase-Name");
         assert_eq!(lowered.as_str(), "mixedcase-name");
+    }
+
+    #[test]
+    fn lowered_str_equality_is_case_invariant() {
+        assert_eq!(LoweredStr::new("Alice"), LoweredStr::new("alice"));
     }
 
     #[test]
