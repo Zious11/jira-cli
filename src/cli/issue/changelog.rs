@@ -293,7 +293,7 @@ mod tests {
     use crate::types::jira::{ChangelogItem, User};
 
     #[test]
-    fn classify_author_treats_short_name_as_substring() {
+    fn from_raw_treats_short_name_as_substring() {
         match AuthorNeedle::from_raw("alice") {
             AuthorNeedle::NameSubstring(s) => assert_eq!(s.as_str(), "alice"),
             other => panic!("expected NameSubstring, got {other:?}"),
@@ -301,7 +301,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_author_treats_colon_string_as_accountid() {
+    fn from_raw_treats_colon_string_as_accountid() {
         match AuthorNeedle::from_raw("557058:abc-123") {
             AuthorNeedle::AccountId(s) => assert_eq!(s, "557058:abc-123"),
             other => panic!("expected AccountId, got {other:?}"),
@@ -309,7 +309,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_author_treats_long_hex_blob_as_accountid() {
+    fn from_raw_treats_long_hex_blob_as_accountid() {
         match AuthorNeedle::from_raw("abcdef0123456789deadbeef") {
             AuthorNeedle::AccountId(s) => assert_eq!(s, "abcdef0123456789deadbeef"),
             other => panic!("expected AccountId, got {other:?}"),
@@ -317,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_author_long_alpha_only_name_is_substring() {
+    fn from_raw_long_alpha_only_name_is_substring() {
         // 15 chars, no digits — regression guard for #213.
         match AuthorNeedle::from_raw("AlexanderGreene") {
             AuthorNeedle::NameSubstring(s) => assert_eq!(s.as_str(), "alexandergreene"),
@@ -326,7 +326,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_author_long_compound_name_is_substring() {
+    fn from_raw_long_compound_name_is_substring() {
         // 18 chars, no digits — regression guard for #213.
         match AuthorNeedle::from_raw("JoseMariaRodriguez") {
             AuthorNeedle::NameSubstring(s) => assert_eq!(s.as_str(), "josemariarodriguez"),
@@ -335,7 +335,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_author_long_hyphenated_name_is_substring() {
+    fn from_raw_long_hyphenated_name_is_substring() {
         // 18 chars with dashes, no digits — regression guard for #213.
         match AuthorNeedle::from_raw("jean-pierre-dupont") {
             AuthorNeedle::NameSubstring(s) => assert_eq!(s.as_str(), "jean-pierre-dupont"),
@@ -344,7 +344,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_author_old_hex_accountid_is_accountid() {
+    fn from_raw_old_hex_accountid_is_accountid() {
         // 24-char hex — contains digits, no colon.
         match AuthorNeedle::from_raw("5b10ac8d82e05b22cc7d4ef5") {
             AuthorNeedle::AccountId(s) => assert_eq!(s, "5b10ac8d82e05b22cc7d4ef5"),
@@ -353,7 +353,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_author_colon_forces_accountid_regardless_of_heuristics() {
+    fn from_raw_colon_forces_accountid_regardless_of_heuristics() {
         // Colon wins the branch regardless of length/digits.
         match AuthorNeedle::from_raw("557058:f58131cb-b67d-43c7") {
             AuthorNeedle::AccountId(s) => assert_eq!(s, "557058:f58131cb-b67d-43c7"),
@@ -362,7 +362,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_author_long_name_with_digit_is_accountid() {
+    fn from_raw_long_name_with_digit_is_accountid() {
         // 13 chars with a digit — documented residual edge. Stays AccountId.
         match AuthorNeedle::from_raw("User12345Name") {
             AuthorNeedle::AccountId(s) => assert_eq!(s, "User12345Name"),
@@ -371,7 +371,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_author_short_hyphenated_name_is_substring() {
+    fn from_raw_short_hyphenated_name_is_substring() {
         // 11 chars — below the length gate, unaffected by the digit rule.
         match AuthorNeedle::from_raw("jean-pierre") {
             AuthorNeedle::NameSubstring(s) => assert_eq!(s.as_str(), "jean-pierre"),
@@ -380,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_author_unknown_placeholder_is_substring() {
+    fn from_raw_unknown_placeholder_is_substring() {
         // 7-char "unknown" — the Jira stub for deleted/migrated users.
         // Below the length gate; NameSubstring path already matches it
         // via case-insensitive account_id containment.

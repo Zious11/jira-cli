@@ -103,11 +103,11 @@ The newtype is further encapsulated inside a nested private submodule (`mod lowe
 |------|--------|
 | `src/cli/issue/changelog.rs` | Add `mod lowered_str { struct LoweredStr ... }` submodule with `pub(super)` surface; change `NameSubstring(String)` → `NameSubstring(LoweredStr)`; rename `classify_author` → `AuthorNeedle::from_raw`; update `author_matches` to call `contains(n.as_str())`; update unit tests to compare via `s.as_str()`. |
 
-No other files change. The enum and all related items remain module-private to `changelog.rs`.
+No other production code files change. The enum and all related items remain module-private to `changelog.rs`.
 
 ## Test strategy
 
-The 10 existing unit tests in `src/cli/issue/changelog.rs` (`classify_author_*`) already cover the heuristic's behavior:
+The 11 existing unit tests in `src/cli/issue/changelog.rs` (renamed `from_raw_*`) already cover the heuristic's behavior:
 
 - Short name → substring
 - Colon → accountId
@@ -116,6 +116,7 @@ The 10 existing unit tests in `src/cli/issue/changelog.rs` (`classify_author_*`)
 - Long compound name → substring
 - Long hyphenated name → substring
 - Old 24-char hex accountId → accountId
+- Colon forces accountId regardless of length/content heuristics
 - Long name with digit → accountId
 - Short hyphenated name → substring
 - Unknown placeholder → substring
@@ -123,6 +124,7 @@ The 10 existing unit tests in `src/cli/issue/changelog.rs` (`classify_author_*`)
 They need mechanical updates:
 
 - Call `AuthorNeedle::from_raw(...)` instead of `classify_author(...)`
+- Rename each test from `classify_author_*` to `from_raw_*` so the name matches the symbol under test
 - Compare the `NameSubstring` inner via `s.as_str()` instead of direct `String` equality
 
 Behavior is unchanged, so no new behavior-oriented test cases are needed. Two small unit tests are added to pin the newtype's type-level contract:

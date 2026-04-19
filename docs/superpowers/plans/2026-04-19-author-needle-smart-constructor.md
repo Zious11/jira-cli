@@ -4,7 +4,7 @@
 
 **Goal:** Move the lowercase invariant on `AuthorNeedle::NameSubstring` from convention to the type system via a `LoweredStr` newtype, and rename the classifier to a smart constructor `AuthorNeedle::from_raw`.
 
-**Architecture:** Add a `LoweredStr(String)` newtype inside a nested private submodule `mod lowered_str` in `src/cli/issue/changelog.rs`, so the tuple field is unreachable from the parent module and `::new` is the only construction path the compiler will accept. Change `NameSubstring(String)` to `NameSubstring(LoweredStr)` so every `NameSubstring` value is lowercased by construction. Rename `classify_author` free function to the associated function `AuthorNeedle::from_raw`. Pure internal refactor — no user-facing behavior changes, no new integration tests; the existing 10 unit tests are the safety net.
+**Architecture:** Add a `LoweredStr(String)` newtype inside a nested private submodule `mod lowered_str` in `src/cli/issue/changelog.rs`, so the tuple field is unreachable from the parent module and `::new` is the only construction path the compiler will accept. Change `NameSubstring(String)` to `NameSubstring(LoweredStr)` so every `NameSubstring` value is lowercased by construction. Rename `classify_author` free function to the associated function `AuthorNeedle::from_raw`. Pure internal refactor — no user-facing behavior changes, no new integration tests; the existing 11 unit tests are the safety net.
 
 **Tech Stack:** Rust 2024 edition, stdlib only (`std::ops::Deref`). Existing test harness (unit tests inline in `changelog.rs`).
 
@@ -29,7 +29,7 @@ Open `src/cli/issue/changelog.rs` and read from line 1 to the end. The critical 
 - Line 114–120: the `AuthorNeedle` enum definition.
 - Line 122–148: the `classify_author` free function and its doc comment.
 - Line 150–158: the `author_matches` function — note `n` is used in `contains(n)` on line 155.
-- Line 256–412 (approximate): the `#[cfg(test)] mod tests` block containing the 10 `classify_author_*` unit tests and the `author_matches_*` tests.
+- Line 256–412 (approximate): the `#[cfg(test)] mod tests` block containing the 11 `from_raw_*` unit tests and the `author_matches_*` tests.
 
 Identify every test that destructures `AuthorNeedle::NameSubstring(s)` and asserts on `s` — they will change from `assert_eq!(s, "alice")` (which relies on `String` equality with `&str`) to `assert_eq!(s.as_str(), "alice")`.
 
@@ -47,7 +47,7 @@ fn lowered_str_normalizes_input_on_construction() {
 
 - [ ] **Step 3: Run the test suite and verify the new test fails to compile**
 
-Run: `cargo test --lib -p jr-cli -- changelog::tests::lowered_str_normalizes_input_on_construction`
+Run: `cargo test --lib -p jr -- changelog::tests::lowered_str_normalizes_input_on_construction`
 
 Expected: compile error `cannot find type 'LoweredStr' in this scope` or similar. This confirms the type does not yet exist — the RED state.
 
@@ -216,13 +216,13 @@ where `n: &String`. Since `n` is now `&LoweredStr`, `contains` would require der
 
 - [ ] **Step 9: Update every existing unit test that calls `classify_author`**
 
-Find every occurrence of `classify_author(` in the `#[cfg(test)]` block and replace with `AuthorNeedle::from_raw(`. There are 10 such tests as of the current tree (names matching `classify_author_*`).
+Find every occurrence of `classify_author(` in the `#[cfg(test)]` block and replace with `AuthorNeedle::from_raw(`. There are 11 such tests as of the current tree (names matching `from_raw_*`).
 
 Example — the test at line 259–263 currently reads:
 
 ```rust
     #[test]
-    fn classify_author_treats_short_name_as_substring() {
+    fn from_raw_treats_short_name_as_substring() {
         match classify_author("alice") {
             AuthorNeedle::NameSubstring(s) => assert_eq!(s, "alice"),
             other => panic!("unexpected variant: {:?}", other),
@@ -234,7 +234,7 @@ Update it to:
 
 ```rust
     #[test]
-    fn classify_author_treats_short_name_as_substring() {
+    fn from_raw_treats_short_name_as_substring() {
         match AuthorNeedle::from_raw("alice") {
             AuthorNeedle::NameSubstring(s) => assert_eq!(s.as_str(), "alice"),
             other => panic!("unexpected variant: {:?}", other),
@@ -251,17 +251,17 @@ Tests that destructure `AuthorNeedle::AccountId(s)` and assert on `s` do **not**
 
 The full list of tests to update (all in `src/cli/issue/changelog.rs`'s `mod tests`):
 
-- `classify_author_treats_short_name_as_substring` (NameSubstring — both changes)
-- `classify_author_treats_colon_string_as_accountid` (AccountId — rename only)
-- `classify_author_treats_long_hex_blob_as_accountid` (AccountId — rename only)
-- `classify_author_long_alpha_only_name_is_substring` (NameSubstring — both changes)
-- `classify_author_long_compound_name_is_substring` (NameSubstring — both changes)
-- `classify_author_long_hyphenated_name_is_substring` (NameSubstring — both changes)
-- `classify_author_old_hex_accountid_is_accountid` (AccountId — rename only)
-- `classify_author_colon_forces_accountid_regardless_of_heuristics` (AccountId — rename only)
-- `classify_author_long_name_with_digit_is_accountid` (AccountId — rename only)
-- `classify_author_short_hyphenated_name_is_substring` (NameSubstring — both changes)
-- `classify_author_unknown_placeholder_is_substring` (NameSubstring — both changes)
+- `from_raw_treats_short_name_as_substring` (NameSubstring — both changes)
+- `from_raw_treats_colon_string_as_accountid` (AccountId — rename only)
+- `from_raw_treats_long_hex_blob_as_accountid` (AccountId — rename only)
+- `from_raw_long_alpha_only_name_is_substring` (NameSubstring — both changes)
+- `from_raw_long_compound_name_is_substring` (NameSubstring — both changes)
+- `from_raw_long_hyphenated_name_is_substring` (NameSubstring — both changes)
+- `from_raw_old_hex_accountid_is_accountid` (AccountId — rename only)
+- `from_raw_colon_forces_accountid_regardless_of_heuristics` (AccountId — rename only)
+- `from_raw_long_name_with_digit_is_accountid` (AccountId — rename only)
+- `from_raw_short_hyphenated_name_is_substring` (NameSubstring — both changes)
+- `from_raw_unknown_placeholder_is_substring` (NameSubstring — both changes)
 
 - [ ] **Step 10: Update the `author_matches_null_author_always_false` test**
 
@@ -331,7 +331,7 @@ cargo test
 Expected: all tests pass (780+ as of the baseline). Pay specific attention to:
 
 - `lowered_str_normalizes_input_on_construction` — PASS (new test, the RED → GREEN transition)
-- All 10 `classify_author_*` tests — PASS
+- All 11 `from_raw_*` tests — PASS
 - `author_matches_respects_account_id_exact` — PASS
 - `author_matches_null_author_always_false` — PASS
 
@@ -351,7 +351,7 @@ function classify_author to the smart-constructor associated function
 AuthorNeedle::from_raw.
 
 Pure internal refactor — no user-facing behavior change. All 10
-existing classify_author_* unit tests still pass unchanged in intent
+existing from_raw_* unit tests still pass unchanged in intent
 (mechanically updated to the new type and name).
 EOF
 )"
@@ -371,7 +371,7 @@ EOF
 - ✅ Heuristic body unchanged — Step 6.
 - ✅ Single production caller updated — Step 7.
 - ✅ `author_matches` uses `n.as_str()` — Step 8.
-- ✅ All 10 unit tests updated — Steps 9 & 10.
+- ✅ All 11 unit tests updated — Steps 9 & 10.
 - ✅ One new test for `LoweredStr::new` lowercase invariant — Step 2.
 - ✅ No new integration tests (spec says not needed).
 - ✅ `cargo fmt --check` + `cargo clippy --all-targets -- -D warnings` + `cargo test` all run — Steps 11–13.
