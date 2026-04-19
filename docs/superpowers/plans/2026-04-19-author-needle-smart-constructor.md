@@ -4,7 +4,7 @@
 
 **Goal:** Move the lowercase invariant on `AuthorNeedle::NameSubstring` from convention to the type system via a `LoweredStr` newtype, and rename the classifier to a smart constructor `AuthorNeedle::from_raw`.
 
-**Architecture:** Add a module-private `LoweredStr(String)` newtype in `src/cli/issue/changelog.rs` whose only constructor lowercases. Change `NameSubstring(String)` to `NameSubstring(LoweredStr)` so the compiler rejects any construction that does not lowercase. Rename `classify_author` free function to the associated function `AuthorNeedle::from_raw`. Pure internal refactor — no user-facing behavior changes, no new integration tests; the existing 10 unit tests are the safety net.
+**Architecture:** Add a `LoweredStr(String)` newtype inside a nested private submodule `mod lowered_str` in `src/cli/issue/changelog.rs`, so the tuple field is unreachable from the parent module and `::new` is the only construction path the compiler will accept. Change `NameSubstring(String)` to `NameSubstring(LoweredStr)` so every `NameSubstring` value is lowercased by construction. Rename `classify_author` free function to the associated function `AuthorNeedle::from_raw`. Pure internal refactor — no user-facing behavior changes, no new integration tests; the existing 10 unit tests are the safety net.
 
 **Tech Stack:** Rust 2024 edition, stdlib only (`std::ops::Deref`). Existing test harness (unit tests inline in `changelog.rs`).
 
@@ -53,35 +53,40 @@ Expected: compile error `cannot find type 'LoweredStr' in this scope` or similar
 
 Do not proceed until the error is `LoweredStr`-related (not some other compile issue in the file).
 
-- [ ] **Step 4: Add the `LoweredStr` newtype**
+- [ ] **Step 4: Add the `LoweredStr` newtype inside a private submodule**
 
-Insert this block in `src/cli/issue/changelog.rs` immediately before the `enum AuthorNeedle` definition (currently line 114). The exact location of the enum may shift by a line or two — insert before whatever line holds `enum AuthorNeedle`:
+Insert this block in `src/cli/issue/changelog.rs` immediately before the `enum AuthorNeedle` definition. Keeping `LoweredStr` inside a nested `mod lowered_str` makes the tuple-struct field unreachable from the parent (`changelog.rs`), so `LoweredStr::new` is the only construction path even for same-file code — the compiler enforces the lowercase invariant fully.
 
 ```rust
-/// Module-private newtype guaranteeing its contents are lowercased.
-///
-/// Construction is the only lowercasing path — the compiler therefore
-/// enforces the invariant that `author_matches` relies on (haystack is
-/// lowercased, needle must already be lowercased).
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LoweredStr(String);
+/// Private submodule so the `LoweredStr` tuple field is not reachable
+/// from the rest of `changelog.rs`. `::new` therefore becomes the only
+/// construction path, and the compiler enforces the lowercase invariant
+/// that `author_matches` relies on: needle is lowercased at
+/// construction, haystack is lowercased at match time, so `contains`
+/// is sound without re-normalizing the needle.
+mod lowered_str {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(super) struct LoweredStr(String);
 
-impl LoweredStr {
-    fn new(s: &str) -> Self {
-        Self(s.to_lowercase())
+    impl LoweredStr {
+        pub(super) fn new(s: &str) -> Self {
+            Self(s.to_lowercase())
+        }
+
+        pub(super) fn as_str(&self) -> &str {
+            &self.0
+        }
     }
 
-    fn as_str(&self) -> &str {
-        &self.0
+    impl std::ops::Deref for LoweredStr {
+        type Target = str;
+        fn deref(&self) -> &str {
+            &self.0
+        }
     }
 }
 
-impl std::ops::Deref for LoweredStr {
-    type Target = str;
-    fn deref(&self) -> &str {
-        &self.0
-    }
-}
+use lowered_str::LoweredStr;
 ```
 
 - [ ] **Step 5: Change the `NameSubstring` variant to carry `LoweredStr`**
@@ -107,9 +112,9 @@ enum AuthorNeedle {
     /// Case-sensitive — Jira accountIds are opaque identifiers.
     AccountId(String),
     /// Case-insensitive substring match against `displayName` or `accountId`.
-    /// The inner `LoweredStr` is always lowercased at construction time, so
-    /// `author_matches` can compare against a pre-lowercased haystack without
-    /// re-normalizing the needle.
+    /// The inner `LoweredStr` is lowercased at construction time, so
+    /// `author_matches` lowercases the haystack at match time and compares
+    /// directly without also re-normalizing the needle.
     NameSubstring(LoweredStr),
 }
 ```

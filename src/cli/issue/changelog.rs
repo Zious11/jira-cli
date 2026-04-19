@@ -111,32 +111,35 @@ pub(super) async fn handle(
     Ok(())
 }
 
-/// Module-private newtype whose `::new` constructor is the only
-/// lowercasing path. The type is kept module-private so outside
-/// callers cannot construct it at all; within this module every
-/// construction goes through `LoweredStr::new` by convention. Together
-/// this carries the invariant that `author_matches` relies on: needle
-/// is lowercased at construction, haystack is lowercased at match
-/// time, so `contains` is sound without re-normalizing the needle.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LoweredStr(String);
+/// Private submodule so the `LoweredStr` tuple field is not reachable
+/// from the rest of `changelog.rs`. `::new` therefore becomes the only
+/// construction path, and the compiler enforces the lowercase invariant
+/// that `author_matches` relies on: needle is lowercased at
+/// construction, haystack is lowercased at match time, so `contains`
+/// is sound without re-normalizing the needle.
+mod lowered_str {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(super) struct LoweredStr(String);
 
-impl LoweredStr {
-    fn new(s: &str) -> Self {
-        Self(s.to_lowercase())
+    impl LoweredStr {
+        pub(super) fn new(s: &str) -> Self {
+            Self(s.to_lowercase())
+        }
+
+        pub(super) fn as_str(&self) -> &str {
+            &self.0
+        }
     }
 
-    fn as_str(&self) -> &str {
-        &self.0
+    impl std::ops::Deref for LoweredStr {
+        type Target = str;
+        fn deref(&self) -> &str {
+            &self.0
+        }
     }
 }
 
-impl std::ops::Deref for LoweredStr {
-    type Target = str;
-    fn deref(&self) -> &str {
-        &self.0
-    }
-}
+use lowered_str::LoweredStr;
 
 #[derive(Debug, Clone)]
 enum AuthorNeedle {
