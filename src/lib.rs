@@ -6,6 +6,7 @@ pub mod config;
 pub mod duration;
 pub mod error;
 pub mod jql;
+pub(crate) mod observability;
 pub mod output;
 pub mod partial_match;
 pub mod types;

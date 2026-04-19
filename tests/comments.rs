@@ -276,3 +276,127 @@ async fn issue_comments_network_drop_surfaces_reach_error() {
     );
     assert!(!stderr.contains("panic"), "stderr leaked a panic: {stderr}");
 }
+
+#[tokio::test]
+async fn comments_verbose_logs_parse_failure_once() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/BAD-1/comment"))
+        .and(query_param("startAt", "0"))
+        .and(query_param("maxResults", "100"))
+        .and(query_param("expand", "properties"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "comments": [
+                {
+                    "id": "10001",
+                    "author": {
+                        "accountId": "u1", "displayName": "Alice",
+                        "emailAddress": "a@test.com", "active": true
+                    },
+                    "body": { "type": "doc", "version": 1, "content": [
+                        { "type": "paragraph", "content": [
+                            { "type": "text", "text": "first" }
+                        ]}
+                    ]},
+                    "created": "not-a-date"
+                },
+                {
+                    "id": "10002",
+                    "author": {
+                        "accountId": "u1", "displayName": "Alice",
+                        "emailAddress": "a@test.com", "active": true
+                    },
+                    "body": { "type": "doc", "version": 1, "content": [
+                        { "type": "paragraph", "content": [
+                            { "type": "text", "text": "second" }
+                        ]}
+                    ]},
+                    "created": "still-not-a-date"
+                }
+            ],
+            "startAt": 0,
+            "maxResults": 100,
+            "total": 2
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "comments", "BAD-1", "--verbose"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "jr exited non-zero ({:?}). stdout:\n{stdout}\nstderr:\n{stderr}",
+        output.status.code()
+    );
+    let count = stderr.matches("timestamp failed to parse").count();
+    assert_eq!(
+        count, 1,
+        "expected exactly one parse-failure log across 2 bad comments, got {count}. stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("[verbose] date"),
+        "expected [verbose] date prefix in stderr, got:\n{stderr}"
+    );
+}
+
+#[tokio::test]
+async fn comments_parse_failure_silent_without_verbose() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/BAD-2/comment"))
+        .and(query_param("startAt", "0"))
+        .and(query_param("maxResults", "100"))
+        .and(query_param("expand", "properties"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "comments": [
+                {
+                    "id": "10001",
+                    "author": {
+                        "accountId": "u1", "displayName": "Alice",
+                        "emailAddress": "a@test.com", "active": true
+                    },
+                    "body": { "type": "doc", "version": 1, "content": [
+                        { "type": "paragraph", "content": [
+                            { "type": "text", "text": "first" }
+                        ]}
+                    ]},
+                    "created": "not-a-date"
+                }
+            ],
+            "startAt": 0,
+            "maxResults": 100,
+            "total": 1
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "comments", "BAD-2"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "jr exited non-zero ({:?}). stdout:\n{stdout}\nstderr:\n{stderr}",
+        output.status.code()
+    );
+    assert!(
+        !stderr.contains("failed to parse"),
+        "expected no verbose parse-failure output without --verbose, got:\n{stderr}"
+    );
+}

@@ -1261,3 +1261,235 @@ async fn changelog_author_me_is_case_insensitive() {
         "Someone Else should be filtered: {stdout}"
     );
 }
+
+#[tokio::test]
+async fn changelog_verbose_logs_parse_failure_once() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/BAD-1/changelog"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "values": [
+                {
+                    "id": "1",
+                    "author": {
+                        "accountId": "u1",
+                        "displayName": "Alice",
+                        "emailAddress": null,
+                        "active": true
+                    },
+                    "created": "not-a-date",
+                    "items": [{
+                        "field": "status",
+                        "fieldtype": "jira",
+                        "from": null, "fromString": "To Do",
+                        "to": null, "toString": "In Progress"
+                    }]
+                },
+                {
+                    "id": "2",
+                    "author": {
+                        "accountId": "u1",
+                        "displayName": "Alice",
+                        "emailAddress": null,
+                        "active": true
+                    },
+                    "created": "still-not-a-date",
+                    "items": [{
+                        "field": "status",
+                        "fieldtype": "jira",
+                        "from": null, "fromString": "In Progress",
+                        "to": null, "toString": "Done"
+                    }]
+                }
+            ],
+            "startAt": 0,
+            "maxResults": 100,
+            "total": 2,
+            "isLast": true
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "changelog", "BAD-1", "--verbose"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "jr exited non-zero ({:?}). stdout:\n{stdout}\nstderr:\n{stderr}",
+        output.status.code()
+    );
+    let count = stderr.matches("timestamp failed to parse").count();
+    assert_eq!(
+        count, 1,
+        "expected exactly one parse-failure log across 2 bad entries, got {count}. stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("[verbose] changelog"),
+        "expected [verbose] changelog prefix in stderr, got:\n{stderr}"
+    );
+}
+
+#[tokio::test]
+async fn changelog_parse_failure_silent_without_verbose() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/BAD-2/changelog"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "values": [{
+                "id": "1",
+                "author": {
+                    "accountId": "u1",
+                    "displayName": "Alice",
+                    "emailAddress": null,
+                    "active": true
+                },
+                "created": "not-a-date",
+                "items": [{
+                    "field": "status",
+                    "fieldtype": "jira",
+                    "from": null, "fromString": "A",
+                    "to": null, "toString": "B"
+                }]
+            }],
+            "startAt": 0,
+            "maxResults": 100,
+            "total": 1,
+            "isLast": true
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "changelog", "BAD-2"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "jr exited non-zero ({:?}). stdout:\n{stdout}\nstderr:\n{stderr}",
+        output.status.code()
+    );
+    assert!(
+        !stderr.contains("failed to parse"),
+        "expected no verbose parse-failure output without --verbose, got:\n{stderr}"
+    );
+}
+
+#[tokio::test]
+async fn changelog_verbose_mixed_good_bad_entries() {
+    // Scopes the verbose log: good entries render normally, only bad
+    // entries trigger `[verbose]`, and the dedup flag still caps at
+    // exactly one line across multiple bad entries.
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/MIX-1/changelog"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "values": [
+                {
+                    "id": "1",
+                    "author": {
+                        "accountId": "u1",
+                        "displayName": "Alice",
+                        "emailAddress": null,
+                        "active": true
+                    },
+                    "created": "2026-03-20T10:00:00.000+0000",
+                    "items": [{
+                        "field": "status",
+                        "fieldtype": "jira",
+                        "from": null, "fromString": "To Do",
+                        "to": null, "toString": "In Progress"
+                    }]
+                },
+                {
+                    "id": "2",
+                    "author": {
+                        "accountId": "u1",
+                        "displayName": "Alice",
+                        "emailAddress": null,
+                        "active": true
+                    },
+                    "created": "not-a-date",
+                    "items": [{
+                        "field": "status",
+                        "fieldtype": "jira",
+                        "from": null, "fromString": "In Progress",
+                        "to": null, "toString": "Done"
+                    }]
+                },
+                {
+                    "id": "3",
+                    "author": {
+                        "accountId": "u1",
+                        "displayName": "Alice",
+                        "emailAddress": null,
+                        "active": true
+                    },
+                    "created": "2026-03-21T11:00:00.000+0000",
+                    "items": [{
+                        "field": "resolution",
+                        "fieldtype": "jira",
+                        "from": null, "fromString": "Unresolved",
+                        "to": null, "toString": "Done"
+                    }]
+                }
+            ],
+            "startAt": 0,
+            "maxResults": 100,
+            "total": 3,
+            "isLast": true
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "changelog", "MIX-1", "--verbose"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "jr exited non-zero ({:?}). stdout:\n{stdout}\nstderr:\n{stderr}",
+        output.status.code()
+    );
+
+    let fail_count = stderr.matches("timestamp failed to parse").count();
+    assert_eq!(
+        fail_count, 1,
+        "expected exactly one parse-failure log across 1 bad entry among 3, got {fail_count}. stderr:\n{stderr}"
+    );
+
+    // Parseable rows must still render. Use `Unresolved` from the good
+    // id=3 row — it appears in no other row's fromString/toString, so
+    // its presence uniquely proves id=3 rendered. Avoiding date
+    // substrings keeps this timezone-independent.
+    assert!(
+        stdout.contains("Unresolved"),
+        "expected good-row field content ('Unresolved' from id=3) in stdout, got:\n{stdout}"
+    );
+    // The raw bad timestamp string surfaces in the date column of the bad row.
+    assert!(
+        stdout.contains("not-a-date"),
+        "expected raw-timestamp fallback to appear in stdout for the bad row, got:\n{stdout}"
+    );
+}
