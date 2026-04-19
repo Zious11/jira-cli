@@ -43,7 +43,7 @@ pub(super) async fn handle(
         Some(raw) if helpers::is_me_keyword(raw) => Some(AuthorNeedle::AccountId(
             client.get_myself().await?.account_id,
         )),
-        Some(raw) => Some(classify_author(raw)),
+        Some(raw) => Some(AuthorNeedle::from_raw(raw)),
         None => None,
     };
 
@@ -111,39 +111,75 @@ pub(super) async fn handle(
     Ok(())
 }
 
+/// Private submodule so the `LoweredStr` tuple field is not reachable
+/// from the rest of `changelog.rs`. `::new` therefore becomes the only
+/// construction path, and the compiler enforces the lowercase invariant
+/// that `author_matches` relies on: needle is lowercased at
+/// construction, haystack is lowercased at match time, so `contains`
+/// is sound without re-normalizing the needle.
+mod lowered_str {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(super) struct LoweredStr(String);
+
+    impl LoweredStr {
+        pub(super) fn new(s: &str) -> Self {
+            Self(s.to_lowercase())
+        }
+
+        pub(super) fn as_str(&self) -> &str {
+            &self.0
+        }
+    }
+
+    impl std::ops::Deref for LoweredStr {
+        type Target = str;
+        fn deref(&self) -> &str {
+            &self.0
+        }
+    }
+}
+
+use lowered_str::LoweredStr;
+
 #[derive(Debug, Clone)]
 enum AuthorNeedle {
     /// Exact accountId match (literal input or resolved from "me").
+    /// Case-sensitive — Jira accountIds are opaque identifiers.
     AccountId(String),
     /// Case-insensitive substring match against `displayName` or `accountId`.
-    NameSubstring(String),
+    /// The inner `LoweredStr` is lowercased at construction time, so
+    /// `author_matches` lowercases the haystack at match time and compares
+    /// directly without also re-normalizing the needle.
+    NameSubstring(LoweredStr),
 }
 
-/// Classify a user-supplied `--author` value. We treat a value as an
-/// accountId if it either contains a colon, or is ≥12 chars of
-/// `[A-Za-z0-9_-]` containing at least one digit. Otherwise it's a
-/// name substring.
-///
-/// The API's accountId format varies (`public cloud` uses
-/// `557058:...`-style strings; older formats are opaque 24+ char
-/// hex-like blobs). Both documented formats guarantee digits, so the
-/// digit requirement distinguishes them from long digit-free display
-/// names like `AlexanderGreene` or `jean-pierre-dupont`. Residual
-/// edge: a 12+ char single-word name that incidentally contains a
-/// digit (e.g. `User12345Name`) still classifies as accountId; see
-/// issue #213 for the rationale.
-fn classify_author(raw: &str) -> AuthorNeedle {
-    let trimmed = raw.trim();
-    let looks_like_account_id = trimmed.contains(':')
-        || (trimmed.len() >= 12
-            && trimmed.chars().any(|c| c.is_ascii_digit())
-            && trimmed
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
-    if looks_like_account_id {
-        AuthorNeedle::AccountId(trimmed.to_string())
-    } else {
-        AuthorNeedle::NameSubstring(trimmed.to_lowercase())
+impl AuthorNeedle {
+    /// Classify a user-supplied `--author` value. A value is treated as an
+    /// accountId if it either contains a colon, or is ≥12 chars of
+    /// `[A-Za-z0-9_-]` containing at least one digit. Otherwise it is a
+    /// name substring.
+    ///
+    /// The API's accountId format varies (`public cloud` uses
+    /// `557058:...`-style strings; older formats are opaque 24+ char
+    /// hex-like blobs). Both documented formats guarantee digits, so the
+    /// digit requirement distinguishes them from long digit-free display
+    /// names like `AlexanderGreene` or `jean-pierre-dupont`. Residual
+    /// edge: a 12+ char single-word name that incidentally contains a
+    /// digit (e.g. `User12345Name`) still classifies as accountId; see
+    /// issue #213 for the rationale.
+    fn from_raw(raw: &str) -> Self {
+        let trimmed = raw.trim();
+        let looks_like_account_id = trimmed.contains(':')
+            || (trimmed.len() >= 12
+                && trimmed.chars().any(|c| c.is_ascii_digit())
+                && trimmed
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        if looks_like_account_id {
+            Self::AccountId(trimmed.to_string())
+        } else {
+            Self::NameSubstring(LoweredStr::new(trimmed))
+        }
     }
 }
 
@@ -152,7 +188,8 @@ fn author_matches(author: Option<&crate::types::jira::User>, needle: &AuthorNeed
     match needle {
         AuthorNeedle::AccountId(id) => a.account_id == *id,
         AuthorNeedle::NameSubstring(n) => {
-            a.display_name.to_lowercase().contains(n) || a.account_id.to_lowercase().contains(n)
+            a.display_name.to_lowercase().contains(n.as_str())
+                || a.account_id.to_lowercase().contains(n.as_str())
         }
     }
 }
@@ -256,99 +293,99 @@ mod tests {
     use crate::types::jira::{ChangelogItem, User};
 
     #[test]
-    fn classify_author_treats_short_name_as_substring() {
-        match classify_author("alice") {
-            AuthorNeedle::NameSubstring(s) => assert_eq!(s, "alice"),
+    fn from_raw_treats_short_name_as_substring() {
+        match AuthorNeedle::from_raw("alice") {
+            AuthorNeedle::NameSubstring(s) => assert_eq!(s.as_str(), "alice"),
             other => panic!("expected NameSubstring, got {other:?}"),
         }
     }
 
     #[test]
-    fn classify_author_treats_colon_string_as_accountid() {
-        match classify_author("557058:abc-123") {
+    fn from_raw_treats_colon_string_as_accountid() {
+        match AuthorNeedle::from_raw("557058:abc-123") {
             AuthorNeedle::AccountId(s) => assert_eq!(s, "557058:abc-123"),
             other => panic!("expected AccountId, got {other:?}"),
         }
     }
 
     #[test]
-    fn classify_author_treats_long_hex_blob_as_accountid() {
-        match classify_author("abcdef0123456789deadbeef") {
+    fn from_raw_treats_long_hex_blob_as_accountid() {
+        match AuthorNeedle::from_raw("abcdef0123456789deadbeef") {
             AuthorNeedle::AccountId(s) => assert_eq!(s, "abcdef0123456789deadbeef"),
             other => panic!("expected AccountId, got {other:?}"),
         }
     }
 
     #[test]
-    fn classify_author_long_alpha_only_name_is_substring() {
+    fn from_raw_long_alpha_only_name_is_substring() {
         // 15 chars, no digits — regression guard for #213.
-        match classify_author("AlexanderGreene") {
-            AuthorNeedle::NameSubstring(s) => assert_eq!(s, "alexandergreene"),
+        match AuthorNeedle::from_raw("AlexanderGreene") {
+            AuthorNeedle::NameSubstring(s) => assert_eq!(s.as_str(), "alexandergreene"),
             other => panic!("expected NameSubstring, got {other:?}"),
         }
     }
 
     #[test]
-    fn classify_author_long_compound_name_is_substring() {
+    fn from_raw_long_compound_name_is_substring() {
         // 18 chars, no digits — regression guard for #213.
-        match classify_author("JoseMariaRodriguez") {
-            AuthorNeedle::NameSubstring(s) => assert_eq!(s, "josemariarodriguez"),
+        match AuthorNeedle::from_raw("JoseMariaRodriguez") {
+            AuthorNeedle::NameSubstring(s) => assert_eq!(s.as_str(), "josemariarodriguez"),
             other => panic!("expected NameSubstring, got {other:?}"),
         }
     }
 
     #[test]
-    fn classify_author_long_hyphenated_name_is_substring() {
+    fn from_raw_long_hyphenated_name_is_substring() {
         // 18 chars with dashes, no digits — regression guard for #213.
-        match classify_author("jean-pierre-dupont") {
-            AuthorNeedle::NameSubstring(s) => assert_eq!(s, "jean-pierre-dupont"),
+        match AuthorNeedle::from_raw("jean-pierre-dupont") {
+            AuthorNeedle::NameSubstring(s) => assert_eq!(s.as_str(), "jean-pierre-dupont"),
             other => panic!("expected NameSubstring, got {other:?}"),
         }
     }
 
     #[test]
-    fn classify_author_old_hex_accountid_is_accountid() {
+    fn from_raw_old_hex_accountid_is_accountid() {
         // 24-char hex — contains digits, no colon.
-        match classify_author("5b10ac8d82e05b22cc7d4ef5") {
+        match AuthorNeedle::from_raw("5b10ac8d82e05b22cc7d4ef5") {
             AuthorNeedle::AccountId(s) => assert_eq!(s, "5b10ac8d82e05b22cc7d4ef5"),
             other => panic!("expected AccountId, got {other:?}"),
         }
     }
 
     #[test]
-    fn classify_author_colon_forces_accountid_regardless_of_heuristics() {
+    fn from_raw_colon_forces_accountid_regardless_of_heuristics() {
         // Colon wins the branch regardless of length/digits.
-        match classify_author("557058:f58131cb-b67d-43c7") {
+        match AuthorNeedle::from_raw("557058:f58131cb-b67d-43c7") {
             AuthorNeedle::AccountId(s) => assert_eq!(s, "557058:f58131cb-b67d-43c7"),
             other => panic!("expected AccountId, got {other:?}"),
         }
     }
 
     #[test]
-    fn classify_author_long_name_with_digit_is_accountid() {
+    fn from_raw_long_name_with_digit_is_accountid() {
         // 13 chars with a digit — documented residual edge. Stays AccountId.
-        match classify_author("User12345Name") {
+        match AuthorNeedle::from_raw("User12345Name") {
             AuthorNeedle::AccountId(s) => assert_eq!(s, "User12345Name"),
             other => panic!("expected AccountId, got {other:?}"),
         }
     }
 
     #[test]
-    fn classify_author_short_hyphenated_name_is_substring() {
+    fn from_raw_short_hyphenated_name_is_substring() {
         // 11 chars — below the length gate, unaffected by the digit rule.
-        match classify_author("jean-pierre") {
-            AuthorNeedle::NameSubstring(s) => assert_eq!(s, "jean-pierre"),
+        match AuthorNeedle::from_raw("jean-pierre") {
+            AuthorNeedle::NameSubstring(s) => assert_eq!(s.as_str(), "jean-pierre"),
             other => panic!("expected NameSubstring, got {other:?}"),
         }
     }
 
     #[test]
-    fn classify_author_unknown_placeholder_is_substring() {
+    fn from_raw_unknown_placeholder_is_substring() {
         // 7-char "unknown" — the Jira stub for deleted/migrated users.
         // Below the length gate; NameSubstring path already matches it
         // via case-insensitive account_id containment.
-        match classify_author("unknown") {
-            AuthorNeedle::NameSubstring(s) => assert_eq!(s, "unknown"),
+        match AuthorNeedle::from_raw("unknown") {
+            AuthorNeedle::NameSubstring(s) => assert_eq!(s.as_str(), "unknown"),
             other => panic!("expected NameSubstring, got {other:?}"),
         }
     }
@@ -375,7 +412,7 @@ mod tests {
     fn author_matches_null_author_always_false() {
         assert!(!author_matches(
             None,
-            &AuthorNeedle::NameSubstring("alice".into())
+            &AuthorNeedle::NameSubstring(LoweredStr::new("alice"))
         ));
     }
 
@@ -577,6 +614,17 @@ mod tests {
         truncate_to_rows(&mut entries, 2);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].items.len(), 2);
+    }
+
+    #[test]
+    fn lowered_str_normalizes_input_on_construction() {
+        let lowered = LoweredStr::new("MixedCase-Name");
+        assert_eq!(lowered.as_str(), "mixedcase-name");
+    }
+
+    #[test]
+    fn lowered_str_equality_is_case_invariant() {
+        assert_eq!(LoweredStr::new("Alice"), LoweredStr::new("alice"));
     }
 
     #[test]
