@@ -6,9 +6,9 @@
 
 ## Problem
 
-`AuthorNeedle::NameSubstring(String)` in `src/cli/issue/changelog.rs` is documented as holding an already-lowercased string. `author_matches` relies on that invariant — it lowercases the haystack (`display_name`, `account_id`) and calls `contains(n)` without re-lowercasing the needle.
+`AuthorNeedle::NameSubstring(String)` in `src/cli/issue/changelog.rs` was documented as holding an already-lowercased string. `author_matches` relied on that invariant — it lowercased the haystack (`display_name`, `account_id`) and called `contains(n)` without re-lowercasing the needle.
 
-Today the invariant is upheld only by convention: `classify_author` is the sole constructor of the `NameSubstring` variant, and it always lowercases. Nothing stops a future contributor from writing `AuthorNeedle::NameSubstring(raw.to_string())` elsewhere in the module; the compiler will not object, and the resulting case-mismatch bug would be silent (matches would simply fail for mixed-case names).
+Before this refactor, the invariant was upheld only by convention: `classify_author` was the sole constructor of the `NameSubstring` variant, and it always lowercased. Nothing stopped a future contributor from writing `AuthorNeedle::NameSubstring(raw.to_string())` elsewhere in the module; the compiler would not object, and the resulting case-mismatch bug would be silent (matches would simply fail for mixed-case names).
 
 ## Goal
 
