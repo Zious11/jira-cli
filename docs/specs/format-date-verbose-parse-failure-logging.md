@@ -74,10 +74,11 @@ pub(crate) fn log_parse_failure_once(
 ```
 
 `swap(true, Relaxed)` is the idiomatic "set the flag and return the
-previous value" primitive. `Ordering::Relaxed` is correct here because
-the flag guards no shared-state initialization — worst case a narrow
-race window emits two log lines, which is acceptable for an
-observability signal.
+previous value" primitive. Because the read-modify-write is atomic,
+exactly one caller per flag can observe `false` and emit the log line.
+`Ordering::Relaxed` is correct here because we only need that atomic
+one-shot state transition; the flag does not guard shared-state
+initialization or any other cross-thread memory ordering requirement.
 
 ## Plumbing
 
@@ -105,8 +106,9 @@ No change to public surface (`--verbose` flag unchanged).
 
 ## Tests
 
-Two integration tests added, one per call-site, using the existing
-`wiremock` + `assert_cmd` pattern.
+Five integration tests added across the two call-sites (three in
+`tests/issue_changelog.rs` and two in `tests/comments.rs`), using the
+existing `wiremock` + `assert_cmd` pattern.
 
 ### `tests/issue_changelog.rs`
 

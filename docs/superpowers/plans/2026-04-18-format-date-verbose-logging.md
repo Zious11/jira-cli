@@ -556,7 +556,7 @@ created
 Find every call site in `src/cli/issue/list.rs`:
 
 ```bash
-grep -n "format_comment_row(" /Users/zious/Documents/GITHUB/jira-cli/.worktrees/format-date-verbose-logging/src/cli/issue/list.rs
+grep -n "format_comment_row(" src/cli/issue/list.rs
 ```
 
 Each caller should have `&client` in scope (comment-rendering happens inside handler functions that receive the client). Pass `client.verbose()` as the new last arg to every call.
