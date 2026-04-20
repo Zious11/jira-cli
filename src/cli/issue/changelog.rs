@@ -4,6 +4,7 @@ use serde::Serialize;
 
 use crate::api::client::JiraClient;
 use crate::cli::{IssueCommand, OutputFormat};
+use crate::error::JrError;
 use crate::output;
 use crate::types::jira::ChangelogEntry;
 
@@ -39,7 +40,21 @@ pub(super) async fn handle(
 
     // Resolve --author "me" (case-insensitive, shared with other commands
     // via `helpers::is_me_keyword`) up-front; other forms compare directly.
+    //
+    // An empty or whitespace-only needle is rejected before any API call.
+    // Otherwise `AuthorNeedle::from_raw("")` would produce
+    // `NameSubstring(LoweredStr(""))`, and `haystack.contains("")` is
+    // always `true` per `str::contains` — every user would silently match,
+    // which is a filter bypass for agents piping an unset shell variable
+    // as `--author "$UNSET_VAR"`.
     let author_needle = match author.as_deref() {
+        Some(raw) if raw.trim().is_empty() => {
+            return Err(JrError::UserError(
+                "--author cannot be empty or whitespace-only. Provide a name, accountId, or \"me\"."
+                    .into(),
+            )
+            .into());
+        }
         Some(raw) if helpers::is_me_keyword(raw) => Some(AuthorNeedle::AccountId(
             client.get_myself().await?.account_id,
         )),
@@ -508,6 +523,62 @@ mod tests {
         assert!(!author_matches(
             Some(&user),
             &AuthorNeedle::NameSubstring(LoweredStr::new("bob"))
+        ));
+    }
+
+    #[test]
+    fn author_matches_substring_hits_unicode_display_name() {
+        // Non-ASCII display_name + non-ASCII needle: both sides use
+        // Unicode-aware lowercasing (`str::to_lowercase`), so an accented
+        // needle must match an uppercase-accented haystack. Complements
+        // the classification pins added for #218 — those ensure Unicode
+        // input falls through to NameSubstring; this pins that the match
+        // itself works once it gets there.
+        let user = User {
+            account_id: "557058:xyz".into(),
+            display_name: "JOSÉ Rodríguez".into(),
+            email_address: None,
+            active: Some(true),
+        };
+        assert!(author_matches(
+            Some(&user),
+            &AuthorNeedle::NameSubstring(LoweredStr::new("josé"))
+        ));
+    }
+
+    #[test]
+    fn author_matches_substring_handles_empty_display_name() {
+        // Empty display_name must not panic or spuriously match; only
+        // the account_id haystack can produce a hit. "".contains("alice")
+        // is false, so the needle falls through to the account_id check.
+        let user = User {
+            account_id: "557058:xyz".into(),
+            display_name: String::new(),
+            email_address: None,
+            active: Some(true),
+        };
+        assert!(!author_matches(
+            Some(&user),
+            &AuthorNeedle::NameSubstring(LoweredStr::new("alice"))
+        ));
+    }
+
+    #[test]
+    fn author_matches_substring_handles_empty_account_id() {
+        // Empty account_id: the display_name haystack still works, so a
+        // needle that matches display_name returns true even when
+        // account_id is empty. Guards against a future refactor that
+        // conditions the display_name branch on a non-empty account_id
+        // (e.g., "only search display_name if account_id didn't match").
+        let user = User {
+            account_id: String::new(),
+            display_name: "Alice Smith".into(),
+            email_address: None,
+            active: Some(true),
+        };
+        assert!(author_matches(
+            Some(&user),
+            &AuthorNeedle::NameSubstring(LoweredStr::new("alice"))
         ));
     }
 
