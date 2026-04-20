@@ -345,9 +345,11 @@ mod tests {
 
     #[test]
     fn from_raw_long_unicode_name_is_substring() {
-        // 18 chars with non-ASCII letters (é, í), no digits — the
-        // ASCII-alphanumeric guard rejects accented chars, so this stays
-        // NameSubstring regardless of length.
+        // 18 chars with non-ASCII letters (é, í) and no digits — the
+        // digit guard rejects this input before the ASCII-alphanumeric
+        // guard runs, so this test documents the general Unicode
+        // fall-through. The specific ASCII-guard pin is
+        // `from_raw_long_unicode_name_with_digit_is_substring`.
         match AuthorNeedle::from_raw("JoséMariaRodríguez") {
             AuthorNeedle::NameSubstring(s) => assert_eq!(s.as_str(), "josémariarodríguez"),
             other => panic!("expected NameSubstring, got {other:?}"),
@@ -356,12 +358,27 @@ mod tests {
 
     #[test]
     fn from_raw_long_unicode_name_with_digit_is_substring() {
-        // 15 chars, non-ASCII letter (é) AND a digit — pins the
+        // 15 chars with non-ASCII letter (é) AND a digit — pins the
         // is_ascii_alphanumeric guard specifically. A refactor to
         // char::is_alphanumeric would misclassify this as AccountId
-        // because 'é' has the Unicode Alphabetic property.
+        // because `'é'.is_alphanumeric() == true` while
+        // `'é'.is_ascii_alphanumeric() == false`.
         match AuthorNeedle::from_raw("José123Mariarod") {
             AuthorNeedle::NameSubstring(s) => assert_eq!(s.as_str(), "josé123mariarod"),
+            other => panic!("expected NameSubstring, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_raw_long_cyrillic_name_with_digit_is_substring() {
+        // 14 chars of Cyrillic letters + digits — widens the
+        // ASCII-guard pin beyond Latin-1 to any non-ASCII alphabetic
+        // script. `'А'.is_alphanumeric() == true` (Cyrillic capital A,
+        // U+0410) but `'А'.is_ascii_alphanumeric() == false`.
+        // Note: the first literal char looks like ASCII 'A' (U+0041)
+        // but is U+0410 — do not "clean up" by retyping it.
+        match AuthorNeedle::from_raw("Александр12345") {
+            AuthorNeedle::NameSubstring(s) => assert_eq!(s.as_str(), "александр12345"),
             other => panic!("expected NameSubstring, got {other:?}"),
         }
     }
