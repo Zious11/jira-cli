@@ -309,14 +309,6 @@ mod tests {
     }
 
     #[test]
-    fn from_raw_treats_long_hex_blob_as_accountid() {
-        match AuthorNeedle::from_raw("abcdef0123456789deadbeef") {
-            AuthorNeedle::AccountId(s) => assert_eq!(s, "abcdef0123456789deadbeef"),
-            other => panic!("expected AccountId, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn from_raw_long_alpha_only_name_is_substring() {
         // 15 chars, no digits — regression guard for #213.
         match AuthorNeedle::from_raw("AlexanderGreene") {
@@ -411,6 +403,30 @@ mod tests {
     }
 
     #[test]
+    fn from_raw_twelve_char_boundary_with_digit_is_accountid() {
+        // Exactly 12 chars with a digit — pins the `trimmed.len() >= 12`
+        // gate. A silent off-by-one to `> 12` would leave this input
+        // falling through to NameSubstring; neighboring length-based
+        // tests land on either side of the boundary and do not cover
+        // this exact value.
+        match AuthorNeedle::from_raw("abcdefghijk1") {
+            AuthorNeedle::AccountId(s) => assert_eq!(s, "abcdefghijk1"),
+            other => panic!("expected AccountId at 12-char boundary, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_raw_twelve_char_boundary_no_digit_is_substring() {
+        // Exactly 12 chars without a digit — pins that the length gate
+        // alone is not sufficient; the digit requirement still applies
+        // at the boundary.
+        match AuthorNeedle::from_raw("abcdefghijkl") {
+            AuthorNeedle::NameSubstring(s) => assert_eq!(s.as_str(), "abcdefghijkl"),
+            other => panic!("expected NameSubstring without digit, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn from_raw_short_hyphenated_name_is_substring() {
         // 11 chars — below the length gate, unaffected by the digit rule.
         match AuthorNeedle::from_raw("jean-pierre") {
@@ -445,6 +461,53 @@ mod tests {
         assert!(!author_matches(
             Some(&user),
             &AuthorNeedle::AccountId("other".into())
+        ));
+    }
+
+    #[test]
+    fn author_matches_substring_hits_display_name_case_insensitive() {
+        // Needle lowercased at construction; haystack lowercased at match.
+        let user = User {
+            account_id: "557058:xyz".into(),
+            display_name: "ALICE Smith".into(),
+            email_address: None,
+            active: Some(true),
+        };
+        assert!(author_matches(
+            Some(&user),
+            &AuthorNeedle::NameSubstring(LoweredStr::new("alice"))
+        ));
+    }
+
+    #[test]
+    fn author_matches_substring_hits_account_id_case_insensitive() {
+        // Second haystack: account_id. Pins the
+        // `account_id.to_lowercase().contains(n)` fallback so a
+        // substring needle that happens to match inside an accountId
+        // still matches even when the display_name does not.
+        let user = User {
+            account_id: "557058:ABC-123".into(),
+            display_name: "unrelated name".into(),
+            email_address: None,
+            active: Some(true),
+        };
+        assert!(author_matches(
+            Some(&user),
+            &AuthorNeedle::NameSubstring(LoweredStr::new("abc-123"))
+        ));
+    }
+
+    #[test]
+    fn author_matches_substring_misses_when_absent() {
+        let user = User {
+            account_id: "557058:xyz".into(),
+            display_name: "Alice Smith".into(),
+            email_address: None,
+            active: Some(true),
+        };
+        assert!(!author_matches(
+            Some(&user),
+            &AuthorNeedle::NameSubstring(LoweredStr::new("bob"))
         ));
     }
 
