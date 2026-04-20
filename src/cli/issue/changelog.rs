@@ -344,6 +344,29 @@ mod tests {
     }
 
     #[test]
+    fn from_raw_long_unicode_name_is_substring() {
+        // 18 chars with non-ASCII letters (é, í), no digits — the
+        // ASCII-alphanumeric guard rejects accented chars, so this stays
+        // NameSubstring regardless of length.
+        match AuthorNeedle::from_raw("JoséMariaRodríguez") {
+            AuthorNeedle::NameSubstring(s) => assert_eq!(s.as_str(), "josémariarodríguez"),
+            other => panic!("expected NameSubstring, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_raw_long_unicode_name_with_digit_is_substring() {
+        // 15 chars, non-ASCII letter (é) AND a digit — pins the
+        // is_ascii_alphanumeric guard specifically. A refactor to
+        // char::is_alphanumeric would misclassify this as AccountId
+        // because 'é' has the Unicode Alphabetic property.
+        match AuthorNeedle::from_raw("José123Mariarod") {
+            AuthorNeedle::NameSubstring(s) => assert_eq!(s.as_str(), "josé123mariarod"),
+            other => panic!("expected NameSubstring, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn from_raw_old_hex_accountid_is_accountid() {
         // 24-char hex — contains digits, no colon.
         match AuthorNeedle::from_raw("5b10ac8d82e05b22cc7d4ef5") {
