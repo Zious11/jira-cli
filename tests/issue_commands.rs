@@ -1685,3 +1685,136 @@ async fn test_assign_issue_invalid_account_id_returns_error() {
         "Expected Jira error message in error, got: {msg}"
     );
 }
+
+// ── partial_match single-substring rejection (issue #193) ────────────
+//
+// These lock the guarantee that a single substring-only hit under
+// `--no-input` routes through `Ambiguous` and errors before any
+// state-changing HTTP call is made. The unit tests in partial_match.rs
+// cover the matcher itself; these cover the handler wiring at each
+// call site.
+
+#[tokio::test]
+async fn test_move_single_substring_rejected_no_input() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1/transitions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::transitions_response_with_status(vec![
+                ("21", "Start", "In Progress"),
+                ("31", "Close", "Closed"),
+            ]),
+        ))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(common::fixtures::issue_response(
+                "FOO-1",
+                "Test issue",
+                "To Do",
+            )),
+        )
+        .mount(&server)
+        .await;
+
+    // Assert no transition POST occurs — the substring must short-circuit.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/FOO-1/transitions"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["--no-input", "issue", "move", "FOO-1", "prog"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure on ambiguous substring, stderr: {stderr}"
+    );
+    // workflow.rs uses `anyhow::bail!` which doesn't inject a JrError into
+    // the cause chain → main.rs falls back to exit 1. Pinning this lets a
+    // future refactor to JrError::UserError (exit 64) flag the test for review.
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "Ambiguous transition currently exits 1 via anyhow::bail!, got: {:?}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("Ambiguous transition"),
+        "Expected 'Ambiguous transition' in stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("In Progress"),
+        "Expected matched candidate 'In Progress' in stderr: {stderr}"
+    );
+}
+
+#[tokio::test]
+async fn test_link_single_substring_rejected_no_input() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issueLinkType"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(common::fixtures::link_types_response()),
+        )
+        .mount(&server)
+        .await;
+
+    // Assert no link POST occurs — the substring must short-circuit.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issueLink"))
+        .respond_with(ResponseTemplate::new(201))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args([
+            "--no-input",
+            "issue",
+            "link",
+            "FOO-1",
+            "FOO-2",
+            "--type",
+            "block",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure on ambiguous substring, stderr: {stderr}"
+    );
+    // links.rs uses `anyhow::bail!` → exit 1 (see move test for rationale).
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "Ambiguous link type currently exits 1 via anyhow::bail!, got: {:?}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("Ambiguous link type"),
+        "Expected 'Ambiguous link type' in stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("Blocks"),
+        "Expected matched candidate 'Blocks' in stderr: {stderr}"
+    );
+}
