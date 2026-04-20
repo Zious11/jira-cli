@@ -4,6 +4,7 @@ use serde::Serialize;
 
 use crate::api::client::JiraClient;
 use crate::cli::{IssueCommand, OutputFormat};
+use crate::error::JrError;
 use crate::output;
 use crate::types::jira::ChangelogEntry;
 
@@ -39,7 +40,21 @@ pub(super) async fn handle(
 
     // Resolve --author "me" (case-insensitive, shared with other commands
     // via `helpers::is_me_keyword`) up-front; other forms compare directly.
+    //
+    // An empty or whitespace-only needle is rejected before any API call.
+    // Otherwise `AuthorNeedle::from_raw("")` would produce
+    // `NameSubstring(LoweredStr(""))`, and `haystack.contains("")` is
+    // always `true` per `str::contains` — every user would silently match,
+    // which is a filter bypass for agents piping an unset shell variable
+    // as `--author "$UNSET_VAR"`.
     let author_needle = match author.as_deref() {
+        Some(raw) if raw.trim().is_empty() => {
+            return Err(JrError::UserError(
+                "--author cannot be empty or whitespace-only. Provide a name, accountId, or \"me\"."
+                    .into(),
+            )
+            .into());
+        }
         Some(raw) if helpers::is_me_keyword(raw) => Some(AuthorNeedle::AccountId(
             client.get_myself().await?.account_id,
         )),
@@ -309,14 +324,6 @@ mod tests {
     }
 
     #[test]
-    fn from_raw_treats_long_hex_blob_as_accountid() {
-        match AuthorNeedle::from_raw("abcdef0123456789deadbeef") {
-            AuthorNeedle::AccountId(s) => assert_eq!(s, "abcdef0123456789deadbeef"),
-            other => panic!("expected AccountId, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn from_raw_long_alpha_only_name_is_substring() {
         // 15 chars, no digits — regression guard for #213.
         match AuthorNeedle::from_raw("AlexanderGreene") {
@@ -339,6 +346,46 @@ mod tests {
         // 18 chars with dashes, no digits — regression guard for #213.
         match AuthorNeedle::from_raw("jean-pierre-dupont") {
             AuthorNeedle::NameSubstring(s) => assert_eq!(s.as_str(), "jean-pierre-dupont"),
+            other => panic!("expected NameSubstring, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_raw_long_unicode_name_is_substring() {
+        // 18 chars with non-ASCII letters (é, í) and no digits — the
+        // digit guard rejects this input before the ASCII-alphanumeric
+        // guard runs, so this test documents the general Unicode
+        // fall-through. The specific ASCII-guard pin is
+        // `from_raw_long_unicode_name_with_digit_is_substring`.
+        match AuthorNeedle::from_raw("JoséMariaRodríguez") {
+            AuthorNeedle::NameSubstring(s) => assert_eq!(s.as_str(), "josémariarodríguez"),
+            other => panic!("expected NameSubstring, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_raw_long_unicode_name_with_digit_is_substring() {
+        // 15 chars with non-ASCII letter (é) AND a digit — pins the
+        // is_ascii_alphanumeric guard specifically. A refactor to
+        // char::is_alphanumeric would misclassify this as AccountId
+        // because `'é'.is_alphanumeric() == true` while
+        // `'é'.is_ascii_alphanumeric() == false`.
+        match AuthorNeedle::from_raw("José123Mariarod") {
+            AuthorNeedle::NameSubstring(s) => assert_eq!(s.as_str(), "josé123mariarod"),
+            other => panic!("expected NameSubstring, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_raw_long_cyrillic_name_with_digit_is_substring() {
+        // 14 chars of Cyrillic letters + digits — widens the
+        // ASCII-guard pin beyond Latin-1 to any non-ASCII alphabetic
+        // script. `'А'.is_alphanumeric() == true` (Cyrillic capital A,
+        // U+0410) but `'А'.is_ascii_alphanumeric() == false`.
+        // Note: the first literal char looks like ASCII 'A' (U+0041)
+        // but is U+0410 — do not "clean up" by retyping it.
+        match AuthorNeedle::from_raw("Александр12345") {
+            AuthorNeedle::NameSubstring(s) => assert_eq!(s.as_str(), "александр12345"),
             other => panic!("expected NameSubstring, got {other:?}"),
         }
     }
@@ -367,6 +414,30 @@ mod tests {
         match AuthorNeedle::from_raw("User12345Name") {
             AuthorNeedle::AccountId(s) => assert_eq!(s, "User12345Name"),
             other => panic!("expected AccountId, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_raw_twelve_char_boundary_with_digit_is_accountid() {
+        // Exactly 12 chars with a digit — pins the `trimmed.len() >= 12`
+        // gate. A silent off-by-one to `> 12` would leave this input
+        // falling through to NameSubstring; neighboring length-based
+        // tests land on either side of the boundary and do not cover
+        // this exact value.
+        match AuthorNeedle::from_raw("abcdefghijk1") {
+            AuthorNeedle::AccountId(s) => assert_eq!(s, "abcdefghijk1"),
+            other => panic!("expected AccountId at 12-char boundary, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_raw_twelve_char_boundary_no_digit_is_substring() {
+        // Exactly 12 chars without a digit — pins that the length gate
+        // alone is not sufficient; the digit requirement still applies
+        // at the boundary.
+        match AuthorNeedle::from_raw("abcdefghijkl") {
+            AuthorNeedle::NameSubstring(s) => assert_eq!(s.as_str(), "abcdefghijkl"),
+            other => panic!("expected NameSubstring without digit, got {other:?}"),
         }
     }
 
@@ -405,6 +476,109 @@ mod tests {
         assert!(!author_matches(
             Some(&user),
             &AuthorNeedle::AccountId("other".into())
+        ));
+    }
+
+    #[test]
+    fn author_matches_substring_hits_display_name_case_insensitive() {
+        // Needle lowercased at construction; haystack lowercased at match.
+        let user = User {
+            account_id: "557058:xyz".into(),
+            display_name: "ALICE Smith".into(),
+            email_address: None,
+            active: Some(true),
+        };
+        assert!(author_matches(
+            Some(&user),
+            &AuthorNeedle::NameSubstring(LoweredStr::new("alice"))
+        ));
+    }
+
+    #[test]
+    fn author_matches_substring_hits_account_id_case_insensitive() {
+        // Second haystack: account_id. Pins the
+        // `account_id.to_lowercase().contains(n)` fallback so a
+        // substring needle that happens to match inside an accountId
+        // still matches even when the display_name does not.
+        let user = User {
+            account_id: "557058:ABC-123".into(),
+            display_name: "unrelated name".into(),
+            email_address: None,
+            active: Some(true),
+        };
+        assert!(author_matches(
+            Some(&user),
+            &AuthorNeedle::NameSubstring(LoweredStr::new("abc-123"))
+        ));
+    }
+
+    #[test]
+    fn author_matches_substring_misses_when_absent() {
+        let user = User {
+            account_id: "557058:xyz".into(),
+            display_name: "Alice Smith".into(),
+            email_address: None,
+            active: Some(true),
+        };
+        assert!(!author_matches(
+            Some(&user),
+            &AuthorNeedle::NameSubstring(LoweredStr::new("bob"))
+        ));
+    }
+
+    #[test]
+    fn author_matches_substring_hits_unicode_display_name() {
+        // Non-ASCII display_name + non-ASCII needle: both sides use
+        // Unicode-aware lowercasing (`str::to_lowercase`), so an accented
+        // needle must match an uppercase-accented haystack. Complements
+        // the classification pins added for #218 — those ensure Unicode
+        // input falls through to NameSubstring; this pins that the match
+        // itself works once it gets there.
+        let user = User {
+            account_id: "557058:xyz".into(),
+            display_name: "JOSÉ Rodríguez".into(),
+            email_address: None,
+            active: Some(true),
+        };
+        assert!(author_matches(
+            Some(&user),
+            &AuthorNeedle::NameSubstring(LoweredStr::new("josé"))
+        ));
+    }
+
+    #[test]
+    fn author_matches_substring_handles_empty_display_name() {
+        // Empty display_name must not panic or spuriously match; only
+        // the account_id haystack can produce a hit. "".contains("alice")
+        // is false, so the needle falls through to the account_id check.
+        let user = User {
+            account_id: "557058:xyz".into(),
+            display_name: String::new(),
+            email_address: None,
+            active: Some(true),
+        };
+        assert!(!author_matches(
+            Some(&user),
+            &AuthorNeedle::NameSubstring(LoweredStr::new("alice"))
+        ));
+    }
+
+    #[test]
+    fn author_matches_substring_handles_empty_account_id() {
+        // Empty account_id: the display_name haystack still works, so a
+        // needle that matches display_name returns true even when
+        // account_id is empty. Guards against a future refactor that
+        // conditions the display_name branch on a non-empty account_id
+        // (e.g., "only search display_name if account_id didn't match").
+        let user = User {
+            account_id: String::new(),
+            display_name: "Alice Smith".into(),
+            email_address: None,
+            active: Some(true),
+        };
+        assert!(author_matches(
+            Some(&user),
+            &AuthorNeedle::NameSubstring(LoweredStr::new("alice"))
         ));
     }
 

@@ -462,6 +462,80 @@ async fn changelog_author_me_resolves_via_myself() {
     assert!(!stdout.contains("Someone Else"));
 }
 
+// Empty or whitespace-only `--author` must be rejected before any API
+// call. Without the guard, the needle lowercases to `""` and
+// `haystack.contains("")` is always `true` per Rust's `str::contains`,
+// so every author silently matches — a filter bypass that surfaces when
+// an agent passes an unset shell variable as `--author "$UNSET_VAR"`.
+//
+// `MockServer::start()` is created but registers no mocks: it exists
+// so the handler can construct a `JiraClient` against a valid
+// `JR_BASE_URL`. If the guard regresses, the handler would reach the
+// unmocked changelog path and exit with a non-64 code, which the
+// `Some(64)` assertion catches.
+#[tokio::test]
+async fn changelog_rejects_empty_author() {
+    let server = MockServer::start().await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "changelog", "FOO-1", "--author", ""])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "expected exit 64 (UserError), got: {:?}",
+        output.status.code()
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--author cannot be empty"),
+        "expected '--author cannot be empty' in stderr: {stderr}"
+    );
+}
+
+#[tokio::test]
+async fn changelog_rejects_whitespace_only_author() {
+    let server = MockServer::start().await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "changelog", "FOO-1", "--author", "   "])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(64));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--author cannot be empty"));
+}
+
+// Tabs and newlines are Unicode `White_Space` per the stdlib, so
+// `str::trim()` strips them. Pins that the guard correctly rejects
+// these forms too — an agent that renders `$UNSET_VAR` via a template
+// could end up with `\t` or `\n` as the entire argument.
+#[tokio::test]
+async fn changelog_rejects_tab_or_newline_only_author() {
+    let server = MockServer::start().await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "changelog", "FOO-1", "--author", "\t\n"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(64));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--author cannot be empty"));
+}
+
 #[tokio::test]
 async fn changelog_author_name_substring_case_insensitive() {
     let server = MockServer::start().await;
