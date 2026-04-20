@@ -1,6 +1,6 @@
 # jr — Jira CLI
 
-A Rust CLI tool for automating Jira Cloud workflows. Binary name: `jr`, crate name: `jr-cli`.
+A Rust CLI tool for automating Jira Cloud workflows. Binary name: `jr`, package name: `jr`.
 
 ## Architecture
 
