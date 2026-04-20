@@ -62,6 +62,22 @@ pub(super) async fn handle(
         None => None,
     };
 
+    // --field is subject to the same silent filter bypass: the filter
+    // runs `needles.iter().any(|n| h.contains(n))` with lowercased
+    // user input, and `contains("")` is always `true` per `str::contains`.
+    // An empty needle would make every item match (or, in the
+    // repeated-flag `Vec<String>` form, OR with any other needle to
+    // the same effect). Reject before the API call, matching the
+    // --author rejection above.
+    for raw in &field {
+        if raw.trim().is_empty() {
+            return Err(JrError::UserError(
+                "--field cannot be empty or whitespace-only. Provide a field name like \"status\" or \"assignee\".".into(),
+            )
+            .into());
+        }
+    }
+
     let mut entries = client.get_changelog(&key).await?;
 
     // Sort chronologically by parsed `created`. Unparseable entries fall

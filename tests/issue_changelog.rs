@@ -536,6 +536,103 @@ async fn changelog_rejects_tab_or_newline_only_author() {
     assert!(stderr.contains("--author cannot be empty"));
 }
 
+// --field suffers the same class of silent-filter-bypass as --author:
+// the filter is `needles.iter().any(|n| h.contains(n))` with lowercased
+// user input, and `contains("")` is always `true` per `str::contains`,
+// so an empty value would make every item match. Reject before the API
+// call for the same reasons (exit 64 / JrError::UserError). MockServer
+// mounts no expectations — a regression would reach the unmocked
+// changelog path and exit with a non-64 code.
+#[tokio::test]
+async fn changelog_rejects_empty_field() {
+    let server = MockServer::start().await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "changelog", "FOO-1", "--field", ""])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "expected exit 64 (UserError), got: {:?}",
+        output.status.code()
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--field cannot be empty"),
+        "expected '--field cannot be empty' in stderr: {stderr}"
+    );
+}
+
+#[tokio::test]
+async fn changelog_rejects_whitespace_only_field() {
+    let server = MockServer::start().await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "changelog", "FOO-1", "--field", "   "])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(64));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--field cannot be empty"));
+}
+
+// Parity with the --author guard: tabs/newlines are Unicode
+// `White_Space` and `str::trim()` strips them, so the rejection
+// fires for these forms too.
+#[tokio::test]
+async fn changelog_rejects_tab_or_newline_only_field() {
+    let server = MockServer::start().await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["issue", "changelog", "FOO-1", "--field", "\t\n"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(64));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--field cannot be empty"));
+}
+
+// --field is repeatable (`Vec<String>`). A mixed invocation with one
+// valid + one empty value must still reject — otherwise the empty
+// needle would OR with the valid one and match every item anyway.
+#[tokio::test]
+async fn changelog_rejects_empty_field_among_valid() {
+    let server = MockServer::start().await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args([
+            "issue",
+            "changelog",
+            "FOO-1",
+            "--field",
+            "status",
+            "--field",
+            "",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(64));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--field cannot be empty"));
+}
+
 #[tokio::test]
 async fn changelog_author_name_substring_case_insensitive() {
     let server = MockServer::start().await;
