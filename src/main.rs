@@ -70,16 +70,37 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 cli::assets::handle(command, &cli.output, &client).await
             }
             cli::Command::Auth { command } => match command {
-                cli::AuthCommand::Login { oauth } => {
+                cli::AuthCommand::Login {
+                    oauth,
+                    email,
+                    token,
+                    client_id,
+                    client_secret,
+                } => {
                     if oauth {
-                        cli::auth::login_oauth().await
+                        cli::auth::login_oauth(client_id, client_secret, cli.no_input).await
                     } else {
-                        cli::auth::login_token().await
+                        cli::auth::login_token(email, token, cli.no_input).await
                     }
                 }
                 cli::AuthCommand::Status => cli::auth::status().await,
-                cli::AuthCommand::Refresh { oauth } => {
-                    cli::auth::refresh_credentials(oauth, &cli.output).await
+                cli::AuthCommand::Refresh {
+                    oauth,
+                    email,
+                    token,
+                    client_id,
+                    client_secret,
+                } => {
+                    cli::auth::refresh_credentials(
+                        oauth,
+                        email,
+                        token,
+                        client_id,
+                        client_secret,
+                        cli.no_input,
+                        &cli.output,
+                    )
+                    .await
                 }
             },
             cli::Command::Me => {
