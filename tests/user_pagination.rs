@@ -229,3 +229,149 @@ async fn search_assignable_users_by_project_all_paginates() {
     assert_eq!(users[0].display_name, "p1 User 000");
     assert_eq!(users[100].display_name, "p2 User 000");
 }
+
+/// End-to-end: `jr user search --all` paginates and emits all users as JSON.
+#[tokio::test]
+async fn user_search_all_cli_paginates() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/search"))
+        .and(query_param("query", "u"))
+        .and(query_param("startAt", "0"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(users_page(100, "p1")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/search"))
+        .and(query_param("query", "u"))
+        .and(query_param("startAt", "100"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(users_page(50, "p2")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/search"))
+        .and(query_param("query", "u"))
+        .and(query_param("startAt", "150"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::user_search_response(vec![])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_json(&server.uri())
+        .args(["user", "search", "u", "--all"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let arr = json.as_array().expect("user search --all JSON is an array");
+    assert_eq!(arr.len(), 150, "--all should paginate to 150 users");
+}
+
+/// End-to-end: `jr user list --all --project FOO` paginates.
+#[tokio::test]
+async fn user_list_all_cli_paginates() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .and(query_param("projectKeys", "FOO"))
+        .and(query_param("startAt", "0"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(users_page(100, "p1")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .and(query_param("projectKeys", "FOO"))
+        .and(query_param("startAt", "100"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(users_page(35, "p2")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .and(query_param("projectKeys", "FOO"))
+        .and(query_param("startAt", "135"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::user_search_response(vec![])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_json(&server.uri())
+        .args(["user", "list", "--project", "FOO", "--all"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let arr = json.as_array().expect("user list --all JSON is an array");
+    assert_eq!(arr.len(), 135);
+}
+
+/// Without `--all`, `jr user search` must still make exactly one API request
+/// (the existing single-call path) — no accidental pagination.
+#[tokio::test]
+async fn user_search_no_all_issues_single_request() {
+    let server = MockServer::start().await;
+
+    // No startAt/maxResults constraints — proves the legacy single-call path
+    // (which doesn't send those params) is still in use.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/search"))
+        .and(query_param("query", "u"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(common::fixtures::user_search_response(
+                (0..50)
+                    .map(|i| {
+                        let acc = Box::leak(format!("acc-{i:03}").into_boxed_str()) as &str;
+                        let name = Box::leak(format!("User {i:03}").into_boxed_str()) as &str;
+                        (acc, name, true)
+                    })
+                    .collect(),
+            )),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_json(&server.uri())
+        .args(["user", "search", "u"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let arr = json.as_array().expect("user search JSON is an array");
+    assert_eq!(
+        arr.len(),
+        30,
+        "default cap should truncate to 30, got {}",
+        arr.len()
+    );
+}
