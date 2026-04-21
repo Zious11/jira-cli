@@ -229,6 +229,58 @@ async fn resolve_queue_duplicate_names_error_message() {
     );
 }
 
+/// Single-substring hit on a queue name must route through Ambiguous and
+/// error with the disambiguation message + UserError (exit 64 in the
+/// binary). Complements the ExactMultiple coverage above and locks the
+/// behavior at queue.rs:169 from the #193 strict-matching rollout.
+#[tokio::test]
+async fn resolve_queue_single_substring_is_ambiguous() {
+    let server = MockServer::start().await;
+
+    // "escal" is a single-substring of "Escalations" only — "General Requests"
+    // shares no substring. The input is neither exact nor a multi-hit, which
+    // is the exact scenario the #193 strict-matching rollout now routes
+    // through Ambiguous.
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk/15/queue"))
+        .and(query_param("includeCount", "true"))
+        .and(query_param("start", "0"))
+        .and(query_param("limit", "50"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 2,
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "values": [
+                { "id": "10", "name": "Escalations", "issueCount": 5 },
+                { "id": "20", "name": "General Requests", "issueCount": 3 }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".into());
+    let result = jr::cli::queue::resolve_queue_by_name("15", "escal", &client).await;
+
+    let err = result.unwrap_err();
+    assert!(
+        err.downcast_ref::<jr::error::JrError>()
+            .is_some_and(|e| matches!(e, jr::error::JrError::UserError(_))),
+        "Expected JrError::UserError, got: {err}"
+    );
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("matches multiple queues"),
+        "Expected disambiguation phrase in error, got: {msg}"
+    );
+    assert!(
+        msg.contains("Escalations"),
+        "Expected matched queue 'Escalations' in error, got: {msg}"
+    );
+}
+
 #[tokio::test]
 async fn resolve_queue_mixed_case_duplicate_names_error_message() {
     let server = MockServer::start().await;

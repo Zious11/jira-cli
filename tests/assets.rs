@@ -1382,3 +1382,91 @@ async fn schema_table_filters_system_attrs() {
     // System attrs "Key" and "Created" should be filtered out
     assert!(!stdout.contains("Created"));
 }
+
+/// Single-substring hit on `--schema` must route through Ambiguous and
+/// error with exit 64. Locks the resolve_schema branch at assets.rs:471.
+/// No object-type listing or object-schema-attribute fetch should occur.
+#[tokio::test]
+async fn schema_single_substring_schema_filter_rejected() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/assets/workspace"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 1, "start": 0, "limit": 50, "isLastPage": true,
+            "values": [{ "workspaceId": "ws-123" }]
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/jsm/assets/workspace/ws-123/v1/objectschema/list"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "startAt": 0, "maxResults": 25, "total": 2, "isLast": true,
+            "values": [
+                { "id": "6", "name": "ITSM", "objectSchemaKey": "ITSM",
+                  "status": "Ok", "objectCount": 95, "objectTypeCount": 2 },
+                { "id": "7", "name": "Office", "objectSchemaKey": "OFF",
+                  "status": "Ok", "objectCount": 50, "objectTypeCount": 3 }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    // Assert no object-type listing fires — schema resolution must
+    // short-circuit.
+    Mock::given(method("GET"))
+        .and(path(
+            "/jsm/assets/workspace/ws-123/v1/objectschema/6/objecttypes/flat",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/jsm/assets/workspace/ws-123/v1/objectschema/7/objecttypes/flat",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let _guard = set_cache_dir(cache_dir.path()).await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args([
+            "--no-input",
+            "assets",
+            "schema",
+            "AnyType",
+            "--schema",
+            "its",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure on ambiguous schema filter, stderr: {stderr}"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Ambiguous schema should exit 64 (UserError), got: {:?}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("Ambiguous schema"),
+        "Expected 'Ambiguous schema' in stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("ITSM"),
+        "Expected matched schema 'ITSM' in stderr: {stderr}"
+    );
+}

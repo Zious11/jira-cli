@@ -1814,3 +1814,56 @@ async fn test_link_single_substring_rejected_no_input() {
         "Expected matched candidate 'Blocks' in stderr: {stderr}"
     );
 }
+
+#[tokio::test]
+async fn test_unlink_single_substring_rejected_no_input() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issueLinkType"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(common::fixtures::link_types_response()),
+        )
+        .mount(&server)
+        .await;
+
+    // Assert no DELETE /issueLink/* occurs — the substring must short-circuit.
+    // Unlink also fetches candidate links (GET /rest/api/3/issue/FOO-1?fields=issuelinks)
+    // before any delete, but that's irrelevant here since we error out before
+    // reaching that call. No DELETE mock is mounted at all.
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args([
+            "--no-input",
+            "issue",
+            "unlink",
+            "FOO-1",
+            "FOO-2",
+            "--type",
+            "block",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure on ambiguous substring, stderr: {stderr}"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Ambiguous link type should exit 64 (UserError), got: {:?}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("Ambiguous link type"),
+        "Expected 'Ambiguous link type' in stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("Blocks"),
+        "Expected matched candidate 'Blocks' in stderr: {stderr}"
+    );
+}
