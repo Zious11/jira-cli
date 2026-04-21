@@ -18,10 +18,21 @@ use serde_json::Value;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+/// Build a `jr` command pre-configured for non-interactive JSON output
+/// against a mock server. Matches the pattern used in other integration
+/// test files so shared flags/env live in one place.
+fn jr_cmd_json(server_uri: &str) -> Command {
+    let mut cmd = Command::cargo_bin("jr").unwrap();
+    cmd.env("JR_BASE_URL", server_uri)
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["--no-input", "--output", "json"]);
+    cmd
+}
+
 /// `jr issue list --all` fetches beyond the default 30-row cap. Server
-/// returns 35 issues in one page (is_last=true) — client with `--all`
-/// passes `limit=None` → keeps all 35. Client without `--all` passes
-/// `limit=Some(30)` → truncates to 30.
+/// returns 35 issues in one cursor-paginated response (`nextPageToken`
+/// absent) — client with `--all` passes `limit=None` → keeps all 35.
+/// Client without `--all` passes `limit=Some(30)` → truncates to 30.
 #[tokio::test]
 async fn issue_list_all_returns_more_than_default_cap() {
     let server = MockServer::start().await;
@@ -39,20 +50,8 @@ async fn issue_list_all_returns_more_than_default_cap() {
         .await;
 
     // With --all: all 35 issues should appear in JSON output.
-    let output = Command::cargo_bin("jr")
-        .unwrap()
-        .env("JR_BASE_URL", server.uri())
-        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
-        .args([
-            "--no-input",
-            "--output",
-            "json",
-            "issue",
-            "list",
-            "--jql",
-            "project = ALL",
-            "--all",
-        ])
+    let output = jr_cmd_json(&server.uri())
+        .args(["issue", "list", "--jql", "project = ALL", "--all"])
         .output()
         .unwrap();
 
@@ -100,19 +99,8 @@ async fn issue_list_default_caps_at_thirty() {
         .mount(&server)
         .await;
 
-    let output = Command::cargo_bin("jr")
-        .unwrap()
-        .env("JR_BASE_URL", server.uri())
-        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
-        .args([
-            "--no-input",
-            "--output",
-            "json",
-            "issue",
-            "list",
-            "--jql",
-            "project = CAP",
-        ])
+    let output = jr_cmd_json(&server.uri())
+        .args(["issue", "list", "--jql", "project = CAP"])
         .output()
         .unwrap();
 
@@ -154,19 +142,8 @@ async fn user_search_all_returns_more_than_default_cap() {
         .mount(&server)
         .await;
 
-    let output = Command::cargo_bin("jr")
-        .unwrap()
-        .env("JR_BASE_URL", server.uri())
-        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
-        .args([
-            "--no-input",
-            "--output",
-            "json",
-            "user",
-            "search",
-            "User",
-            "--all",
-        ])
+    let output = jr_cmd_json(&server.uri())
+        .args(["user", "search", "User", "--all"])
         .output()
         .unwrap();
 
@@ -206,11 +183,8 @@ async fn user_search_default_caps_at_thirty() {
         .mount(&server)
         .await;
 
-    let output = Command::cargo_bin("jr")
-        .unwrap()
-        .env("JR_BASE_URL", server.uri())
-        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
-        .args(["--no-input", "--output", "json", "user", "search", "User"])
+    let output = jr_cmd_json(&server.uri())
+        .args(["user", "search", "User"])
         .output()
         .unwrap();
 
