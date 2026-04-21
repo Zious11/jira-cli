@@ -3,6 +3,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::api::client::JiraClient;
 use crate::cli::{IssueCommand, OutputFormat};
+use crate::error::JrError;
 use crate::output;
 use crate::partial_match::{self, MatchResult};
 
@@ -65,11 +66,12 @@ pub(super) async fn handle_link(
         MatchResult::ExactMultiple(name) => name,
         MatchResult::Ambiguous(matches) => {
             if no_input {
-                bail!(
+                return Err(JrError::UserError(format!(
                     "Ambiguous link type \"{}\". Matches: {}",
                     link_type_name,
                     matches.join(", ")
-                );
+                ))
+                .into());
             }
             let selection = dialoguer::Select::new()
                 .with_prompt(format!("Multiple types match \"{link_type_name}\""))
@@ -135,11 +137,12 @@ pub(super) async fn handle_unlink(
             MatchResult::ExactMultiple(name) => name,
             MatchResult::Ambiguous(matches) => {
                 if no_input {
-                    bail!(
+                    return Err(JrError::UserError(format!(
                         "Ambiguous link type \"{}\". Matches: {}",
                         type_name,
                         matches.join(", ")
-                    );
+                    ))
+                    .into());
                 }
                 let selection = dialoguer::Select::new()
                     .with_prompt(format!("Multiple types match \"{type_name}\""))

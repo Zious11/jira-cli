@@ -1742,13 +1742,10 @@ async fn test_move_single_substring_rejected_no_input() {
         !output.status.success(),
         "Expected failure on ambiguous substring, stderr: {stderr}"
     );
-    // workflow.rs uses `anyhow::bail!` which doesn't inject a JrError into
-    // the cause chain → main.rs falls back to exit 1. Pinning this lets a
-    // future refactor to JrError::UserError (exit 64) flag the test for review.
     assert_eq!(
         output.status.code(),
-        Some(1),
-        "Ambiguous transition currently exits 1 via anyhow::bail!, got: {:?}",
+        Some(64),
+        "Ambiguous transition should exit 64 (UserError), got: {:?}",
         output.status.code()
     );
     assert!(
@@ -1802,11 +1799,10 @@ async fn test_link_single_substring_rejected_no_input() {
         !output.status.success(),
         "Expected failure on ambiguous substring, stderr: {stderr}"
     );
-    // links.rs uses `anyhow::bail!` → exit 1 (see move test for rationale).
     assert_eq!(
         output.status.code(),
-        Some(1),
-        "Ambiguous link type currently exits 1 via anyhow::bail!, got: {:?}",
+        Some(64),
+        "Ambiguous link type should exit 64 (UserError), got: {:?}",
         output.status.code()
     );
     assert!(
