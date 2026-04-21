@@ -1903,13 +1903,17 @@ async fn test_edit_team_cold_cache_miss_avoids_stale_advice() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_list_shows_team_column_with_cached_name() {
     let server = MockServer::start().await;
+    // Summary is deliberately chosen to NOT contain the team name
+    // ("Platform") so the `contains("Platform")` assertion below can only
+    // pass via the resolved Team column cell — not a false match against
+    // the Summary column.
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
         .respond_with(ResponseTemplate::new(200).set_body_json(
             common::fixtures::issue_search_response(vec![
                 common::fixtures::issue_response_with_team(
                     "HDL-800",
-                    "On Platform team",
+                    "Issue for backend work",
                     TEST_TEAM_FIELD_ID,
                     "team-uuid-abc",
                 ),
@@ -1927,8 +1931,12 @@ async fn test_list_shows_team_column_with_cached_name() {
         .args(["issue", "list", "--jql", "project = HDL"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Team")) // header
-        .stdout(predicate::str::contains("Platform")); // resolved name
+        .stdout(predicate::str::contains("Team")) // column header
+        .stdout(predicate::str::contains("Platform")) // resolved name (not in summary)
+        // Strong signal that resolution actually happened: the raw UUID
+        // must NOT appear in the output. If the cache lookup silently
+        // failed, we'd see "team-uuid-abc" in the Team cell instead.
+        .stdout(predicate::str::contains("team-uuid-abc").not());
 }
 
 /// When an issue's team UUID isn't in the cache, the Team column shows the
@@ -1936,13 +1944,15 @@ async fn test_list_shows_team_column_with_cached_name() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_list_team_column_falls_back_to_uuid_when_cache_missing() {
     let server = MockServer::start().await;
+    // Summary is chosen to NOT contain "Team" so the column-header
+    // assertion below can only match the real "Team" header.
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
         .respond_with(ResponseTemplate::new(200).set_body_json(
             common::fixtures::issue_search_response(vec![
                 common::fixtures::issue_response_with_team(
                     "HDL-801",
-                    "Team not in cache",
+                    "Issue with unknown owner",
                     TEST_TEAM_FIELD_ID,
                     "team-uuid-unknown",
                 ),
@@ -1960,8 +1970,8 @@ async fn test_list_team_column_falls_back_to_uuid_when_cache_missing() {
         .args(["issue", "list", "--jql", "project = HDL"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Team"))
-        .stdout(predicate::str::contains("team-uuid-unknown"));
+        .stdout(predicate::str::contains("Team")) // column header (summary has no "Team")
+        .stdout(predicate::str::contains("team-uuid-unknown")); // raw UUID fallback
 }
 
 /// Team column is omitted when no issue in the result has a populated team,

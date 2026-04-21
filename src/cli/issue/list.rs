@@ -482,8 +482,9 @@ pub(super) async fn handle_list(
     }
 
     // Team column gating (#191): show only when team_field_id is configured
-    // AND at least one issue has a populated team. Resolve UUIDs to names via
-    // the team cache once, per-row lookup is O(1) against the map.
+    // AND at least one issue has a populated team. Build the UUID→name map
+    // once so per-row resolution is O(1) against the HashMap (rather than a
+    // linear scan of the cache vec for every row).
     let client_verbose = client.verbose();
     let team_displays: Vec<String> = if let Some(field_id) = team_field_id {
         let uuids: Vec<Option<String>> = issues
@@ -494,15 +495,16 @@ pub(super) async fn handle_list(
             // Team cache read is best-effort for display — an Err or missing
             // entry falls back to the UUID. Cache population is not this
             // command's responsibility.
-            let cache = crate::cache::read_team_cache().ok().flatten();
+            let team_map: std::collections::HashMap<String, String> =
+                crate::cache::read_team_cache()
+                    .ok()
+                    .flatten()
+                    .map(|c| c.teams.into_iter().map(|t| (t.id, t.name)).collect())
+                    .unwrap_or_default();
             uuids
                 .iter()
                 .map(|u| match u {
-                    Some(uuid) => cache
-                        .as_ref()
-                        .and_then(|c| c.teams.iter().find(|t| t.id == *uuid))
-                        .map(|t| t.name.clone())
-                        .unwrap_or_else(|| uuid.clone()),
+                    Some(uuid) => team_map.get(uuid).cloned().unwrap_or_else(|| uuid.clone()),
                     None => "-".to_string(),
                 })
                 .collect()
