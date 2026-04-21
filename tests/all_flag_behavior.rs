@@ -20,7 +20,7 @@ mod common;
 
 use assert_cmd::Command;
 use serde_json::Value;
-use wiremock::matchers::{body_partial_json, method, path, query_param};
+use wiremock::matchers::{body_partial_json, method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Build a `jr` command pre-configured for non-interactive JSON output
@@ -266,9 +266,13 @@ async fn user_list_default_caps_at_thirty() {
         .collect();
     // Without --all, handle_list calls the legacy single-call
     // `search_assignable_users_by_project` — no startAt/maxResults params.
+    // Assert absence so a regression routing default through `_all`
+    // (which would paginate) is caught.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
         .and(query_param("projectKeys", "PROJ"))
+        .and(query_param_is_missing("startAt"))
+        .and(query_param_is_missing("maxResults"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(common::fixtures::user_search_response(
                 users
@@ -465,12 +469,17 @@ async fn board_view_all_returns_more_than_default_cap() {
     mount_kanban_prereqs(&server).await;
 
     let issues = build_issue_fixtures(35, "BVA");
-    // Constrain request body so the test fails if the handler stops sending
-    // the expected JQL shape.
+    // Constrain the JQL AND `maxResults: 50`. Under `--all`,
+    // `handle_view` passes `limit=None` to `search_issues`, which maps to
+    // `max_per_page = limit.unwrap_or(50).min(100) = 50`. If a regression
+    // made `--all` pass `limit=Some(large)` instead, `max_per_page` would
+    // be a different value and this mock would miss — symmetric to the
+    // `maxResults: 30` pin on the default-cap test.
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
         .and(body_partial_json(serde_json::json!({
             "jql": "project = \"PROJ\" AND statusCategory != Done ORDER BY rank ASC",
+            "maxResults": 50,
         })))
         .respond_with(
             ResponseTemplate::new(200)
