@@ -132,3 +132,74 @@ async fn issue_view_network_drop_surfaces_reach_error() {
     );
     assert!(!stderr.contains("panic"), "stderr leaked a panic: {stderr}");
 }
+
+/// Corrupt `teams.json` must be non-fatal: `jr issue view` keeps running and
+/// the Team row shows the UUID with an actionable hint pointing the user at
+/// `jr team list --refresh` (same path as a cold cache).
+///
+/// Behavior follows `src/cache.rs:23-26` — `serde_json::from_str` failures
+/// return `Ok(None)` rather than propagating the parse error. The `Ok(None)`
+/// branch at `src/cli/issue/list.rs:947` surfaces the `(name not cached —
+/// run 'jr team list --refresh')` hint inline in the table. See issue #194
+/// for the divergence from the original "stderr warning" proposal.
+#[tokio::test]
+async fn issue_view_corrupt_team_cache_falls_back_gracefully() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    let jr_cache_dir = cache_dir.path().join("jr");
+    std::fs::create_dir_all(&jr_cache_dir).unwrap();
+    // Truncated JSON — serde_json::from_str returns Err, which read_cache
+    // maps to Ok(None) per src/cache.rs:23-26.
+    std::fs::write(jr_cache_dir.join("teams.json"), "{ not json").unwrap();
+
+    let jr_config_dir = config_dir.path().join("jr");
+    std::fs::create_dir_all(&jr_config_dir).unwrap();
+    std::fs::write(
+        jr_config_dir.join("config.toml"),
+        "[fields]\nteam_field_id = \"customfield_10001\"\n",
+    )
+    .unwrap();
+
+    let team_uuid = "36885b3c-1bf0-4f85-a357-c5b858c31de4";
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_response_with_team(
+                "PROJ-1",
+                "Issue with team",
+                "customfield_10001",
+                team_uuid,
+            ),
+        ))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args(["issue", "view", "PROJ-1"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "Corrupt team cache should be non-fatal, stderr: {stderr}, stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains(team_uuid),
+        "Output should show the UUID so the user can identify the team, stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("name not cached") && stdout.contains("jr team list --refresh"),
+        "Output should guide the user to refresh the cache, stdout: {stdout}"
+    );
+    assert!(!stderr.contains("panic"), "stderr leaked a panic: {stderr}");
+}
