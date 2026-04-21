@@ -188,6 +188,20 @@ pub enum AuthCommand {
         /// Use OAuth 2.0 instead of API token (requires your own OAuth app)
         #[arg(long)]
         oauth: bool,
+        /// Jira email (API token flow). Prefer $JR_EMAIL over this flag.
+        #[arg(long)]
+        email: Option<String>,
+        /// API token (API token flow). Prefer $JR_API_TOKEN over this flag — bare
+        /// CLI args can leak via process lists (`ps`, audit logs).
+        #[arg(long)]
+        token: Option<String>,
+        /// OAuth Client ID (OAuth flow). Prefer $JR_OAUTH_CLIENT_ID over this flag.
+        #[arg(long)]
+        client_id: Option<String>,
+        /// OAuth Client Secret (OAuth flow). Prefer $JR_OAUTH_CLIENT_SECRET over
+        /// this flag — bare CLI args can leak via process lists.
+        #[arg(long)]
+        client_secret: Option<String>,
     },
     /// Show authentication status
     Status,
@@ -202,6 +216,20 @@ pub enum AuthCommand {
         /// Use OAuth 2.0 instead of API token (matches `jr auth login --oauth`)
         #[arg(long)]
         oauth: bool,
+        /// Jira email (API token flow). Prefer $JR_EMAIL over this flag.
+        #[arg(long)]
+        email: Option<String>,
+        /// API token (API token flow). Prefer $JR_API_TOKEN over this flag —
+        /// bare CLI args can leak via process lists.
+        #[arg(long)]
+        token: Option<String>,
+        /// OAuth Client ID (OAuth flow). Prefer $JR_OAUTH_CLIENT_ID over this flag.
+        #[arg(long)]
+        client_id: Option<String>,
+        /// OAuth Client Secret (OAuth flow). Prefer $JR_OAUTH_CLIENT_SECRET over
+        /// this flag — bare CLI args can leak via process lists.
+        #[arg(long)]
+        client_secret: Option<String>,
     },
 }
 

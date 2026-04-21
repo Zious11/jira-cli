@@ -3,7 +3,76 @@ use dialoguer::{Input, Password};
 
 use crate::api::auth;
 use crate::config::Config;
+use crate::error::JrError;
 use crate::output;
+
+/// Environment variable names for the four auth credentials.
+///
+/// Flag > env > prompt precedence is implemented by [`resolve_credential`].
+/// Callers pass the matching `flag_name` so error messages can cite both
+/// names verbatim.
+pub(crate) const ENV_EMAIL: &str = "JR_EMAIL";
+pub(crate) const ENV_API_TOKEN: &str = "JR_API_TOKEN";
+pub(crate) const ENV_OAUTH_CLIENT_ID: &str = "JR_OAUTH_CLIENT_ID";
+pub(crate) const ENV_OAUTH_CLIENT_SECRET: &str = "JR_OAUTH_CLIENT_SECRET";
+
+/// Resolve a credential value via flag → env → TTY prompt, or error under
+/// `--no-input`.
+///
+/// Order of precedence:
+/// 1. `flag_value` (explicit CLI arg wins).
+/// 2. `env::var(env_name)` if non-empty.
+/// 3. If `no_input` is true, return a `JrError::UserError` naming the flag
+///    and env var so scripts/agents can recover. `hint` — if supplied —
+///    is appended to the error so first-time agents learn *where to obtain*
+///    the credential, not just how to pass it (relevant for OAuth where
+///    users must first create an app at developer.atlassian.com).
+/// 4. Otherwise, prompt interactively. `is_password` chooses between
+///    `dialoguer::Password` (masked) and `Input` (visible).
+///
+/// Empty env values are ignored so an accidentally-exported-but-unset var
+/// doesn't silently substitute for real input.
+pub(crate) fn resolve_credential(
+    flag_value: Option<String>,
+    env_name: &str,
+    flag_name: &str,
+    prompt_label: &str,
+    is_password: bool,
+    no_input: bool,
+    hint: Option<&str>,
+) -> Result<String> {
+    if let Some(v) = flag_value.filter(|v| !v.is_empty()) {
+        return Ok(v);
+    }
+    if let Ok(v) = std::env::var(env_name)
+        && !v.is_empty()
+    {
+        return Ok(v);
+    }
+    if no_input {
+        let base = format!("{prompt_label} is required. Provide {flag_name} or set ${env_name}.");
+        let msg = match hint {
+            Some(h) => format!("{base} {h}"),
+            None => base,
+        };
+        return Err(JrError::UserError(msg).into());
+    }
+    if is_password {
+        Password::new()
+            .with_prompt(prompt_label)
+            .interact()
+            .with_context(|| format!("failed to read {prompt_label}"))
+    } else {
+        Input::new()
+            .with_prompt(prompt_label)
+            .interact_text()
+            .with_context(|| format!("failed to read {prompt_label}"))
+    }
+}
+
+/// Hint for OAuth client_id / client_secret errors so first-time agents
+/// discover they must create an OAuth app before passing credentials.
+const OAUTH_APP_HINT: &str = "Create one at https://developer.atlassian.com/console/myapps/.";
 
 /// Which auth flow `jr auth refresh` should dispatch to.
 ///
@@ -44,17 +113,30 @@ fn chosen_flow(config: &Config, oauth_override: bool) -> AuthFlow {
     }
 }
 
-/// Prompt for email and API token, then store in keychain.
-pub async fn login_token() -> Result<()> {
-    let email: String = dialoguer::Input::new()
-        .with_prompt("Jira email")
-        .interact_text()
-        .context("failed to read Jira email")?;
-
-    let token: String = dialoguer::Password::new()
-        .with_prompt("API token")
-        .interact()
-        .context("failed to read API token")?;
+/// Resolve email and API token (flag → env → prompt), then store in keychain.
+pub async fn login_token(
+    email: Option<String>,
+    token: Option<String>,
+    no_input: bool,
+) -> Result<()> {
+    let email = resolve_credential(
+        email,
+        ENV_EMAIL,
+        "--email",
+        "Jira email",
+        false,
+        no_input,
+        None,
+    )?;
+    let token = resolve_credential(
+        token,
+        ENV_API_TOKEN,
+        "--token",
+        "API token",
+        true,
+        no_input,
+        None,
+    )?;
 
     auth::store_api_token(&email, &token)?;
     eprintln!("Credentials stored in keychain.");
@@ -62,20 +144,37 @@ pub async fn login_token() -> Result<()> {
 }
 
 /// Run the OAuth 2.0 (3LO) login flow and persist site configuration.
-/// Prompts the user for their own OAuth app credentials.
-pub async fn login_oauth() -> Result<()> {
-    eprintln!("OAuth 2.0 requires your own Atlassian OAuth app.");
-    eprintln!("Create one at: https://developer.atlassian.com/console/myapps/\n");
+///
+/// Credentials resolved via flag → env → prompt, so CI/agent workflows can
+/// pipe them in without a TTY.
+pub async fn login_oauth(
+    client_id: Option<String>,
+    client_secret: Option<String>,
+    no_input: bool,
+) -> Result<()> {
+    if !no_input {
+        eprintln!("OAuth 2.0 requires your own Atlassian OAuth app.");
+        eprintln!("Create one at: https://developer.atlassian.com/console/myapps/\n");
+    }
 
-    let client_id: String = Input::new()
-        .with_prompt("OAuth Client ID")
-        .interact_text()
-        .context("failed to read OAuth client ID")?;
-
-    let client_secret: String = Password::new()
-        .with_prompt("OAuth Client Secret")
-        .interact()
-        .context("failed to read OAuth client secret")?;
+    let client_id = resolve_credential(
+        client_id,
+        ENV_OAUTH_CLIENT_ID,
+        "--client-id",
+        "OAuth Client ID",
+        false,
+        no_input,
+        Some(OAUTH_APP_HINT),
+    )?;
+    let client_secret = resolve_credential(
+        client_secret,
+        ENV_OAUTH_CLIENT_SECRET,
+        "--client-secret",
+        "OAuth Client Secret",
+        true,
+        no_input,
+        Some(OAUTH_APP_HINT),
+    )?;
 
     // Store OAuth app credentials in keychain
     crate::api::auth::store_oauth_app_credentials(&client_id, &client_secret)?;
@@ -152,6 +251,11 @@ fn refresh_success_payload(flow: AuthFlow) -> serde_json::Value {
 /// before the error is propagated.
 pub async fn refresh_credentials(
     oauth_override: bool,
+    email: Option<String>,
+    token: Option<String>,
+    client_id: Option<String>,
+    client_secret: Option<String>,
+    no_input: bool,
     output: &crate::cli::OutputFormat,
 ) -> Result<()> {
     let config = Config::load()?;
@@ -162,8 +266,8 @@ pub async fn refresh_credentials(
     )?;
 
     let login_result = match flow {
-        AuthFlow::Token => login_token().await,
-        AuthFlow::OAuth => login_oauth().await,
+        AuthFlow::Token => login_token(email, token, no_input).await,
+        AuthFlow::OAuth => login_oauth(client_id, client_secret, no_input).await,
     };
 
     if let Err(err) = login_result {
@@ -262,5 +366,146 @@ mod tests {
         let payload = refresh_success_payload(AuthFlow::OAuth);
         assert_eq!(payload["status"], "refreshed");
         assert_eq!(payload["auth_method"], "oauth");
+    }
+
+    // ── resolve_credential ───────────────────────────────────────────
+    //
+    // Env-reading tests must serialize process-environment mutation across
+    // parallel test threads. `std::env::set_var` / `remove_var` are unsafe
+    // in Rust 2024 because concurrent env access (even on different keys)
+    // is UB — C's getenv/setenv aren't thread-safe. `EnvGuard` holds
+    // `ENV_LOCK` for its full lifetime and removes the var on drop so a
+    // panic mid-test doesn't leak state to later tests in the same
+    // process. Matches the pattern in src/config.rs::ENV_MUTEX.
+
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct EnvGuard {
+        key: &'static str,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let lock = ENV_LOCK.lock().unwrap();
+            // SAFETY: test env mutation is serialized by ENV_LOCK, held for
+            // this guard's lifetime. The Drop impl unsets the same
+            // test-local key before releasing the lock.
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            EnvGuard { key, _lock: lock }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: matches the test-local key set in `EnvGuard::set`
+            // while `_lock` is still held by this `EnvGuard`.
+            unsafe {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_credential_prefers_flag_over_env() {
+        let _guard = EnvGuard::set("_JR_TEST_PREFERS_FLAG", "from-env");
+        let got = resolve_credential(
+            Some("from-flag".into()),
+            "_JR_TEST_PREFERS_FLAG",
+            "--email",
+            "Jira email",
+            false,
+            true,
+            None,
+        )
+        .unwrap();
+        assert_eq!(got, "from-flag");
+    }
+
+    #[test]
+    fn resolve_credential_falls_back_to_env_when_flag_absent() {
+        let _guard = EnvGuard::set("_JR_TEST_FALLS_BACK", "from-env");
+        let got = resolve_credential(
+            None,
+            "_JR_TEST_FALLS_BACK",
+            "--email",
+            "Jira email",
+            false,
+            true,
+            None,
+        )
+        .unwrap();
+        assert_eq!(got, "from-env");
+    }
+
+    #[test]
+    fn resolve_credential_ignores_empty_flag_and_env() {
+        // Empty values should fall through to the no_input error path.
+        let _guard = EnvGuard::set("_JR_TEST_EMPTY", "");
+        let err = resolve_credential(
+            Some(String::new()),
+            "_JR_TEST_EMPTY",
+            "--email",
+            "Jira email",
+            false,
+            true,
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            err.downcast_ref::<JrError>()
+                .is_some_and(|e| matches!(e, JrError::UserError(_))),
+            "Expected JrError::UserError for empty inputs, got: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_credential_no_input_errors_when_missing() {
+        // resolve_credential reads env via std::env::var — hold ENV_LOCK to
+        // serialize against set/remove calls in sibling tests.
+        let _lock = ENV_LOCK.lock().unwrap();
+        let err = resolve_credential(
+            None,
+            "_JR_TEST_UNSET_MISSING",
+            "--email",
+            "Jira email",
+            false,
+            true,
+            None,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            err.downcast_ref::<JrError>()
+                .is_some_and(|e| matches!(e, JrError::UserError(_))),
+            "Expected JrError::UserError, got: {err}"
+        );
+        assert!(
+            msg.contains("--email") && msg.contains("$_JR_TEST_UNSET_MISSING"),
+            "Error should cite both flag and env var: {msg}"
+        );
+    }
+
+    #[test]
+    fn resolve_credential_oauth_hint_appears_in_error() {
+        // Same env-read serialization as the test above.
+        let _lock = ENV_LOCK.lock().unwrap();
+        let err = resolve_credential(
+            None,
+            "_JR_TEST_UNSET_OAUTH",
+            "--client-id",
+            "OAuth Client ID",
+            false,
+            true,
+            Some(OAUTH_APP_HINT),
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("developer.atlassian.com/console/myapps"),
+            "OAuth error should cite dev console URL: {msg}"
+        );
     }
 }

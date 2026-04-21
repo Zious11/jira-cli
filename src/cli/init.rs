@@ -43,11 +43,14 @@ pub async fn handle() -> Result<()> {
     };
     config.save_global()?;
 
-    // Step 3: Authenticate
+    // Step 3: Authenticate. `jr init` is inherently interactive (Select
+    // prompts above), so pass no_input=false and let dialoguer handle each
+    // credential prompt. Flags aren't plumbed through init — users who want
+    // a non-interactive setup should run `jr auth login` directly.
     if auth_choice == 0 {
-        crate::cli::auth::login_oauth().await?;
+        crate::cli::auth::login_oauth(None, None, false).await?;
     } else {
-        crate::cli::auth::login_token().await?;
+        crate::cli::auth::login_token(None, None, false).await?;
         let mut config = Config::load()?;
         config.global.instance.auth_method = Some("api_token".into());
         config.save_global()?;
