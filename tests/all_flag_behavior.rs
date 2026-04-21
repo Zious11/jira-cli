@@ -390,8 +390,14 @@ async fn sprint_current_all_returns_more_than_default_cap() {
     mount_scrum_prereqs(&server).await;
 
     let issues = build_issue_fixtures(35, "SPA");
+    // Pin `startAt=0` and `maxResults=50` so the mock match proves the
+    // client actually issued the expected sprint-issue request shape.
+    // `get_sprint_issues` hardcodes these values regardless of `--all`
+    // (the limit is applied client-side), so they're a stable handle.
     Mock::given(method("GET"))
         .and(path("/rest/agile/1.0/sprint/100/issue"))
+        .and(query_param("startAt", "0"))
+        .and(query_param("maxResults", "50"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(common::fixtures::sprint_issues_response(issues, 35)),
@@ -429,8 +435,13 @@ async fn sprint_current_default_caps_at_thirty() {
     mount_scrum_prereqs(&server).await;
 
     let issues = build_issue_fixtures(35, "SPC");
+    // Same startAt=0 / maxResults=50 pin as the `--all` positive test —
+    // `get_sprint_issues` hardcodes these values, so the request shape
+    // is the same in both cases; the difference is client-side truncation.
     Mock::given(method("GET"))
         .and(path("/rest/agile/1.0/sprint/100/issue"))
+        .and(query_param("startAt", "0"))
+        .and(query_param("maxResults", "50"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(common::fixtures::sprint_issues_response(issues, 35)),
