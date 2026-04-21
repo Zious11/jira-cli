@@ -5,6 +5,34 @@ use crate::config::Config;
 use crate::error::JrError;
 use crate::types::jira::User;
 
+/// Detect Atlassian team UUID format: 36 chars, hex digits split into
+/// 8-4-4-4-12 groups by hyphens. Case-insensitive on hex.
+///
+/// Used to short-circuit the cache-name-match path for agents that already
+/// know a team's ID — `--team <uuid>` sends the value straight to the
+/// customfield without a cache lookup or name match.
+fn is_team_uuid(s: &str) -> bool {
+    if s.len() != 36 {
+        return false;
+    }
+    let bytes = s.as_bytes();
+    for (i, b) in bytes.iter().enumerate() {
+        match i {
+            8 | 13 | 18 | 23 => {
+                if *b != b'-' {
+                    return false;
+                }
+            }
+            _ => {
+                if !b.is_ascii_hexdigit() {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
 pub(super) async fn resolve_team_field(
     config: &Config,
     client: &JiraClient,
@@ -25,15 +53,54 @@ pub(super) async fn resolve_team_field(
             })?
     };
 
-    // 2. Load teams from cache (or fetch if missing/expired)
-    let teams = match crate::cache::read_team_cache()? {
-        Some(cached) => cached.teams,
-        None => crate::cli::team::fetch_and_cache_teams(config, client).await?,
+    // 2. UUID pass-through: if the caller already has a team UUID (agents,
+    // scripts), skip cache + name-match entirely. The customfield accepts
+    // the UUID directly — no lookup needed. Pre-cache-load so a cold cache
+    // doesn't force a teams fetch just to validate an ID we already have.
+    if is_team_uuid(team_name) {
+        if client.verbose() {
+            eprintln!("[verbose] team resolved via UUID pass-through: {team_name}");
+        }
+        return Ok((field_id, team_name.to_string()));
+    }
+
+    // 3. Load teams from cache (or fetch if missing/expired). `cache_was_fresh`
+    // tells step 5 whether an auto-refresh-on-miss is worth attempting —
+    // no point re-fetching a list we just fetched.
+    let (teams, cache_was_fresh) = match crate::cache::read_team_cache()? {
+        Some(cached) => (cached.teams, false),
+        None => (
+            crate::cli::team::fetch_and_cache_teams(config, client).await?,
+            true,
+        ),
     };
 
-    // 3. Partial match
+    // 4. Partial match
     let team_names: Vec<String> = teams.iter().map(|t| t.name.clone()).collect();
-    match crate::partial_match::partial_match(team_name, &team_names) {
+    let match_result = crate::partial_match::partial_match(team_name, &team_names);
+
+    // 5. Auto-refresh on miss: if the cache came from disk and the name
+    // didn't match anything, the team was likely added upstream since the
+    // last refresh. Fetch once transparently and retry. Bounded to a
+    // single retry via `cache_was_fresh` — no infinite-refresh loop.
+    // `refreshed` tracks whether a retry happened so the bail message at
+    // step 6 can avoid the stale "run `jr team list --refresh`" advice.
+    let mut refreshed = false;
+    let (teams, match_result) =
+        if matches!(match_result, crate::partial_match::MatchResult::None(_)) && !cache_was_fresh {
+            if client.verbose() {
+                eprintln!("[verbose] team \"{team_name}\" not in cache, refreshing from server...");
+            }
+            let fresh = crate::cli::team::fetch_and_cache_teams(config, client).await?;
+            let fresh_names: Vec<String> = fresh.iter().map(|t| t.name.clone()).collect();
+            let retry = crate::partial_match::partial_match(team_name, &fresh_names);
+            refreshed = true;
+            (fresh, retry)
+        } else {
+            (teams, match_result)
+        };
+
+    match match_result {
         crate::partial_match::MatchResult::Exact(matched_name) => {
             let idx = teams
                 .iter()
@@ -93,6 +160,16 @@ pub(super) async fn resolve_team_field(
             Ok((field_id, teams[idx].id.clone()))
         }
         crate::partial_match::MatchResult::None(_) => {
+            // Post-refresh miss: the cache was just fetched fresh, so advising
+            // "run jr team list --refresh" would be misleading. Tell the user
+            // the team genuinely doesn't exist.
+            if refreshed {
+                anyhow::bail!(
+                    "No team matching \"{}\" (checked a fresh team list). \
+                     Verify the team name or check access permissions.",
+                    team_name
+                );
+            }
             anyhow::bail!(
                 "No team matching \"{}\". Run \"jr team list --refresh\" to update.",
                 team_name
@@ -486,6 +563,50 @@ pub(super) async fn resolve_asset(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_team_uuid_accepts_standard_uuid() {
+        assert!(is_team_uuid("36885b3c-1bf0-4f85-a357-c5b858c31de4"));
+    }
+
+    #[test]
+    fn is_team_uuid_accepts_uppercase_hex() {
+        // Atlassian UUIDs are typically lowercase but the format is
+        // case-insensitive — accept either so users don't get bitten by
+        // copy-paste casing.
+        assert!(is_team_uuid("36885B3C-1BF0-4F85-A357-C5B858C31DE4"));
+    }
+
+    #[test]
+    fn is_team_uuid_accepts_mixed_case_hex() {
+        assert!(is_team_uuid("36885B3c-1bF0-4F85-a357-c5B858c31De4"));
+    }
+
+    #[test]
+    fn is_team_uuid_rejects_wrong_length() {
+        assert!(!is_team_uuid("36885b3c-1bf0-4f85-a357-c5b858c31de"));
+        assert!(!is_team_uuid("36885b3c-1bf0-4f85-a357-c5b858c31de44"));
+        assert!(!is_team_uuid(""));
+    }
+
+    #[test]
+    fn is_team_uuid_rejects_missing_hyphen() {
+        // Right length, wrong separator at position 8
+        assert!(!is_team_uuid("36885b3c11bf0-4f85-a357-c5b858c31de4"));
+    }
+
+    #[test]
+    fn is_team_uuid_rejects_non_hex() {
+        // 'g' is not a hex digit
+        assert!(!is_team_uuid("g6885b3c-1bf0-4f85-a357-c5b858c31de4"));
+    }
+
+    #[test]
+    fn is_team_uuid_rejects_team_name_with_hyphens() {
+        // Plausible team names with hyphens shouldn't pass as UUIDs.
+        assert!(!is_team_uuid("backend-platform-team-lead-group-main"));
+        assert!(!is_team_uuid("Platform Ops"));
+    }
 
     #[test]
     fn is_me_keyword_lowercase() {
