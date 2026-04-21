@@ -8,7 +8,7 @@
 
 1. `team_field_id` is configured in `config.global.fields`
 2. At least one returned issue has a populated team UUID under `fields.<team_field_id>`
-3. Output is in `Table` mode (skipped for JSON since JSON consumers see the raw UUID under `fields.extra`)
+3. Output is in `Table` mode (skipped for JSON since JSON consumers see the raw UUID under `fields.<team_field_id>`)
 
 Two other list-like commands show the same issues but omit the Team column, breaking UX consistency:
 
