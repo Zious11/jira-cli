@@ -189,7 +189,12 @@ async fn sprint_current_omits_team_column_when_field_unconfigured() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Platform work"))
-        .stdout(predicate::str::contains("│ Team").not());
+        // Positive anchors: other expected headers must be present so the
+        // negative assertion below isn't vacuously true on an empty/errored
+        // table. Stays decoupled from comfy-table's box-drawing glyphs.
+        .stdout(predicate::str::contains("Assignee"))
+        .stdout(predicate::str::contains("Summary"))
+        .stdout(predicate::str::contains("Team").not());
 }
 
 /// `jr sprint current` omits the Team column when `team_field_id` IS
@@ -224,7 +229,9 @@ async fn sprint_current_omits_team_column_when_no_issue_has_team() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Untagged work"))
-        .stdout(predicate::str::contains("│ Team").not());
+        .stdout(predicate::str::contains("Assignee"))
+        .stdout(predicate::str::contains("Summary"))
+        .stdout(predicate::str::contains("Team").not());
 }
 
 /// Mount the two prereq mocks for `board view` against a kanban board:
@@ -324,5 +331,111 @@ async fn board_view_kanban_omits_team_column_when_no_issue_has_team() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Untagged ticket"))
-        .stdout(predicate::str::contains("│ Team").not());
+        .stdout(predicate::str::contains("Assignee"))
+        .stdout(predicate::str::contains("Summary"))
+        .stdout(predicate::str::contains("Team").not());
+}
+
+/// When an issue carries a team UUID that isn't in the local cache, the
+/// column renders the raw UUID (fallback). Parallel to
+/// `test_view_renders_team_uuid_fallback_when_not_cached` in cli_handler.rs
+/// for the issue-view path. Locks in the UUID fallback behavior so a
+/// refactor returning "-" or panicking is caught.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sprint_current_falls_back_to_uuid_when_team_not_cached() {
+    let server = MockServer::start().await;
+    mount_sprint_prereqs(&server).await;
+
+    let issues = vec![issue_with_team(
+        "PROJ-1",
+        "Uncached team",
+        "In Progress",
+        "team-uuid-orphan",
+    )];
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/sprint/100/issue"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::sprint_issues_response(issues, 1)),
+        )
+        .mount(&server)
+        .await;
+
+    // Empty cache dir — teams.json not written, so the UUID→name map is
+    // empty and the UUID falls through as the display value.
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_config_with_team_field(config_dir.path());
+
+    jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["--project", "PROJ", "sprint", "current"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Team"))
+        .stdout(predicate::str::contains("team-uuid-orphan"));
+}
+
+/// JSON mode produces identical issue payloads regardless of whether
+/// `team_field_id` is configured — team resolution is Table-mode only.
+/// The raw UUID is already under `fields.<team_field_id>` and JSON consumers
+/// resolve locally. Locks in the Table-mode gate that list.rs, sprint.rs,
+/// and board.rs all share.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sprint_current_json_output_unchanged_when_team_field_configured() {
+    let server = MockServer::start().await;
+    mount_sprint_prereqs(&server).await;
+
+    let issues = vec![issue_with_team(
+        "PROJ-1",
+        "JSON mode work",
+        "In Progress",
+        "team-uuid-platform",
+    )];
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/sprint/100/issue"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::sprint_issues_response(issues, 1)),
+        )
+        .mount(&server)
+        .await;
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_team_cache(cache_dir.path());
+    write_config_with_team_field(config_dir.path());
+
+    // Override the default --output table from jr_cmd_with_xdg by passing
+    // --output json explicitly (last arg wins in clap).
+    let mut cmd = Command::cargo_bin("jr").unwrap();
+    cmd.env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "--no-input",
+            "--output",
+            "json",
+            "--project",
+            "PROJ",
+            "sprint",
+            "current",
+        ]);
+    let output = cmd.output().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Raw UUID must be present (under fields.<team_field_id>); the resolved
+    // team name must NOT appear (JSON mode skips resolution).
+    assert!(
+        stdout.contains("team-uuid-platform"),
+        "JSON must surface raw UUID; got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("\"Platform\""),
+        "JSON must not embed resolved team name; got: {stdout}"
+    );
 }

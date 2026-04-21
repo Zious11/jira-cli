@@ -218,8 +218,17 @@ async fn handle_view(
     // Team column gating mirrors handle_list in src/cli/issue/list.rs
     // (per #246): show only when team_field_id is configured AND at least
     // one issue has a populated team.
+    //
+    // Skipped entirely in JSON mode — `print_output` only serializes `issues`
+    // under OutputFormat::Json and ignores `rows`, so the cache read + map
+    // build would be wasted filesystem I/O. JSON consumers already see the
+    // raw UUID under `fields.extra[team_field_id]` and can resolve locally.
+    // Team cache read is best-effort for display — a miss falls back to
+    // rendering the raw UUID.
     let client_verbose = client.verbose();
-    let team_displays: Vec<String> = if let Some(field_id) = team_field_id {
+    let team_displays: Vec<String> = if matches!(output_format, OutputFormat::Table)
+        && let Some(field_id) = team_field_id
+    {
         let uuids: Vec<Option<String>> = issues
             .iter()
             .map(|i| i.fields.team_id(field_id, client_verbose))

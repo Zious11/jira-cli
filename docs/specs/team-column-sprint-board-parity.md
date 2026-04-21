@@ -28,13 +28,12 @@ Two other list-like commands show the same issues but omit the Team column, brea
 
 ## Design
 
-Each handler gains the same local pattern:
+Each handler gains the same local pattern, with a small structural variation driven by existing code shape (see per-file notes below):
 
 ```rust
-let team_field_id = config.global.fields.team_field_id.as_deref();
-
 // Request the team field in the API call's `extra` slice so the raw UUID
 // is returned under `issue.fields.extra[team_field_id]`.
+let team_field_id = config.global.fields.team_field_id.as_deref();
 let mut extra: Vec<&str> = sp_field_id.iter().copied().collect();
 if let Some(t) = team_field_id {
     extra.push(t);
@@ -42,10 +41,12 @@ if let Some(t) = team_field_id {
 
 // ... fetch issues via get_sprint_issues / search_issues with &extra ...
 
-// Table-only: resolve UUIDs → display strings once.
-let team_displays: Vec<String> = if matches!(output_format, OutputFormat::Table)
-    && let Some(field_id) = team_field_id
-{
+// Table-only: resolve UUIDs → display strings once. The Table-mode gate
+// is structurally enforced either via a chained `matches!()` guard
+// (list.rs, board.rs) or by being nested inside the `OutputFormat::Table`
+// match arm (sprint.rs). Both achieve the same effect: no cache I/O for
+// JSON consumers.
+let team_displays: Vec<String> = if let Some(field_id) = team_field_id {
     let uuids: Vec<Option<String>> = issues
         .iter()
         .map(|i| i.fields.team_id(field_id, client.verbose()))
@@ -102,7 +103,7 @@ let headers = issue_table_headers(sp_field_id.is_some(), /* show_assets */ false
 
 Integration tests in new file `tests/team_column_parity.rs`:
 
-- `sprint_current_shows_team_column_when_populated` — mock a sprint with 2 issues carrying team UUIDs, configure `team_field_id`, mock the team cache, run `jr sprint current --board-id N --output json` (wait — JSON mode skips the column; test via table mode by asserting stdout contains "Team" header + resolved team name). Use stdout inspection pattern from existing integration tests.
+- `sprint_current_shows_team_column_when_populated` — mock a sprint with 2 issues carrying team UUIDs, configure `team_field_id`, pre-populate the team cache, and assert Table-mode stdout contains both the "Team" header and resolved team names.
 - `sprint_current_omits_team_column_when_field_id_not_configured` — no `team_field_id` in config → no Team header in stdout.
 - `sprint_current_omits_team_column_when_no_issue_has_team` — `team_field_id` configured but zero issues have populated team → no Team header.
 - `board_view_kanban_shows_team_column_when_populated` — same as sprint but via `jr board view` with a kanban board mock.
