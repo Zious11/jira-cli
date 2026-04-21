@@ -3,12 +3,16 @@ use crate::types::jira::User;
 use anyhow::Result;
 
 /// Maximum users requested per page. Atlassian's effective server-side cap
-/// for `/user/search` and related endpoints is 100 — requesting more is ignored.
+/// for `/user/search` and related endpoints is 100 — requesting more is
+/// silently clamped to 100 by the server.
 const USER_PAGE_SIZE: u32 = 100;
 
 /// Safety bound on the pagination loop. Atlassian documents a 1000-user hard
-/// cap on these endpoints, so at USER_PAGE_SIZE=100 we need at most 10
-/// iterations; 15 leaves 50% headroom against pathological server behavior.
+/// cap on these endpoints, so at `USER_PAGE_SIZE=100` the loop terminates
+/// naturally (empty page) by iteration 11. The 15-iteration bound is purely
+/// defensive against pathological server behavior (e.g., Atlassian silently
+/// raising the cap). Users in practice see at most ~1000 users; if the loop
+/// ever exits via this cap, `search_users_all` emits a stderr warning.
 const USER_PAGINATION_SAFETY_CAP: u32 = 15;
 
 impl JiraClient {
@@ -70,20 +74,30 @@ impl JiraClient {
     /// The endpoint returns a flat JSON array with no `isLast` / `total`
     /// metadata, and its docs note responses "usually return fewer users
     /// than specified in `maxResults`" due to post-page filtering. The only
-    /// reliable termination signal is an empty response.
+    /// reliable termination signal is an empty response — a non-empty short
+    /// page is NOT end-of-data, and breaking on it would silently truncate.
     pub async fn search_users_all(&self, query: &str) -> Result<Vec<User>> {
         let mut all: Vec<User> = Vec::new();
         let mut start_at: u32 = 0;
+        let mut reached_end = false;
         for _ in 0..USER_PAGINATION_SAFETY_CAP {
             let page = self
                 .search_users_page(query, start_at, USER_PAGE_SIZE)
                 .await?;
             if page.is_empty() {
+                reached_end = true;
                 break;
             }
             let fetched = page.len() as u32;
             all.extend(page);
             start_at = start_at.saturating_add(fetched);
+        }
+        if !reached_end {
+            eprintln!(
+                "warning: user search hit pagination safety cap ({} pages, {} users); results may be incomplete",
+                USER_PAGINATION_SAFETY_CAP,
+                all.len()
+            );
         }
         Ok(all)
     }
@@ -171,7 +185,8 @@ impl JiraClient {
     ///
     /// Same termination rules as `search_users_all`: empty response is the only
     /// reliable end-of-data signal (the endpoint returns a flat array with no
-    /// `isLast` or `total` envelope metadata).
+    /// `isLast` or `total` envelope metadata). A non-empty short page is NOT
+    /// end-of-data.
     pub async fn search_assignable_users_by_project_all(
         &self,
         query: &str,
@@ -179,6 +194,7 @@ impl JiraClient {
     ) -> Result<Vec<User>> {
         let mut all: Vec<User> = Vec::new();
         let mut start_at: u32 = 0;
+        let mut reached_end = false;
         for _ in 0..USER_PAGINATION_SAFETY_CAP {
             let page = self
                 .search_assignable_users_by_project_page(
@@ -189,11 +205,19 @@ impl JiraClient {
                 )
                 .await?;
             if page.is_empty() {
+                reached_end = true;
                 break;
             }
             let fetched = page.len() as u32;
             all.extend(page);
             start_at = start_at.saturating_add(fetched);
+        }
+        if !reached_end {
+            eprintln!(
+                "warning: assignable user search hit pagination safety cap ({} pages, {} users); results may be incomplete",
+                USER_PAGINATION_SAFETY_CAP,
+                all.len()
+            );
         }
         Ok(all)
     }

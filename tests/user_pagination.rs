@@ -177,7 +177,66 @@ async fn search_users_all_propagates_error_mid_pagination() {
 
     let client = JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
     let result = client.search_users_all("u").await;
-    assert!(result.is_err(), "500 on page 2 must propagate");
+    let err = result.expect_err("500 on page 2 must propagate");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("500"),
+        "error must surface the 500 status, got: {msg}"
+    );
+}
+
+/// Atlassian docs warn that the user-search endpoint "usually returns fewer
+/// users than specified in maxResults" due to post-page filtering. A short
+/// non-empty page is NOT end-of-data; the loop must keep paginating until it
+/// sees a truly empty page. This pins that contract: page 2 returns 35 users
+/// (short), page 3 returns 100 again (proving short didn't mean EOF), page 4
+/// empties and ends the loop.
+#[tokio::test]
+async fn search_users_all_continues_past_short_non_empty_page() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/search"))
+        .and(query_param("startAt", "0"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(users_page(100, "p1")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/search"))
+        .and(query_param("startAt", "100"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(users_page(35, "p2")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/search"))
+        .and(query_param("startAt", "135"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(users_page(100, "p3")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/search"))
+        .and(query_param("startAt", "235"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::user_search_response(vec![])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let users = client.search_users_all("u").await.expect("must succeed");
+    assert_eq!(
+        users.len(),
+        235,
+        "must keep paginating past a short non-empty page (100 + 35 + 100)"
+    );
 }
 
 /// `search_assignable_users_by_project_all` paginates the assignable-users
