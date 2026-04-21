@@ -3,7 +3,7 @@ mod common;
 
 use assert_cmd::Command;
 use predicates::prelude::*;
-use wiremock::matchers::{body_partial_json, method, path, query_param};
+use wiremock::matchers::{body_partial_json, method, path, path_regex, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Build a `jr` command pre-configured for handler-level testing.
@@ -1691,4 +1691,206 @@ async fn test_verbose_omits_body_line_for_get() {
         .success()
         .stderr(predicate::str::contains("[verbose] GET"))
         .stderr(predicate::str::contains("[verbose] body:").not());
+}
+
+/// UUID pass-through (issue #190): `--team <uuid>` must skip cache +
+/// name-resolution entirely and send the UUID straight to the customfield.
+/// GraphQL metadata and the teams list endpoint should never be hit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_edit_team_uuid_pass_through_skips_cache_lookup() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/HDL-700"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": {
+                "customfield_10100": "deadbeef-cafe-4123-8abc-0123456789ab"
+            }
+        })))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // The team-resolution path must NOT fire for a UUID input — asserting 0
+    // hits on both endpoints pins the short-circuit at resolve_team_field's
+    // entry.
+    Mock::given(method("POST"))
+        .and(path("/gateway/api/graphql"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path_regex("/gateway/api/public/teams/v1/org/.*/teams"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_test_team_cache(cache_dir.path());
+    write_test_config_with_team_field(config_dir.path());
+
+    jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "issue",
+            "edit",
+            "HDL-700",
+            "--team",
+            "deadbeef-cafe-4123-8abc-0123456789ab",
+        ])
+        .assert()
+        .success();
+}
+
+/// Write a config.toml with both team_field_id AND an instance URL —
+/// `resolve_org_id` extracts the hostname from `instance.url` to build the
+/// GraphQL query for org metadata. Required for any test that exercises
+/// the fetch_and_cache_teams path (auto-refresh on miss).
+fn write_test_config_with_team_and_instance(config_home: &std::path::Path, url: &str) {
+    let conf_dir = config_home.join("jr");
+    std::fs::create_dir_all(&conf_dir).unwrap();
+    std::fs::write(
+        conf_dir.join("config.toml"),
+        format!(
+            "[instance]\nurl = \"{url}\"\n[fields]\nteam_field_id = \"{TEST_TEAM_FIELD_ID}\"\n"
+        ),
+    )
+    .unwrap();
+}
+
+/// Auto-refresh on miss (issue #190): when the cached team list doesn't
+/// contain the requested name, refresh once and retry. Locks the fetch
+/// count at exactly 1 — no infinite refresh loop.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_edit_team_auto_refreshes_cache_on_miss() {
+    let server = MockServer::start().await;
+
+    // Cache only has "Platform" / "Platform Ops". User asks for "Alpha
+    // Team", which isn't in the stale cache but IS in the fresh API
+    // response (teams_list_json includes "Alpha Team" → team-uuid-alpha).
+    Mock::given(method("POST"))
+        .and(path("/gateway/api/graphql"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(common::fixtures::graphql_org_metadata_json()),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path_regex("/gateway/api/public/teams/v1/org/.*/teams"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(common::fixtures::teams_list_json()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/HDL-701"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": { "customfield_10100": "team-uuid-alpha" }
+        })))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_test_team_cache(cache_dir.path());
+    write_test_config_with_team_and_instance(config_dir.path(), &server.uri());
+
+    jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["issue", "edit", "HDL-701", "--team", "Alpha Team"])
+        .assert()
+        .success();
+}
+
+/// Auto-refresh on miss is bounded to a single retry: when the name is
+/// missing from both the stale cache and a fresh fetch, `resolve_team_field`
+/// bails instead of looping. Asserts exactly one teams fetch fires.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_edit_team_auto_refresh_gives_up_after_one_retry() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/gateway/api/graphql"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(common::fixtures::graphql_org_metadata_json()),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path_regex("/gateway/api/public/teams/v1/org/.*/teams"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(common::fixtures::teams_list_json()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Never reached — the command must bail before any PUT.
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/HDL-702"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_test_team_cache(cache_dir.path());
+    write_test_config_with_team_and_instance(config_dir.path(), &server.uri());
+
+    jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["issue", "edit", "HDL-702", "--team", "NonexistentTeam"])
+        .assert()
+        .failure()
+        // Post-refresh miss: the message must say "checked a fresh team list"
+        // and NOT suggest running `jr team list --refresh` (which the user
+        // just effectively did).
+        .stderr(predicate::str::contains("No team matching"))
+        .stderr(predicate::str::contains("checked a fresh team list"))
+        .stderr(predicate::str::contains("jr team list --refresh").not());
+}
+
+/// Cold-cache miss: no local team cache exists, so step 3 fetches fresh
+/// immediately. A missing name in that fresh fetch must also emit the
+/// "checked a fresh team list" message — not the "run jr team list
+/// --refresh" advice, which would be misleading since we just fetched.
+/// Pins the `fetched_fresh = cache_was_fresh || retry_fetched` logic.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_edit_team_cold_cache_miss_avoids_stale_advice() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/gateway/api/graphql"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(common::fixtures::graphql_org_metadata_json()),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    // Fresh fetch returns teams_list_json (Alpha / Beta / Security) — no
+    // "NonexistentTeam". The retry at step 5 is skipped because the cache
+    // was already fresh, but the bail must still use the fresh-list
+    // message (exercises cache_was_fresh=true, retry_fetched=false).
+    Mock::given(method("GET"))
+        .and(path_regex("/gateway/api/public/teams/v1/org/.*/teams"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(common::fixtures::teams_list_json()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let cache_dir = tempfile::tempdir().unwrap(); // no teams.json — cold cache
+    let config_dir = tempfile::tempdir().unwrap();
+    write_test_config_with_team_and_instance(config_dir.path(), &server.uri());
+
+    jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["issue", "edit", "HDL-703", "--team", "NonexistentTeam"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("No team matching"))
+        .stderr(predicate::str::contains("checked a fresh team list"))
+        .stderr(predicate::str::contains("jr team list --refresh").not());
 }
