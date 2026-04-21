@@ -931,7 +931,7 @@ pub(super) async fn handle_view(
             }
 
             if let Some(field_id) = team_field_id {
-                if let Some(team_uuid) = issue.fields.team_id(field_id) {
+                if let Some(team_uuid) = issue.fields.team_id(field_id, client.verbose()) {
                     let team_display = match crate::cache::read_team_cache() {
                         Ok(Some(c)) => c
                             .teams
