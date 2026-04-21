@@ -2,6 +2,15 @@ use crate::api::client::JiraClient;
 use crate::types::jira::User;
 use anyhow::Result;
 
+/// Maximum users requested per page. Atlassian's effective server-side cap
+/// for `/user/search` and related endpoints is 100 — requesting more is ignored.
+const USER_PAGE_SIZE: u32 = 100;
+
+/// Safety bound on the pagination loop. Atlassian documents a 1000-user hard
+/// cap on these endpoints, so at USER_PAGE_SIZE=100 we need at most 10
+/// iterations; 15 leaves 50% headroom against pathological server behavior.
+const USER_PAGINATION_SAFETY_CAP: u32 = 15;
+
 impl JiraClient {
     pub async fn get_myself(&self) -> Result<User> {
         self.get("/rest/api/3/myself").await
@@ -27,6 +36,56 @@ impl JiraClient {
             );
         };
         Ok(users)
+    }
+
+    /// Single-page variant of `search_users` with explicit `startAt` / `maxResults`.
+    /// Private — used only by `search_users_all` to implement the loop.
+    async fn search_users_page(
+        &self,
+        query: &str,
+        start_at: u32,
+        max_results: u32,
+    ) -> Result<Vec<User>> {
+        let path = format!(
+            "/rest/api/3/user/search?query={}&startAt={}&maxResults={}",
+            urlencoding::encode(query),
+            start_at,
+            max_results,
+        );
+        let raw: serde_json::Value = self.get(&path).await?;
+        let users: Vec<User> = if raw.is_array() {
+            serde_json::from_value(raw)?
+        } else if let Some(values) = raw.get("values") {
+            serde_json::from_value(values.clone())?
+        } else {
+            anyhow::bail!(
+                "Unexpected response from user search API. Expected a JSON array or object with \"values\" key."
+            );
+        };
+        Ok(users)
+    }
+
+    /// Paginate `/rest/api/3/user/search` until exhausted.
+    ///
+    /// The endpoint returns a flat JSON array with no `isLast` / `total`
+    /// metadata, and its docs note responses "usually return fewer users
+    /// than specified in `maxResults`" due to post-page filtering. The only
+    /// reliable termination signal is an empty response.
+    pub async fn search_users_all(&self, query: &str) -> Result<Vec<User>> {
+        let mut all: Vec<User> = Vec::new();
+        let mut start_at: u32 = 0;
+        for _ in 0..USER_PAGINATION_SAFETY_CAP {
+            let page = self
+                .search_users_page(query, start_at, USER_PAGE_SIZE)
+                .await?;
+            if page.is_empty() {
+                break;
+            }
+            let fetched = page.len() as u32;
+            all.extend(page);
+            start_at = start_at.saturating_add(fetched);
+        }
+        Ok(all)
     }
 
     /// Search for users assignable to a specific issue.
