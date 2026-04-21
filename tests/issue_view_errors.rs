@@ -150,9 +150,10 @@ async fn issue_view_corrupt_team_cache_falls_back_gracefully() {
 
     let jr_cache_dir = cache_dir.path().join("jr");
     std::fs::create_dir_all(&jr_cache_dir).unwrap();
-    // Truncated JSON — serde_json::from_str returns Err, which read_cache
-    // maps to Ok(None) per src/cache.rs:23-26.
-    std::fs::write(jr_cache_dir.join("teams.json"), "{ not json").unwrap();
+    // Truncated JSON — simulates a partial write (disk-full, interrupted
+    // process). serde_json::from_str returns Err, which read_cache maps to
+    // Ok(None) per src/cache.rs:23-26.
+    std::fs::write(jr_cache_dir.join("teams.json"), "{\"teams\": [").unwrap();
 
     let jr_config_dir = config_dir.path().join("jr");
     std::fs::create_dir_all(&jr_config_dir).unwrap();
