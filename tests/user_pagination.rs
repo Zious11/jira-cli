@@ -98,3 +98,84 @@ async fn search_users_all_paginates_and_concatenates() {
     assert_eq!(users[200].display_name, "p3 User 000");
     assert_eq!(users[226].display_name, "p3 User 026");
 }
+
+/// Loop stops as soon as a page comes back empty; subsequent startAt
+/// windows are not requested. The strict `.expect(1)` on each mock,
+/// combined with wiremock rejecting unmatched requests, asserts that
+/// any fourth request would fail.
+#[tokio::test]
+async fn search_users_all_stops_on_empty_page() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/search"))
+        .and(query_param("query", "u"))
+        .and(query_param("startAt", "0"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(users_page(100, "p1")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/search"))
+        .and(query_param("query", "u"))
+        .and(query_param("startAt", "100"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::user_search_response(vec![])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let users = client.search_users_all("u").await.expect("must succeed");
+    assert_eq!(users.len(), 100);
+}
+
+/// If the API never returns an empty page (pathological behavior), the loop
+/// stops at USER_PAGINATION_SAFETY_CAP iterations = 15 requests.
+#[tokio::test]
+async fn search_users_all_respects_safety_cap() {
+    let server = MockServer::start().await;
+
+    // Unbounded responder for any startAt; .expect(15) pins the iteration cap.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/search"))
+        .and(query_param("query", "u"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(users_page(100, "cap")))
+        .expect(15)
+        .mount(&server)
+        .await;
+
+    let client = JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let users = client.search_users_all("u").await.expect("must succeed");
+    assert_eq!(users.len(), 1500, "15 iterations * 100 per page = 1500");
+}
+
+/// If a page request fails mid-pagination, the error is propagated and the
+/// loop does not silently return partial results.
+#[tokio::test]
+async fn search_users_all_propagates_error_mid_pagination() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/search"))
+        .and(query_param("startAt", "0"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(users_page(100, "p1")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/search"))
+        .and(query_param("startAt", "100"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let result = client.search_users_all("u").await;
+    assert!(result.is_err(), "500 on page 2 must propagate");
+}
