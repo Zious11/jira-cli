@@ -141,8 +141,11 @@ async fn issue_list_default_caps_at_thirty() {
 }
 
 /// `jr user search --all` returns all users from a response that contains
-/// more than DEFAULT_LIMIT entries. `search_users` is flat (no pagination),
-/// so truncation is purely client-side.
+/// more than DEFAULT_LIMIT entries. As of #189, `--all` triggers true
+/// server-side pagination — the client requests page 1 (startAt=0) and
+/// receives 35 users (a short page due to Atlassian's post-paging filter),
+/// then advances `startAt` by the requested `maxResults` (100) and sees an
+/// empty page that terminates the loop.
 #[tokio::test]
 async fn user_search_all_returns_more_than_default_cap() {
     let server = MockServer::start().await;
@@ -150,11 +153,12 @@ async fn user_search_all_returns_more_than_default_cap() {
     let users: Vec<(String, String, bool)> = (1..=35)
         .map(|i| (format!("acc-{i:03}"), format!("User {i:03}"), true))
         .collect();
-    // Constrain the `query` param so the test fails if `search_users`
-    // stops sending it (or renames the param).
+
+    // Page 1 (startAt=0): 35 users.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/user/search"))
         .and(query_param("query", "User"))
+        .and(query_param("startAt", "0"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(common::fixtures::user_search_response(
                 users
@@ -162,6 +166,18 @@ async fn user_search_all_returns_more_than_default_cap() {
                     .map(|(a, d, t)| (a.as_str(), d.as_str(), *t))
                     .collect(),
             )),
+        )
+        .mount(&server)
+        .await;
+    // Page 2 (startAt=100, advanced by requested maxResults, NOT by returned
+    // count): empty — terminates the loop.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/search"))
+        .and(query_param("query", "User"))
+        .and(query_param("startAt", "100"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::user_search_response(vec![])),
         )
         .mount(&server)
         .await;
