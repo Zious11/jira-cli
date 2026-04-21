@@ -222,7 +222,8 @@ async fn handle_view(
     // Skipped entirely in JSON mode — `print_output` only serializes `issues`
     // under OutputFormat::Json and ignores `rows`, so the cache read + map
     // build would be wasted filesystem I/O. JSON consumers already see the
-    // raw UUID under `fields.extra[team_field_id]` and can resolve locally.
+    // raw UUID under `fields.<team_field_id>` (IssueFields::extra is
+    // `#[serde(flatten)]`) and can resolve locally.
     // Team cache read is best-effort for display — a miss falls back to
     // rendering the raw UUID.
     let client_verbose = client.verbose();

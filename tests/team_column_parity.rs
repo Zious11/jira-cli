@@ -156,6 +156,24 @@ async fn sprint_current_shows_team_column_when_populated() {
         .stdout(predicate::str::contains("Team"))
         .stdout(predicate::str::contains("Platform"))
         .stdout(predicate::str::contains("Growth"));
+
+    // Pin the contract that the handler added team_field_id to the API
+    // call's `fields` query param. Without this, a future refactor that
+    // drops `extra.push(t)` would still pass the display-layer assertions
+    // above because the fixture always includes the team field regardless.
+    let requests = server
+        .received_requests()
+        .await
+        .expect("received_requests recording");
+    let sprint_issue_req = requests
+        .iter()
+        .find(|r| r.url.path() == "/rest/agile/1.0/sprint/100/issue")
+        .expect("sprint issue request must have been made");
+    let query = sprint_issue_req.url.query().unwrap_or("");
+    assert!(
+        query.contains(TEST_TEAM_FIELD_ID),
+        "sprint API call must request the team custom field in `fields=`; got: {query}"
+    );
 }
 
 /// `jr sprint current` omits the Team column when `team_field_id` is not
@@ -298,6 +316,24 @@ async fn board_view_kanban_shows_team_column_when_populated() {
         .stdout(predicate::str::contains("Team"))
         .stdout(predicate::str::contains("Platform"))
         .stdout(predicate::str::contains("Growth"));
+
+    // Pin that the POST /search/jql body's `fields` array includes the team
+    // custom field. Without this, dropping `extra.push(t)` in board.rs would
+    // still pass the display assertions above because the fixture ignores
+    // the request body shape.
+    let requests = server
+        .received_requests()
+        .await
+        .expect("received_requests recording");
+    let search_req = requests
+        .iter()
+        .find(|r| r.url.path() == "/rest/api/3/search/jql")
+        .expect("search/jql request must have been made");
+    let body = String::from_utf8_lossy(&search_req.body);
+    assert!(
+        body.contains(TEST_TEAM_FIELD_ID),
+        "board view must request the team custom field in `fields`; got body: {body}"
+    );
 }
 
 /// `jr board view` (kanban) omits the Team column when configured but no
@@ -375,13 +411,19 @@ async fn sprint_current_falls_back_to_uuid_when_team_not_cached() {
         .stdout(predicate::str::contains("team-uuid-orphan"));
 }
 
-/// JSON mode produces identical issue payloads regardless of whether
-/// `team_field_id` is configured — team resolution is Table-mode only.
-/// The raw UUID is already under `fields.<team_field_id>` and JSON consumers
-/// resolve locally. Locks in the Table-mode gate that list.rs, sprint.rs,
-/// and board.rs all share.
+/// JSON mode keeps the raw team UUID and does not resolve it to a team name.
+/// When `team_field_id` is configured, the UUID remains under
+/// `fields.<team_field_id>` for JSON consumers to resolve locally; the Team
+/// column and name resolution are Table-mode only. Locks in the shared
+/// Table-mode gate that list.rs, sprint.rs, and board.rs all use.
+///
+/// Note: the handler still requests the team custom field in the API call
+/// when `team_field_id` is set, so the JSON payload's field set is NOT
+/// identical to the un-configured case — the intended guarantee here is
+/// specifically "no UUID→name resolution in JSON output," not full payload
+/// identity across configurations.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sprint_current_json_output_unchanged_when_team_field_configured() {
+async fn sprint_current_json_output_keeps_team_uuid_without_resolution() {
     let server = MockServer::start().await;
     mount_sprint_prereqs(&server).await;
 

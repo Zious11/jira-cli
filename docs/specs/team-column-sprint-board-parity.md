@@ -7,7 +7,7 @@
 `jr issue list` shows a Team column when:
 
 1. `team_field_id` is configured in `config.global.fields`
-2. At least one returned issue has a populated team UUID under `fields.extra[team_field_id]`
+2. At least one returned issue has a populated team UUID under `fields.<team_field_id>`
 3. Output is in `Table` mode (skipped for JSON since JSON consumers see the raw UUID under `fields.extra`)
 
 Two other list-like commands show the same issues but omit the Team column, breaking UX consistency:
@@ -32,7 +32,7 @@ Each handler gains the same local pattern, with a small structural variation dri
 
 ```rust
 // Request the team field in the API call's `extra` slice so the raw UUID
-// is returned under `issue.fields.extra[team_field_id]`.
+// is returned under `issue.fields.<team_field_id>`.
 let team_field_id = config.global.fields.team_field_id.as_deref();
 let mut extra: Vec<&str> = sp_field_id.iter().copied().collect();
 if let Some(t) = team_field_id {
@@ -103,21 +103,24 @@ let headers = issue_table_headers(sp_field_id.is_some(), /* show_assets */ false
 
 Integration tests in new file `tests/team_column_parity.rs`:
 
-- `sprint_current_shows_team_column_when_populated` — mock a sprint with 2 issues carrying team UUIDs, configure `team_field_id`, pre-populate the team cache, and assert Table-mode stdout contains both the "Team" header and resolved team names.
-- `sprint_current_omits_team_column_when_field_id_not_configured` — no `team_field_id` in config → no Team header in stdout.
+- `sprint_current_shows_team_column_when_populated` — mock a sprint with 2 issues carrying team UUIDs, configure `team_field_id`, pre-populate the team cache, assert Table-mode stdout contains both the "Team" header and resolved team names, AND assert via `received_requests()` that the GET request's `fields=` query param includes the team field ID.
+- `sprint_current_omits_team_column_when_field_unconfigured` — no `team_field_id` in config → no Team header in stdout.
 - `sprint_current_omits_team_column_when_no_issue_has_team` — `team_field_id` configured but zero issues have populated team → no Team header.
-- `board_view_kanban_shows_team_column_when_populated` — same as sprint but via `jr board view` with a kanban board mock.
-- `board_view_scrum_shows_team_column_when_populated` — scrum path (delegates to `get_sprint_issues`).
-- `board_view_omits_team_column_when_field_id_not_configured`.
+- `sprint_current_falls_back_to_uuid_when_team_not_cached` — team UUID present on issue but not in the local cache → column renders the raw UUID (mirrors the existing `issue view` fallback test pattern).
+- `sprint_current_json_output_keeps_team_uuid_without_resolution` — JSON mode: asserts the raw UUID is in output and the resolved team name is NOT, locking in the Table-mode gate.
+- `board_view_kanban_shows_team_column_when_populated` — kanban path via `jr board view`, same display assertions plus a `received_requests()` check that the POST body's `fields` array includes the team field ID.
+- `board_view_kanban_omits_team_column_when_no_issue_has_team` — kanban gating symmetric to the sprint "no issue has team" case.
 
 Unit tests: none needed. The pattern is already covered by `list.rs` unit tests; the handlers are thin glue.
+
+The scrum branch of `board view` delegates to `get_sprint_issues` and shares the display block with the kanban branch, so it is covered transitively by the sprint and kanban tests above rather than an additional dedicated case.
 
 ## Backwards Compatibility
 
 - Users without `team_field_id` configured: no visible change. Team column skipped as before.
 - Users with `team_field_id` configured but no team-bearing issues in the query: no visible change. Column skipped.
 - Users with `team_field_id` configured AND team-bearing issues: Team column now appears in sprint/board output (matching `issue list`).
-- JSON output: unchanged in all cases. `fields.extra[team_field_id]` continues to surface the raw UUID.
+- JSON output: the raw UUID remains under `fields.<team_field_id>` with no name resolution. When `team_field_id` is configured the handler requests the team custom field, so the JSON payload's field set differs from the unconfigured case — but no UUID→name resolution ever runs in JSON mode.
 
 No flag changes, no API surface changes.
 
