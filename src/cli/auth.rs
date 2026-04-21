@@ -370,28 +370,40 @@ mod tests {
 
     // ── resolve_credential ───────────────────────────────────────────
     //
-    // Env-reading tests use per-test env var names to avoid races with
-    // parallel test threads. `EnvGuard` removes the var on drop so a panic
-    // mid-test doesn't leak state to later tests in the same process.
+    // Env-reading tests must serialize process-environment mutation across
+    // parallel test threads. `std::env::set_var` / `remove_var` are unsafe
+    // in Rust 2024 because concurrent env access (even on different keys)
+    // is UB — C's getenv/setenv aren't thread-safe. `EnvGuard` holds
+    // `ENV_LOCK` for its full lifetime and removes the var on drop so a
+    // panic mid-test doesn't leak state to later tests in the same
+    // process. Matches the pattern in src/config.rs::ENV_MUTEX.
 
-    struct EnvGuard(&'static str);
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct EnvGuard {
+        key: &'static str,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
 
     impl EnvGuard {
         fn set(key: &'static str, value: &str) -> Self {
-            // SAFETY: test-local keys (all prefixed `_JR_TEST_`), never read
-            // by production code. The Drop impl unsets the same key.
+            let lock = ENV_LOCK.lock().unwrap();
+            // SAFETY: test env mutation is serialized by ENV_LOCK, held for
+            // this guard's lifetime. The Drop impl unsets the same
+            // test-local key before releasing the lock.
             unsafe {
                 std::env::set_var(key, value);
             }
-            EnvGuard(key)
+            EnvGuard { key, _lock: lock }
         }
     }
 
     impl Drop for EnvGuard {
         fn drop(&mut self) {
-            // SAFETY: matches the test-local key set in `EnvGuard::set`.
+            // SAFETY: matches the test-local key set in `EnvGuard::set`
+            // while `_lock` is still held by this `EnvGuard`.
             unsafe {
-                std::env::remove_var(self.0);
+                std::env::remove_var(self.key);
             }
         }
     }
@@ -451,6 +463,9 @@ mod tests {
 
     #[test]
     fn resolve_credential_no_input_errors_when_missing() {
+        // resolve_credential reads env via std::env::var — hold ENV_LOCK to
+        // serialize against set/remove calls in sibling tests.
+        let _lock = ENV_LOCK.lock().unwrap();
         let err = resolve_credential(
             None,
             "_JR_TEST_UNSET_MISSING",
@@ -475,6 +490,8 @@ mod tests {
 
     #[test]
     fn resolve_credential_oauth_hint_appears_in_error() {
+        // Same env-read serialization as the test above.
+        let _lock = ENV_LOCK.lock().unwrap();
         let err = resolve_credential(
             None,
             "_JR_TEST_UNSET_OAUTH",
