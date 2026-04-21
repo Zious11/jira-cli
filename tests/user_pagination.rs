@@ -451,3 +451,70 @@ async fn user_search_no_all_issues_single_request() {
         "single-call path must not send maxResults; got query: {query}"
     );
 }
+
+/// End-to-end: when the server never returns an empty page, the safety cap
+/// bites and the command emits a stderr warning so the truncation is
+/// observable instead of silent. Pins the user-visible warning contract.
+#[tokio::test]
+async fn user_search_all_cli_emits_safety_cap_warning() {
+    let server = MockServer::start().await;
+
+    // Every request (any startAt) returns a full 100-user page — the loop
+    // never sees an empty response and must exit via the safety cap.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/search"))
+        .and(query_param("query", "u"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(users_page(100, "cap")))
+        .expect(15)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_json(&server.uri())
+        .args(["user", "search", "u", "--all"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "command must still succeed when cap hits; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("hit pagination safety cap"),
+        "stderr must contain the safety-cap warning so truncation is observable; got: {stderr}"
+    );
+}
+
+/// Same safety-cap warning contract for `user list --all` (assignable users
+/// endpoint). The two paginated methods have parallel warning behavior; both
+/// need explicit coverage so a refactor of either one doesn't silently drop
+/// the stderr notice.
+#[tokio::test]
+async fn user_list_all_cli_emits_safety_cap_warning() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .and(query_param("projectKeys", "FOO"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(users_page(100, "cap")))
+        .expect(15)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_json(&server.uri())
+        .args(["user", "list", "--project", "FOO", "--all"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "command must still succeed when cap hits; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("hit pagination safety cap"),
+        "stderr must contain the safety-cap warning so truncation is observable; got: {stderr}"
+    );
+}
