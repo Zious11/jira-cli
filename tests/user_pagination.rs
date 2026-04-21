@@ -179,3 +179,53 @@ async fn search_users_all_propagates_error_mid_pagination() {
     let result = client.search_users_all("u").await;
     assert!(result.is_err(), "500 on page 2 must propagate");
 }
+
+/// `search_assignable_users_by_project_all` paginates the assignable-users
+/// endpoint and concatenates pages in order.
+#[tokio::test]
+async fn search_assignable_users_by_project_all_paginates() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .and(query_param("query", ""))
+        .and(query_param("projectKeys", "FOO"))
+        .and(query_param("startAt", "0"))
+        .and(query_param("maxResults", "100"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(users_page(100, "p1")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .and(query_param("projectKeys", "FOO"))
+        .and(query_param("startAt", "100"))
+        .and(query_param("maxResults", "100"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(users_page(40, "p2")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .and(query_param("projectKeys", "FOO"))
+        .and(query_param("startAt", "140"))
+        .and(query_param("maxResults", "100"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::user_search_response(vec![])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let users = client
+        .search_assignable_users_by_project_all("", "FOO")
+        .await
+        .expect("pagination must succeed");
+    assert_eq!(users.len(), 140);
+    assert_eq!(users[0].display_name, "p1 User 000");
+    assert_eq!(users[100].display_name, "p2 User 000");
+}

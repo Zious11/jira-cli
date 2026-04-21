@@ -138,6 +138,66 @@ impl JiraClient {
         Ok(users)
     }
 
+    /// Single-page variant of `search_assignable_users_by_project`.
+    /// Private — used only by `search_assignable_users_by_project_all`.
+    async fn search_assignable_users_by_project_page(
+        &self,
+        query: &str,
+        project_key: &str,
+        start_at: u32,
+        max_results: u32,
+    ) -> Result<Vec<User>> {
+        let path = format!(
+            "/rest/api/3/user/assignable/multiProjectSearch?query={}&projectKeys={}&startAt={}&maxResults={}",
+            urlencoding::encode(query),
+            urlencoding::encode(project_key),
+            start_at,
+            max_results,
+        );
+        let raw: serde_json::Value = self.get(&path).await?;
+        let users: Vec<User> = if raw.is_array() {
+            serde_json::from_value(raw)?
+        } else if let Some(values) = raw.get("values") {
+            serde_json::from_value(values.clone())?
+        } else {
+            anyhow::bail!(
+                "Unexpected response from assignable user search API. Expected a JSON array or object with \"values\" key."
+            );
+        };
+        Ok(users)
+    }
+
+    /// Paginate `/rest/api/3/user/assignable/multiProjectSearch` until exhausted.
+    ///
+    /// Same termination rules as `search_users_all`: empty response is the only
+    /// reliable end-of-data signal (the endpoint returns a flat array with no
+    /// `isLast` or `total` envelope metadata).
+    pub async fn search_assignable_users_by_project_all(
+        &self,
+        query: &str,
+        project_key: &str,
+    ) -> Result<Vec<User>> {
+        let mut all: Vec<User> = Vec::new();
+        let mut start_at: u32 = 0;
+        for _ in 0..USER_PAGINATION_SAFETY_CAP {
+            let page = self
+                .search_assignable_users_by_project_page(
+                    query,
+                    project_key,
+                    start_at,
+                    USER_PAGE_SIZE,
+                )
+                .await?;
+            if page.is_empty() {
+                break;
+            }
+            let fetched = page.len() as u32;
+            all.extend(page);
+            start_at = start_at.saturating_add(fetched);
+        }
+        Ok(all)
+    }
+
     /// Fetch a single user by accountId.
     ///
     /// Returns a `JrError::ApiError { status: 404 | 400, .. }` when the
