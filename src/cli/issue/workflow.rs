@@ -156,11 +156,12 @@ pub(super) async fn handle_move(
             }
             MatchResult::Ambiguous(matches) => {
                 if no_input {
-                    bail!(
+                    return Err(JrError::UserError(format!(
                         "Ambiguous transition \"{}\". Matches: {}",
                         target_status,
                         matches.join(", ")
-                    );
+                    ))
+                    .into());
                 }
                 // Interactive disambiguation
                 eprintln!(
