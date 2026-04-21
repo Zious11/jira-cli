@@ -1940,7 +1940,7 @@ async fn test_list_shows_team_column_with_cached_name() {
 }
 
 /// When an issue's team UUID isn't in the cache, the Team column shows the
-/// raw UUID as a fallback. Cache population is out of scope for `jr list`.
+/// raw UUID as a fallback. Cache population is out of scope for `jr issue list`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_list_team_column_falls_back_to_uuid_when_cache_missing() {
     let server = MockServer::start().await;

@@ -485,8 +485,15 @@ pub(super) async fn handle_list(
     // AND at least one issue has a populated team. Build the UUID→name map
     // once so per-row resolution is O(1) against the HashMap (rather than a
     // linear scan of the cache vec for every row).
+    //
+    // Skipped entirely in JSON mode: `print_output` only serializes `issues`
+    // under OutputFormat::Json and ignores `rows`, so the cache read + map
+    // build would be wasted filesystem I/O. JSON consumers already see the
+    // raw UUID under `fields.extra[team_field_id]` and can resolve locally.
     let client_verbose = client.verbose();
-    let team_displays: Vec<String> = if let Some(field_id) = team_field_id {
+    let team_displays: Vec<String> = if matches!(output_format, OutputFormat::Table)
+        && let Some(field_id) = team_field_id
+    {
         let uuids: Vec<Option<String>> = issues
             .iter()
             .map(|i| i.fields.team_id(field_id, client_verbose))
