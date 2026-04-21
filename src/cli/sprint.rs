@@ -230,7 +230,13 @@ async fn handle_current(
 
     let sprint = &sprints[0];
     let sp_field_id = config.global.fields.story_points_field_id.as_deref();
-    let extra: Vec<&str> = sp_field_id.iter().copied().collect();
+    let team_field_id = config.global.fields.team_field_id.as_deref();
+    let mut extra: Vec<&str> = sp_field_id.iter().copied().collect();
+    // Request the team field so handle_current can surface a Team column
+    // matching `jr issue list` — per #246 parity follow-up to #191.
+    if let Some(t) = team_field_id {
+        extra.push(t);
+    }
     let result = client
         .get_sprint_issues(sprint.id, None, effective_limit, &extra)
         .await?;
@@ -276,13 +282,55 @@ async fn handle_current(
 
             eprintln!();
 
+            // Team column gating mirrors handle_list in src/cli/issue/list.rs
+            // (per #246): show only when team_field_id is configured AND at
+            // least one issue has a populated team. Build UUID→name map once
+            // so per-row resolution is O(1).
+            let client_verbose = client.verbose();
+            let team_displays: Vec<String> = if let Some(field_id) = team_field_id {
+                let uuids: Vec<Option<String>> = issues
+                    .iter()
+                    .map(|i| i.fields.team_id(field_id, client_verbose))
+                    .collect();
+                if uuids.iter().any(|u| u.is_some()) {
+                    let team_map: std::collections::HashMap<String, String> =
+                        crate::cache::read_team_cache()
+                            .ok()
+                            .flatten()
+                            .map(|c| c.teams.into_iter().map(|t| (t.id, t.name)).collect())
+                            .unwrap_or_default();
+                    uuids
+                        .iter()
+                        .map(|u| match u {
+                            Some(uuid) => {
+                                team_map.get(uuid).cloned().unwrap_or_else(|| uuid.clone())
+                            }
+                            None => "-".to_string(),
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            };
+            let show_team_col = !team_displays.is_empty();
+
             let rows: Vec<Vec<String>> = issues
                 .iter()
-                .map(|issue| super::issue::format_issue_row(issue, sp_field_id, None, None))
+                .enumerate()
+                .map(|(i, issue)| {
+                    let team = if show_team_col {
+                        Some(team_displays[i].as_str())
+                    } else {
+                        None
+                    };
+                    super::issue::format_issue_row(issue, sp_field_id, None, team)
+                })
                 .collect();
             output::print_output(
                 output_format,
-                &super::issue::issue_table_headers(sp_field_id.is_some(), false, false),
+                &super::issue::issue_table_headers(sp_field_id.is_some(), false, show_team_col),
                 &rows,
                 &issues,
             )?;
