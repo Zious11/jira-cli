@@ -71,11 +71,17 @@ impl JiraClient {
 
     /// Paginate `/rest/api/3/user/search` until exhausted.
     ///
-    /// The endpoint returns a flat JSON array with no `isLast` / `total`
-    /// metadata, and its docs note responses "usually return fewer users
-    /// than specified in `maxResults`" due to post-page filtering. The only
-    /// reliable termination signal is an empty response — a non-empty short
-    /// page is NOT end-of-data, and breaking on it would silently truncate.
+    /// Jira uses **fixed-window pagination**: the server selects the raw
+    /// user range `[startAt, startAt + maxResults)` and *then* applies
+    /// permission filtering, returning only visible users — which may be
+    /// fewer than `maxResults`. Advancing `startAt` by the returned count
+    /// would overlap windows and cause duplicates
+    /// (see JRACLOUD-71293). The correct advance is always by
+    /// `USER_PAGE_SIZE` (the requested window size).
+    ///
+    /// A non-empty short page is NOT end-of-data — more visible users may
+    /// live in later windows. The only reliable termination signal is an
+    /// empty response.
     pub async fn search_users_all(&self, query: &str) -> Result<Vec<User>> {
         let mut all: Vec<User> = Vec::new();
         let mut start_at: u32 = 0;
@@ -88,9 +94,8 @@ impl JiraClient {
                 reached_end = true;
                 break;
             }
-            let fetched = page.len() as u32;
             all.extend(page);
-            start_at = start_at.saturating_add(fetched);
+            start_at = start_at.saturating_add(USER_PAGE_SIZE);
         }
         if !reached_end {
             eprintln!(
@@ -183,10 +188,10 @@ impl JiraClient {
 
     /// Paginate `/rest/api/3/user/assignable/multiProjectSearch` until exhausted.
     ///
-    /// Same termination rules as `search_users_all`: empty response is the only
-    /// reliable end-of-data signal (the endpoint returns a flat array with no
-    /// `isLast` or `total` envelope metadata). A non-empty short page is NOT
-    /// end-of-data.
+    /// Same fixed-window semantics as `search_users_all`: advance `startAt`
+    /// by `USER_PAGE_SIZE`, not by returned count, to avoid overlap/duplicate
+    /// users. Empty response is the only reliable end-of-data signal; a
+    /// non-empty short page is NOT end-of-data.
     pub async fn search_assignable_users_by_project_all(
         &self,
         query: &str,
@@ -208,9 +213,8 @@ impl JiraClient {
                 reached_end = true;
                 break;
             }
-            let fetched = page.len() as u32;
             all.extend(page);
-            start_at = start_at.saturating_add(fetched);
+            start_at = start_at.saturating_add(USER_PAGE_SIZE);
         }
         if !reached_end {
             eprintln!(

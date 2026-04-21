@@ -25,21 +25,27 @@ fn jr_cmd_json(server_uri: &str) -> Command {
 }
 
 /// Build a user-search fixture of `count` users with names/ids derived from `prefix`.
-/// `Box::leak` converts the owned Strings into `&'static str` so they can be fed
-/// into `user_search_response`'s `Vec<(&str, &str, bool)>` signature.
+/// Constructs the JSON response directly from owned `String`s to avoid leaking
+/// memory just to satisfy the borrowed-string fixture signature.
 fn users_page(count: usize, prefix: &str) -> Value {
-    let users: Vec<(&str, &str, bool)> = (0..count)
+    let users: Vec<Value> = (0..count)
         .map(|i| {
-            let acc = Box::leak(format!("{prefix}-acc-{i:03}").into_boxed_str()) as &str;
-            let name = Box::leak(format!("{prefix} User {i:03}").into_boxed_str()) as &str;
-            (acc, name, true)
+            serde_json::json!({
+                "accountId": format!("{prefix}-acc-{i:03}"),
+                "displayName": format!("{prefix} User {i:03}"),
+                "emailAddress": format!("{prefix}.user.{i:03}@test.com"),
+                "active": true,
+            })
         })
         .collect();
-    common::fixtures::user_search_response(users)
+    Value::Array(users)
 }
 
 /// `search_users_all` paginates three sequential pages (100 + 100 + 27)
-/// and returns 227 users concatenated in order.
+/// and returns 227 users concatenated in order. `startAt` advances by the
+/// requested page size (100) each iteration regardless of returned count —
+/// Jira uses fixed-window pagination, so advancing by the short page's
+/// length would re-scan already-seen raw users.
 #[tokio::test]
 async fn search_users_all_paginates_and_concatenates() {
     let server = MockServer::start().await;
@@ -77,7 +83,7 @@ async fn search_users_all_paginates_and_concatenates() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/user/search"))
         .and(query_param("query", "u"))
-        .and(query_param("startAt", "227"))
+        .and(query_param("startAt", "300"))
         .and(query_param("maxResults", "100"))
         .respond_with(
             ResponseTemplate::new(200)
@@ -188,9 +194,10 @@ async fn search_users_all_propagates_error_mid_pagination() {
 /// Atlassian docs warn that the user-search endpoint "usually returns fewer
 /// users than specified in maxResults" due to post-page filtering. A short
 /// non-empty page is NOT end-of-data; the loop must keep paginating until it
-/// sees a truly empty page. This pins that contract: page 2 returns 35 users
-/// (short), page 3 returns 100 again (proving short didn't mean EOF), page 4
-/// empties and ends the loop.
+/// sees a truly empty page. Pins two contracts at once: (a) short response
+/// doesn't trigger early termination, and (b) `startAt` advances by the
+/// requested window size (100) regardless of returned count — advancing by
+/// 35 would re-scan users[35..100] and produce duplicates per JRACLOUD-71293.
 #[tokio::test]
 async fn search_users_all_continues_past_short_non_empty_page() {
     let server = MockServer::start().await;
@@ -213,7 +220,7 @@ async fn search_users_all_continues_past_short_non_empty_page() {
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/user/search"))
-        .and(query_param("startAt", "135"))
+        .and(query_param("startAt", "200"))
         .respond_with(ResponseTemplate::new(200).set_body_json(users_page(100, "p3")))
         .expect(1)
         .mount(&server)
@@ -221,7 +228,7 @@ async fn search_users_all_continues_past_short_non_empty_page() {
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/user/search"))
-        .and(query_param("startAt", "235"))
+        .and(query_param("startAt", "300"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(common::fixtures::user_search_response(vec![])),
@@ -269,7 +276,7 @@ async fn search_assignable_users_by_project_all_paginates() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
         .and(query_param("projectKeys", "FOO"))
-        .and(query_param("startAt", "140"))
+        .and(query_param("startAt", "200"))
         .and(query_param("maxResults", "100"))
         .respond_with(
             ResponseTemplate::new(200)
@@ -315,7 +322,7 @@ async fn user_search_all_cli_paginates() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/user/search"))
         .and(query_param("query", "u"))
-        .and(query_param("startAt", "150"))
+        .and(query_param("startAt", "200"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(common::fixtures::user_search_response(vec![])),
@@ -365,7 +372,7 @@ async fn user_list_all_cli_paginates() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
         .and(query_param("projectKeys", "FOO"))
-        .and(query_param("startAt", "135"))
+        .and(query_param("startAt", "200"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(common::fixtures::user_search_response(vec![])),
@@ -391,26 +398,18 @@ async fn user_list_all_cli_paginates() {
 
 /// Without `--all`, `jr user search` must still make exactly one API request
 /// (the existing single-call path) — no accidental pagination.
+/// Asserts via `received_requests()` that the request query string contains
+/// no `startAt` or `maxResults` — a loose matcher like `query_param("query", "u")`
+/// would still match a paginated request, so the post-hoc inspection is
+/// required to actually guard against accidental pagination regression.
 #[tokio::test]
 async fn user_search_no_all_issues_single_request() {
     let server = MockServer::start().await;
 
-    // No startAt/maxResults constraints — proves the legacy single-call path
-    // (which doesn't send those params) is still in use.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/user/search"))
         .and(query_param("query", "u"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(common::fixtures::user_search_response(
-                (0..50)
-                    .map(|i| {
-                        let acc = Box::leak(format!("acc-{i:03}").into_boxed_str()) as &str;
-                        let name = Box::leak(format!("User {i:03}").into_boxed_str()) as &str;
-                        (acc, name, true)
-                    })
-                    .collect(),
-            )),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(users_page(50, "u")))
         .expect(1)
         .mount(&server)
         .await;
@@ -432,5 +431,23 @@ async fn user_search_no_all_issues_single_request() {
         30,
         "default cap should truncate to 30, got {}",
         arr.len()
+    );
+
+    // Primary guard: verify the actual request the binary sent contains no
+    // pagination parameters. Without `--all` the single-call path must not
+    // send `startAt` or `maxResults`.
+    let requests = server
+        .received_requests()
+        .await
+        .expect("received_requests must be recording");
+    assert_eq!(requests.len(), 1, "expected exactly one API request");
+    let query = requests[0].url.query().unwrap_or("");
+    assert!(
+        !query.contains("startAt"),
+        "single-call path must not send startAt; got query: {query}"
+    );
+    assert!(
+        !query.contains("maxResults"),
+        "single-call path must not send maxResults; got query: {query}"
     );
 }

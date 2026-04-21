@@ -32,6 +32,7 @@ From the official Atlassian REST API v3 documentation (`api-group-user-search`):
 - Both endpoints return a **flat JSON array** of User objects — no envelope, no `total`, no `isLast`, no `nextPageToken`. The existing helpers in `src/api/pagination.rs` do not apply.
 - Both endpoints are subject to a documented **hard cap of 1000 users**: "the operations in this resource only return users found within the first 1000 users."
 - The docs warn that responses "usually return fewer users than specified in `maxResults`" because filtering happens *after* the server selects a page from the first 1000. **Short-page-as-end-of-data is NOT a reliable termination signal.** The only reliable termination signal for these endpoints is an empty-array response.
+- Jira uses **fixed-window pagination**: the server selects raw users `[startAt, startAt + maxResults)` and then applies permission filtering. Each call advances through the raw window. Pagination therefore must advance `startAt` by the requested `maxResults` (the window size), **not** by the returned count. Advancing by the returned (post-filter) count overlaps windows and produces duplicate users — see [JRACLOUD-71293](https://jira.atlassian.com/browse/JRACLOUD-71293).
 - The Atlassian developer community confirms `maxResults` is effectively capped at 100 server-side, even if you request more.
 
 ## Design
@@ -83,9 +84,8 @@ async fn search_users_all(&self, query: &str) -> Result<Vec<User>> {
         if page.is_empty() {
             break;
         }
-        let fetched = page.len() as u32;
         all.extend(page);
-        start_at = start_at.saturating_add(fetched);
+        start_at = start_at.saturating_add(USER_PAGE_SIZE);
     }
     Ok(all)
 }
@@ -94,7 +94,7 @@ async fn search_users_all(&self, query: &str) -> Result<Vec<User>> {
 Key properties:
 
 - **Termination:** empty response only. No `isLast`/`total` to rely on; short pages are filtering artifacts, not end-of-data.
-- **Advance by actual page length**, not by `max_results`. This is the correct `startAt` for the next window even when the server returns <100 results.
+- **Advance `startAt` by `USER_PAGE_SIZE`**, not by the returned count. Jira's fixed-window pagination scans raw users `[startAt, startAt + maxResults)` then filters; advancing by the filtered count would overlap windows and produce duplicate users (JRACLOUD-71293).
 - **Safety cap: 15 iterations.** Defensive guard against pathological server behavior; generous vs the documented 1000-user hard cap (10 iterations at page 100).
 - **Error handling: abort.** Any `?` propagation from a page fetch aborts the loop and returns the error. No retry, no partial-success. Matches `atlassian-python-api` and `jira-node` behavior (validated via Perplexity).
 - **Rate limiting** is inherited from `JiraClient::get()` which already handles 429 + `Retry-After` via `src/api/rate_limit.rs`.

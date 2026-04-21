@@ -201,9 +201,8 @@ pub async fn search_users_all(&self, query: &str) -> Result<Vec<User>> {
         if page.is_empty() {
             break;
         }
-        let fetched = page.len() as u32;
         all.extend(page);
-        start_at = start_at.saturating_add(fetched);
+        start_at = start_at.saturating_add(USER_PAGE_SIZE);
     }
     Ok(all)
 }
@@ -494,9 +493,8 @@ pub async fn search_assignable_users_by_project_all(
         if page.is_empty() {
             break;
         }
-        let fetched = page.len() as u32;
         all.extend(page);
-        start_at = start_at.saturating_add(fetched);
+        start_at = start_at.saturating_add(USER_PAGE_SIZE);
     }
     Ok(all)
 }
@@ -819,7 +817,7 @@ git commit -m "feat(cli): wire --all to paginate user search and list (#189)"
 | `USER_PAGE_SIZE = 100` constant | Task 1 |
 | `USER_PAGINATION_SAFETY_CAP = 15` constant | Task 1 |
 | Empty-response termination | Tasks 1 (impl) + 2 (test) |
-| `startAt` advanced by actual page length, not `max_results` | Task 1 (impl `start_at.saturating_add(fetched)`) |
+| `startAt` advanced by requested `USER_PAGE_SIZE` (fixed-window pagination), not by returned count | Task 1 (impl `start_at.saturating_add(USER_PAGE_SIZE)`) |
 | Abort-on-error semantics | Task 2 (test) |
 | CLI branch on `--all` for `user search` | Task 4 |
 | CLI branch on `--all` for `user list` | Task 4 |

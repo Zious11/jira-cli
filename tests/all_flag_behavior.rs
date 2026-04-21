@@ -142,8 +142,10 @@ async fn issue_list_default_caps_at_thirty() {
 
 /// `jr user search --all` returns all users from a response that contains
 /// more than DEFAULT_LIMIT entries. As of #189, `--all` triggers true
-/// server-side pagination — the client requests page 1 (startAt=0), sees
-/// 35 users in one shot, then stops when the next page returns empty.
+/// server-side pagination — the client requests page 1 (startAt=0) and
+/// receives 35 users (a short page due to Atlassian's post-paging filter),
+/// then advances `startAt` by the requested `maxResults` (100) and sees an
+/// empty page that terminates the loop.
 #[tokio::test]
 async fn user_search_all_returns_more_than_default_cap() {
     let server = MockServer::start().await;
@@ -167,11 +169,12 @@ async fn user_search_all_returns_more_than_default_cap() {
         )
         .mount(&server)
         .await;
-    // Page 2 (startAt=35): empty — terminates the loop.
+    // Page 2 (startAt=100, advanced by requested maxResults, NOT by returned
+    // count): empty — terminates the loop.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/user/search"))
         .and(query_param("query", "User"))
-        .and(query_param("startAt", "35"))
+        .and(query_param("startAt", "100"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(common::fixtures::user_search_response(vec![])),
