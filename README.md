@@ -71,6 +71,10 @@ new binary becomes the creator of fresh Keychain entries. **Click
 "Always Allow"** on the two prompts macOS shows during re-store —
 otherwise future commands will prompt again.
 
+For CI or headless boxes, pass credentials via env vars or flags
+(e.g. `JR_EMAIL="..." JR_API_TOKEN="$TOKEN" jr --no-input auth refresh`)
+so the flow completes without a TTY.
+
 Tracked in [#207](https://github.com/Zious11/jira-cli/issues/207). A
 longer-term fix (Developer ID signing) is tracked as a separate issue.
 
@@ -85,6 +89,12 @@ jr auth login
 
 # Or authenticate with OAuth 2.0 (requires your own OAuth app)
 jr auth login --oauth
+
+# Non-interactive (CI / agents): flags or env vars, no TTY required.
+# Prefer env vars for secrets — bare CLI args can leak via process lists.
+JR_EMAIL="you@example.com" JR_API_TOKEN="$TOKEN" jr --no-input auth login
+JR_OAUTH_CLIENT_ID="$ID" JR_OAUTH_CLIENT_SECRET="$SECRET" \
+    jr --no-input auth login --oauth
 
 # View your current sprint/board issues
 jr issue list --project FOO
@@ -134,7 +144,8 @@ jr issue comment KEY-123 "Deployed to staging"
 | Command | Description |
 |---------|-------------|
 | `jr init` | Configure Jira instance and authenticate |
-| `jr auth login` | Authenticate with API token (default) or `--oauth` for OAuth 2.0 |
+| `jr auth login` | Authenticate with API token (default) or `--oauth` for OAuth 2.0. Non-interactive: `--email`/`--token` or `JR_EMAIL`/`JR_API_TOKEN`; `--client-id`/`--client-secret` or `JR_OAUTH_CLIENT_ID`/`JR_OAUTH_CLIENT_SECRET` for OAuth |
+| `jr auth refresh` | Clear stored credentials and re-run login (same flags/env vars as `auth login`) |
 | `jr auth status` | Show authentication status |
 | `jr me` | Show current user info |
 | `jr issue list` | List issues (`--assignee`, `--reporter`, `--recent`, `--status`, `--open`, `--team`, `--asset KEY`, `--jql`, `--limit`/`--all`, `--points`, `--assets`) |
@@ -227,6 +238,7 @@ board_id = 42
 - `--url-only` prints URLs instead of opening a browser
 - State-changing commands are idempotent (exit 0 if already in target state)
 - Structured exit codes (see [Exit Codes](#exit-codes) table)
+- `auth login` / `auth refresh` accept credentials via flags (`--email`, `--token`, `--client-id`, `--client-secret`) or env vars (`JR_EMAIL`, `JR_API_TOKEN`, `JR_OAUTH_CLIENT_ID`, `JR_OAUTH_CLIENT_SECRET`) — no TTY required. Prefer env vars for secrets.
 
 ```bash
 # AI agent workflow example
