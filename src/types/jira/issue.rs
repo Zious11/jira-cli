@@ -84,8 +84,41 @@ impl IssueFields {
         self.extra.get(field_id)?.as_f64()
     }
 
-    pub fn team_id(&self, field_id: &str) -> Option<String> {
-        self.extra.get(field_id)?.as_str().map(String::from)
+    /// Extract the team UUID from the issue's team field.
+    ///
+    /// Returns `None` when the field is missing, null, or present but not
+    /// a JSON string. In the present-but-not-a-string case — typically an
+    /// object like `{"id": "..."}` from a misconfigured `team_field_id`
+    /// pointing at a non-Teams custom field — emits a once-per-process
+    /// `[verbose]` hint on stderr so users can diagnose the silent drop.
+    pub fn team_id(&self, field_id: &str, verbose: bool) -> Option<String> {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static LOGGED: AtomicBool = AtomicBool::new(false);
+        let value = self.extra.get(field_id)?;
+        match value.as_str() {
+            Some(s) => Some(s.to_string()),
+            None => {
+                if !value.is_null() && verbose && !LOGGED.swap(true, Ordering::Relaxed) {
+                    eprintln!(
+                        "[verbose] team field \"{field_id}\" has unexpected shape \
+                         (expected string UUID, got {}). Check team_field_id in config.",
+                        value_kind(value)
+                    );
+                }
+                None
+            }
+        }
+    }
+}
+
+fn value_kind(v: &serde_json::Value) -> &'static str {
+    match v {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "bool",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
     }
 }
 
@@ -187,7 +220,7 @@ mod tests {
             json!("36885b3c-1bf0-4f85-a357-c5b858c31de4"),
         );
         assert_eq!(
-            fields.team_id("customfield_10001"),
+            fields.team_id("customfield_10001", false),
             Some("36885b3c-1bf0-4f85-a357-c5b858c31de4".to_string())
         );
     }
@@ -195,13 +228,32 @@ mod tests {
     #[test]
     fn team_id_returns_none_for_null_value() {
         let fields = fields_with_extra("customfield_10001", json!(null));
-        assert_eq!(fields.team_id("customfield_10001"), None);
+        assert_eq!(fields.team_id("customfield_10001", false), None);
     }
 
     #[test]
     fn team_id_returns_none_for_missing_key() {
         let fields = IssueFields::default();
-        assert_eq!(fields.team_id("customfield_10001"), None);
+        assert_eq!(fields.team_id("customfield_10001", false), None);
+    }
+
+    #[test]
+    fn team_id_returns_none_for_object_value() {
+        // Misconfigured team_field_id pointing at a non-Teams custom field
+        // (e.g., user-picker) can deliver an object like {"id": "..."}.
+        // team_id returns None and — if verbose — logs once; with verbose=false
+        // here, this just pins the None return without touching the gate flag.
+        let fields = fields_with_extra(
+            "customfield_10001",
+            json!({"id": "36885b3c-1bf0-4f85-a357-c5b858c31de4"}),
+        );
+        assert_eq!(fields.team_id("customfield_10001", false), None);
+    }
+
+    #[test]
+    fn team_id_returns_none_for_array_value() {
+        let fields = fields_with_extra("customfield_10001", json!([1, 2, 3]));
+        assert_eq!(fields.team_id("customfield_10001", false), None);
     }
 
     #[test]
