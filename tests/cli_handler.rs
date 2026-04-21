@@ -1894,3 +1894,117 @@ async fn test_edit_team_cold_cache_miss_avoids_stale_advice() {
         .stderr(predicate::str::contains("checked a fresh team list"))
         .stderr(predicate::str::contains("jr team list --refresh").not());
 }
+
+// ── Team column in `issue list` (#191) ──────────────────────────────
+
+/// When `team_field_id` is configured AND at least one issue in the result
+/// has a populated team, the list output includes a Team column with the
+/// cached team name (not the raw UUID).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_list_shows_team_column_with_cached_name() {
+    let server = MockServer::start().await;
+    // Summary is deliberately chosen to NOT contain the team name
+    // ("Platform") so the `contains("Platform")` assertion below can only
+    // pass via the resolved Team column cell — not a false match against
+    // the Summary column.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response(vec![
+                common::fixtures::issue_response_with_team(
+                    "HDL-800",
+                    "Issue for backend work",
+                    TEST_TEAM_FIELD_ID,
+                    "team-uuid-abc",
+                ),
+            ]),
+        ))
+        .mount(&server)
+        .await;
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_test_team_cache(cache_dir.path()); // "team-uuid-abc" → "Platform"
+    write_test_config_with_team_field(config_dir.path());
+
+    jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["issue", "list", "--jql", "project = HDL"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Team")) // column header
+        .stdout(predicate::str::contains("Platform")) // resolved name (not in summary)
+        // Strong signal that resolution actually happened: the raw UUID
+        // must NOT appear in the output. If the cache lookup silently
+        // failed, we'd see "team-uuid-abc" in the Team cell instead.
+        .stdout(predicate::str::contains("team-uuid-abc").not());
+}
+
+/// When an issue's team UUID isn't in the cache, the Team column shows the
+/// raw UUID as a fallback. Cache population is out of scope for `jr issue list`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_list_team_column_falls_back_to_uuid_when_cache_missing() {
+    let server = MockServer::start().await;
+    // Summary is chosen to NOT contain "Team" so the column-header
+    // assertion below can only match the real "Team" header.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response(vec![
+                common::fixtures::issue_response_with_team(
+                    "HDL-801",
+                    "Issue with unknown owner",
+                    TEST_TEAM_FIELD_ID,
+                    "team-uuid-unknown",
+                ),
+            ]),
+        ))
+        .mount(&server)
+        .await;
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_test_team_cache(cache_dir.path()); // does NOT include team-uuid-unknown
+    write_test_config_with_team_field(config_dir.path());
+
+    jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["issue", "list", "--jql", "project = HDL"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Team")) // column header (summary has no "Team")
+        .stdout(predicate::str::contains("team-uuid-unknown")); // raw UUID fallback
+}
+
+/// Team column is omitted when no issue in the result has a populated team,
+/// even if `team_field_id` is configured — mirrors the Points/Assets gating.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_list_omits_team_column_when_no_issue_has_team() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response(vec![common::fixtures::issue_response(
+                "HDL-802",
+                "No team set",
+                "To Do",
+            )]),
+        ))
+        .mount(&server)
+        .await;
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_test_team_cache(cache_dir.path());
+    write_test_config_with_team_field(config_dir.path());
+
+    jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["issue", "list", "--jql", "project = HDL"])
+        .assert()
+        .success()
+        // Positive neighbour anchors the table shape — "Assignee" is always
+        // present in the header row. The negative on "Team" then asserts
+        // the column itself is absent without relying on box-drawing glyphs
+        // (which could change if comfy-table's default theme changes).
+        .stdout(predicate::str::contains("HDL-802"))
+        .stdout(predicate::str::contains("Assignee"))
+        .stdout(predicate::str::contains("Team").not());
+}
