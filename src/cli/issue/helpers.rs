@@ -83,10 +83,7 @@ pub(super) async fn resolve_team_field(
     // didn't match anything, the team was likely added upstream since the
     // last refresh. Fetch once transparently and retry. Bounded to a
     // single retry via `cache_was_fresh` — no infinite-refresh loop.
-    // `refreshed` tracks whether a retry happened so the bail message at
-    // step 6 can avoid the stale "run `jr team list --refresh`" advice.
-    let mut refreshed = false;
-    let (teams, match_result) =
+    let (teams, match_result, retry_fetched) =
         if matches!(match_result, crate::partial_match::MatchResult::None(_)) && !cache_was_fresh {
             if client.verbose() {
                 eprintln!("[verbose] team \"{team_name}\" not in cache, refreshing from server...");
@@ -94,11 +91,16 @@ pub(super) async fn resolve_team_field(
             let fresh = crate::cli::team::fetch_and_cache_teams(config, client).await?;
             let fresh_names: Vec<String> = fresh.iter().map(|t| t.name.clone()).collect();
             let retry = crate::partial_match::partial_match(team_name, &fresh_names);
-            refreshed = true;
-            (fresh, retry)
+            (fresh, retry, true)
         } else {
-            (teams, match_result)
+            (teams, match_result, false)
         };
+
+    // Any fetch during this call (either the initial cold-cache fetch at
+    // step 3 or the retry above) means the bail message at step 6 can
+    // avoid the stale "run `jr team list --refresh`" advice — the user
+    // just effectively did.
+    let fetched_fresh = cache_was_fresh || retry_fetched;
 
     match match_result {
         crate::partial_match::MatchResult::Exact(matched_name) => {
@@ -160,10 +162,9 @@ pub(super) async fn resolve_team_field(
             Ok((field_id, teams[idx].id.clone()))
         }
         crate::partial_match::MatchResult::None(_) => {
-            // Post-refresh miss: the cache was just fetched fresh, so advising
-            // "run jr team list --refresh" would be misleading. Tell the user
-            // the team genuinely doesn't exist.
-            if refreshed {
+            // Any fresh fetch this call (cold-cache or retry) means advising
+            // "run jr team list --refresh" would be misleading — we just did.
+            if fetched_fresh {
                 anyhow::bail!(
                     "No team matching \"{}\" (checked a fresh team list). \
                      Verify the team name or check access permissions.",
@@ -602,10 +603,28 @@ mod tests {
     }
 
     #[test]
-    fn is_team_uuid_rejects_team_name_with_hyphens() {
-        // Plausible team names with hyphens shouldn't pass as UUIDs.
-        assert!(!is_team_uuid("backend-platform-team-lead-group-main"));
-        assert!(!is_team_uuid("Platform Ops"));
+    fn is_team_uuid_rejects_plausible_team_name_with_hyphens() {
+        // Plausible team names shouldn't pass as UUIDs. 37 chars and 12 chars
+        // — both rejected by the length check (complements the 36-char
+        // hyphen-position test below).
+        assert!(!is_team_uuid("backend-platform-team-lead-group-main")); // 37
+        assert!(!is_team_uuid("Platform Ops")); // 12
+    }
+
+    #[test]
+    fn is_team_uuid_rejects_hyphens_in_wrong_position_at_36_chars() {
+        // 36-char hyphenated string with hyphens at non-UUID positions
+        // (12, 17, 22, 27 vs the required 8, 13, 18, 23). Exercises the
+        // per-position validation rather than the length gate.
+        assert!(!is_team_uuid("platform-ops-team-lead-group-mainxxx"));
+    }
+
+    #[test]
+    fn is_team_uuid_rejects_non_hex_at_hex_position() {
+        // 36-char UUID-shaped string with correct hyphen positions but
+        // non-hex ('x') in the final group. Exercises the hex-slot check
+        // at indices past all hyphen positions.
+        assert!(!is_team_uuid("aaaaaaaa-aaaa-aaaa-aaaa-xxxxxxxxxxxx"));
     }
 
     #[test]

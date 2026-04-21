@@ -1853,3 +1853,44 @@ async fn test_edit_team_auto_refresh_gives_up_after_one_retry() {
         .stderr(predicate::str::contains("checked a fresh team list"))
         .stderr(predicate::str::contains("jr team list --refresh").not());
 }
+
+/// Cold-cache miss: no local team cache exists, so step 3 fetches fresh
+/// immediately. A missing name in that fresh fetch must also emit the
+/// "checked a fresh team list" message — not the "run jr team list
+/// --refresh" advice, which would be misleading since we just fetched.
+/// Pins the `fetched_fresh = cache_was_fresh || retry_fetched` logic.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_edit_team_cold_cache_miss_avoids_stale_advice() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/gateway/api/graphql"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(common::fixtures::graphql_org_metadata_json()),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    // Fresh fetch returns teams_list_json (Alpha / Beta / Security) — no
+    // "NonexistentTeam". The retry at step 5 is skipped because the cache
+    // was already fresh, but the bail must still use the fresh-list
+    // message (exercises cache_was_fresh=true, retry_fetched=false).
+    Mock::given(method("GET"))
+        .and(path_regex("/gateway/api/public/teams/v1/org/.*/teams"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(common::fixtures::teams_list_json()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let cache_dir = tempfile::tempdir().unwrap(); // no teams.json — cold cache
+    let config_dir = tempfile::tempdir().unwrap();
+    write_test_config_with_team_and_instance(config_dir.path(), &server.uri());
+
+    jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["issue", "edit", "HDL-703", "--team", "NonexistentTeam"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("No team matching"))
+        .stderr(predicate::str::contains("checked a fresh team list"))
+        .stderr(predicate::str::contains("jr team list --refresh").not());
+}
