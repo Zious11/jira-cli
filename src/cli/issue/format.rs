@@ -6,18 +6,27 @@ use crate::types::jira::Issue;
 pub fn format_issue_rows_public(issues: &[Issue]) -> Vec<Vec<String>> {
     issues
         .iter()
-        .map(|issue| format_issue_row(issue, None, None))
+        .map(|issue| format_issue_row(issue, None, None, None))
         .collect()
 }
 
-/// Build a single table row for an issue, optionally including story points and linked assets.
+/// Build a single table row for an issue, optionally including story points,
+/// linked assets, and team.
+///
+/// `team` is a per-row pre-resolved display string: caller looks up the team
+/// UUID in the cache and passes the human-readable name or a fallback. When
+/// the enclosing column is not shown (the `show_team` flag in
+/// `issue_table_headers`), callers pass `None` and the slot is skipped.
 pub fn format_issue_row(
     issue: &Issue,
     sp_field_id: Option<&str>,
     assets: Option<&[LinkedAsset]>,
+    team: Option<&str>,
 ) -> Vec<String> {
-    let col_count =
-        6 + if sp_field_id.is_some() { 1 } else { 0 } + if assets.is_some() { 1 } else { 0 };
+    let col_count = 6
+        + if sp_field_id.is_some() { 1 } else { 0 }
+        + if assets.is_some() { 1 } else { 0 }
+        + if team.is_some() { 1 } else { 0 };
     let mut row = Vec::with_capacity(col_count);
     row.push(issue.key.clone());
     row.push(
@@ -61,6 +70,9 @@ pub fn format_issue_row(
             .map(|a| a.display_name.clone())
             .unwrap_or_else(|| "Unassigned".into()),
     );
+    if let Some(team_display) = team {
+        row.push(team_display.to_string());
+    }
     if let Some(linked) = assets {
         row.push(format_linked_assets_short(linked));
     }
@@ -68,13 +80,21 @@ pub fn format_issue_row(
     row
 }
 
-/// Headers matching `format_issue_row` output.
-pub fn issue_table_headers(show_points: bool, show_assets: bool) -> Vec<&'static str> {
+/// Headers matching `format_issue_row` output. `show_team` mirrors the
+/// per-row `team` option: when true, each row must supply a `team` string.
+pub fn issue_table_headers(
+    show_points: bool,
+    show_assets: bool,
+    show_team: bool,
+) -> Vec<&'static str> {
     let mut headers = vec!["Key", "Type", "Status", "Priority"];
     if show_points {
         headers.push("Points");
     }
     headers.push("Assignee");
+    if show_team {
+        headers.push("Team");
+    }
     if show_assets {
         headers.push("Assets");
     }

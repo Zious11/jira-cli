@@ -89,7 +89,7 @@ async fn handle_view(
         .await?;
 
     if keys.is_empty() {
-        let headers = issue_table_headers(false, false);
+        let headers = issue_table_headers(false, false, false);
         let empty: Vec<Vec<String>> = vec![];
         let empty_issues: Vec<crate::types::jira::Issue> = vec![];
         return output::print_output(output_format, &headers, &empty, &empty_issues);
@@ -105,7 +105,7 @@ async fn handle_view(
     let issues = reorder_by_queue_position(search_result.issues, &keys);
 
     // Step 4: Output
-    let headers = issue_table_headers(false, false);
+    let headers = issue_table_headers(false, false, false);
     let rows = format_issue_rows_public(&issues);
     output::print_output(output_format, &headers, &rows, &issues)
 }

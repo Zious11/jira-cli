@@ -149,7 +149,13 @@ pub(super) async fn handle_list(
     };
 
     let sp_field_id = config.global.fields.story_points_field_id.as_deref();
+    let team_field_id = config.global.fields.team_field_id.as_deref();
     let mut extra: Vec<&str> = sp_field_id.iter().copied().collect();
+    // Request team field on list output so handle_list can surface a Team
+    // column per #191 (shown only when ≥1 issue has a populated team).
+    if let Some(t) = team_field_id {
+        extra.push(t);
+    }
 
     // Resolve team name to (field_id, uuid) before building JQL
     let resolved_team = if let Some(ref team_name) = team {
@@ -475,6 +481,39 @@ pub(super) async fn handle_list(
         }
     }
 
+    // Team column gating (#191): show only when team_field_id is configured
+    // AND at least one issue has a populated team. Resolve UUIDs to names via
+    // the team cache once, per-row lookup is O(1) against the map.
+    let client_verbose = client.verbose();
+    let team_displays: Vec<String> = if let Some(field_id) = team_field_id {
+        let uuids: Vec<Option<String>> = issues
+            .iter()
+            .map(|i| i.fields.team_id(field_id, client_verbose))
+            .collect();
+        if uuids.iter().any(|u| u.is_some()) {
+            // Team cache read is best-effort for display — an Err or missing
+            // entry falls back to the UUID. Cache population is not this
+            // command's responsibility.
+            let cache = crate::cache::read_team_cache().ok().flatten();
+            uuids
+                .iter()
+                .map(|u| match u {
+                    Some(uuid) => cache
+                        .as_ref()
+                        .and_then(|c| c.teams.iter().find(|t| t.id == *uuid))
+                        .map(|t| t.name.clone())
+                        .unwrap_or_else(|| uuid.clone()),
+                    None => "-".to_string(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+    let show_team_col = !team_displays.is_empty();
+
     let rows: Vec<Vec<String>> = issues
         .iter()
         .enumerate()
@@ -484,10 +523,16 @@ pub(super) async fn handle_list(
             } else {
                 None
             };
-            format::format_issue_row(issue, effective_sp, assets)
+            let team = if show_team_col {
+                Some(team_displays[i].as_str())
+            } else {
+                None
+            };
+            format::format_issue_row(issue, effective_sp, assets, team)
         })
         .collect();
-    let headers = format::issue_table_headers(effective_sp.is_some(), show_assets_col);
+    let headers =
+        format::issue_table_headers(effective_sp.is_some(), show_assets_col, show_team_col);
     output::print_output(output_format, &headers, &rows, &issues)?;
 
     if has_more && !all {
