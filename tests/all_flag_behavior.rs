@@ -1,4 +1,5 @@
-//! End-to-end coverage for `--all` disabling the default-limit cap (#186).
+//! End-to-end coverage for `--all` disabling the default-limit cap
+//! (#186 + #248).
 //!
 //! `resolve_effective_limit` is unit-tested in `src/cli/mod.rs`, but without
 //! handler tests there's no regression guarantee that commands actually pass
@@ -6,16 +7,20 @@
 //! a response with more than `DEFAULT_LIMIT` (30) items and asserts the
 //! command returns the full set under `--all` and the 30-row cap without.
 //!
-//! Scope note: this PR covers `issue list` and `user search`. The other four
-//! `--all` commands (`user list`, `board view`, `sprint current`,
-//! `issue changelog`) are deferred to a follow-up issue.
+//! Initial coverage (#186) landed for `issue list` and `user search`.
+//! #248 extends this to the remaining `--all`-accepting commands:
+//! `user list`, `board view`, `sprint current`, `issue changelog`.
+//!
+//! Note: `user list --all` paginate+concat is already covered in
+//! `tests/user_pagination.rs` (#189). The test here focuses on the
+//! previously-missing negative case — default 30-row cap without `--all`.
 
 #[allow(dead_code)]
 mod common;
 
 use assert_cmd::Command;
 use serde_json::Value;
-use wiremock::matchers::{body_partial_json, method, path, query_param};
+use wiremock::matchers::{body_partial_json, method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Build a `jr` command pre-configured for non-interactive JSON output
@@ -242,5 +247,440 @@ async fn user_search_default_caps_at_thirty() {
         30,
         "default limit should truncate to 30, got {}",
         arr.len()
+    );
+}
+
+// =============================================================================
+// #248 — remaining `--all`-accepting commands
+// =============================================================================
+
+/// Without `--all`, `jr user list --project PROJ` truncates to DEFAULT_LIMIT (30).
+/// The positive `--all` counterpart for this command is covered by
+/// `tests/user_pagination.rs::user_list_all_cli_paginates` (#189).
+#[tokio::test]
+async fn user_list_default_caps_at_thirty() {
+    let server = MockServer::start().await;
+
+    let users: Vec<(String, String, bool)> = (1..=35)
+        .map(|i| (format!("acc-{i:03}"), format!("Person {i:03}"), true))
+        .collect();
+    // Without --all, handle_list calls the legacy single-call
+    // `search_assignable_users_by_project` — no startAt/maxResults params.
+    // Assert absence so a regression routing default through `_all`
+    // (which would paginate) is caught.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/multiProjectSearch"))
+        .and(query_param("projectKeys", "PROJ"))
+        .and(query_param_is_missing("startAt"))
+        .and(query_param_is_missing("maxResults"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(common::fixtures::user_search_response(
+                users
+                    .iter()
+                    .map(|(a, d, t)| (a.as_str(), d.as_str(), *t))
+                    .collect(),
+            )),
+        )
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_json(&server.uri())
+        .args(["user", "list", "--project", "PROJ"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let arr = json.as_array().expect("user list JSON is an array");
+    assert_eq!(
+        arr.len(),
+        30,
+        "default limit should truncate to 30, got {}",
+        arr.len()
+    );
+}
+
+/// Mount the three sprint-command prereq mocks on `server`: board
+/// auto-resolve, board config (scrum), and active sprint list. Uses
+/// fixed board id 42 and sprint id 100. All three API calls send
+/// `startAt=0` and `maxResults=50` unconditionally, so the mocks pin
+/// those values — a regression that drops pagination params on any of
+/// these prereq calls would fail the mock match.
+async fn mount_scrum_prereqs(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/board"))
+        .and(query_param("projectKeyOrId", "PROJ"))
+        .and(query_param("type", "scrum"))
+        .and(query_param("startAt", "0"))
+        .and(query_param("maxResults", "50"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::board_list_response(vec![common::fixtures::board_response(
+                42,
+                "PROJ Scrum",
+                "scrum",
+                "PROJ",
+            )]),
+        ))
+        .mount(server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/board/42/configuration"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::board_config_response("scrum")),
+        )
+        .mount(server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/board/42/sprint"))
+        .and(query_param("state", "active"))
+        .and(query_param("startAt", "0"))
+        .and(query_param("maxResults", "50"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::sprint_list_response(vec![common::fixtures::sprint(
+                100, "Sprint 1", "active",
+            )]),
+        ))
+        .mount(server)
+        .await;
+}
+
+/// Mount the two kanban-board prereq mocks on `server`: board
+/// auto-resolve and board config (kanban). Uses fixed board id 42.
+/// The `list_boards` call sends `startAt=0` and `maxResults=50`, so
+/// the mock pins those — symmetric to `mount_scrum_prereqs`.
+async fn mount_kanban_prereqs(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/board"))
+        .and(query_param("projectKeyOrId", "PROJ"))
+        .and(query_param("startAt", "0"))
+        .and(query_param("maxResults", "50"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::board_list_response(vec![common::fixtures::board_response(
+                42,
+                "PROJ Kanban",
+                "kanban",
+                "PROJ",
+            )]),
+        ))
+        .mount(server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/board/42/configuration"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::board_config_response("kanban")),
+        )
+        .mount(server)
+        .await;
+}
+
+fn build_issue_fixtures(count: usize, prefix: &str) -> Vec<Value> {
+    (1..=count)
+        .map(|i| {
+            common::fixtures::issue_response(
+                &format!("{prefix}-{i}"),
+                &format!("Issue {i}"),
+                "In Progress",
+            )
+        })
+        .collect()
+}
+
+/// `jr sprint current --all` returns more than DEFAULT_LIMIT issues.
+/// `get_sprint_issues` receives `limit=None` under `--all`, so the client
+/// consumes the server page in full without client-side truncation.
+#[tokio::test]
+async fn sprint_current_all_returns_more_than_default_cap() {
+    let server = MockServer::start().await;
+    mount_scrum_prereqs(&server).await;
+
+    let issues = build_issue_fixtures(35, "SPA");
+    // Pin `startAt=0` and `maxResults=50` so the mock match proves the
+    // client actually issued the expected sprint-issue request shape.
+    // `get_sprint_issues` hardcodes these values regardless of `--all`
+    // (the limit is applied client-side), so they're a stable handle.
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/sprint/100/issue"))
+        .and(query_param("startAt", "0"))
+        .and(query_param("maxResults", "50"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::sprint_issues_response(issues, 35)),
+        )
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_json(&server.uri())
+        .args(["--project", "PROJ", "sprint", "current", "--all"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    // sprint current emits {sprint, issues, [sprint_summary]} in JSON mode.
+    let arr = json["issues"]
+        .as_array()
+        .expect("issues array in sprint current JSON");
+    assert_eq!(
+        arr.len(),
+        35,
+        "--all should return all 35 issues, got {}",
+        arr.len()
+    );
+}
+
+/// Without `--all`, `jr sprint current` truncates to DEFAULT_LIMIT (30).
+#[tokio::test]
+async fn sprint_current_default_caps_at_thirty() {
+    let server = MockServer::start().await;
+    mount_scrum_prereqs(&server).await;
+
+    let issues = build_issue_fixtures(35, "SPC");
+    // Same startAt=0 / maxResults=50 pin as the `--all` positive test —
+    // `get_sprint_issues` hardcodes these values, so the request shape
+    // is the same in both cases; the difference is client-side truncation.
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/sprint/100/issue"))
+        .and(query_param("startAt", "0"))
+        .and(query_param("maxResults", "50"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::sprint_issues_response(issues, 35)),
+        )
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_json(&server.uri())
+        .args(["--project", "PROJ", "sprint", "current"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let arr = json["issues"]
+        .as_array()
+        .expect("issues array in sprint current JSON");
+    assert_eq!(
+        arr.len(),
+        30,
+        "default limit should truncate to 30, got {}",
+        arr.len()
+    );
+}
+
+/// `jr board view --all` (kanban path) returns more than DEFAULT_LIMIT issues.
+/// `search_issues` receives `limit=None` under `--all`, so no client-side
+/// truncation applies.
+#[tokio::test]
+async fn board_view_all_returns_more_than_default_cap() {
+    let server = MockServer::start().await;
+    mount_kanban_prereqs(&server).await;
+
+    let issues = build_issue_fixtures(35, "BVA");
+    // Constrain the JQL AND `maxResults: 50`. Under `--all`,
+    // `handle_view` passes `limit=None` to `search_issues`, which maps to
+    // `max_per_page = limit.unwrap_or(50).min(100) = 50`. If a regression
+    // made `--all` pass `limit=Some(large)` instead, `max_per_page` would
+    // be a different value and this mock would miss — symmetric to the
+    // `maxResults: 30` pin on the default-cap test.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(serde_json::json!({
+            "jql": "project = \"PROJ\" AND statusCategory != Done ORDER BY rank ASC",
+            "maxResults": 50,
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::issue_search_response(issues)),
+        )
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_json(&server.uri())
+        .args(["--project", "PROJ", "board", "view", "--all"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let arr = json
+        .as_array()
+        .expect("board view JSON is an array of issues");
+    assert_eq!(
+        arr.len(),
+        35,
+        "--all should return all 35 issues, got {}",
+        arr.len()
+    );
+}
+
+/// Without `--all`, `jr board view` (kanban) truncates to DEFAULT_LIMIT (30).
+/// `search_issues` receives `limit=Some(30)` so `max_per_page=30` on the
+/// request body — pin that shape so a regression to full-page fetch is caught.
+#[tokio::test]
+async fn board_view_default_caps_at_thirty() {
+    let server = MockServer::start().await;
+    mount_kanban_prereqs(&server).await;
+
+    let issues = build_issue_fixtures(35, "BVC");
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(serde_json::json!({
+            "jql": "project = \"PROJ\" AND statusCategory != Done ORDER BY rank ASC",
+            "maxResults": 30,
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::issue_search_response(issues)),
+        )
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_json(&server.uri())
+        .args(["--project", "PROJ", "board", "view"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let arr = json
+        .as_array()
+        .expect("board view JSON is an array of issues");
+    assert_eq!(
+        arr.len(),
+        30,
+        "default limit should truncate to 30, got {}",
+        arr.len()
+    );
+}
+
+/// Build a changelog response with N entries, each carrying one item —
+/// so N entries maps to N rows for `truncate_to_rows`.
+fn build_changelog_response(count: usize, total: u32, is_last: bool) -> Value {
+    let values: Vec<Value> = (1..=count)
+        .map(|i| {
+            serde_json::json!({
+                "id": format!("{i}"),
+                "author": {
+                    "accountId": format!("acc-{i:03}"),
+                    "displayName": format!("User {i:03}"),
+                    "active": true,
+                },
+                "created": format!("2026-04-{:02}T10:00:00.000+0000", (i % 27) + 1),
+                "items": [{
+                    "field": "status",
+                    "fieldtype": "jira",
+                    "from": "1", "fromString": "To Do",
+                    "to": "3", "toString": "In Progress",
+                }],
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "startAt": 0,
+        "maxResults": 100,
+        "total": total,
+        "isLast": is_last,
+        "values": values,
+    })
+}
+
+/// `jr issue changelog <KEY> --all` returns all changelog rows even when
+/// there are more than DEFAULT_LIMIT. `--all` disables the local
+/// `truncate_to_rows` call; the API call itself always fetches every page.
+#[tokio::test]
+async fn issue_changelog_all_returns_more_than_default_cap() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1/changelog"))
+        .and(query_param("startAt", "0"))
+        .and(query_param("maxResults", "100"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(build_changelog_response(35, 35, true)),
+        )
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_json(&server.uri())
+        .args(["issue", "changelog", "FOO-1", "--all"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let entries = json["entries"]
+        .as_array()
+        .expect("changelog JSON has entries array");
+    assert_eq!(
+        entries.len(),
+        35,
+        "--all should return all 35 changelog entries, got {}",
+        entries.len()
+    );
+}
+
+/// Without `--all`, `jr issue changelog <KEY>` truncates to DEFAULT_LIMIT (30).
+#[tokio::test]
+async fn issue_changelog_default_caps_at_thirty() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1/changelog"))
+        .and(query_param("startAt", "0"))
+        .and(query_param("maxResults", "100"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(build_changelog_response(35, 35, true)),
+        )
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_json(&server.uri())
+        .args(["issue", "changelog", "FOO-1"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let entries = json["entries"]
+        .as_array()
+        .expect("changelog JSON has entries array");
+    assert_eq!(
+        entries.len(),
+        30,
+        "default limit should truncate to 30 rows, got {}",
+        entries.len()
     );
 }
