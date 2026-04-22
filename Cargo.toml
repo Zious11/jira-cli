@@ -31,6 +31,7 @@ toml = "1"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 futures = { version = "0.3", default-features = false, features = ["async-await"] }
+rand = "0.9"
 urlencoding = "2"
 pulldown-cmark = { version = "0.13", default-features = false }
 

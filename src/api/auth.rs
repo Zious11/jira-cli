@@ -305,11 +305,24 @@ pub async fn refresh_oauth_token(client_id: &str, client_secret: &str) -> Result
     Ok(tokens.access_token)
 }
 
-/// Generate a unique state parameter for CSRF protection.
+/// Generate a cryptographically random state parameter for CSRF protection
+/// of the OAuth 2.0 authorization-code flow (RFC 6749 §10.12).
+///
+/// 32 random bytes from the OS CSPRNG (via `rand` 0.9 — which delegates to
+/// `getrandom` on the target platform) rendered as 64 hex characters. 256
+/// bits of entropy far exceeds the ~30 bits offered by the previous
+/// wall-clock-nanosecond implementation, closing the attack window where
+/// an attacker with local access could observe the authorize URL and race
+/// the 127.0.0.1 callback listener with a forged code.
 fn generate_state() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let t = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-    format!("{:x}", t.as_nanos())
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::rng().fill_bytes(&mut bytes);
+    bytes.iter().fold(String::with_capacity(64), |mut s, b| {
+        use std::fmt::Write;
+        let _ = write!(s, "{b:02x}");
+        s
+    })
 }
 
 /// Extract a query parameter value from a raw HTTP request string.
@@ -365,5 +378,30 @@ mod tests {
         let state = generate_state();
         assert!(!state.is_empty());
         assert!(state.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    /// 256-bit CSPRNG output rendered as hex must always be 64 characters.
+    /// Pinning the length guards against a regression to any lower-entropy
+    /// source (e.g., timestamp-hex, truncated UUIDs) that would still pass
+    /// the is_hex check.
+    #[test]
+    fn test_generate_state_is_64_hex_chars() {
+        let state = generate_state();
+        assert_eq!(
+            state.len(),
+            64,
+            "expected 32 bytes = 64 hex chars, got: {state}"
+        );
+    }
+
+    /// Two calls must produce different values. With 256 bits of entropy
+    /// the collision probability is cryptographically negligible (~2^-128
+    /// per pair), so a collision here means the CSPRNG source is broken or
+    /// the function fell back to something deterministic.
+    #[test]
+    fn test_generate_state_is_unpredictable() {
+        let a = generate_state();
+        let b = generate_state();
+        assert_ne!(a, b, "two consecutive calls returned identical state: {a}");
     }
 }
