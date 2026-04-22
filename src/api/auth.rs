@@ -270,6 +270,12 @@ pub async fn oauth_login(
 
 /// Refresh the OAuth 2.0 access token using the stored refresh token.
 /// Returns the new access token on success.
+///
+/// Intentionally takes no `scopes` parameter: the `refresh_token` grant
+/// inherits scopes from the original authorization per RFC 6749 §6. To
+/// pick up a changed `[instance].oauth_scopes` in config.toml, the user
+/// must re-run `jr auth login --oauth` (refresh alone will keep the old
+/// scope set).
 pub async fn refresh_oauth_token(client_id: &str, client_secret: &str) -> Result<String> {
     let (_, refresh_token) = load_oauth_tokens()?;
 

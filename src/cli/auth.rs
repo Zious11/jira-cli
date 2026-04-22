@@ -586,4 +586,37 @@ mod tests {
             "unexpected error: {msg}"
         );
     }
+
+    /// The default scope literal is a backward-compatibility contract for
+    /// every user who hasn't opted into `oauth_scopes`. A typo that drops
+    /// `offline_access` would silently break refresh tokens for everyone.
+    #[test]
+    fn default_oauth_scopes_is_the_classic_set_with_offline_access() {
+        assert_eq!(
+            auth::DEFAULT_OAUTH_SCOPES,
+            "read:jira-work write:jira-work read:jira-user offline_access"
+        );
+    }
+
+    /// `jr` deliberately does NOT reject mixed classic+granular scopes,
+    /// unknown scope names, or missing `offline_access` — Atlassian returns
+    /// `invalid_scope` at token exchange per the spec's "Out of scope"
+    /// section. Locks this so a future refactor that starts "helping" with
+    /// client-side validation fails visibly.
+    #[test]
+    fn resolve_oauth_scopes_does_not_validate_scope_shape() {
+        let inputs = [
+            "read:jira-work read:issue:jira",           // classic + granular mix
+            "read:issue:jira write:issue:jira",         // no offline_access
+            "totally-made-up-scope another-fake-scope", // unknown scopes
+            "offline_access",                           // only offline_access
+        ];
+        for raw in inputs {
+            let config = config_with_oauth_scopes(Some(raw));
+            let result = resolve_oauth_scopes(&config).unwrap_or_else(|e| {
+                panic!("resolve_oauth_scopes must pass {raw:?} through unchanged, got error: {e:#}")
+            });
+            assert_eq!(result, raw, "input {raw:?} must pass through unchanged");
+        }
+    }
 }

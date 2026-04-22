@@ -47,7 +47,7 @@ auth_method = "oauth"
 oauth_scopes = "read:issue:jira write:issue:jira write:comment:jira read:jira-user offline_access"
 ```
 
-Env override comes free from the existing `Env::prefixed("JR_")` merge in `Config::load()`: `JR_INSTANCE_OAUTH_SCOPES` sets or overrides the value. Empirically confirmed by the existing `JR_INSTANCE_AUTH_METHOD` usage in `tests/auth_refresh.rs:71`.
+**Env-var override is out of scope for this PR.** Figment's default `Env::prefixed("JR_")` layer in `Config::load()` cannot reach nested struct fields without a `.split(...)` separator, and neither `.split("_")` (would split `oauth_scopes` itself) nor `.split("__")` (changes convention for the whole app) is a one-file change. The earlier `tests/auth_refresh.rs:71` reference was defensive env-clearing, not proof that `JR_INSTANCE_AUTH_METHOD` actually propagates through figment. A dedicated follow-up issue tracks adding proper nested-env-var support for `JR_INSTANCE_*` and `JR_FIELDS_*` across the config.
 
 ### Default
 
@@ -71,7 +71,7 @@ Config::load() → cli::auth::handle_login()
 ```
 
 - `oauth_login` gains a third parameter `scopes: &str`, replacing the `SCOPES` constant at the existing use site (`src/api/auth.rs:168`).
-- `refresh_oauth_token` is **unchanged**. The OAuth `refresh_token` grant does not accept a `scope` parameter at Atlassian's token endpoint; scopes for refreshed access tokens inherit from the original authorization.
+- `refresh_oauth_token` is **unchanged**. The OAuth `refresh_token` grant does not accept a `scope` parameter at Atlassian's token endpoint; scopes for refreshed access tokens inherit from the original authorization (RFC 6749 §6). **Consequence:** changing `oauth_scopes` in config.toml does not take effect until the user re-runs `jr auth login --oauth`. `jr auth refresh` alone will keep the old scope set.
 
 ### Scope-resolution helper
 
@@ -120,8 +120,8 @@ No client-side mix detection. No warning for missing `offline_access`. Both are 
 
 All unit tests in the affected modules. No integration test for the OAuth flow itself — `oauth_login` hits `auth.atlassian.com` and the value of mocking the authorization-code dance is low compared to the risk of the mock diverging from Atlassian's actual behavior.
 
-- `src/config.rs` (`#[cfg(test)]` module): `oauth_scopes` parses from TOML; missing field yields `None`; env var `JR_INSTANCE_OAUTH_SCOPES` overrides
-- `src/cli/auth.rs` (`#[cfg(test)]` module): `resolve_oauth_scopes` — None path returns default, Some(valid) returns trimmed, Some(empty/whitespace) returns `ConfigError`, Some with internal whitespace is collapsed
+- `src/config.rs` (`#[cfg(test)]` module): `oauth_scopes` parses from TOML; missing field yields `None`. (Env-var override deferred — see Data flow note above.)
+- `src/cli/auth.rs` (`#[cfg(test)]` module): `resolve_oauth_scopes` — None path returns default, Some(valid) returns trimmed, Some(empty/whitespace) returns `ConfigError`, Some with internal whitespace is collapsed. Plus two lock-in tests: `DEFAULT_OAUTH_SCOPES` content is pinned to `"read:jira-work write:jira-work read:jira-user offline_access"`, and `resolve_oauth_scopes_does_not_validate_scope_shape` guards against future client-side validation creep (classic+granular mix, unknown scopes, missing `offline_access` all pass through unchanged).
 
 ## Out of scope
 
