@@ -113,6 +113,29 @@ fn chosen_flow(config: &Config, oauth_override: bool) -> AuthFlow {
     }
 }
 
+/// Pick the OAuth scope string: user override from `[instance].oauth_scopes`
+/// if set, else the compiled-in default. Trims and collapses interior
+/// whitespace so multi-line TOML strings encode cleanly. Empty or
+/// whitespace-only overrides are a configuration error.
+fn resolve_oauth_scopes(config: &Config) -> Result<String> {
+    match config.global.instance.oauth_scopes.as_deref() {
+        None => Ok(auth::DEFAULT_OAUTH_SCOPES.to_string()),
+        Some(raw) => {
+            let collapsed: String = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+            if collapsed.is_empty() {
+                Err(JrError::ConfigError(
+                    "oauth_scopes is empty; remove the setting to use defaults \
+                     or list at least one scope"
+                        .into(),
+                )
+                .into())
+            } else {
+                Ok(collapsed)
+            }
+        }
+    }
+}
+
 /// Resolve email and API token (flag → env → prompt), then store in keychain.
 pub async fn login_token(
     email: Option<String>,
@@ -176,12 +199,18 @@ pub async fn login_oauth(
         Some(OAUTH_APP_HINT),
     )?;
 
-    // Store OAuth app credentials in keychain
+    // Resolve config and scopes BEFORE persisting credentials — a bad
+    // [instance].oauth_scopes (empty/whitespace-only) must fail fast, not
+    // leave new client_id/client_secret in the keychain alongside a login
+    // that never succeeded.
+    let mut config = Config::load().unwrap_or_default();
+    let scopes = resolve_oauth_scopes(&config)?;
+
+    // Store OAuth app credentials in keychain (only after scopes validate)
     crate::api::auth::store_oauth_app_credentials(&client_id, &client_secret)?;
 
-    let result = crate::api::auth::oauth_login(&client_id, &client_secret).await?;
+    let result = crate::api::auth::oauth_login(&client_id, &client_secret, &scopes).await?;
 
-    let mut config = Config::load().unwrap_or_default();
     config.global.instance.url = Some(result.site_url);
     config.global.instance.cloud_id = Some(result.cloud_id);
     config.global.instance.auth_method = Some("oauth".into());
@@ -306,9 +335,8 @@ mod tests {
             global: GlobalConfig {
                 instance: InstanceConfig {
                     url: Some("https://example.atlassian.net".into()),
-                    cloud_id: None,
-                    org_id: None,
                     auth_method: method.map(str::to_string),
+                    ..InstanceConfig::default()
                 },
                 ..Default::default()
             },
@@ -507,5 +535,93 @@ mod tests {
             msg.contains("developer.atlassian.com/console/myapps"),
             "OAuth error should cite dev console URL: {msg}"
         );
+    }
+
+    fn config_with_oauth_scopes(scopes: Option<&str>) -> Config {
+        Config {
+            global: GlobalConfig {
+                instance: InstanceConfig {
+                    oauth_scopes: scopes.map(String::from),
+                    ..InstanceConfig::default()
+                },
+                ..GlobalConfig::default()
+            },
+            project: Default::default(),
+        }
+    }
+
+    #[test]
+    fn resolve_oauth_scopes_none_returns_default() {
+        let config = config_with_oauth_scopes(None);
+        assert_eq!(
+            resolve_oauth_scopes(&config).unwrap(),
+            auth::DEFAULT_OAUTH_SCOPES
+        );
+    }
+
+    #[test]
+    fn resolve_oauth_scopes_trims_and_collapses_whitespace() {
+        let config = config_with_oauth_scopes(Some(
+            "  read:issue:jira   write:comment:jira\n\toffline_access  ",
+        ));
+        assert_eq!(
+            resolve_oauth_scopes(&config).unwrap(),
+            "read:issue:jira write:comment:jira offline_access"
+        );
+    }
+
+    #[test]
+    fn resolve_oauth_scopes_empty_string_is_config_error() {
+        let config = config_with_oauth_scopes(Some(""));
+        let err = resolve_oauth_scopes(&config).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("oauth_scopes is empty"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn resolve_oauth_scopes_whitespace_only_is_config_error() {
+        let config = config_with_oauth_scopes(Some("   \n\t  "));
+        let err = resolve_oauth_scopes(&config).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("oauth_scopes is empty"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    /// The default scope literal is a backward-compatibility contract for
+    /// every user who hasn't opted into `oauth_scopes`. A typo that drops
+    /// `offline_access` would silently break refresh tokens for everyone.
+    #[test]
+    fn default_oauth_scopes_is_the_classic_set_with_offline_access() {
+        assert_eq!(
+            auth::DEFAULT_OAUTH_SCOPES,
+            "read:jira-work write:jira-work read:jira-user offline_access"
+        );
+    }
+
+    /// `jr` deliberately does NOT reject mixed classic+granular scopes,
+    /// unknown scope names, or missing `offline_access` — Atlassian returns
+    /// `invalid_scope` at token exchange per the spec's "Out of scope"
+    /// section. Locks this so a future refactor that starts "helping" with
+    /// client-side validation fails visibly.
+    #[test]
+    fn resolve_oauth_scopes_does_not_validate_scope_shape() {
+        let inputs = [
+            "read:jira-work read:issue:jira",           // classic + granular mix
+            "read:issue:jira write:issue:jira",         // no offline_access
+            "totally-made-up-scope another-fake-scope", // unknown scopes
+            "offline_access",                           // only offline_access
+        ];
+        for raw in inputs {
+            let config = config_with_oauth_scopes(Some(raw));
+            let result = resolve_oauth_scopes(&config).unwrap_or_else(|e| {
+                panic!("resolve_oauth_scopes must pass {raw:?} through unchanged, got error: {e:#}")
+            });
+            assert_eq!(result, raw, "input {raw:?} must pass through unchanged");
+        }
     }
 }

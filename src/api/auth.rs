@@ -24,7 +24,13 @@ const KEY_API_TOKEN: &str = "api-token";
 const KEY_OAUTH_ACCESS: &str = "oauth-access-token";
 const KEY_OAUTH_REFRESH: &str = "oauth-refresh-token";
 
-const SCOPES: &str = "read:jira-work write:jira-work read:jira-user offline_access";
+/// Default OAuth 2.0 scopes used when `oauth_scopes` is not set in
+/// config.toml. Matches Atlassian's "classic" scope recommendation for
+/// Jira Platform apps. Users who configured their Developer Console app
+/// with granular scopes (e.g., for least-privilege agent use) should
+/// override via `[instance].oauth_scopes` in config.toml.
+pub const DEFAULT_OAUTH_SCOPES: &str =
+    "read:jira-work write:jira-work read:jira-user offline_access";
 
 fn entry(key: &str) -> Result<Entry> {
     Entry::new(&service_name(), key).context("Failed to access keychain")
@@ -142,12 +148,21 @@ pub struct OAuthResult {
 }
 
 /// Run the full OAuth 2.0 (3LO) authorization code flow:
-/// 1. Open browser to Atlassian authorization page
+/// 1. Open browser to Atlassian authorization page requesting `scopes`
 /// 2. Listen on a local port for the callback
 /// 3. Exchange the authorization code for tokens
 /// 4. Fetch accessible resources to get the cloud ID
 /// 5. Store tokens in the system keychain
-pub async fn oauth_login(client_id: &str, client_secret: &str) -> Result<OAuthResult> {
+///
+/// `scopes` is a space-separated scope string (URL-encoded internally).
+/// Callers should use [`DEFAULT_OAUTH_SCOPES`] when no user override is set.
+/// Note: [`refresh_oauth_token`] does NOT take a scope parameter — the
+/// `refresh_token` grant inherits scopes from the original authorization.
+pub async fn oauth_login(
+    client_id: &str,
+    client_secret: &str,
+    scopes: &str,
+) -> Result<OAuthResult> {
     // 1. Find an available port for the local callback server.
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
@@ -165,7 +180,7 @@ pub async fn oauth_login(client_id: &str, client_secret: &str) -> Result<OAuthRe
          &state={state}\
          &response_type=code\
          &prompt=consent",
-        urlencoding::encode(SCOPES),
+        urlencoding::encode(scopes),
     );
 
     eprintln!("Opening browser for authorization...");
@@ -255,6 +270,12 @@ pub async fn oauth_login(client_id: &str, client_secret: &str) -> Result<OAuthRe
 
 /// Refresh the OAuth 2.0 access token using the stored refresh token.
 /// Returns the new access token on success.
+///
+/// Intentionally takes no `scopes` parameter: the `refresh_token` grant
+/// inherits scopes from the original authorization per RFC 6749 §6. To
+/// pick up a changed `[instance].oauth_scopes` in config.toml, the user
+/// must re-run `jr auth login --oauth` (refresh alone will keep the old
+/// scope set).
 pub async fn refresh_oauth_token(client_id: &str, client_secret: &str) -> Result<String> {
     let (_, refresh_token) = load_oauth_tokens()?;
 
