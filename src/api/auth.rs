@@ -308,16 +308,21 @@ pub async fn refresh_oauth_token(client_id: &str, client_secret: &str) -> Result
 /// Generate a cryptographically random state parameter for CSRF protection
 /// of the OAuth 2.0 authorization-code flow (RFC 6749 §10.12).
 ///
-/// 32 random bytes from the OS CSPRNG (via `rand` 0.9 — which delegates to
-/// `getrandom` on the target platform) rendered as 64 hex characters. 256
-/// bits of entropy far exceeds the ~30 bits offered by the previous
-/// wall-clock-nanosecond implementation, closing the attack window where
-/// an attacker with local access could observe the authorize URL and race
-/// the 127.0.0.1 callback listener with a forged code.
+/// 32 random bytes read directly from the operating system CSPRNG via
+/// `rand::rngs::OsRng` (which is a thin wrapper over the `getrandom` crate
+/// and calls `getrandom(2)` / `BCryptGenRandom` on each invocation — no
+/// user-space reseeding state, unlike `rand::rng()` / `ThreadRng`).
+/// Rendered as 64 hex characters. 256 bits of entropy far exceeds the
+/// ~30 bits offered by the previous wall-clock-nanosecond implementation,
+/// closing the attack window where an attacker with local access could
+/// observe the authorize URL and race the 127.0.0.1 callback listener
+/// with a forged code.
 fn generate_state() -> String {
-    use rand::RngCore;
+    use rand::TryRngCore;
     let mut bytes = [0u8; 32];
-    rand::rng().fill_bytes(&mut bytes);
+    rand::rngs::OsRng
+        .try_fill_bytes(&mut bytes)
+        .expect("OS CSPRNG should always succeed for 32-byte reads");
     bytes.iter().fold(String::with_capacity(64), |mut s, b| {
         use std::fmt::Write;
         let _ = write!(s, "{b:02x}");
@@ -394,14 +399,21 @@ mod tests {
         );
     }
 
-    /// Two calls must produce different values. With 256 bits of entropy
-    /// the collision probability is cryptographically negligible (~2^-128
-    /// per pair), so a collision here means the CSPRNG source is broken or
-    /// the function fell back to something deterministic.
+    /// Sanity check that `generate_state` is not obviously deterministic:
+    /// generate 8 values and assert at least 7 are distinct. A deterministic
+    /// or low-entropy regression (e.g., a reintroduction of `as_nanos`-style
+    /// state, or a constant) will collapse all 8 outputs to the same value
+    /// and trip this check. With 256 bits of true entropy the probability of
+    /// any collision across 8 samples is ~2^-253 (birthday bound, C(8,2) /
+    /// 2^256), so the test is not a CI flake risk.
     #[test]
-    fn test_generate_state_is_unpredictable() {
-        let a = generate_state();
-        let b = generate_state();
-        assert_ne!(a, b, "two consecutive calls returned identical state: {a}");
+    fn test_generate_state_is_not_deterministic() {
+        let samples: std::collections::HashSet<String> = (0..8).map(|_| generate_state()).collect();
+        assert!(
+            samples.len() >= 7,
+            "expected >=7 distinct values from 8 generate_state() calls, \
+             got {} distinct out of 8: {samples:?}",
+            samples.len()
+        );
     }
 }
