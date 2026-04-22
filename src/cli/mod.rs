@@ -594,8 +594,9 @@ pub enum UserCommand {
         /// table rows and JSON array length; does not reduce the API fetch.
         #[arg(long)]
         limit: Option<u32>,
-        /// Disable the default local cap. Jira still returns a single page
-        /// (up to 50 results by default, capped at 100 server-side).
+        /// Fetch all matching users by paginating through every API page
+        /// (up to Jira's documented 1000-user hard cap). Overrides the
+        /// default local cap.
         #[arg(long, conflicts_with = "limit")]
         all: bool,
     },
@@ -610,8 +611,9 @@ pub enum UserCommand {
         /// table rows and JSON array length; does not reduce the API fetch.
         #[arg(long)]
         limit: Option<u32>,
-        /// Disable the default local cap. Jira still returns a single page
-        /// (up to 50 results by default, capped at 100 server-side).
+        /// Fetch all assignable users by paginating through every API page
+        /// (up to Jira's documented 1000-user hard cap). Overrides the
+        /// default local cap.
         #[arg(long, conflicts_with = "limit")]
         all: bool,
     },

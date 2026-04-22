@@ -489,7 +489,8 @@ pub(super) async fn handle_list(
     // Skipped entirely in JSON mode: `print_output` only serializes `issues`
     // under OutputFormat::Json and ignores `rows`, so the cache read + map
     // build would be wasted filesystem I/O. JSON consumers already see the
-    // raw UUID under `fields.extra[team_field_id]` and can resolve locally.
+    // raw UUID under `fields.<team_field_id>` (IssueFields::extra is
+    // `#[serde(flatten)]`) and can resolve locally.
     let client_verbose = client.verbose();
     let team_displays: Vec<String> = if matches!(output_format, OutputFormat::Table)
         && let Some(field_id) = team_field_id

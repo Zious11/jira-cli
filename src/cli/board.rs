@@ -187,6 +187,11 @@ async fn handle_view(
     let board_config = client.get_board_config(board_id).await?;
     let board_type = board_config.board_type.to_lowercase();
 
+    // Request the team field alongside issues so handle_view can surface a
+    // Team column matching `jr issue list` — per #246 parity follow-up.
+    let team_field_id = config.global.fields.team_field_id.as_deref();
+    let extra: Vec<&str> = team_field_id.iter().copied().collect();
+
     let (issues, has_more) = if board_type == "scrum" {
         // For scrum boards, fetch the active sprint's issues
         let sprints = client.list_sprints(board_id, Some("active")).await?;
@@ -195,7 +200,7 @@ async fn handle_view(
         }
         let sprint = &sprints[0];
         let result = client
-            .get_sprint_issues(sprint.id, None, effective_limit, &[])
+            .get_sprint_issues(sprint.id, None, effective_limit, &extra)
             .await?;
         (result.issues, result.has_more)
     } else {
@@ -206,18 +211,65 @@ async fn handle_view(
             );
         }
         let jql = build_kanban_jql(project_key.as_deref());
-        let result = client.search_issues(&jql, effective_limit, &[]).await?;
+        let result = client.search_issues(&jql, effective_limit, &extra).await?;
         (result.issues, result.has_more)
     };
 
-    let rows = super::issue::format_issue_rows_public(&issues);
+    // Team column gating mirrors handle_list in src/cli/issue/list.rs
+    // (per #246): show only when team_field_id is configured AND at least
+    // one issue has a populated team.
+    //
+    // Skipped entirely in JSON mode — `print_output` only serializes `issues`
+    // under OutputFormat::Json and ignores `rows`, so the cache read + map
+    // build would be wasted filesystem I/O. JSON consumers already see the
+    // raw UUID under `fields.<team_field_id>` (IssueFields::extra is
+    // `#[serde(flatten)]`) and can resolve locally.
+    // Team cache read is best-effort for display — a miss falls back to
+    // rendering the raw UUID.
+    let client_verbose = client.verbose();
+    let team_displays: Vec<String> = if matches!(output_format, OutputFormat::Table)
+        && let Some(field_id) = team_field_id
+    {
+        let uuids: Vec<Option<String>> = issues
+            .iter()
+            .map(|i| i.fields.team_id(field_id, client_verbose))
+            .collect();
+        if uuids.iter().any(|u| u.is_some()) {
+            let team_map: std::collections::HashMap<String, String> =
+                crate::cache::read_team_cache()
+                    .ok()
+                    .flatten()
+                    .map(|c| c.teams.into_iter().map(|t| (t.id, t.name)).collect())
+                    .unwrap_or_default();
+            uuids
+                .iter()
+                .map(|u| match u {
+                    Some(uuid) => team_map.get(uuid).cloned().unwrap_or_else(|| uuid.clone()),
+                    None => "-".to_string(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+    let show_team_col = !team_displays.is_empty();
 
-    output::print_output(
-        output_format,
-        &["Key", "Type", "Status", "Priority", "Assignee", "Summary"],
-        &rows,
-        &issues,
-    )?;
+    let rows: Vec<Vec<String>> = issues
+        .iter()
+        .enumerate()
+        .map(|(i, issue)| {
+            let team = if show_team_col {
+                Some(team_displays[i].as_str())
+            } else {
+                None
+            };
+            super::issue::format_issue_row(issue, None, None, team)
+        })
+        .collect();
+    let headers = super::issue::issue_table_headers(false, false, show_team_col);
+    output::print_output(output_format, &headers, &rows, &issues)?;
 
     if has_more && !all {
         if board_type != "scrum" {

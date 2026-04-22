@@ -33,7 +33,11 @@ async fn handle_search(
     client: &JiraClient,
 ) -> Result<()> {
     let effective = resolve_effective_limit(limit, all);
-    let mut users = client.search_users(query).await?;
+    let mut users = if all {
+        client.search_users_all(query).await?
+    } else {
+        client.search_users(query).await?
+    };
     if let Some(cap) = effective {
         users.truncate(cap as usize);
     }
@@ -48,9 +52,15 @@ async fn handle_list(
     client: &JiraClient,
 ) -> Result<()> {
     let effective = resolve_effective_limit(limit, all);
-    let mut users = client
-        .search_assignable_users_by_project("", project)
-        .await?;
+    let mut users = if all {
+        client
+            .search_assignable_users_by_project_all("", project)
+            .await?
+    } else {
+        client
+            .search_assignable_users_by_project("", project)
+            .await?
+    };
     if let Some(cap) = effective {
         users.truncate(cap as usize);
     }
