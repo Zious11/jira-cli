@@ -66,7 +66,7 @@ Zero behavior change for any user who doesn't set the new config field.
 ### Data flow
 
 ```
-Config::load() → cli::auth::handle_login()
+Config::load() → cli::auth::login_oauth()
   → resolve_oauth_scopes(&config)?
   → api::auth::oauth_login(client_id, client_secret, scopes)
     → urlencoding::encode(scopes) in the authorize URL
@@ -116,7 +116,7 @@ No client-side mix detection. No warning for missing `offline_access`. Both are 
 
 - `docs/specs/oauth-scopes-configurable.md` (this file)
 - README section on OAuth configuration: call out that the scope string must match what the Developer Console app has configured, that classic and granular cannot mix, and that `offline_access` is required for unattended re-authentication
-- Existing `jr auth login --oauth` help text: reference the config key so users discover it without reading the README
+- `jr auth login --oauth` help text in `src/cli/mod.rs`: reference the config key so users discover it from `jr auth login --help` without having to read the README
 
 ## Testing strategy
 

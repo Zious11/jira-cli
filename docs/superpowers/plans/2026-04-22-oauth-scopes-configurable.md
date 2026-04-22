@@ -96,7 +96,7 @@ pub struct InstanceConfig {
 }
 ```
 
-No other changes required — `Deserialize`, `Default`, and the existing `Env::prefixed("JR_")` merge pick this up automatically (empirically confirmed: `tests/auth_refresh.rs:71` already uses `JR_INSTANCE_AUTH_METHOD` against the same struct).
+No other changes required — the `Deserialize` and `Default` derives pick this up automatically from the TOML layer. **Do not** assume `JR_INSTANCE_OAUTH_SCOPES` works via the current `Env::prefixed("JR_")` merge; figment's default env provider can't reach nested struct fields without a `.split(...)` configuration, and the spec at `docs/specs/oauth-scopes-configurable.md:50` scopes nested env-var support out of this PR. The `tests/auth_refresh.rs:71` reference in earlier drafts was defensive env-clearing, not proof that `JR_INSTANCE_AUTH_METHOD` actually propagates through figment.
 
 ### Step 4: Run tests to verify they pass
 
@@ -113,9 +113,10 @@ git add src/config.rs
 git commit -m "feat(config): add oauth_scopes to InstanceConfig (#184)
 
 Adds Option<String> field so users can override the hardcoded OAuth 2.0
-scope list via config.toml or the JR_INSTANCE_OAUTH_SCOPES env var. No
-behavior change yet — the field is unused until Task 3 wires it into
-oauth_login. Spec: docs/specs/oauth-scopes-configurable.md."
+scope list via config.toml. Env-var override via JR_INSTANCE_OAUTH_SCOPES
+is out of scope for this PR — see spec data-flow note. No behavior change
+yet — the field is unused until Task 3 wires it into oauth_login.
+Spec: docs/specs/oauth-scopes-configurable.md."
 ```
 
 ---
