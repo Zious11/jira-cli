@@ -304,14 +304,19 @@ async fn user_list_default_caps_at_thirty() {
     );
 }
 
-/// Helpers for the sprint + board path: mount board auto-resolve, board
-/// config (scrum), and active sprint list. Returns a ready-to-use server
-/// with board id 42 and sprint id 100.
+/// Mount the three sprint-command prereq mocks on `server`: board
+/// auto-resolve, board config (scrum), and active sprint list. Uses
+/// fixed board id 42 and sprint id 100. All three API calls send
+/// `startAt=0` and `maxResults=50` unconditionally, so the mocks pin
+/// those values — a regression that drops pagination params on any of
+/// these preqreq calls would fail the mock match.
 async fn mount_scrum_prereqs(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path("/rest/agile/1.0/board"))
         .and(query_param("projectKeyOrId", "PROJ"))
         .and(query_param("type", "scrum"))
+        .and(query_param("startAt", "0"))
+        .and(query_param("maxResults", "50"))
         .respond_with(ResponseTemplate::new(200).set_body_json(
             common::fixtures::board_list_response(vec![common::fixtures::board_response(
                 42,
@@ -335,6 +340,8 @@ async fn mount_scrum_prereqs(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path("/rest/agile/1.0/board/42/sprint"))
         .and(query_param("state", "active"))
+        .and(query_param("startAt", "0"))
+        .and(query_param("maxResults", "50"))
         .respond_with(ResponseTemplate::new(200).set_body_json(
             common::fixtures::sprint_list_response(vec![common::fixtures::sprint(
                 100, "Sprint 1", "active",
@@ -344,10 +351,16 @@ async fn mount_scrum_prereqs(server: &MockServer) {
         .await;
 }
 
+/// Mount the two kanban-board prereq mocks on `server`: board
+/// auto-resolve and board config (kanban). Uses fixed board id 42.
+/// The `list_boards` call sends `startAt=0` and `maxResults=50`, so
+/// the mock pins those — symmetric to `mount_scrum_prereqs`.
 async fn mount_kanban_prereqs(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path("/rest/agile/1.0/board"))
         .and(query_param("projectKeyOrId", "PROJ"))
+        .and(query_param("startAt", "0"))
+        .and(query_param("maxResults", "50"))
         .respond_with(ResponseTemplate::new(200).set_body_json(
             common::fixtures::board_list_response(vec![common::fixtures::board_response(
                 42,
