@@ -171,17 +171,7 @@ pub async fn oauth_login(
     let redirect_uri = format!("http://localhost:{port}/callback");
     let state = generate_state()?;
 
-    let auth_url = format!(
-        "https://auth.atlassian.com/authorize\
-         ?audience=api.atlassian.com\
-         &client_id={client_id}\
-         &scope={}\
-         &redirect_uri={redirect_uri}\
-         &state={state}\
-         &response_type=code\
-         &prompt=consent",
-        urlencoding::encode(scopes),
-    );
+    let auth_url = build_authorize_url(client_id, scopes, &redirect_uri, &state);
 
     eprintln!("Opening browser for authorization...");
     eprintln!("If browser doesn't open, visit: {auth_url}");
@@ -305,6 +295,41 @@ pub async fn refresh_oauth_token(client_id: &str, client_secret: &str) -> Result
     Ok(tokens.access_token)
 }
 
+/// Build the Atlassian OAuth 2.0 authorize URL with all dynamic parameters
+/// percent-encoded uniformly.
+///
+/// All four dynamic values (`client_id`, `scopes`, `redirect_uri`, `state`)
+/// are passed through `urlencoding::encode`, which applies RFC 3986
+/// percent-encoding — spaces become `%20`, not `+`. Atlassian's authorize
+/// endpoint requires `%20` for space-separated scopes, NOT the
+/// application/x-www-form-urlencoded `+` form that `url::Url::query_pairs_mut`
+/// would produce (confirmed against Atlassian's documented example URLs).
+///
+/// Uniform encoding is a defense-in-depth measure: it prevents a
+/// pathological `client_id` containing `&`, `=`, `#`, or `?` from reshaping
+/// the query string — e.g., `real_id&redirect_uri=evil.example` becomes
+/// `real_id%26redirect_uri%3Devil.example` and is treated as a single
+/// scalar value by Atlassian (which then rejects it as an unknown client).
+///
+/// The static constants (`audience`, `response_type`, `prompt`) are not
+/// user-controlled so they are not encoded here.
+fn build_authorize_url(client_id: &str, scopes: &str, redirect_uri: &str, state: &str) -> String {
+    format!(
+        "https://auth.atlassian.com/authorize\
+         ?audience=api.atlassian.com\
+         &client_id={}\
+         &scope={}\
+         &redirect_uri={}\
+         &state={}\
+         &response_type=code\
+         &prompt=consent",
+        urlencoding::encode(client_id),
+        urlencoding::encode(scopes),
+        urlencoding::encode(redirect_uri),
+        urlencoding::encode(state),
+    )
+}
+
 /// Generate a cryptographically random state parameter for CSRF protection
 /// of the OAuth 2.0 authorization-code flow (RFC 6749 §10.12).
 ///
@@ -425,6 +450,77 @@ mod tests {
             "expected 8 distinct values from 8 generate_state() calls, \
              got {} distinct: {samples:?}",
             samples.len()
+        );
+    }
+
+    /// Happy path: a well-formed `client_id` + scopes + redirect_uri + state
+    /// produce an authorize URL with all Atlassian-required static params,
+    /// scope spaces rendered as `%20` (Atlassian rejects `+`-encoded spaces).
+    #[test]
+    fn test_build_authorize_url_happy_path() {
+        let url = build_authorize_url(
+            "normal-client-id",
+            "read:jira-work offline_access",
+            "http://localhost:12345/callback",
+            "deadbeef",
+        );
+
+        assert!(url.starts_with("https://auth.atlassian.com/authorize?"));
+        assert!(url.contains("audience=api.atlassian.com"));
+        assert!(url.contains("&client_id=normal-client-id"));
+        assert!(
+            url.contains("&scope=read%3Ajira-work%20offline_access"),
+            "scope must be %20-encoded, not +-encoded (Atlassian requires %20): {url}"
+        );
+        assert!(url.contains("&redirect_uri=http%3A%2F%2Flocalhost%3A12345%2Fcallback"));
+        assert!(url.contains("&state=deadbeef"));
+        assert!(url.contains("&response_type=code"));
+        assert!(url.contains("&prompt=consent"));
+    }
+
+    /// A pathological `client_id` containing query-string reserved chars
+    /// (`&`, `=`, `#`) must be fully escaped so it cannot reshape the query
+    /// string. Without uniform encoding, `real_id&redirect_uri=evil.example`
+    /// would silently override the redirect_uri parameter.
+    #[test]
+    fn test_build_authorize_url_escapes_hostile_client_id() {
+        let url = build_authorize_url(
+            "real_id&redirect_uri=evil.example#frag",
+            "read:jira-work",
+            "http://localhost:12345/callback",
+            "deadbeef",
+        );
+
+        assert!(
+            !url.contains("&redirect_uri=evil.example"),
+            "hostile client_id must not be able to inject a redirect_uri override: {url}"
+        );
+        assert!(
+            url.contains("client_id=real_id%26redirect_uri%3Devil.example%23frag"),
+            "client_id reserved chars must be percent-encoded: {url}"
+        );
+    }
+
+    /// Scope values containing `+` (unlikely but not impossible — some
+    /// granular scopes are under evolution) must have the `+` escaped to
+    /// `%2B`. Unescaped `+` in a form-urlencoded context means "space",
+    /// which would silently corrupt the scope list.
+    #[test]
+    fn test_build_authorize_url_escapes_plus_in_scope() {
+        let url = build_authorize_url(
+            "client",
+            "scope:with+plus",
+            "http://localhost:12345/callback",
+            "deadbeef",
+        );
+
+        assert!(
+            url.contains("scope=scope%3Awith%2Bplus"),
+            "+ in scope must be encoded as %2B: {url}"
+        );
+        assert!(
+            !url.contains("scope:with+plus"),
+            "raw + must not appear in the URL: {url}"
         );
     }
 }
