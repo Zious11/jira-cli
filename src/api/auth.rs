@@ -169,7 +169,7 @@ pub async fn oauth_login(
     drop(listener);
 
     let redirect_uri = format!("http://localhost:{port}/callback");
-    let state = generate_state();
+    let state = generate_state()?;
 
     let auth_url = format!(
         "https://auth.atlassian.com/authorize\
@@ -305,11 +305,38 @@ pub async fn refresh_oauth_token(client_id: &str, client_secret: &str) -> Result
     Ok(tokens.access_token)
 }
 
-/// Generate a unique state parameter for CSRF protection.
-fn generate_state() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let t = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-    format!("{:x}", t.as_nanos())
+/// Generate a cryptographically random state parameter for CSRF protection
+/// of the OAuth 2.0 authorization-code flow (RFC 6749 §10.12).
+///
+/// 32 random bytes read directly from the operating system CSPRNG via
+/// `rand::rngs::OsRng` (which is a thin wrapper over the `getrandom` crate
+/// and calls `getrandom(2)` / `BCryptGenRandom` on each invocation — no
+/// user-space reseeding state, unlike `rand::rng()` / `ThreadRng`).
+/// Rendered as 64 hex characters. 256 bits of entropy far exceeds the
+/// ~30 bits offered by the previous wall-clock-nanosecond implementation,
+/// closing the attack window where an attacker with local access could
+/// observe the authorize URL and race the 127.0.0.1 callback listener
+/// with a forged code.
+///
+/// Returns `Err` when the OS CSPRNG is unavailable — a rare but non-
+/// panicking failure mode (sandboxed environments without `/dev/urandom`,
+/// early-boot situations, or OS-level seccomp denials). The caller
+/// bubbles this up through `oauth_login` so `jr auth login` fails with
+/// an actionable error rather than aborting the process (the release
+/// profile uses `panic = "abort"`).
+fn generate_state() -> Result<String> {
+    use rand::TryRngCore;
+    let mut bytes = [0u8; 32];
+    rand::rngs::OsRng.try_fill_bytes(&mut bytes).context(
+        "Failed to read from OS CSPRNG when generating OAuth state. \
+         Check OS entropy availability or sandbox/seccomp restrictions \
+         that may block getrandom(2) / BCryptGenRandom.",
+    )?;
+    Ok(bytes.iter().fold(String::with_capacity(64), |mut s, b| {
+        use std::fmt::Write;
+        let _ = write!(s, "{b:02x}");
+        s
+    }))
 }
 
 /// Extract a query parameter value from a raw HTTP request string.
@@ -362,8 +389,42 @@ mod tests {
 
     #[test]
     fn test_generate_state_is_hex() {
-        let state = generate_state();
+        let state = generate_state().expect("OS CSPRNG available in tests");
         assert!(!state.is_empty());
         assert!(state.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    /// 256-bit CSPRNG output rendered as hex must always be 64 characters.
+    /// Pinning the length guards against a regression to any lower-entropy
+    /// source (e.g., timestamp-hex, truncated UUIDs) that would still pass
+    /// the is_hex check.
+    #[test]
+    fn test_generate_state_is_64_hex_chars() {
+        let state = generate_state().expect("OS CSPRNG available in tests");
+        assert_eq!(
+            state.len(),
+            64,
+            "expected 32 bytes = 64 hex chars, got: {state}"
+        );
+    }
+
+    /// `generate_state` must produce 8 distinct values across 8 calls. A
+    /// deterministic or low-entropy regression (reintroduced `as_nanos`
+    /// state, a constant, etc.) collapses outputs and trips this check.
+    /// With 256 bits of true entropy the birthday-bound collision
+    /// probability across 8 samples is C(8,2) / 2^256 ≈ 2^-253, so
+    /// requiring all 8 to be distinct is rigorously not a flake source.
+    #[test]
+    fn test_generate_state_is_not_deterministic() {
+        let samples: std::collections::HashSet<String> = (0..8)
+            .map(|_| generate_state().expect("OS CSPRNG available in tests"))
+            .collect();
+        assert_eq!(
+            samples.len(),
+            8,
+            "expected 8 distinct values from 8 generate_state() calls, \
+             got {} distinct: {samples:?}",
+            samples.len()
+        );
     }
 }
