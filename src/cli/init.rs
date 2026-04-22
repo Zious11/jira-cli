@@ -28,9 +28,7 @@ pub async fn handle() -> Result<()> {
     let global = GlobalConfig {
         instance: InstanceConfig {
             url: Some(url.clone()),
-            cloud_id: None,
-            org_id: None,
-            auth_method: None,
+            ..InstanceConfig::default()
         },
         defaults: DefaultsConfig::default(),
         fields: FieldsConfig::default(),

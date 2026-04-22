@@ -306,9 +306,8 @@ mod tests {
             global: GlobalConfig {
                 instance: InstanceConfig {
                     url: Some("https://example.atlassian.net".into()),
-                    cloud_id: None,
-                    org_id: None,
                     auth_method: method.map(str::to_string),
+                    ..InstanceConfig::default()
                 },
                 ..Default::default()
             },
