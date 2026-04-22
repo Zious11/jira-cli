@@ -309,7 +309,7 @@ async fn user_list_default_caps_at_thirty() {
 /// fixed board id 42 and sprint id 100. All three API calls send
 /// `startAt=0` and `maxResults=50` unconditionally, so the mocks pin
 /// those values — a regression that drops pagination params on any of
-/// these preqreq calls would fail the mock match.
+/// these prereq calls would fail the mock match.
 async fn mount_scrum_prereqs(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path("/rest/agile/1.0/board"))
