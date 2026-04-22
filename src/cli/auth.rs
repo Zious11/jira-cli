@@ -199,11 +199,16 @@ pub async fn login_oauth(
         Some(OAUTH_APP_HINT),
     )?;
 
-    // Store OAuth app credentials in keychain
-    crate::api::auth::store_oauth_app_credentials(&client_id, &client_secret)?;
-
+    // Resolve config and scopes BEFORE persisting credentials — a bad
+    // [instance].oauth_scopes (empty/whitespace-only) must fail fast, not
+    // leave new client_id/client_secret in the keychain alongside a login
+    // that never succeeded.
     let mut config = Config::load().unwrap_or_default();
     let scopes = resolve_oauth_scopes(&config)?;
+
+    // Store OAuth app credentials in keychain (only after scopes validate)
+    crate::api::auth::store_oauth_app_credentials(&client_id, &client_secret)?;
+
     let result = crate::api::auth::oauth_login(&client_id, &client_secret, &scopes).await?;
 
     config.global.instance.url = Some(result.site_url);
