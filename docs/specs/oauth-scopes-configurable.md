@@ -4,11 +4,13 @@
 
 ## Problem
 
-`jr`'s OAuth 2.0 (3LO) flow at `src/api/auth.rs:27` hardcodes a classic scope string:
+`jr`'s OAuth 2.0 (3LO) flow previously hardcoded a classic scope string in `src/api/auth.rs`:
 
 ```rust
 const SCOPES: &str = "read:jira-work write:jira-work read:jira-user offline_access";
 ```
+
+(As part of this change, the constant is renamed to `pub const DEFAULT_OAUTH_SCOPES` so the CLI handler can fall back to it when no override is configured — see the Default section below.)
 
 Users who configure an OAuth app in the Atlassian Developer Console with a different scope set — typically granular scopes for least-privilege agent use, e.g. `read:issue:jira write:comment:jira` — cannot make `jr auth login --oauth` request those scopes. The authorize URL always asks for the hardcoded classic string regardless of what the Developer Console app actually has.
 

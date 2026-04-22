@@ -16,12 +16,12 @@
 
 | Path | Change |
 |---|---|
-| `src/config.rs` | Add `oauth_scopes: Option<String>` to `InstanceConfig`; add unit tests for TOML parse, None default, env override |
+| `src/config.rs` | Add `oauth_scopes: Option<String>` to `InstanceConfig`; add unit tests for TOML parse and missing-key default-to-`None` behavior |
 | `src/api/auth.rs` | Rename `const SCOPES` → `pub const DEFAULT_OAUTH_SCOPES`; add `scopes: &str` parameter to `oauth_login`; use the parameter in the authorize URL |
 | `src/cli/auth.rs` | Add module-private `resolve_oauth_scopes(&Config) -> Result<String>`; call it in `login_oauth` and pass the result into `oauth_login`; add unit tests covering four cases |
 | `README.md` | Add `oauth_scopes` to the global config example and a short note on classic-vs-granular + `offline_access` |
 
-No files created. No integration test file needed — `oauth_login` hits `auth.atlassian.com` directly and is out of scope for unit-testable mocking.
+No additional implementation or test files are created by the plan. The spec (`docs/specs/oauth-scopes-configurable.md`) and this plan itself are new in this PR but are documentation, not implementation. No integration test file is needed — `oauth_login` hits `auth.atlassian.com` directly and is out of scope for unit-testable mocking. Env-var override is likewise out of scope (see spec Data flow section).
 
 ---
 
