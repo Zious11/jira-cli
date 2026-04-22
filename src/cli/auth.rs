@@ -113,6 +113,29 @@ fn chosen_flow(config: &Config, oauth_override: bool) -> AuthFlow {
     }
 }
 
+/// Pick the OAuth scope string: user override from `[instance].oauth_scopes`
+/// if set, else the compiled-in default. Trims and collapses interior
+/// whitespace so multi-line TOML strings encode cleanly. Empty or
+/// whitespace-only overrides are a configuration error.
+fn resolve_oauth_scopes(config: &Config) -> Result<String> {
+    match config.global.instance.oauth_scopes.as_deref() {
+        None => Ok(auth::DEFAULT_OAUTH_SCOPES.to_string()),
+        Some(raw) => {
+            let collapsed: String = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+            if collapsed.is_empty() {
+                Err(JrError::ConfigError(
+                    "oauth_scopes is empty; remove the setting to use defaults \
+                     or list at least one scope"
+                        .into(),
+                )
+                .into())
+            } else {
+                Ok(collapsed)
+            }
+        }
+    }
+}
+
 /// Resolve email and API token (flag → env → prompt), then store in keychain.
 pub async fn login_token(
     email: Option<String>,
@@ -179,9 +202,10 @@ pub async fn login_oauth(
     // Store OAuth app credentials in keychain
     crate::api::auth::store_oauth_app_credentials(&client_id, &client_secret)?;
 
-    let result = crate::api::auth::oauth_login(&client_id, &client_secret).await?;
-
     let mut config = Config::load().unwrap_or_default();
+    let scopes = resolve_oauth_scopes(&config)?;
+    let result = crate::api::auth::oauth_login(&client_id, &client_secret, &scopes).await?;
+
     config.global.instance.url = Some(result.site_url);
     config.global.instance.cloud_id = Some(result.cloud_id);
     config.global.instance.auth_method = Some("oauth".into());
@@ -505,6 +529,61 @@ mod tests {
         assert!(
             msg.contains("developer.atlassian.com/console/myapps"),
             "OAuth error should cite dev console URL: {msg}"
+        );
+    }
+
+    fn config_with_oauth_scopes(scopes: Option<&str>) -> Config {
+        Config {
+            global: GlobalConfig {
+                instance: InstanceConfig {
+                    oauth_scopes: scopes.map(String::from),
+                    ..InstanceConfig::default()
+                },
+                ..GlobalConfig::default()
+            },
+            project: Default::default(),
+        }
+    }
+
+    #[test]
+    fn resolve_oauth_scopes_none_returns_default() {
+        let config = config_with_oauth_scopes(None);
+        assert_eq!(
+            resolve_oauth_scopes(&config).unwrap(),
+            auth::DEFAULT_OAUTH_SCOPES
+        );
+    }
+
+    #[test]
+    fn resolve_oauth_scopes_trims_and_collapses_whitespace() {
+        let config = config_with_oauth_scopes(Some(
+            "  read:issue:jira   write:comment:jira\n\toffline_access  ",
+        ));
+        assert_eq!(
+            resolve_oauth_scopes(&config).unwrap(),
+            "read:issue:jira write:comment:jira offline_access"
+        );
+    }
+
+    #[test]
+    fn resolve_oauth_scopes_empty_string_is_config_error() {
+        let config = config_with_oauth_scopes(Some(""));
+        let err = resolve_oauth_scopes(&config).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("oauth_scopes is empty"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn resolve_oauth_scopes_whitespace_only_is_config_error() {
+        let config = config_with_oauth_scopes(Some("   \n\t  "));
+        let err = resolve_oauth_scopes(&config).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("oauth_scopes is empty"),
+            "unexpected error: {msg}"
         );
     }
 }
