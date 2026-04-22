@@ -169,7 +169,7 @@ pub async fn oauth_login(
     drop(listener);
 
     let redirect_uri = format!("http://localhost:{port}/callback");
-    let state = generate_state();
+    let state = generate_state()?;
 
     let auth_url = format!(
         "https://auth.atlassian.com/authorize\
@@ -317,17 +317,26 @@ pub async fn refresh_oauth_token(client_id: &str, client_secret: &str) -> Result
 /// closing the attack window where an attacker with local access could
 /// observe the authorize URL and race the 127.0.0.1 callback listener
 /// with a forged code.
-fn generate_state() -> String {
+///
+/// Returns `Err` when the OS CSPRNG is unavailable — a rare but non-
+/// panicking failure mode (sandboxed environments without `/dev/urandom`,
+/// early-boot situations, or OS-level seccomp denials). The caller
+/// bubbles this up through `oauth_login` so `jr auth login` fails with
+/// an actionable error rather than aborting the process (the release
+/// profile uses `panic = "abort"`).
+fn generate_state() -> Result<String> {
     use rand::TryRngCore;
     let mut bytes = [0u8; 32];
-    rand::rngs::OsRng
-        .try_fill_bytes(&mut bytes)
-        .expect("OS CSPRNG should always succeed for 32-byte reads");
-    bytes.iter().fold(String::with_capacity(64), |mut s, b| {
+    rand::rngs::OsRng.try_fill_bytes(&mut bytes).context(
+        "Failed to read from OS CSPRNG when generating OAuth state. \
+         Check OS entropy availability or sandbox/seccomp restrictions \
+         that may block getrandom(2) / BCryptGenRandom.",
+    )?;
+    Ok(bytes.iter().fold(String::with_capacity(64), |mut s, b| {
         use std::fmt::Write;
         let _ = write!(s, "{b:02x}");
         s
-    })
+    }))
 }
 
 /// Extract a query parameter value from a raw HTTP request string.
@@ -380,7 +389,7 @@ mod tests {
 
     #[test]
     fn test_generate_state_is_hex() {
-        let state = generate_state();
+        let state = generate_state().expect("OS CSPRNG available in tests");
         assert!(!state.is_empty());
         assert!(state.chars().all(|c| c.is_ascii_hexdigit()));
     }
@@ -391,7 +400,7 @@ mod tests {
     /// the is_hex check.
     #[test]
     fn test_generate_state_is_64_hex_chars() {
-        let state = generate_state();
+        let state = generate_state().expect("OS CSPRNG available in tests");
         assert_eq!(
             state.len(),
             64,
@@ -399,20 +408,22 @@ mod tests {
         );
     }
 
-    /// Sanity check that `generate_state` is not obviously deterministic:
-    /// generate 8 values and assert at least 7 are distinct. A deterministic
-    /// or low-entropy regression (e.g., a reintroduction of `as_nanos`-style
-    /// state, or a constant) will collapse all 8 outputs to the same value
-    /// and trip this check. With 256 bits of true entropy the probability of
-    /// any collision across 8 samples is ~2^-253 (birthday bound, C(8,2) /
-    /// 2^256), so the test is not a CI flake risk.
+    /// `generate_state` must produce 8 distinct values across 8 calls. A
+    /// deterministic or low-entropy regression (reintroduced `as_nanos`
+    /// state, a constant, etc.) collapses outputs and trips this check.
+    /// With 256 bits of true entropy the birthday-bound collision
+    /// probability across 8 samples is C(8,2) / 2^256 ≈ 2^-253, so
+    /// requiring all 8 to be distinct is rigorously not a flake source.
     #[test]
     fn test_generate_state_is_not_deterministic() {
-        let samples: std::collections::HashSet<String> = (0..8).map(|_| generate_state()).collect();
-        assert!(
-            samples.len() >= 7,
-            "expected >=7 distinct values from 8 generate_state() calls, \
-             got {} distinct out of 8: {samples:?}",
+        let samples: std::collections::HashSet<String> = (0..8)
+            .map(|_| generate_state().expect("OS CSPRNG available in tests"))
+            .collect();
+        assert_eq!(
+            samples.len(),
+            8,
+            "expected 8 distinct values from 8 generate_state() calls, \
+             got {} distinct: {samples:?}",
             samples.len()
         );
     }
