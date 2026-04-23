@@ -1471,7 +1471,7 @@ async fn schema_single_substring_schema_filter_rejected() {
     );
 }
 
-// ── partial_match single-substring rejection (#240) — helpers.rs sites ──
+// ── partial_match single-substring rejection (#240) — helpers.rs and assets.rs sites ──
 
 /// `issue list --asset <substring>` must exit 64 when the substring matches
 /// multiple asset labels. Locks `helpers::resolve_asset`'s Ambiguous branch
