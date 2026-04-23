@@ -197,6 +197,10 @@ async fn issue_create_json_falls_back_on_get_failure() {
         stderr.contains("PROJ-456") && stderr.to_lowercase().contains("warn"),
         "expected a stderr warning mentioning the new key, got: {stderr}"
     );
+    assert!(
+        stderr.contains("jr issue view PROJ-456"),
+        "expected recovery hint pointing at `jr issue view`, got: {stderr}"
+    );
 
     let parsed: Value = serde_json::from_str(&stdout).expect("stdout must be valid JSON");
     assert_eq!(parsed["key"], "PROJ-456");
