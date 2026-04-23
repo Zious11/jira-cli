@@ -203,7 +203,21 @@ pub async fn login_oauth(
     // [instance].oauth_scopes (empty/whitespace-only) must fail fast, not
     // leave new client_id/client_secret in the keychain alongside a login
     // that never succeeded.
-    let mut config = Config::load().unwrap_or_default();
+    //
+    // Propagate load errors (malformed TOML, permission denied, etc.)
+    // instead of falling back to defaults. Falling back would cause the
+    // subsequent `save_global()` to overwrite the user's broken-but-
+    // recoverable config with a default payload, silently discarding
+    // settings they cared about (#258). figment's `Toml::file` already
+    // treats a missing file as empty, so a genuinely-absent config never
+    // reaches this error path — only real failures do.
+    let mut config = Config::load().map_err(|err| {
+        JrError::ConfigError(format!(
+            "Failed to load config: {err}\n\n\
+             Fix the error in your config file (usually ~/.config/jr/config.toml), \
+             or remove the file to start fresh."
+        ))
+    })?;
     let scopes = resolve_oauth_scopes(&config)?;
 
     // Store OAuth app credentials in keychain (only after scopes validate)
