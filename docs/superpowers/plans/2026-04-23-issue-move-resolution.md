@@ -706,14 +706,19 @@ Expected: PASS — all 5 tests.
 - [ ] In `src/cli/mod.rs`, locate `IssueCommand::Move { ... }` (grep for `Move {` in that file to jump). Add a new field at the end:
 
 ```rust
-/// Set the resolution field atomically with the transition. Matched
-/// case-insensitively against `jr issue resolutions` by exact name,
-/// prefix, or unique substring. Required on many JSM workflows to
-/// avoid leaving the ticket in a half-resolved state
-/// (status=Done, resolution=null).
+/// Set the resolution atomically with the transition (e.g. "Fixed").
+/// Many JSM workflows require this; run `jr issue resolutions` to
+/// discover valid values.
+///
+/// Matched case-insensitively against the exact resolution name. Prefix
+/// / substring partial matches are NOT auto-resolved (they error with a
+/// candidate list) — the flag is a machine-facing setter where silent
+/// fuzziness would be surprising. Unset = no resolution sent.
 #[arg(long)]
 resolution: Option<String>,
 ```
+
+**Note:** Task 5 initially planned a partial-match flow ("unique substring → Ok") but the local-review feedback flagged that this diverges from the project's sibling resolvers (which all error on substring under `--no-input`). The shipped implementation errors on any non-exact match — reflected in the CLI doc comment above and in the spec's design section. Leaving this plan text intact for archaeology, but the implementation is case-insensitive exact only.
 
 ### Step 6: Thread `--resolution` through `handle_move`
 
