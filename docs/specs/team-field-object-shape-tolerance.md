@@ -74,10 +74,10 @@ This particular message is `--verbose`-gated (only emits when `client.verbose()`
 
 Revised warning:
 ```
-[verbose] team field "customfield_10001" has unexpected shape (got <kind>)
+[verbose] team field "customfield_10001" has unexpected shape (got <kind>). Expected string UUID or object with string "id".
 ```
 
-Same tag, dropped the config-blame clause, dropped the "expected string UUID" claim (we now accept two shapes, the "expected" is "string OR object-with-string-id").
+Same `[verbose]` tag, dropped the config-blame clause, replaced the "expected string UUID" suffix with a positive statement of the two accepted shapes — users hitting this (genuinely broken data: bool, number, array, or object missing a string `id`) get both diagnosis and expectation in one line.
 
 ## Testing
 
