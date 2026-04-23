@@ -33,6 +33,7 @@ chrono = { version = "0.4", features = ["serde"] }
 futures = { version = "0.3", default-features = false, features = ["async-await"] }
 rand = "0.9"
 urlencoding = "2"
+url = "2"
 pulldown-cmark = { version = "0.13", default-features = false }
 
 [dev-dependencies]

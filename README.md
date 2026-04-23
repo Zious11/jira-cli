@@ -170,6 +170,7 @@ jr issue comment JSM-42 "customer is on the paid plan — prioritizing" --intern
 | `jr issue link KEY1 KEY2` | Link two issues (`--type blocks`, defaults to Relates) |
 | `jr issue unlink KEY1 KEY2` | Remove link(s) between issues (`--type` to filter) |
 | `jr issue link-types` | List available link types |
+| `jr issue remote-link KEY --url URL` | Attach a Confluence page or web URL (`--title` optional, defaults to URL) |
 | `jr issue assets KEY`          | Show assets linked to an issue                |
 | `jr board list` | List boards (`--project`, `--type scrum\|kanban`) |
 | `jr board view --board 42` | Show current board issues (`--board` or config, `--limit`/`--all`) |

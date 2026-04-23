@@ -64,6 +64,23 @@ pub(crate) fn unlink_response(unlinked: bool, count: usize) -> Value {
     })
 }
 
+/// JSON response for `issue remote-link`.
+pub(crate) fn remote_link_response(
+    key: &str,
+    id: u64,
+    url: &str,
+    title: &str,
+    self_url: &str,
+) -> Value {
+    json!({
+        "key": key,
+        "id": id,
+        "url": url,
+        "title": title,
+        "self": self_url,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,5 +134,16 @@ mod tests {
     #[test]
     fn test_unlink_no_match() {
         assert_json_snapshot!(unlink_response(false, 0));
+    }
+
+    #[test]
+    fn test_remote_link() {
+        assert_json_snapshot!(remote_link_response(
+            "TEST-1",
+            10000,
+            "https://example.com",
+            "Example",
+            "https://example.atlassian.net/rest/api/3/issue/TEST-1/remotelink/10000",
+        ));
     }
 }

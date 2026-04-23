@@ -1,0 +1,11 @@
+---
+source: src/cli/issue/json_output.rs
+expression: "remote_link_response(\"TEST-1\", 10000, \"https://example.com\", \"Example\",\n\"https://example.atlassian.net/rest/api/3/issue/TEST-1/remotelink/10000\",)"
+---
+{
+  "id": 10000,
+  "key": "TEST-1",
+  "self": "https://example.atlassian.net/rest/api/3/issue/TEST-1/remotelink/10000",
+  "title": "Example",
+  "url": "https://example.com"
+}
