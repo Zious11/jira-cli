@@ -215,7 +215,8 @@ pub async fn login_oauth(
     let mut config = Config::load().map_err(|err| {
         JrError::ConfigError(format!(
             "Failed to load config: {err:#}\n\n\
-             Fix the error in {config_path}, or remove the file to start fresh.",
+             Fix or remove the file referenced above. Global config: {config_path}; \
+             per-project overrides come from `.jr.toml` in the current directory or any parent.",
             config_path = config_path.display()
         ))
     })?;

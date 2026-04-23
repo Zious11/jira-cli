@@ -39,9 +39,12 @@ fn auth_login_oauth_surfaces_malformed_config_without_overwriting() {
         .env("XDG_CACHE_HOME", cache_dir.path())
         .env("XDG_CONFIG_HOME", config_dir.path())
         .env("JR_SERVICE_NAME", "jr-jira-cli-test")
-        // env_remove to avoid figment picking up parent-shell JR_INSTANCE_*
-        // values that would let Config::load succeed by overriding the bad
-        // file with env values.
+        // Defense-in-depth env hygiene. Figment's extract() is fatal on a
+        // TOML parse error, so the malformed global config above will fail
+        // load regardless of JR_INSTANCE_* values in the parent shell. We
+        // still clear them so this test stays correct if the failure case
+        // is later broadened to valid-but-schema-wrong configs, where env
+        // vars WOULD contribute to the merged Config.
         .env_remove("JR_INSTANCE_URL")
         .env_remove("JR_INSTANCE_AUTH_METHOD")
         .env_remove("JR_INSTANCE_OAUTH_SCOPES")
