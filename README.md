@@ -134,6 +134,9 @@ jr issue create --project FOO --type Bug --summary "Auth token not refreshing" -
 # Transition an issue
 jr issue move KEY-123 "In Progress"
 
+# Close a JSM ticket atomically with status + resolution (so SLAs + reports stay accurate)
+jr issue move JSM-42 Done --resolution Fixed
+
 # Log time
 jr worklog add KEY-123 2h -m "Fixed the auth bug"
 
@@ -157,8 +160,9 @@ jr issue comment JSM-42 "customer is on the paid plan — prioritizing" --intern
 | `jr issue view KEY` | View issue details (per-field asset rows, enriched JSON, story points) |
 | `jr issue create` | Create an issue (`--team`, `--points`) |
 | `jr issue edit KEY` | Edit issue fields (`--team`, `--points`, `--no-points`) |
-| `jr issue move KEY [STATUS]` | Transition issue (partial match on status name) |
+| `jr issue move KEY [STATUS]` | Transition issue (partial match on status name). `--resolution <name>` atomically sets resolution on the transition for JSM/resolution-required workflows. |
 | `jr issue transitions KEY` | List available transitions |
+| `jr issue resolutions` | List instance-scoped resolution values (cached 7 days; `--refresh` to bust). Discover what to pass to `--resolution` on `jr issue move`. |
 | `jr issue assign KEY` | Assign to self (or `--to USER`, `--unassign`) |
 | `jr issue comment KEY "msg"` | Add a comment (`--stdin`, `--file`, `--markdown`, `--internal` for JSM agent-only notes) |
 | `jr issue comments KEY` | List comments (`--limit N`; JSM issues show a Visibility column: External / Internal) |

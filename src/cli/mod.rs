@@ -379,11 +379,9 @@ pub enum IssueCommand {
         key: String,
         /// Target status (partial match supported)
         status: Option<String>,
-        /// Set the resolution field atomically with the transition. Matched
-        /// case-insensitively against `jr issue resolutions` by exact name,
-        /// prefix, or unique substring. Required on many JSM workflows to
-        /// avoid leaving the ticket in a half-resolved state
-        /// (status=Done, resolution=null).
+        /// Set resolution atomically with the transition (e.g. "Fixed"). Many
+        /// JSM workflows require this; run `jr issue resolutions` to discover
+        /// valid values.
         #[arg(long)]
         resolution: Option<String>,
     },
