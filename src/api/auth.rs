@@ -24,7 +24,13 @@ const KEY_API_TOKEN: &str = "api-token";
 const KEY_OAUTH_ACCESS: &str = "oauth-access-token";
 const KEY_OAUTH_REFRESH: &str = "oauth-refresh-token";
 
-const SCOPES: &str = "read:jira-work write:jira-work read:jira-user offline_access";
+/// Default OAuth 2.0 scopes used when `oauth_scopes` is not set in
+/// config.toml. Matches Atlassian's "classic" scope recommendation for
+/// Jira Platform apps. Users who configured their Developer Console app
+/// with granular scopes (e.g., for least-privilege agent use) should
+/// override via `[instance].oauth_scopes` in config.toml.
+pub const DEFAULT_OAUTH_SCOPES: &str =
+    "read:jira-work write:jira-work read:jira-user offline_access";
 
 fn entry(key: &str) -> Result<Entry> {
     Entry::new(&service_name(), key).context("Failed to access keychain")
@@ -142,31 +148,30 @@ pub struct OAuthResult {
 }
 
 /// Run the full OAuth 2.0 (3LO) authorization code flow:
-/// 1. Open browser to Atlassian authorization page
+/// 1. Open browser to Atlassian authorization page requesting `scopes`
 /// 2. Listen on a local port for the callback
 /// 3. Exchange the authorization code for tokens
 /// 4. Fetch accessible resources to get the cloud ID
 /// 5. Store tokens in the system keychain
-pub async fn oauth_login(client_id: &str, client_secret: &str) -> Result<OAuthResult> {
+///
+/// `scopes` is a space-separated scope string (URL-encoded internally).
+/// Callers should use [`DEFAULT_OAUTH_SCOPES`] when no user override is set.
+/// Note: [`refresh_oauth_token`] does NOT take a scope parameter — the
+/// `refresh_token` grant inherits scopes from the original authorization.
+pub async fn oauth_login(
+    client_id: &str,
+    client_secret: &str,
+    scopes: &str,
+) -> Result<OAuthResult> {
     // 1. Find an available port for the local callback server.
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
     drop(listener);
 
     let redirect_uri = format!("http://localhost:{port}/callback");
-    let state = generate_state();
+    let state = generate_state()?;
 
-    let auth_url = format!(
-        "https://auth.atlassian.com/authorize\
-         ?audience=api.atlassian.com\
-         &client_id={client_id}\
-         &scope={}\
-         &redirect_uri={redirect_uri}\
-         &state={state}\
-         &response_type=code\
-         &prompt=consent",
-        urlencoding::encode(SCOPES),
-    );
+    let auth_url = build_authorize_url(client_id, scopes, &redirect_uri, &state);
 
     eprintln!("Opening browser for authorization...");
     eprintln!("If browser doesn't open, visit: {auth_url}");
@@ -255,6 +260,12 @@ pub async fn oauth_login(client_id: &str, client_secret: &str) -> Result<OAuthRe
 
 /// Refresh the OAuth 2.0 access token using the stored refresh token.
 /// Returns the new access token on success.
+///
+/// Intentionally takes no `scopes` parameter: the `refresh_token` grant
+/// inherits scopes from the original authorization per RFC 6749 §6. To
+/// pick up a changed `[instance].oauth_scopes` in config.toml, the user
+/// must re-run `jr auth login --oauth` (refresh alone will keep the old
+/// scope set).
 pub async fn refresh_oauth_token(client_id: &str, client_secret: &str) -> Result<String> {
     let (_, refresh_token) = load_oauth_tokens()?;
 
@@ -284,11 +295,73 @@ pub async fn refresh_oauth_token(client_id: &str, client_secret: &str) -> Result
     Ok(tokens.access_token)
 }
 
-/// Generate a unique state parameter for CSRF protection.
-fn generate_state() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let t = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-    format!("{:x}", t.as_nanos())
+/// Build the Atlassian OAuth 2.0 authorize URL with all dynamic parameters
+/// percent-encoded uniformly.
+///
+/// All four dynamic values (`client_id`, `scopes`, `redirect_uri`, `state`)
+/// are passed through `urlencoding::encode`, which applies RFC 3986
+/// percent-encoding — spaces become `%20`, not `+`. Atlassian's authorize
+/// endpoint requires `%20` for space-separated scopes, NOT the
+/// application/x-www-form-urlencoded `+` form that `url::Url::query_pairs_mut`
+/// would produce (confirmed against Atlassian's documented example URLs).
+///
+/// Uniform encoding is a defense-in-depth measure: it prevents a
+/// pathological `client_id` containing `&`, `=`, `#`, or `?` from reshaping
+/// the query string — e.g., `real_id&redirect_uri=evil.example` becomes
+/// `real_id%26redirect_uri%3Devil.example` and is treated as a single
+/// scalar value by Atlassian (which then rejects it as an unknown client).
+///
+/// The static constants (`audience`, `response_type`, `prompt`) are not
+/// user-controlled so they are not encoded here.
+fn build_authorize_url(client_id: &str, scopes: &str, redirect_uri: &str, state: &str) -> String {
+    format!(
+        "https://auth.atlassian.com/authorize\
+         ?audience=api.atlassian.com\
+         &client_id={}\
+         &scope={}\
+         &redirect_uri={}\
+         &state={}\
+         &response_type=code\
+         &prompt=consent",
+        urlencoding::encode(client_id),
+        urlencoding::encode(scopes),
+        urlencoding::encode(redirect_uri),
+        urlencoding::encode(state),
+    )
+}
+
+/// Generate a cryptographically random state parameter for CSRF protection
+/// of the OAuth 2.0 authorization-code flow (RFC 6749 §10.12).
+///
+/// 32 random bytes read directly from the operating system CSPRNG via
+/// `rand::rngs::OsRng` (which is a thin wrapper over the `getrandom` crate
+/// and calls `getrandom(2)` / `BCryptGenRandom` on each invocation — no
+/// user-space reseeding state, unlike `rand::rng()` / `ThreadRng`).
+/// Rendered as 64 hex characters. 256 bits of entropy far exceeds the
+/// ~30 bits offered by the previous wall-clock-nanosecond implementation,
+/// closing the attack window where an attacker with local access could
+/// observe the authorize URL and race the 127.0.0.1 callback listener
+/// with a forged code.
+///
+/// Returns `Err` when the OS CSPRNG is unavailable — a rare but non-
+/// panicking failure mode (sandboxed environments without `/dev/urandom`,
+/// early-boot situations, or OS-level seccomp denials). The caller
+/// bubbles this up through `oauth_login` so `jr auth login` fails with
+/// an actionable error rather than aborting the process (the release
+/// profile uses `panic = "abort"`).
+fn generate_state() -> Result<String> {
+    use rand::TryRngCore;
+    let mut bytes = [0u8; 32];
+    rand::rngs::OsRng.try_fill_bytes(&mut bytes).context(
+        "Failed to read from OS CSPRNG when generating OAuth state. \
+         Check OS entropy availability or sandbox/seccomp restrictions \
+         that may block getrandom(2) / BCryptGenRandom.",
+    )?;
+    Ok(bytes.iter().fold(String::with_capacity(64), |mut s, b| {
+        use std::fmt::Write;
+        let _ = write!(s, "{b:02x}");
+        s
+    }))
 }
 
 /// Extract a query parameter value from a raw HTTP request string.
@@ -341,8 +414,113 @@ mod tests {
 
     #[test]
     fn test_generate_state_is_hex() {
-        let state = generate_state();
+        let state = generate_state().expect("OS CSPRNG available in tests");
         assert!(!state.is_empty());
         assert!(state.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    /// 256-bit CSPRNG output rendered as hex must always be 64 characters.
+    /// Pinning the length guards against a regression to any lower-entropy
+    /// source (e.g., timestamp-hex, truncated UUIDs) that would still pass
+    /// the is_hex check.
+    #[test]
+    fn test_generate_state_is_64_hex_chars() {
+        let state = generate_state().expect("OS CSPRNG available in tests");
+        assert_eq!(
+            state.len(),
+            64,
+            "expected 32 bytes = 64 hex chars, got: {state}"
+        );
+    }
+
+    /// `generate_state` must produce 8 distinct values across 8 calls. A
+    /// deterministic or low-entropy regression (reintroduced `as_nanos`
+    /// state, a constant, etc.) collapses outputs and trips this check.
+    /// With 256 bits of true entropy the birthday-bound collision
+    /// probability across 8 samples is C(8,2) / 2^256 ≈ 2^-253, so
+    /// requiring all 8 to be distinct is rigorously not a flake source.
+    #[test]
+    fn test_generate_state_is_not_deterministic() {
+        let samples: std::collections::HashSet<String> = (0..8)
+            .map(|_| generate_state().expect("OS CSPRNG available in tests"))
+            .collect();
+        assert_eq!(
+            samples.len(),
+            8,
+            "expected 8 distinct values from 8 generate_state() calls, \
+             got {} distinct: {samples:?}",
+            samples.len()
+        );
+    }
+
+    /// Happy path: a well-formed `client_id` + scopes + redirect_uri + state
+    /// produce an authorize URL with all Atlassian-required static params,
+    /// scope spaces rendered as `%20` (Atlassian rejects `+`-encoded spaces).
+    #[test]
+    fn test_build_authorize_url_happy_path() {
+        let url = build_authorize_url(
+            "normal-client-id",
+            "read:jira-work offline_access",
+            "http://localhost:12345/callback",
+            "deadbeef",
+        );
+
+        assert!(url.starts_with("https://auth.atlassian.com/authorize?"));
+        assert!(url.contains("audience=api.atlassian.com"));
+        assert!(url.contains("&client_id=normal-client-id"));
+        assert!(
+            url.contains("&scope=read%3Ajira-work%20offline_access"),
+            "scope must be %20-encoded, not +-encoded (Atlassian requires %20): {url}"
+        );
+        assert!(url.contains("&redirect_uri=http%3A%2F%2Flocalhost%3A12345%2Fcallback"));
+        assert!(url.contains("&state=deadbeef"));
+        assert!(url.contains("&response_type=code"));
+        assert!(url.contains("&prompt=consent"));
+    }
+
+    /// A pathological `client_id` containing query-string reserved chars
+    /// (`&`, `=`, `#`) must be fully escaped so it cannot reshape the query
+    /// string. Without uniform encoding, `real_id&redirect_uri=evil.example`
+    /// would silently override the redirect_uri parameter.
+    #[test]
+    fn test_build_authorize_url_escapes_hostile_client_id() {
+        let url = build_authorize_url(
+            "real_id&redirect_uri=evil.example#frag",
+            "read:jira-work",
+            "http://localhost:12345/callback",
+            "deadbeef",
+        );
+
+        assert!(
+            !url.contains("&redirect_uri=evil.example"),
+            "hostile client_id must not be able to inject a redirect_uri override: {url}"
+        );
+        assert!(
+            url.contains("client_id=real_id%26redirect_uri%3Devil.example%23frag"),
+            "client_id reserved chars must be percent-encoded: {url}"
+        );
+    }
+
+    /// Scope values containing `+` (unlikely but not impossible — some
+    /// granular scopes are under evolution) must have the `+` escaped to
+    /// `%2B`. Unescaped `+` in a form-urlencoded context means "space",
+    /// which would silently corrupt the scope list.
+    #[test]
+    fn test_build_authorize_url_escapes_plus_in_scope() {
+        let url = build_authorize_url(
+            "client",
+            "scope:with+plus",
+            "http://localhost:12345/callback",
+            "deadbeef",
+        );
+
+        assert!(
+            url.contains("scope=scope%3Awith%2Bplus"),
+            "+ in scope must be encoded as %2B: {url}"
+        );
+        assert!(
+            !url.contains("scope:with+plus"),
+            "raw + must not appear in the URL: {url}"
+        );
     }
 }

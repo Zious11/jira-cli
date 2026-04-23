@@ -185,7 +185,9 @@ pub enum AssetsCommand {
 pub enum AuthCommand {
     /// Authenticate with Jira
     Login {
-        /// Use OAuth 2.0 instead of API token (requires your own OAuth app)
+        /// Use OAuth 2.0 instead of API token (requires your own OAuth app).
+        /// Scope list is Atlassian's recommended classic set by default;
+        /// override via `[instance].oauth_scopes` in config.toml.
         #[arg(long)]
         oauth: bool,
         /// Jira email (API token flow). Prefer $JR_EMAIL over this flag.

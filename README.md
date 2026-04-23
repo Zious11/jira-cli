@@ -88,6 +88,8 @@ jr init
 jr auth login
 
 # Or authenticate with OAuth 2.0 (requires your own OAuth app)
+# Scopes default to Atlassian's recommended classic set; override via
+# [instance].oauth_scopes in config.toml — see Configuration below.
 jr auth login --oauth
 
 # Non-interactive (CI / agents): flags or env vars, no TTY required.
@@ -214,6 +216,12 @@ jr issue comment KEY-123 "Deployed to staging"
 [instance]
 url = "https://yourorg.atlassian.net"
 auth_method = "api_token"  # or "oauth"
+# Optional: override the OAuth 2.0 scope list when auth_method = "oauth".
+# Must match what your app in the Atlassian Developer Console has
+# configured. Classic and granular scopes CANNOT mix in one request, and
+# "offline_access" is required for refresh tokens to be issued. If unset,
+# jr uses Atlassian's recommended classic scopes.
+# oauth_scopes = "read:issue:jira write:issue:jira write:comment:jira read:jira-user offline_access"
 
 [defaults]
 output = "table"

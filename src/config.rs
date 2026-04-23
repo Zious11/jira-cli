@@ -29,6 +29,7 @@ pub struct InstanceConfig {
     pub cloud_id: Option<String>,
     pub org_id: Option<String>,
     pub auth_method: Option<String>,
+    pub oauth_scopes: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -184,9 +185,8 @@ mod tests {
             global: GlobalConfig {
                 instance: InstanceConfig {
                     url: Some("https://myorg.atlassian.net".into()),
-                    cloud_id: None,
-                    org_id: None,
                     auth_method: Some("api_token".into()),
+                    ..InstanceConfig::default()
                 },
                 defaults: DefaultsConfig::default(),
                 ..Default::default()
@@ -204,8 +204,8 @@ mod tests {
                 instance: InstanceConfig {
                     url: Some("https://myorg.atlassian.net".into()),
                     cloud_id: Some("abc-123".into()),
-                    org_id: None,
                     auth_method: Some("oauth".into()),
+                    ..InstanceConfig::default()
                 },
                 defaults: DefaultsConfig::default(),
                 ..Default::default()
@@ -276,9 +276,8 @@ mod tests {
             global: GlobalConfig {
                 instance: InstanceConfig {
                     url: Some("https://myorg.atlassian.net/".into()),
-                    cloud_id: None,
-                    org_id: None,
                     auth_method: Some("api_token".into()),
+                    ..InstanceConfig::default()
                 },
                 defaults: DefaultsConfig::default(),
                 ..Default::default()
@@ -297,9 +296,8 @@ mod tests {
             global: GlobalConfig {
                 instance: InstanceConfig {
                     url: Some("https://test.atlassian.net".into()),
-                    cloud_id: None,
-                    org_id: None,
                     auth_method: Some("api_token".into()),
+                    ..InstanceConfig::default()
                 },
                 defaults: DefaultsConfig::default(),
                 ..Default::default()
@@ -322,5 +320,35 @@ mod tests {
             Some("https://test.atlassian.net")
         );
         assert_eq!(loaded.instance.auth_method.as_deref(), Some("api_token"));
+    }
+
+    #[test]
+    fn instance_config_parses_oauth_scopes_from_toml() {
+        let toml = r#"
+            [instance]
+            url = "https://example.atlassian.net"
+            auth_method = "oauth"
+            oauth_scopes = "read:issue:jira write:issue:jira offline_access"
+        "#;
+
+        let config: GlobalConfig = Figment::new().merge(Toml::string(toml)).extract().unwrap();
+
+        assert_eq!(
+            config.instance.oauth_scopes.as_deref(),
+            Some("read:issue:jira write:issue:jira offline_access")
+        );
+    }
+
+    #[test]
+    fn instance_config_oauth_scopes_missing_is_none() {
+        let toml = r#"
+            [instance]
+            url = "https://example.atlassian.net"
+            auth_method = "oauth"
+        "#;
+
+        let config: GlobalConfig = Figment::new().merge(Toml::string(toml)).extract().unwrap();
+
+        assert!(config.instance.oauth_scopes.is_none());
     }
 }
