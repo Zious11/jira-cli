@@ -92,3 +92,71 @@ async fn issue_view_json_extracts_team_uuid_from_object_shape() {
         "warning about unexpected shape must not fire on object-shape response; stderr: {stderr}"
     );
 }
+
+#[tokio::test]
+async fn issue_view_verbose_warns_on_truly_unexpected_team_shape() {
+    // Covers the warning-emission branch end-to-end. A numeric `id` is a
+    // genuinely unexpected shape (Atlassian documents `id` as a string UUID),
+    // and `jr --verbose issue view` should surface the diagnostic text on
+    // stderr with no retry/crash.
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(Value::Array(vec![])))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-701"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "key": "PROJ-701",
+            "fields": {
+                "summary": "test",
+                "status": { "name": "To Do", "statusCategory": { "name": "To Do", "key": "new" } },
+                "issuetype": { "name": "Task" },
+                "project": { "key": "PROJ" },
+                "customfield_10001": { "id": 42, "name": "Numeric Team" }
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(config_dir.path().join("jr")).unwrap();
+    std::fs::write(
+        config_dir.path().join("jr/config.toml"),
+        "[fields]\nteam_field_id = \"customfield_10001\"\n",
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        // Table output — the `team_id()` extraction happens in the table
+        // render path (src/cli/issue/list.rs:983). The JSON path just
+        // re-serializes the raw value and would bypass the warning branch.
+        .args(["--verbose", "issue", "view", "PROJ-701", "--no-input"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "expected success (unexpected shape is a warning, not a fatal error), stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("unexpected shape"),
+        "verbose run should surface the warning; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("Expected string UUID or object with string"),
+        "warning should hint at accepted shapes; stderr: {stderr}"
+    );
+}

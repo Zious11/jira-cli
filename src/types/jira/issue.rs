@@ -91,9 +91,13 @@ impl IssueFields {
     /// - Object `{"id": "<uuid>", "name": "..."}` (Atlas Teams platform).
     ///
     /// Returns `None` when the field is missing, null, or present but not one of
-    /// the accepted shapes. On genuinely unexpected shapes (bool, number, array,
-    /// or object without a string `id`), emits a once-per-process `[verbose]`
-    /// hint on stderr when `verbose` is true.
+    /// the accepted shapes. An object whose `id` is null or not a string is
+    /// treated as unexpected. On genuinely unexpected shapes (bool, number,
+    /// array, or object without a string `id`), emits a once-per-process
+    /// `[verbose]` hint on stderr when `verbose` is true. The once-per-process
+    /// gate is module-wide: if a single run needed to warn for two distinct
+    /// team fields (not a supported configuration today), only the first would
+    /// emit.
     pub fn team_id(&self, field_id: &str, verbose: bool) -> Option<String> {
         use std::sync::atomic::{AtomicBool, Ordering};
         static LOGGED: AtomicBool = AtomicBool::new(false);
@@ -301,6 +305,29 @@ mod tests {
     fn team_id_returns_none_for_array_value() {
         let fields = fields_with_extra("customfield_10001", json!([1, 2, 3]));
         assert_eq!(fields.team_id("customfield_10001", false), None);
+    }
+
+    #[test]
+    fn team_id_returns_none_for_object_with_non_string_id() {
+        // The `id` field must be a string. Numeric/other types fall through to
+        // the "unexpected shape" branch rather than being coerced — a future
+        // lenient-parsing refactor would regress this case, so we pin it.
+        let fields = fields_with_extra(
+            "customfield_10001",
+            json!({"id": 42, "name": "Platform Team"}),
+        );
+        assert_eq!(fields.team_id("customfield_10001", false), None);
+    }
+
+    #[test]
+    fn team_id_exercises_verbose_warning_branch() {
+        // Ensures the `verbose: true` path compiles and runs without panic,
+        // covering the `eprintln!` branch (which all other tests skip to
+        // avoid tripping the module-wide LOGGED gate for subsequent tests).
+        // We can't capture stderr easily here; the integration test at
+        // tests/team_object_shape.rs covers the text-level assertions.
+        let fields = fields_with_extra("customfield_10001", json!([1, 2, 3]));
+        assert_eq!(fields.team_id("customfield_10001", true), None);
     }
 
     #[test]
