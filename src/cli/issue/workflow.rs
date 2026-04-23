@@ -400,24 +400,12 @@ pub(super) async fn handle_resolutions(
 ) -> Result<()> {
     let resolutions = load_resolutions(client, refresh).await?;
 
-    match output_format {
-        OutputFormat::Json => {
-            println!("{}", serde_json::to_string_pretty(&resolutions)?);
-        }
-        OutputFormat::Table => {
-            use comfy_table::{Cell, Table, presets::UTF8_FULL};
-            let mut table = Table::new();
-            table.load_preset(UTF8_FULL);
-            table.set_header(vec![Cell::new("Name"), Cell::new("Description")]);
-            for r in &resolutions {
-                table.add_row(vec![
-                    Cell::new(&r.name),
-                    Cell::new(r.description.as_deref().unwrap_or("")),
-                ]);
-            }
-            println!("{table}");
-        }
-    }
+    let rows: Vec<Vec<String>> = resolutions
+        .iter()
+        .map(|r| vec![r.name.clone(), r.description.clone().unwrap_or_default()])
+        .collect();
+
+    output::print_output(output_format, &["Name", "Description"], &rows, &resolutions)?;
 
     Ok(())
 }
