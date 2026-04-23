@@ -759,14 +759,8 @@ pub(super) async fn handle_view(
     let sp_field_id = config.global.fields.story_points_field_id.as_deref();
     let team_field_id: Option<&str> = config.global.fields.team_field_id.as_deref();
     let cmdb_fields = get_or_fetch_cmdb_fields(client).await.unwrap_or_default();
-    let cmdb_field_id_list = cmdb_field_ids(&cmdb_fields);
-    let mut extra: Vec<&str> = sp_field_id.iter().copied().collect();
-    for f in &cmdb_field_id_list {
-        extra.push(f.as_str());
-    }
-    if let Some(t) = team_field_id {
-        extra.push(t);
-    }
+    let extra_owned = super::helpers::compose_extra_fields(config, &cmdb_fields);
+    let extra: Vec<&str> = extra_owned.iter().map(String::as_str).collect();
     let mut issue = client.get_issue(&key, &extra).await?;
 
     // Extract and enrich assets per-field (shared by both JSON and table paths).

@@ -2,6 +2,7 @@ use anyhow::{Result, bail};
 use serde_json::json;
 
 use crate::adf;
+use crate::api::assets::linked::get_or_fetch_cmdb_fields;
 use crate::api::client::JiraClient;
 use crate::cli::{IssueCommand, OutputFormat};
 use crate::config::Config;
@@ -145,9 +146,44 @@ pub(super) async fn handle_create(
 
     match output_format {
         OutputFormat::Json => {
-            let mut json_response = serde_json::to_value(&response)?;
-            json_response["url"] = json!(browse_url);
-            println!("{}", serde_json::to_string_pretty(&json_response)?);
+            // Follow-up GET so the JSON output matches `issue view --output json`
+            // (full Issue shape), plus `url`. On GET failure we keep the create
+            // succeeding — warn on stderr and fall back to the old `{key, url}`
+            // shape so downstream consumers always get at least the key + URL.
+            //
+            // Pre-existing pattern (same as handle_view, handle_list, project): a CMDB
+            // discovery error silently degrades to an empty field list. Tracked as a
+            // separate cleanup in the follow-up concerns documented on PR #253 — will
+            // be addressed codebase-wide, not per-call-site.
+            let cmdb_fields = get_or_fetch_cmdb_fields(client).await.unwrap_or_default();
+            let extra_owned = helpers::compose_extra_fields(config, &cmdb_fields);
+            let extra: Vec<&str> = extra_owned.iter().map(String::as_str).collect();
+
+            match client.get_issue(&response.key, &extra).await {
+                Ok(issue) => {
+                    let mut issue_json = serde_json::to_value(&issue)?;
+                    if let Some(obj) = issue_json.as_object_mut() {
+                        obj.insert("url".into(), serde_json::Value::String(browse_url.clone()));
+                    }
+                    println!("{}", serde_json::to_string_pretty(&issue_json)?);
+                }
+                Err(err) => {
+                    // Fallback JSON carries a top-level `fetch_error` string so
+                    // scripts using `jq '.fields.status.name'` can tell this
+                    // shape apart from success without parsing stderr. Recovery
+                    // hint points users at `jr issue view` for the full payload.
+                    let err_msg = format!("{err}");
+                    eprintln!(
+                        "warning: issue created ({}) but follow-up fetch failed: {err_msg}. \
+                         Run `jr issue view {} --output json` to retrieve the full payload.",
+                        response.key, response.key
+                    );
+                    let mut json_response = serde_json::to_value(&response)?;
+                    json_response["url"] = json!(browse_url);
+                    json_response["fetch_error"] = json!(err_msg);
+                    println!("{}", serde_json::to_string_pretty(&json_response)?);
+                }
+            }
         }
         OutputFormat::Table => {
             output::print_success(&format!("Created issue {}", response.key));
