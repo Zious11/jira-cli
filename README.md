@@ -137,8 +137,11 @@ jr issue move KEY-123 "In Progress"
 # Log time
 jr worklog add KEY-123 2h -m "Fixed the auth bug"
 
-# Add a comment
+# Add a comment (public reply by default)
 jr issue comment KEY-123 "Deployed to staging"
+
+# Add an internal-only comment on a JSM issue (agents see it, customers don't)
+jr issue comment JSM-42 "customer is on the paid plan — prioritizing" --internal
 ```
 
 ## Commands
@@ -157,8 +160,8 @@ jr issue comment KEY-123 "Deployed to staging"
 | `jr issue move KEY [STATUS]` | Transition issue (partial match on status name) |
 | `jr issue transitions KEY` | List available transitions |
 | `jr issue assign KEY` | Assign to self (or `--to USER`, `--unassign`) |
-| `jr issue comment KEY "msg"` | Add a comment (`--stdin`, `--file`, `--markdown`) |
-| `jr issue comments KEY` | List comments (`--limit N`) |
+| `jr issue comment KEY "msg"` | Add a comment (`--stdin`, `--file`, `--markdown`, `--internal` for JSM agent-only notes) |
+| `jr issue comments KEY` | List comments (`--limit N`; JSM issues show a Visibility column: External / Internal) |
 | `jr issue open KEY` | Open in browser (`--url-only` for scripts) |
 | `jr issue link KEY1 KEY2` | Link two issues (`--type blocks`, defaults to Relates) |
 | `jr issue unlink KEY1 KEY2` | Remove link(s) between issues (`--type` to filter) |

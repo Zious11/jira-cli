@@ -414,7 +414,9 @@ pub enum IssueCommand {
         /// Read comment from stdin (for piping)
         #[arg(long)]
         stdin: bool,
-        /// Mark comment as internal (agent-only, not visible to customers on JSM projects)
+        /// Mark comment as internal — agent-only, not visible to the customer on the JSM
+        /// portal. Without this flag the comment is a public reply (the default). No-op on
+        /// standard (non-JSM) projects, where Jira ignores the `sd.public.comment` property.
         #[arg(long)]
         internal: bool,
     },
