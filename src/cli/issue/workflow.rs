@@ -209,7 +209,7 @@ pub(super) async fn handle_move(
     };
 
     client
-        .transition_issue(&key, &selected_transition.id)
+        .transition_issue(&key, &selected_transition.id, None)
         .await?;
 
     let new_status = selected_transition

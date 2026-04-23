@@ -73,7 +73,58 @@ async fn test_get_transitions() {
         jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
     let transitions = client.get_transitions("FOO-1").await.unwrap();
     assert_eq!(transitions.transitions.len(), 2);
-    client.transition_issue("FOO-1", "21").await.unwrap();
+    client.transition_issue("FOO-1", "21", None).await.unwrap();
+}
+
+#[tokio::test]
+async fn transition_issue_with_fields_sends_fields_in_body() {
+    use wiremock::matchers::{body_partial_json, method, path};
+
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/FOO-1/transitions"))
+        .and(body_partial_json(serde_json::json!({
+            "transition": { "id": "31" },
+            "fields": { "resolution": { "name": "Done" } }
+        })))
+        .respond_with(wiremock::ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let fields = serde_json::json!({ "resolution": { "name": "Done" } });
+    client
+        .transition_issue("FOO-1", "31", Some(&fields))
+        .await
+        .unwrap();
+    // wiremock .expect(1) verifies the matcher was hit exactly once
+}
+
+#[tokio::test]
+async fn transition_issue_without_fields_omits_fields_key() {
+    use wiremock::matchers::{method, path};
+
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/FOO-1/transitions"))
+        .respond_with(wiremock::ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    client.transition_issue("FOO-1", "31", None).await.unwrap();
+
+    let requests = server.received_requests().await.unwrap();
+    let body = String::from_utf8_lossy(&requests[0].body);
+    assert!(
+        !body.contains("\"fields\""),
+        "fields key must be absent when None is passed, got body: {body}"
+    );
+    assert!(body.contains("\"transition\""));
+    assert!(body.contains("\"31\""));
 }
 
 #[tokio::test]
