@@ -1532,14 +1532,16 @@ async fn issue_list_asset_substring_rejected() {
     let cache_dir = tempfile::tempdir().unwrap();
     let _guard = set_cache_dir(cache_dir.path()).await;
 
-    // Isolate config so no parent `.jr.toml` leaks in (e.g. dev-shell project).
+    // Isolate cwd, global, and project configs so no dev-machine state leaks.
     let project_dir = tempfile::tempdir().unwrap();
     std::fs::write(project_dir.path().join(".jr.toml"), "project = \"PROJ\"\n").unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
 
     let output = assert_cmd::Command::cargo_bin("jr")
         .unwrap()
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CONFIG_HOME", config_dir.path())
         .current_dir(project_dir.path())
         .args(["--no-input", "issue", "list", "--asset", "Acme"])
         .output()
@@ -1636,11 +1638,15 @@ async fn assets_tickets_status_substring_rejected() {
 
     let cache_dir = tempfile::tempdir().unwrap();
     let _guard = set_cache_dir(cache_dir.path()).await;
+    let config_dir = tempfile::tempdir().unwrap();
+    let cwd_dir = tempfile::tempdir().unwrap();
 
     let output = assert_cmd::Command::cargo_bin("jr")
         .unwrap()
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .current_dir(cwd_dir.path())
         .args([
             "--no-input",
             "assets",
@@ -1754,11 +1760,15 @@ async fn assets_schema_type_substring_rejected() {
 
     let cache_dir = tempfile::tempdir().unwrap();
     let _guard = set_cache_dir(cache_dir.path()).await;
+    let config_dir = tempfile::tempdir().unwrap();
+    let cwd_dir = tempfile::tempdir().unwrap();
 
     let output = assert_cmd::Command::cargo_bin("jr")
         .unwrap()
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .current_dir(cwd_dir.path())
         .args(["--no-input", "assets", "schema", "Serv"])
         .output()
         .unwrap();

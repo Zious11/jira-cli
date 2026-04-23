@@ -1644,14 +1644,10 @@ async fn test_list_team_substring_rejects_with_exit_64() {
     write_test_team_cache(cache_dir.path());
     write_test_config_with_team_field(config_dir.path());
 
-    let output = Command::cargo_bin("jr")
-        .unwrap()
-        .env("JR_BASE_URL", server.uri())
-        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
-        .env("XDG_CACHE_HOME", cache_dir.path())
-        .env("XDG_CONFIG_HOME", config_dir.path())
+    let server_uri = server.uri();
+    let output = jr_cmd_with_xdg(&server_uri, cache_dir.path(), config_dir.path())
         .current_dir(cache_dir.path())
-        .args(["--no-input", "issue", "list", "--team", "Platf"])
+        .args(["issue", "list", "--team", "Platf"])
         .output()
         .unwrap();
 
@@ -1712,11 +1708,9 @@ async fn test_assign_user_substring_rejects_with_exit_64() {
         .mount(&server)
         .await;
 
-    let output = Command::cargo_bin("jr")
-        .unwrap()
-        .env("JR_BASE_URL", server.uri())
-        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
-        .args(["--no-input", "issue", "assign", "HDL-900", "--to", "Jane"])
+    let server_uri = server.uri();
+    let output = jr_cmd(&server_uri)
+        .args(["issue", "assign", "HDL-900", "--to", "Jane"])
         .output()
         .unwrap();
 
