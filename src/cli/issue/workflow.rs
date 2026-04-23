@@ -331,9 +331,31 @@ pub(super) async fn handle_move(
         }
     };
 
-    client
+    // Transform Atlassian's "Field 'resolution' is required" 400 into an
+    // actionable hint pointing at `--resolution` and `jr issue resolutions`.
+    // Heuristic: lowercased error body contains both "resolution" and
+    // "required". Other 400s pass through unchanged.
+    let transition_result = client
         .transition_issue(&key, &selected_transition.id, resolution_fields.as_ref())
-        .await?;
+        .await;
+
+    if let Err(err) = transition_result {
+        let msg = format!("{err:#}").to_lowercase();
+        if msg.contains("resolution") && msg.contains("required") {
+            let to_label = selected_transition
+                .to
+                .as_ref()
+                .map(|s| s.name.as_str())
+                .unwrap_or(&selected_transition.name);
+            return Err(JrError::UserError(format!(
+                "The \"{to_label}\" transition requires a resolution.\n\n\
+                 Try:\n    jr issue move {key} {to_label} --resolution <name>\n\n\
+                 Run `jr issue resolutions` to see available values."
+            ))
+            .into());
+        }
+        return Err(err);
+    }
 
     let new_status = selected_transition
         .to
