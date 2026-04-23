@@ -109,14 +109,17 @@ impl IssueFields {
         // Per developer.atlassian.com/platform/teams/components/team-field-in-jira-rest-api,
         // the Team custom field returns an object on GET in tenants that use the Atlas
         // Teams platform. Extract `id` as the UUID.
-        if let Some(obj) = value.as_object()
-            && let Some(id) = obj.get("id").and_then(|v| v.as_str())
+        if let Some(id) = value
+            .as_object()
+            .and_then(|obj| obj.get("id"))
+            .and_then(|v| v.as_str())
         {
             return Some(id.to_string());
         }
         if verbose && !LOGGED.swap(true, Ordering::Relaxed) {
             eprintln!(
-                "[verbose] team field \"{field_id}\" has unexpected shape (got {})",
+                "[verbose] team field \"{field_id}\" has unexpected shape (got {}). \
+                 Expected string UUID or object with string \"id\".",
                 value_kind(value)
             );
         }
