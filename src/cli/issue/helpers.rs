@@ -179,6 +179,25 @@ pub(super) async fn resolve_team_field(
     }
 }
 
+/// Compose the `extra` fields list that both `handle_view` and `handle_create`
+/// pass to `JiraClient::get_issue`. Order: story-points, cmdb ids, team.
+pub(super) fn compose_extra_fields(
+    config: &Config,
+    cmdb_fields: &[(String, String)],
+) -> Vec<String> {
+    let mut extra: Vec<String> = Vec::new();
+    if let Some(sp) = config.global.fields.story_points_field_id.as_deref() {
+        extra.push(sp.to_string());
+    }
+    for (id, _) in cmdb_fields {
+        extra.push(id.clone());
+    }
+    if let Some(t) = config.global.fields.team_field_id.as_deref() {
+        extra.push(t.to_string());
+    }
+    extra
+}
+
 pub(super) fn resolve_story_points_field_id(config: &Config) -> Result<String> {
     Ok(config
         .global
@@ -735,5 +754,52 @@ mod tests {
         assert!(msg.contains("No match. Found:"));
         assert!(msg.contains("Alice"));
         assert!(msg.contains("Bob"));
+    }
+
+    // ── compose_extra_fields tests ────────────────────────────────────
+
+    #[test]
+    fn extra_fields_for_issue_composes_sp_team_and_cmdb() {
+        use crate::config::Config;
+
+        let mut config = Config::default();
+        config.global.fields.story_points_field_id = Some("customfield_10016".into());
+        config.global.fields.team_field_id = Some("customfield_10001".into());
+        let cmdb_fields = vec![
+            (
+                "customfield_12345".to_string(),
+                "Affected Services".to_string(),
+            ),
+            ("customfield_67890".to_string(), "Deployed To".to_string()),
+        ];
+
+        let extra = compose_extra_fields(&config, &cmdb_fields);
+
+        assert!(
+            extra.contains(&"customfield_10016".to_string()),
+            "sp present"
+        );
+        assert!(
+            extra.contains(&"customfield_10001".to_string()),
+            "team present"
+        );
+        assert!(
+            extra.contains(&"customfield_12345".to_string()),
+            "cmdb 1 present"
+        );
+        assert!(
+            extra.contains(&"customfield_67890".to_string()),
+            "cmdb 2 present"
+        );
+        assert_eq!(extra.len(), 4);
+    }
+
+    #[test]
+    fn extra_fields_for_issue_omits_unset_optionals() {
+        use crate::config::Config;
+        let config = Config::default();
+        let cmdb_fields: Vec<(String, String)> = vec![];
+        let extra = compose_extra_fields(&config, &cmdb_fields);
+        assert!(extra.is_empty());
     }
 }
