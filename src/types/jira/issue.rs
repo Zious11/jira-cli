@@ -230,6 +230,13 @@ pub struct CreateIssueResponse {
     pub key: String,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+pub struct CreateRemoteLinkResponse {
+    pub id: u64,
+    #[serde(rename = "self")]
+    pub self_url: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
