@@ -31,11 +31,29 @@ Before (create):
 After (create):
 ```json
 {
-  "id": "…", "key": "PROJ-123", "self": "…/rest/api/3/issue/…",
+  "key": "PROJ-123",
   "fields": { "summary": "…", "status": {…}, "assignee": {…}, … },
   "url": "https://…/browse/PROJ-123"
 }
 ```
+
+Shape matches `serde_json::to_value(&Issue { key, fields })` from
+`src/types/jira/issue.rs` — the `Issue` struct only carries `key` and
+`fields`, so `id` and `self` from the raw API response don't appear in
+the serialized output.
+
+If the follow-up GET fails, the fallback shape is:
+```json
+{
+  "key": "PROJ-123",
+  "url": "https://…/browse/PROJ-123",
+  "fetch_error": "…error message…"
+}
+```
+
+The top-level `fetch_error` string is a machine-readable sentinel so
+scripts piping through `jq` can distinguish a degraded fallback from
+success without parsing stderr.
 
 ### Which extra fields to fetch
 

@@ -775,23 +775,20 @@ mod tests {
 
         let extra = compose_extra_fields(&config, &cmdb_fields);
 
-        assert!(
-            extra.contains(&"customfield_10016".to_string()),
-            "sp present"
+        // compose_extra_fields documents the order: story-points first, CMDB
+        // ids preserved in slice order, team last. Asserting the full vector
+        // (not just membership) pins that contract so a refactor that changes
+        // order — which could break downstream callers relying on it — trips
+        // this test instead of escaping into production.
+        assert_eq!(
+            extra,
+            vec![
+                "customfield_10016".to_string(), // SP first
+                "customfield_12345".to_string(), // CMDB preserved in slice order
+                "customfield_67890".to_string(), // CMDB preserved in slice order
+                "customfield_10001".to_string(), // team last
+            ],
         );
-        assert!(
-            extra.contains(&"customfield_10001".to_string()),
-            "team present"
-        );
-        assert!(
-            extra.contains(&"customfield_12345".to_string()),
-            "cmdb 1 present"
-        );
-        assert!(
-            extra.contains(&"customfield_67890".to_string()),
-            "cmdb 2 present"
-        );
-        assert_eq!(extra.len(), 4);
     }
 
     #[test]
