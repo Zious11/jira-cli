@@ -39,14 +39,23 @@ fn resolve_resolution_by_name(resolutions: &[Resolution], query: &str) -> Result
                     name
                 )
             }),
-        // Multiple case-insensitive exact duplicates — surface the whole list
-        // so the operator can see why and fix their data.
-        MatchResult::ExactMultiple(_) => Err(JrError::UserError(format!(
-            "Multiple resolutions named \"{}\" exist: {}",
-            query,
-            names.join(", ")
-        ))
-        .into()),
+        // Multiple case-insensitive exact duplicates — list ONLY the
+        // duplicate entries that actually collide with the query, so the
+        // operator sees which conflicting values need cleanup (not the
+        // whole instance-wide resolution list).
+        MatchResult::ExactMultiple(_) => {
+            let duplicates: Vec<String> = resolutions
+                .iter()
+                .filter(|r| r.name.eq_ignore_ascii_case(query))
+                .map(|r| r.name.clone())
+                .collect();
+            Err(JrError::UserError(format!(
+                "Multiple resolutions named \"{}\" exist: {}",
+                query,
+                duplicates.join(", ")
+            ))
+            .into())
+        }
         // Ambiguous always errors — including single-substring hits. Project
         // convention is that only case-insensitive EXACT matches auto-resolve.
         MatchResult::Ambiguous(matches) => Err(JrError::UserError(format!(
@@ -718,6 +727,42 @@ mod resolution_resolver_tests {
         assert!(
             msg.contains("Duplicate"),
             "error should list candidates: {msg}"
+        );
+    }
+
+    /// When an instance has two resolutions with the same name (different ids,
+    /// same display label) the error must list ONLY the colliding entries, not
+    /// every resolution on the instance. Otherwise operators can't tell which
+    /// records to clean up.
+    #[test]
+    fn resolve_resolution_exact_multiple_lists_only_duplicates() {
+        let resolutions = vec![
+            Resolution {
+                id: Some("10000".into()),
+                name: "Done".into(),
+                description: None,
+            },
+            Resolution {
+                id: Some("10100".into()),
+                name: "done".into(), // case-insensitive duplicate of "Done"
+                description: None,
+            },
+            Resolution {
+                id: Some("10001".into()),
+                name: "Won't Do".into(),
+                description: None,
+            },
+        ];
+
+        let err = resolve_resolution_by_name(&resolutions, "Done").unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("Done") && msg.contains("done"),
+            "error should list both duplicates: {msg}"
+        );
+        assert!(
+            !msg.contains("Won't Do"),
+            "error must NOT list non-duplicate entries, but did: {msg}"
         );
     }
 }
