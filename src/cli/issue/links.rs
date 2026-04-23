@@ -258,6 +258,10 @@ pub(super) async fn handle_remote_link(
         ))
         .into());
     }
+    // Use the normalized form so the API request, stdout JSON, and the table
+    // success line all agree. The raw `url: &str` may contain quirks the url
+    // crate silently normalized away (e.g. tabs/newlines stripped from path).
+    let url = parsed.as_str();
 
     // Default the title to the URL for script-friendly single-flag use.
     let title = title

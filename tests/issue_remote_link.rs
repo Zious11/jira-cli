@@ -27,11 +27,14 @@ async fn remote_link_creates_with_explicit_title() {
         server.uri()
     );
 
+    // Note: the CLI normalizes URLs via `url::Url::parse` before sending, so
+    // `https://example.com` becomes `https://example.com/` (trailing slash
+    // added). The mock body + stdout assertions use the normalized form.
     Mock::given(method("POST"))
         .and(path("/rest/api/3/issue/PROJ-123/remotelink"))
         .and(body_partial_json(serde_json::json!({
             "object": {
-                "url": "https://example.com",
+                "url": "https://example.com/",
                 "title": "Example"
             }
         })))
@@ -75,7 +78,7 @@ async fn remote_link_creates_with_explicit_title() {
     let parsed: Value = serde_json::from_str(&stdout).expect("stdout must be valid JSON");
     assert_eq!(parsed["key"], "PROJ-123");
     assert_eq!(parsed["id"], 10000);
-    assert_eq!(parsed["url"], "https://example.com");
+    assert_eq!(parsed["url"], "https://example.com/");
     assert_eq!(parsed["title"], "Example");
     assert_eq!(parsed["self"], self_url.as_str());
 }
@@ -246,5 +249,100 @@ async fn remote_link_surfaces_not_authenticated_on_401() {
     assert!(
         stderr.contains("Not authenticated") || stderr.contains("jr auth login"),
         "401 should surface reauth hint, got: {stderr}"
+    );
+}
+
+/// Validation guard: junk string in `--url` must exit 64 at the CLI boundary
+/// before any HTTP call is made. Mirrors the empty-input guards at
+/// `tests/issue_changelog.rs:477` — Jira's /remotelink endpoint accepts any
+/// string and would silently create a broken remote link without this check.
+#[test]
+fn remote_link_rejects_invalid_url_with_exit_64() {
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    let cwd_dir = tempfile::tempdir().unwrap();
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .current_dir(cwd_dir.path())
+        // Unreachable base URL — validation must short-circuit before any
+        // network call, so this should never be dialed.
+        .env("JR_BASE_URL", "http://127.0.0.1:1")
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "issue",
+            "remote-link",
+            "PROJ-1",
+            "--url",
+            "not-a-url",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "junk --url must exit 64 (UserError), got: {:?}, stderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--url"),
+        "stderr should name the offending flag, got: {stderr}"
+    );
+    assert!(
+        stderr.to_lowercase().contains("not a valid url"),
+        "stderr should describe the failure mode, got: {stderr}"
+    );
+}
+
+/// Validation guard: the http|https scheme gate rejects URLs that parse
+/// cleanly as URLs but would render as unclickable/unsafe links in Jira
+/// (e.g. `ftp://`, `javascript:`, `file://`). Locks the `matches!(..., "http"
+/// | "https")` check so a future refactor that broadens the scheme set gets
+/// a test failure.
+#[test]
+fn remote_link_rejects_non_http_scheme_with_exit_64() {
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    let cwd_dir = tempfile::tempdir().unwrap();
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .current_dir(cwd_dir.path())
+        .env("JR_BASE_URL", "http://127.0.0.1:1")
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "issue",
+            "remote-link",
+            "PROJ-1",
+            "--url",
+            "ftp://example.com",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "non-http scheme must exit 64 (UserError), got: {:?}, stderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("http or https"),
+        "stderr should name the accepted schemes, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("ftp"),
+        "stderr should echo the rejected scheme, got: {stderr}"
     );
 }
