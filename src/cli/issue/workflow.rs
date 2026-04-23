@@ -13,13 +13,19 @@ use super::helpers;
 
 // ── Resolution resolver ───────────────────────────────────────────────
 
-/// Resolve a user-supplied resolution name against a list of resolutions,
-/// using the same partial_match UX as status/link-type/user resolution
-/// elsewhere: exact (case-insensitive) > unique prefix/substring >
-/// disambiguation error with candidate list.
+/// Resolve a user-supplied resolution name against a list of resolutions.
 ///
-/// Errors surface as `JrError::UserError` (exit 64) so CI consumers can
-/// distinguish a misspelled resolution from a transport failure.
+/// Matching strategy (via `partial_match`): case-insensitive exact wins.
+/// Anything else — prefix, substring, multiple exact duplicates, or no
+/// match — surfaces the candidate list via `JrError::UserError` (exit 64),
+/// matching the spec (docs/specs/issue-move-resolution.md) and sibling
+/// resolvers (`handle_move` status block, `handle_link` link-type block).
+///
+/// Notably, a single-substring hit is NOT silently promoted to success —
+/// that would diverge from every other resolver in the codebase and
+/// bypass the operator's intent to be explicit about which resolution to
+/// apply. The caller is expected to propagate the error (no interactive
+/// prompt for `--resolution`; the flag is purely explicit).
 fn resolve_resolution_by_name(resolutions: &[Resolution], query: &str) -> Result<Resolution> {
     let names: Vec<String> = resolutions.iter().map(|r| r.name.clone()).collect();
     match partial_match::partial_match(query, &names) {
@@ -41,29 +47,14 @@ fn resolve_resolution_by_name(resolutions: &[Resolution], query: &str) -> Result
             names.join(", ")
         ))
         .into()),
-        MatchResult::Ambiguous(matches) => {
-            // A single substring hit is a unique partial match — promote to success.
-            if matches.len() == 1 {
-                let name = &matches[0];
-                resolutions
-                    .iter()
-                    .find(|r| &r.name == name)
-                    .cloned()
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "Internal error: matched resolution \"{}\" not found. Please report this as a bug.",
-                            name
-                        )
-                    })
-            } else {
-                Err(JrError::UserError(format!(
-                    "Ambiguous resolution \"{}\". Matches: {}",
-                    query,
-                    matches.join(", ")
-                ))
-                .into())
-            }
-        }
+        // Ambiguous always errors — including single-substring hits. Project
+        // convention is that only case-insensitive EXACT matches auto-resolve.
+        MatchResult::Ambiguous(matches) => Err(JrError::UserError(format!(
+            "Ambiguous resolution \"{}\". Matches: {}",
+            query,
+            matches.join(", ")
+        ))
+        .into()),
         MatchResult::None(all) => Err(JrError::UserError(format!(
             "No resolution matching \"{}\". Available: {}",
             query,
@@ -294,6 +285,12 @@ pub(super) async fn handle_move(
                 None => {
                     let fetched = client.get_resolutions().await?;
                     // Write-through the cache with just the fields we persist.
+                    // Resolutions without an id cannot be cached (the cache key
+                    // is the id). In practice `GET /rest/api/3/resolution`
+                    // always returns an id; this is a defensive fallback that
+                    // warns rather than silently drops so a partial Atlassian
+                    // response is visible to the operator.
+                    let before = fetched.len();
                     let cacheable: Vec<crate::cache::CachedResolution> = fetched
                         .iter()
                         .filter_map(|r| {
@@ -304,6 +301,12 @@ pub(super) async fn handle_move(
                             })
                         })
                         .collect();
+                    if cacheable.len() != before {
+                        eprintln!(
+                            "warning: {} resolution(s) lacked an id and were not cached",
+                            before - cacheable.len()
+                        );
+                    }
                     crate::cache::write_resolutions_cache(&cacheable)?;
                     fetched
                 }
@@ -608,10 +611,28 @@ mod resolution_resolver_tests {
     }
 
     #[test]
-    fn resolve_resolution_partial_match_returns_single_hit() {
-        // "Dup" uniquely matches Duplicate (prefix/substring)
-        let r = resolve_resolution_by_name(&sample_resolutions(), "Dup").unwrap();
-        assert_eq!(r.name, "Duplicate");
+    fn resolve_resolution_unique_substring_errors_as_ambiguous() {
+        // "Dup" uniquely matches Duplicate (prefix/substring), but per
+        // project convention only case-insensitive EXACT matches
+        // auto-resolve. A unique non-exact hit still errors so the caller
+        // is explicit about which resolution they want.
+        let err = resolve_resolution_by_name(&sample_resolutions(), "Dup").unwrap_err();
+        let jr_err = err
+            .downcast_ref::<crate::error::JrError>()
+            .expect("expected JrError wrapper");
+        assert!(
+            matches!(jr_err, crate::error::JrError::UserError(_)),
+            "expected UserError variant, got: {jr_err:?}"
+        );
+        let root = err.root_cause().to_string().to_lowercase();
+        assert!(
+            root.contains("ambiguous"),
+            "expected ambiguous error, got: {err:?}"
+        );
+        assert!(
+            root.contains("duplicate"),
+            "error should list the matching candidate, got: {err:?}"
+        );
     }
 
     #[test]
@@ -623,13 +644,16 @@ mod resolution_resolver_tests {
             root.contains("ambiguous") || root.contains("multiple"),
             "expected ambiguous error, got: {err:?}"
         );
-        // Exit code 64 comes from JrError::UserError — verify by downcasting
-        if let Some(jr_err) = err.downcast_ref::<crate::error::JrError>() {
-            assert!(
-                matches!(jr_err, crate::error::JrError::UserError(_)),
-                "expected UserError variant, got: {jr_err:?}"
-            );
-        }
+        // Exit code 64 comes from JrError::UserError — verify by downcasting.
+        // Use .expect() so a regression that drops the JrError wrapper fails
+        // the test instead of silently skipping the inner assertion.
+        let jr_err = err
+            .downcast_ref::<crate::error::JrError>()
+            .expect("expected JrError wrapper");
+        assert!(
+            matches!(jr_err, crate::error::JrError::UserError(_)),
+            "expected UserError variant, got: {jr_err:?}"
+        );
     }
 
     #[test]
