@@ -10,16 +10,16 @@ On tenants using the Atlas Teams custom field (the modern, cross-product "Team" 
 {"id": "<uuid>", "name": "Team Name"}
 ```
 
-`src/types/jira/issue.rs:94` currently extracts team UUIDs via `value.as_str()` — it handles only the scalar string shape. For the object shape, `team_id()` returns `None` and emits a once-per-process verbose warning misleadingly claiming the config is broken:
+Before this change, `IssueFields::team_id` in `src/types/jira/issue.rs` extracted team UUIDs via `value.as_str()` — it handled only the scalar string shape. For the object shape, `team_id()` returned `None` and emitted a once-per-process verbose warning misleadingly claiming the config was broken:
 
 ```
 [verbose] team field "customfield_10001" has unexpected shape (expected string UUID, got object). Check team_field_id in config.
 ```
 
-User-visible impact:
-- Team row is silently dropped from `issue view` output.
-- Team column is silently dropped from `issue list`, `sprint view`, `board view`.
-- The verbose warning gaslights the user into re-checking their config when the config is correct.
+User-visible impact before the fix:
+- Team row was silently dropped from `issue view` output.
+- Team column was silently dropped from `issue list`, `sprint view`, `board view`.
+- The verbose warning gaslit users into re-checking their config when the config was correct.
 
 ## Root cause validation
 
@@ -85,8 +85,8 @@ Unit tests inline in `src/types/jira/issue.rs`:
 
 1. **Object with string `id`** — `customfield_10001 = {"id": "team-uuid-abc", "name": "Platform Team"}` → `Some("team-uuid-abc")`, no warning.
 2. **Object with string `id` AND no `name`** — `{"id": "team-uuid-xyz"}` → `Some("team-uuid-xyz")`, no warning.
-3. **Object with null `id`** — `{"id": null, "name": "..."}` → `None`, warning emitted.
-4. **Object without `id` key** — `{"name": "..."}` → `None`, warning emitted.
+3. **Object with null `id`** — `{"id": null, "name": "..."}` → `None`, warning emitted when verbose.
+4. **Object without `id` key** — `{"name": "..."}` → `None`, warning emitted when verbose.
 5. **String UUID (regression)** — existing behaviour preserved.
 6. **Missing / null / bool / number / array** — existing behaviour preserved.
 

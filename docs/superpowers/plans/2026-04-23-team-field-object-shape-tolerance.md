@@ -90,20 +90,25 @@ pub fn team_id(&self, field_id: &str, verbose: bool) -> Option<String> {
     // Per developer.atlassian.com/platform/teams/components/team-field-in-jira-rest-api,
     // the Team custom field returns an object on GET in tenants that use the Atlas
     // Teams platform. Extract `id` as the UUID.
-    if let Some(obj) = value.as_object()
-        && let Some(id) = obj.get("id").and_then(|v| v.as_str())
+    if let Some(id) = value
+        .as_object()
+        .and_then(|obj| obj.get("id"))
+        .and_then(|v| v.as_str())
     {
         return Some(id.to_string());
     }
     if verbose && !LOGGED.swap(true, Ordering::Relaxed) {
         eprintln!(
-            "[verbose] team field \"{field_id}\" has unexpected shape (got {})",
+            "[verbose] team field \"{field_id}\" has unexpected shape (got {}). \
+             Expected string UUID or object with string \"id\".",
             value_kind(value)
         );
     }
     None
 }
 ```
+
+Note: this plan originally prescribed let-chain syntax (`if let Some(obj) = ... && let Some(id) = ...`), which stabilized in Rust 1.88 and breaks the crate's MSRV of 1.85. The snippet above uses the MSRV-safe `.and_then()` chain that the final code landed. The warning text includes the "Expected string UUID or object with string" suffix added during local review.
 
 Also update the doc comment immediately above the function to reflect the new contract:
 
@@ -115,9 +120,13 @@ Also update the doc comment immediately above the function to reflect the new co
 /// - Object `{"id": "<uuid>", "name": "..."}` (Atlas Teams platform).
 ///
 /// Returns `None` when the field is missing, null, or present but not one of
-/// the accepted shapes. On genuinely unexpected shapes (bool, number, array,
-/// or object without a string `id`), emits a once-per-process `[verbose]`
-/// hint on stderr when `verbose` is true.
+/// the accepted shapes. An object whose `id` is null or not a string is
+/// treated as unexpected. On genuinely unexpected shapes (bool, number,
+/// array, or object without a string `id`), emits a once-per-process
+/// `[verbose]` hint on stderr when `verbose` is true. The once-per-process
+/// gate is module-wide: if a single run needed to warn for two distinct
+/// team fields (not a supported configuration today), only the first would
+/// emit.
 ```
 
 - [ ] **Step 3: Run tests**

@@ -32,7 +32,7 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
-async fn issue_view_json_extracts_team_uuid_from_object_shape() {
+async fn issue_view_json_preserves_team_object_shape_without_warning() {
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
