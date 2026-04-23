@@ -33,7 +33,7 @@ The existing code comment calling the object shape a "misconfigured `team_field_
 
 ## Design
 
-Extend `IssueFields::team_id` to accept both shapes. Extract `id` from the object form; keep the existing string form; emit the verbose warning only for genuinely unexpected shapes (bool, number, array, null-with-non-null-value).
+Extend `IssueFields::team_id` to accept both shapes. Extract `id` from the object form; keep the existing string form; emit the verbose warning only for genuinely unexpected shapes (bool, number, array, or object values without a string `id`).
 
 ### Shape handling
 
@@ -42,8 +42,8 @@ Extend `IssueFields::team_id` to accept both shapes. Extract `id` from the objec
 | `null` or missing | `None`, no warning |
 | `"<uuid>"` (scalar string) | `Some("<uuid>".into())` |
 | `{"id": "<uuid>", ...}` (object with string `id`) | `Some("<uuid>".into())` |
-| `{"id": null, ...}` or object without string `id` | `None`, warn (genuinely unexpected) |
-| bool / number / array | `None`, warn (unchanged behaviour) |
+| `{"id": null, ...}` or object without string `id` | `None`, warn when verbose (genuinely unexpected) |
+| bool / number / array | `None`, warn when verbose (unchanged behaviour) |
 
 The `name` field in the object form is **not** consumed by this change. Display code already resolves UUIDs via the team cache; introducing a parallel "use embedded name when present" code path is scope creep (tracked separately if wanted).
 
