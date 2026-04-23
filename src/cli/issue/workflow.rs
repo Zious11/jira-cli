@@ -64,6 +64,58 @@ fn resolve_resolution_by_name(resolutions: &[Resolution], query: &str) -> Result
     }
 }
 
+// ── Resolutions loader ───────────────────────────────────────────────
+
+/// Load the instance-global list of resolutions, honouring the 7-day cache.
+///
+/// When `refresh` is false (the common read-through path), a cache hit is
+/// converted directly to `Vec<Resolution>`. A miss falls through to the
+/// refresh path so the cache is warmed for the next caller.
+///
+/// When `refresh` is true (explicit bypass), the cache is ignored on read
+/// but still written through so subsequent reads see the fresh data.
+///
+/// Entries returned from the API without an id cannot be persisted (the
+/// cache key is the id). `GET /rest/api/3/resolution` always returns an id
+/// in practice; this is a defensive fallback that warns on stderr rather
+/// than silently dropping so a partial Atlassian response is visible.
+async fn load_resolutions(client: &JiraClient, refresh: bool) -> Result<Vec<Resolution>> {
+    if !refresh {
+        if let Some(c) = crate::cache::read_resolutions_cache()? {
+            return Ok(c
+                .resolutions
+                .into_iter()
+                .map(|r| Resolution {
+                    id: Some(r.id),
+                    name: r.name,
+                    description: r.description,
+                })
+                .collect());
+        }
+    }
+
+    let fetched = client.get_resolutions().await?;
+    let before = fetched.len();
+    let cacheable: Vec<crate::cache::CachedResolution> = fetched
+        .iter()
+        .filter_map(|r| {
+            r.id.as_ref().map(|id| crate::cache::CachedResolution {
+                id: id.clone(),
+                name: r.name.clone(),
+                description: r.description.clone(),
+            })
+        })
+        .collect();
+    if cacheable.len() != before {
+        eprintln!(
+            "warning: {} resolution(s) lacked an id and were not cached",
+            before - cacheable.len()
+        );
+    }
+    crate::cache::write_resolutions_cache(&cacheable)?;
+    Ok(fetched)
+}
+
 // ── Move (Transition) ────────────────────────────────────────────────
 
 pub(super) async fn handle_move(
@@ -271,46 +323,7 @@ pub(super) async fn handle_move(
     let resolution_fields: Option<serde_json::Value> = match resolution.as_deref() {
         None => None,
         Some(query) => {
-            let cached = crate::cache::read_resolutions_cache()?;
-            let resolutions: Vec<Resolution> = match cached {
-                Some(c) => c
-                    .resolutions
-                    .into_iter()
-                    .map(|r| Resolution {
-                        id: Some(r.id),
-                        name: r.name,
-                        description: r.description,
-                    })
-                    .collect(),
-                None => {
-                    let fetched = client.get_resolutions().await?;
-                    // Write-through the cache with just the fields we persist.
-                    // Resolutions without an id cannot be cached (the cache key
-                    // is the id). In practice `GET /rest/api/3/resolution`
-                    // always returns an id; this is a defensive fallback that
-                    // warns rather than silently drops so a partial Atlassian
-                    // response is visible to the operator.
-                    let before = fetched.len();
-                    let cacheable: Vec<crate::cache::CachedResolution> = fetched
-                        .iter()
-                        .filter_map(|r| {
-                            r.id.as_ref().map(|id| crate::cache::CachedResolution {
-                                id: id.clone(),
-                                name: r.name.clone(),
-                                description: r.description.clone(),
-                            })
-                        })
-                        .collect();
-                    if cacheable.len() != before {
-                        eprintln!(
-                            "warning: {} resolution(s) lacked an id and were not cached",
-                            before - cacheable.len()
-                        );
-                    }
-                    crate::cache::write_resolutions_cache(&cacheable)?;
-                    fetched
-                }
-            };
+            let resolutions = load_resolutions(client, false).await?;
             let matched = resolve_resolution_by_name(&resolutions, query)?;
             Some(serde_json::json!({
                 "resolution": { "name": matched.name }
@@ -374,6 +387,37 @@ pub(super) async fn handle_transitions(
         &rows,
         &resp.transitions,
     )?;
+
+    Ok(())
+}
+
+// ── Resolutions ───────────────────────────────────────────────────────
+
+pub(super) async fn handle_resolutions(
+    refresh: bool,
+    output_format: &OutputFormat,
+    client: &JiraClient,
+) -> Result<()> {
+    let resolutions = load_resolutions(client, refresh).await?;
+
+    match output_format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&resolutions)?);
+        }
+        OutputFormat::Table => {
+            use comfy_table::{Cell, Table, presets::UTF8_FULL};
+            let mut table = Table::new();
+            table.load_preset(UTF8_FULL);
+            table.set_header(vec![Cell::new("Name"), Cell::new("Description")]);
+            for r in &resolutions {
+                table.add_row(vec![
+                    Cell::new(&r.name),
+                    Cell::new(r.description.as_deref().unwrap_or("")),
+                ]);
+            }
+            println!("{table}");
+        }
+    }
 
     Ok(())
 }

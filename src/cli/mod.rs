@@ -392,6 +392,13 @@ pub enum IssueCommand {
         /// Issue key
         key: String,
     },
+    /// List the resolution values defined on this Jira instance. Cached
+    /// for 7 days; use --refresh to bypass the cache.
+    Resolutions {
+        /// Bypass the local cache and re-fetch from the server.
+        #[arg(long)]
+        refresh: bool,
+    },
     /// Assign issue
     Assign {
         /// Issue key
