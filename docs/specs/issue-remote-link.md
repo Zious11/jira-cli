@@ -37,7 +37,7 @@ jr issue remote-link <KEY> --url <URL> [--title <TITLE>]
 | Mode | Shape |
 |---|---|
 | `--output json` | `{"key": "<issue>", "id": <linkId>, "url": "<url>", "title": "<title>", "self": "<atlassian-rest-url>"}` |
-| Default (table) | `Linked https://... → PROJ-123 (id: 10000)` on stdout |
+| Default (table) | `Linked PROJ-123 → https://... (id: 10000)` on stderr (via `output::print_success`) |
 
 Exit 0 on success. On Atlassian error: surface the error body, exit 1 (or 2 for auth errors, per existing conventions).
 

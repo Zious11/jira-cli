@@ -23,7 +23,7 @@
 
 In `src/api/jira/links.rs` (or wherever the module tests live), add a failing test that:
 - Uses `JiraClient::new_for_test` against a `wiremock::MockServer`.
-- Mounts `POST /rest/api/3/issue/PROJ-1/remotelink` returning status 201 with body `{"id": 10000, "self": "https://tenant.atlassian.net/rest/api/2/issue/PROJ-1/remotelink/10000"}`.
+- Mounts `POST /rest/api/3/issue/PROJ-1/remotelink` returning status 201 with body `{"id": 10000, "self": "https://tenant.atlassian.net/rest/api/3/issue/PROJ-1/remotelink/10000"}`.
 - Asserts the request body sent was `{"object": {"url": "https://example.com", "title": "Example"}}`.
 - Asserts the deserialized `CreateRemoteLinkResponse` has `id == 10000` and `self_url == "https://..."`.
 
@@ -165,7 +165,7 @@ pub(super) async fn handle_remote_link(
         OutputFormat::Table => {
             output::print_success(&format!(
                 "Linked {} → {} (id: {})",
-                url, key, response.id
+                key, url, response.id
             ));
         }
     }
