@@ -1617,6 +1617,134 @@ async fn test_edit_team_substring_rejects_under_no_input() {
         .stderr(predicate::str::contains("Platform Ops"));
 }
 
+/// Complements `test_edit_team_substring_rejects_under_no_input` by covering
+/// `issue list --team` through `helpers::resolve_team_field`. Cache seeds
+/// "Platform" and "Platform Ops" — substring "Platf" hits both, routing
+/// through `MatchResult::Ambiguous`. After #240's refactor of helpers.rs to
+/// `JrError::UserError`, this path must exit 64 with a disambiguation message
+/// listing every candidate and NO JQL search fired.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_list_team_substring_rejects_with_exit_64() {
+    let server = MockServer::start().await;
+
+    // No JQL search mock: the call must fail at resolve_team_field before
+    // any issue search hits the wire. Asserting 0 hits pins the
+    // short-circuit contract.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "issues": [], "nextPageToken": null
+        })))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_test_team_cache(cache_dir.path());
+    write_test_config_with_team_field(config_dir.path());
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .current_dir(cache_dir.path())
+        .args(["--no-input", "issue", "list", "--team", "Platf"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure on ambiguous team substring, stderr: {stderr}"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Ambiguous team should exit 64 (UserError), got: {:?}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("Multiple teams match"),
+        "Expected 'Multiple teams match' in stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("Platform Ops"),
+        "Expected candidate 'Platform Ops' in stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("Platform"),
+        "Expected candidate 'Platform' in stderr: {stderr}"
+    );
+}
+
+/// `issue assign <key> --to <substring>` must exit 64 when the substring
+/// matches multiple assignable users. The assignable-user search endpoint
+/// returns two active users whose display names both contain "Jane"; neither
+/// is an exact match, so `disambiguate_user` routes through
+/// `MatchResult::Ambiguous`. #240's refactor guarantees `JrError::UserError`
+/// (exit 64). The PUT assignee endpoint must NOT be hit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_assign_user_substring_rejects_with_exit_64() {
+    let server = MockServer::start().await;
+
+    // Two active users both match substring "Jane" — routes through Ambiguous.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/user/assignable/search"))
+        .and(query_param("query", "Jane"))
+        .and(query_param("issueKey", "HDL-900"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::user_search_response(vec![
+                ("acc-jane-doe", "Jane Doe", true),
+                ("acc-jane-smith", "Jane Smith", true),
+            ]),
+        ))
+        .mount(&server)
+        .await;
+
+    // No PUT assignee mock — the command must fail before any assignment.
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/HDL-900/assignee"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["--no-input", "issue", "assign", "HDL-900", "--to", "Jane"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure on ambiguous user substring, stderr: {stderr}"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Ambiguous user should exit 64 (UserError), got: {:?}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("Multiple users match"),
+        "Expected 'Multiple users match' in stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("Jane Doe"),
+        "Expected candidate 'Jane Doe' in stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("Jane Smith"),
+        "Expected candidate 'Jane Smith' in stderr: {stderr}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_verbose_logs_request_body_for_put() {
     let server = MockServer::start().await;

@@ -1470,3 +1470,320 @@ async fn schema_single_substring_schema_filter_rejected() {
         "Expected matched schema 'ITSM' in stderr: {stderr}"
     );
 }
+
+// ── partial_match single-substring rejection (#240) — helpers.rs sites ──
+
+/// `issue list --asset <substring>` must exit 64 when the substring matches
+/// multiple asset labels. Locks `helpers::resolve_asset`'s Ambiguous branch
+/// after #240's refactor to `JrError::UserError`.
+///
+/// Flow: `Acme` is not a SCHEMA-NUMBER key, so it takes the AQL-search path
+/// → workspace discovery → search_assets returns two assets whose labels
+/// both contain "Acme" → `partial_match` routes through Ambiguous. No JQL
+/// search for issues fires.
+#[tokio::test]
+async fn issue_list_asset_substring_rejected() {
+    let server = MockServer::start().await;
+
+    // Workspace discovery
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/assets/workspace"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 1, "start": 0, "limit": 50, "isLastPage": true,
+            "values": [{ "workspaceId": "ws-123" }]
+        })))
+        .mount(&server)
+        .await;
+
+    // AQL search — both results share the "Acme" substring, neither is an
+    // exact match. Routes through MatchResult::Ambiguous.
+    Mock::given(method("POST"))
+        .and(path("/jsm/assets/workspace/ws-123/v1/object/aql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "startAt": 0, "maxResults": 25, "total": 2, "isLast": true,
+            "values": [
+                {
+                    "id": "80",
+                    "label": "Acme Corp HQ",
+                    "objectKey": "OBJ-80",
+                    "objectType": { "id": "13", "name": "Client" }
+                },
+                {
+                    "id": "81",
+                    "label": "Acme Corp EU",
+                    "objectKey": "OBJ-81",
+                    "objectType": { "id": "13", "name": "Client" }
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    // Assert no issue search fires — asset resolution must short-circuit.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "issues": [], "nextPageToken": null
+        })))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let _guard = set_cache_dir(cache_dir.path()).await;
+
+    // Isolate config so no parent `.jr.toml` leaks in (e.g. dev-shell project).
+    let project_dir = tempfile::tempdir().unwrap();
+    std::fs::write(project_dir.path().join(".jr.toml"), "project = \"PROJ\"\n").unwrap();
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .current_dir(project_dir.path())
+        .args(["--no-input", "issue", "list", "--asset", "Acme"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure on ambiguous asset substring, stderr: {stderr}"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Ambiguous asset should exit 64 (UserError), got: {:?}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("Multiple assets match"),
+        "Expected 'Multiple assets match' in stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("Acme Corp HQ"),
+        "Expected candidate 'Acme Corp HQ' in stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("Acme Corp EU"),
+        "Expected candidate 'Acme Corp EU' in stderr: {stderr}"
+    );
+}
+
+/// `assets tickets <key> --status <substring>` must exit 64 when the
+/// substring matches multiple distinct status names. Locks the
+/// `filter_tickets` Ambiguous branch at `src/cli/assets.rs:336` after #240
+/// (this site already used `JrError::UserError` pre-refactor).
+#[tokio::test]
+async fn assets_tickets_status_substring_rejected() {
+    let server = MockServer::start().await;
+
+    // Workspace discovery
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/assets/workspace"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 1, "start": 0, "limit": 50, "isLastPage": true,
+            "values": [{ "workspaceId": "ws-123" }]
+        })))
+        .mount(&server)
+        .await;
+
+    // resolve_object_key: non-numeric key → AQL search by Key.
+    Mock::given(method("POST"))
+        .and(path("/jsm/assets/workspace/ws-123/v1/object/aql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "startAt": 0, "maxResults": 1, "total": 1, "isLast": true,
+            "values": [{
+                "id": "70",
+                "label": "Acme Corp",
+                "objectKey": "OBJ-70",
+                "objectType": { "id": "13", "name": "Client" }
+            }]
+        })))
+        .mount(&server)
+        .await;
+
+    // Connected tickets endpoint: two tickets whose status names both
+    // contain "Prog" as a substring ("In Progress" and "Progressing").
+    // Neither is an exact match → MatchResult::Ambiguous.
+    Mock::given(method("GET"))
+        .and(path(
+            "/jsm/assets/workspace/ws-123/v1/objectconnectedtickets/70/tickets",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "tickets": [
+                {
+                    "key": "PROJ-1",
+                    "id": "1001",
+                    "title": "Ticket one",
+                    "status": { "name": "In Progress", "colorName": "yellow" },
+                    "type": { "name": "Task" },
+                    "priority": { "name": "Medium" }
+                },
+                {
+                    "key": "PROJ-2",
+                    "id": "1002",
+                    "title": "Ticket two",
+                    "status": { "name": "Progressing", "colorName": "yellow" },
+                    "type": { "name": "Task" },
+                    "priority": { "name": "Medium" }
+                }
+            ],
+            "allTicketsQuery": "issueFunction in assetsObject(\"objectId = 70\")"
+        })))
+        .mount(&server)
+        .await;
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let _guard = set_cache_dir(cache_dir.path()).await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args([
+            "--no-input",
+            "assets",
+            "tickets",
+            "OBJ-70",
+            "--status",
+            "Prog",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure on ambiguous status substring, stderr: {stderr}"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Ambiguous ticket status should exit 64 (UserError), got: {:?}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("Ambiguous status"),
+        "Expected 'Ambiguous status' in stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("In Progress"),
+        "Expected candidate 'In Progress' in stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("Progressing"),
+        "Expected candidate 'Progressing' in stderr: {stderr}"
+    );
+}
+
+/// `assets schema <type_substring>` must exit 64 when the substring matches
+/// multiple object-type names. Locks `handle_schema`'s partial_match
+/// Ambiguous branch at `src/cli/assets.rs:669` (already uses UserError
+/// pre-#240, so this locks the existing exit-64 contract against regression).
+///
+/// Flow: two object types across a single schema share the "Serv" substring.
+/// Passing `Serv` as the type name routes through `MatchResult::Ambiguous`
+/// → `ambiguous_type_error` with schema-labeled candidates. No per-type
+/// attribute fetch fires.
+#[tokio::test]
+async fn assets_schema_type_substring_rejected() {
+    let server = MockServer::start().await;
+
+    // Workspace discovery
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/assets/workspace"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 1, "start": 0, "limit": 50, "isLastPage": true,
+            "values": [{ "workspaceId": "ws-123" }]
+        })))
+        .mount(&server)
+        .await;
+
+    // Schemas list
+    Mock::given(method("GET"))
+        .and(path("/jsm/assets/workspace/ws-123/v1/objectschema/list"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "startAt": 0, "maxResults": 25, "total": 1, "isLast": true,
+            "values": [{
+                "id": "6", "name": "ITSM", "objectSchemaKey": "ITSM",
+                "status": "Ok", "objectCount": 95, "objectTypeCount": 2
+            }]
+        })))
+        .mount(&server)
+        .await;
+
+    // Object-type listing for schema 6 — two types both contain the "Serv"
+    // substring but neither is an exact match → Ambiguous.
+    Mock::given(method("GET"))
+        .and(path(
+            "/jsm/assets/workspace/ws-123/v1/objectschema/6/objecttypes/flat",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {
+                "id": "50", "name": "Service", "position": 0,
+                "objectCount": 10, "objectSchemaId": "6",
+                "inherited": false, "abstractObjectType": false
+            },
+            {
+                "id": "51", "name": "Server", "position": 1,
+                "objectCount": 20, "objectSchemaId": "6",
+                "inherited": false, "abstractObjectType": false
+            }
+        ])))
+        .mount(&server)
+        .await;
+
+    // Per-type attribute fetch must NOT fire — resolution short-circuits.
+    Mock::given(method("GET"))
+        .and(path(
+            "/jsm/assets/workspace/ws-123/v1/objecttype/50/attributes",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/jsm/assets/workspace/ws-123/v1/objecttype/51/attributes",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let _guard = set_cache_dir(cache_dir.path()).await;
+
+    let output = assert_cmd::Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args(["--no-input", "assets", "schema", "Serv"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected failure on ambiguous type substring, stderr: {stderr}"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Ambiguous object type should exit 64 (UserError), got: {:?}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("Ambiguous type"),
+        "Expected 'Ambiguous type' in stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("Service"),
+        "Expected candidate 'Service' in stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("Server"),
+        "Expected candidate 'Server' in stderr: {stderr}"
+    );
+}
