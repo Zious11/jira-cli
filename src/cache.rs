@@ -170,6 +170,40 @@ pub fn write_workspace_cache(workspace_id: &str) -> Result<()> {
     )
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedResolution {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ResolutionsCache {
+    pub resolutions: Vec<CachedResolution>,
+    pub fetched_at: DateTime<Utc>,
+}
+
+impl Expiring for ResolutionsCache {
+    fn fetched_at(&self) -> DateTime<Utc> {
+        self.fetched_at
+    }
+}
+
+pub fn read_resolutions_cache() -> Result<Option<ResolutionsCache>> {
+    read_cache("resolutions.json")
+}
+
+pub fn write_resolutions_cache(resolutions: &[CachedResolution]) -> Result<()> {
+    write_cache(
+        "resolutions.json",
+        &ResolutionsCache {
+            resolutions: resolutions.to_vec(),
+            fetched_at: Utc::now(),
+        },
+    )
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CmdbFieldsCache {
     pub fields: Vec<(String, String)>,
@@ -286,7 +320,7 @@ mod tests {
 
     static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
-    fn with_temp_cache<F: FnOnce()>(f: F) {
+    pub(super) fn with_temp_cache<F: FnOnce()>(f: F) {
         // Recover from poison: catch_unwind below ensures env cleanup completed
         // even if a prior test panicked, so the guarded state is consistent.
         let guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
@@ -708,6 +742,44 @@ mod tests {
             std::fs::write(dir.join("project_meta.json"), r#"{"unexpected": true}"#).unwrap();
             let result = read_project_meta("ANY").unwrap();
             assert!(result.is_none(), "wrong-shape JSON should return None");
+        });
+    }
+}
+
+#[cfg(test)]
+mod resolution_cache_tests {
+    use super::tests::with_temp_cache;
+    use super::*;
+
+    #[test]
+    fn resolution_cache_round_trip() {
+        with_temp_cache(|| {
+            let input = vec![
+                CachedResolution {
+                    id: "10000".into(),
+                    name: "Done".into(),
+                    description: Some("Work complete".into()),
+                },
+                CachedResolution {
+                    id: "10001".into(),
+                    name: "Won't Do".into(),
+                    description: None,
+                },
+            ];
+            write_resolutions_cache(&input).unwrap();
+            let loaded = read_resolutions_cache().unwrap().unwrap();
+
+            assert_eq!(loaded.resolutions.len(), 2);
+            assert_eq!(loaded.resolutions[0].name, "Done");
+            assert_eq!(loaded.resolutions[1].description, None);
+        });
+    }
+
+    #[test]
+    fn resolution_cache_missing_returns_none() {
+        with_temp_cache(|| {
+            let loaded = read_resolutions_cache().unwrap();
+            assert!(loaded.is_none());
         });
     }
 }

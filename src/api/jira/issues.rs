@@ -137,12 +137,30 @@ impl JiraClient {
         self.get(&path).await
     }
 
-    /// Transition an issue to a new status.
-    pub async fn transition_issue(&self, key: &str, transition_id: &str) -> Result<()> {
+    /// Transition an issue to a new status, optionally setting extra fields
+    /// in the same request (e.g. `resolution`). Passing `fields = None`
+    /// preserves the pre-existing behaviour of sending only the transition id.
+    ///
+    /// When `fields` is `Some(&json)`, the value is merged as-is under the
+    /// `fields` key of the request body — callers are responsible for shaping
+    /// it correctly (Atlassian expects `{"resolution": {"name": "Done"}}` or
+    /// `{"resolution": {"id": "10000"}}`).
+    pub async fn transition_issue(
+        &self,
+        key: &str,
+        transition_id: &str,
+        fields: Option<&serde_json::Value>,
+    ) -> Result<()> {
         let path = format!("/rest/api/3/issue/{}/transitions", urlencoding::encode(key));
-        let body = serde_json::json!({
-            "transition": { "id": transition_id }
-        });
+        let body = match fields {
+            Some(f) => serde_json::json!({
+                "transition": { "id": transition_id },
+                "fields": f,
+            }),
+            None => serde_json::json!({
+                "transition": { "id": transition_id }
+            }),
+        };
         self.post_no_content(&path, &body).await
     }
 

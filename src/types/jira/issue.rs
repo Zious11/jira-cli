@@ -151,9 +151,17 @@ pub struct IssueProject {
     pub name: Option<String>,
 }
 
-#[derive(Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Serialize)]
 pub struct Resolution {
+    /// Resolution id — populated by `GET /rest/api/3/resolution`; absent on
+    /// `issue.fields.resolution` responses which only carry the name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     pub name: String,
+    /// Description — populated by `GET /rest/api/3/resolution`; absent on
+    /// `issue.fields.resolution` responses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
@@ -513,5 +521,32 @@ mod tests {
         });
         let comment: Comment = serde_json::from_value(json).unwrap();
         assert!(comment.properties.is_empty());
+    }
+
+    #[test]
+    fn resolution_deserializes_full_shape_from_resolution_endpoint() {
+        // GET /rest/api/3/resolution returns entries with id + name + description,
+        // not just the {"name": "..."} shape that issue.fields.resolution uses.
+        let json = r#"{
+            "id": "10000",
+            "name": "Done",
+            "description": "Work has been completed.",
+            "self": "https://example.atlassian.net/rest/api/3/resolution/10000"
+        }"#;
+        let r: Resolution = serde_json::from_str(json).unwrap();
+        assert_eq!(r.id.as_deref(), Some("10000"));
+        assert_eq!(r.name, "Done");
+        assert_eq!(r.description.as_deref(), Some("Work has been completed."));
+    }
+
+    #[test]
+    fn resolution_preserves_simple_shape_from_issue_fields() {
+        // issue.fields.resolution comes back as {"name": "Fixed"} — no id/description.
+        // Extending the struct must not break the existing path.
+        let json = r#"{"name": "Fixed"}"#;
+        let r: Resolution = serde_json::from_str(json).unwrap();
+        assert_eq!(r.name, "Fixed");
+        assert!(r.id.is_none());
+        assert!(r.description.is_none());
     }
 }

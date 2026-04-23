@@ -379,11 +379,23 @@ pub enum IssueCommand {
         key: String,
         /// Target status (partial match supported)
         status: Option<String>,
+        /// Set resolution atomically with the transition (e.g. "Fixed"). Many
+        /// JSM workflows require this; run `jr issue resolutions` to discover
+        /// valid values.
+        #[arg(long)]
+        resolution: Option<String>,
     },
     /// List available transitions without performing one
     Transitions {
         /// Issue key
         key: String,
+    },
+    /// List the resolution values defined on this Jira instance. Cached
+    /// for 7 days; use --refresh to bypass the cache.
+    Resolutions {
+        /// Bypass the local cache and re-fetch from the server.
+        #[arg(long)]
+        refresh: bool,
     },
     /// Assign issue
     Assign {

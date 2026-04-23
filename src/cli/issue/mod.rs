@@ -60,6 +60,9 @@ pub async fn handle(
         IssueCommand::Transitions { .. } => {
             workflow::handle_transitions(command, output_format, client).await
         }
+        IssueCommand::Resolutions { refresh } => {
+            workflow::handle_resolutions(refresh, output_format, client).await
+        }
         IssueCommand::Assign { .. } => {
             workflow::handle_assign(command, output_format, client, no_input).await
         }
