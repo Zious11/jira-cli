@@ -21,6 +21,11 @@ fn auth_login_oauth_surfaces_malformed_config_without_overwriting() {
     // its contents so we can assert it's unchanged after the command runs.
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
+    // Pristine working directory so Config::load()'s upward walk for a
+    // per-project `.jr.toml` cannot pick up an unrelated file on the
+    // developer's machine and turn the test's intended global-config
+    // failure into a project-config failure (or a silent pass).
+    let cwd_dir = tempfile::tempdir().unwrap();
     let jr_dir = config_dir.path().join("jr");
     std::fs::create_dir_all(&jr_dir).unwrap();
     let config_path = jr_dir.join("config.toml");
@@ -30,6 +35,7 @@ fn auth_login_oauth_surfaces_malformed_config_without_overwriting() {
 
     let output = Command::cargo_bin("jr")
         .unwrap()
+        .current_dir(cwd_dir.path())
         .env("XDG_CACHE_HOME", cache_dir.path())
         .env("XDG_CONFIG_HOME", config_dir.path())
         .env("JR_SERVICE_NAME", "jr-jira-cli-test")
