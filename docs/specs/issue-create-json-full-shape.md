@@ -52,7 +52,7 @@ The follow-up GET uses the same `extra_fields` composition as `handle_view` (`sr
 
 The issue has already been created when the follow-up GET runs — we must **not** treat a GET failure as a create failure. Behaviour:
 
-- Emit a stderr warning: `[warn] issue created ({key}) but follow-up fetch failed: {err}`
+- Emit a stderr warning: `warning: issue created ({key}) but follow-up fetch failed: {err}`
 - Fall back to the old minimal shape: `{ "key": "...", "url": "..." }`
 - Exit 0 (the create succeeded; the user's automation still gets the key)
 
@@ -69,7 +69,7 @@ Out of scope. `edit` already has its own `edit_response` shape; this issue is sp
 All tests use wiremock (`JR_BASE_URL` override, existing pattern in `tests/`):
 
 1. **Happy path** — POST returns `{id, key, self}`, GET returns full `Issue`. Assert stdout JSON has `.fields.summary`, `.key`, `.url`, and `.fields.status.name`.
-2. **Degraded path** — POST returns 201, GET returns 500. Assert stdout JSON is the minimal `{key, url}` shape, stderr contains `[warn]`, exit code 0.
+2. **Degraded path** — POST returns 201, GET returns 500. Assert stdout JSON is the minimal `{key, url}` shape, stderr contains `warning:`, exit code 0.
 3. **Table path** — POST returns 201, no GET is made (wiremock expectation: zero GET requests). Assert stdout/stderr match existing table output.
 
 Unit tests: none needed — the handler already has integration coverage; the change is purely orchestration.

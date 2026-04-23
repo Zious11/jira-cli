@@ -2,6 +2,7 @@ use anyhow::{Result, bail};
 use serde_json::json;
 
 use crate::adf;
+use crate::api::assets::linked::get_or_fetch_cmdb_fields;
 use crate::api::client::JiraClient;
 use crate::cli::{IssueCommand, OutputFormat};
 use crate::config::Config;
@@ -149,9 +150,7 @@ pub(super) async fn handle_create(
             // (full Issue shape), plus `url`. On GET failure we keep the create
             // succeeding — warn on stderr and fall back to the old `{key, url}`
             // shape so downstream consumers always get at least the key + URL.
-            let cmdb_fields = crate::api::assets::linked::get_or_fetch_cmdb_fields(client)
-                .await
-                .unwrap_or_default();
+            let cmdb_fields = get_or_fetch_cmdb_fields(client).await.unwrap_or_default();
             let extra_owned = helpers::compose_extra_fields(config, &cmdb_fields);
             let extra: Vec<&str> = extra_owned.iter().map(String::as_str).collect();
 
@@ -165,7 +164,7 @@ pub(super) async fn handle_create(
                 }
                 Err(err) => {
                     eprintln!(
-                        "[warn] issue created ({}) but follow-up fetch failed: {err}",
+                        "warning: issue created ({}) but follow-up fetch failed: {err}",
                         response.key
                     );
                     let mut json_response = serde_json::to_value(&response)?;

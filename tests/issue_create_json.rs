@@ -113,6 +113,11 @@ async fn issue_create_json_returns_full_shape() {
     );
     assert_eq!(parsed["fields"]["issuetype"]["name"], "Task");
     assert_eq!(parsed["fields"]["project"]["key"], "PROJ");
+
+    assert!(
+        !stderr.to_lowercase().contains("warning") && !stderr.to_lowercase().contains("error"),
+        "expected clean stderr on happy path, got: {stderr}"
+    );
 }
 
 /// If the follow-up GET fails, the handler warns on stderr and falls back to

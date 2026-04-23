@@ -262,7 +262,7 @@ match output_format {
             }
             Err(err) => {
                 eprintln!(
-                    "[warn] issue created ({}) but follow-up fetch failed: {err}",
+                    "warning: issue created ({}) but follow-up fetch failed: {err}",
                     response.key
                 );
                 let mut json_response = serde_json::to_value(&response)?;
@@ -361,7 +361,7 @@ async fn issue_create_json_degrades_when_follow_up_get_fails() {
     assert!(parsed["url"].as_str().unwrap().ends_with("/browse/PROJ-124"));
     assert!(parsed.get("fields").is_none(), "fallback shape must not include fields");
 
-    assert!(stderr.contains("[warn]"), "expected warning on stderr, got: {stderr}");
+    assert!(stderr.contains("warning:"), "expected warning on stderr, got: {stderr}");
     assert!(stderr.contains("PROJ-124"), "warning should mention key");
 }
 ```
