@@ -253,7 +253,7 @@ pub(super) async fn handle_remote_link(
     })?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err(JrError::UserError(format!(
-            "--url must use http or https (got {:?}).",
+            "--url must use http or https (got {}).",
             parsed.scheme()
         ))
         .into());
