@@ -238,10 +238,34 @@ pub(super) async fn handle_remote_link(
         unreachable!()
     };
 
-    // Default the title to the URL for script-friendly single-flag use.
-    let title = title.unwrap_or_else(|| url.clone());
+    // Input validation — Jira's /remotelink endpoint accepts any string for
+    // `object.url` without verifying it's a real URL. Creating a link to
+    // "not-a-url" would succeed silently and produce a broken remote link
+    // in the Jira UI. Validate on the CLI boundary instead.
+    let url = url.trim();
+    if url.is_empty() {
+        return Err(JrError::UserError("--url must not be empty.".into()).into());
+    }
+    let parsed = url::Url::parse(url).map_err(|err| {
+        JrError::UserError(format!(
+            "--url is not a valid URL: {err}. Expected something like https://example.com/path."
+        ))
+    })?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(JrError::UserError(format!(
+            "--url must use http or https (got {:?}).",
+            parsed.scheme()
+        ))
+        .into());
+    }
 
-    let response = client.create_remote_link(&key, &url, &title).await?;
+    // Default the title to the URL for script-friendly single-flag use.
+    let title = title
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| url.to_string());
+
+    let response = client.create_remote_link(&key, url, &title).await?;
 
     match output_format {
         OutputFormat::Json => {
@@ -250,14 +274,14 @@ pub(super) async fn handle_remote_link(
                 serde_json::to_string_pretty(&json_output::remote_link_response(
                     &key,
                     response.id,
-                    &url,
+                    url,
                     &title,
                     &response.self_url,
                 ))?
             );
         }
         OutputFormat::Table => {
-            output::print_success(&format!("Linked {} → {} (id: {})", url, key, response.id));
+            output::print_success(&format!("Linked {} → {} (id: {})", key, url, response.id));
         }
     }
 

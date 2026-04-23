@@ -179,15 +179,72 @@ async fn remote_link_surfaces_server_error() {
         .unwrap();
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        !output.status.success(),
-        "expected failure on 400, stderr: {stderr}, stdout: {stdout}"
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "malformed-request API error should exit 1 (ApiError default), got: {:?}, stderr: {}",
+        output.status.code(),
+        stderr
     );
 
-    let lower = stderr.to_lowercase();
     assert!(
-        lower.contains("issue does not exist") || stderr.contains("400"),
-        "stderr must surface the server error (either the message or the status), got: {stderr}"
+        stderr.to_lowercase().contains("issue does not exist"),
+        "server error body should surface on stderr, got: {stderr}"
+    );
+}
+
+#[tokio::test]
+async fn remote_link_surfaces_not_authenticated_on_401() {
+    // Mirrors the 401 regression guard at tests/issue_changelog.rs:1109 —
+    // pins that unauthenticated responses route through JrError::NotAuthenticated
+    // (exit 2) with the "run jr auth login" hint, instead of a generic
+    // JrError::ApiError (exit 1).
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/PROJ-125/remotelink"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+            "errorMessages": ["Authentication required"],
+            "errors": {}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    let cwd_dir = tempfile::tempdir().unwrap();
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .current_dir(cwd_dir.path())
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "issue",
+            "remote-link",
+            "PROJ-125",
+            "--url",
+            "https://example.com",
+            "--output",
+            "json",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "401 should route to NotAuthenticated (exit 2), got: {:?}, stderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Not authenticated") || stderr.contains("jr auth login"),
+        "401 should surface reauth hint, got: {stderr}"
     );
 }
