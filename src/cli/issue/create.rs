@@ -145,9 +145,34 @@ pub(super) async fn handle_create(
 
     match output_format {
         OutputFormat::Json => {
-            let mut json_response = serde_json::to_value(&response)?;
-            json_response["url"] = json!(browse_url);
-            println!("{}", serde_json::to_string_pretty(&json_response)?);
+            // Follow-up GET so the JSON output matches `issue view --output json`
+            // (full Issue shape), plus `url`. On GET failure we keep the create
+            // succeeding — warn on stderr and fall back to the old `{key, url}`
+            // shape so downstream consumers always get at least the key + URL.
+            let cmdb_fields = crate::api::assets::linked::get_or_fetch_cmdb_fields(client)
+                .await
+                .unwrap_or_default();
+            let extra_owned = helpers::compose_extra_fields(config, &cmdb_fields);
+            let extra: Vec<&str> = extra_owned.iter().map(String::as_str).collect();
+
+            match client.get_issue(&response.key, &extra).await {
+                Ok(issue) => {
+                    let mut issue_json = serde_json::to_value(&issue)?;
+                    if let Some(obj) = issue_json.as_object_mut() {
+                        obj.insert("url".into(), serde_json::Value::String(browse_url.clone()));
+                    }
+                    println!("{}", serde_json::to_string_pretty(&issue_json)?);
+                }
+                Err(err) => {
+                    eprintln!(
+                        "[warn] issue created ({}) but follow-up fetch failed: {err}",
+                        response.key
+                    );
+                    let mut json_response = serde_json::to_value(&response)?;
+                    json_response["url"] = json!(browse_url);
+                    println!("{}", serde_json::to_string_pretty(&json_response)?);
+                }
+            }
         }
         OutputFormat::Table => {
             output::print_success(&format!("Created issue {}", response.key));
