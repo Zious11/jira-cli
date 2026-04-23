@@ -494,6 +494,24 @@ pub enum IssueCommand {
         #[arg(long)]
         r#type: Option<String>,
     },
+    /// Link a Confluence page or arbitrary web URL to an issue as a remote link.
+    ///
+    /// Renders under the issue's "Web links" (or "Confluence pages") panel in
+    /// Jira's UI. Jira decides which panel based on its own app-integration
+    /// metadata — this command creates a plain remote link and lets Jira sort
+    /// it into the right panel.
+    RemoteLink {
+        /// Issue key (e.g. PROJ-123).
+        key: String,
+
+        /// URL to link to.
+        #[arg(long)]
+        url: String,
+
+        /// Label shown in the Jira UI. Defaults to the URL when omitted.
+        #[arg(long)]
+        title: Option<String>,
+    },
     /// List available link types
     LinkTypes,
     /// Show assets linked to an issue

@@ -226,3 +226,40 @@ pub(super) async fn handle_unlink(
 
     Ok(())
 }
+
+// ── Remote Link ───────────────────────────────────────────────────
+
+pub(super) async fn handle_remote_link(
+    command: IssueCommand,
+    output_format: &OutputFormat,
+    client: &JiraClient,
+) -> Result<()> {
+    let IssueCommand::RemoteLink { key, url, title } = command else {
+        unreachable!()
+    };
+
+    // Default the title to the URL for script-friendly single-flag use.
+    let title = title.unwrap_or_else(|| url.clone());
+
+    let response = client.create_remote_link(&key, &url, &title).await?;
+
+    match output_format {
+        OutputFormat::Json => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json_output::remote_link_response(
+                    &key,
+                    response.id,
+                    &url,
+                    &title,
+                    &response.self_url,
+                ))?
+            );
+        }
+        OutputFormat::Table => {
+            output::print_success(&format!("Linked {} → {} (id: {})", url, key, response.id));
+        }
+    }
+
+    Ok(())
+}

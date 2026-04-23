@@ -80,6 +80,9 @@ pub async fn handle(
         IssueCommand::Unlink { .. } => {
             links::handle_unlink(command, output_format, client, no_input).await
         }
+        IssueCommand::RemoteLink { .. } => {
+            links::handle_remote_link(command, output_format, client).await
+        }
         IssueCommand::LinkTypes => links::handle_link_types(output_format, client).await,
         IssueCommand::Assets { key } => {
             assets::handle_issue_assets(&key, output_format, client).await
