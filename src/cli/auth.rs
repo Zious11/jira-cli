@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use dialoguer::{Input, Password};
 
 use crate::api::auth;
-use crate::config::Config;
+use crate::config::{Config, global_config_path};
 use crate::error::JrError;
 use crate::output;
 
@@ -203,7 +203,23 @@ pub async fn login_oauth(
     // [instance].oauth_scopes (empty/whitespace-only) must fail fast, not
     // leave new client_id/client_secret in the keychain alongside a login
     // that never succeeded.
-    let mut config = Config::load().unwrap_or_default();
+    //
+    // Propagate load errors (malformed TOML, permission denied, etc.)
+    // instead of falling back to defaults. Falling back would cause the
+    // subsequent `save_global()` to overwrite the user's broken-but-
+    // recoverable config with a default payload, silently discarding
+    // settings they cared about (#258). figment's `Toml::file` already
+    // treats a missing file as empty, so a genuinely-absent config never
+    // reaches this error path — only real failures do.
+    let config_path = global_config_path();
+    let mut config = Config::load().map_err(|err| {
+        JrError::ConfigError(format!(
+            "Failed to load config: {err:#}\n\n\
+             Fix or remove the file referenced above. Global config: {config_path}; \
+             per-project overrides come from `.jr.toml` in the current directory or any parent.",
+            config_path = config_path.display()
+        ))
+    })?;
     let scopes = resolve_oauth_scopes(&config)?;
 
     // Store OAuth app credentials in keychain (only after scopes validate)

@@ -122,11 +122,12 @@ pub(super) async fn resolve_team_field(
                     .iter()
                     .map(|t| format!("  {} (id: {})", t.name, t.id))
                     .collect();
-                anyhow::bail!(
+                return Err(JrError::UserError(format!(
                     "Multiple teams named \"{}\" found:\n{}\nUse a more specific name.",
                     team_name,
                     lines.join("\n")
-                );
+                ))
+                .into());
             }
 
             let labels: Vec<String> = duplicates
@@ -143,11 +144,12 @@ pub(super) async fn resolve_team_field(
         crate::partial_match::MatchResult::Ambiguous(matches) => {
             if no_input {
                 let quoted: Vec<String> = matches.iter().map(|m| format!("\"{}\"", m)).collect();
-                anyhow::bail!(
+                return Err(JrError::UserError(format!(
                     "Multiple teams match \"{}\": {}. Use a more specific name.",
                     team_name,
                     quoted.join(", ")
-                );
+                ))
+                .into());
             }
             let selection = dialoguer::Select::new()
                 .with_prompt(format!("Multiple teams match \"{team_name}\""))
@@ -165,16 +167,18 @@ pub(super) async fn resolve_team_field(
             // Any fresh fetch this call (cold-cache or retry) means advising
             // "run jr team list --refresh" would be misleading — we just did.
             if fetched_fresh {
-                anyhow::bail!(
+                return Err(JrError::UserError(format!(
                     "No team matching \"{}\" (checked a fresh team list). \
                      Verify the team name or check access permissions.",
                     team_name
-                );
+                ))
+                .into());
             }
-            anyhow::bail!(
+            Err(JrError::UserError(format!(
                 "No team matching \"{}\". Run \"jr team list --refresh\" to update.",
                 team_name
-            );
+            ))
+            .into())
         }
     }
 }
@@ -241,7 +245,7 @@ fn disambiguate_user(
     none_msg_fn: impl Fn(&[String]) -> String,
 ) -> Result<(String, String)> {
     if users.is_empty() {
-        anyhow::bail!("{}", empty_msg);
+        return Err(JrError::UserError(empty_msg.to_string()).into());
     }
 
     if users.len() == 1 {
@@ -280,11 +284,12 @@ fn disambiguate_user(
                         }
                     })
                     .collect();
-                anyhow::bail!(
+                return Err(JrError::UserError(format!(
                     "Multiple users named \"{}\" found:\n{}\nSpecify the accountId directly or use a more specific name.",
                     name,
                     lines.join("\n")
-                );
+                ))
+                .into());
             }
 
             let labels: Vec<String> = duplicates
@@ -306,11 +311,12 @@ fn disambiguate_user(
         }
         crate::partial_match::MatchResult::Ambiguous(matches) => {
             if no_input {
-                anyhow::bail!(
+                return Err(JrError::UserError(format!(
                     "Multiple users match \"{}\": {}. Use a more specific name.",
                     name,
                     matches.join(", ")
-                );
+                ))
+                .into());
             }
             let selection = dialoguer::Select::new()
                 .with_prompt(format!("Multiple users match \"{name}\""))
@@ -328,7 +334,7 @@ fn disambiguate_user(
             ))
         }
         crate::partial_match::MatchResult::None(all_names) => {
-            anyhow::bail!("{}", none_msg_fn(&all_names));
+            Err(JrError::UserError(none_msg_fn(&all_names)).into())
         }
     }
 }
@@ -483,10 +489,11 @@ pub(super) async fn resolve_asset(
         .await?;
 
     if results.is_empty() {
-        anyhow::bail!(
+        return Err(JrError::UserError(format!(
             "No assets matching \"{}\" found. Check the name and try again.",
             input
-        );
+        ))
+        .into());
     }
 
     if results.len() == 1 {
@@ -516,11 +523,12 @@ pub(super) async fn resolve_asset(
                     .iter()
                     .map(|a| format!("  {} ({})", a.object_key, a.label))
                     .collect();
-                anyhow::bail!(
+                return Err(JrError::UserError(format!(
                     "Multiple assets match \"{}\":\n{}\nUse a more specific name or pass the object key directly.",
                     input,
                     lines.join("\n")
-                );
+                ))
+                .into());
             }
 
             let items: Vec<String> = duplicates
@@ -545,11 +553,12 @@ pub(super) async fn resolve_asset(
                     .iter()
                     .map(|a| format!("  {} ({})", a.object_key, a.label))
                     .collect();
-                anyhow::bail!(
+                return Err(JrError::UserError(format!(
                     "Multiple assets match \"{}\":\n{}\nUse a more specific name or pass the object key directly.",
                     input,
                     lines.join("\n")
-                );
+                ))
+                .into());
             }
 
             let items: Vec<String> = filtered
@@ -571,11 +580,12 @@ pub(super) async fn resolve_asset(
                 .iter()
                 .map(|a| format!("  {} ({})", a.object_key, a.label))
                 .collect();
-            anyhow::bail!(
+            Err(JrError::UserError(format!(
                 "No assets with a name matching \"{}\" found. Similar results:\n{}\nUse the object key directly.",
                 input,
                 lines.join("\n")
-            );
+            ))
+            .into())
         }
     }
 }
