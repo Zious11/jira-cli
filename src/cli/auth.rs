@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use dialoguer::{Input, Password};
 
 use crate::api::auth;
-use crate::config::Config;
+use crate::config::{Config, global_config_path};
 use crate::error::JrError;
 use crate::output;
 
@@ -211,11 +211,12 @@ pub async fn login_oauth(
     // settings they cared about (#258). figment's `Toml::file` already
     // treats a missing file as empty, so a genuinely-absent config never
     // reaches this error path — only real failures do.
+    let config_path = global_config_path();
     let mut config = Config::load().map_err(|err| {
         JrError::ConfigError(format!(
-            "Failed to load config: {err}\n\n\
-             Fix the error in your config file (usually ~/.config/jr/config.toml), \
-             or remove the file to start fresh."
+            "Failed to load config: {err:#}\n\n\
+             Fix the error in {config_path}, or remove the file to start fresh.",
+            config_path = config_path.display()
         ))
     })?;
     let scopes = resolve_oauth_scopes(&config)?;
