@@ -7,8 +7,71 @@ use crate::cli::{IssueCommand, OutputFormat};
 use crate::error::JrError;
 use crate::output;
 use crate::partial_match::{self, MatchResult};
+use crate::types::jira::Resolution;
 
 use super::helpers;
+
+// ── Resolution resolver ───────────────────────────────────────────────
+
+/// Resolve a user-supplied resolution name against a list of resolutions,
+/// using the same partial_match UX as status/link-type/user resolution
+/// elsewhere: exact (case-insensitive) > unique prefix/substring >
+/// disambiguation error with candidate list.
+///
+/// Errors surface as `JrError::UserError` (exit 64) so CI consumers can
+/// distinguish a misspelled resolution from a transport failure.
+fn resolve_resolution_by_name(resolutions: &[Resolution], query: &str) -> Result<Resolution> {
+    let names: Vec<String> = resolutions.iter().map(|r| r.name.clone()).collect();
+    match partial_match::partial_match(query, &names) {
+        MatchResult::Exact(name) => resolutions
+            .iter()
+            .find(|r| r.name == name)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Internal error: matched resolution \"{}\" not found. Please report this as a bug.",
+                    name
+                )
+            }),
+        // Multiple case-insensitive exact duplicates — surface the whole list
+        // so the operator can see why and fix their data.
+        MatchResult::ExactMultiple(_) => Err(JrError::UserError(format!(
+            "Multiple resolutions named \"{}\" exist: {}",
+            query,
+            names.join(", ")
+        ))
+        .into()),
+        MatchResult::Ambiguous(matches) => {
+            // A single substring hit is a unique partial match — promote to success.
+            if matches.len() == 1 {
+                let name = &matches[0];
+                resolutions
+                    .iter()
+                    .find(|r| &r.name == name)
+                    .cloned()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Internal error: matched resolution \"{}\" not found. Please report this as a bug.",
+                            name
+                        )
+                    })
+            } else {
+                Err(JrError::UserError(format!(
+                    "Ambiguous resolution \"{}\". Matches: {}",
+                    query,
+                    matches.join(", ")
+                ))
+                .into())
+            }
+        }
+        MatchResult::None(all) => Err(JrError::UserError(format!(
+            "No resolution matching \"{}\". Available: {}",
+            query,
+            all.join(", ")
+        ))
+        .into()),
+    }
+}
 
 // ── Move (Transition) ────────────────────────────────────────────────
 
@@ -18,7 +81,12 @@ pub(super) async fn handle_move(
     client: &JiraClient,
     no_input: bool,
 ) -> Result<()> {
-    let IssueCommand::Move { key, status } = command else {
+    let IssueCommand::Move {
+        key,
+        status,
+        resolution,
+    } = command
+    else {
         unreachable!()
     };
 
@@ -208,8 +276,47 @@ pub(super) async fn handle_move(
         }
     };
 
+    // Resolve --resolution against the cached resolutions list if provided.
+    let resolution_fields: Option<serde_json::Value> = match resolution.as_deref() {
+        None => None,
+        Some(query) => {
+            let cached = crate::cache::read_resolutions_cache()?;
+            let resolutions: Vec<Resolution> = match cached {
+                Some(c) => c
+                    .resolutions
+                    .into_iter()
+                    .map(|r| Resolution {
+                        id: Some(r.id),
+                        name: r.name,
+                        description: r.description,
+                    })
+                    .collect(),
+                None => {
+                    let fetched = client.get_resolutions().await?;
+                    // Write-through the cache with just the fields we persist.
+                    let cacheable: Vec<crate::cache::CachedResolution> = fetched
+                        .iter()
+                        .filter_map(|r| {
+                            r.id.as_ref().map(|id| crate::cache::CachedResolution {
+                                id: id.clone(),
+                                name: r.name.clone(),
+                                description: r.description.clone(),
+                            })
+                        })
+                        .collect();
+                    crate::cache::write_resolutions_cache(&cacheable)?;
+                    fetched
+                }
+            };
+            let matched = resolve_resolution_by_name(&resolutions, query)?;
+            Some(serde_json::json!({
+                "resolution": { "name": matched.name }
+            }))
+        }
+    };
+
     client
-        .transition_issue(&key, &selected_transition.id, None)
+        .transition_issue(&key, &selected_transition.id, resolution_fields.as_ref())
         .await?;
 
     let new_status = selected_transition
@@ -456,4 +563,83 @@ pub(super) async fn handle_open(command: IssueCommand, client: &JiraClient) -> R
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod resolution_resolver_tests {
+    use super::*;
+    use crate::types::jira::Resolution;
+
+    fn sample_resolutions() -> Vec<Resolution> {
+        vec![
+            Resolution {
+                id: Some("10000".into()),
+                name: "Done".into(),
+                description: None,
+            },
+            Resolution {
+                id: Some("10001".into()),
+                name: "Won't Do".into(),
+                description: None,
+            },
+            Resolution {
+                id: Some("10002".into()),
+                name: "Duplicate".into(),
+                description: None,
+            },
+            Resolution {
+                id: Some("10003".into()),
+                name: "Cannot Reproduce".into(),
+                description: None,
+            },
+        ]
+    }
+
+    #[test]
+    fn resolve_resolution_exact_match_returns_it() {
+        let r = resolve_resolution_by_name(&sample_resolutions(), "Done").unwrap();
+        assert_eq!(r.name, "Done");
+    }
+
+    #[test]
+    fn resolve_resolution_case_insensitive_exact() {
+        let r = resolve_resolution_by_name(&sample_resolutions(), "done").unwrap();
+        assert_eq!(r.name, "Done");
+    }
+
+    #[test]
+    fn resolve_resolution_partial_match_returns_single_hit() {
+        // "Dup" uniquely matches Duplicate (prefix/substring)
+        let r = resolve_resolution_by_name(&sample_resolutions(), "Dup").unwrap();
+        assert_eq!(r.name, "Duplicate");
+    }
+
+    #[test]
+    fn resolve_resolution_ambiguous_substring_errors_with_exit_64() {
+        // "o" matches Done, Won't Do, Cannot Reproduce — disambiguation required.
+        let err = resolve_resolution_by_name(&sample_resolutions(), "o").unwrap_err();
+        let root = err.root_cause().to_string().to_lowercase();
+        assert!(
+            root.contains("ambiguous") || root.contains("multiple"),
+            "expected ambiguous error, got: {err:?}"
+        );
+        // Exit code 64 comes from JrError::UserError — verify by downcasting
+        if let Some(jr_err) = err.downcast_ref::<crate::error::JrError>() {
+            assert!(
+                matches!(jr_err, crate::error::JrError::UserError(_)),
+                "expected UserError variant, got: {jr_err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_resolution_no_match_errors_with_candidates() {
+        let err = resolve_resolution_by_name(&sample_resolutions(), "nonexistent").unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("Done"), "error should list candidates: {msg}");
+        assert!(
+            msg.contains("Duplicate"),
+            "error should list candidates: {msg}"
+        );
+    }
 }
