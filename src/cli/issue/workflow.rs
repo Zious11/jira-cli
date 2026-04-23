@@ -44,10 +44,16 @@ fn resolve_resolution_by_name(resolutions: &[Resolution], query: &str) -> Result
         // operator sees which conflicting values need cleanup (not the
         // whole instance-wide resolution list).
         MatchResult::ExactMultiple(_) => {
+            // Include the id alongside each duplicate name so the operator
+            // can tell two same-named entries apart in Jira admin and pick
+            // which one to delete / rename.
             let duplicates: Vec<String> = resolutions
                 .iter()
                 .filter(|r| r.name.eq_ignore_ascii_case(query))
-                .map(|r| r.name.clone())
+                .map(|r| match r.id.as_deref() {
+                    Some(id) => format!("{} (id={})", r.name, id),
+                    None => r.name.clone(),
+                })
                 .collect();
             Err(JrError::UserError(format!(
                 "Multiple resolutions named \"{}\" exist: {}",
@@ -84,10 +90,12 @@ fn resolve_resolution_by_name(resolutions: &[Resolution], query: &str) -> Result
 /// When `refresh` is true (explicit bypass), the cache is ignored on read
 /// but still written through so subsequent reads see the fresh data.
 ///
-/// Entries returned from the API without an id cannot be persisted (the
-/// cache key is the id). `GET /rest/api/3/resolution` always returns an id
-/// in practice; this is a defensive fallback that warns on stderr rather
-/// than silently dropping so a partial Atlassian response is visible.
+/// Entries returned from the API without an id are dropped on write —
+/// the cache's `CachedResolution` type has a non-optional id field so an
+/// id-less resolution cannot be persisted. `GET /rest/api/3/resolution`
+/// always returns an id in practice; this is a defensive fallback that
+/// warns on stderr rather than silently dropping so a partial Atlassian
+/// response is visible.
 async fn load_resolutions(client: &JiraClient, refresh: bool) -> Result<Vec<Resolution>> {
     if !refresh {
         if let Some(c) = crate::cache::read_resolutions_cache()? {
@@ -759,6 +767,12 @@ mod resolution_resolver_tests {
         assert!(
             msg.contains("Done") && msg.contains("done"),
             "error should list both duplicates: {msg}"
+        );
+        // Ids disambiguate same-name entries so the operator can fix the
+        // correct one in Jira admin.
+        assert!(
+            msg.contains("id=10000") && msg.contains("id=10100"),
+            "error should include ids to disambiguate same-name entries: {msg}"
         );
         assert!(
             !msg.contains("Won't Do"),
