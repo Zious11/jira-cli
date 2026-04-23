@@ -204,3 +204,74 @@ async fn issue_create_json_falls_back_on_get_failure() {
         "fallback shape must not contain `fields`, got: {parsed}"
     );
 }
+
+/// The table output path must not trigger a follow-up GET after a successful
+/// create. Table formatting only needs the key returned by POST, so fetching
+/// the full issue would be a wasted round trip.
+#[tokio::test]
+async fn issue_create_table_does_not_trigger_follow_up_get() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+            "id": "10001",
+            "key": "PROJ-125",
+            "self": format!("{}/rest/api/3/issue/10001", server.uri()),
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Critical: a GET on the issue MUST NOT be made on the table path.
+    // wiremock's .expect(0) will fail the test on drop if the GET was called.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-125"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("should not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(Value::Array(vec![])))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--type",
+            "Task",
+            "--summary",
+            "table test",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "expected success, stderr: {stderr}, stdout: {stdout}"
+    );
+    // `print_success` writes to stderr, not stdout, so check both to avoid
+    // coupling the assertion to output stream details — the key guarantee here
+    // is the .expect(0) on the GET mock.
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains("Created issue PROJ-125"),
+        "output must announce the created key, stdout: {stdout}, stderr: {stderr}"
+    );
+}
