@@ -1,6 +1,7 @@
 use crate::types::assets::LinkedAsset;
 use crate::types::assets::linked::format_linked_assets_short;
 use crate::types::jira::Issue;
+use crate::types::jira::issue::Comment;
 
 /// Format issue rows for table output.
 pub fn format_issue_rows_public(issues: &[Issue]) -> Vec<Vec<String>> {
@@ -113,6 +114,53 @@ pub fn format_points(value: f64) -> String {
     }
 }
 
+pub(super) fn format_comment_date(iso: &str, verbose: bool) -> String {
+    use std::sync::atomic::AtomicBool;
+    static LOGGED: AtomicBool = AtomicBool::new(false);
+    match chrono::DateTime::parse_from_rfc3339(iso)
+        .or_else(|_| chrono::DateTime::parse_from_str(iso, "%Y-%m-%dT%H:%M:%S%.3f%z"))
+    {
+        Ok(dt) => dt.format("%Y-%m-%d %H:%M").to_string(),
+        Err(_) => {
+            // Label is "date" (not "comment") because this formatter is also
+            // used by `handle_view` for the Created/Updated timestamp rows.
+            crate::observability::log_parse_failure_once(&LOGGED, "date", iso, verbose);
+            iso.to_string()
+        }
+    }
+}
+
+pub(super) fn format_comment_row(
+    author_name: Option<&str>,
+    created: Option<&str>,
+    body_text: Option<&str>,
+    verbose: bool,
+) -> Vec<String> {
+    vec![
+        author_name.unwrap_or("(unknown)").to_string(),
+        created
+            .map(|c| format_comment_date(c, verbose))
+            .unwrap_or_else(|| "-".into()),
+        body_text.unwrap_or("(no content)").to_string(),
+    ]
+}
+
+/// Extract the internal/external visibility from a comment's `sd.public.comment` property.
+/// Returns `Some("Internal")` or `Some("External")` if the property exists, `None` otherwise.
+pub(super) fn comment_visibility(comment: &Comment) -> Option<&'static str> {
+    comment
+        .properties
+        .iter()
+        .find(|p| p.key == "sd.public.comment")
+        .map(|p| {
+            if p.value.get("internal") == Some(&serde_json::Value::Bool(true)) {
+                "Internal"
+            } else {
+                "External"
+            }
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,5 +183,43 @@ mod tests {
         assert_eq!(format_points(f64::NAN), "-");
         assert_eq!(format_points(f64::INFINITY), "-");
         assert_eq!(format_points(f64::NEG_INFINITY), "-");
+    }
+
+    #[test]
+    fn format_comment_date_rfc3339() {
+        assert_eq!(
+            format_comment_date("2026-03-20T14:32:00+00:00", false),
+            "2026-03-20 14:32"
+        );
+    }
+
+    #[test]
+    fn format_comment_date_jira_offset_no_colon() {
+        assert_eq!(
+            format_comment_date("2026-03-20T14:32:00.000+0000", false),
+            "2026-03-20 14:32"
+        );
+    }
+
+    #[test]
+    fn format_comment_date_malformed_returns_raw() {
+        assert_eq!(format_comment_date("not-a-date", false), "not-a-date");
+    }
+
+    #[test]
+    fn format_comment_row_missing_author() {
+        let row = format_comment_row(None, Some("2026-03-20T14:32:00+00:00"), None, false);
+        assert_eq!(row[0], "(unknown)");
+    }
+
+    #[test]
+    fn format_comment_row_missing_body() {
+        let row = format_comment_row(
+            Some("Jane Smith"),
+            Some("2026-03-20T14:32:00+00:00"),
+            None,
+            false,
+        );
+        assert_eq!(row[2], "(no content)");
     }
 }

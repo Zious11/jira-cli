@@ -1,11 +1,13 @@
 mod assets;
 mod changelog;
+mod comments;
 mod create;
 mod format;
 mod helpers;
 mod json_output;
 mod links;
 mod list;
+mod view;
 mod workflow;
 
 pub use format::{format_issue_row, format_issue_rows_public, format_points, issue_table_headers};
@@ -38,7 +40,7 @@ pub async fn handle(
             .await
         }
         IssueCommand::View { .. } => {
-            list::handle_view(command, output_format, config, client).await
+            view::handle_view(command, output_format, config, client).await
         }
         IssueCommand::Create { .. } => {
             create::handle_create(
@@ -70,7 +72,7 @@ pub async fn handle(
             workflow::handle_comment(command, output_format, client).await
         }
         IssueCommand::Comments { key, limit } => {
-            list::handle_comments(&key, limit, output_format, client).await
+            comments::handle_comments(&key, limit, output_format, client).await
         }
         IssueCommand::Changelog { .. } => changelog::handle(command, output_format, client).await,
         IssueCommand::Open { .. } => workflow::handle_open(command, client).await,
