@@ -22,7 +22,10 @@ fn read_cache<T: DeserializeOwned + Expiring>(filename: &str) -> Result<Option<T
     };
     let cache: T = match serde_json::from_str(&content) {
         Ok(c) => c,
-        Err(_) => return Ok(None),
+        Err(e) => {
+            eprintln!("warning: cache file {filename} unreadable ({e}); will refetch");
+            return Ok(None);
+        }
     };
     if (Utc::now() - cache.fetched_at()).num_days() >= CACHE_TTL_DAYS {
         return Ok(None);
@@ -104,7 +107,10 @@ pub fn read_project_meta(project_key: &str) -> Result<Option<ProjectMeta>> {
     let content = std::fs::read_to_string(&path)?;
     let map: HashMap<String, ProjectMeta> = match serde_json::from_str(&content) {
         Ok(m) => m,
-        Err(_) => return Ok(None),
+        Err(e) => {
+            eprintln!("warning: project_meta.json unreadable ({e}); will refetch");
+            return Ok(None);
+        }
     };
 
     match map.get(project_key) {
@@ -132,7 +138,12 @@ pub fn write_project_meta(project_key: &str, meta: &ProjectMeta) -> Result<()> {
     // Read existing map or start fresh
     let mut map: HashMap<String, ProjectMeta> = if path.exists() {
         let content = std::fs::read_to_string(&path)?;
-        serde_json::from_str(&content).unwrap_or_default()
+        serde_json::from_str(&content).unwrap_or_else(|e| {
+            eprintln!(
+                "warning: project_meta.json unreadable ({e}); starting fresh — other cached projects will be lost"
+            );
+            HashMap::new()
+        })
     } else {
         HashMap::new()
     };
@@ -266,7 +277,10 @@ pub fn read_object_type_attr_cache(
     let content = std::fs::read_to_string(&path)?;
     let cache: ObjectTypeAttrCache = match serde_json::from_str(&content) {
         Ok(c) => c,
-        Err(_) => return Ok(None),
+        Err(e) => {
+            eprintln!("warning: object_type_attrs.json unreadable ({e}); will refetch");
+            return Ok(None);
+        }
     };
 
     let age = Utc::now() - cache.fetched_at;
@@ -291,9 +305,14 @@ pub fn write_object_type_attr_cache(
 
     let mut cache: ObjectTypeAttrCache = if path.exists() {
         let content = std::fs::read_to_string(&path)?;
-        serde_json::from_str(&content).unwrap_or(ObjectTypeAttrCache {
-            fetched_at: Utc::now(),
-            types: HashMap::new(),
+        serde_json::from_str(&content).unwrap_or_else(|e| {
+            eprintln!(
+                "warning: object_type_attrs.json unreadable ({e}); starting fresh — other cached object types will be lost"
+            );
+            ObjectTypeAttrCache {
+                fetched_at: Utc::now(),
+                types: HashMap::new(),
+            }
         })
     } else {
         ObjectTypeAttrCache {
