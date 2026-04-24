@@ -34,10 +34,11 @@ fn resolve_resolution_by_name(resolutions: &[Resolution], query: &str) -> Result
             .find(|r| r.name == name)
             .cloned()
             .ok_or_else(|| {
-                anyhow::anyhow!(
+                JrError::Internal(format!(
                     "Internal error: matched resolution \"{}\" not found. Please report this as a bug.",
                     name
-                )
+                ))
+                .into()
             }),
         // Multiple case-insensitive exact duplicates — list ONLY the
         // duplicate entries that actually collide with the query, so the
@@ -261,10 +262,10 @@ pub(super) async fn handle_move(
                     .find(|(n, _)| n == &name)
                     .map(|(_, i)| *i)
                     .ok_or_else(|| {
-                        anyhow::anyhow!(
+                        JrError::Internal(format!(
                             "Internal error: matched candidate \"{}\" not found. Please report this as a bug.",
                             name
-                        )
+                        ))
                     })?;
                 &transitions[idx]
             }
@@ -275,10 +276,10 @@ pub(super) async fn handle_move(
                     .find(|(n, _)| n == &name)
                     .map(|(_, i)| *i)
                     .ok_or_else(|| {
-                        anyhow::anyhow!(
+                        JrError::Internal(format!(
                             "Internal error: matched candidate \"{}\" not found. Please report this as a bug.",
                             name
-                        )
+                        ))
                     })?;
                 &transitions[idx]
             }
@@ -312,10 +313,10 @@ pub(super) async fn handle_move(
                     .find(|(n, _)| n == selected_name)
                     .map(|(_, i)| *i)
                     .ok_or_else(|| {
-                        anyhow::anyhow!(
+                        JrError::Internal(format!(
                             "Internal error: selected candidate \"{}\" not found. Please report this as a bug.",
                             selected_name
-                        )
+                        ))
                     })?;
                 &transitions[tidx]
             }
