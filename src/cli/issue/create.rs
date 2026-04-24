@@ -79,10 +79,16 @@ pub(super) async fn handle_create(
         })
         .ok_or_else(|| JrError::UserError("Summary is required. Use --summary".into()))?;
 
-    // Resolve description
+    // Resolve description. spawn_blocking isolates the blocking stdin read
+    // from the tokio runtime so later async work isn't starved while waiting
+    // on piped input.
     let desc_text = if description_stdin {
-        let mut buf = String::new();
-        std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;
+        let buf = tokio::task::spawn_blocking(|| {
+            let mut buf = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;
+            Ok::<_, std::io::Error>(buf)
+        })
+        .await??;
         Some(buf)
     } else {
         description
@@ -222,10 +228,14 @@ pub(super) async fn handle_edit(
     let mut fields = json!({});
     let mut has_updates = false;
 
-    // Resolve description
+    // Resolve description (see handle_create for rationale on spawn_blocking).
     let desc_text = if description_stdin {
-        let mut buf = String::new();
-        std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;
+        let buf = tokio::task::spawn_blocking(|| {
+            let mut buf = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;
+            Ok::<_, std::io::Error>(buf)
+        })
+        .await??;
         Some(buf)
     } else {
         description

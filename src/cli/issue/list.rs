@@ -416,9 +416,19 @@ pub(super) async fn handle_list(
 
         if !to_enrich.is_empty() {
             // Get workspace ID for assets that don't carry their own.
-            let fallback_wid = crate::api::assets::workspace::get_or_fetch_workspace_id(client)
-                .await
-                .ok();
+            let fallback_wid = match crate::api::assets::workspace::get_or_fetch_workspace_id(
+                client,
+            )
+            .await
+            {
+                Ok(wid) => Some(wid),
+                Err(err) => {
+                    eprintln!(
+                        "warning: failed to fetch workspace ID for asset enrichment: {err}. Assets without embedded workspace IDs will be skipped."
+                    );
+                    None
+                }
+            };
 
             let futures: Vec<_> = to_enrich
                 .keys()
