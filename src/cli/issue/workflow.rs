@@ -578,11 +578,15 @@ pub(super) async fn handle_comment(
         unreachable!()
     };
 
-    // Resolve comment text from the various sources
+    // Resolve comment text from the various sources. spawn_blocking isolates
+    // the blocking stdin read from the tokio runtime.
     let text = if stdin {
-        let mut buf = String::new();
-        std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;
-        buf
+        tokio::task::spawn_blocking(|| {
+            let mut buf = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;
+            Ok::<_, std::io::Error>(buf)
+        })
+        .await??
     } else if let Some(ref path) = file {
         std::fs::read_to_string(path)?
     } else if let Some(ref msg) = message {
