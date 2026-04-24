@@ -27,6 +27,14 @@ pub enum JrError {
     #[error("{0}")]
     UserError(String),
 
+    /// Invariant violation / "should never happen" bug. Prefix the message with
+    /// "Internal error:" at call sites so the formatted output self-describes
+    /// as a bug. Exit code 1 (default), distinguished from UserError (64) and
+    /// ConfigError (78) so callers matching on `JrError` can tell "we have a
+    /// bug" apart from "user did something wrong".
+    #[error("{0}")]
+    Internal(String),
+
     #[error("Interrupted")]
     Interrupted,
 
@@ -65,6 +73,19 @@ mod tests {
     #[test]
     fn user_error_exit_code() {
         assert_eq!(JrError::UserError("test".into()).exit_code(), 64);
+    }
+
+    #[test]
+    fn internal_error_exit_code_is_one() {
+        assert_eq!(JrError::Internal("bug".into()).exit_code(), 1);
+    }
+
+    #[test]
+    fn internal_error_display_passthrough() {
+        assert_eq!(
+            JrError::Internal("Internal error: x not found".into()).to_string(),
+            "Internal error: x not found"
+        );
     }
 
     #[test]
