@@ -617,13 +617,13 @@ No tasks in this plan cover those phases.
 
 ---
 
-## Success Criteria Recap (from the spec)
+## Success Criteria Recap (from the spec) — with post-implementation outcomes
 
-- [ ] `src/cli/issue/list.rs` ≤ 750 lines
-- [ ] `src/cli/issue/view.rs` exists and owns `handle_view`
-- [ ] `src/cli/issue/comments.rs` exists and owns `handle_comments`
-- [ ] `src/cli/issue/format.rs` exports `format_comment_date`, `format_comment_row`, `comment_visibility` as `pub(super)`
-- [ ] `src/cli/issue/mod.rs` routes `View`/`Comments` to the new modules
-- [ ] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` all pass locally
-- [ ] Single atomic commit on branch `refactor/list-rs-split`
-- [ ] `jr issue --help`, `jr issue view --help`, `jr issue comments --help` all emit their usage text
+- [ ] ~~`src/cli/issue/list.rs` ≤ 750 lines~~ — **not met**: actual 1,083 lines. The spec's pre-flight estimate that `handle_view` was ~739 lines was wrong (it's ~268); `handle_list` is the real large handler. See the spec's Post-implementation note.
+- [x] `src/cli/issue/view.rs` exists and owns `handle_view`
+- [x] `src/cli/issue/comments.rs` exists and owns `handle_comments`
+- [x] `src/cli/issue/format.rs` exports `format_comment_date`, `format_comment_row`, `comment_visibility` as `pub(super)`
+- [x] `src/cli/issue/mod.rs` routes `View`/`Comments` to the new modules
+- [x] `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` all pass locally
+- [x] Single atomic commit on branch `refactor/list-rs-split`
+- [x] `jr issue --help`, `jr issue view --help`, `jr issue comments --help` all emit their usage text

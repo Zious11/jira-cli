@@ -1,5 +1,13 @@
 # Refactor: Split `cli/issue/list.rs` into focused files
 
+> **Post-implementation note (PR #272):** The line-count estimates in this spec were based on a bad pre-implementation read of `list.rs`. Actual outcomes:
+> - `list.rs`: 1,498 → **1,083** (spec projected ~700; target ≤ 750 **not met**)
+> - `view.rs`: **285** (spec projected ~750 — `handle_view` was only ~268 lines, not 739)
+> - `comments.rs`: **61** (spec projected ~80; close)
+> - `format.rs`: 139 → **225** (spec projected ~215; close)
+>
+> The structural goals — three focused files, shared helpers in `format.rs`, `pub(super)` visibility, dispatch rewired, no behavior change — were met. The size goal for `list.rs` was not met because `handle_list` itself is the large handler (~600 lines of JQL/filter composition), not `handle_view` as the spec assumed. Extracting list-only helpers remains an Out-of-Scope follow-up per YAGNI (it would require a second caller to justify).
+
 ## Goal
 
 Reduce `src/cli/issue/list.rs` from 1,498 lines to ~700 by extracting the two unrelated handlers it currently hosts (`handle_view`, `handle_comments`) into sibling files, and relocating comment-formatting helpers to the existing shared `format.rs` module. No behavioral changes, no public API changes.
@@ -161,14 +169,16 @@ per rustc/Cargo/ripgrep contributor guidelines.
 
 ## Success Criteria
 
-- `src/cli/issue/list.rs` ≤ 750 lines (target: ~700).
-- `src/cli/issue/view.rs` exists and owns `handle_view` + its tests.
-- `src/cli/issue/comments.rs` exists and owns `handle_comments` + its tests.
-- `src/cli/issue/format.rs` exports `format_comment_date`, `format_comment_row`, `comment_visibility` with `pub(super)` visibility.
-- `src/cli/issue/mod.rs` routes `View`/`Comments` to the new modules.
-- Full CI-equivalent check set passes locally (`fmt`, `clippy -D warnings`, `test`).
-- PR CI stays green.
-- No functional-level test changes; only file relocations within `cli/issue/`.
+Original criteria (with actual outcome noted after each):
+
+- ~~`src/cli/issue/list.rs` ≤ 750 lines (target: ~700).~~ **Actual: 1,083 lines. Not met** — see Post-implementation note at top; the real large handler was `handle_list`, not `handle_view`. Kept the split scope pure-motion per the spec's Out-of-Scope rule.
+- `src/cli/issue/view.rs` exists and owns `handle_view` + its tests. ✅ (285 lines)
+- `src/cli/issue/comments.rs` exists and owns `handle_comments` + its tests. ✅ (61 lines)
+- `src/cli/issue/format.rs` exports `format_comment_date`, `format_comment_row`, `comment_visibility` with `pub(super)` visibility. ✅
+- `src/cli/issue/mod.rs` routes `View`/`Comments` to the new modules. ✅
+- Full CI-equivalent check set passes locally (`fmt`, `clippy -D warnings`, `test`). ✅
+- PR CI stays green. ✅ (all 7 jobs passed on PR #272)
+- No functional-level test changes; only file relocations within `cli/issue/`. ✅ (916 tests, same count as baseline)
 
 ## Out-of-Scope Follow-ups (Deferred)
 
