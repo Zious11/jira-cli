@@ -135,11 +135,11 @@ pub fn store_oauth_tokens(profile: &str, access: &str, refresh: &str) -> Result<
 pub fn load_oauth_tokens(profile: &str) -> Result<(String, String)>
 
 // Clear helpers
-pub fn clear_profile_creds(profile: &str) -> Result<()>   // OAuth keys for one profile
-pub fn clear_all_credentials() -> Result<()>              // shared keys + every profile's OAuth keys
+pub fn clear_profile_creds(profile: &str) -> Result<()>          // OAuth keys for one profile
+pub fn clear_all_credentials(profiles: &[&str]) -> Result<()>    // shared keys + every listed profile's OAuth keys
 ```
 
-`clear_all_credentials` iterates the config's profile list (source of truth) to clear each `<profile>:oauth-*` pair.
+`clear_all_credentials` takes the list of known profile names from the caller (typically derived from `config.global.profiles.keys()`) so it can clear each `<profile>:oauth-*` pair without needing to enumerate the keychain.
 
 ### `:` Separator Safety
 
@@ -324,7 +324,7 @@ A user who wants to revert can `cp config.toml config.toml.backup` first (releas
 |---|---|---|---|
 | `--profile X` unknown | `UserError` | 64 | `unknown profile: foo; known: default, sandbox` |
 | `JR_PROFILE=X` unknown | `UserError` | 64 | (same as above) |
-| `default_profile = "X"` in config but X missing from `[profiles]` | `ConfigError` | 78 | `default_profile "foo" not in [profiles]; fix config.toml or run "jr auth list"` |
+| `default_profile = "X"` in config but X missing from `[profiles]` | `UserError` | 64 | `default_profile "foo" not in [profiles]; fix config.toml or run "jr auth list"` |
 | `jr auth switch <unknown>` | `UserError` | 64 | `unknown profile: foo; known: …` |
 | `jr auth remove <name>` where `name == default_profile` | `UserError` | 64 | `cannot remove active profile "default"; switch first with "jr auth switch …"` |
 | `jr auth remove <unknown>` | `UserError` | 64 | `unknown profile: foo; known: …` |
@@ -348,7 +348,7 @@ TDD; existing test stack (`proptest`, `insta`, `tempfile`, `assert_cmd`, `wiremo
 - Migration is idempotent (second run is a no-op)
 - `[fields]` carried into `[profiles.default]` during migration
 - `Config::active_profile()` returns the right `&ProfileConfig`
-- Unknown `default_profile` returns `ConfigError`
+- Unknown `default_profile` returns `UserError` (matches the unified active-profile existence check; the value comes from user-edited config, env, or flag — UserError is the honest classification)
 
 `api::auth::tests`:
 - `store_oauth_tokens(profile, ...) + load_oauth_tokens(profile, ...)` round-trip per profile (uses `JR_SERVICE_NAME=jr-jira-cli-test-<test_name>`)

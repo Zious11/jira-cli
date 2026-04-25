@@ -197,7 +197,15 @@ pub async fn login_token(
     // Persist the profile's auth_method so subsequent runs know which flow
     // to use. URL is set by `prepare_login_target` before this point, so
     // we only touch auth_method here.
-    let mut config = Config::load()?;
+    //
+    // Use `load_lenient` (not `load`) for the same reason `handle_login`
+    // does: this function may be invoked while creating a brand-new profile
+    // whose name doesn't yet appear in `[profiles]`, and the resolved
+    // active profile (e.g., from `JR_PROFILE`) might not exist either.
+    // A strict reload here would re-trigger the unknown-active-profile
+    // check mid-flight and abort a login that's intentionally creating
+    // its target.
+    let mut config = Config::load_lenient()?;
     let p = config
         .global
         .profiles
@@ -259,7 +267,13 @@ pub async fn login_oauth(
     // treats a missing file as empty, so a genuinely-absent config never
     // reaches this error path — only real failures do.
     let config_path = global_config_path();
-    let config = Config::load().map_err(|err| {
+    // Use `load_lenient` (not `load`) so a `JR_PROFILE` pointing at an
+    // unconfigured profile, or a target profile that doesn't yet exist,
+    // can't trip the strict active-profile existence check mid-login.
+    // `handle_login` already did the lenient load up-front; this internal
+    // reload must agree, otherwise the orchestrator-allowed creation flow
+    // gets aborted halfway through.
+    let config = Config::load_lenient().map_err(|err| {
         JrError::ConfigError(format!(
             "Failed to load config: {err:#}\n\n\
              Fix or remove the file referenced above. Global config: {config_path}; \
@@ -285,8 +299,9 @@ pub async fn login_oauth(
 
     // Persist site info to the named profile under [profiles.<name>], not
     // the legacy [instance] block. Reload to pick up any mutations made
-    // earlier in the login flow (e.g., by `prepare_login_target`).
-    let mut config = Config::load()?;
+    // earlier in the login flow (e.g., by `prepare_login_target`). Same
+    // lenient-load rationale as the earlier reload above.
+    let mut config = Config::load_lenient()?;
     let p = config
         .global
         .profiles

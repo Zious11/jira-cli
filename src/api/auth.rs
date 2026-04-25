@@ -140,13 +140,30 @@ pub fn load_oauth_app_credentials() -> Result<(String, String)> {
 /// Clear OAuth tokens for a single profile (other profiles + shared keys
 /// such as email / api-token / oauth_client_id are untouched).
 ///
+/// For the `"default"` profile, this also deletes the legacy flat OAuth
+/// keys (`oauth-access-token` / `oauth-refresh-token`). Without that step,
+/// a user mid-migration would see `jr auth logout --profile default`
+/// "succeed" while the legacy keys remained — and the next
+/// `load_oauth_tokens("default")` would lazy-migrate them back into the
+/// namespaced slots, effectively undoing the logout. Non-`"default"`
+/// profiles never inherit legacy keys, so this clause stays scoped to
+/// `"default"` to avoid stomping on another profile's migration window.
+///
 /// `NoEntry` results are treated as success (the entry was already absent).
 /// Any other failure (permission denied, ACL mismatch, platform error) is
 /// aggregated and returned so callers can surface partial-failure details
 /// rather than reporting success while stale entries remain.
 pub fn clear_profile_creds(profile: &str) -> Result<()> {
     let mut failures: Vec<String> = Vec::new();
-    for key in [oauth_access_key(profile), oauth_refresh_key(profile)] {
+    let mut keys: Vec<String> = vec![oauth_access_key(profile), oauth_refresh_key(profile)];
+    // For the "default" profile, also clear the legacy flat OAuth keys
+    // that load_oauth_tokens("default") would otherwise lazy-migrate
+    // back into existence on the next read — defeating logout.
+    if profile == "default" {
+        keys.push(KEY_OAUTH_ACCESS_LEGACY.to_string());
+        keys.push(KEY_OAUTH_REFRESH_LEGACY.to_string());
+    }
+    for key in keys {
         match entry(&key) {
             Ok(e) => match e.delete_credential() {
                 Ok(()) | Err(keyring::Error::NoEntry) => {}
@@ -677,6 +694,68 @@ mod tests {
             assert_eq!(new_access, "legacy-access");
 
             assert!(entry("oauth-access-token").unwrap().get_password().is_err());
+        });
+    }
+
+    /// Regression: `clear_profile_creds("default")` must also remove the
+    /// legacy flat OAuth keys. Otherwise `jr auth logout --profile default`
+    /// leaves the legacy entries in place and the next `load_oauth_tokens`
+    /// call resurrects them via the lazy-migration path — silently undoing
+    /// the logout for a user mid-migration.
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn clear_profile_creds_default_also_clears_legacy_flat_keys() {
+        with_test_keyring(|| {
+            // Pre-seed legacy flat keys.
+            entry(KEY_OAUTH_ACCESS_LEGACY)
+                .unwrap()
+                .set_password("legacy-access")
+                .unwrap();
+            entry(KEY_OAUTH_REFRESH_LEGACY)
+                .unwrap()
+                .set_password("legacy-refresh")
+                .unwrap();
+
+            clear_profile_creds("default").unwrap();
+
+            // Legacy keys must be gone — otherwise lazy migration would
+            // resurrect them on the next load_oauth_tokens call.
+            assert!(
+                entry(KEY_OAUTH_ACCESS_LEGACY)
+                    .unwrap()
+                    .get_password()
+                    .is_err()
+            );
+            assert!(
+                entry(KEY_OAUTH_REFRESH_LEGACY)
+                    .unwrap()
+                    .get_password()
+                    .is_err()
+            );
+        });
+    }
+
+    /// Companion to the test above: clearing a non-default profile must NOT
+    /// touch the legacy flat keys, since those belong to the `"default"`
+    /// profile's lazy-migration window.
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn clear_profile_creds_non_default_leaves_legacy_keys_alone() {
+        with_test_keyring(|| {
+            entry(KEY_OAUTH_ACCESS_LEGACY)
+                .unwrap()
+                .set_password("legacy-access")
+                .unwrap();
+
+            clear_profile_creds("sandbox").unwrap();
+
+            // Legacy keys belong to the "default" profile's lazy migration;
+            // logging out of "sandbox" must not touch them.
+            let access = entry(KEY_OAUTH_ACCESS_LEGACY)
+                .unwrap()
+                .get_password()
+                .unwrap();
+            assert_eq!(access, "legacy-access");
         });
     }
 

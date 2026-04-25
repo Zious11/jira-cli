@@ -197,3 +197,56 @@ auth_method = "api_token"
     assert!(saved.contains("[profiles.newprof]"), "saved: {saved}");
     assert!(saved.contains("https://newprof.example"), "saved: {saved}");
 }
+
+/// Regression: when `JR_PROFILE` points at a profile that doesn't exist
+/// in `[profiles]` AND the user runs `jr auth login --profile <other>`
+/// to create that other profile, login must still succeed. Round-5 found
+/// that `login_token`/`login_oauth` reloaded config via strict
+/// `Config::load()` after `handle_login`'s lenient load, which re-fired
+/// the unknown-active-profile check on the unrelated `JR_PROFILE` value
+/// and aborted the in-flight creation. Both internal reloads now use
+/// `load_lenient` to match the orchestrator.
+#[test]
+#[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+fn auth_login_with_jr_profile_pointing_to_unrelated_profile_still_creates_target() {
+    if std::env::var("JR_RUN_KEYRING_TESTS").is_err() {
+        return;
+    }
+    let (dir, path) = fresh_config_dir();
+    std::fs::write(
+        &path,
+        r#"
+default_profile = "default"
+[profiles.default]
+url = "https://existing.example"
+auth_method = "api_token"
+"#,
+    )
+    .unwrap();
+
+    // JR_PROFILE points to a non-existent profile, but --profile points
+    // to a different new profile that login should create. Login must
+    // succeed despite the JR_PROFILE mismatch — login uses lenient load
+    // throughout so the strict active-profile existence check never
+    // fires for the in-flight creation.
+    Command::cargo_bin("jr")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", dir.path())
+        .env("JR_PROFILE", "ghost")
+        .env("JR_EMAIL", "user@example.com")
+        .env("JR_API_TOKEN", "token-value")
+        .args([
+            "auth",
+            "login",
+            "--profile",
+            "fresh",
+            "--url",
+            "https://fresh.example",
+            "--no-input",
+        ])
+        .assert()
+        .success();
+
+    let saved = std::fs::read_to_string(&path).unwrap();
+    assert!(saved.contains("[profiles.fresh]"), "saved: {saved}");
+}
