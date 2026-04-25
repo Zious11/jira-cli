@@ -216,7 +216,11 @@ pub enum AuthCommand {
         client_secret: Option<String>,
     },
     /// Show authentication status
-    Status,
+    Status {
+        /// Profile to show status for. Defaults to active profile.
+        #[arg(long)]
+        profile: Option<String>,
+    },
     /// Clear stored credentials and re-run the login flow.
     ///
     /// On macOS, run this after upgrading `jr` (e.g., `brew upgrade`, binary
@@ -225,6 +229,9 @@ pub enum AuthCommand {
     /// the creator of fresh entries, avoiding repeated "allow access"
     /// prompts. See issue #207.
     Refresh {
+        /// Profile to refresh credentials for. Defaults to active profile.
+        #[arg(long)]
+        profile: Option<String>,
         /// Use OAuth 2.0 instead of API token (matches `jr auth login --oauth`)
         #[arg(long)]
         oauth: bool,
@@ -250,6 +257,13 @@ pub enum AuthCommand {
     },
     /// List all configured profiles, marking the active one.
     List,
+    /// Clear OAuth tokens for a profile (profile entry stays in config).
+    /// Shared API-token credential is NEVER touched.
+    Logout {
+        /// Profile to log out of. Defaults to active profile.
+        #[arg(long)]
+        profile: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

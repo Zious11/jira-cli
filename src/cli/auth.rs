@@ -369,26 +369,35 @@ pub(super) fn prepare_login_target(
 }
 
 /// Show authentication status: instance URL, auth method, credential availability.
-pub async fn status() -> Result<()> {
+///
+/// When `profile_arg` is `Some`, reports for that profile. Otherwise reports
+/// for the active profile (resolved via the usual flag → env → config →
+/// "default" precedence chain at `Config::load` time).
+pub async fn status(profile_arg: Option<&str>) -> Result<()> {
     let config = Config::load()?;
+    let target = profile_arg
+        .map(str::to_string)
+        .unwrap_or_else(|| config.active_profile_name.clone());
+    crate::config::validate_profile_name(&target)?;
 
-    let url = config
-        .global
-        .instance
-        .url
-        .as_deref()
+    let profile = config.global.profiles.get(&target);
+    let url = profile
+        .and_then(|p| p.url.as_deref())
         .unwrap_or("(not configured)");
+    println!("Profile:     {target}");
     println!("Instance:    {url}");
 
-    let method = config
-        .global
-        .instance
-        .auth_method
-        .as_deref()
+    let method = profile
+        .and_then(|p| p.auth_method.as_deref())
         .unwrap_or("(not configured)");
     println!("Auth method: {method}");
 
-    let creds_ok = auth::load_api_token().is_ok();
+    // Credential probe: API-token creds are shared (one per host); OAuth
+    // tokens are per-profile and namespaced by the profile name.
+    let creds_ok = match method {
+        "oauth" => auth::load_oauth_tokens(&target).is_ok(),
+        _ => auth::load_api_token().is_ok(),
+    };
     if creds_ok {
         println!("Credentials: stored in keychain");
     } else {
@@ -426,25 +435,41 @@ fn refresh_success_payload(flow: AuthFlow) -> serde_json::Value {
 /// network error during OAuth), the user is warned that credentials are gone
 /// and told exactly which `jr auth login` invocation will restore them,
 /// before the error is propagated.
-pub async fn refresh_credentials(
-    oauth_override: bool,
-    email: Option<String>,
-    token: Option<String>,
-    client_id: Option<String>,
-    client_secret: Option<String>,
-    no_input: bool,
-    output: &crate::cli::OutputFormat,
-) -> Result<()> {
-    let config = Config::load()?;
-    let flow = chosen_flow(&config, oauth_override);
+/// Bundle of CLI arguments threaded from `main.rs` to [`refresh_credentials`].
+///
+/// Same rationale as [`LoginArgs`] — passing all credential slots plus the
+/// flow toggle and `--profile` as positional parameters trips clippy's
+/// `too_many_arguments` lint, so they're grouped into a struct that also
+/// makes the call site at `main.rs` self-documenting.
+pub struct RefreshArgs<'a> {
+    pub profile: Option<&'a str>,
+    pub oauth: bool,
+    pub email: Option<String>,
+    pub token: Option<String>,
+    pub client_id: Option<String>,
+    pub client_secret: Option<String>,
+    pub no_input: bool,
+    pub output: &'a crate::cli::OutputFormat,
+}
 
-    auth::clear_all_credentials(&["default"]).context(
+pub async fn refresh_credentials(args: RefreshArgs<'_>) -> Result<()> {
+    let config = Config::load()?;
+    let target = args
+        .profile
+        .map(str::to_string)
+        .unwrap_or_else(|| config.active_profile_name.clone());
+    crate::config::validate_profile_name(&target)?;
+    let flow = chosen_flow(&config, args.oauth);
+
+    auth::clear_all_credentials(&[target.as_str()]).context(
         "failed to clear stored credentials before refresh — keychain may still hold stale entries",
     )?;
 
     let login_result = match flow {
-        AuthFlow::Token => login_token("default", email, token, no_input).await,
-        AuthFlow::OAuth => login_oauth("default", client_id, client_secret, no_input).await,
+        AuthFlow::Token => login_token(&target, args.email, args.token, args.no_input).await,
+        AuthFlow::OAuth => {
+            login_oauth(&target, args.client_id, args.client_secret, args.no_input).await
+        }
     };
 
     if let Err(err) = login_result {
@@ -459,7 +484,7 @@ pub async fn refresh_credentials(
         return Err(err);
     }
 
-    match output {
+    match args.output {
         crate::cli::OutputFormat::Json => {
             let payload = serde_json::to_string_pretty(&refresh_success_payload(flow))
                 .context("failed to serialize refresh success payload as JSON")?;
@@ -470,6 +495,32 @@ pub async fn refresh_credentials(
         }
     }
 
+    Ok(())
+}
+
+/// Pure resolver for `jr auth logout`. Defaults to the active profile when
+/// the user passes no `--profile`. Kept module-private and split out so the
+/// CLI default behavior is unit-testable without filesystem or keychain.
+pub(super) fn resolve_logout_target(
+    _global: &crate::config::GlobalConfig,
+    profile_arg: Option<&str>,
+    active: &str,
+) -> String {
+    profile_arg.unwrap_or(active).to_string()
+}
+
+/// `jr auth logout [--profile <name>]` — clear OAuth tokens for the target
+/// profile. The profile entry in `config.toml` is left in place so a follow-up
+/// `jr auth login --profile <name>` re-authenticates without losing site
+/// metadata. The shared API-token credential is intentionally NOT cleared
+/// (it's keyed by host, not profile, so wiping it would log every profile
+/// out of API-token mode).
+pub async fn handle_logout(profile_arg: Option<&str>) -> anyhow::Result<()> {
+    let config = crate::config::Config::load()?;
+    let target = resolve_logout_target(&config.global, profile_arg, &config.active_profile_name);
+    crate::config::validate_profile_name(&target)?;
+    crate::api::auth::clear_profile_creds(&target)?;
+    crate::output::print_success(&format!("Logged out of profile {target:?}"));
     Ok(())
 }
 
@@ -843,6 +894,16 @@ mod tests {
         assert_eq!(
             auth::DEFAULT_OAUTH_SCOPES,
             "read:jira-work write:jira-work read:jira-user offline_access"
+        );
+    }
+
+    #[test]
+    fn resolve_logout_target_defaults_to_active() {
+        let global = crate::config::GlobalConfig::default();
+        assert_eq!(resolve_logout_target(&global, None, "default"), "default");
+        assert_eq!(
+            resolve_logout_target(&global, Some("sandbox"), "default"),
+            "sandbox"
         );
     }
 

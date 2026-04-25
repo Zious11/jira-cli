@@ -103,27 +103,32 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                     })
                     .await
                 }
-                cli::AuthCommand::Status => cli::auth::status().await,
+                cli::AuthCommand::Status { profile } => cli::auth::status(profile.as_deref()).await,
                 cli::AuthCommand::Refresh {
+                    profile,
                     oauth,
                     email,
                     token,
                     client_id,
                     client_secret,
                 } => {
-                    cli::auth::refresh_credentials(
+                    cli::auth::refresh_credentials(cli::auth::RefreshArgs {
+                        profile: profile.as_deref(),
                         oauth,
                         email,
                         token,
                         client_id,
                         client_secret,
-                        cli.no_input,
-                        &cli.output,
-                    )
+                        no_input: cli.no_input,
+                        output: &cli.output,
+                    })
                     .await
                 }
                 cli::AuthCommand::Switch { name } => cli::auth::handle_switch(&name).await,
                 cli::AuthCommand::List => cli::auth::handle_list(&cli.output).await,
+                cli::AuthCommand::Logout { profile } => {
+                    cli::auth::handle_logout(profile.as_deref()).await
+                }
             },
             cli::Command::Me => {
                 let config = config::Config::load()?;
