@@ -58,7 +58,7 @@ src/
 ├── types/jira/          # Serde structs for API responses (Issue, Board, Sprint, User, Team, etc.)
 ├── types/jsm/           # Serde structs for JSM API responses (ServiceDesk, Queue, etc.)
 ├── cache.rs             # Per-profile XDG cache (~/.cache/jr/v1/<profile>/) — team list, project meta, workspace ID, CMDB fields, object-type attrs, resolutions (all 7-day TTL). Versioned root (`v1/`) lets a future schema bump orphan stale files cleanly.
-├── config.rs            # Global (~/.config/jr/config.toml) [profiles.<name>] + default_profile + per-project (.jr.toml), figment layering. Auto-migrates legacy [instance]/[fields] shape on first load. Active profile resolved at load via JR_PROFILE_OVERRIDE (set by main from --profile flag) > JR_PROFILE env > default_profile field > "default".
+├── config.rs            # Global (~/.config/jr/config.toml) [profiles.<name>] + default_profile + per-project (.jr.toml), figment layering. Auto-migrates legacy [instance]/[fields] shape on first load. Active profile resolved at load via Config::load_with(cli_profile) (cli flag threaded through as a parameter, NOT an env-var seam) > JR_PROFILE env > default_profile field > "default".
 ├── output.rs            # Table (comfy-table) and JSON formatting
 ├── adf.rs               # Atlassian Document Format: text→ADF, markdown→ADF, ADF→text
 ├── duration.rs          # Worklog duration parser (2h, 1h30m, 1d, 1w)

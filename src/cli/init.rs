@@ -9,18 +9,34 @@ pub async fn handle() -> Result<()> {
 
     // Multi-profile awareness: if profiles already exist, ask whether to add
     // another one rather than overwriting the existing setup. When the user
-    // opts in, JR_PROFILE_OVERRIDE is set so the rest of init scopes its
-    // writes to the new profile.
+    // opts in, the new profile name is captured in `new_profile_override`
+    // and threaded into every subsequent `Config::load_*_with` call — the
+    // earlier `JR_PROFILE_OVERRIDE` env-var seam is gone (it required
+    // `unsafe { set_var }` under #[tokio::main], which is unsound because
+    // tokio worker threads exist before the async-main body runs).
     //
-    // Distinguish "no config yet" (legitimate first-run) from "config exists
-    // but won't load" (malformed TOML, permission-denied, etc.). The latter
-    // is a real problem: silently dropping to defaults would let `jr init`
-    // overwrite the user's broken-but-recoverable file. Only swallow the
-    // error when the config file genuinely doesn't exist.
+    // Distinguish three failure modes when loading the existing config:
+    //   - config file genuinely absent → fall through to first-run setup
+    //   - `JrError::UserError` (e.g., `JR_PROFILE` points at an unknown
+    //     profile) → recovery is to unset the env / fix `default_profile`,
+    //     NOT to delete config.toml; tell the user that
+    //   - other errors (malformed TOML, permission denied) → tell the user
+    //     to fix or remove the file, since `jr init` would otherwise
+    //     overwrite a broken-but-recoverable file
     let existing = match crate::config::Config::load() {
         Ok(c) => Some(c),
         Err(e) => {
             let path = crate::config::global_config_path();
+            if let Some(je) = e.downcast_ref::<crate::error::JrError>() {
+                if matches!(je, crate::error::JrError::UserError(_)) {
+                    return Err(e.context(
+                        "config refused to load due to a user-input issue. \
+                         If JR_PROFILE points to a profile that doesn't exist, \
+                         unset it; or run 'jr auth list' to see configured \
+                         profiles.",
+                    ));
+                }
+            }
             if path.exists() {
                 return Err(e.context(format!(
                     "failed to load existing config at {}; fix or remove it before running 'jr init'",
@@ -30,6 +46,7 @@ pub async fn handle() -> Result<()> {
             None
         }
     };
+    let mut new_profile_override: Option<String> = None;
     if let Some(c) = existing.as_ref() {
         if !c.global.profiles.is_empty() {
             let names: Vec<String> = c.global.profiles.keys().cloned().collect();
@@ -47,14 +64,7 @@ pub async fn handle() -> Result<()> {
                 .interact_text()
                 .context("failed to read profile name")?;
             crate::config::validate_profile_name(&profile_name)?;
-            // SAFETY: jr init's flow is fully serial — each prompt awaits
-            // user input before the next step proceeds, and no spawned task
-            // reads or writes env vars between this call and Config::load
-            // below. If any future background work is added to init, this
-            // needs reassessment.
-            unsafe {
-                std::env::set_var("JR_PROFILE_OVERRIDE", &profile_name);
-            }
+            new_profile_override = Some(profile_name);
         }
     }
 
@@ -77,7 +87,9 @@ pub async fn handle() -> Result<()> {
     // Determine which profile this init flow targets. The override is set
     // earlier when the user opted to add a new profile alongside an existing
     // one; otherwise we fall back to the literal "default".
-    let profile_name = std::env::var("JR_PROFILE_OVERRIDE").unwrap_or_else(|_| "default".into());
+    let profile_name = new_profile_override
+        .clone()
+        .unwrap_or_else(|| "default".into());
 
     // Load any existing config, then write the URL into the target profile
     // entry. The legacy `[instance]` block is `#[serde(skip_serializing)]`
@@ -85,8 +97,8 @@ pub async fn handle() -> Result<()> {
     // on save — every persisted field must live under `[profiles.<name>]`.
     //
     // Reload here (rather than reusing the `existing` we discriminated
-    // above) so JR_PROFILE_OVERRIDE — which the new-profile branch may have
-    // just set — is reflected in `active_profile_name`.
+    // above) so the new-profile choice — captured into `profile_name`
+    // earlier — is reflected in `active_profile_name`.
     //
     // Lenient because the override may name a not-yet-created profile (the
     // whole point of running `jr init` is to add it). Without lenient, the
@@ -94,11 +106,11 @@ pub async fn handle() -> Result<()> {
     // `unwrap_or_else(default)` fallback would silently clobber existing
     // profiles on save — flagged by Copilot review on PR #275.
     //
-    // The `?` (no fallback) is safe because line ~20 above already
-    // discriminated "config file is malformed/unreadable" from "no config
-    // yet"; the only reachable failure here would be a fresh IO error
-    // between then and now, which we want to surface, not silently swallow.
-    let mut config = Config::load_lenient()?;
+    // The `?` (no fallback) is safe because the discrimination block at
+    // the top already separated "config file is malformed/unreadable"
+    // from "no config yet"; the only reachable failure here would be a
+    // fresh IO error between then and now, which we want to surface.
+    let mut config = Config::load_lenient_with(Some(&profile_name))?;
     config
         .global
         .profiles
@@ -115,7 +127,7 @@ pub async fn handle() -> Result<()> {
         crate::cli::auth::login_oauth(&profile_name, None, None, false).await?;
     } else {
         crate::cli::auth::login_token(&profile_name, None, None, false).await?;
-        let mut config = Config::load()?;
+        let mut config = Config::load_with(Some(&profile_name))?;
         config
             .global
             .profiles
@@ -126,7 +138,7 @@ pub async fn handle() -> Result<()> {
     }
 
     // Step 4: Per-project setup
-    let config = Config::load()?;
+    let config = Config::load_with(Some(&profile_name))?;
     let client = api::client::JiraClient::from_config(&config, false)?;
 
     let setup_project = Confirm::new()
@@ -167,7 +179,7 @@ pub async fn handle() -> Result<()> {
 
     // Step 5: Discover team field
     if let Ok(Some(team_id)) = client.find_team_field_id().await {
-        let mut config = Config::load()?;
+        let mut config = Config::load_with(Some(&profile_name))?;
         let active = config.active_profile_name.clone();
         config
             .global
@@ -210,7 +222,7 @@ pub async fn handle() -> Result<()> {
             };
 
             if let Some(id) = field_id {
-                let mut config = Config::load()?;
+                let mut config = Config::load_with(Some(&profile_name))?;
                 let active = config.active_profile_name.clone();
                 config
                     .global
@@ -232,7 +244,7 @@ pub async fn handle() -> Result<()> {
         .trim_start_matches("http://")
         .trim_end_matches('/');
     if let Ok(metadata) = client.get_org_metadata(hostname).await {
-        let mut config = Config::load()?;
+        let mut config = Config::load_with(Some(&profile_name))?;
         let active = config.active_profile_name.clone();
         let entry = config.global.profiles.entry(active).or_default();
         entry.cloud_id = Some(metadata.cloud_id.clone());

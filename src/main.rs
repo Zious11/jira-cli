@@ -10,19 +10,14 @@ use jr::output;
 async fn main() {
     let mut cli = Cli::parse();
 
-    // Surface --profile to Config::load via env var (avoids changing the public load API).
+    // Validate --profile early so a bad name fails before any work runs.
+    // The validated value is threaded into `Config::load_with` rather than
+    // through an env-var seam, since `unsafe { std::env::set_var(...) }` is
+    // unsound under #[tokio::main] (worker threads already exist).
     if let Some(p) = cli.profile.as_deref() {
         if let Err(e) = config::validate_profile_name(p) {
             eprintln!("Error: {e}");
             std::process::exit(e.exit_code());
-        }
-        // SAFETY: this call site runs on the main thread BEFORE the tokio
-        // runtime spawns any worker threads (we're inside `#[tokio::main]`'s
-        // generated future but before any `.await` that yields to the
-        // scheduler) — no concurrent env access is possible. Once async
-        // work begins, JR_PROFILE_OVERRIDE is read-only.
-        unsafe {
-            std::env::set_var("JR_PROFILE_OVERRIDE", p);
         }
     }
 
@@ -81,7 +76,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             cli::Command::Completion { .. } => unreachable!(),
             cli::Command::Init => cli::init::handle().await,
             cli::Command::Assets { command } => {
-                let config = config::Config::load()?;
+                let config = config::Config::load_with(cli.profile.as_deref())?;
                 let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
                 cli::assets::handle(command, &cli.output, &client).await
             }
@@ -128,17 +123,21 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                     })
                     .await
                 }
-                cli::AuthCommand::Switch { name } => cli::auth::handle_switch(&name).await,
-                cli::AuthCommand::List => cli::auth::handle_list(&cli.output).await,
+                cli::AuthCommand::Switch { name } => {
+                    cli::auth::handle_switch(&name, cli.profile.as_deref()).await
+                }
+                cli::AuthCommand::List => {
+                    cli::auth::handle_list(&cli.output, cli.profile.as_deref()).await
+                }
                 cli::AuthCommand::Logout { profile } => {
                     cli::auth::handle_logout(profile.as_deref()).await
                 }
                 cli::AuthCommand::Remove { name } => {
-                    cli::auth::handle_remove(&name, cli.no_input).await
+                    cli::auth::handle_remove(&name, cli.no_input, cli.profile.as_deref()).await
                 }
             },
             cli::Command::Me => {
-                let config = config::Config::load()?;
+                let config = config::Config::load_with(cli.profile.as_deref())?;
                 let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
                 let user = client.get_myself().await?;
                 output::print_output(
@@ -157,7 +156,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 Ok(())
             }
             cli::Command::Project { command } => {
-                let config = config::Config::load()?;
+                let config = config::Config::load_with(cli.profile.as_deref())?;
                 let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
                 cli::project::handle(
                     command,
@@ -169,7 +168,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 .await
             }
             cli::Command::Issue { command } => {
-                let config = config::Config::load()?;
+                let config = config::Config::load_with(cli.profile.as_deref())?;
                 let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
                 cli::issue::handle(
                     *command,
@@ -183,7 +182,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 Ok(())
             }
             cli::Command::Board { command } => {
-                let config = config::Config::load()?;
+                let config = config::Config::load_with(cli.profile.as_deref())?;
                 let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
                 cli::board::handle(
                     command,
@@ -195,7 +194,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 .await
             }
             cli::Command::Sprint { command } => {
-                let config = config::Config::load()?;
+                let config = config::Config::load_with(cli.profile.as_deref())?;
                 let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
                 cli::sprint::handle(
                     command,
@@ -207,22 +206,22 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 .await
             }
             cli::Command::Worklog { command } => {
-                let config = config::Config::load()?;
+                let config = config::Config::load_with(cli.profile.as_deref())?;
                 let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
                 cli::worklog::handle(command, &client, &cli.output).await
             }
             cli::Command::Team { command } => {
-                let config = config::Config::load()?;
+                let config = config::Config::load_with(cli.profile.as_deref())?;
                 let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
                 cli::team::handle(command, &cli.output, &config, &client).await
             }
             cli::Command::User { command } => {
-                let config = config::Config::load()?;
+                let config = config::Config::load_with(cli.profile.as_deref())?;
                 let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
                 cli::user::handle(command, &cli.output, &client).await
             }
             cli::Command::Queue { command } => {
-                let config = config::Config::load()?;
+                let config = config::Config::load_with(cli.profile.as_deref())?;
                 let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
                 cli::queue::handle(
                     command,
@@ -239,7 +238,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 data,
                 header,
             } => {
-                let config = config::Config::load()?;
+                let config = config::Config::load_with(cli.profile.as_deref())?;
                 let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
                 cli::api::handle_api(path, method, data, header, &client).await
             }

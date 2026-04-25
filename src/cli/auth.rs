@@ -205,7 +205,7 @@ pub async fn login_token(
     // A strict reload here would re-trigger the unknown-active-profile
     // check mid-flight and abort a login that's intentionally creating
     // its target.
-    let mut config = Config::load_lenient()?;
+    let mut config = Config::load_lenient_with(Some(profile))?;
     let p = config
         .global
         .profiles
@@ -273,7 +273,7 @@ pub async fn login_oauth(
     // `handle_login` already did the lenient load up-front; this internal
     // reload must agree, otherwise the orchestrator-allowed creation flow
     // gets aborted halfway through.
-    let config = Config::load_lenient().map_err(|err| {
+    let config = Config::load_lenient_with(Some(profile)).map_err(|err| {
         JrError::ConfigError(format!(
             "Failed to load config: {err:#}\n\n\
              Fix or remove the file referenced above. Global config: {config_path}; \
@@ -301,7 +301,7 @@ pub async fn login_oauth(
     // the legacy [instance] block. Reload to pick up any mutations made
     // earlier in the login flow (e.g., by `prepare_login_target`). Same
     // lenient-load rationale as the earlier reload above.
-    let mut config = Config::load_lenient()?;
+    let mut config = Config::load_lenient_with(Some(profile))?;
     let p = config
         .global
         .profiles
@@ -348,7 +348,11 @@ pub async fn handle_login(args: LoginArgs) -> Result<()> {
     // `load_lenient` skips the active-profile existence check so
     // `jr auth login --profile newprof --url ...` can create the profile
     // on first use. Every other command keeps the strict `Config::load()`.
-    let mut config = Config::load_lenient().map_err(|err| {
+    //
+    // Pass `args.profile.as_deref()` as the cli-flag override so the
+    // resolved active profile reflects the subcommand's `--profile` rather
+    // than relying on env-var seams (which are unsound under #[tokio::main]).
+    let mut config = Config::load_lenient_with(args.profile.as_deref()).map_err(|err| {
         JrError::ConfigError(format!(
             "Failed to load config: {err:#}\n\n\
              Fix or remove the file referenced above. Global config: {config_path}; \
@@ -453,7 +457,15 @@ pub(super) fn prepare_login_target(
 /// for the active profile (resolved via the usual flag → env → config →
 /// "default" precedence chain at `Config::load` time).
 pub async fn status(profile_arg: Option<&str>) -> Result<()> {
-    let config = Config::load()?;
+    // `profile_arg` is the explicit per-subcommand override (`--profile`
+    // on `auth status`); when absent we still let Config::load apply the
+    // standard precedence chain (env > default_profile > "default").
+    // Passing `profile_arg` here also doubles as the CLI-flag override
+    // for `Config::load_with`, ensuring a `jr auth status --profile X`
+    // against an unconfigured X surfaces a clear "unknown profile" error
+    // from the strict load instead of silently falling back to the
+    // active profile.
+    let config = Config::load_with(profile_arg)?;
     let target = profile_arg
         .map(str::to_string)
         .unwrap_or_else(|| config.active_profile_name.clone());
@@ -562,7 +574,10 @@ pub struct RefreshArgs<'a> {
 }
 
 pub async fn refresh_credentials(args: RefreshArgs<'_>) -> Result<()> {
-    let config = Config::load()?;
+    // Pass `args.profile` as the CLI-flag override so a `--profile X`
+    // against an unconfigured X surfaces the strict load's "unknown
+    // profile" error rather than silently refreshing the active profile.
+    let config = Config::load_with(args.profile)?;
     let target = args
         .profile
         .map(str::to_string)
@@ -649,7 +664,7 @@ pub(super) fn resolve_logout_target(
 /// (it's keyed by host, not profile, so wiping it would log every profile
 /// out of API-token mode).
 pub async fn handle_logout(profile_arg: Option<&str>) -> anyhow::Result<()> {
-    let config = crate::config::Config::load()?;
+    let config = crate::config::Config::load_with(profile_arg)?;
     let target = resolve_logout_target(&config.global, profile_arg, &config.active_profile_name);
     crate::config::validate_profile_name(&target)?;
     if !config.global.profiles.contains_key(&target) {
@@ -715,8 +730,12 @@ pub(super) fn handle_remove_in_memory(
 /// 4. Best-effort wipe of per-profile OAuth tokens and cache directory; both
 ///    are intentionally non-fatal — a missing keychain entry or cache dir is
 ///    the expected steady state for an already-cleaned profile, not an error.
-pub async fn handle_remove(target: &str, no_input: bool) -> anyhow::Result<()> {
-    let mut config = Config::load()?;
+pub async fn handle_remove(
+    target: &str,
+    no_input: bool,
+    cli_profile: Option<&str>,
+) -> anyhow::Result<()> {
+    let mut config = Config::load_with(cli_profile)?;
     crate::config::validate_profile_name(target)?;
 
     if !no_input {
@@ -765,8 +784,8 @@ pub(super) fn handle_switch_in_memory(
 }
 
 /// `jr auth switch <name>` — set the default profile in `config.toml`.
-pub async fn handle_switch(target: &str) -> Result<()> {
-    let mut config = Config::load()?;
+pub async fn handle_switch(target: &str, cli_profile: Option<&str>) -> Result<()> {
+    let mut config = Config::load_with(cli_profile)?;
     config.global = handle_switch_in_memory(config.global, target)?;
     config.save_global()?;
     output::print_success(&format!("Active profile set to {target:?}"));
@@ -821,8 +840,11 @@ pub(super) fn render_list_json(
 }
 
 /// `jr auth list` — print every configured profile, marking the active one.
-pub async fn handle_list(output: &crate::cli::OutputFormat) -> Result<()> {
-    let config = Config::load()?;
+pub async fn handle_list(
+    output: &crate::cli::OutputFormat,
+    cli_profile: Option<&str>,
+) -> Result<()> {
+    let config = Config::load_with(cli_profile)?;
     let rendered = match output {
         crate::cli::OutputFormat::Table => {
             render_list_table(&config.global, &config.active_profile_name)

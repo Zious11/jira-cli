@@ -190,17 +190,34 @@ impl Config {
     /// Strict load — used by every command except `jr auth login`.
     /// Errors if the resolved active profile isn't in `[profiles]`.
     pub fn load() -> anyhow::Result<Self> {
-        Self::load_inner(true)
+        Self::load_with(None)
+    }
+
+    /// Variant that accepts a CLI-flag profile override.
+    ///
+    /// Threading the `--profile` value as a parameter (instead of through an
+    /// env-var seam like the legacy `JR_PROFILE_OVERRIDE`) avoids
+    /// `unsafe { std::env::set_var(...) }` under `#[tokio::main]`, where
+    /// worker threads exist before the async-main body runs and POSIX
+    /// `setenv` is not thread-safe.
+    pub fn load_with(cli_profile: Option<&str>) -> anyhow::Result<Self> {
+        Self::load_inner(cli_profile, true)
     }
 
     /// Lenient load — used by `jr auth login` only, which legitimately
     /// creates profiles on demand. Skips the active-profile existence
     /// check; otherwise identical to [`Config::load`].
     pub fn load_lenient() -> anyhow::Result<Self> {
-        Self::load_inner(false)
+        Self::load_lenient_with(None)
     }
 
-    fn load_inner(strict: bool) -> anyhow::Result<Self> {
+    /// Lenient variant that accepts a CLI-flag profile override. See
+    /// [`Config::load_with`] for the threading rationale.
+    pub fn load_lenient_with(cli_profile: Option<&str>) -> anyhow::Result<Self> {
+        Self::load_inner(cli_profile, false)
+    }
+
+    fn load_inner(cli_profile: Option<&str>, strict: bool) -> anyhow::Result<Self> {
         let global_path = global_config_path();
         let mut global: GlobalConfig = Figment::new()
             .merge(Serialized::defaults(GlobalConfig::default()))
@@ -253,14 +270,14 @@ impl Config {
             .transpose()?
             .unwrap_or_default();
 
-        // JR_PROFILE_OVERRIDE is an INTERNAL seam set by main.rs from the parsed
-        // --profile flag *before* Config::load runs. It MUST NOT be set by users
-        // directly — JR_PROFILE is the user-facing env var. Task 9 wires the
-        // `unsafe { std::env::set_var(...) }` call from main.
-        let cli_profile_flag = std::env::var("JR_PROFILE_OVERRIDE").ok();
+        // The `--profile` CLI flag is threaded in as a parameter rather than
+        // via an env-var seam. Earlier rounds used `JR_PROFILE_OVERRIDE`, but
+        // setting it inside `#[tokio::main]` requires `unsafe { set_var }` at
+        // a point where tokio worker threads already exist — POSIX `setenv`
+        // is not thread-safe, so the cleaner fix is to drop the env-var seam
+        // entirely. JR_PROFILE remains the user-facing env var.
         let env_profile = std::env::var("JR_PROFILE").ok();
-        let active_profile_name =
-            resolve_active_profile_name(&global, cli_profile_flag.as_deref(), env_profile);
+        let active_profile_name = resolve_active_profile_name(&global, cli_profile, env_profile);
         // Validate the resolved name. JR_PROFILE / --profile / default_profile
         // all flow into cache paths and keyring keys, so a bad value (e.g.
         // "foo:bar" or path separators) must be rejected at the config boundary.
@@ -979,21 +996,20 @@ mod tests {
         unsafe {
             std::env::set_var("XDG_CONFIG_HOME", dir.path());
             std::env::set_var("JR_PROFILE", "from-env");
-            std::env::set_var("JR_PROFILE_OVERRIDE", "from-flag");
         }
-        let cfg = Config::load().unwrap();
+        // CLI flag wins over env var.
+        let cfg = Config::load_with(Some("from-flag")).unwrap();
         assert_eq!(cfg.active_profile_name, "from-flag");
 
-        unsafe {
-            std::env::remove_var("JR_PROFILE_OVERRIDE");
-        }
-        let cfg = Config::load().unwrap();
+        // Without the CLI flag, JR_PROFILE wins over the config field.
+        let cfg = Config::load_with(None).unwrap();
         assert_eq!(cfg.active_profile_name, "from-env");
 
         unsafe {
             std::env::remove_var("JR_PROFILE");
         }
-        let cfg = Config::load().unwrap();
+        // With neither flag nor env, the config field wins.
+        let cfg = Config::load_with(None).unwrap();
         assert_eq!(cfg.active_profile_name, "from-config");
 
         unsafe {

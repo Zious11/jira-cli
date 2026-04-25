@@ -664,17 +664,36 @@ mod tests {
         format!("jr-jira-cli-test-{}-{}", std::process::id(), n)
     }
 
+    /// Serializes JR_SERVICE_NAME mutation across concurrent keyring tests so
+    /// no test observes a service name set by another in-flight test (which
+    /// would point its keychain operations at the wrong namespace).
+    static KEYRING_TEST_ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// Wrap a test in a unique JR_SERVICE_NAME scope so concurrent tests don't collide.
     fn with_test_keyring<F: FnOnce()>(f: F) {
         if std::env::var("JR_RUN_KEYRING_TESTS").is_err() {
             return;
         }
+        // Hold the mutex across env mutation + body + cleanup so no other
+        // `with_test_keyring` invocation can race the JR_SERVICE_NAME
+        // set/unset and observe a half-applied state. Recover from a
+        // poisoned lock — a panicking test still leaves the env in a
+        // recoverable state because we restore JR_SERVICE_NAME at scope
+        // exit, and a unique service-name namespace per call already
+        // isolates keychain entries.
+        let _guard = KEYRING_TEST_ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let svc = unique_test_service();
         let prev = std::env::var("JR_SERVICE_NAME").ok();
-        // SAFETY: tests using keyring must be serialized via JR_RUN_KEYRING_TESTS opt-in.
+        // SAFETY: KEYRING_TEST_ENV_MUTEX is held for the duration of this
+        // scope, so no other test in this binary can race the env mutation.
+        // The opt-in `JR_RUN_KEYRING_TESTS` gate further keeps these tests
+        // off the default test path.
         unsafe { std::env::set_var("JR_SERVICE_NAME", &svc) };
         f();
         let _ = clear_all_credentials(&["default", "sandbox"]);
+        // SAFETY: still holding KEYRING_TEST_ENV_MUTEX.
         unsafe {
             match prev {
                 Some(p) => std::env::set_var("JR_SERVICE_NAME", p),

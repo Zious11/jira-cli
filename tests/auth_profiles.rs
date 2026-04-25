@@ -6,8 +6,7 @@ use tempfile::TempDir;
 
 fn jr() -> Command {
     let mut cmd = Command::cargo_bin("jr").unwrap();
-    cmd.env_remove("JR_PROFILE")
-        .env_remove("JR_PROFILE_OVERRIDE");
+    cmd.env_remove("JR_PROFILE");
     cmd
 }
 
