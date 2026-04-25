@@ -39,6 +39,28 @@ fn auth_list_shows_no_profiles_for_fresh_install() {
 }
 
 #[test]
+fn auth_logout_unknown_profile_exits_64() {
+    let (dir, path) = fresh_config_dir();
+    std::fs::write(
+        &path,
+        r#"
+default_profile = "default"
+[profiles.default]
+url = "https://x.example"
+auth_method = "api_token"
+"#,
+    )
+    .unwrap();
+
+    jr().env("XDG_CONFIG_HOME", dir.path())
+        .args(["auth", "logout", "--profile", "ghost"])
+        .assert()
+        .failure()
+        .code(64)
+        .stderr(predicates::str::contains("unknown profile"));
+}
+
+#[test]
 fn auth_remove_active_profile_exits_64() {
     let (dir, path) = fresh_config_dir();
     std::fs::write(
@@ -97,5 +119,11 @@ url = "https://from-flag.example"
         .iter()
         .filter(|p| p["active"].as_bool() == Some(true))
         .collect();
+    assert_eq!(
+        active.len(),
+        1,
+        "expected exactly one active profile, got {}: {parsed:?}",
+        active.len()
+    );
     assert_eq!(active[0]["name"], "from-flag");
 }

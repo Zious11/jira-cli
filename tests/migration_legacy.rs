@@ -36,7 +36,9 @@ output = "json"
     )
     .unwrap();
 
-    // SAFETY: test runs single-threaded under cargo test --test
+    // SAFETY: ENV_MUTEX is held across the env-var mutation and the
+    // Config::load that depends on it; no other code path in this test
+    // binary mutates XDG_CONFIG_HOME concurrently.
     unsafe {
         std::env::set_var("XDG_CONFIG_HOME", dir.path());
     }
@@ -84,6 +86,9 @@ auth_method = "api_token"
     )
     .unwrap();
 
+    // SAFETY: ENV_MUTEX is held across the env-var mutation and the
+    // Config::load that depends on it; no other code path in this test
+    // binary mutates XDG_CONFIG_HOME concurrently.
     unsafe {
         std::env::set_var("XDG_CONFIG_HOME", dir.path());
     }

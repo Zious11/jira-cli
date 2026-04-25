@@ -29,8 +29,11 @@ pub async fn handle() -> Result<()> {
                 .interact_text()
                 .context("failed to read profile name")?;
             crate::config::validate_profile_name(&profile_name)?;
-            // SAFETY: jr init is single-threaded — main.rs awaits this future
-            // on the tokio runtime before anything else mutates env vars.
+            // SAFETY: jr init's flow is fully serial — each prompt awaits
+            // user input before the next step proceeds, and no spawned task
+            // reads or writes env vars between this call and Config::load
+            // below. If any future background work is added to init, this
+            // needs reassessment.
             unsafe {
                 std::env::set_var("JR_PROFILE_OVERRIDE", &profile_name);
             }

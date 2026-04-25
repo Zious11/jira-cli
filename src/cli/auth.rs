@@ -96,19 +96,38 @@ impl AuthFlow {
     }
 }
 
-/// Decide which login flow to run based on config + explicit override.
+/// Decide which login flow to run for the **active** profile + explicit
+/// override.
+///
+/// Today this is only exercised by unit tests (production callers like
+/// `refresh_credentials` need the target profile, not the active one, and
+/// use [`chosen_flow_for_profile`] directly). It's kept as a thin wrapper
+/// so a future caller that genuinely wants the active profile has a
+/// labeled entry point — `#[cfg(test)]` because adding it without a real
+/// caller would just be dead code.
 ///
 /// Order of precedence:
 /// 1. `oauth_override = true` → always OAuth (user passed `--oauth`).
-/// 2. Config `auth_method == "oauth"` → OAuth.
+/// 2. Active profile `auth_method == "oauth"` → OAuth.
 /// 3. Anything else (including unset) → Token. Matches the `api_token`
 ///    default that `JiraClient::from_config` applies when no method is set.
+#[cfg(test)]
 fn chosen_flow(config: &Config, oauth_override: bool) -> AuthFlow {
+    chosen_flow_for_profile(&config.active_profile(), oauth_override)
+}
+
+/// Decide which login flow to run based on a specific profile + explicit
+/// override. Use this when the caller has already resolved the target
+/// profile and that profile may differ from the active one (refresh,
+/// per-target dispatch).
+fn chosen_flow_for_profile(
+    profile: &crate::config::ProfileConfig,
+    oauth_override: bool,
+) -> AuthFlow {
     if oauth_override {
         return AuthFlow::OAuth;
     }
-    let active = config.active_profile();
-    match active.auth_method.as_deref() {
+    match profile.auth_method.as_deref() {
         Some("oauth") => AuthFlow::OAuth,
         _ => AuthFlow::Token,
     }
@@ -461,11 +480,35 @@ pub async fn refresh_credentials(args: RefreshArgs<'_>) -> Result<()> {
         .map(str::to_string)
         .unwrap_or_else(|| config.active_profile_name.clone());
     crate::config::validate_profile_name(&target)?;
-    let flow = chosen_flow(&config, args.oauth);
+    // Inspect the target profile's auth method (not the active profile's)
+    // so `jr auth refresh --profile X` against a non-active X dispatches
+    // the right flow. Missing entries default to api_token, matching the
+    // login-time default.
+    let target_profile = config
+        .global
+        .profiles
+        .get(&target)
+        .cloned()
+        .unwrap_or_default();
+    let flow = chosen_flow_for_profile(&target_profile, args.oauth);
 
-    auth::clear_all_credentials(&[target.as_str()]).context(
-        "failed to clear stored credentials before refresh — keychain may still hold stale entries",
-    )?;
+    // Clear-only-what-this-flow-refreshes:
+    //
+    // - OAuth refresh rotates the per-profile <profile>:oauth-*-token
+    //   entries; the shared keys (email, api-token, oauth_client_id,
+    //   oauth_client_secret) belong to other profiles too and must not
+    //   be wiped.
+    // - API-token refresh re-prompts the email + api-token, and the
+    //   shared api-token IS the credential being refreshed — so the
+    //   #207-style "wipe-then-relogin" path is correct here.
+    match flow {
+        AuthFlow::OAuth => auth::clear_profile_creds(&target).context(
+            "failed to clear stored OAuth tokens before refresh — keychain may still hold stale entries",
+        )?,
+        AuthFlow::Token => auth::clear_all_credentials(&[target.as_str()]).context(
+            "failed to clear stored credentials before refresh — keychain may still hold stale entries",
+        )?,
+    }
 
     let login_result = match flow {
         AuthFlow::Token => login_token(&target, args.email, args.token, args.no_input).await,
@@ -521,6 +564,18 @@ pub async fn handle_logout(profile_arg: Option<&str>) -> anyhow::Result<()> {
     let config = crate::config::Config::load()?;
     let target = resolve_logout_target(&config.global, profile_arg, &config.active_profile_name);
     crate::config::validate_profile_name(&target)?;
+    if !config.global.profiles.contains_key(&target) {
+        let known: Vec<&str> = config.global.profiles.keys().map(String::as_str).collect();
+        return Err(JrError::UserError(format!(
+            "unknown profile: {target}; known: {}",
+            if known.is_empty() {
+                "(none)".into()
+            } else {
+                known.join(", ")
+            }
+        ))
+        .into());
+    }
     crate::api::auth::clear_profile_creds(&target)?;
     crate::output::print_success(&format!("Logged out of profile {target:?}"));
     Ok(())
@@ -740,6 +795,48 @@ mod tests {
     fn chosen_flow_oauth_override_wins_over_config() {
         let config = config_with_auth_method(Some("api_token"));
         assert_eq!(chosen_flow(&config, true), AuthFlow::OAuth);
+    }
+
+    /// Regression: refresh against a non-active profile must dispatch the
+    /// flow stored on THAT profile's auth_method, not the active profile's.
+    /// `chosen_flow(&Config, _)` always reads the active profile, which
+    /// silently picked the wrong flow when active=api_token but the refresh
+    /// target=oauth (or vice-versa). `chosen_flow_for_profile` takes the
+    /// resolved target profile so callers like `refresh_credentials` can
+    /// thread the right ProfileConfig in.
+    #[test]
+    fn chosen_flow_for_profile_inspects_passed_profile_not_active() {
+        let mut profiles = std::collections::BTreeMap::new();
+        profiles.insert(
+            "default".into(),
+            ProfileConfig {
+                auth_method: Some("api_token".into()),
+                ..ProfileConfig::default()
+            },
+        );
+        profiles.insert(
+            "sandbox".into(),
+            ProfileConfig {
+                auth_method: Some("oauth".into()),
+                ..ProfileConfig::default()
+            },
+        );
+        let config = Config {
+            global: GlobalConfig {
+                default_profile: Some("default".into()),
+                profiles,
+                ..GlobalConfig::default()
+            },
+            project: Default::default(),
+            active_profile_name: "default".into(),
+        };
+        // chosen_flow without override returns Token (active is api_token)
+        assert_eq!(chosen_flow(&config, false), AuthFlow::Token);
+        // chosen_flow_for_profile against sandbox returns OAuth even though
+        // the active profile is api_token — proves the resolver looks at
+        // the passed profile, not the active one.
+        let sandbox = config.global.profiles["sandbox"].clone();
+        assert_eq!(chosen_flow_for_profile(&sandbox, false), AuthFlow::OAuth);
     }
 
     #[test]

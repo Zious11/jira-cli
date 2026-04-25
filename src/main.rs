@@ -16,7 +16,11 @@ async fn main() {
             eprintln!("Error: {e}");
             std::process::exit(e.exit_code());
         }
-        // SAFETY: main is single-threaded at this point.
+        // SAFETY: this call site runs on the main thread BEFORE the tokio
+        // runtime spawns any worker threads (we're inside `#[tokio::main]`'s
+        // generated future but before any `.await` that yields to the
+        // scheduler) — no concurrent env access is possible. Once async
+        // work begins, JR_PROFILE_OVERRIDE is read-only.
         unsafe {
             std::env::set_var("JR_PROFILE_OVERRIDE", p);
         }
