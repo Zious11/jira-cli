@@ -38,6 +38,10 @@ pub struct Cli {
     /// Enable verbose output
     #[arg(long, global = true)]
     pub verbose: bool,
+
+    /// Override the active profile (precedence: this flag > JR_PROFILE > config > "default")
+    #[arg(long, global = true)]
+    pub profile: Option<String>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]

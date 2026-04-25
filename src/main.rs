@@ -10,6 +10,18 @@ use jr::output;
 async fn main() {
     let mut cli = Cli::parse();
 
+    // Surface --profile to Config::load via env var (avoids changing the public load API).
+    if let Some(p) = cli.profile.as_deref() {
+        if let Err(e) = config::validate_profile_name(p) {
+            eprintln!("Error: {e}");
+            std::process::exit(e.exit_code());
+        }
+        // SAFETY: main is single-threaded at this point.
+        unsafe {
+            std::env::set_var("JR_PROFILE_OVERRIDE", p);
+        }
+    }
+
     if cli.no_color || std::env::var("NO_COLOR").is_ok() {
         colored::control::set_override(false);
     }

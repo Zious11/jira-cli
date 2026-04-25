@@ -844,6 +844,53 @@ mod tests {
     }
 
     #[test]
+    fn config_load_precedence_flag_overrides_env_overrides_field() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let dir = TempDir::new().unwrap();
+        let cfg_dir = dir.path().join("jr");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        let config_path = cfg_dir.join("config.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+                default_profile = "from-config"
+                [profiles.from-config]
+                url = "https://x"
+                [profiles.from-env]
+                url = "https://y"
+                [profiles.from-flag]
+                url = "https://z"
+            "#,
+        )
+        .unwrap();
+
+        // SAFETY: ENV_MUTEX held across env mutations.
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", dir.path());
+            std::env::set_var("JR_PROFILE", "from-env");
+            std::env::set_var("JR_PROFILE_OVERRIDE", "from-flag");
+        }
+        let cfg = Config::load().unwrap();
+        assert_eq!(cfg.active_profile_name, "from-flag");
+
+        unsafe {
+            std::env::remove_var("JR_PROFILE_OVERRIDE");
+        }
+        let cfg = Config::load().unwrap();
+        assert_eq!(cfg.active_profile_name, "from-env");
+
+        unsafe {
+            std::env::remove_var("JR_PROFILE");
+        }
+        let cfg = Config::load().unwrap();
+        assert_eq!(cfg.active_profile_name, "from-config");
+
+        unsafe {
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+    }
+
+    #[test]
     fn global_config_parses_legacy_shape_into_legacy_fields() {
         let toml = r#"
             [instance]
