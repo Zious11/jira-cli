@@ -98,7 +98,15 @@ Precedence (highest wins):
 
 ## Profile Name Validation
 
-`[A-Za-z0-9_-]{1,64}` enforced at every entry point (CLI, config-load migration). Validation lives in `config::validate_profile_name(name) -> Result<(), JrError>` so the rule is single-sourced. Rejects empty strings, whitespace, `:`, `/`, `.`, and other shell/path metacharacters. The `:` rejection guarantees keyring key parsing remains unambiguous.
+Allowed: `[A-Za-z0-9_-]{1,64}`. Validation lives in `config::validate_profile_name(name) -> Result<(), JrError>` so the rule is single-sourced — every entry point (CLI, config-load migration) calls it.
+
+Two validation layers:
+
+1. **Character set + length**: regex above. Rejects empty strings, whitespace, `:`, `/`, `.`, and other shell/path metacharacters. The `:` rejection guarantees keyring key parsing remains unambiguous; the `/` and `.` rejections keep cache subdirectory paths clean.
+
+2. **Windows reserved names** (case-insensitive): `CON`, `NUL`, `AUX`, `PRN`, `COM1`–`COM9`, `LPT1`–`LPT9`. Profile names matching these (with or without an extension) are rejected on every platform — even on macOS and Linux where they'd technically work — so configs stay portable across machines. Without this, a `CON` profile created on macOS would fail on Windows when the cache subdir was created.
+
+Error message: `invalid profile name "<name>"; allowed: A-Z a-z 0-9 _ - up to 64 chars; reserved Windows names (CON, NUL, AUX, PRN, COM1-9, LPT1-9) excluded`.
 
 ## Keyring Layout
 
@@ -317,7 +325,8 @@ A user who wants to revert can `cp config.toml config.toml.backup` first (releas
 | `jr auth remove <unknown>` | `UserError` | 64 | `unknown profile: foo; known: …` |
 | `jr auth login --profile X --no-input` and X is new and `--url` missing | `UserError` | 64 | `--url required when creating a new profile under --no-input` |
 | `jr auth refresh --profile X` where X is api_token-auth | `UserError` | 64 | `profile "X" uses api_token auth; OAuth refresh not applicable` |
-| Profile name fails validation | `UserError` | 64 | `invalid profile name "foo:bar"; allowed: A-Z a-z 0-9 _ - up to 64 chars` |
+| Profile name fails character/length validation | `UserError` | 64 | `invalid profile name "foo:bar"; allowed: A-Z a-z 0-9 _ - up to 64 chars; reserved Windows names (CON, NUL, AUX, PRN, COM1-9, LPT1-9) excluded` |
+| Profile name matches a Windows reserved name | `UserError` | 64 | (same message — reserved name list embedded) |
 | TOML migration write fails | `Internal` | 1 | `Internal error: config migration failed: <io>` |
 | Keyring read fails on per-profile key | `ConfigError` (existing) | 78 | (existing message) |
 
@@ -329,7 +338,7 @@ TDD; existing test stack (`proptest`, `insta`, `tempfile`, `assert_cmd`, `wiremo
 
 `config::tests`:
 - Active-profile resolution precedence (4 cases: flag, env, config field, default fallback)
-- Profile-name validation (proptest with random strings; assert accept ⇔ regex match)
+- Profile-name validation: regex character/length cases (proptest with random strings; assert accept ⇔ regex match), plus an explicit table-driven test for Windows reserved names (CON, con, Con, NUL, AUX, PRN, COM1, COM9, LPT1, LPT9 — case-insensitive — all rejected on every platform)
 - Migration: synthetic legacy `[instance]` TOML → assert post-migration `GlobalConfig` shape
 - Migration is idempotent (second run is a no-op)
 - `[fields]` carried into `[profiles.default]` during migration
@@ -394,6 +403,14 @@ fn store_and_load_per_profile_oauth_tokens() {
 ```
 
 CI runs them on macOS/Windows by default; Linux CI either provides D-Bus or skips. Local devs run them automatically.
+
+## Concurrency & Cross-Platform Notes
+
+**Concurrent `jr` invocations writing `config.toml`**: two simultaneous mutating commands (e.g., `jr auth switch` and `jr auth login` in different terminals) can race; the last writer wins, the other's changes are lost. This is a *pre-existing* limitation of `Config::save_global` (which uses non-atomic `std::fs::write`), not a regression introduced by multi-profile. Mitigated by the same atomic-save follow-up listed below.
+
+**Concurrent OAuth refresh against the same profile**: two simultaneous `jr auth refresh --profile X` (or any commands that trigger refresh) can both POST to `/oauth/token`, with the second response invalidating the first. Last writer wins on the keyring side. Pre-existing single-instance limitation, not a regression. The retry path on a 401 already handles the case where a stale refresh token rejects — users see one extra retry, not a hard failure.
+
+**Cross-machine portability**: `config.toml` is plain TOML and copies cleanly between machines. **Credentials in the OS keyring do NOT migrate** (by design — never write secrets to disk). Users moving to a new machine re-run `jr auth login --profile <each>` to re-establish credentials. Matches every CLI surveyed.
 
 ## Out of Scope / Follow-ups
 
