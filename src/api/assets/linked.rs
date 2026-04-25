@@ -10,12 +10,14 @@ use crate::types::assets::LinkedAsset;
 
 /// Get CMDB fields (id, name pairs), using cache when available.
 pub async fn get_or_fetch_cmdb_fields(client: &JiraClient) -> Result<Vec<(String, String)>> {
-    if let Some(cached) = cache::read_cmdb_fields_cache()? {
+    // Profile threading lands in Task 7 (JiraClient consumes active profile);
+    // until then, use the "default" profile literal as a stopgap.
+    if let Some(cached) = cache::read_cmdb_fields_cache("default")? {
         return Ok(cached.fields);
     }
 
     let fields = client.find_cmdb_fields().await?;
-    let _ = cache::write_cmdb_fields_cache(&fields);
+    let _ = cache::write_cmdb_fields_cache("default", &fields);
     Ok(fields)
 }
 

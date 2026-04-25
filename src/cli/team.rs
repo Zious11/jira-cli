@@ -29,7 +29,7 @@ async fn handle_list(
     let teams = if refresh {
         fetch_and_cache_teams(config, client).await?
     } else {
-        match cache::read_team_cache()? {
+        match cache::read_team_cache(&config.active_profile_name)? {
             Some(cached) => cached.teams,
             None => fetch_and_cache_teams(config, client).await?,
         }
@@ -67,7 +67,7 @@ pub async fn fetch_and_cache_teams(
         })
         .collect();
 
-    cache::write_team_cache(&cached)?;
+    cache::write_team_cache(&config.active_profile_name, &cached)?;
     Ok(cached)
 }
 

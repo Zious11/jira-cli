@@ -165,7 +165,7 @@ pub async fn handle() -> Result<()> {
                     name: t.display_name,
                 })
                 .collect();
-            if let Err(err) = crate::cache::write_team_cache(&cached) {
+            if let Err(err) = crate::cache::write_team_cache(&config.active_profile_name, &cached) {
                 eprintln!(
                     "warning: failed to warm team cache: {err}. First `jr team list` will refetch."
                 );

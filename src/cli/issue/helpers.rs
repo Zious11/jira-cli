@@ -67,7 +67,8 @@ pub(super) async fn resolve_team_field(
     // 3. Load teams from cache (or fetch if missing/expired). `cache_was_fresh`
     // tells step 5 whether an auto-refresh-on-miss is worth attempting —
     // no point re-fetching a list we just fetched.
-    let (teams, cache_was_fresh) = match crate::cache::read_team_cache()? {
+    let (teams, cache_was_fresh) = match crate::cache::read_team_cache(&config.active_profile_name)?
+    {
         Some(cached) => (cached.teams, false),
         None => (
             crate::cli::team::fetch_and_cache_teams(config, client).await?,
