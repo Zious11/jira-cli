@@ -98,10 +98,9 @@ fn resolve_resolution_by_name(resolutions: &[Resolution], query: &str) -> Result
 /// warns on stderr rather than silently dropping so a partial Atlassian
 /// response is visible.
 async fn load_resolutions(client: &JiraClient, refresh: bool) -> Result<Vec<Resolution>> {
-    // Profile threading lands in Task 7 (JiraClient consumes active profile);
-    // until then, use the "default" profile literal as a stopgap.
+    let profile = client.profile_name();
     if !refresh {
-        if let Some(c) = crate::cache::read_resolutions_cache("default")? {
+        if let Some(c) = crate::cache::read_resolutions_cache(profile)? {
             return Ok(c
                 .resolutions
                 .into_iter()
@@ -132,7 +131,7 @@ async fn load_resolutions(client: &JiraClient, refresh: bool) -> Result<Vec<Reso
             before - cacheable.len()
         );
     }
-    crate::cache::write_resolutions_cache("default", &cacheable)?;
+    crate::cache::write_resolutions_cache(profile, &cacheable)?;
     Ok(fetched)
 }
 

@@ -194,7 +194,13 @@ impl Config {
             .extract()?;
 
         let needs_migration = global.profiles.is_empty()
-            && (global.instance.url.is_some() || global.fields.team_field_id.is_some());
+            && (global.instance.url.is_some()
+                || global.instance.auth_method.is_some()
+                || global.instance.cloud_id.is_some()
+                || global.instance.org_id.is_some()
+                || global.instance.oauth_scopes.is_some()
+                || global.fields.team_field_id.is_some()
+                || global.fields.story_points_field_id.is_some());
 
         if needs_migration {
             global = migrate_legacy_global(global);
@@ -222,6 +228,10 @@ impl Config {
         let env_profile = std::env::var("JR_PROFILE").ok();
         let active_profile_name =
             resolve_active_profile_name(&global, cli_profile_flag.as_deref(), env_profile);
+        // Validate the resolved name. JR_PROFILE / --profile / default_profile
+        // all flow into cache paths and keyring keys, so a bad value (e.g.
+        // "foo:bar" or path separators) must be rejected at the config boundary.
+        validate_profile_name(&active_profile_name)?;
 
         Ok(Config {
             global,
@@ -898,6 +908,28 @@ mod tests {
         unsafe {
             std::env::remove_var("XDG_CONFIG_HOME");
         }
+    }
+
+    #[test]
+    fn config_load_rejects_invalid_profile_name_from_env() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let dir = TempDir::new().unwrap();
+        let cfg_dir = dir.path().join("jr");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        // SAFETY: ENV_MUTEX held.
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", dir.path());
+            std::env::set_var("JR_PROFILE", "evil:profile");
+        }
+        let result = Config::load();
+        unsafe {
+            std::env::remove_var("JR_PROFILE");
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+        assert!(
+            result.is_err(),
+            "JR_PROFILE with invalid char should reject"
+        );
     }
 
     #[test]

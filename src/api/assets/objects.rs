@@ -162,11 +162,10 @@ pub async fn enrich_search_attributes(
 
     let mut attr_map: HashMap<String, CachedObjectTypeAttr> = HashMap::new();
 
+    let profile = client.profile_name();
     for type_id in &type_ids {
         // Try cache first.
-        // Profile threading lands in Task 7 (JiraClient consumes active profile);
-        // until then, use the "default" profile literal as a stopgap.
-        let attrs = match cache::read_object_type_attr_cache("default", type_id) {
+        let attrs = match cache::read_object_type_attr_cache(profile, type_id) {
             Ok(Some(cached)) => cached,
             _ => {
                 // Cache miss — fetch from API
@@ -187,7 +186,7 @@ pub async fn enrich_search_attributes(
                             })
                             .collect();
                         // Best-effort cache write
-                        let _ = cache::write_object_type_attr_cache("default", type_id, &cached);
+                        let _ = cache::write_object_type_attr_cache(profile, type_id, &cached);
                         cached
                     }
                     Err(_) => {

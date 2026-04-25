@@ -1,10 +1,19 @@
 //! Legacy [instance] -> [profiles.default] migration tests.
 
 use std::fs;
+use std::sync::Mutex;
 use tempfile::TempDir;
+
+/// Both tests in this file mutate process-global env vars (XDG_CONFIG_HOME).
+/// Cargo runs tests within a single integration-test binary in parallel by
+/// default, so without serialization they race against each other and produce
+/// flaky results. Cross-file races are out of scope here — each `tests/*.rs`
+/// runs as its own binary with its own process.
+static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
 #[test]
 fn legacy_instance_block_migrated_in_memory() {
+    let _guard = ENV_MUTEX.lock().unwrap();
     let dir = TempDir::new().unwrap();
     let cfg_path = dir.path().join("jr").join("config.toml");
     fs::create_dir_all(cfg_path.parent().unwrap()).unwrap();
@@ -61,6 +70,7 @@ output = "json"
 
 #[test]
 fn migration_is_idempotent() {
+    let _guard = ENV_MUTEX.lock().unwrap();
     let dir = TempDir::new().unwrap();
     let cfg_path = dir.path().join("jr").join("config.toml");
     fs::create_dir_all(cfg_path.parent().unwrap()).unwrap();

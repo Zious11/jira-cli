@@ -245,7 +245,12 @@ jr auth remove <NAME>
     Confirmation prompt unless --no-input.
 
 jr auth refresh [--profile NAME]
-    OAuth-only — refresh access token for that profile.
+    Refresh credentials for the named profile (defaults to active).
+    Behavior depends on the profile's auth_method:
+      • api_token: re-prompts for email/token (or reads JR_EMAIL/JR_API_TOKEN)
+      • oauth: refreshes the access token via the stored refresh token
+    The shared API-token credential is rewritten if the profile uses
+    api_token auth; per-profile OAuth tokens are rewritten if oauth.
 ```
 
 ### `jr init` interaction

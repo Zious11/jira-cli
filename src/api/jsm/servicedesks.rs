@@ -43,9 +43,8 @@ pub async fn get_or_fetch_project_meta(
     project_key: &str,
 ) -> Result<ProjectMeta> {
     // Check cache first.
-    // Profile threading lands in Task 7 (JiraClient consumes active profile);
-    // until then, use the "default" profile literal as a stopgap.
-    if let Some(cached) = cache::read_project_meta("default", project_key)? {
+    let profile = client.profile_name();
+    if let Some(cached) = cache::read_project_meta(profile, project_key)? {
         return Ok(cached);
     }
 
@@ -94,7 +93,7 @@ pub async fn get_or_fetch_project_meta(
     };
 
     // Write to cache (best-effort — don't fail the command if cache write fails)
-    let _ = cache::write_project_meta("default", project_key, &meta);
+    let _ = cache::write_project_meta(profile, project_key, &meta);
 
     Ok(meta)
 }

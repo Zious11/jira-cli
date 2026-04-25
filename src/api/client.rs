@@ -21,6 +21,10 @@ pub struct JiraClient {
     auth_header: String,
     verbose: bool,
     assets_base_url: Option<String>,
+    /// Active profile name, plumbed through so per-profile cache calls can
+    /// scope their reads/writes correctly without the call sites needing
+    /// access to `&Config`.
+    profile_name: String,
 }
 
 impl JiraClient {
@@ -98,6 +102,7 @@ impl JiraClient {
             auth_header,
             verbose,
             assets_base_url,
+            profile_name: config.active_profile_name.clone(),
         })
     }
 
@@ -112,7 +117,15 @@ impl JiraClient {
             auth_header,
             verbose: false,
             assets_base_url,
+            profile_name: "default".to_string(),
         }
+    }
+
+    /// Active profile name this client is bound to. Used by per-profile
+    /// cache call sites (CMDB fields, workspace ID, project meta, resolutions,
+    /// object-type attrs) that have a `&JiraClient` but not `&Config`.
+    pub fn profile_name(&self) -> &str {
+        &self.profile_name
     }
 
     /// Whether the client was constructed with `--verbose` enabled.

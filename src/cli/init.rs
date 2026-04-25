@@ -1,9 +1,7 @@
 use anyhow::{Context, Result};
 use dialoguer::{Confirm, Input, Select};
 
-use crate::config::{
-    Config, DefaultsConfig, FieldsConfig, GlobalConfig, InstanceConfig, ProjectConfig,
-};
+use crate::config::{Config, ProjectConfig};
 use crate::{api, output};
 
 pub async fn handle() -> Result<()> {
@@ -55,22 +53,26 @@ pub async fn handle() -> Result<()> {
         .interact()
         .context("failed to prompt for authentication method")?;
 
-    let global = GlobalConfig {
-        instance: InstanceConfig {
-            url: Some(url.clone()),
-            ..InstanceConfig::default()
-        },
-        defaults: DefaultsConfig::default(),
-        fields: FieldsConfig::default(),
-        ..GlobalConfig::default()
-    };
+    // Determine which profile this init flow targets. The override is set
+    // earlier when the user opted to add a new profile alongside an existing
+    // one; otherwise we fall back to the literal "default".
+    let profile_name = std::env::var("JR_PROFILE_OVERRIDE").unwrap_or_else(|_| "default".into());
 
-    // Save initial config so auth can use it
-    let config = Config {
-        global,
+    // Load any existing config, then write the URL into the target profile
+    // entry. The legacy `[instance]` block is `#[serde(skip_serializing)]`
+    // since the multi-profile refactor, so writes there are silently dropped
+    // on save — every persisted field must live under `[profiles.<name>]`.
+    let mut config = Config::load().unwrap_or_else(|_| Config {
+        global: crate::config::GlobalConfig::default(),
         project: ProjectConfig::default(),
-        active_profile_name: String::new(),
-    };
+        active_profile_name: profile_name.clone(),
+    });
+    config
+        .global
+        .profiles
+        .entry(profile_name.clone())
+        .or_default()
+        .url = Some(url.clone());
     config.save_global()?;
 
     // Step 3: Authenticate. `jr init` is inherently interactive (Select
@@ -78,11 +80,16 @@ pub async fn handle() -> Result<()> {
     // credential prompt. Flags aren't plumbed through init — users who want
     // a non-interactive setup should run `jr auth login` directly.
     if auth_choice == 0 {
-        crate::cli::auth::login_oauth("default", None, None, false).await?;
+        crate::cli::auth::login_oauth(&profile_name, None, None, false).await?;
     } else {
-        crate::cli::auth::login_token("default", None, None, false).await?;
+        crate::cli::auth::login_token(&profile_name, None, None, false).await?;
         let mut config = Config::load()?;
-        config.global.instance.auth_method = Some("api_token".into());
+        config
+            .global
+            .profiles
+            .entry(profile_name.clone())
+            .or_default()
+            .auth_method = Some("api_token".into());
         config.save_global()?;
     }
 
@@ -129,7 +136,13 @@ pub async fn handle() -> Result<()> {
     // Step 5: Discover team field
     if let Ok(Some(team_id)) = client.find_team_field_id().await {
         let mut config = Config::load()?;
-        config.global.fields.team_field_id = Some(team_id);
+        let active = config.active_profile_name.clone();
+        config
+            .global
+            .profiles
+            .entry(active)
+            .or_default()
+            .team_field_id = Some(team_id);
         config.save_global()?;
     }
 
@@ -166,7 +179,13 @@ pub async fn handle() -> Result<()> {
 
             if let Some(id) = field_id {
                 let mut config = Config::load()?;
-                config.global.fields.story_points_field_id = Some(id);
+                let active = config.active_profile_name.clone();
+                config
+                    .global
+                    .profiles
+                    .entry(active)
+                    .or_default()
+                    .story_points_field_id = Some(id);
                 config.save_global()?;
             }
         }
@@ -182,8 +201,10 @@ pub async fn handle() -> Result<()> {
         .trim_end_matches('/');
     if let Ok(metadata) = client.get_org_metadata(hostname).await {
         let mut config = Config::load()?;
-        config.global.instance.cloud_id = Some(metadata.cloud_id);
-        config.global.instance.org_id = Some(metadata.org_id.clone());
+        let active = config.active_profile_name.clone();
+        let entry = config.global.profiles.entry(active).or_default();
+        entry.cloud_id = Some(metadata.cloud_id.clone());
+        entry.org_id = Some(metadata.org_id.clone());
         config.save_global()?;
 
         // Step 7: Prefetch team list into cache
