@@ -370,9 +370,21 @@ pub async fn handle_login(args: LoginArgs) -> Result<()> {
         .profile
         .as_deref()
         .unwrap_or(&config.active_profile_name);
+    // Prompt for URL whenever the target profile lacks one — both the
+    // brand-new-profile case AND the existing-but-URL-less case (e.g.,
+    // a hand-edited or migrated profile with status `unset`). Without
+    // this, `jr auth login --profile <existing-no-url>` interactively
+    // would leave the profile URL-less and fail confusingly on the
+    // next command.
+    let target_has_url = config
+        .global
+        .profiles
+        .get(target_for_check)
+        .and_then(|p| p.url.as_deref())
+        .is_some();
     let url_resolved: Option<String> = if let Some(u) = args.url.as_deref() {
         Some(u.to_string())
-    } else if !args.no_input && !config.global.profiles.contains_key(target_for_check) {
+    } else if !args.no_input && !target_has_url {
         let prompt: String = dialoguer::Input::new()
             .with_prompt(format!(
                 "Jira instance URL for profile {target_for_check:?} \
@@ -432,14 +444,16 @@ pub(super) fn prepare_login_target(
         None => active_profile_name.to_string(),
     };
 
-    let exists = global.profiles.contains_key(&target);
     let entry = global.profiles.entry(target.clone()).or_default();
 
     if let Some(url) = url_arg {
         entry.url = Some(url.trim_end_matches('/').to_string());
-    } else if !exists && no_input {
+    } else if entry.url.is_none() && no_input {
+        // Both "brand-new profile" and "existing profile with no URL"
+        // hit this path — under --no-input we can't prompt for the
+        // missing URL, so error out with the expected recovery flag.
         return Err(JrError::UserError(
-            "--url required when creating a new profile under --no-input".into(),
+            "--url required when the target profile has no URL configured".into(),
         )
         .into());
     }
@@ -751,6 +765,12 @@ pub async fn handle_remove(
 ) -> anyhow::Result<()> {
     let mut config = Config::load_with(cli_profile)?;
     crate::config::validate_profile_name(target)?;
+
+    // Pre-validate against a clone before prompting so a typo or
+    // unremovable target (active profile, default_profile target) doesn't
+    // make the user click through a confirmation dialog only to error
+    // afterward. The actual mutation runs below against the real config.
+    let _ = handle_remove_in_memory(config.global.clone(), target, &config.active_profile_name)?;
 
     if !no_input {
         let confirm = dialoguer::Confirm::new()
