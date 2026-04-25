@@ -57,6 +57,36 @@ pub struct Config {
     pub project: ProjectConfig,
 }
 
+/// Validate a profile name. See docs/specs/multi-profile-auth.md "Profile Name Validation".
+pub fn validate_profile_name(name: &str) -> Result<(), JrError> {
+    const RESERVED_WINDOWS: &[&str] = &[
+        "CON", "NUL", "AUX", "PRN", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+
+    if name.is_empty() || name.len() > 64 {
+        return Err(invalid_profile_name(name));
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(invalid_profile_name(name));
+    }
+    let upper = name.to_ascii_uppercase();
+    if RESERVED_WINDOWS.contains(&upper.as_str()) {
+        return Err(invalid_profile_name(name));
+    }
+    Ok(())
+}
+
+fn invalid_profile_name(name: &str) -> JrError {
+    JrError::UserError(format!(
+        "invalid profile name {name:?}; allowed: A-Z a-z 0-9 _ - up to 64 chars; \
+         reserved Windows names (CON, NUL, AUX, PRN, COM1-9, LPT1-9) excluded"
+    ))
+}
+
 impl Config {
     pub fn load() -> anyhow::Result<Self> {
         let global_path = global_config_path();
@@ -350,5 +380,46 @@ mod tests {
         let config: GlobalConfig = Figment::new().merge(Toml::string(toml)).extract().unwrap();
 
         assert!(config.instance.oauth_scopes.is_none());
+    }
+
+    #[test]
+    fn validate_profile_name_accepts_alphanumeric_dash_underscore() {
+        assert!(validate_profile_name("default").is_ok());
+        assert!(validate_profile_name("sandbox-uat").is_ok());
+        assert!(validate_profile_name("team_a").is_ok());
+        assert!(validate_profile_name("Prod1").is_ok());
+        assert!(validate_profile_name("a").is_ok());
+        assert!(validate_profile_name(&"a".repeat(64)).is_ok());
+    }
+
+    #[test]
+    fn validate_profile_name_rejects_invalid_chars() {
+        for bad in [
+            "", " ", "foo bar", "foo:bar", "foo/bar", "foo.bar", "..", ".",
+        ] {
+            assert!(
+                validate_profile_name(bad).is_err(),
+                "expected {bad:?} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_profile_name_rejects_too_long() {
+        let too_long = "a".repeat(65);
+        assert!(validate_profile_name(&too_long).is_err());
+    }
+
+    #[test]
+    fn validate_profile_name_rejects_windows_reserved_names_case_insensitive() {
+        for bad in [
+            "CON", "con", "Con", "NUL", "nul", "AUX", "aux", "PRN", "prn", "COM1", "com9", "LPT1",
+            "lpt9",
+        ] {
+            assert!(
+                validate_profile_name(bad).is_err(),
+                "expected Windows reserved name {bad:?} to be rejected"
+            );
+        }
     }
 }
