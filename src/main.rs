@@ -83,17 +83,25 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             }
             cli::Command::Auth { command } => match command {
                 cli::AuthCommand::Login {
+                    profile,
+                    url,
                     oauth,
                     email,
                     token,
                     client_id,
                     client_secret,
                 } => {
-                    if oauth {
-                        cli::auth::login_oauth(client_id, client_secret, cli.no_input).await
-                    } else {
-                        cli::auth::login_token(email, token, cli.no_input).await
-                    }
+                    cli::auth::handle_login(cli::auth::LoginArgs {
+                        profile,
+                        url,
+                        oauth,
+                        email,
+                        token,
+                        client_id,
+                        client_secret,
+                        no_input: cli.no_input,
+                    })
+                    .await
                 }
                 cli::AuthCommand::Status => cli::auth::status().await,
                 cli::AuthCommand::Refresh {

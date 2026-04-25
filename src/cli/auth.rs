@@ -137,7 +137,13 @@ fn resolve_oauth_scopes(config: &Config) -> Result<String> {
 }
 
 /// Resolve email and API token (flag → env → prompt), then store in keychain.
+///
+/// `profile` names which entry under `[profiles]` should record the
+/// `auth_method = "api_token"` after a successful login. The keychain entry
+/// for API token + email is shared across profiles today (one-pair-per-host
+/// keyring layout); the profile name only affects config persistence.
 pub async fn login_token(
+    profile: &str,
     email: Option<String>,
     token: Option<String>,
     no_input: bool,
@@ -162,6 +168,19 @@ pub async fn login_token(
     )?;
 
     auth::store_api_token(&email, &token)?;
+
+    // Persist the profile's auth_method so subsequent runs know which flow
+    // to use. URL is set by `prepare_login_target` before this point, so
+    // we only touch auth_method here.
+    let mut config = Config::load()?;
+    let p = config
+        .global
+        .profiles
+        .entry(profile.to_string())
+        .or_default();
+    p.auth_method = Some("api_token".into());
+    config.save_global()?;
+
     eprintln!("Credentials stored in keychain.");
     Ok(())
 }
@@ -169,8 +188,11 @@ pub async fn login_token(
 /// Run the OAuth 2.0 (3LO) login flow and persist site configuration.
 ///
 /// Credentials resolved via flag → env → prompt, so CI/agent workflows can
-/// pipe them in without a TTY.
+/// pipe them in without a TTY. `profile` names the target profile under
+/// `[profiles]`; OAuth tokens are stored under namespaced keychain entries
+/// (`<profile>:oauth-*-token`) so multiple sites can coexist.
 pub async fn login_oauth(
+    profile: &str,
     client_id: Option<String>,
     client_secret: Option<String>,
     no_input: bool,
@@ -212,7 +234,7 @@ pub async fn login_oauth(
     // treats a missing file as empty, so a genuinely-absent config never
     // reaches this error path — only real failures do.
     let config_path = global_config_path();
-    let mut config = Config::load().map_err(|err| {
+    let config = Config::load().map_err(|err| {
         JrError::ConfigError(format!(
             "Failed to load config: {err:#}\n\n\
              Fix or remove the file referenced above. Global config: {config_path}; \
@@ -226,15 +248,124 @@ pub async fn login_oauth(
     crate::api::auth::store_oauth_app_credentials(&client_id, &client_secret)?;
 
     let result =
-        crate::api::auth::oauth_login("default", &client_id, &client_secret, &scopes).await?;
+        crate::api::auth::oauth_login(profile, &client_id, &client_secret, &scopes).await?;
 
-    config.global.instance.url = Some(result.site_url);
-    config.global.instance.cloud_id = Some(result.cloud_id);
-    config.global.instance.auth_method = Some("oauth".into());
+    // Persist site info to the named profile under [profiles.<name>], not
+    // the legacy [instance] block. Reload to pick up any mutations made
+    // earlier in the login flow (e.g., by `prepare_login_target`).
+    let mut config = Config::load()?;
+    let p = config
+        .global
+        .profiles
+        .entry(profile.to_string())
+        .or_default();
+    p.url = Some(result.site_url);
+    p.cloud_id = Some(result.cloud_id);
+    p.auth_method = Some("oauth".into());
     config.save_global()?;
 
     output::print_success(&format!("Authenticated with {}", result.site_name));
     Ok(())
+}
+
+/// Bundle of CLI arguments threaded from `main.rs` to [`handle_login`].
+///
+/// Grouped into a struct because the orchestrator needs all four credential
+/// slots (two API-token, two OAuth) plus profile/URL/flow toggles, which
+/// trips clippy's `too_many_arguments` lint when passed as positional
+/// parameters. The struct also makes the call site at `main.rs` self-
+/// documenting.
+pub struct LoginArgs {
+    pub profile: Option<String>,
+    pub url: Option<String>,
+    pub oauth: bool,
+    pub email: Option<String>,
+    pub token: Option<String>,
+    pub client_id: Option<String>,
+    pub client_secret: Option<String>,
+    pub no_input: bool,
+}
+
+/// Orchestrate `jr auth login`: ensure the target profile exists with the
+/// requested URL, then dispatch to the API-token or OAuth flow. Wraps the
+/// pure logic in [`prepare_login_target`] so `main.rs` only needs one call
+/// to thread the new `--profile` / `--url` flags through.
+///
+/// Wraps a load failure in `JrError::ConfigError` (exit 78) so a malformed
+/// `config.toml` surfaces as an actionable error instead of dropping to
+/// `Config::default()` and overwriting the user's broken-but-recoverable
+/// file (#258).
+pub async fn handle_login(args: LoginArgs) -> Result<()> {
+    let config_path = global_config_path();
+    let mut config = Config::load().map_err(|err| {
+        JrError::ConfigError(format!(
+            "Failed to load config: {err:#}\n\n\
+             Fix or remove the file referenced above. Global config: {config_path}; \
+             per-project overrides come from `.jr.toml` in the current directory or any parent.",
+            config_path = config_path.display()
+        ))
+    })?;
+    let (global, target) = prepare_login_target(
+        config.global,
+        args.profile.as_deref(),
+        args.url.as_deref(),
+        args.no_input,
+    )?;
+    config.global = global;
+    config.save_global()?;
+    if args.oauth {
+        login_oauth(&target, args.client_id, args.client_secret, args.no_input).await
+    } else {
+        login_token(&target, args.email, args.token, args.no_input).await
+    }
+}
+
+/// Pure logic for ensuring a target profile exists with the given URL.
+/// Returns `(updated_global, resolved_profile_name)`.
+///
+/// - When `profile_arg` is `Some`, that name is validated and used as the
+///   target. Otherwise the active default falls back to `"default"`.
+/// - When `url_arg` is `Some`, the profile's URL is overwritten (with the
+///   trailing slash trimmed for canonical form).
+/// - When creating a new profile under `--no-input`, a URL is required so
+///   non-interactive agents can't accidentally create empty profiles.
+/// - If `default_profile` is unset (legacy / fresh config), the resolved
+///   target is promoted to the default so a follow-up `jr` invocation
+///   keeps targeting it.
+pub(super) fn prepare_login_target(
+    mut global: crate::config::GlobalConfig,
+    profile_arg: Option<&str>,
+    url_arg: Option<&str>,
+    no_input: bool,
+) -> Result<(crate::config::GlobalConfig, String)> {
+    let target = match profile_arg {
+        Some(name) => {
+            crate::config::validate_profile_name(name)?;
+            name.to_string()
+        }
+        None => global
+            .default_profile
+            .clone()
+            .unwrap_or_else(|| "default".to_string()),
+    };
+
+    let exists = global.profiles.contains_key(&target);
+    let entry = global.profiles.entry(target.clone()).or_default();
+
+    if let Some(url) = url_arg {
+        entry.url = Some(url.trim_end_matches('/').to_string());
+    } else if !exists && no_input {
+        return Err(JrError::UserError(
+            "--url required when creating a new profile under --no-input".into(),
+        )
+        .into());
+    }
+
+    if global.default_profile.is_none() {
+        global.default_profile = Some(target.clone());
+    }
+
+    Ok((global, target))
 }
 
 /// Show authentication status: instance URL, auth method, credential availability.
@@ -312,8 +443,8 @@ pub async fn refresh_credentials(
     )?;
 
     let login_result = match flow {
-        AuthFlow::Token => login_token(email, token, no_input).await,
-        AuthFlow::OAuth => login_oauth(client_id, client_secret, no_input).await,
+        AuthFlow::Token => login_token("default", email, token, no_input).await,
+        AuthFlow::OAuth => login_oauth("default", client_id, client_secret, no_input).await,
     };
 
     if let Err(err) = login_result {
@@ -791,6 +922,57 @@ mod tests {
             .collect();
         assert_eq!(active.len(), 1, "exactly one active");
         assert_eq!(active[0]["name"], "default");
+    }
+
+    #[test]
+    fn login_create_new_profile_no_input_requires_url() {
+        let global = crate::config::GlobalConfig::default();
+        let result = prepare_login_target(global, Some("sandbox"), None, true);
+        assert!(result.is_err());
+        let msg = format!("{:#}", result.unwrap_err());
+        assert!(msg.contains("--url required"), "got: {msg}");
+    }
+
+    #[test]
+    fn login_create_new_profile_with_url_succeeds() {
+        let global = crate::config::GlobalConfig::default();
+        let (mutated, target) = prepare_login_target(
+            global,
+            Some("sandbox"),
+            Some("https://sandbox.example"),
+            true,
+        )
+        .unwrap();
+        assert_eq!(target, "sandbox");
+        assert_eq!(
+            mutated.profiles["sandbox"].url.as_deref(),
+            Some("https://sandbox.example")
+        );
+    }
+
+    #[test]
+    fn login_existing_profile_with_url_updates_url() {
+        let mut profiles = std::collections::BTreeMap::new();
+        profiles.insert(
+            "default".to_string(),
+            crate::config::ProfileConfig {
+                url: Some("https://old.example".into()),
+                ..crate::config::ProfileConfig::default()
+            },
+        );
+        let global = crate::config::GlobalConfig {
+            default_profile: Some("default".into()),
+            profiles,
+            ..crate::config::GlobalConfig::default()
+        };
+        let (mutated, target) =
+            prepare_login_target(global, Some("default"), Some("https://new.example"), true)
+                .unwrap();
+        assert_eq!(target, "default");
+        assert_eq!(
+            mutated.profiles["default"].url.as_deref(),
+            Some("https://new.example")
+        );
     }
 
     /// `jr` deliberately does NOT reject mixed classic+granular scopes,

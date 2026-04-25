@@ -48,9 +48,9 @@ pub async fn handle() -> Result<()> {
     // credential prompt. Flags aren't plumbed through init — users who want
     // a non-interactive setup should run `jr auth login` directly.
     if auth_choice == 0 {
-        crate::cli::auth::login_oauth(None, None, false).await?;
+        crate::cli::auth::login_oauth("default", None, None, false).await?;
     } else {
-        crate::cli::auth::login_token(None, None, false).await?;
+        crate::cli::auth::login_token("default", None, None, false).await?;
         let mut config = Config::load()?;
         config.global.instance.auth_method = Some("api_token".into());
         config.save_global()?;

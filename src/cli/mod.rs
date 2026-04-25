@@ -189,6 +189,12 @@ pub enum AssetsCommand {
 pub enum AuthCommand {
     /// Authenticate with Jira
     Login {
+        /// Profile to log in to (creates it if absent). Defaults to active profile.
+        #[arg(long)]
+        profile: Option<String>,
+        /// Jira instance URL (required when creating a new profile under --no-input).
+        #[arg(long)]
+        url: Option<String>,
         /// Use OAuth 2.0 instead of API token (requires your own OAuth app).
         /// Scope list is Atlassian's recommended classic set by default;
         /// override via `[instance].oauth_scopes` in config.toml.
