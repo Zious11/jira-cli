@@ -129,6 +129,9 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 cli::AuthCommand::Logout { profile } => {
                     cli::auth::handle_logout(profile.as_deref()).await
                 }
+                cli::AuthCommand::Remove { name } => {
+                    cli::auth::handle_remove(&name, cli.no_input).await
+                }
             },
             cli::Command::Me => {
                 let config = config::Config::load()?;

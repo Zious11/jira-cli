@@ -264,6 +264,13 @@ pub enum AuthCommand {
         #[arg(long)]
         profile: Option<String>,
     },
+    /// Permanently delete a profile (config + cache + per-profile OAuth tokens).
+    /// Shared credentials are NEVER touched.
+    Remove {
+        /// Profile name to remove. Cannot be the active profile —
+        /// switch first with `jr auth switch`.
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
