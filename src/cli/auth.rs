@@ -107,18 +107,20 @@ fn chosen_flow(config: &Config, oauth_override: bool) -> AuthFlow {
     if oauth_override {
         return AuthFlow::OAuth;
     }
-    match config.global.instance.auth_method.as_deref() {
+    let active = config.active_profile();
+    match active.auth_method.as_deref() {
         Some("oauth") => AuthFlow::OAuth,
         _ => AuthFlow::Token,
     }
 }
 
-/// Pick the OAuth scope string: user override from `[instance].oauth_scopes`
-/// if set, else the compiled-in default. Trims and collapses interior
-/// whitespace so multi-line TOML strings encode cleanly. Empty or
+/// Pick the OAuth scope string: user override from the active profile's
+/// `oauth_scopes` if set, else the compiled-in default. Trims and collapses
+/// interior whitespace so multi-line TOML strings encode cleanly. Empty or
 /// whitespace-only overrides are a configuration error.
 fn resolve_oauth_scopes(config: &Config) -> Result<String> {
-    match config.global.instance.oauth_scopes.as_deref() {
+    let active = config.active_profile();
+    match active.oauth_scopes.as_deref() {
         None => Ok(auth::DEFAULT_OAUTH_SCOPES.to_string()),
         Some(raw) => {
             let collapsed: String = raw.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -693,20 +695,26 @@ pub async fn handle_list(output: &crate::cli::OutputFormat) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, GlobalConfig, InstanceConfig, ProfileConfig};
+    use crate::config::{Config, GlobalConfig, ProfileConfig};
 
     fn config_with_auth_method(method: Option<&str>) -> Config {
+        let mut profiles = std::collections::BTreeMap::new();
+        profiles.insert(
+            "default".to_string(),
+            ProfileConfig {
+                url: Some("https://example.atlassian.net".into()),
+                auth_method: method.map(str::to_string),
+                ..ProfileConfig::default()
+            },
+        );
         Config {
             global: GlobalConfig {
-                instance: InstanceConfig {
-                    url: Some("https://example.atlassian.net".into()),
-                    auth_method: method.map(str::to_string),
-                    ..InstanceConfig::default()
-                },
+                default_profile: Some("default".into()),
+                profiles,
                 ..Default::default()
             },
             project: Default::default(),
-            active_profile_name: String::new(),
+            active_profile_name: "default".into(),
         }
     }
 
@@ -904,16 +912,22 @@ mod tests {
     }
 
     fn config_with_oauth_scopes(scopes: Option<&str>) -> Config {
+        let mut profiles = std::collections::BTreeMap::new();
+        profiles.insert(
+            "default".to_string(),
+            ProfileConfig {
+                oauth_scopes: scopes.map(String::from),
+                ..ProfileConfig::default()
+            },
+        );
         Config {
             global: GlobalConfig {
-                instance: InstanceConfig {
-                    oauth_scopes: scopes.map(String::from),
-                    ..InstanceConfig::default()
-                },
+                default_profile: Some("default".into()),
+                profiles,
                 ..GlobalConfig::default()
             },
             project: Default::default(),
-            active_profile_name: String::new(),
+            active_profile_name: "default".into(),
         }
     }
 
