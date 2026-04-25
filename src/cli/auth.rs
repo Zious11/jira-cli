@@ -373,6 +373,68 @@ pub async fn handle_switch(target: &str) -> Result<()> {
     Ok(())
 }
 
+/// Render the table-form output of `jr auth list`. The active profile is
+/// marked with a leading `*`; others get a leading space so column widths
+/// stay stable across rows. Status today is a coarse "do we have a URL on
+/// file?" check — credential-store probing comes in Task 13.
+pub(super) fn render_list_table(global: &crate::config::GlobalConfig, active: &str) -> String {
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    for (name, p) in &global.profiles {
+        let marker = if name == active { "*" } else { " " };
+        let auth = p.auth_method.as_deref().unwrap_or("?");
+        let url = p.url.as_deref().unwrap_or("(unset)");
+        let status = if p.url.is_some() {
+            "configured"
+        } else {
+            "no-creds"
+        };
+        rows.push(vec![
+            format!("{marker} {name}"),
+            url.to_string(),
+            auth.to_string(),
+            status.to_string(),
+        ]);
+    }
+    crate::output::render_table(&["NAME", "URL", "AUTH", "STATUS"], &rows)
+}
+
+/// Render the `--output json` form of `jr auth list`: an array of profile
+/// objects keyed by name, with `active: true` on exactly one entry.
+pub(super) fn render_list_json(
+    global: &crate::config::GlobalConfig,
+    active: &str,
+) -> Result<String> {
+    let arr: Vec<serde_json::Value> = global
+        .profiles
+        .iter()
+        .map(|(name, p)| {
+            serde_json::json!({
+                "name": name,
+                "url": p.url,
+                "auth_method": p.auth_method,
+                "status": if p.url.is_some() { "configured" } else { "no-creds" },
+                "active": name == active,
+            })
+        })
+        .collect();
+    Ok(serde_json::to_string_pretty(&arr)?)
+}
+
+/// `jr auth list` — print every configured profile, marking the active one.
+pub async fn handle_list(output: &crate::cli::OutputFormat) -> Result<()> {
+    let config = Config::load()?;
+    let rendered = match output {
+        crate::cli::OutputFormat::Table => {
+            render_list_table(&config.global, &config.active_profile_name)
+        }
+        crate::cli::OutputFormat::Json => {
+            render_list_json(&config.global, &config.active_profile_name)?
+        }
+    };
+    println!("{rendered}");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -673,6 +735,62 @@ mod tests {
         };
         let mutated = handle_switch_in_memory(global, "sandbox").unwrap();
         assert_eq!(mutated.default_profile.as_deref(), Some("sandbox"));
+    }
+
+    fn three_profile_fixture() -> GlobalConfig {
+        let mut profiles = std::collections::BTreeMap::new();
+        profiles.insert(
+            "default".to_string(),
+            ProfileConfig {
+                url: Some("https://acme.atlassian.net".into()),
+                auth_method: Some("api_token".into()),
+                ..ProfileConfig::default()
+            },
+        );
+        profiles.insert(
+            "sandbox".to_string(),
+            ProfileConfig {
+                url: Some("https://acme-sandbox.atlassian.net".into()),
+                auth_method: Some("oauth".into()),
+                cloud_id: Some("xyz-789".into()),
+                ..ProfileConfig::default()
+            },
+        );
+        profiles.insert(
+            "staging".to_string(),
+            ProfileConfig {
+                url: Some("https://acme-staging.atlassian.net".into()),
+                auth_method: Some("api_token".into()),
+                ..ProfileConfig::default()
+            },
+        );
+        GlobalConfig {
+            default_profile: Some("default".into()),
+            profiles,
+            ..GlobalConfig::default()
+        }
+    }
+
+    #[test]
+    fn list_table_snapshot() {
+        let global = three_profile_fixture();
+        let rendered = render_list_table(&global, "default");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn list_json_shape() {
+        let global = three_profile_fixture();
+        let json = render_list_json(&global, "default").unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let arr = parsed.as_array().expect("array");
+        assert_eq!(arr.len(), 3);
+        let active: Vec<&serde_json::Value> = arr
+            .iter()
+            .filter(|p| p["active"].as_bool() == Some(true))
+            .collect();
+        assert_eq!(active.len(), 1, "exactly one active");
+        assert_eq!(active[0]["name"], "default");
     }
 
     /// `jr` deliberately does NOT reject mixed classic+granular scopes,

@@ -242,6 +242,8 @@ pub enum AuthCommand {
         /// Profile name to make active. Must already exist in config.
         name: String,
     },
+    /// List all configured profiles, marking the active one.
+    List,
 }
 
 #[derive(Subcommand)]
