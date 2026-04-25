@@ -156,7 +156,11 @@ impl Config {
             .transpose()?
             .unwrap_or_default();
 
-        let cli_profile_flag = std::env::var("JR_PROFILE_OVERRIDE").ok(); // populated by main from CLI flag
+        // JR_PROFILE_OVERRIDE is an INTERNAL seam set by main.rs from the parsed
+        // --profile flag *before* Config::load runs. It MUST NOT be set by users
+        // directly — JR_PROFILE is the user-facing env var. Task 9 wires the
+        // `unsafe { std::env::set_var(...) }` call from main.
+        let cli_profile_flag = std::env::var("JR_PROFILE_OVERRIDE").ok();
         let env_profile = std::env::var("JR_PROFILE").ok();
         let active_profile_name =
             resolve_active_profile_name(&global, cli_profile_flag.as_deref(), env_profile);
@@ -228,7 +232,7 @@ impl Config {
             .ok_or_else(|| {
                 let known: Vec<&str> = self.global.profiles.keys().map(String::as_str).collect();
                 JrError::ConfigError(format!(
-                    "default_profile {:?} not in [profiles]; known: {}; \
+                    "active profile {:?} not in [profiles]; known: {}; \
                      fix config.toml or run \"jr auth list\"",
                     self.active_profile_name,
                     if known.is_empty() {
