@@ -225,7 +225,8 @@ pub async fn login_oauth(
     // Store OAuth app credentials in keychain (only after scopes validate)
     crate::api::auth::store_oauth_app_credentials(&client_id, &client_secret)?;
 
-    let result = crate::api::auth::oauth_login(&client_id, &client_secret, &scopes).await?;
+    let result =
+        crate::api::auth::oauth_login("default", &client_id, &client_secret, &scopes).await?;
 
     config.global.instance.url = Some(result.site_url);
     config.global.instance.cloud_id = Some(result.cloud_id);
@@ -306,7 +307,7 @@ pub async fn refresh_credentials(
     let config = Config::load()?;
     let flow = chosen_flow(&config, oauth_override);
 
-    auth::clear_credentials().context(
+    auth::clear_all_credentials(&["default"]).context(
         "failed to clear stored credentials before refresh — keychain may still hold stale entries",
     )?;
 

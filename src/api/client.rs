@@ -56,7 +56,7 @@ impl JiraClient {
         } else {
             match auth_method {
                 "oauth" => {
-                    let (access, _refresh) = crate::api::auth::load_oauth_tokens()?;
+                    let (access, _refresh) = crate::api::auth::load_oauth_tokens("default")?;
                     format!("Bearer {access}")
                 }
                 _ => {

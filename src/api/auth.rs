@@ -21,8 +21,18 @@ fn service_name() -> String {
 /// Key names stored in the system keychain.
 const KEY_EMAIL: &str = "email";
 const KEY_API_TOKEN: &str = "api-token";
-const KEY_OAUTH_ACCESS: &str = "oauth-access-token";
-const KEY_OAUTH_REFRESH: &str = "oauth-refresh-token";
+/// Pre-multi-profile flat OAuth keys. Read-only on the migration path inside
+/// [`load_oauth_tokens`] for the `"default"` profile; new writes always use
+/// the namespaced `<profile>:oauth-*-token` keys.
+const KEY_OAUTH_ACCESS_LEGACY: &str = "oauth-access-token";
+const KEY_OAUTH_REFRESH_LEGACY: &str = "oauth-refresh-token";
+
+fn oauth_access_key(profile: &str) -> String {
+    format!("{profile}:oauth-access-token")
+}
+fn oauth_refresh_key(profile: &str) -> String {
+    format!("{profile}:oauth-refresh-token")
+}
 
 /// Default OAuth 2.0 scopes used when `oauth_scopes` is not set in
 /// config.toml. Matches Atlassian's "classic" scope recommendation for
@@ -55,23 +65,52 @@ pub fn load_api_token() -> Result<(String, String)> {
     Ok((email, token))
 }
 
-/// Store OAuth 2.0 access and refresh tokens in the system keychain.
-pub fn store_oauth_tokens(access: &str, refresh: &str) -> Result<()> {
-    entry(KEY_OAUTH_ACCESS)?.set_password(access)?;
-    entry(KEY_OAUTH_REFRESH)?.set_password(refresh)?;
+/// Store OAuth 2.0 access and refresh tokens scoped to a profile.
+///
+/// Tokens are written to the namespaced keys `<profile>:oauth-access-token`
+/// and `<profile>:oauth-refresh-token` so multiple Jira sites can coexist
+/// in a single keychain.
+pub fn store_oauth_tokens(profile: &str, access: &str, refresh: &str) -> Result<()> {
+    entry(&oauth_access_key(profile))?.set_password(access)?;
+    entry(&oauth_refresh_key(profile))?.set_password(refresh)?;
     Ok(())
 }
 
-/// Load OAuth 2.0 access and refresh tokens from the system keychain.
+/// Load OAuth 2.0 access and refresh tokens for a profile.
+///
 /// Returns `(access_token, refresh_token)`.
-pub fn load_oauth_tokens() -> Result<(String, String)> {
-    let access = entry(KEY_OAUTH_ACCESS)?
-        .get_password()
-        .context("No stored OAuth token — run \"jr auth login\"")?;
-    let refresh = entry(KEY_OAUTH_REFRESH)?
-        .get_password()
-        .context("No stored OAuth refresh token — run \"jr auth login\"")?;
-    Ok((access, refresh))
+///
+/// For the `"default"` profile, falls back to the legacy flat keys
+/// (`oauth-access-token` / `oauth-refresh-token`, the pre-multi-profile
+/// layout) and opportunistically migrates them to the new namespaced keys
+/// on read: writes the namespaced copies, then deletes the legacy ones.
+/// This means existing single-profile users transparently survive the
+/// upgrade without re-authenticating. Non-`"default"` profiles never
+/// inherit legacy keys — that would silently cross-pollinate credentials
+/// across distinct Jira sites.
+pub fn load_oauth_tokens(profile: &str) -> Result<(String, String)> {
+    let access_key = oauth_access_key(profile);
+    let refresh_key = oauth_refresh_key(profile);
+    if let (Ok(a), Ok(r)) = (
+        entry(&access_key)?.get_password(),
+        entry(&refresh_key)?.get_password(),
+    ) {
+        return Ok((a, r));
+    }
+    if profile == "default" {
+        if let (Ok(a), Ok(r)) = (
+            entry(KEY_OAUTH_ACCESS_LEGACY)?.get_password(),
+            entry(KEY_OAUTH_REFRESH_LEGACY)?.get_password(),
+        ) {
+            store_oauth_tokens("default", &a, &r)?;
+            let _ = entry(KEY_OAUTH_ACCESS_LEGACY)?.delete_credential();
+            let _ = entry(KEY_OAUTH_REFRESH_LEGACY)?.delete_credential();
+            return Ok((a, r));
+        }
+    }
+    Err(anyhow::anyhow!(
+        "No stored OAuth token for profile {profile:?} — run \"jr auth login --profile {profile}\""
+    ))
 }
 
 /// Store OAuth app credentials (client_id and client_secret) in the system keychain.
@@ -98,25 +137,17 @@ pub fn load_oauth_app_credentials() -> Result<(String, String)> {
     Ok((id, secret))
 }
 
-/// Remove all stored credentials from the system keychain.
+/// Clear OAuth tokens for a single profile (other profiles + shared keys
+/// such as email / api-token / oauth_client_id are untouched).
 ///
-/// `NoEntry` results are treated as success (the entry was already absent,
-/// which is the expected case on a fresh install or after a prior clear).
+/// `NoEntry` results are treated as success (the entry was already absent).
 /// Any other failure (permission denied, ACL mismatch, platform error) is
-/// aggregated and returned so callers can decide whether to proceed — for
-/// example, `jr auth refresh` needs to know if the clear actually happened
-/// before reporting the refresh as successful.
-pub fn clear_credentials() -> Result<()> {
+/// aggregated and returned so callers can surface partial-failure details
+/// rather than reporting success while stale entries remain.
+pub fn clear_profile_creds(profile: &str) -> Result<()> {
     let mut failures: Vec<String> = Vec::new();
-    for key in [
-        KEY_EMAIL,
-        KEY_API_TOKEN,
-        KEY_OAUTH_ACCESS,
-        KEY_OAUTH_REFRESH,
-        "oauth_client_id",
-        "oauth_client_secret",
-    ] {
-        match entry(key) {
+    for key in [oauth_access_key(profile), oauth_refresh_key(profile)] {
+        match entry(&key) {
             Ok(e) => match e.delete_credential() {
                 Ok(()) | Err(keyring::Error::NoEntry) => {}
                 Err(err) => failures.push(format!("{key}: {err}")),
@@ -128,13 +159,57 @@ pub fn clear_credentials() -> Result<()> {
         Ok(())
     } else {
         Err(anyhow::anyhow!(
-            "failed to clear {} keychain {}: {}",
+            "failed to clear {} keychain entries: {}",
             failures.len(),
-            if failures.len() == 1 {
-                "entry"
-            } else {
-                "entries"
+            failures.join("; ")
+        ))
+    }
+}
+
+/// Remove shared credentials and OAuth tokens for every listed profile from
+/// the system keychain.
+///
+/// Always clears the shared / single-tenant keys (`email`, `api-token`,
+/// `oauth_client_id`, `oauth_client_secret`) plus the legacy flat OAuth
+/// keys. Per-profile OAuth tokens (`<profile>:oauth-*-token`) are cleared
+/// only for the profiles in `profiles` — callers know their own profile
+/// list (from config) and pass it in.
+///
+/// `NoEntry` results are treated as success (the entry was already absent,
+/// which is the expected case on a fresh install or after a prior clear).
+/// Any other failure (permission denied, ACL mismatch, platform error) is
+/// aggregated and returned so callers can decide whether to proceed — for
+/// example, `jr auth refresh` needs to know if the clear actually happened
+/// before reporting the refresh as successful.
+pub fn clear_all_credentials(profiles: &[&str]) -> Result<()> {
+    let mut failures: Vec<String> = Vec::new();
+    let mut keys: Vec<String> = vec![
+        KEY_EMAIL.to_string(),
+        KEY_API_TOKEN.to_string(),
+        "oauth_client_id".to_string(),
+        "oauth_client_secret".to_string(),
+        KEY_OAUTH_ACCESS_LEGACY.to_string(),
+        KEY_OAUTH_REFRESH_LEGACY.to_string(),
+    ];
+    for profile in profiles {
+        keys.push(oauth_access_key(profile));
+        keys.push(oauth_refresh_key(profile));
+    }
+    for key in keys {
+        match entry(&key) {
+            Ok(e) => match e.delete_credential() {
+                Ok(()) | Err(keyring::Error::NoEntry) => {}
+                Err(err) => failures.push(format!("{key}: {err}")),
             },
+            Err(err) => failures.push(format!("{key}: {err}")),
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "failed to clear {} keychain entries: {}",
+            failures.len(),
             failures.join("; ")
         ))
     }
@@ -159,6 +234,7 @@ pub struct OAuthResult {
 /// Note: [`refresh_oauth_token`] does NOT take a scope parameter — the
 /// `refresh_token` grant inherits scopes from the original authorization.
 pub async fn oauth_login(
+    profile: &str,
     client_id: &str,
     client_secret: &str,
     scopes: &str,
@@ -249,7 +325,7 @@ pub async fn oauth_login(
         .ok_or_else(|| anyhow::anyhow!("No accessible Jira sites found"))?;
 
     // 5. Store tokens in the system keychain.
-    store_oauth_tokens(&tokens.access_token, &tokens.refresh_token)?;
+    store_oauth_tokens(profile, &tokens.access_token, &tokens.refresh_token)?;
 
     Ok(OAuthResult {
         cloud_id: resource.id.clone(),
@@ -266,8 +342,12 @@ pub async fn oauth_login(
 /// pick up a changed `[instance].oauth_scopes` in config.toml, the user
 /// must re-run `jr auth login --oauth` (refresh alone will keep the old
 /// scope set).
-pub async fn refresh_oauth_token(client_id: &str, client_secret: &str) -> Result<String> {
-    let (_, refresh_token) = load_oauth_tokens()?;
+pub async fn refresh_oauth_token(
+    profile: &str,
+    client_id: &str,
+    client_secret: &str,
+) -> Result<String> {
+    let (_, refresh_token) = load_oauth_tokens(profile)?;
 
     let client = reqwest::Client::new();
     let response = client
@@ -291,7 +371,7 @@ pub async fn refresh_oauth_token(client_id: &str, client_secret: &str) -> Result
         refresh_token: String,
     }
     let tokens: TokenResponse = response.json().await?;
-    store_oauth_tokens(&tokens.access_token, &tokens.refresh_token)?;
+    store_oauth_tokens(profile, &tokens.access_token, &tokens.refresh_token)?;
     Ok(tokens.access_token)
 }
 
@@ -522,5 +602,101 @@ mod tests {
             !url.contains("scope:with+plus"),
             "raw + must not appear in the URL: {url}"
         );
+    }
+
+    fn unique_test_service() -> String {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        format!("jr-jira-cli-test-{}-{}", std::process::id(), n)
+    }
+
+    /// Wrap a test in a unique JR_SERVICE_NAME scope so concurrent tests don't collide.
+    fn with_test_keyring<F: FnOnce()>(f: F) {
+        if std::env::var("JR_RUN_KEYRING_TESTS").is_err() {
+            return;
+        }
+        let svc = unique_test_service();
+        let prev = std::env::var("JR_SERVICE_NAME").ok();
+        // SAFETY: tests using keyring must be serialized via JR_RUN_KEYRING_TESTS opt-in.
+        unsafe { std::env::set_var("JR_SERVICE_NAME", &svc) };
+        f();
+        let _ = clear_all_credentials(&["default", "sandbox"]);
+        unsafe {
+            match prev {
+                Some(p) => std::env::set_var("JR_SERVICE_NAME", p),
+                None => std::env::remove_var("JR_SERVICE_NAME"),
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn store_and_load_per_profile_oauth_tokens_round_trip() {
+        with_test_keyring(|| {
+            store_oauth_tokens("default", "access1", "refresh1").unwrap();
+            store_oauth_tokens("sandbox", "access2", "refresh2").unwrap();
+
+            let (a1, r1) = load_oauth_tokens("default").unwrap();
+            let (a2, r2) = load_oauth_tokens("sandbox").unwrap();
+
+            assert_eq!((a1.as_str(), r1.as_str()), ("access1", "refresh1"));
+            assert_eq!((a2.as_str(), r2.as_str()), ("access2", "refresh2"));
+        });
+    }
+
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn load_oauth_tokens_returns_err_for_missing_profile() {
+        with_test_keyring(|| {
+            assert!(load_oauth_tokens("default").is_err());
+        });
+    }
+
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn lazy_migration_legacy_flat_keys_for_default_profile() {
+        with_test_keyring(|| {
+            entry("oauth-access-token")
+                .unwrap()
+                .set_password("legacy-access")
+                .unwrap();
+            entry("oauth-refresh-token")
+                .unwrap()
+                .set_password("legacy-refresh")
+                .unwrap();
+
+            let (access, refresh) = load_oauth_tokens("default").unwrap();
+            assert_eq!(access, "legacy-access");
+            assert_eq!(refresh, "legacy-refresh");
+
+            let new_access = entry("default:oauth-access-token")
+                .unwrap()
+                .get_password()
+                .unwrap();
+            assert_eq!(new_access, "legacy-access");
+
+            assert!(entry("oauth-access-token").unwrap().get_password().is_err());
+        });
+    }
+
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn lazy_migration_does_not_fire_for_non_default_profile() {
+        with_test_keyring(|| {
+            entry("oauth-access-token")
+                .unwrap()
+                .set_password("legacy-access")
+                .unwrap();
+            entry("oauth-refresh-token")
+                .unwrap()
+                .set_password("legacy-refresh")
+                .unwrap();
+
+            assert!(
+                load_oauth_tokens("sandbox").is_err(),
+                "sandbox profile should NOT inherit legacy keys"
+            );
+        });
     }
 }
