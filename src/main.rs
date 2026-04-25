@@ -114,6 +114,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                     )
                     .await
                 }
+                cli::AuthCommand::Switch { name } => cli::auth::handle_switch(&name).await,
             },
             cli::Command::Me => {
                 let config = config::Config::load()?;

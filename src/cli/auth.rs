@@ -342,10 +342,41 @@ pub async fn refresh_credentials(
     Ok(())
 }
 
+/// Pure logic for `jr auth switch` — separated for testing without filesystem.
+pub(super) fn handle_switch_in_memory(
+    mut global: crate::config::GlobalConfig,
+    target: &str,
+) -> Result<crate::config::GlobalConfig> {
+    crate::config::validate_profile_name(target)?;
+    if !global.profiles.contains_key(target) {
+        let known: Vec<&str> = global.profiles.keys().map(String::as_str).collect();
+        return Err(JrError::UserError(format!(
+            "unknown profile: {target}; known: {}",
+            if known.is_empty() {
+                "(none)".into()
+            } else {
+                known.join(", ")
+            }
+        ))
+        .into());
+    }
+    global.default_profile = Some(target.to_string());
+    Ok(global)
+}
+
+/// `jr auth switch <name>` — set the default profile in `config.toml`.
+pub async fn handle_switch(target: &str) -> Result<()> {
+    let mut config = Config::load()?;
+    config.global = handle_switch_in_memory(config.global, target)?;
+    config.save_global()?;
+    output::print_success(&format!("Active profile set to {target:?}"));
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, GlobalConfig, InstanceConfig};
+    use crate::config::{Config, GlobalConfig, InstanceConfig, ProfileConfig};
 
     fn config_with_auth_method(method: Option<&str>) -> Config {
         Config {
@@ -620,6 +651,28 @@ mod tests {
             auth::DEFAULT_OAUTH_SCOPES,
             "read:jira-work write:jira-work read:jira-user offline_access"
         );
+    }
+
+    #[test]
+    fn switch_to_unknown_profile_returns_error() {
+        let result = handle_switch_in_memory(GlobalConfig::default(), "ghost");
+        assert!(result.is_err());
+        let msg = format!("{:#}", result.unwrap_err());
+        assert!(msg.contains("unknown profile"), "got: {msg}");
+        assert!(msg.contains("ghost"), "got: {msg}");
+    }
+
+    #[test]
+    fn switch_to_known_profile_mutates_default_profile() {
+        let mut profiles = std::collections::BTreeMap::new();
+        profiles.insert("sandbox".to_string(), ProfileConfig::default());
+        let global = GlobalConfig {
+            default_profile: Some("default".into()),
+            profiles,
+            ..GlobalConfig::default()
+        };
+        let mutated = handle_switch_in_memory(global, "sandbox").unwrap();
+        assert_eq!(mutated.default_profile.as_deref(), Some("sandbox"));
     }
 
     /// `jr` deliberately does NOT reject mixed classic+granular scopes,

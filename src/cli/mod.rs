@@ -237,6 +237,11 @@ pub enum AuthCommand {
         #[arg(long)]
         client_secret: Option<String>,
     },
+    /// Set the default profile in config.toml.
+    Switch {
+        /// Profile name to make active. Must already exist in config.
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
