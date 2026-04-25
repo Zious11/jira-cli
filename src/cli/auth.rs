@@ -779,8 +779,8 @@ pub(super) fn render_list_json(
         .map(|(name, p)| {
             serde_json::json!({
                 "name": name,
-                "url": p.url,
-                "auth_method": p.auth_method,
+                "url": &p.url,
+                "auth_method": &p.auth_method,
                 "status": if p.url.is_some() { "configured" } else { "no-creds" },
                 "active": name == active,
             })

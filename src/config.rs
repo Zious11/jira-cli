@@ -155,6 +155,8 @@ pub fn migrate_legacy_global(mut global: GlobalConfig) -> GlobalConfig {
     if global.instance.url.is_none()
         && global.instance.auth_method.is_none()
         && global.instance.cloud_id.is_none()
+        && global.instance.org_id.is_none()
+        && global.instance.oauth_scopes.is_none()
         && global.fields.team_field_id.is_none()
         && global.fields.story_points_field_id.is_none()
     {
@@ -232,33 +234,19 @@ impl Config {
         // all flow into cache paths and keyring keys, so a bad value (e.g.
         // "foo:bar" or path separators) must be rejected at the config boundary.
         validate_profile_name(&active_profile_name)?;
-        // Existence check: if the user has any profiles configured, the
-        // resolved active profile must actually be one of them. A typo in
-        // JR_PROFILE / `default_profile` used to surface much later as a
-        // "no URL configured" or empty-keychain error. Eagerly failing here
-        // matches the wording of `active_profile_or_err` so the message is
-        // consistent across paths.
+
+        // Verify the resolved active profile exists in [profiles] (when any
+        // profiles are configured). A fresh install with no profiles yet is
+        // allowed: jr init / jr auth login will create the first one.
         //
-        // Skip cases:
-        //  1. `profiles` is empty → brand-new install (no config yet, the
-        //     fallback resolves to "default"); not an error.
-        //  2. The name came from `JR_PROFILE_OVERRIDE` (i.e., the `--profile`
-        //     CLI flag for a one-shot operation). Multi-profile commands like
-        //     `jr auth logout --profile ghost`, `jr auth status --profile ghost`,
-        //     and `jr auth login --profile ghost` (creates) all want their
-        //     own per-command validation with consistent exit-64 wording —
-        //     not exit-78 from the config layer. The flag is the user
-        //     explicitly addressing a specific profile; the handler decides
-        //     whether existence is required.
-        let from_cli_flag = cli_profile_flag.is_some();
-        if !from_cli_flag
-            && !global.profiles.is_empty()
-            && !global.profiles.contains_key(&active_profile_name)
-        {
+        // UserError (exit 64) instead of ConfigError (exit 78) because the
+        // invalid input source is the user (--profile flag, JR_PROFILE env,
+        // or a hand-edited default_profile field) — not a malformed config
+        // file. Matches the wording used by switch/remove/logout/status.
+        if !global.profiles.is_empty() && !global.profiles.contains_key(&active_profile_name) {
             let known: Vec<&str> = global.profiles.keys().map(String::as_str).collect();
-            return Err(JrError::ConfigError(format!(
-                "active profile {active_profile_name:?} not in [profiles]; known: {}; \
-                 fix config.toml or run \"jr auth list\"",
+            return Err(JrError::UserError(format!(
+                "unknown profile: {active_profile_name}; known: {}",
                 known.join(", ")
             ))
             .into());
@@ -895,6 +883,40 @@ mod tests {
     }
 
     #[test]
+    fn migrate_legacy_with_only_org_id_set_creates_profile() {
+        let global = GlobalConfig {
+            instance: InstanceConfig {
+                org_id: Some("org-only".into()),
+                ..InstanceConfig::default()
+            },
+            ..GlobalConfig::default()
+        };
+        let migrated = migrate_legacy_global(global);
+        assert_eq!(migrated.default_profile.as_deref(), Some("default"));
+        assert_eq!(
+            migrated.profiles["default"].org_id.as_deref(),
+            Some("org-only")
+        );
+    }
+
+    #[test]
+    fn migrate_legacy_with_only_oauth_scopes_set_creates_profile() {
+        let global = GlobalConfig {
+            instance: InstanceConfig {
+                oauth_scopes: Some("read:jira-work offline_access".into()),
+                ..InstanceConfig::default()
+            },
+            ..GlobalConfig::default()
+        };
+        let migrated = migrate_legacy_global(global);
+        assert_eq!(migrated.default_profile.as_deref(), Some("default"));
+        assert_eq!(
+            migrated.profiles["default"].oauth_scopes.as_deref(),
+            Some("read:jira-work offline_access")
+        );
+    }
+
+    #[test]
     fn config_load_precedence_flag_overrides_env_overrides_field() {
         let _guard = ENV_MUTEX.lock().unwrap();
         let dir = TempDir::new().unwrap();
@@ -968,11 +990,15 @@ mod tests {
             std::env::remove_var("XDG_CONFIG_HOME");
         }
         let err = result.expect_err("ghost profile should fail Config::load");
-        let msg = format!("{err:#}");
+        let je = err.downcast_ref::<JrError>().expect("should be JrError");
         assert!(
-            msg.contains("active profile") && msg.contains("ghost") && msg.contains("default"),
-            "got: {msg}"
+            matches!(je, JrError::UserError(_)),
+            "expected UserError, got {je:?}"
         );
+        let msg = format!("{err:#}");
+        assert!(msg.contains("unknown profile"), "got: {msg}");
+        assert!(msg.contains("ghost"), "got: {msg}");
+        assert!(msg.contains("default"), "got: {msg}");
     }
 
     #[test]
