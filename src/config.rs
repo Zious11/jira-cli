@@ -243,17 +243,23 @@ impl Config {
     }
 
     pub fn base_url(&self) -> anyhow::Result<String> {
-        // JR_BASE_URL env var overrides everything (used by tests to inject wiremock URL)
         if let Ok(override_url) = std::env::var("JR_BASE_URL") {
             return Ok(override_url.trim_end_matches('/').to_string());
         }
-
-        let url = self.global.instance.url.as_ref().ok_or_else(|| {
-            JrError::ConfigError("No Jira instance configured. Run \"jr init\" first.".into())
+        let profile = self.global.profiles.get(&self.active_profile_name).ok_or_else(|| {
+            JrError::ConfigError(format!(
+                "No Jira instance configured for profile {:?}. Run \"jr auth login --profile {}\" or \"jr init\".",
+                self.active_profile_name, self.active_profile_name
+            ))
         })?;
-
-        if let Some(cloud_id) = &self.global.instance.cloud_id {
-            if self.global.instance.auth_method.as_deref() == Some("oauth") {
+        let url = profile.url.as_ref().ok_or_else(|| {
+            JrError::ConfigError(format!(
+                "Profile {:?} has no URL configured. Run \"jr auth login --profile {}\".",
+                self.active_profile_name, self.active_profile_name
+            ))
+        })?;
+        if let Some(cloud_id) = &profile.cloud_id {
+            if profile.auth_method.as_deref() == Some("oauth") {
                 return Ok(format!("https://api.atlassian.com/ex/jira/{cloud_id}"));
             }
         }
@@ -359,18 +365,24 @@ mod tests {
     #[test]
     fn test_base_url_api_token() {
         let _guard = ENV_MUTEX.lock().unwrap();
+        let mut profiles = std::collections::BTreeMap::new();
+        profiles.insert(
+            "default".to_string(),
+            ProfileConfig {
+                url: Some("https://myorg.atlassian.net".into()),
+                auth_method: Some("api_token".into()),
+                ..ProfileConfig::default()
+            },
+        );
         let config = Config {
             global: GlobalConfig {
-                instance: InstanceConfig {
-                    url: Some("https://myorg.atlassian.net".into()),
-                    auth_method: Some("api_token".into()),
-                    ..InstanceConfig::default()
-                },
+                default_profile: Some("default".into()),
+                profiles,
                 defaults: DefaultsConfig::default(),
                 ..Default::default()
             },
             project: ProjectConfig::default(),
-            active_profile_name: String::new(),
+            active_profile_name: "default".into(),
         };
         assert_eq!(config.base_url().unwrap(), "https://myorg.atlassian.net");
     }
@@ -378,19 +390,25 @@ mod tests {
     #[test]
     fn test_base_url_oauth() {
         let _guard = ENV_MUTEX.lock().unwrap();
+        let mut profiles = std::collections::BTreeMap::new();
+        profiles.insert(
+            "default".to_string(),
+            ProfileConfig {
+                url: Some("https://myorg.atlassian.net".into()),
+                cloud_id: Some("abc-123".into()),
+                auth_method: Some("oauth".into()),
+                ..ProfileConfig::default()
+            },
+        );
         let config = Config {
             global: GlobalConfig {
-                instance: InstanceConfig {
-                    url: Some("https://myorg.atlassian.net".into()),
-                    cloud_id: Some("abc-123".into()),
-                    auth_method: Some("oauth".into()),
-                    ..InstanceConfig::default()
-                },
+                default_profile: Some("default".into()),
+                profiles,
                 defaults: DefaultsConfig::default(),
                 ..Default::default()
             },
             project: ProjectConfig::default(),
-            active_profile_name: String::new(),
+            active_profile_name: "default".into(),
         };
         assert_eq!(
             config.base_url().unwrap(),
@@ -407,6 +425,58 @@ mod tests {
             active_profile_name: String::new(),
         };
         assert!(config.base_url().is_err());
+    }
+
+    #[test]
+    fn base_url_uses_active_profile() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let mut profiles = std::collections::BTreeMap::new();
+        profiles.insert(
+            "sandbox".to_string(),
+            ProfileConfig {
+                url: Some("https://sandbox.atlassian.net".into()),
+                auth_method: Some("api_token".into()),
+                ..ProfileConfig::default()
+            },
+        );
+        let config = Config {
+            global: GlobalConfig {
+                default_profile: Some("sandbox".into()),
+                profiles,
+                ..GlobalConfig::default()
+            },
+            project: ProjectConfig::default(),
+            active_profile_name: "sandbox".into(),
+        };
+        assert_eq!(config.base_url().unwrap(), "https://sandbox.atlassian.net");
+    }
+
+    #[test]
+    fn base_url_uses_active_profile_oauth_path() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let mut profiles = std::collections::BTreeMap::new();
+        profiles.insert(
+            "default".to_string(),
+            ProfileConfig {
+                url: Some("https://acme.atlassian.net".into()),
+                auth_method: Some("oauth".into()),
+                cloud_id: Some("abc-123".into()),
+                ..ProfileConfig::default()
+            },
+        );
+        let config = Config {
+            global: GlobalConfig {
+                default_profile: Some("default".into()),
+                profiles,
+                ..GlobalConfig::default()
+            },
+            project: ProjectConfig::default(),
+            active_profile_name: "default".into(),
+        };
+        assert_eq!(
+            config.base_url().unwrap(),
+            "https://api.atlassian.com/ex/jira/abc-123"
+        );
     }
 
     #[test]
@@ -455,18 +525,24 @@ mod tests {
     #[test]
     fn test_base_url_trailing_slash_trimmed() {
         let _guard = ENV_MUTEX.lock().unwrap();
+        let mut profiles = std::collections::BTreeMap::new();
+        profiles.insert(
+            "default".to_string(),
+            ProfileConfig {
+                url: Some("https://myorg.atlassian.net/".into()),
+                auth_method: Some("api_token".into()),
+                ..ProfileConfig::default()
+            },
+        );
         let config = Config {
             global: GlobalConfig {
-                instance: InstanceConfig {
-                    url: Some("https://myorg.atlassian.net/".into()),
-                    auth_method: Some("api_token".into()),
-                    ..InstanceConfig::default()
-                },
+                default_profile: Some("default".into()),
+                profiles,
                 defaults: DefaultsConfig::default(),
                 ..Default::default()
             },
             project: ProjectConfig::default(),
-            active_profile_name: String::new(),
+            active_profile_name: "default".into(),
         };
         assert_eq!(config.base_url().unwrap(), "https://myorg.atlassian.net");
     }
