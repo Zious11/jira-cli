@@ -755,8 +755,24 @@ pub async fn handle_remove(
 
     config.global = handle_remove_in_memory(config.global, target, &config.active_profile_name)?;
     config.save_global()?;
-    let _ = crate::api::auth::clear_profile_creds(target);
-    let _ = crate::cache::clear_profile_cache(target);
+
+    // Config entry is gone — that's the persistent state. The keychain
+    // and cache cleanup is best-effort: failures here (permission denied,
+    // locked keychain, IO) shouldn't unwind the config write, but the
+    // user does need to know they have leftover state to clean up
+    // manually. Surface as warnings; report overall success.
+    if let Err(e) = crate::api::auth::clear_profile_creds(target) {
+        crate::output::print_warning(&format!(
+            "removed config entry but failed to clear OAuth tokens for {target:?}: {e}. \
+             Remove the entries manually via your OS keychain UI."
+        ));
+    }
+    if let Err(e) = crate::cache::clear_profile_cache(target) {
+        crate::output::print_warning(&format!(
+            "removed config entry but failed to clear cache for {target:?}: {e}. \
+             Remove ~/.cache/jr/v1/{target}/ manually if disk space matters."
+        ));
+    }
     crate::output::print_success(&format!("Removed profile {target:?}"));
     Ok(())
 }
