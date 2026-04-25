@@ -91,8 +91,8 @@ pub fn store_oauth_tokens(profile: &str, access: &str, refresh: &str) -> Result<
 pub fn load_oauth_tokens(profile: &str) -> Result<(String, String)> {
     let access_key = oauth_access_key(profile);
     let refresh_key = oauth_refresh_key(profile);
-    let access = entry(&access_key)?.get_password().ok();
-    let refresh = entry(&refresh_key)?.get_password().ok();
+    let access = read_keyring_optional(&access_key)?;
+    let refresh = read_keyring_optional(&refresh_key)?;
 
     match (access, refresh) {
         (Some(a), Some(r)) => Ok((a, r)),
@@ -102,10 +102,9 @@ pub fn load_oauth_tokens(profile: &str) -> Result<(String, String)> {
             // profiles never inherit legacy keys; that would silently
             // cross-pollinate credentials across distinct Jira sites.
             if profile == "default" {
-                if let (Ok(a), Ok(r)) = (
-                    entry(KEY_OAUTH_ACCESS_LEGACY)?.get_password(),
-                    entry(KEY_OAUTH_REFRESH_LEGACY)?.get_password(),
-                ) {
+                let legacy_access = read_keyring_optional(KEY_OAUTH_ACCESS_LEGACY)?;
+                let legacy_refresh = read_keyring_optional(KEY_OAUTH_REFRESH_LEGACY)?;
+                if let (Some(a), Some(r)) = (legacy_access, legacy_refresh) {
                     store_oauth_tokens("default", &a, &r)?;
                     let _ = entry(KEY_OAUTH_ACCESS_LEGACY)?.delete_credential();
                     let _ = entry(KEY_OAUTH_REFRESH_LEGACY)?.delete_credential();
@@ -129,6 +128,24 @@ pub fn load_oauth_tokens(profile: &str) -> Result<(String, String)> {
              Run \"jr auth logout --profile {profile}\" then \
              \"jr auth login --profile {profile}\" to restore a clean state."
         )),
+    }
+}
+
+/// Read an optional keychain entry, distinguishing "not present" (`NoEntry`)
+/// from real backend failures.
+///
+/// `keyring::Entry::get_password().ok()` collapses every error to `None` —
+/// so a permission-denied, locked-keyring, or platform error looks identical
+/// to a missing entry. That silently triggers fallbacks (legacy migration,
+/// generic "no token" messages) and hides the real problem from the user.
+/// This helper instead matches `keyring::Error::NoEntry` as the only
+/// "absent" case and propagates everything else up the call stack so the
+/// CLI can surface actionable diagnostics.
+fn read_keyring_optional(key: &str) -> Result<Option<String>> {
+    match entry(key)?.get_password() {
+        Ok(v) => Ok(Some(v)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(e.into()),
     }
 }
 

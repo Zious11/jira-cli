@@ -67,7 +67,7 @@ Rust types:
 
 ```rust
 pub struct GlobalConfig {
-    pub default_profile: String,
+    pub default_profile: Option<String>,
     pub profiles: BTreeMap<String, ProfileConfig>,   // BTreeMap for deterministic `jr auth list`
     pub defaults: DefaultsConfig,
 }
@@ -94,7 +94,22 @@ Precedence (highest wins):
 3. `default_profile` field in `config.toml`
 4. Literal name `"default"` if none of the above set
 
-`Config::load()` resolves this once at startup. Result lives as `Config::active_profile_name: String`. `Config::active_profile() -> &ProfileConfig` returns the resolved profile. Unknown profile → `JrError::ConfigError("unknown profile: <name>; known: ...")`.
+`Config::load()` resolves this once at startup. Result lives as `Config::active_profile_name: String`. The active profile is reached through two accessors plus a load-time validation:
+
+- `Config::active_profile() -> ProfileConfig` — returns an owned `ProfileConfig`,
+  cloning the active profile entry from the map. Falls back to
+  `ProfileConfig::default()` if the active profile name isn't in the map (this
+  branch is reachable only for in-memory `Config` values built directly in tests
+  — `Config::load()` already errors with `UserError` for the load-time case).
+- `Config::active_profile_or_err() -> anyhow::Result<&ProfileConfig>` — strict
+  variant that errors with `JrError::ConfigError` when the active profile
+  isn't in the map. Used by callers that want to fail loudly rather than
+  silently returning a default.
+- `Config::load()` validates that the resolved active profile name (when
+  `[profiles]` is non-empty) exists in the map, and returns
+  `JrError::UserError` (exit 64) if not. The error message lists the known
+  profile names, matching the `switch`/`remove`/`logout`/`status` handlers'
+  wording.
 
 ## Profile Name Validation
 
@@ -221,7 +236,7 @@ jr auth switch <NAME>
 
 jr auth list
     Show all configured profiles. Mark active with `*`.
-    Table columns: NAME | URL | AUTH | STATUS    where STATUS ∈ {ok, no-creds, expired}
+    Table columns: NAME | URL | AUTH | STATUS    where STATUS ∈ {configured, no-creds}
     JSON: [{"name", "url", "auth_method", "status", "active"}]
 
 jr auth status [--profile NAME]
@@ -347,7 +362,7 @@ TDD; existing test stack (`proptest`, `insta`, `tempfile`, `assert_cmd`, `wiremo
 - Migration: synthetic legacy `[instance]` TOML → assert post-migration `GlobalConfig` shape
 - Migration is idempotent (second run is a no-op)
 - `[fields]` carried into `[profiles.default]` during migration
-- `Config::active_profile()` returns the right `&ProfileConfig`
+- `Config::active_profile()` returns the right `ProfileConfig` (owned clone) and `Config::active_profile_or_err()` returns `&ProfileConfig` or errors with `JrError::ConfigError` for callers that want to fail loudly
 - Unknown `default_profile` returns `UserError` (matches the unified active-profile existence check; the value comes from user-edited config, env, or flag — UserError is the honest classification)
 
 `api::auth::tests`:
