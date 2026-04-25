@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use dialoguer::{Confirm, Input, Select};
 
-use crate::config::{Config, ProjectConfig};
+use crate::config::Config;
 use crate::{api, output};
 
 pub async fn handle() -> Result<()> {
@@ -86,15 +86,19 @@ pub async fn handle() -> Result<()> {
     //
     // Reload here (rather than reusing the `existing` we discriminated
     // above) so JR_PROFILE_OVERRIDE — which the new-profile branch may have
-    // just set — is reflected in `active_profile_name`. We've already
-    // verified the config file either loads cleanly or doesn't exist, so
-    // the only paths reachable here are a successful reload or a genuine
-    // first-run fall-through.
-    let mut config = Config::load().unwrap_or_else(|_| Config {
-        global: crate::config::GlobalConfig::default(),
-        project: ProjectConfig::default(),
-        active_profile_name: profile_name.clone(),
-    });
+    // just set — is reflected in `active_profile_name`.
+    //
+    // Lenient because the override may name a not-yet-created profile (the
+    // whole point of running `jr init` is to add it). Without lenient, the
+    // strict active-profile-existence check fires and the previous
+    // `unwrap_or_else(default)` fallback would silently clobber existing
+    // profiles on save — flagged by Copilot review on PR #275.
+    //
+    // The `?` (no fallback) is safe because line ~20 above already
+    // discriminated "config file is malformed/unreadable" from "no config
+    // yet"; the only reachable failure here would be a fresh IO error
+    // between then and now, which we want to surface, not silently swallow.
+    let mut config = Config::load_lenient()?;
     config
         .global
         .profiles
