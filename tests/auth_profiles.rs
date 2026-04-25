@@ -38,6 +38,21 @@ fn auth_list_shows_no_profiles_for_fresh_install() {
         .stdout(predicates::str::contains("[]"));
 }
 
+/// Regression: `jr auth status` against a fresh install (no [profiles]
+/// in config — or no config at all) must succeed with a "not configured"
+/// message, not error with "unknown profile". Setup scripts and CI use
+/// `auth status` as a first-run probe before deciding whether to call
+/// `jr init` or `jr auth login`.
+#[test]
+fn auth_status_fresh_install_no_profiles_succeeds() {
+    let (dir, _path) = fresh_config_dir(); // no config.toml written
+    jr().env("XDG_CONFIG_HOME", dir.path())
+        .args(["auth", "status"])
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("No profiles configured"));
+}
+
 #[test]
 fn auth_status_unknown_profile_exits_64() {
     let (dir, path) = fresh_config_dir();

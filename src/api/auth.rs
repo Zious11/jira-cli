@@ -91,26 +91,45 @@ pub fn store_oauth_tokens(profile: &str, access: &str, refresh: &str) -> Result<
 pub fn load_oauth_tokens(profile: &str) -> Result<(String, String)> {
     let access_key = oauth_access_key(profile);
     let refresh_key = oauth_refresh_key(profile);
-    if let (Ok(a), Ok(r)) = (
-        entry(&access_key)?.get_password(),
-        entry(&refresh_key)?.get_password(),
-    ) {
-        return Ok((a, r));
-    }
-    if profile == "default" {
-        if let (Ok(a), Ok(r)) = (
-            entry(KEY_OAUTH_ACCESS_LEGACY)?.get_password(),
-            entry(KEY_OAUTH_REFRESH_LEGACY)?.get_password(),
-        ) {
-            store_oauth_tokens("default", &a, &r)?;
-            let _ = entry(KEY_OAUTH_ACCESS_LEGACY)?.delete_credential();
-            let _ = entry(KEY_OAUTH_REFRESH_LEGACY)?.delete_credential();
-            return Ok((a, r));
+    let access = entry(&access_key)?.get_password().ok();
+    let refresh = entry(&refresh_key)?.get_password().ok();
+
+    match (access, refresh) {
+        (Some(a), Some(r)) => Ok((a, r)),
+        (None, None) => {
+            // Both namespaced keys absent — try legacy fallback for the
+            // "default" profile (lazy-migration path). Non-default
+            // profiles never inherit legacy keys; that would silently
+            // cross-pollinate credentials across distinct Jira sites.
+            if profile == "default" {
+                if let (Ok(a), Ok(r)) = (
+                    entry(KEY_OAUTH_ACCESS_LEGACY)?.get_password(),
+                    entry(KEY_OAUTH_REFRESH_LEGACY)?.get_password(),
+                ) {
+                    store_oauth_tokens("default", &a, &r)?;
+                    let _ = entry(KEY_OAUTH_ACCESS_LEGACY)?.delete_credential();
+                    let _ = entry(KEY_OAUTH_REFRESH_LEGACY)?.delete_credential();
+                    return Ok((a, r));
+                }
+            }
+            Err(anyhow::anyhow!(
+                "No stored OAuth token for profile {profile:?} — \
+                 run \"jr auth login --profile {profile}\""
+            ))
         }
+        // Partial state: one half missing. Don't silently fall back to
+        // legacy migration — that would mask data loss / corruption by
+        // either resurrecting a stale legacy pair or returning the
+        // generic "no token" message, both of which hide the fact that
+        // the namespaced keys are in an inconsistent state. Surface it
+        // with explicit recovery instructions instead.
+        _ => Err(anyhow::anyhow!(
+            "OAuth keychain entries for profile {profile:?} are partial \
+             (one of access/refresh present, the other missing). \
+             Run \"jr auth logout --profile {profile}\" then \
+             \"jr auth login --profile {profile}\" to restore a clean state."
+        )),
     }
-    Err(anyhow::anyhow!(
-        "No stored OAuth token for profile {profile:?} — run \"jr auth login --profile {profile}\""
-    ))
 }
 
 /// Store OAuth app credentials (client_id and client_secret) in the system keychain.
@@ -756,6 +775,30 @@ mod tests {
                 .get_password()
                 .unwrap();
             assert_eq!(access, "legacy-access");
+        });
+    }
+
+    /// Regression: `load_oauth_tokens` must distinguish (None, None) from
+    /// partial state (Some, None) / (None, Some). A pair lookup that
+    /// retried via the legacy fallback on partial state would either
+    /// silently resurrect a stale legacy pair or return the generic
+    /// "no token" error — both of which hide data loss / corruption.
+    /// Partial state should surface as an explicit error pointing to
+    /// logout+login recovery.
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn load_oauth_tokens_errors_on_partial_state() {
+        with_test_keyring(|| {
+            // Pre-seed only the access key (missing refresh).
+            entry(&oauth_access_key("sandbox"))
+                .unwrap()
+                .set_password("access-only")
+                .unwrap();
+
+            let result = load_oauth_tokens("sandbox");
+            let err = result.expect_err("partial state should error");
+            let msg = format!("{err:#}");
+            assert!(msg.contains("partial"), "got: {msg}");
         });
     }
 

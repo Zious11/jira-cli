@@ -226,6 +226,24 @@ impl Config {
             );
         }
 
+        // Validate every profile name in the map. A hand-edited config with
+        // quoted/invalid keys (e.g. `[profiles."foo:bar"]`) would otherwise
+        // deserialize fine but produce names that can't be targeted by
+        // switch/remove/logout/status (which validate input) AND would create
+        // unsafe cache / keyring namespaces if used downstream. Placed after
+        // the migration block (so the synthetic "default" key from migration
+        // is also covered) and before resolving `active_profile_name` (so a
+        // fresh first-run with empty profiles isn't gated).
+        for name in global.profiles.keys() {
+            validate_profile_name(name).map_err(|_| {
+                JrError::UserError(format!(
+                    "invalid profile name {name:?} in config.toml; allowed: \
+                     A-Z a-z 0-9 _ - up to 64 chars; reserved Windows names \
+                     (CON, NUL, AUX, PRN, COM1-9, LPT1-9) excluded"
+                ))
+            })?;
+        }
+
         let project = Self::find_project_config()
             .map(|path| -> anyhow::Result<ProjectConfig> {
                 Ok(Figment::new()
@@ -1079,6 +1097,39 @@ mod tests {
         let cfg = lenient.unwrap();
         assert_eq!(cfg.active_profile_name, "ghost");
         assert_eq!(cfg.global.profiles.len(), 1, "profile map untouched");
+    }
+
+    #[test]
+    fn config_load_rejects_invalid_profile_key_in_config() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let dir = TempDir::new().unwrap();
+        let cfg_dir = dir.path().join("jr");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::write(
+            cfg_dir.join("config.toml"),
+            r#"
+                default_profile = "default"
+                [profiles.default]
+                url = "https://x"
+                [profiles."bad:name"]
+                url = "https://y"
+            "#,
+        )
+        .unwrap();
+
+        // SAFETY: ENV_MUTEX held.
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", dir.path());
+        }
+        let result = Config::load();
+        unsafe {
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+
+        let err = result.expect_err("invalid profile key should reject");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("invalid profile name"), "got: {msg}");
+        assert!(msg.contains("bad:name"), "got: {msg}");
     }
 
     #[test]

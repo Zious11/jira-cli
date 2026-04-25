@@ -459,6 +459,19 @@ pub async fn status(profile_arg: Option<&str>) -> Result<()> {
         .unwrap_or_else(|| config.active_profile_name.clone());
     crate::config::validate_profile_name(&target)?;
 
+    // Special-case: fresh install with no profiles yet. `jr auth status`
+    // is a legitimate probe used by setup scripts / CI / agents to detect
+    // first-run state before deciding whether to drive `jr init` or
+    // `jr auth login`. Erroring here would block that probe — the user
+    // hasn't configured anything yet, so "unknown profile" is misleading.
+    if config.global.profiles.is_empty() {
+        eprintln!(
+            "No profiles configured. Run `jr init` or \
+             `jr auth login --profile <NAME>` to set up."
+        );
+        return Ok(());
+    }
+
     // Refuse to "succeed" against a profile the user never configured —
     // matches the strict behavior of switch/remove/logout. Without this,
     // `jr auth status --profile typo` printed "(not configured)" for

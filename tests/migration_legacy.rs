@@ -11,9 +11,45 @@ use tempfile::TempDir;
 /// runs as its own binary with its own process.
 static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
+/// RAII helper: sets `XDG_CONFIG_HOME` to `value` for the duration of
+/// the guard's lifetime, then restores the prior value (or unsets if
+/// none) on drop. Drop runs even if the test panics, so a `Config::load`
+/// that unwraps unsuccessfully never leaks `XDG_CONFIG_HOME` into the
+/// next test in the same binary. Also avoids unconditionally clobbering
+/// a pre-existing `XDG_CONFIG_HOME` from the parent environment that the
+/// developer relied on outside the test runner.
+struct XdgConfigGuard {
+    previous: Option<std::ffi::OsString>,
+}
+
+impl XdgConfigGuard {
+    fn set(value: &std::path::Path) -> Self {
+        let previous = std::env::var_os("XDG_CONFIG_HOME");
+        // SAFETY: tests in this binary serialize env mutation via
+        // ENV_MUTEX; no concurrent access.
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", value);
+        }
+        Self { previous }
+    }
+}
+
+impl Drop for XdgConfigGuard {
+    fn drop(&mut self) {
+        // SAFETY: same as set() — caller must hold ENV_MUTEX while the
+        // guard is alive; no concurrent access.
+        unsafe {
+            match self.previous.take() {
+                Some(prev) => std::env::set_var("XDG_CONFIG_HOME", prev),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+        }
+    }
+}
+
 #[test]
 fn legacy_instance_block_migrated_in_memory() {
-    let _guard = ENV_MUTEX.lock().unwrap();
+    let _env_lock = ENV_MUTEX.lock().unwrap();
     let dir = TempDir::new().unwrap();
     let cfg_path = dir.path().join("jr").join("config.toml");
     fs::create_dir_all(cfg_path.parent().unwrap()).unwrap();
@@ -36,16 +72,8 @@ output = "json"
     )
     .unwrap();
 
-    // SAFETY: ENV_MUTEX is held across the env-var mutation and the
-    // Config::load that depends on it; no other code path in this test
-    // binary mutates XDG_CONFIG_HOME concurrently.
-    unsafe {
-        std::env::set_var("XDG_CONFIG_HOME", dir.path());
-    }
+    let _xdg = XdgConfigGuard::set(dir.path());
     let config = jr::config::Config::load().unwrap();
-    unsafe {
-        std::env::remove_var("XDG_CONFIG_HOME");
-    }
 
     assert_eq!(config.active_profile_name, "default");
     assert!(config.global.profiles.contains_key("default"));
@@ -68,11 +96,12 @@ output = "json"
         !on_disk.contains("[fields]"),
         "[fields] should not be serialized"
     );
+    // _xdg dropped here — restores prior XDG_CONFIG_HOME (or unsets).
 }
 
 #[test]
 fn migration_is_idempotent() {
-    let _guard = ENV_MUTEX.lock().unwrap();
+    let _env_lock = ENV_MUTEX.lock().unwrap();
     let dir = TempDir::new().unwrap();
     let cfg_path = dir.path().join("jr").join("config.toml");
     fs::create_dir_all(cfg_path.parent().unwrap()).unwrap();
@@ -86,22 +115,15 @@ auth_method = "api_token"
     )
     .unwrap();
 
-    // SAFETY: ENV_MUTEX is held across the env-var mutation and the
-    // Config::load that depends on it; no other code path in this test
-    // binary mutates XDG_CONFIG_HOME concurrently.
-    unsafe {
-        std::env::set_var("XDG_CONFIG_HOME", dir.path());
-    }
+    let _xdg = XdgConfigGuard::set(dir.path());
     let _ = jr::config::Config::load().unwrap();
     let after_first = fs::read_to_string(&cfg_path).unwrap();
     let _ = jr::config::Config::load().unwrap();
     let after_second = fs::read_to_string(&cfg_path).unwrap();
-    unsafe {
-        std::env::remove_var("XDG_CONFIG_HOME");
-    }
 
     assert_eq!(
         after_first, after_second,
         "second load should not modify file"
     );
+    // _xdg dropped here — restores prior XDG_CONFIG_HOME (or unsets).
 }
