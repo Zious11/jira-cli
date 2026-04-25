@@ -330,7 +330,10 @@ pub struct LoginArgs {
 /// file (#258).
 pub async fn handle_login(args: LoginArgs) -> Result<()> {
     let config_path = global_config_path();
-    let mut config = Config::load().map_err(|err| {
+    // `load_lenient` skips the active-profile existence check so
+    // `jr auth login --profile newprof --url ...` can create the profile
+    // on first use. Every other command keeps the strict `Config::load()`.
+    let mut config = Config::load_lenient().map_err(|err| {
         JrError::ConfigError(format!(
             "Failed to load config: {err:#}\n\n\
              Fix or remove the file referenced above. Global config: {config_path}; \

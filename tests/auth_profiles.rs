@@ -148,3 +148,52 @@ url = "https://from-flag.example"
     );
     assert_eq!(active[0]["name"], "from-flag");
 }
+
+/// Regression: round-4's unified active-profile existence check at
+/// `Config::load` time broke `jr auth login --profile newprof --url ...`
+/// because the profile didn't exist yet. `handle_login` now uses
+/// `Config::load_lenient` to skip that check, restoring the documented
+/// "login creates profile if absent" behavior.
+///
+/// Gated behind `JR_RUN_KEYRING_TESTS=1` because `login_token` writes the
+/// shared API token to the keyring, which Linux CI may not have.
+#[test]
+#[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+fn auth_login_creates_new_profile_with_url() {
+    if std::env::var("JR_RUN_KEYRING_TESTS").is_err() {
+        return;
+    }
+    let (dir, path) = fresh_config_dir();
+    std::fs::write(
+        &path,
+        r#"
+default_profile = "default"
+[profiles.default]
+url = "https://existing.example"
+auth_method = "api_token"
+"#,
+    )
+    .unwrap();
+
+    // login --profile newprof should succeed and create the profile,
+    // even though newprof isn't in [profiles] yet at load time.
+    jr().env("XDG_CONFIG_HOME", dir.path())
+        .env("JR_EMAIL", "user@example.com")
+        .env("JR_API_TOKEN", "token-value")
+        .args([
+            "auth",
+            "login",
+            "--profile",
+            "newprof",
+            "--url",
+            "https://newprof.example",
+            "--no-input",
+        ])
+        .assert()
+        .success();
+
+    // Verify the profile was added to config.
+    let saved = std::fs::read_to_string(&path).unwrap();
+    assert!(saved.contains("[profiles.newprof]"), "saved: {saved}");
+    assert!(saved.contains("https://newprof.example"), "saved: {saved}");
+}

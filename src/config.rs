@@ -187,7 +187,20 @@ fn save_global_to(path: &std::path::Path, global: &GlobalConfig) -> anyhow::Resu
 }
 
 impl Config {
+    /// Strict load — used by every command except `jr auth login`.
+    /// Errors if the resolved active profile isn't in `[profiles]`.
     pub fn load() -> anyhow::Result<Self> {
+        Self::load_inner(true)
+    }
+
+    /// Lenient load — used by `jr auth login` only, which legitimately
+    /// creates profiles on demand. Skips the active-profile existence
+    /// check; otherwise identical to [`Config::load`].
+    pub fn load_lenient() -> anyhow::Result<Self> {
+        Self::load_inner(false)
+    }
+
+    fn load_inner(strict: bool) -> anyhow::Result<Self> {
         let global_path = global_config_path();
         let mut global: GlobalConfig = Figment::new()
             .merge(Serialized::defaults(GlobalConfig::default()))
@@ -239,11 +252,18 @@ impl Config {
         // profiles are configured). A fresh install with no profiles yet is
         // allowed: jr init / jr auth login will create the first one.
         //
+        // Skipped for `load_lenient` (used only by `jr auth login`), which
+        // legitimately creates the target profile on demand and would
+        // otherwise be locked out of `--profile newprof --url ...`.
+        //
         // UserError (exit 64) instead of ConfigError (exit 78) because the
         // invalid input source is the user (--profile flag, JR_PROFILE env,
         // or a hand-edited default_profile field) — not a malformed config
         // file. Matches the wording used by switch/remove/logout/status.
-        if !global.profiles.is_empty() && !global.profiles.contains_key(&active_profile_name) {
+        if strict
+            && !global.profiles.is_empty()
+            && !global.profiles.contains_key(&active_profile_name)
+        {
             let known: Vec<&str> = global.profiles.keys().map(String::as_str).collect();
             return Err(JrError::UserError(format!(
                 "unknown profile: {active_profile_name}; known: {}",
@@ -1021,6 +1041,44 @@ mod tests {
             result.is_err(),
             "JR_PROFILE with invalid char should reject"
         );
+    }
+
+    #[test]
+    fn config_load_lenient_succeeds_when_active_profile_unknown() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let dir = TempDir::new().unwrap();
+        let cfg_dir = dir.path().join("jr");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::write(
+            cfg_dir.join("config.toml"),
+            r#"
+                default_profile = "default"
+                [profiles.default]
+                url = "https://x"
+            "#,
+        )
+        .unwrap();
+
+        // SAFETY: ENV_MUTEX held.
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", dir.path());
+            std::env::set_var("JR_PROFILE", "ghost");
+        }
+        let strict = Config::load();
+        let lenient = Config::load_lenient();
+        unsafe {
+            std::env::remove_var("JR_PROFILE");
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+
+        assert!(strict.is_err(), "strict load should reject unknown profile");
+        assert!(
+            lenient.is_ok(),
+            "lenient load should accept unknown profile"
+        );
+        let cfg = lenient.unwrap();
+        assert_eq!(cfg.active_profile_name, "ghost");
+        assert_eq!(cfg.global.profiles.len(), 1, "profile map untouched");
     }
 
     #[test]
