@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use crate::error::JrError;
 
-#[derive(Debug, Deserialize, Serialize, Default)]
+#[derive(Debug, Deserialize, Serialize, Default, Clone)]
 pub struct FieldsConfig {
     pub team_field_id: Option<String>,
     pub story_points_field_id: Option<String>,
@@ -24,7 +24,7 @@ pub struct ProfileConfig {
     pub story_points_field_id: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Default)]
+#[derive(Debug, Deserialize, Serialize, Default, Clone)]
 pub struct GlobalConfig {
     /// New-shape: name of the active profile.
     /// Resolved precedence: --profile > JR_PROFILE > this field > "default".
@@ -50,7 +50,7 @@ pub struct GlobalConfig {
     pub defaults: DefaultsConfig,
 }
 
-#[derive(Debug, Deserialize, Serialize, Default)]
+#[derive(Debug, Deserialize, Serialize, Default, Clone)]
 pub struct InstanceConfig {
     pub url: Option<String>,
     pub cloud_id: Option<String>,
@@ -59,7 +59,7 @@ pub struct InstanceConfig {
     pub oauth_scopes: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct DefaultsConfig {
     pub output: String,
 }
@@ -138,14 +138,71 @@ fn invalid_profile_name(name: &str) -> JrError {
     ))
 }
 
+/// Pure migration: copies a `GlobalConfig`'s legacy `[instance]` + `[fields]`
+/// data into a new `[profiles.default]` entry. No-op if already in new shape.
+///
+/// Legacy fields are intentionally preserved during the transition (Tasks 4-15)
+/// so callers that still read `global.instance.*` / `global.fields.*` keep
+/// working until Tasks 7/8 migrate them to read `active_profile()` instead.
+/// Task 16 stops serializing the legacy fields, so they fall off disk on the
+/// next save.
+pub fn migrate_legacy_global(mut global: GlobalConfig) -> GlobalConfig {
+    if !global.profiles.is_empty() {
+        return global;
+    }
+
+    if global.instance.url.is_none()
+        && global.instance.auth_method.is_none()
+        && global.instance.cloud_id.is_none()
+        && global.fields.team_field_id.is_none()
+        && global.fields.story_points_field_id.is_none()
+    {
+        return global;
+    }
+
+    let profile = ProfileConfig {
+        url: global.instance.url.clone(),
+        auth_method: global.instance.auth_method.clone(),
+        cloud_id: global.instance.cloud_id.clone(),
+        org_id: global.instance.org_id.clone(),
+        oauth_scopes: global.instance.oauth_scopes.clone(),
+        team_field_id: global.fields.team_field_id.clone(),
+        story_points_field_id: global.fields.story_points_field_id.clone(),
+    };
+    global.profiles.insert("default".to_string(), profile);
+    global.default_profile = Some("default".to_string());
+    global
+}
+
+fn save_global_to(path: &std::path::Path, global: &GlobalConfig) -> anyhow::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let content = toml::to_string_pretty(global)?;
+    std::fs::write(path, content)?;
+    Ok(())
+}
+
 impl Config {
     pub fn load() -> anyhow::Result<Self> {
         let global_path = global_config_path();
-        let global: GlobalConfig = Figment::new()
+        let mut global: GlobalConfig = Figment::new()
             .merge(Serialized::defaults(GlobalConfig::default()))
             .merge(Toml::file(&global_path))
             .merge(Env::prefixed("JR_"))
             .extract()?;
+
+        let needs_migration = global.profiles.is_empty()
+            && (global.instance.url.is_some() || global.fields.team_field_id.is_some());
+
+        if needs_migration {
+            global = migrate_legacy_global(global);
+            save_global_to(&global_path, &global)?;
+            eprintln!(
+                "Migrated config to multi-profile layout (single profile \"default\"). \
+                 Run 'jr auth list' to view profiles."
+            );
+        }
 
         let project = Self::find_project_config()
             .map(|path| -> anyhow::Result<ProjectConfig> {
@@ -246,12 +303,7 @@ impl Config {
     }
 
     pub fn save_global(&self) -> anyhow::Result<()> {
-        let dir = global_config_dir();
-        std::fs::create_dir_all(&dir)?;
-        let path = dir.join("config.toml");
-        let content = toml::to_string_pretty(&self.global)?;
-        std::fs::write(path, content)?;
-        Ok(())
+        save_global_to(&global_config_path(), &self.global)
     }
 }
 
@@ -641,6 +693,78 @@ mod tests {
             active_profile_name: "ghost".into(),
         };
         assert!(cfg.active_profile_or_err().is_err());
+    }
+
+    #[test]
+    fn migrate_legacy_instance_into_default_profile() {
+        let global = GlobalConfig {
+            instance: InstanceConfig {
+                url: Some("https://legacy.example".into()),
+                cloud_id: Some("legacy-1".into()),
+                org_id: Some("org-1".into()),
+                auth_method: Some("api_token".into()),
+                oauth_scopes: None,
+            },
+            fields: FieldsConfig {
+                team_field_id: Some("customfield_99".into()),
+                story_points_field_id: Some("customfield_42".into()),
+            },
+            ..GlobalConfig::default()
+        };
+
+        let migrated = migrate_legacy_global(global);
+
+        assert_eq!(migrated.default_profile.as_deref(), Some("default"));
+        assert_eq!(migrated.profiles.len(), 1);
+        let p = &migrated.profiles["default"];
+        assert_eq!(p.url.as_deref(), Some("https://legacy.example"));
+        assert_eq!(p.cloud_id.as_deref(), Some("legacy-1"));
+        assert_eq!(p.team_field_id.as_deref(), Some("customfield_99"));
+        assert_eq!(p.story_points_field_id.as_deref(), Some("customfield_42"));
+        // Legacy fields are intentionally preserved during the transition so
+        // callers that still read them keep working until Tasks 7/8 migrate.
+        assert_eq!(
+            migrated.instance.url.as_deref(),
+            Some("https://legacy.example"),
+            "[instance] preserved during transition"
+        );
+        assert_eq!(
+            migrated.fields.team_field_id.as_deref(),
+            Some("customfield_99"),
+            "[fields] preserved during transition"
+        );
+    }
+
+    #[test]
+    fn migrate_legacy_is_idempotent_when_already_new_shape() {
+        let mut profiles = std::collections::BTreeMap::new();
+        profiles.insert(
+            "custom".to_string(),
+            ProfileConfig {
+                url: Some("https://x.example".into()),
+                ..ProfileConfig::default()
+            },
+        );
+        let global = GlobalConfig {
+            default_profile: Some("custom".into()),
+            profiles,
+            ..GlobalConfig::default()
+        };
+        let migrated = migrate_legacy_global(global.clone());
+        assert_eq!(migrated.default_profile.as_deref(), Some("custom"));
+        assert_eq!(migrated.profiles.len(), 1);
+        assert_eq!(
+            migrated.profiles["custom"].url.as_deref(),
+            Some("https://x.example")
+        );
+    }
+
+    #[test]
+    fn migrate_legacy_with_no_data_yields_empty_new_shape() {
+        let global = GlobalConfig::default();
+        let migrated = migrate_legacy_global(global);
+        assert!(migrated.profiles.is_empty());
+        assert!(migrated.default_profile.is_none());
     }
 
     #[test]
