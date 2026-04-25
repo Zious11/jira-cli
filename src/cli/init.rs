@@ -39,6 +39,7 @@ pub async fn handle() -> Result<()> {
     let config = Config {
         global,
         project: ProjectConfig::default(),
+        active_profile_name: String::new(),
     };
     config.save_global()?;
 

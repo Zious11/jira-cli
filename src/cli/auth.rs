@@ -357,6 +357,7 @@ mod tests {
                 ..Default::default()
             },
             project: Default::default(),
+            active_profile_name: String::new(),
         }
     }
 
@@ -563,6 +564,7 @@ mod tests {
                 ..GlobalConfig::default()
             },
             project: Default::default(),
+            active_profile_name: String::new(),
         }
     }
 

@@ -82,6 +82,30 @@ pub struct ProjectConfig {
 pub struct Config {
     pub global: GlobalConfig,
     pub project: ProjectConfig,
+    /// Resolved at load() — flag > JR_PROFILE > default_profile > "default".
+    pub active_profile_name: String,
+}
+
+/// Resolve the active profile name from precedence chain:
+/// 1. cli_flag (--profile)
+/// 2. env var (JR_PROFILE)
+/// 3. config.default_profile field
+/// 4. literal "default"
+pub fn resolve_active_profile_name(
+    config: &GlobalConfig,
+    cli_flag: Option<&str>,
+    env_var: Option<String>,
+) -> String {
+    if let Some(name) = cli_flag {
+        return name.to_string();
+    }
+    if let Some(name) = env_var {
+        return name;
+    }
+    if let Some(name) = config.default_profile.as_ref() {
+        return name.clone();
+    }
+    "default".to_string()
 }
 
 /// Validate a profile name. See docs/specs/multi-profile-auth.md "Profile Name Validation".
@@ -132,7 +156,16 @@ impl Config {
             .transpose()?
             .unwrap_or_default();
 
-        Ok(Config { global, project })
+        let cli_profile_flag = std::env::var("JR_PROFILE_OVERRIDE").ok(); // populated by main from CLI flag
+        let env_profile = std::env::var("JR_PROFILE").ok();
+        let active_profile_name =
+            resolve_active_profile_name(&global, cli_profile_flag.as_deref(), env_profile);
+
+        Ok(Config {
+            global,
+            project,
+            active_profile_name,
+        })
     }
 
     fn find_project_config() -> Option<PathBuf> {
@@ -174,6 +207,38 @@ impl Config {
 
     pub fn board_id(&self, cli_override: Option<u64>) -> Option<u64> {
         cli_override.or(self.project.board_id)
+    }
+
+    /// Look up the active profile. Returns a default-empty `ProfileConfig` if
+    /// the active profile isn't in the map (legacy migration path runs before
+    /// most callers reach this; tests can also exercise the empty case).
+    pub fn active_profile(&self) -> ProfileConfig {
+        self.global
+            .profiles
+            .get(&self.active_profile_name)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Strict variant — errors if the active profile isn't configured.
+    pub fn active_profile_or_err(&self) -> anyhow::Result<&ProfileConfig> {
+        self.global
+            .profiles
+            .get(&self.active_profile_name)
+            .ok_or_else(|| {
+                let known: Vec<&str> = self.global.profiles.keys().map(String::as_str).collect();
+                JrError::ConfigError(format!(
+                    "default_profile {:?} not in [profiles]; known: {}; \
+                     fix config.toml or run \"jr auth list\"",
+                    self.active_profile_name,
+                    if known.is_empty() {
+                        "(none)".into()
+                    } else {
+                        known.join(", ")
+                    }
+                ))
+                .into()
+            })
     }
 
     pub fn save_global(&self) -> anyhow::Result<()> {
@@ -249,6 +314,7 @@ mod tests {
                 ..Default::default()
             },
             project: ProjectConfig::default(),
+            active_profile_name: String::new(),
         };
         assert_eq!(config.base_url().unwrap(), "https://myorg.atlassian.net");
     }
@@ -268,6 +334,7 @@ mod tests {
                 ..Default::default()
             },
             project: ProjectConfig::default(),
+            active_profile_name: String::new(),
         };
         assert_eq!(
             config.base_url().unwrap(),
@@ -281,6 +348,7 @@ mod tests {
         let config = Config {
             global: GlobalConfig::default(),
             project: ProjectConfig::default(),
+            active_profile_name: String::new(),
         };
         assert!(config.base_url().is_err());
     }
@@ -293,6 +361,7 @@ mod tests {
                 project: Some("FOO".into()),
                 board_id: None,
             },
+            active_profile_name: String::new(),
         };
         assert_eq!(config.project_key(Some("BAR")), Some("BAR".into()));
         assert_eq!(config.project_key(None), Some("FOO".into()));
@@ -306,6 +375,7 @@ mod tests {
                 project: None,
                 board_id: Some(42),
             },
+            active_profile_name: String::new(),
         };
         // CLI override wins
         assert_eq!(config.board_id(Some(99)), Some(99));
@@ -340,6 +410,7 @@ mod tests {
                 ..Default::default()
             },
             project: ProjectConfig::default(),
+            active_profile_name: String::new(),
         };
         assert_eq!(config.base_url().unwrap(), "https://myorg.atlassian.net");
     }
@@ -360,6 +431,7 @@ mod tests {
                 ..Default::default()
             },
             project: ProjectConfig::default(),
+            active_profile_name: String::new(),
         };
 
         // Write config to temp path
@@ -493,6 +565,78 @@ mod tests {
         assert!(cfg.profiles.contains_key("default"));
         assert!(cfg.profiles.contains_key("sandbox"));
         assert_eq!(cfg.profiles["sandbox"].cloud_id.as_deref(), Some("xyz-789"));
+    }
+
+    #[test]
+    fn resolve_active_profile_name_uses_cli_flag_when_set() {
+        let cfg = GlobalConfig {
+            default_profile: Some("config-default".into()),
+            ..GlobalConfig::default()
+        };
+        let name = resolve_active_profile_name(&cfg, Some("flag-value"), None);
+        assert_eq!(name, "flag-value");
+    }
+
+    #[test]
+    fn resolve_active_profile_name_uses_env_when_no_flag() {
+        let cfg = GlobalConfig {
+            default_profile: Some("config-default".into()),
+            ..GlobalConfig::default()
+        };
+        let name = resolve_active_profile_name(&cfg, None, Some("env-value".into()));
+        assert_eq!(name, "env-value");
+    }
+
+    #[test]
+    fn resolve_active_profile_name_uses_config_when_no_flag_or_env() {
+        let cfg = GlobalConfig {
+            default_profile: Some("config-default".into()),
+            ..GlobalConfig::default()
+        };
+        let name = resolve_active_profile_name(&cfg, None, None);
+        assert_eq!(name, "config-default");
+    }
+
+    #[test]
+    fn resolve_active_profile_name_falls_back_to_default_literal() {
+        let cfg = GlobalConfig::default();
+        let name = resolve_active_profile_name(&cfg, None, None);
+        assert_eq!(name, "default");
+    }
+
+    #[test]
+    fn config_active_profile_returns_resolved_profile() {
+        let mut profiles = std::collections::BTreeMap::new();
+        profiles.insert(
+            "sandbox".to_string(),
+            ProfileConfig {
+                url: Some("https://sandbox.example".into()),
+                ..ProfileConfig::default()
+            },
+        );
+        let cfg = Config {
+            global: GlobalConfig {
+                default_profile: Some("sandbox".into()),
+                profiles,
+                ..GlobalConfig::default()
+            },
+            project: ProjectConfig::default(),
+            active_profile_name: "sandbox".into(),
+        };
+        assert_eq!(
+            cfg.active_profile().url.as_deref(),
+            Some("https://sandbox.example")
+        );
+    }
+
+    #[test]
+    fn config_active_profile_unknown_profile_returns_error() {
+        let cfg = Config {
+            global: GlobalConfig::default(),
+            project: ProjectConfig::default(),
+            active_profile_name: "ghost".into(),
+        };
+        assert!(cfg.active_profile_or_err().is_err());
     }
 
     #[test]
