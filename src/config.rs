@@ -13,14 +13,41 @@ pub struct FieldsConfig {
     pub story_points_field_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Serialize, Default, Clone)]
+pub struct ProfileConfig {
+    pub url: Option<String>,
+    pub auth_method: Option<String>,
+    pub cloud_id: Option<String>,
+    pub org_id: Option<String>,
+    pub oauth_scopes: Option<String>,
+    pub team_field_id: Option<String>,
+    pub story_points_field_id: Option<String>,
+}
+
 #[derive(Debug, Deserialize, Serialize, Default)]
 pub struct GlobalConfig {
+    /// New-shape: name of the active profile.
+    /// Resolved precedence: --profile > JR_PROFILE > this field > "default".
+    /// `Option` because legacy configs don't have it.
+    #[serde(default)]
+    pub default_profile: Option<String>,
+
+    /// New-shape: named profiles.
+    #[serde(default)]
+    pub profiles: std::collections::BTreeMap<String, ProfileConfig>,
+
+    /// Legacy single-instance config — read for migration only.
+    /// Removed in cleanup task once migration is fully wired.
     #[serde(default)]
     pub instance: InstanceConfig,
-    #[serde(default)]
-    pub defaults: DefaultsConfig,
+
+    /// Legacy global custom-field IDs — read for migration only.
+    /// Migration moves these into the default profile.
     #[serde(default)]
     pub fields: FieldsConfig,
+
+    #[serde(default)]
+    pub defaults: DefaultsConfig,
 }
 
 #[derive(Debug, Deserialize, Serialize, Default)]
@@ -421,5 +448,75 @@ mod tests {
                 "expected Windows reserved name {bad:?} to be rejected"
             );
         }
+    }
+
+    #[test]
+    fn profile_config_roundtrip() {
+        let toml = r#"
+            url = "https://acme.atlassian.net"
+            auth_method = "oauth"
+            cloud_id = "abc-123"
+            org_id = "def-456"
+            oauth_scopes = "read:jira-work offline_access"
+            team_field_id = "customfield_10001"
+            story_points_field_id = "customfield_10002"
+        "#;
+        let p: ProfileConfig = toml::from_str(toml).unwrap();
+        assert_eq!(p.url.as_deref(), Some("https://acme.atlassian.net"));
+        assert_eq!(p.auth_method.as_deref(), Some("oauth"));
+        assert_eq!(p.cloud_id.as_deref(), Some("abc-123"));
+        assert_eq!(p.org_id.as_deref(), Some("def-456"));
+        assert_eq!(p.team_field_id.as_deref(), Some("customfield_10001"));
+        assert_eq!(
+            p.story_points_field_id.as_deref(),
+            Some("customfield_10002")
+        );
+    }
+
+    #[test]
+    fn global_config_parses_new_shape() {
+        let toml = r#"
+            default_profile = "default"
+
+            [profiles.default]
+            url = "https://acme.atlassian.net"
+            auth_method = "api_token"
+
+            [profiles.sandbox]
+            url = "https://acme-sandbox.atlassian.net"
+            auth_method = "oauth"
+            cloud_id = "xyz-789"
+        "#;
+        let cfg: GlobalConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.default_profile.as_deref(), Some("default"));
+        assert_eq!(cfg.profiles.len(), 2);
+        assert!(cfg.profiles.contains_key("default"));
+        assert!(cfg.profiles.contains_key("sandbox"));
+        assert_eq!(cfg.profiles["sandbox"].cloud_id.as_deref(), Some("xyz-789"));
+    }
+
+    #[test]
+    fn global_config_parses_legacy_shape_into_legacy_fields() {
+        let toml = r#"
+            [instance]
+            url = "https://legacy.atlassian.net"
+            auth_method = "api_token"
+            cloud_id = "legacy-1"
+
+            [fields]
+            team_field_id = "customfield_99"
+            story_points_field_id = "customfield_42"
+        "#;
+        let cfg: GlobalConfig = toml::from_str(toml).unwrap();
+        assert!(cfg.profiles.is_empty(), "no [profiles] in legacy shape");
+        assert!(
+            cfg.default_profile.is_none(),
+            "no default_profile in legacy shape"
+        );
+        assert_eq!(
+            cfg.instance.url.as_deref(),
+            Some("https://legacy.atlassian.net")
+        );
+        assert_eq!(cfg.fields.team_field_id.as_deref(), Some("customfield_99"));
     }
 }

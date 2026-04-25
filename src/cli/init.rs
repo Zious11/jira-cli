@@ -32,6 +32,7 @@ pub async fn handle() -> Result<()> {
         },
         defaults: DefaultsConfig::default(),
         fields: FieldsConfig::default(),
+        ..GlobalConfig::default()
     };
 
     // Save initial config so auth can use it
