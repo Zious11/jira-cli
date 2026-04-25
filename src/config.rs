@@ -37,13 +37,14 @@ pub struct GlobalConfig {
     pub profiles: std::collections::BTreeMap<String, ProfileConfig>,
 
     /// Legacy single-instance config — read for migration only.
-    /// Removed in cleanup task once migration is fully wired.
-    #[serde(default)]
+    /// Kept on the in-memory struct so callers reading legacy fields keep
+    /// working during the transition. Skipped on serialize so saved configs
+    /// only contain the new shape.
+    #[serde(default, skip_serializing)]
     pub instance: InstanceConfig,
 
     /// Legacy global custom-field IDs — read for migration only.
-    /// Migration moves these into the default profile.
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub fields: FieldsConfig,
 
     #[serde(default)]
@@ -552,23 +553,34 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let config_path = dir.path().join("config.toml");
 
+        let mut profiles = std::collections::BTreeMap::new();
+        profiles.insert(
+            "default".to_string(),
+            ProfileConfig {
+                url: Some("https://test.atlassian.net".into()),
+                auth_method: Some("api_token".into()),
+                ..ProfileConfig::default()
+            },
+        );
+
         let config = Config {
             global: GlobalConfig {
-                instance: InstanceConfig {
-                    url: Some("https://test.atlassian.net".into()),
-                    auth_method: Some("api_token".into()),
-                    ..InstanceConfig::default()
-                },
+                default_profile: Some("default".into()),
+                profiles,
                 defaults: DefaultsConfig::default(),
                 ..Default::default()
             },
             project: ProjectConfig::default(),
-            active_profile_name: String::new(),
+            active_profile_name: "default".into(),
         };
 
         // Write config to temp path
         let content = toml::to_string_pretty(&config.global).unwrap();
         fs::write(&config_path, &content).unwrap();
+
+        // Legacy [instance]/[fields] blocks must not appear in serialized output
+        assert!(!content.contains("[instance]"));
+        assert!(!content.contains("[fields]"));
 
         // Read it back
         let loaded: GlobalConfig = Figment::new()
@@ -576,11 +588,9 @@ mod tests {
             .extract()
             .unwrap();
 
-        assert_eq!(
-            loaded.instance.url.as_deref(),
-            Some("https://test.atlassian.net")
-        );
-        assert_eq!(loaded.instance.auth_method.as_deref(), Some("api_token"));
+        let p = loaded.profiles.get("default").expect("default profile");
+        assert_eq!(p.url.as_deref(), Some("https://test.atlassian.net"));
+        assert_eq!(p.auth_method.as_deref(), Some("api_token"));
     }
 
     #[test]

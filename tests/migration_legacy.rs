@@ -49,6 +49,14 @@ output = "json"
     let on_disk = fs::read_to_string(&cfg_path).unwrap();
     assert!(on_disk.contains("default_profile"));
     assert!(on_disk.contains("[profiles.default]"));
+    assert!(
+        !on_disk.contains("[instance]"),
+        "[instance] should not be serialized"
+    );
+    assert!(
+        !on_disk.contains("[fields]"),
+        "[fields] should not be serialized"
+    );
 }
 
 #[test]
