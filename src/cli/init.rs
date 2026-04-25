@@ -11,7 +11,25 @@ pub async fn handle() -> Result<()> {
     // another one rather than overwriting the existing setup. When the user
     // opts in, JR_PROFILE_OVERRIDE is set so the rest of init scopes its
     // writes to the new profile.
-    let existing = crate::config::Config::load().ok();
+    //
+    // Distinguish "no config yet" (legitimate first-run) from "config exists
+    // but won't load" (malformed TOML, permission-denied, etc.). The latter
+    // is a real problem: silently dropping to defaults would let `jr init`
+    // overwrite the user's broken-but-recoverable file. Only swallow the
+    // error when the config file genuinely doesn't exist.
+    let existing = match crate::config::Config::load() {
+        Ok(c) => Some(c),
+        Err(e) => {
+            let path = crate::config::global_config_path();
+            if path.exists() {
+                return Err(e.context(format!(
+                    "failed to load existing config at {}; fix or remove it before running 'jr init'",
+                    path.display()
+                )));
+            }
+            None
+        }
+    };
     if let Some(c) = existing.as_ref() {
         if !c.global.profiles.is_empty() {
             let names: Vec<String> = c.global.profiles.keys().cloned().collect();
@@ -65,6 +83,13 @@ pub async fn handle() -> Result<()> {
     // entry. The legacy `[instance]` block is `#[serde(skip_serializing)]`
     // since the multi-profile refactor, so writes there are silently dropped
     // on save — every persisted field must live under `[profiles.<name>]`.
+    //
+    // Reload here (rather than reusing the `existing` we discriminated
+    // above) so JR_PROFILE_OVERRIDE — which the new-profile branch may have
+    // just set — is reflected in `active_profile_name`. We've already
+    // verified the config file either loads cleanly or doesn't exist, so
+    // the only paths reachable here are a successful reload or a genuine
+    // first-run fall-through.
     let mut config = Config::load().unwrap_or_else(|_| Config {
         global: crate::config::GlobalConfig::default(),
         project: ProjectConfig::default(),

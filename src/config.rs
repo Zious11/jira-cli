@@ -232,6 +232,37 @@ impl Config {
         // all flow into cache paths and keyring keys, so a bad value (e.g.
         // "foo:bar" or path separators) must be rejected at the config boundary.
         validate_profile_name(&active_profile_name)?;
+        // Existence check: if the user has any profiles configured, the
+        // resolved active profile must actually be one of them. A typo in
+        // JR_PROFILE / `default_profile` used to surface much later as a
+        // "no URL configured" or empty-keychain error. Eagerly failing here
+        // matches the wording of `active_profile_or_err` so the message is
+        // consistent across paths.
+        //
+        // Skip cases:
+        //  1. `profiles` is empty → brand-new install (no config yet, the
+        //     fallback resolves to "default"); not an error.
+        //  2. The name came from `JR_PROFILE_OVERRIDE` (i.e., the `--profile`
+        //     CLI flag for a one-shot operation). Multi-profile commands like
+        //     `jr auth logout --profile ghost`, `jr auth status --profile ghost`,
+        //     and `jr auth login --profile ghost` (creates) all want their
+        //     own per-command validation with consistent exit-64 wording —
+        //     not exit-78 from the config layer. The flag is the user
+        //     explicitly addressing a specific profile; the handler decides
+        //     whether existence is required.
+        let from_cli_flag = cli_profile_flag.is_some();
+        if !from_cli_flag
+            && !global.profiles.is_empty()
+            && !global.profiles.contains_key(&active_profile_name)
+        {
+            let known: Vec<&str> = global.profiles.keys().map(String::as_str).collect();
+            return Err(JrError::ConfigError(format!(
+                "active profile {active_profile_name:?} not in [profiles]; known: {}; \
+                 fix config.toml or run \"jr auth list\"",
+                known.join(", ")
+            ))
+            .into());
+        }
 
         Ok(Config {
             global,
@@ -908,6 +939,40 @@ mod tests {
         unsafe {
             std::env::remove_var("XDG_CONFIG_HOME");
         }
+    }
+
+    #[test]
+    fn config_load_errors_when_jr_profile_targets_unknown_profile() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let dir = TempDir::new().unwrap();
+        let cfg_dir = dir.path().join("jr");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::write(
+            cfg_dir.join("config.toml"),
+            r#"
+                default_profile = "default"
+                [profiles.default]
+                url = "https://x"
+            "#,
+        )
+        .unwrap();
+
+        // SAFETY: ENV_MUTEX held.
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", dir.path());
+            std::env::set_var("JR_PROFILE", "ghost");
+        }
+        let result = Config::load();
+        unsafe {
+            std::env::remove_var("JR_PROFILE");
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+        let err = result.expect_err("ghost profile should fail Config::load");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("active profile") && msg.contains("ghost") && msg.contains("default"),
+            "got: {msg}"
+        );
     }
 
     #[test]

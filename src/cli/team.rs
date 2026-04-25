@@ -79,9 +79,14 @@ pub async fn resolve_org_id(config: &Config, client: &JiraClient) -> Result<Stri
         return Ok(org_id.clone());
     }
 
-    // Extract hostname from instance URL
+    // Extract hostname from instance URL. Multi-profile world: the URL
+    // lives on the active profile, so name it in the error and point the
+    // user at the profile-aware login command.
     let url = active.url.as_ref().ok_or_else(|| {
-        JrError::ConfigError("No Jira instance configured. Run \"jr init\" first.".into())
+        JrError::ConfigError(format!(
+            "Profile {:?} has no URL configured. Run \"jr auth login --profile {}\" or \"jr init\".",
+            config.active_profile_name, config.active_profile_name
+        ))
     })?;
     let hostname = url
         .trim_start_matches("https://")

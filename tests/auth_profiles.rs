@@ -39,6 +39,27 @@ fn auth_list_shows_no_profiles_for_fresh_install() {
 }
 
 #[test]
+fn auth_status_unknown_profile_exits_64() {
+    let (dir, path) = fresh_config_dir();
+    std::fs::write(
+        &path,
+        r#"
+default_profile = "default"
+[profiles.default]
+url = "https://x.example"
+auth_method = "api_token"
+"#,
+    )
+    .unwrap();
+    jr().env("XDG_CONFIG_HOME", dir.path())
+        .args(["auth", "status", "--profile", "ghost"])
+        .assert()
+        .failure()
+        .code(64)
+        .stderr(predicates::str::contains("unknown profile"));
+}
+
+#[test]
 fn auth_logout_unknown_profile_exits_64() {
     let (dir, path) = fresh_config_dir();
     std::fs::write(

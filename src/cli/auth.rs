@@ -133,13 +133,17 @@ fn chosen_flow_for_profile(
     }
 }
 
-/// Pick the OAuth scope string: user override from the active profile's
+/// Pick the OAuth scope string: user override from the *target* profile's
 /// `oauth_scopes` if set, else the compiled-in default. Trims and collapses
 /// interior whitespace so multi-line TOML strings encode cleanly. Empty or
 /// whitespace-only overrides are a configuration error.
-fn resolve_oauth_scopes(config: &Config) -> Result<String> {
-    let active = config.active_profile();
-    match active.oauth_scopes.as_deref() {
+///
+/// Takes a `&ProfileConfig` (not a `&Config`) so callers like `login_oauth`
+/// can pass the profile they're actually targeting; reading `Config`'s
+/// active profile would silently return the wrong scopes when
+/// `jr auth login --profile X` runs against a non-active X.
+fn resolve_oauth_scopes(profile: &crate::config::ProfileConfig) -> Result<String> {
+    match profile.oauth_scopes.as_deref() {
         None => Ok(auth::DEFAULT_OAUTH_SCOPES.to_string()),
         Some(raw) => {
             let collapsed: String = raw.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -263,7 +267,15 @@ pub async fn login_oauth(
             config_path = config_path.display()
         ))
     })?;
-    let scopes = resolve_oauth_scopes(&config)?;
+    // Read scopes from the TARGET profile, not the active one — `login_oauth`
+    // may target a non-active profile (e.g., `jr auth login --profile X`).
+    let target_profile = config
+        .global
+        .profiles
+        .get(profile)
+        .cloned()
+        .unwrap_or_default();
+    let scopes = resolve_oauth_scopes(&target_profile)?;
 
     // Store OAuth app credentials in keychain (only after scopes validate)
     crate::api::auth::store_oauth_app_credentials(&client_id, &client_secret)?;
@@ -326,11 +338,37 @@ pub async fn handle_login(args: LoginArgs) -> Result<()> {
             config_path = config_path.display()
         ))
     })?;
+
+    // Defensive: when the user is creating a NEW profile interactively and
+    // didn't pass `--url`, prompt for it instead of silently creating a
+    // URL-less profile that fails confusingly on the next command. Done in
+    // the orchestrator (not in `prepare_login_target`) so that pure helper
+    // stays trivially unit-testable without a TTY.
+    let target_for_check = args
+        .profile
+        .as_deref()
+        .unwrap_or(&config.active_profile_name);
+    let url_resolved: Option<String> = if let Some(u) = args.url.as_deref() {
+        Some(u.to_string())
+    } else if !args.no_input && !config.global.profiles.contains_key(target_for_check) {
+        let prompt: String = dialoguer::Input::new()
+            .with_prompt(format!(
+                "Jira instance URL for profile {target_for_check:?} \
+                 (e.g., https://yourorg.atlassian.net)"
+            ))
+            .interact_text()
+            .context("failed to read Jira instance URL")?;
+        Some(prompt)
+    } else {
+        None
+    };
+
     let (global, target) = prepare_login_target(
         config.global,
         args.profile.as_deref(),
-        args.url.as_deref(),
+        url_resolved.as_deref(),
         args.no_input,
+        &config.active_profile_name,
     )?;
     config.global = global;
     config.save_global()?;
@@ -345,7 +383,11 @@ pub async fn handle_login(args: LoginArgs) -> Result<()> {
 /// Returns `(updated_global, resolved_profile_name)`.
 ///
 /// - When `profile_arg` is `Some`, that name is validated and used as the
-///   target. Otherwise the active default falls back to `"default"`.
+///   target. Otherwise we fall back to `active_profile_name`, which the
+///   caller has already resolved through the full precedence chain
+///   (`--profile` flag > `JR_PROFILE` env > `default_profile` field >
+///   `"default"`). Reading `default_profile` directly here would drop the
+///   flag and env layers and silently target the wrong profile.
 /// - When `url_arg` is `Some`, the profile's URL is overwritten (with the
 ///   trailing slash trimmed for canonical form).
 /// - When creating a new profile under `--no-input`, a URL is required so
@@ -358,16 +400,14 @@ pub(super) fn prepare_login_target(
     profile_arg: Option<&str>,
     url_arg: Option<&str>,
     no_input: bool,
+    active_profile_name: &str,
 ) -> Result<(crate::config::GlobalConfig, String)> {
     let target = match profile_arg {
         Some(name) => {
             crate::config::validate_profile_name(name)?;
             name.to_string()
         }
-        None => global
-            .default_profile
-            .clone()
-            .unwrap_or_else(|| "default".to_string()),
+        None => active_profile_name.to_string(),
     };
 
     let exists = global.profiles.contains_key(&target);
@@ -400,6 +440,23 @@ pub async fn status(profile_arg: Option<&str>) -> Result<()> {
         .map(str::to_string)
         .unwrap_or_else(|| config.active_profile_name.clone());
     crate::config::validate_profile_name(&target)?;
+
+    // Refuse to "succeed" against a profile the user never configured —
+    // matches the strict behavior of switch/remove/logout. Without this,
+    // `jr auth status --profile typo` printed "(not configured)" for
+    // every field and exited 0, hiding the typo.
+    if !config.global.profiles.contains_key(&target) {
+        let known: Vec<&str> = config.global.profiles.keys().map(String::as_str).collect();
+        return Err(JrError::UserError(format!(
+            "unknown profile: {target}; known: {}",
+            if known.is_empty() {
+                "(none)".into()
+            } else {
+                known.join(", ")
+            }
+        ))
+        .into());
+    }
 
     let profile = config.global.profiles.get(&target);
     let url = profile
@@ -1008,50 +1065,37 @@ mod tests {
         );
     }
 
-    fn config_with_oauth_scopes(scopes: Option<&str>) -> Config {
-        let mut profiles = std::collections::BTreeMap::new();
-        profiles.insert(
-            "default".to_string(),
-            ProfileConfig {
-                oauth_scopes: scopes.map(String::from),
-                ..ProfileConfig::default()
-            },
-        );
-        Config {
-            global: GlobalConfig {
-                default_profile: Some("default".into()),
-                profiles,
-                ..GlobalConfig::default()
-            },
-            project: Default::default(),
-            active_profile_name: "default".into(),
+    fn profile_with_oauth_scopes(scopes: Option<&str>) -> ProfileConfig {
+        ProfileConfig {
+            oauth_scopes: scopes.map(String::from),
+            ..ProfileConfig::default()
         }
     }
 
     #[test]
     fn resolve_oauth_scopes_none_returns_default() {
-        let config = config_with_oauth_scopes(None);
+        let p = profile_with_oauth_scopes(None);
         assert_eq!(
-            resolve_oauth_scopes(&config).unwrap(),
+            resolve_oauth_scopes(&p).unwrap(),
             auth::DEFAULT_OAUTH_SCOPES
         );
     }
 
     #[test]
     fn resolve_oauth_scopes_trims_and_collapses_whitespace() {
-        let config = config_with_oauth_scopes(Some(
+        let p = profile_with_oauth_scopes(Some(
             "  read:issue:jira   write:comment:jira\n\toffline_access  ",
         ));
         assert_eq!(
-            resolve_oauth_scopes(&config).unwrap(),
+            resolve_oauth_scopes(&p).unwrap(),
             "read:issue:jira write:comment:jira offline_access"
         );
     }
 
     #[test]
     fn resolve_oauth_scopes_empty_string_is_config_error() {
-        let config = config_with_oauth_scopes(Some(""));
-        let err = resolve_oauth_scopes(&config).unwrap_err();
+        let p = profile_with_oauth_scopes(Some(""));
+        let err = resolve_oauth_scopes(&p).unwrap_err();
         let msg = format!("{err:#}");
         assert!(
             msg.contains("oauth_scopes is empty"),
@@ -1061,12 +1105,28 @@ mod tests {
 
     #[test]
     fn resolve_oauth_scopes_whitespace_only_is_config_error() {
-        let config = config_with_oauth_scopes(Some("   \n\t  "));
-        let err = resolve_oauth_scopes(&config).unwrap_err();
+        let p = profile_with_oauth_scopes(Some("   \n\t  "));
+        let err = resolve_oauth_scopes(&p).unwrap_err();
         let msg = format!("{err:#}");
         assert!(
             msg.contains("oauth_scopes is empty"),
             "unexpected error: {msg}"
+        );
+    }
+
+    /// Regression: `resolve_oauth_scopes` must read the *passed* profile,
+    /// not anything off a `Config`. `login_oauth(profile, ...)` may target
+    /// a non-active profile and used to resolve scopes from the active
+    /// profile, silently returning the wrong scope list.
+    #[test]
+    fn resolve_oauth_scopes_inspects_passed_profile_not_active() {
+        let custom = ProfileConfig {
+            oauth_scopes: Some("custom:scope offline_access".into()),
+            ..ProfileConfig::default()
+        };
+        assert_eq!(
+            resolve_oauth_scopes(&custom).unwrap(),
+            "custom:scope offline_access"
         );
     }
 
@@ -1223,7 +1283,7 @@ mod tests {
     #[test]
     fn login_create_new_profile_no_input_requires_url() {
         let global = crate::config::GlobalConfig::default();
-        let result = prepare_login_target(global, Some("sandbox"), None, true);
+        let result = prepare_login_target(global, Some("sandbox"), None, true, "default");
         assert!(result.is_err());
         let msg = format!("{:#}", result.unwrap_err());
         assert!(msg.contains("--url required"), "got: {msg}");
@@ -1237,6 +1297,7 @@ mod tests {
             Some("sandbox"),
             Some("https://sandbox.example"),
             true,
+            "default",
         )
         .unwrap();
         assert_eq!(target, "sandbox");
@@ -1261,13 +1322,46 @@ mod tests {
             profiles,
             ..crate::config::GlobalConfig::default()
         };
-        let (mutated, target) =
-            prepare_login_target(global, Some("default"), Some("https://new.example"), true)
-                .unwrap();
+        let (mutated, target) = prepare_login_target(
+            global,
+            Some("default"),
+            Some("https://new.example"),
+            true,
+            "default",
+        )
+        .unwrap();
         assert_eq!(target, "default");
         assert_eq!(
             mutated.profiles["default"].url.as_deref(),
             Some("https://new.example")
+        );
+    }
+
+    /// Regression: when `--profile` is omitted, fallback uses the active
+    /// profile name (which encodes flag > env > config), NOT the
+    /// `default_profile` config field — using the latter ignores the
+    /// `JR_PROFILE` env / `--profile` global flag.
+    #[test]
+    fn login_falls_back_to_active_profile_name_not_default_profile_field() {
+        let mut profiles = std::collections::BTreeMap::new();
+        profiles.insert(
+            "from-env".into(),
+            crate::config::ProfileConfig {
+                url: Some("https://from-env.example".into()),
+                ..crate::config::ProfileConfig::default()
+            },
+        );
+        let global = crate::config::GlobalConfig {
+            default_profile: Some("from-config".into()),
+            profiles,
+            ..crate::config::GlobalConfig::default()
+        };
+        let (_mutated, target) =
+            prepare_login_target(global, None, Some("https://x.example"), true, "from-env")
+                .unwrap();
+        assert_eq!(
+            target, "from-env",
+            "must follow active_profile_name, not default_profile field"
         );
     }
 
@@ -1285,8 +1379,8 @@ mod tests {
             "offline_access",                           // only offline_access
         ];
         for raw in inputs {
-            let config = config_with_oauth_scopes(Some(raw));
-            let result = resolve_oauth_scopes(&config).unwrap_or_else(|e| {
+            let p = profile_with_oauth_scopes(Some(raw));
+            let result = resolve_oauth_scopes(&p).unwrap_or_else(|e| {
                 panic!("resolve_oauth_scopes must pass {raw:?} through unchanged, got error: {e:#}")
             });
             assert_eq!(result, raw, "input {raw:?} must pass through unchanged");
