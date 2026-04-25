@@ -802,10 +802,14 @@ pub(super) fn render_list_table(global: &crate::config::GlobalConfig, active: &s
         let marker = if name == active { "*" } else { " " };
         let auth = p.auth_method.as_deref().unwrap_or("?");
         let url = p.url.as_deref().unwrap_or("(unset)");
+        // STATUS reflects CONFIG presence (URL on file), not credential
+        // presence. `unset` is more accurate than the old `no-creds` label,
+        // which suggested the keychain was missing entries when in reality
+        // the profile entry simply lacks a URL.
         let status = if p.url.is_some() {
             "configured"
         } else {
-            "no-creds"
+            "unset"
         };
         rows.push(vec![
             format!("{marker} {name}"),
@@ -831,7 +835,7 @@ pub(super) fn render_list_json(
                 "name": name,
                 "url": &p.url,
                 "auth_method": &p.auth_method,
-                "status": if p.url.is_some() { "configured" } else { "no-creds" },
+                "status": if p.url.is_some() { "configured" } else { "unset" },
                 "active": name == active,
             })
         })

@@ -163,6 +163,51 @@ url = "https://from-flag.example"
     assert_eq!(active[0]["name"], "from-flag");
 }
 
+/// Regression (Copilot round-10): the global `--profile` flag was being
+/// dropped by `auth status`, `auth login`, `auth refresh`, and `auth logout`
+/// because each handler reloaded config internally and only saw the
+/// subcommand-level `--profile`. main.rs now composes an effective profile
+/// (`subcmd.profile.or(cli.profile)`) so the global flag propagates.
+#[test]
+fn global_profile_flag_targets_auth_status() {
+    let (dir, path) = fresh_config_dir();
+    std::fs::write(
+        &path,
+        r#"
+default_profile = "default"
+[profiles.default]
+url = "https://default.example"
+auth_method = "api_token"
+[profiles.sandbox]
+url = "https://sandbox.example"
+auth_method = "api_token"
+"#,
+    )
+    .unwrap();
+
+    // Global `--profile sandbox` without subcommand-level `--profile`.
+    // Status output must reflect sandbox, not default.
+    let out = jr()
+        .env("XDG_CONFIG_HOME", dir.path())
+        .args(["--profile", "sandbox", "auth", "status"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        combined.contains("sandbox") || combined.contains("https://sandbox.example"),
+        "global --profile flag should target sandbox; got: {combined}"
+    );
+}
+
 /// Regression: round-4's unified active-profile existence check at
 /// `Config::load` time broke `jr auth login --profile newprof --url ...`
 /// because the profile didn't exist yet. `handle_login` now uses

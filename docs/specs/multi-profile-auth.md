@@ -236,7 +236,7 @@ jr auth switch <NAME>
 
 jr auth list
     Show all configured profiles. Mark active with `*`.
-    Table columns: NAME | URL | AUTH | STATUS    where STATUS ∈ {configured, no-creds}
+    Table columns: NAME | URL | AUTH | STATUS    where STATUS ∈ {configured, unset}
     JSON: [{"name", "url", "auth_method", "status", "active"}]
 
 jr auth status [--profile NAME]

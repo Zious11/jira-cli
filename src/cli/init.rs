@@ -59,11 +59,27 @@ pub async fn handle() -> Result<()> {
             if !add {
                 return Ok(());
             }
-            let profile_name: String = Input::new()
-                .with_prompt("Name for the new profile")
-                .interact_text()
-                .context("failed to read profile name")?;
-            crate::config::validate_profile_name(&profile_name)?;
+            // Re-prompt on collision so a typo matching an existing profile
+            // name doesn't silently overwrite that profile's URL/auth
+            // settings later in the flow.
+            let profile_name: String = loop {
+                let candidate: String = Input::new()
+                    .with_prompt("Name for the new profile")
+                    .interact_text()
+                    .context("failed to read profile name")?;
+                if let Err(e) = crate::config::validate_profile_name(&candidate) {
+                    eprintln!("invalid profile name: {e}");
+                    continue;
+                }
+                if c.global.profiles.contains_key(&candidate) {
+                    eprintln!(
+                        "profile {candidate:?} already exists. Pick a different name, or run \
+                         'jr auth remove {candidate}' first to overwrite."
+                    );
+                    continue;
+                }
+                break candidate;
+            };
             new_profile_override = Some(profile_name);
         }
     }

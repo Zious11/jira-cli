@@ -81,6 +81,13 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 cli::assets::handle(command, &cli.output, &client).await
             }
             cli::Command::Auth { command } => match command {
+                // For each subcommand that takes its own `--profile` arg, we
+                // compose an "effective profile" by falling back to the
+                // global `--profile` (`cli.profile`) when the subcommand-level
+                // value is `None`. Without this, `jr --profile sandbox auth
+                // <subcmd>` would silently drop the global flag because each
+                // handler reloads config internally and only sees the
+                // subcommand-level arg.
                 cli::AuthCommand::Login {
                     profile,
                     url,
@@ -90,8 +97,9 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                     client_id,
                     client_secret,
                 } => {
+                    let effective_profile = profile.or_else(|| cli.profile.clone());
                     cli::auth::handle_login(cli::auth::LoginArgs {
-                        profile,
+                        profile: effective_profile,
                         url,
                         oauth,
                         email,
@@ -102,7 +110,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                     })
                     .await
                 }
-                cli::AuthCommand::Status { profile } => cli::auth::status(profile.as_deref()).await,
+                cli::AuthCommand::Status { profile } => {
+                    let effective_profile = profile.or_else(|| cli.profile.clone());
+                    cli::auth::status(effective_profile.as_deref()).await
+                }
                 cli::AuthCommand::Refresh {
                     profile,
                     oauth,
@@ -111,8 +122,9 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                     client_id,
                     client_secret,
                 } => {
+                    let effective_profile = profile.or_else(|| cli.profile.clone());
                     cli::auth::refresh_credentials(cli::auth::RefreshArgs {
-                        profile: profile.as_deref(),
+                        profile: effective_profile.as_deref(),
                         oauth,
                         email,
                         token,
@@ -130,7 +142,8 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                     cli::auth::handle_list(&cli.output, cli.profile.as_deref()).await
                 }
                 cli::AuthCommand::Logout { profile } => {
-                    cli::auth::handle_logout(profile.as_deref()).await
+                    let effective_profile = profile.or_else(|| cli.profile.clone());
+                    cli::auth::handle_logout(effective_profile.as_deref()).await
                 }
                 cli::AuthCommand::Remove { name } => {
                     cli::auth::handle_remove(&name, cli.no_input, cli.profile.as_deref()).await
