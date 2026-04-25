@@ -151,10 +151,14 @@ jr issue comment JSM-42 "customer is on the paid plan — prioritizing" --intern
 
 | Command | Description |
 |---------|-------------|
-| `jr init` | Configure Jira instance and authenticate |
-| `jr auth login` | Authenticate with API token (default) or `--oauth` for OAuth 2.0. Non-interactive: `--email`/`--token` or `JR_EMAIL`/`JR_API_TOKEN`; `--client-id`/`--client-secret` or `JR_OAUTH_CLIENT_ID`/`JR_OAUTH_CLIENT_SECRET` for OAuth |
-| `jr auth refresh` | Clear stored credentials and re-run login (same flags/env vars as `auth login`) |
-| `jr auth status` | Show authentication status |
+| `jr init` | Configure Jira instance and authenticate (prompts to add another profile if any are already configured) |
+| `jr auth login` | Authenticate with API token (default) or `--oauth` for OAuth 2.0. `--profile NAME` targets a specific profile (creates if absent); `--url URL` sets the Jira instance URL when creating. Non-interactive: `--email`/`--token` or `JR_EMAIL`/`JR_API_TOKEN`; `--client-id`/`--client-secret` or `JR_OAUTH_CLIENT_ID`/`JR_OAUTH_CLIENT_SECRET` for OAuth |
+| `jr auth switch <NAME>` | Set the default profile in `config.toml`. Errors if `NAME` doesn't exist |
+| `jr auth list` | List configured profiles (table or JSON via `--output`); active profile marked with `*` |
+| `jr auth status` | Show authentication status for the active profile, or `--profile NAME` for another |
+| `jr auth refresh` | Refresh credentials for the active profile (or `--profile NAME`); same flags/env vars as `auth login` |
+| `jr auth logout` | Clear OAuth tokens for the active profile (or `--profile NAME`); shared API token NOT touched |
+| `jr auth remove <NAME>` | Permanently delete a profile (config entry + cache + per-profile OAuth tokens). Cannot remove the active profile |
 | `jr me` | Show current user info |
 | `jr issue list` | List issues (`--assignee`, `--reporter`, `--recent`, `--status`, `--open`, `--team`, `--asset KEY`, `--jql`, `--limit`/`--all`, `--points`, `--assets`) |
 | `jr issue view KEY` | View issue details (per-field asset rows, enriched JSON, story points) |
@@ -202,6 +206,7 @@ jr issue comment JSM-42 "customer is on the paid plan — prioritizing" --intern
 |------|-------------|
 | `--output json\|table` | Output format (default: table) |
 | `--project FOO` | Override project key |
+| `--profile NAME` | Override the active profile for this invocation (precedence: this flag > `JR_PROFILE` env > `default_profile` in config > `"default"`) |
 | `--no-color` | Disable colored output (also respects `NO_COLOR` env) |
 | `--no-input` | Disable interactive prompts (auto-enabled in pipes/scripts) |
 | `--verbose` | Show HTTP request/response details |
@@ -215,34 +220,58 @@ jr issue comment JSM-42 "customer is on the paid plan — prioritizing" --intern
 # Per-project config (in your repo root)
 .jr.toml
 
-# Team cache (disposable, 7-day TTL)
-~/.cache/jr/teams.json
+# Per-profile cache (disposable, 7-day TTL)
+~/.cache/jr/v1/<profile>/teams.json
 ```
 
-**Global config:**
+**Global config (multi-profile shape):**
 ```toml
-[instance]
+default_profile = "default"
+
+[profiles.default]
 url = "https://yourorg.atlassian.net"
 auth_method = "api_token"  # or "oauth"
-# Optional: override the OAuth 2.0 scope list when auth_method = "oauth".
-# Must match what your app in the Atlassian Developer Console has
-# configured. Classic and granular scopes CANNOT mix in one request, and
-# "offline_access" is required for refresh tokens to be issued. If unset,
-# jr uses Atlassian's recommended classic scopes.
-# oauth_scopes = "read:issue:jira write:issue:jira write:comment:jira read:jira-user offline_access"
+# cloud_id, org_id, oauth_scopes, team_field_id, story_points_field_id
+# are auto-discovered during `jr init` / `jr auth login --oauth` and
+# populated here per profile.
+# oauth_scopes = "read:issue:jira write:issue:jira ... offline_access"
+
+[profiles.sandbox]
+url = "https://yourorg-sandbox.atlassian.net"
+auth_method = "api_token"
+# Sandbox sites usually mirror production custom-field IDs, but `jr` stores
+# them per profile so divergence doesn't silently corrupt cached lookups.
 
 [defaults]
 output = "table"
-
-[fields]
-story_points_field_id = "customfield_XXXXX"  # auto-discovered during init
 ```
+
+Switching between profiles:
+
+```bash
+jr auth switch sandbox          # persistent — writes default_profile in config.toml
+jr --profile sandbox issue list # one-shot — overrides for this call only
+JR_PROFILE=sandbox jr issue list # session-scoped (works well with direnv)
+```
+
+A single classic Atlassian API token authenticates the same user against
+any Atlassian Cloud site, so `email` + `api-token` are stored once in the
+OS keychain and shared by all `api_token` profiles. OAuth tokens are
+cloudId-scoped and stored per profile.
 
 **Per-project config:**
 ```toml
 project = "FOO"
 board_id = 42
 ```
+
+**Migrating from single-instance configs:** the first run after upgrading
+auto-migrates a legacy `[instance]`+`[fields]` config to the new
+`[profiles.default]` shape (one stderr notice; idempotent). OAuth tokens
+in the OS keychain lazy-migrate from flat keys (`oauth-access-token`) to
+namespaced keys (`default:oauth-access-token`) on first authenticated
+read. Old cache files at `~/.cache/jr/*.json` orphan harmlessly when the
+new layout starts using `~/.cache/jr/v1/<profile>/`.
 
 ## Scripting & AI Agents
 
@@ -255,6 +284,7 @@ board_id = 42
 - State-changing commands are idempotent (exit 0 if already in target state)
 - Structured exit codes (see [Exit Codes](#exit-codes) table)
 - `auth login` / `auth refresh` accept credentials via flags (`--email`, `--token`, `--client-id`, `--client-secret`) or env vars (`JR_EMAIL`, `JR_API_TOKEN`, `JR_OAUTH_CLIENT_ID`, `JR_OAUTH_CLIENT_SECRET`) — no TTY required. Prefer env vars for secrets.
+- `--profile NAME` flag and `JR_PROFILE` env var let agents target a specific profile per-call without mutating the user's `default_profile`. Combined with direnv (`echo 'export JR_PROFILE=sandbox' >> .envrc`), a repo can scope all `jr` calls to a sandbox site automatically.
 
 ```bash
 # AI agent workflow example
