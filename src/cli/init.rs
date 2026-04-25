@@ -142,15 +142,11 @@ pub async fn handle() -> Result<()> {
     if auth_choice == 0 {
         crate::cli::auth::login_oauth(&profile_name, None, None, false).await?;
     } else {
+        // login_token already persists auth_method = "api_token" to
+        // [profiles.<name>] internally — no additional load+save needed
+        // here. (Doing a redundant reload + write is also a last-writer-
+        // wins race against any concurrent jr invocation.)
         crate::cli::auth::login_token(&profile_name, None, None, false).await?;
-        let mut config = Config::load_with(Some(&profile_name))?;
-        config
-            .global
-            .profiles
-            .entry(profile_name.clone())
-            .or_default()
-            .auth_method = Some("api_token".into());
-        config.save_global()?;
     }
 
     // Step 4: Per-project setup

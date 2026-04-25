@@ -714,6 +714,20 @@ pub(super) fn handle_remove_in_memory(
         ))
         .into());
     }
+    // Also refuse if `target` is the persisted default_profile, even when
+    // not the *current* active (e.g., `jr --profile sandbox auth remove
+    // default` where active=sandbox but default_profile=default). Removing
+    // the profile that default_profile points to leaves config.toml in a
+    // broken state — strict Config::load() afterward would error with
+    // "active profile 'default' not in [profiles]" until the user manually
+    // edits the file.
+    if global.default_profile.as_deref() == Some(target) {
+        return Err(JrError::UserError(format!(
+            "cannot remove profile {target:?}: it is the default_profile in config. \
+             Switch the default first with \"jr auth switch <other>\"."
+        ))
+        .into());
+    }
     global.profiles.remove(target);
     Ok(global)
 }
@@ -768,9 +782,11 @@ pub async fn handle_remove(
         ));
     }
     if let Err(e) = crate::cache::clear_profile_cache(target) {
+        let cache_path = crate::cache::cache_dir(target);
         crate::output::print_warning(&format!(
             "removed config entry but failed to clear cache for {target:?}: {e}. \
-             Remove ~/.cache/jr/v1/{target}/ manually if disk space matters."
+             Remove {} manually if disk space matters.",
+            cache_path.display()
         ));
     }
     crate::output::print_success(&format!("Removed profile {target:?}"));
