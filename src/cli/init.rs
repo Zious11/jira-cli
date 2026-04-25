@@ -9,6 +9,36 @@ use crate::{api, output};
 pub async fn handle() -> Result<()> {
     eprintln!("Setting up jr — Jira CLI\n");
 
+    // Multi-profile awareness: if profiles already exist, ask whether to add
+    // another one rather than overwriting the existing setup. When the user
+    // opts in, JR_PROFILE_OVERRIDE is set so the rest of init scopes its
+    // writes to the new profile.
+    let existing = crate::config::Config::load().ok();
+    if let Some(c) = existing.as_ref() {
+        if !c.global.profiles.is_empty() {
+            let names: Vec<String> = c.global.profiles.keys().cloned().collect();
+            eprintln!("Profiles already configured: {}", names.join(", "));
+            let add = Confirm::new()
+                .with_prompt("Add another profile?")
+                .default(false)
+                .interact()
+                .context("failed to prompt for additional profile")?;
+            if !add {
+                return Ok(());
+            }
+            let profile_name: String = Input::new()
+                .with_prompt("Name for the new profile")
+                .interact_text()
+                .context("failed to read profile name")?;
+            crate::config::validate_profile_name(&profile_name)?;
+            // SAFETY: jr init is single-threaded — main.rs awaits this future
+            // on the tokio runtime before anything else mutates env vars.
+            unsafe {
+                std::env::set_var("JR_PROFILE_OVERRIDE", &profile_name);
+            }
+        }
+    }
+
     // Step 1: Instance URL
     let url: String = Input::new()
         .with_prompt("Jira instance URL (e.g., https://yourorg.atlassian.net)")
