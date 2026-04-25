@@ -74,12 +74,13 @@ pub async fn fetch_and_cache_teams(
 /// Resolve org_id: read from config, or discover via GraphQL and persist.
 /// Uses hostNames-based GraphQL query to get both cloudId and orgId in one call.
 pub async fn resolve_org_id(config: &Config, client: &JiraClient) -> Result<String> {
-    if let Some(ref org_id) = config.global.instance.org_id {
+    let active = config.active_profile();
+    if let Some(ref org_id) = active.org_id {
         return Ok(org_id.clone());
     }
 
     // Extract hostname from instance URL
-    let url = config.global.instance.url.as_ref().ok_or_else(|| {
+    let url = active.url.as_ref().ok_or_else(|| {
         JrError::ConfigError("No Jira instance configured. Run \"jr init\" first.".into())
     })?;
     let hostname = url
@@ -92,8 +93,19 @@ pub async fn resolve_org_id(config: &Config, client: &JiraClient) -> Result<Stri
 
     // Persist discovered values to config for future use
     let mut updated_config = Config::load()?;
-    updated_config.global.instance.cloud_id = Some(metadata.cloud_id);
-    updated_config.global.instance.org_id = Some(metadata.org_id.clone());
+    let profile_name = updated_config.active_profile_name.clone();
+    updated_config
+        .global
+        .profiles
+        .entry(profile_name.clone())
+        .or_insert_with(crate::config::ProfileConfig::default)
+        .cloud_id = Some(metadata.cloud_id.clone());
+    updated_config
+        .global
+        .profiles
+        .entry(profile_name)
+        .or_insert_with(crate::config::ProfileConfig::default)
+        .org_id = Some(metadata.org_id.clone());
     updated_config.save_global()?;
 
     Ok(metadata.org_id)
