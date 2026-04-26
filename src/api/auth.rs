@@ -116,18 +116,35 @@ pub fn load_oauth_tokens(profile: &str) -> Result<(String, String)> {
                  run \"jr auth login --profile {profile}\""
             ))
         }
-        // Partial state: one half missing. Don't silently fall back to
-        // legacy migration — that would mask data loss / corruption by
-        // either resurrecting a stale legacy pair or returning the
-        // generic "no token" message, both of which hide the fact that
-        // the namespaced keys are in an inconsistent state. Surface it
-        // with explicit recovery instructions instead.
-        _ => Err(anyhow::anyhow!(
-            "OAuth keychain entries for profile {profile:?} are partial \
-             (one of access/refresh present, the other missing). \
-             Run \"jr auth logout --profile {profile}\" then \
-             \"jr auth login --profile {profile}\" to restore a clean state."
-        )),
+        // Partial state: one half of the namespaced pair is missing. For
+        // the "default" profile, try recovering from a still-intact
+        // legacy pair before erroring — this handles interrupted lazy
+        // migrations and partial writes that left the namespaced entries
+        // inconsistent while the legacy flat keys still contain valid
+        // tokens. Non-default profiles must NEVER inherit legacy keys
+        // (that would cross-pollinate credentials across Jira sites).
+        //
+        // If the legacy pair isn't complete either, surface the partial
+        // state with explicit recovery instructions rather than masking
+        // the corruption with a generic "no token" message.
+        _ => {
+            if profile == "default" {
+                let legacy_access = read_keyring_optional(KEY_OAUTH_ACCESS_LEGACY)?;
+                let legacy_refresh = read_keyring_optional(KEY_OAUTH_REFRESH_LEGACY)?;
+                if let (Some(a), Some(r)) = (legacy_access, legacy_refresh) {
+                    store_oauth_tokens("default", &a, &r)?;
+                    let _ = entry(KEY_OAUTH_ACCESS_LEGACY)?.delete_credential();
+                    let _ = entry(KEY_OAUTH_REFRESH_LEGACY)?.delete_credential();
+                    return Ok((a, r));
+                }
+            }
+            Err(anyhow::anyhow!(
+                "OAuth keychain entries for profile {profile:?} are partial \
+                 (one of access/refresh present, the other missing). \
+                 Run \"jr auth logout --profile {profile}\" then \
+                 \"jr auth login --profile {profile}\" to restore a clean state."
+            ))
+        }
     }
 }
 
@@ -835,6 +852,63 @@ mod tests {
             let err = result.expect_err("partial state should error");
             let msg = format!("{err:#}");
             assert!(msg.contains("partial"), "got: {msg}");
+        });
+    }
+
+    /// Edge case: an interrupted lazy migration could leave the namespaced
+    /// pair in a partial state for the `default` profile while the legacy
+    /// flat keys still hold a complete pair. `load_oauth_tokens("default")`
+    /// should recover from the intact legacy pair rather than stranding
+    /// users with a partial-state error.
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn load_oauth_tokens_default_partial_recovers_from_legacy() {
+        with_test_keyring(|| {
+            // Partial namespaced state for the default profile.
+            entry(&oauth_access_key("default"))
+                .unwrap()
+                .set_password("stale-partial")
+                .unwrap();
+            // Complete legacy pair.
+            entry(KEY_OAUTH_ACCESS_LEGACY)
+                .unwrap()
+                .set_password("legacy-access")
+                .unwrap();
+            entry(KEY_OAUTH_REFRESH_LEGACY)
+                .unwrap()
+                .set_password("legacy-refresh")
+                .unwrap();
+
+            let (a, r) = load_oauth_tokens("default").unwrap();
+            assert_eq!(a, "legacy-access");
+            assert_eq!(r, "legacy-refresh");
+
+            // The recovered legacy values overwrote the namespaced pair
+            // (both halves now match the legacy tokens).
+            let recovered_access = entry(&oauth_access_key("default"))
+                .unwrap()
+                .get_password()
+                .unwrap();
+            let recovered_refresh = entry(&oauth_refresh_key("default"))
+                .unwrap()
+                .get_password()
+                .unwrap();
+            assert_eq!(recovered_access, "legacy-access");
+            assert_eq!(recovered_refresh, "legacy-refresh");
+
+            // Legacy flat keys cleaned up after migration.
+            assert!(
+                entry(KEY_OAUTH_ACCESS_LEGACY)
+                    .unwrap()
+                    .get_password()
+                    .is_err()
+            );
+            assert!(
+                entry(KEY_OAUTH_REFRESH_LEGACY)
+                    .unwrap()
+                    .get_password()
+                    .is_err()
+            );
         });
     }
 
