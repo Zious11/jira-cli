@@ -414,7 +414,35 @@ impl Config {
     }
 
     pub fn save_global(&self) -> anyhow::Result<()> {
-        save_global_to(&global_config_path(), &self.global)
+        let path = global_config_path();
+        // Read the file-only baseline (no `JR_*` env overlay) so transient
+        // env overrides on the invocation that mutates a profile (e.g.,
+        // `JR_DEFAULTS_OUTPUT=json jr auth switch sandbox`) can't leak
+        // into the saved config.toml. The in-memory `self.global` has env
+        // overlays applied for the duration of this process; we want to
+        // persist only the structural multi-profile changes (default
+        // profile + profiles map), preserving everything else from disk.
+        //
+        // If the file doesn't exist yet (fresh install), start with the
+        // default-empty `GlobalConfig` — legitimate first-run case where
+        // `defaults`/etc. have nothing to preserve from disk anyway.
+        let mut to_save: GlobalConfig = if path.exists() {
+            Figment::new()
+                .merge(Serialized::defaults(GlobalConfig::default()))
+                .merge(Toml::file(&path))
+                .extract()?
+        } else {
+            GlobalConfig::default()
+        };
+
+        // Overlay only the multi-profile fields. These are what callers
+        // of `save_global` mutate (handle_switch, handle_remove,
+        // handle_login, login_token/oauth, jr init). Other fields like
+        // `defaults.output` are preserved from the file-only baseline.
+        to_save.default_profile = self.global.default_profile.clone();
+        to_save.profiles = self.global.profiles.clone();
+
+        save_global_to(&path, &to_save)
     }
 }
 

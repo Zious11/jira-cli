@@ -258,9 +258,17 @@ pub fn clear_all_credentials(profiles: &[&str]) -> Result<()> {
         KEY_API_TOKEN.to_string(),
         "oauth_client_id".to_string(),
         "oauth_client_secret".to_string(),
-        KEY_OAUTH_ACCESS_LEGACY.to_string(),
-        KEY_OAUTH_REFRESH_LEGACY.to_string(),
     ];
+    // Legacy flat OAuth keys belong to the "default" profile's
+    // lazy-migration path. Only delete them when the caller is
+    // explicitly clearing "default" — otherwise `jr auth refresh
+    // --profile sandbox` (api_token flow) on a not-yet-migrated
+    // legacy install would unconditionally wipe the default
+    // profile's intact-but-unmigrated OAuth tokens.
+    if profiles.contains(&"default") {
+        keys.push(KEY_OAUTH_ACCESS_LEGACY.to_string());
+        keys.push(KEY_OAUTH_REFRESH_LEGACY.to_string());
+    }
     for profile in profiles {
         keys.push(oauth_access_key(profile));
         keys.push(oauth_refresh_key(profile));
