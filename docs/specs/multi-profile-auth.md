@@ -223,7 +223,9 @@ jr auth login [--profile NAME] [--url URL] [--oauth] [--no-input]
         in interactive mode, jr prompts for the URL.
     --url on an EXISTING profile is allowed and transparently updates that
         profile's URL (e.g., user moved sites, or wants to change cloud_id
-        via re-discovery). Confirmation prompt unless --no-input.
+        via re-discovery). Passing --url is itself the explicit confirmation
+        of intent — no separate prompt — so agents and scripts that pass
+        --url get a deterministic write without an interactive gate.
     --oauth on an existing api_token profile (or vice versa) switches the
         auth method for that profile transparently and prompts for
         whatever the new method needs.

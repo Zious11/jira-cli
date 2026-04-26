@@ -627,6 +627,25 @@ pub async fn refresh_credentials(args: RefreshArgs<'_>) -> Result<()> {
         .unwrap_or_default();
     let flow = chosen_flow_for_profile(&target_profile, args.oauth);
 
+    // For the api_token flow, login_token re-prompts/sets the SHARED
+    // api-token but doesn't write a URL. If the target profile has no
+    // URL configured (fresh install / hand-edited profile with status
+    // `unset`), refresh would succeed in keychain terms while leaving
+    // the profile unusable for any actual API call. Refuse upfront with
+    // a recovery hint to use `jr auth login --profile X --url ...`
+    // instead. The OAuth flow goes through oauth_login which fetches
+    // accessible-resources and writes its own URL/cloud_id, so it
+    // doesn't have this gap.
+    if flow == AuthFlow::Token && target_profile.url.is_none() {
+        return Err(JrError::UserError(format!(
+            "profile {target:?} has no URL configured. Use \
+             \"jr auth login --profile {target} --url <https://...>\" \
+             instead of refresh — refresh assumes the profile is already \
+             set up and only rotates credentials."
+        ))
+        .into());
+    }
+
     // Clear-only-what-this-flow-refreshes:
     //
     // - OAuth refresh rotates the per-profile <profile>:oauth-*-token

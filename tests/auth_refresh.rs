@@ -41,18 +41,21 @@ fn auth_refresh_oauth_help_is_accepted() {
 
 #[test]
 fn auth_refresh_no_input_fails_with_clear_message() {
-    // Pin: `jr auth refresh --no-input` without any credential flags must
-    // fail with a UserError (exit 64) that names the missing flag and env
-    // var. Enabled by #211 — login flows now resolve credentials via
-    // flag → env → prompt and error explicitly under --no-input.
+    // Pin: `jr auth refresh --no-input` against an unconfigured profile
+    // (empty config / no URL) must fail with a UserError (exit 64) that
+    // tells the user to use `jr auth login --url ...` instead. Refresh
+    // assumes the profile is already set up; rotating credentials on a
+    // URL-less profile would leave it unusable for actual API calls.
     //
-    // Replaces the pre-#211 test that asserted "fails without panic" when
-    // stdin was closed; the new contract is stronger (specific exit code +
-    // actionable message) so scripts/agents can recover.
+    // Round-16 of the multi-profile-auth review tightened this contract:
+    // pre-fix, refresh would clear credentials and then ask for an email
+    // (via --email / $JR_EMAIL), giving the user a misleading recovery
+    // path. Post-fix, the error names the actual root cause (no profile
+    // URL).
     //
-    // `JR_SERVICE_NAME` scopes the keychain service so `auth::clear_credentials()`
-    // inside the subprocess never touches the developer's real `jr-jira-cli`
-    // entries when `cargo test` runs locally.
+    // `JR_SERVICE_NAME` scopes the keychain service so `auth::clear_*`
+    // inside the subprocess never touches the developer's real
+    // `jr-jira-cli` entries when `cargo test` runs locally.
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
 
@@ -64,8 +67,8 @@ fn auth_refresh_no_input_fails_with_clear_message() {
         .env_remove("JR_EMAIL")
         .env_remove("JR_API_TOKEN")
         // Config::load() merges JR_* via figment's Env::prefixed at
-        // src/config.rs:65 — JR_INSTANCE_AUTH_METHOD=oauth in the parent
-        // shell would flip refresh to the OAuth path and our email/JR_EMAIL
+        // src/config.rs — JR_INSTANCE_AUTH_METHOD=oauth in the parent
+        // shell would flip refresh to the OAuth path and our api_token
         // stderr assertions would fail. Explicitly clear it to pin the
         // api_token flow for this test.
         .env_remove("JR_INSTANCE_AUTH_METHOD")
@@ -77,26 +80,20 @@ fn auth_refresh_no_input_fails_with_clear_message() {
 
     assert!(
         !output.status.success(),
-        "auth refresh --no-input without flags should fail, got stdout: {}",
+        "auth refresh --no-input without setup should fail, got stdout: {}",
         String::from_utf8_lossy(&output.stdout)
     );
     assert_eq!(
         output.status.code(),
         Some(64),
-        "Missing credentials under --no-input should exit 64 (UserError), got: {:?}",
+        "Refresh against unconfigured profile should exit 64 (UserError), got: {:?}",
         output.status.code()
     );
     assert!(
-        stderr.contains("--email") && stderr.contains("$JR_EMAIL"),
-        "Error should cite --email flag and $JR_EMAIL env var: {stderr}"
-    );
-    // The clear-then-login ordering means credentials *are* cleared before
-    // the login failure bubbles up. The recovery hint tells users exactly
-    // how to get back to a working state — pinning it here so a future
-    // refactor can't silently drop the guidance.
-    assert!(
-        stderr.contains("Credentials were cleared"),
-        "Error should include recovery hint after cleared credentials: {stderr}"
+        stderr.contains("no URL configured")
+            && stderr.contains("jr auth login")
+            && stderr.contains("--url"),
+        "Error should explain the missing URL and point at jr auth login --url: {stderr}"
     );
     assert!(!stderr.contains("panic"), "stderr leaked a panic: {stderr}");
 }
