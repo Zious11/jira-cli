@@ -212,6 +212,16 @@ pub async fn login_token(
         .entry(profile.to_string())
         .or_default();
     p.auth_method = Some("api_token".into());
+    // If `default_profile` is unset (legacy / fresh config / refresh
+    // creating a non-"default" profile on a brand-new install), promote
+    // the target so the next strict `Config::load()` doesn't error trying
+    // to resolve the literal "default" against an empty profiles map.
+    // `handle_login` does this via `prepare_login_target`; callers that
+    // bypass that helper (notably `refresh_credentials`) need the same
+    // safeguard here.
+    if config.global.default_profile.is_none() {
+        config.global.default_profile = Some(profile.to_string());
+    }
     config.save_global()?;
 
     eprintln!("Credentials stored in keychain.");
@@ -310,6 +320,14 @@ pub async fn login_oauth(
     p.url = Some(result.site_url);
     p.cloud_id = Some(result.cloud_id);
     p.auth_method = Some("oauth".into());
+    // Same default_profile safeguard as login_token — `refresh_credentials`
+    // can reach this path on a fresh install, and we must never leave
+    // `default_profile = None` when [profiles] is non-empty (the next
+    // strict `Config::load()` would error trying to resolve "default"
+    // against a profiles map that doesn't contain it).
+    if config.global.default_profile.is_none() {
+        config.global.default_profile = Some(profile.to_string());
+    }
     config.save_global()?;
 
     output::print_success(&format!("Authenticated with {}", result.site_name));
