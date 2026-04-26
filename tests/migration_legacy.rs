@@ -11,26 +11,63 @@ use tempfile::TempDir;
 /// runs as its own binary with its own process.
 static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
-/// RAII helper: sets `XDG_CONFIG_HOME` to `value` for the duration of
-/// the guard's lifetime, then restores the prior value (or unsets if
-/// none) on drop. Drop runs even if the test panics, so a `Config::load`
-/// that unwraps unsuccessfully never leaks `XDG_CONFIG_HOME` into the
-/// next test in the same binary. Also avoids unconditionally clobbering
-/// a pre-existing `XDG_CONFIG_HOME` from the parent environment that the
-/// developer relied on outside the test runner.
+/// Set of `JR_*` env vars that `Config::load` reads via figment's
+/// `Env::prefixed("JR_")` or via direct `std::env::var` lookups
+/// (`JR_PROFILE`, `JR_BASE_URL`). A developer with any of these
+/// exported (commonly via direnv) would otherwise have their values
+/// flow into the test's tempdir-scoped config and either trigger
+/// legacy migration unexpectedly or shift the resolved active profile
+/// — making the assertions about migration shape and idempotency
+/// flaky. The guard scrubs them all on `set()` and restores prior
+/// values on drop.
+const JR_ENV_VARS_TO_SCRUB: &[&str] = &[
+    "JR_PROFILE",
+    "JR_DEFAULT_PROFILE",
+    "JR_INSTANCE_URL",
+    "JR_INSTANCE_AUTH_METHOD",
+    "JR_INSTANCE_CLOUD_ID",
+    "JR_INSTANCE_ORG_ID",
+    "JR_INSTANCE_OAUTH_SCOPES",
+    "JR_FIELDS_TEAM_FIELD_ID",
+    "JR_FIELDS_STORY_POINTS_FIELD_ID",
+    "JR_DEFAULTS_OUTPUT",
+    "JR_BASE_URL",
+    "JR_AUTH_HEADER",
+];
+
+/// RAII helper: sets `XDG_CONFIG_HOME` to `value` and scrubs `JR_*`
+/// env vars for the duration of the guard's lifetime, then restores
+/// every prior value (or unsets if none) on drop. Drop runs even if
+/// the test panics, so a `Config::load` that unwraps unsuccessfully
+/// never leaks state into the next test in the same binary. Also
+/// avoids unconditionally clobbering a pre-existing `XDG_CONFIG_HOME`
+/// or `JR_*` from the parent environment that the developer relied on
+/// outside the test runner.
 struct XdgConfigGuard {
-    previous: Option<std::ffi::OsString>,
+    previous_xdg: Option<std::ffi::OsString>,
+    previous_jr_vars: Vec<(&'static str, Option<std::ffi::OsString>)>,
 }
 
 impl XdgConfigGuard {
     fn set(value: &std::path::Path) -> Self {
-        let previous = std::env::var_os("XDG_CONFIG_HOME");
+        let previous_xdg = std::env::var_os("XDG_CONFIG_HOME");
+        let previous_jr_vars: Vec<(&'static str, Option<std::ffi::OsString>)> =
+            JR_ENV_VARS_TO_SCRUB
+                .iter()
+                .map(|&name| (name, std::env::var_os(name)))
+                .collect();
         // SAFETY: tests in this binary serialize env mutation via
         // ENV_MUTEX; no concurrent access.
         unsafe {
             std::env::set_var("XDG_CONFIG_HOME", value);
+            for &name in JR_ENV_VARS_TO_SCRUB {
+                std::env::remove_var(name);
+            }
         }
-        Self { previous }
+        Self {
+            previous_xdg,
+            previous_jr_vars,
+        }
     }
 }
 
@@ -39,9 +76,15 @@ impl Drop for XdgConfigGuard {
         // SAFETY: same as set() — caller must hold ENV_MUTEX while the
         // guard is alive; no concurrent access.
         unsafe {
-            match self.previous.take() {
+            match self.previous_xdg.take() {
                 Some(prev) => std::env::set_var("XDG_CONFIG_HOME", prev),
                 None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+            for (name, prev) in std::mem::take(&mut self.previous_jr_vars) {
+                match prev {
+                    Some(v) => std::env::set_var(name, v),
+                    None => std::env::remove_var(name),
+                }
             }
         }
     }

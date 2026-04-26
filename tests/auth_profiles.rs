@@ -6,7 +6,29 @@ use tempfile::TempDir;
 
 fn jr() -> Command {
     let mut cmd = Command::cargo_bin("jr").unwrap();
-    cmd.env_remove("JR_PROFILE");
+    // Scrub every JR_* env var that Config::load merges via figment's
+    // Env::prefixed("JR_"). Without this, a developer with a direnv-set
+    // JR_INSTANCE_URL / JR_PROFILE / etc. would have those values flow
+    // into the test's "fresh install" config and either trigger legacy
+    // migration unexpectedly or make assertions about empty profiles
+    // fail. Pinning the list here so future JR_* additions don't
+    // silently re-introduce flakiness on dev machines.
+    cmd.env_remove("JR_PROFILE")
+        .env_remove("JR_DEFAULT_PROFILE")
+        .env_remove("JR_INSTANCE_URL")
+        .env_remove("JR_INSTANCE_AUTH_METHOD")
+        .env_remove("JR_INSTANCE_CLOUD_ID")
+        .env_remove("JR_INSTANCE_ORG_ID")
+        .env_remove("JR_INSTANCE_OAUTH_SCOPES")
+        .env_remove("JR_FIELDS_TEAM_FIELD_ID")
+        .env_remove("JR_FIELDS_STORY_POINTS_FIELD_ID")
+        .env_remove("JR_DEFAULTS_OUTPUT")
+        .env_remove("JR_BASE_URL")
+        .env_remove("JR_AUTH_HEADER")
+        .env_remove("JR_EMAIL")
+        .env_remove("JR_API_TOKEN")
+        .env_remove("JR_OAUTH_CLIENT_ID")
+        .env_remove("JR_OAUTH_CLIENT_SECRET");
     cmd
 }
 

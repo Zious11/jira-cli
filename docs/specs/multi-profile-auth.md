@@ -261,13 +261,27 @@ jr auth remove <NAME>
     Errors if NAME doesn't exist.
     Confirmation prompt unless --no-input.
 
-jr auth refresh [--profile NAME]
+jr auth refresh [--profile NAME] [--oauth] [--email/--token/--client-id/--client-secret]
     Refresh credentials for the named profile (defaults to active).
-    Behavior depends on the profile's auth_method:
-      • api_token: re-prompts for email/token (or reads JR_EMAIL/JR_API_TOKEN)
-      • oauth: refreshes the access token via the stored refresh token
-    The shared API-token credential is rewritten if the profile uses
-    api_token auth; per-profile OAuth tokens are rewritten if oauth.
+    The flow is selected from the target profile's auth_method, with
+    `--oauth` as an explicit override (forces the OAuth path regardless
+    of stored auth_method, matching `jr auth login --oauth`).
+    Behavior:
+      • api_token flow: clears the SHARED email/api-token + client_id/
+        client_secret keychain entries (the #207 macOS keychain ACL
+        workaround) and re-prompts via flag → env → TTY. Equivalent to
+        `jr auth login` but with explicit cleanup of stale ACL-bound
+        entries first.
+      • oauth flow: clears the per-profile <profile>:oauth-* keychain
+        entries and re-runs the FULL 3LO browser flow (oauth_login),
+        not the silent refresh_token grant. This is intentional —
+        the same #207 ACL workaround applies to OAuth tokens too, so
+        a "quiet" refresh wouldn't deliver the macOS-keychain-rebind
+        guarantee users came here for.
+    Per-profile token isolation: refreshing OAuth on profile X never
+    touches the shared api-token or another profile's OAuth tokens.
+    Refreshing api_token on profile X DOES rewrite the shared keychain
+    entries (the api-token IS the shared credential).
 ```
 
 ### `jr init` interaction
@@ -345,8 +359,8 @@ A user who wants to revert can `cp config.toml config.toml.backup` first (releas
 | `jr auth switch <unknown>` | `UserError` | 64 | `unknown profile: foo; known: …` |
 | `jr auth remove <name>` where `name == default_profile` | `UserError` | 64 | `cannot remove active profile "default"; switch first with "jr auth switch …"` |
 | `jr auth remove <unknown>` | `UserError` | 64 | `unknown profile: foo; known: …` |
-| `jr auth login --profile X --no-input` and X is new and `--url` missing | `UserError` | 64 | `--url required when creating a new profile under --no-input` |
-| `jr auth refresh --profile X` where X is api_token-auth | `UserError` | 64 | `profile "X" uses api_token auth; OAuth refresh not applicable` |
+| `jr auth login --profile X --no-input` and target has no URL | `UserError` | 64 | `--url required when the target profile has no URL configured` |
+| `jr auth refresh --profile X` where X uses api_token auth and has no URL | `UserError` | 64 | `profile "X" has no URL configured. Use "jr auth login --profile X --url <https://…>" instead of refresh — refresh assumes the profile is already set up and only rotates credentials.` |
 | Profile name fails character/length validation | `UserError` | 64 | `invalid profile name "foo:bar"; allowed: A-Z a-z 0-9 _ - up to 64 chars; reserved Windows names (CON, NUL, AUX, PRN, COM1-9, LPT1-9) excluded` |
 | Profile name matches a Windows reserved name | `UserError` | 64 | (same message — reserved name list embedded) |
 | TOML migration write fails | `Internal` | 1 | `Internal error: config migration failed: <io>` |
