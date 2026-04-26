@@ -409,9 +409,9 @@ pub async fn oauth_login(
 ///
 /// Intentionally takes no `scopes` parameter: the `refresh_token` grant
 /// inherits scopes from the original authorization per RFC 6749 §6. To
-/// pick up a changed `[instance].oauth_scopes` in config.toml, the user
-/// must re-run `jr auth login --oauth` (refresh alone will keep the old
-/// scope set).
+/// pick up a changed `[profiles.<name>].oauth_scopes` in config.toml,
+/// the user must re-run `jr auth login --oauth` (refresh alone will
+/// keep the old scope set).
 pub async fn refresh_oauth_token(
     profile: &str,
     client_id: &str,
