@@ -49,7 +49,7 @@ impl Drop for XdgConfigGuard {
 
 #[test]
 fn legacy_instance_block_migrated_in_memory() {
-    let _env_lock = ENV_MUTEX.lock().unwrap();
+    let _env_lock = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
     let dir = TempDir::new().unwrap();
     let cfg_path = dir.path().join("jr").join("config.toml");
     fs::create_dir_all(cfg_path.parent().unwrap()).unwrap();
@@ -101,7 +101,7 @@ output = "json"
 
 #[test]
 fn migration_is_idempotent() {
-    let _env_lock = ENV_MUTEX.lock().unwrap();
+    let _env_lock = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
     let dir = TempDir::new().unwrap();
     let cfg_path = dir.path().join("jr").join("config.toml");
     fs::create_dir_all(cfg_path.parent().unwrap()).unwrap();

@@ -10,17 +10,6 @@ use jr::output;
 async fn main() {
     let mut cli = Cli::parse();
 
-    // Validate --profile early so a bad name fails before any work runs.
-    // The validated value is threaded into `Config::load_with` rather than
-    // through an env-var seam, since `unsafe { std::env::set_var(...) }` is
-    // unsound under #[tokio::main] (worker threads already exist).
-    if let Some(p) = cli.profile.as_deref() {
-        if let Err(e) = config::validate_profile_name(p) {
-            eprintln!("Error: {e}");
-            std::process::exit(e.exit_code());
-        }
-    }
-
     if cli.no_color || std::env::var("NO_COLOR").is_ok() {
         colored::control::set_override(false);
     }
@@ -63,6 +52,17 @@ async fn main() {
 }
 
 async fn run(cli: Cli) -> anyhow::Result<()> {
+    // Validate --profile here (not in main) so a bad name flows through
+    // the unified error-reporting block — `--output json` callers get
+    // a structured `{"error":..,"code":..}` payload instead of a plain
+    // stderr line. The validated value is threaded into
+    // `Config::load_with` rather than through an env-var seam, since
+    // `unsafe { std::env::set_var(...) }` is unsound under
+    // #[tokio::main] (tokio worker threads already exist).
+    if let Some(p) = cli.profile.as_deref() {
+        config::validate_profile_name(p)?;
+    }
+
     // Handle completion before anything else (no config/auth needed)
     if let cli::Command::Completion { shell } = &cli.command {
         let mut cmd = Cli::command();

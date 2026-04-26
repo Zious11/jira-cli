@@ -66,12 +66,19 @@ fn auth_refresh_no_input_fails_with_clear_message() {
         .env("JR_SERVICE_NAME", "jr-jira-cli-test")
         .env_remove("JR_EMAIL")
         .env_remove("JR_API_TOKEN")
-        // Config::load() merges JR_* via figment's Env::prefixed at
-        // src/config.rs — JR_INSTANCE_AUTH_METHOD=oauth in the parent
-        // shell would flip refresh to the OAuth path and our api_token
-        // stderr assertions would fail. Explicitly clear it to pin the
-        // api_token flow for this test.
+        // Config::load() merges JR_* via figment's Env::prefixed. Any
+        // JR_INSTANCE_* env vars from the parent shell would flow into
+        // the loaded config (e.g., JR_INSTANCE_URL would make the
+        // empty-config look configured; JR_INSTANCE_AUTH_METHOD=oauth
+        // would flip the flow). Clear the full set so the test pins
+        // the unconfigured-profile path on every machine.
+        .env_remove("JR_INSTANCE_URL")
         .env_remove("JR_INSTANCE_AUTH_METHOD")
+        .env_remove("JR_INSTANCE_CLOUD_ID")
+        .env_remove("JR_INSTANCE_ORG_ID")
+        .env_remove("JR_INSTANCE_OAUTH_SCOPES")
+        .env_remove("JR_PROFILE")
+        .env_remove("JR_DEFAULT_PROFILE")
         .args(["--no-input", "auth", "refresh"])
         .output()
         .unwrap();
