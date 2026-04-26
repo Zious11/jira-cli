@@ -219,6 +219,9 @@ impl Config {
 
     fn load_inner(cli_profile: Option<&str>, strict: bool) -> anyhow::Result<Self> {
         let global_path = global_config_path();
+
+        // Read with env-overlay for in-memory use. The rest of the program
+        // sees `JR_*` env overrides applied on top of `config.toml`.
         let mut global: GlobalConfig = Figment::new()
             .merge(Serialized::defaults(GlobalConfig::default()))
             .merge(Toml::file(&global_path))
@@ -235,8 +238,25 @@ impl Config {
                 || global.fields.story_points_field_id.is_some());
 
         if needs_migration {
+            // Write-back uses file-only data (NO env overlay) so transient
+            // `JR_*` env vars set for one invocation (e.g.,
+            // `JR_DEFAULTS_OUTPUT=json`) can never bleed into the migrated
+            // `config.toml`. Without this, an env value set at upgrade time
+            // would be silently baked into the user's on-disk config and
+            // persist across future invocations even when the env var is
+            // unset.
+            //
+            // In-memory `global` still gets migrated below so callers see
+            // the new `[profiles.default]` entry; this two-source pattern
+            // (env-merged for in-memory + file-only for save) keeps the
+            // migration transparent without polluting the saved file.
+            let file_only_global: GlobalConfig = Figment::new()
+                .merge(Serialized::defaults(GlobalConfig::default()))
+                .merge(Toml::file(&global_path))
+                .extract()?;
+            let to_save = migrate_legacy_global(file_only_global);
+            save_global_to(&global_path, &to_save)?;
             global = migrate_legacy_global(global);
-            save_global_to(&global_path, &global)?;
             eprintln!(
                 "Migrated config to multi-profile layout (single profile \"default\"). \
                  Run 'jr auth list' to view profiles."
