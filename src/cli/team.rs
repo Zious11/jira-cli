@@ -29,7 +29,7 @@ async fn handle_list(
     let teams = if refresh {
         fetch_and_cache_teams(config, client).await?
     } else {
-        match cache::read_team_cache()? {
+        match cache::read_team_cache(&config.active_profile_name)? {
             Some(cached) => cached.teams,
             None => fetch_and_cache_teams(config, client).await?,
         }
@@ -67,20 +67,26 @@ pub async fn fetch_and_cache_teams(
         })
         .collect();
 
-    cache::write_team_cache(&cached)?;
+    cache::write_team_cache(&config.active_profile_name, &cached)?;
     Ok(cached)
 }
 
 /// Resolve org_id: read from config, or discover via GraphQL and persist.
 /// Uses hostNames-based GraphQL query to get both cloudId and orgId in one call.
 pub async fn resolve_org_id(config: &Config, client: &JiraClient) -> Result<String> {
-    if let Some(ref org_id) = config.global.instance.org_id {
+    let active = config.active_profile();
+    if let Some(ref org_id) = active.org_id {
         return Ok(org_id.clone());
     }
 
-    // Extract hostname from instance URL
-    let url = config.global.instance.url.as_ref().ok_or_else(|| {
-        JrError::ConfigError("No Jira instance configured. Run \"jr init\" first.".into())
+    // Extract hostname from instance URL. Multi-profile world: the URL
+    // lives on the active profile, so name it in the error and point the
+    // user at the profile-aware login command.
+    let url = active.url.as_ref().ok_or_else(|| {
+        JrError::ConfigError(format!(
+            "Profile {:?} has no URL configured. Run \"jr auth login --profile {}\" or \"jr init\".",
+            config.active_profile_name, config.active_profile_name
+        ))
     })?;
     let hostname = url
         .trim_start_matches("https://")
@@ -90,10 +96,24 @@ pub async fn resolve_org_id(config: &Config, client: &JiraClient) -> Result<Stri
     // Single GraphQL call returns both cloudId and orgId
     let metadata = client.get_org_metadata(hostname).await?;
 
-    // Persist discovered values to config for future use
-    let mut updated_config = Config::load()?;
-    updated_config.global.instance.cloud_id = Some(metadata.cloud_id);
-    updated_config.global.instance.org_id = Some(metadata.org_id.clone());
+    // Persist discovered values to config for future use. Reload using
+    // the same active-profile name we resolved from the caller's `config`,
+    // so a `--profile` CLI flag (or `JR_PROFILE` env) doesn't get lost
+    // between the original load and this write.
+    let mut updated_config = Config::load_with(Some(&config.active_profile_name))?;
+    let profile_name = updated_config.active_profile_name.clone();
+    updated_config
+        .global
+        .profiles
+        .entry(profile_name.clone())
+        .or_insert_with(crate::config::ProfileConfig::default)
+        .cloud_id = Some(metadata.cloud_id.clone());
+    updated_config
+        .global
+        .profiles
+        .entry(profile_name)
+        .or_insert_with(crate::config::ProfileConfig::default)
+        .org_id = Some(metadata.org_id.clone());
     updated_config.save_global()?;
 
     Ok(metadata.org_id)

@@ -1439,8 +1439,10 @@ async fn test_create_table_mode_outputs_to_stderr() {
 }
 
 /// Helper: pre-populate team cache at the given XDG cache dir root.
+/// Writes under `<cache_home>/jr/v1/default/teams.json` to match the
+/// per-profile cache layout introduced in Task 6.
 fn write_test_team_cache(cache_home: &std::path::Path) {
-    let teams_dir = cache_home.join("jr");
+    let teams_dir = cache_home.join("jr").join("v1").join("default");
     std::fs::create_dir_all(&teams_dir).unwrap();
     let cache = jr::cache::TeamCache {
         fetched_at: chrono::Utc::now(),

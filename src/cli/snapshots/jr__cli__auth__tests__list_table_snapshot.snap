@@ -1,0 +1,11 @@
+---
+source: src/cli/auth.rs
+expression: rendered
+---
+┌───────────┬────────────────────────────────────┬───────────┬────────────┐
+│ NAME      ┆ URL                                ┆ AUTH      ┆ STATUS     │
+╞═══════════╪════════════════════════════════════╪═══════════╪════════════╡
+│ * default ┆ https://acme.atlassian.net         ┆ api_token ┆ configured │
+│   sandbox ┆ https://acme-sandbox.atlassian.net ┆ oauth     ┆ configured │
+│   staging ┆ https://acme-staging.atlassian.net ┆ api_token ┆ configured │
+└───────────┴────────────────────────────────────┴───────────┴────────────┘

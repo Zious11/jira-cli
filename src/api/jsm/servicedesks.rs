@@ -42,8 +42,9 @@ pub async fn get_or_fetch_project_meta(
     client: &JiraClient,
     project_key: &str,
 ) -> Result<ProjectMeta> {
-    // Check cache first
-    if let Some(cached) = cache::read_project_meta(project_key)? {
+    // Check cache first.
+    let profile = client.profile_name();
+    if let Some(cached) = cache::read_project_meta(profile, project_key)? {
         return Ok(cached);
     }
 
@@ -92,7 +93,7 @@ pub async fn get_or_fetch_project_meta(
     };
 
     // Write to cache (best-effort — don't fail the command if cache write fails)
-    let _ = cache::write_project_meta(project_key, &meta);
+    let _ = cache::write_project_meta(profile, project_key, &meta);
 
     Ok(meta)
 }

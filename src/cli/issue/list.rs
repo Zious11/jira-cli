@@ -510,7 +510,7 @@ pub(super) async fn handle_list(
             // entry falls back to the UUID. Cache population is not this
             // command's responsibility.
             let team_map: std::collections::HashMap<String, String> =
-                crate::cache::read_team_cache()
+                crate::cache::read_team_cache(&config.active_profile_name)
                     .ok()
                     .flatten()
                     .map(|c| c.teams.into_iter().map(|t| (t.id, t.name)).collect())

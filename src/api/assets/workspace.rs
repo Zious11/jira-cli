@@ -17,7 +17,8 @@ struct WorkspaceEntry {
 /// The discovery endpoint returns a paginated response with workspace entries.
 /// In practice there's only one workspace per site.
 pub async fn get_or_fetch_workspace_id(client: &JiraClient) -> Result<String> {
-    if let Some(cached) = cache::read_workspace_cache()? {
+    let profile = client.profile_name();
+    if let Some(cached) = cache::read_workspace_cache(profile)? {
         return Ok(cached.workspace_id);
     }
 
@@ -51,7 +52,7 @@ pub async fn get_or_fetch_workspace_id(client: &JiraClient) -> Result<String> {
             )
         })?;
 
-    let _ = cache::write_workspace_cache(&workspace_id);
+    let _ = cache::write_workspace_cache(profile, &workspace_id);
 
     Ok(workspace_id)
 }

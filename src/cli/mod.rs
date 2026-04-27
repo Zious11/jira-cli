@@ -38,6 +38,10 @@ pub struct Cli {
     /// Enable verbose output
     #[arg(long, global = true)]
     pub verbose: bool,
+
+    /// Override the active profile (precedence: this flag > JR_PROFILE > config > "default")
+    #[arg(long, global = true)]
+    pub profile: Option<String>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -185,9 +189,16 @@ pub enum AssetsCommand {
 pub enum AuthCommand {
     /// Authenticate with Jira
     Login {
+        /// Profile to log in to (creates it if absent). Defaults to active profile.
+        #[arg(long)]
+        profile: Option<String>,
+        /// Jira instance URL (required when creating a new profile under --no-input).
+        #[arg(long)]
+        url: Option<String>,
         /// Use OAuth 2.0 instead of API token (requires your own OAuth app).
         /// Scope list is Atlassian's recommended classic set by default;
-        /// override via `[instance].oauth_scopes` in config.toml.
+        /// override via `[profiles.<name>].oauth_scopes` in config.toml — see
+        /// Configuration below.
         #[arg(long)]
         oauth: bool,
         /// Jira email (API token flow). Prefer $JR_EMAIL over this flag.
@@ -206,7 +217,11 @@ pub enum AuthCommand {
         client_secret: Option<String>,
     },
     /// Show authentication status
-    Status,
+    Status {
+        /// Profile to show status for. Defaults to active profile.
+        #[arg(long)]
+        profile: Option<String>,
+    },
     /// Clear stored credentials and re-run the login flow.
     ///
     /// On macOS, run this after upgrading `jr` (e.g., `brew upgrade`, binary
@@ -215,6 +230,9 @@ pub enum AuthCommand {
     /// the creator of fresh entries, avoiding repeated "allow access"
     /// prompts. See issue #207.
     Refresh {
+        /// Profile to refresh credentials for. Defaults to active profile.
+        #[arg(long)]
+        profile: Option<String>,
         /// Use OAuth 2.0 instead of API token (matches `jr auth login --oauth`)
         #[arg(long)]
         oauth: bool,
@@ -232,6 +250,27 @@ pub enum AuthCommand {
         /// this flag — bare CLI args can leak via process lists.
         #[arg(long)]
         client_secret: Option<String>,
+    },
+    /// Set the default profile in config.toml.
+    Switch {
+        /// Profile name to make active. Must already exist in config.
+        name: String,
+    },
+    /// List all configured profiles, marking the active one.
+    List,
+    /// Clear OAuth tokens for a profile (profile entry stays in config).
+    /// Shared API-token credential is NEVER touched.
+    Logout {
+        /// Profile to log out of. Defaults to active profile.
+        #[arg(long)]
+        profile: Option<String>,
+    },
+    /// Permanently delete a profile (config + cache + per-profile OAuth tokens).
+    /// Shared credentials are NEVER touched.
+    Remove {
+        /// Profile name to remove. Cannot be the active profile —
+        /// switch first with `jr auth switch`.
+        name: String,
     },
 }
 

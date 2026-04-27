@@ -10,7 +10,7 @@ Single-crate thin client wrapping Jira REST API v3 and Agile REST API directly w
 src/
 ├── main.rs              # Entry point, tokio runtime, clap dispatch, Ctrl+C handling
 ├── cli/                 # Clap derive definitions + command handlers
-│   ├── mod.rs           # CLI enums, global flags (--output, --project, --no-input, --no-color)
+│   ├── mod.rs           # CLI enums, global flags (--output, --project, --profile, --no-input, --no-color)
 │   ├── issue/           # issue commands (split by operation theme)
 │   │   ├── mod.rs       # dispatch + re-exports
 │   │   ├── format.rs    # row formatting, headers, points display
@@ -26,13 +26,13 @@ src/
 │   ├── worklog.rs       # worklog add/list
 │   ├── team.rs          # team list (with cache + lazy org discovery)
 │   ├── user.rs          # user search/list/view (thin wrapper over api/jira/users.rs)
-│   ├── auth.rs          # auth login (API token default, --oauth for OAuth 2.0), auth status
+│   ├── auth.rs          # auth login/switch/list/status/refresh/logout/remove. Multi-profile aware via --profile.
 │   ├── init.rs          # Interactive setup (prefetches org metadata + team cache + story points field)
 │   ├── project.rs       # project fields (types, priorities, statuses, CMDB fields)
 │   └── queue.rs         # queue list/view (JSM service desks)
 ├── api/
 │   ├── client.rs        # JiraClient — HTTP methods, auth headers, rate limit retry, 429/401 handling
-│   ├── auth.rs          # OAuth 2.0 flow, API token storage, keychain read/write, token refresh
+│   ├── auth.rs          # OAuth 2.0 flow + per-profile keychain layout (shared email/api-token/oauth_client_*; namespaced <profile>:oauth-access-token / <profile>:oauth-refresh-token); lazy migration of legacy flat OAuth keys for the "default" profile
 │   ├── pagination.rs    # Offset-based (most endpoints) + cursor-based (JQL search)
 │   ├── rate_limit.rs    # Retry-After parsing
 │   ├── assets/          # Assets/CMDB API call implementations
@@ -57,8 +57,8 @@ src/
 ├── types/assets/        # Serde structs for Assets API responses (AssetObject, ConnectedTicket, LinkedAsset, etc.)
 ├── types/jira/          # Serde structs for API responses (Issue, Board, Sprint, User, Team, etc.)
 ├── types/jsm/           # Serde structs for JSM API responses (ServiceDesk, Queue, etc.)
-├── cache.rs             # XDG cache (~/.cache/jr/) — team list, project meta, workspace ID (all 7-day TTL)
-├── config.rs            # Global (~/.config/jr/config.toml) + per-project (.jr.toml), figment layering
+├── cache.rs             # Per-profile XDG cache (~/.cache/jr/v1/<profile>/) — team list, project meta, workspace ID, CMDB fields, object-type attrs, resolutions (all 7-day TTL). Versioned root (`v1/`) lets a future schema bump orphan stale files cleanly.
+├── config.rs            # Global (~/.config/jr/config.toml) [profiles.<name>] + default_profile + per-project (.jr.toml), figment layering. Auto-migrates legacy [instance]/[fields] shape on first load. Active profile resolved at load via Config::load_with(cli_profile) (cli flag threaded through as a parameter, NOT an env-var seam) > JR_PROFILE env > default_profile field > "default".
 ├── output.rs            # Table (comfy-table) and JSON formatting
 ├── adf.rs               # Atlassian Document Format: text→ADF, markdown→ADF, ADF→text
 ├── duration.rs          # Worklog duration parser (2h, 1h30m, 1d, 1w)
@@ -121,7 +121,9 @@ When adding a new feature:
 
 ## Gotchas
 
-- **Cache format changes:** `~/.cache/jr/cmdb_fields.json` stores `(id, name)` tuples. Old format (ID-only) causes deserialization failure, handled as cache miss. If you change cache structs, old caches auto-expire (7-day TTL) or fail gracefully.
+- **Multi-profile boundary:** every cache reader/writer takes `profile: &str` as its first arg. Pass `&config.active_profile_name` from any handler that has `&Config` in scope. Cross-profile cache leakage is a correctness bug, not a UX issue — sandbox vs prod custom-field IDs can differ.
+- **Per-profile vs shared OAuth keys:** `email`, `api-token`, `oauth_client_id`, `oauth_client_secret` live under flat keychain keys (account-level, shared across profiles). `oauth-access-token` / `oauth-refresh-token` are namespaced as `<profile>:oauth-*` because they're cloudId-scoped. The `"default"` profile lazy-migrates legacy flat keys on first read; other profiles do not.
+- **Cache format changes:** `~/.cache/jr/v1/<profile>/cmdb_fields.json` stores `(id, name)` tuples. Old format (ID-only) causes deserialization failure, handled as cache miss. If you change cache structs, old caches auto-expire (7-day TTL) or fail gracefully. To break compatibility cleanly, bump the cache root from `v1/` to `v2/` — old files orphan harmlessly.
 - **`list.rs` is large (~970 lines):** Contains both `handle_list` and `handle_view` plus all JQL composition logic. If modifying, read the full function you're changing — context matters.
 - **`aqlFunction()` not `assetsQuery()`:** The Jira Assets JQL function is `aqlFunction()`. It requires the human-readable field **name**, not `cf[ID]` or `customfield_NNNNN`. AQL attribute for object key is `Key` (not `objectKey` — that's the JSON field name).
 - **Status category colors are fixed:** `green` = Done, `yellow` = In Progress, `blue-gray` = To Do. These mappings are hardcoded in Jira Cloud across all instances. Used by `--open` filtering.
@@ -129,7 +131,10 @@ When adding a new feature:
 ## AI Agent Notes
 
 - `JR_BASE_URL` env var overrides the configured Jira instance URL (used by tests to inject wiremock)
+- `JR_PROFILE` env var overrides the active profile per-call (combine with direnv to scope a repo to a sandbox site)
+- `--profile NAME` flag overrides `JR_PROFILE` for one invocation; precedence is flag > env > config > "default"
 - `JiraClient::new_for_test(base_url, auth_header)` constructs a client for integration tests
 - Test fixtures live in `tests/common/fixtures.rs`
+- Keyring round-trip tests are gated behind `JR_RUN_KEYRING_TESTS=1` + `#[ignore]` because Linux CI may lack secret-service
 - All interactive prompts have non-interactive flag equivalents for AI agent usage
 - `--output json` on write operations returns structured data (e.g., `{"key": "FOO-123"}`)

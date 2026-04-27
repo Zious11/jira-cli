@@ -250,27 +250,28 @@ pub(super) async fn handle_view(
 
             if let Some(field_id) = team_field_id {
                 if let Some(team_uuid) = issue.fields.team_id(field_id, client.verbose()) {
-                    let team_display = match crate::cache::read_team_cache() {
-                        Ok(Some(c)) => c
-                            .teams
-                            .into_iter()
-                            .find(|t| t.id == team_uuid)
-                            .map(|t| t.name)
-                            .unwrap_or_else(|| {
-                                format!(
-                                    "{} (name not cached — run 'jr team list --refresh')",
-                                    team_uuid
-                                )
-                            }),
-                        Ok(None) => format!(
-                            "{} (name not cached — run 'jr team list --refresh')",
-                            team_uuid
-                        ),
-                        Err(e) => {
-                            eprintln!("warning: failed to read team cache: {e}");
-                            format!("{} (team cache unreadable)", team_uuid)
-                        }
-                    };
+                    let team_display =
+                        match crate::cache::read_team_cache(&config.active_profile_name) {
+                            Ok(Some(c)) => c
+                                .teams
+                                .into_iter()
+                                .find(|t| t.id == team_uuid)
+                                .map(|t| t.name)
+                                .unwrap_or_else(|| {
+                                    format!(
+                                        "{} (name not cached — run 'jr team list --refresh')",
+                                        team_uuid
+                                    )
+                                }),
+                            Ok(None) => format!(
+                                "{} (name not cached — run 'jr team list --refresh')",
+                                team_uuid
+                            ),
+                            Err(e) => {
+                                eprintln!("warning: failed to read team cache: {e}");
+                                format!("{} (team cache unreadable)", team_uuid)
+                            }
+                        };
                     rows.push(vec!["Team".into(), team_display]);
                 }
             }

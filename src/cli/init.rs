@@ -1,13 +1,88 @@
 use anyhow::{Context, Result};
 use dialoguer::{Confirm, Input, Select};
 
-use crate::config::{
-    Config, DefaultsConfig, FieldsConfig, GlobalConfig, InstanceConfig, ProjectConfig,
-};
+use crate::config::Config;
 use crate::{api, output};
 
 pub async fn handle() -> Result<()> {
     eprintln!("Setting up jr — Jira CLI\n");
+
+    // Multi-profile awareness: if profiles already exist, ask whether to add
+    // another one rather than overwriting the existing setup. When the user
+    // opts in, the new profile name is captured in `new_profile_override`
+    // and threaded into every subsequent `Config::load_*_with` call — the
+    // earlier `JR_PROFILE_OVERRIDE` env-var seam is gone (it required
+    // `unsafe { set_var }` under #[tokio::main], which is unsound because
+    // tokio worker threads exist before the async-main body runs).
+    //
+    // Distinguish three failure modes when loading the existing config:
+    //   - config file genuinely absent → fall through to first-run setup
+    //   - `JrError::UserError` (e.g., `JR_PROFILE` points at an unknown
+    //     profile) → recovery is to unset the env / fix `default_profile`,
+    //     NOT to delete config.toml; tell the user that
+    //   - other errors (malformed TOML, permission denied) → tell the user
+    //     to fix or remove the file, since `jr init` would otherwise
+    //     overwrite a broken-but-recoverable file
+    let existing = match crate::config::Config::load() {
+        Ok(c) => Some(c),
+        Err(e) => {
+            let path = crate::config::global_config_path();
+            if let Some(je) = e.downcast_ref::<crate::error::JrError>() {
+                if matches!(je, crate::error::JrError::UserError(_)) {
+                    return Err(e.context(
+                        "config refused to load due to a user-input issue. \
+                         If JR_PROFILE points to a profile that doesn't exist, \
+                         unset it; or run 'jr auth list' to see configured \
+                         profiles.",
+                    ));
+                }
+            }
+            if path.exists() {
+                return Err(e.context(format!(
+                    "failed to load existing config at {}; fix or remove it before running 'jr init'",
+                    path.display()
+                )));
+            }
+            None
+        }
+    };
+    let mut new_profile_override: Option<String> = None;
+    if let Some(c) = existing.as_ref() {
+        if !c.global.profiles.is_empty() {
+            let names: Vec<String> = c.global.profiles.keys().cloned().collect();
+            eprintln!("Profiles already configured: {}", names.join(", "));
+            let add = Confirm::new()
+                .with_prompt("Add another profile?")
+                .default(false)
+                .interact()
+                .context("failed to prompt for additional profile")?;
+            if !add {
+                return Ok(());
+            }
+            // Re-prompt on collision so a typo matching an existing profile
+            // name doesn't silently overwrite that profile's URL/auth
+            // settings later in the flow.
+            let profile_name: String = loop {
+                let candidate: String = Input::new()
+                    .with_prompt("Name for the new profile")
+                    .interact_text()
+                    .context("failed to read profile name")?;
+                if let Err(e) = crate::config::validate_profile_name(&candidate) {
+                    eprintln!("invalid profile name: {e}");
+                    continue;
+                }
+                if c.global.profiles.contains_key(&candidate) {
+                    eprintln!(
+                        "profile {candidate:?} already exists. Pick a different name, or run \
+                         'jr auth remove {candidate}' first to overwrite."
+                    );
+                    continue;
+                }
+                break candidate;
+            };
+            new_profile_override = Some(profile_name);
+        }
+    }
 
     // Step 1: Instance URL
     let url: String = Input::new()
@@ -25,20 +100,39 @@ pub async fn handle() -> Result<()> {
         .interact()
         .context("failed to prompt for authentication method")?;
 
-    let global = GlobalConfig {
-        instance: InstanceConfig {
-            url: Some(url.clone()),
-            ..InstanceConfig::default()
-        },
-        defaults: DefaultsConfig::default(),
-        fields: FieldsConfig::default(),
-    };
+    // Determine which profile this init flow targets. The override is set
+    // earlier when the user opted to add a new profile alongside an existing
+    // one; otherwise we fall back to the literal "default".
+    let profile_name = new_profile_override
+        .clone()
+        .unwrap_or_else(|| "default".into());
 
-    // Save initial config so auth can use it
-    let config = Config {
-        global,
-        project: ProjectConfig::default(),
-    };
+    // Load any existing config, then write the URL into the target profile
+    // entry. The legacy `[instance]` block is `#[serde(skip_serializing)]`
+    // since the multi-profile refactor, so writes there are silently dropped
+    // on save — every persisted field must live under `[profiles.<name>]`.
+    //
+    // Reload here (rather than reusing the `existing` we discriminated
+    // above) so the new-profile choice — captured into `profile_name`
+    // earlier — is reflected in `active_profile_name`.
+    //
+    // Lenient because the override may name a not-yet-created profile (the
+    // whole point of running `jr init` is to add it). Without lenient, the
+    // strict active-profile-existence check fires and the previous
+    // `unwrap_or_else(default)` fallback would silently clobber existing
+    // profiles on save — flagged by Copilot review on PR #275.
+    //
+    // The `?` (no fallback) is safe because the discrimination block at
+    // the top already separated "config file is malformed/unreadable"
+    // from "no config yet"; the only reachable failure here would be a
+    // fresh IO error between then and now, which we want to surface.
+    let mut config = Config::load_lenient_with(Some(&profile_name))?;
+    config
+        .global
+        .profiles
+        .entry(profile_name.clone())
+        .or_default()
+        .url = Some(url.clone());
     config.save_global()?;
 
     // Step 3: Authenticate. `jr init` is inherently interactive (Select
@@ -46,16 +140,17 @@ pub async fn handle() -> Result<()> {
     // credential prompt. Flags aren't plumbed through init — users who want
     // a non-interactive setup should run `jr auth login` directly.
     if auth_choice == 0 {
-        crate::cli::auth::login_oauth(None, None, false).await?;
+        crate::cli::auth::login_oauth(&profile_name, None, None, false).await?;
     } else {
-        crate::cli::auth::login_token(None, None, false).await?;
-        let mut config = Config::load()?;
-        config.global.instance.auth_method = Some("api_token".into());
-        config.save_global()?;
+        // login_token already persists auth_method = "api_token" to
+        // [profiles.<name>] internally — no additional load+save needed
+        // here. (Doing a redundant reload + write is also a last-writer-
+        // wins race against any concurrent jr invocation.)
+        crate::cli::auth::login_token(&profile_name, None, None, false).await?;
     }
 
     // Step 4: Per-project setup
-    let config = Config::load()?;
+    let config = Config::load_with(Some(&profile_name))?;
     let client = api::client::JiraClient::from_config(&config, false)?;
 
     let setup_project = Confirm::new()
@@ -96,8 +191,14 @@ pub async fn handle() -> Result<()> {
 
     // Step 5: Discover team field
     if let Ok(Some(team_id)) = client.find_team_field_id().await {
-        let mut config = Config::load()?;
-        config.global.fields.team_field_id = Some(team_id);
+        let mut config = Config::load_with(Some(&profile_name))?;
+        let active = config.active_profile_name.clone();
+        config
+            .global
+            .profiles
+            .entry(active)
+            .or_default()
+            .team_field_id = Some(team_id);
         config.save_global()?;
     }
 
@@ -133,8 +234,14 @@ pub async fn handle() -> Result<()> {
             };
 
             if let Some(id) = field_id {
-                let mut config = Config::load()?;
-                config.global.fields.story_points_field_id = Some(id);
+                let mut config = Config::load_with(Some(&profile_name))?;
+                let active = config.active_profile_name.clone();
+                config
+                    .global
+                    .profiles
+                    .entry(active)
+                    .or_default()
+                    .story_points_field_id = Some(id);
                 config.save_global()?;
             }
         }
@@ -149,9 +256,11 @@ pub async fn handle() -> Result<()> {
         .trim_start_matches("http://")
         .trim_end_matches('/');
     if let Ok(metadata) = client.get_org_metadata(hostname).await {
-        let mut config = Config::load()?;
-        config.global.instance.cloud_id = Some(metadata.cloud_id);
-        config.global.instance.org_id = Some(metadata.org_id.clone());
+        let mut config = Config::load_with(Some(&profile_name))?;
+        let active = config.active_profile_name.clone();
+        let entry = config.global.profiles.entry(active).or_default();
+        entry.cloud_id = Some(metadata.cloud_id.clone());
+        entry.org_id = Some(metadata.org_id.clone());
         config.save_global()?;
 
         // Step 7: Prefetch team list into cache
@@ -163,7 +272,7 @@ pub async fn handle() -> Result<()> {
                     name: t.display_name,
                 })
                 .collect();
-            if let Err(err) = crate::cache::write_team_cache(&cached) {
+            if let Err(err) = crate::cache::write_team_cache(&config.active_profile_name, &cached) {
                 eprintln!(
                     "warning: failed to warm team cache: {err}. First `jr team list` will refetch."
                 );

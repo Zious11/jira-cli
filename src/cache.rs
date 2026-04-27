@@ -13,8 +13,8 @@ pub(crate) trait Expiring {
 
 /// Read a whole-file cache. Returns `Ok(None)` on missing, expired, or corrupt
 /// (unparseable) files. Propagates I/O errors.
-fn read_cache<T: DeserializeOwned + Expiring>(filename: &str) -> Result<Option<T>> {
-    let path = cache_dir().join(filename);
+fn read_cache<T: DeserializeOwned + Expiring>(profile: &str, filename: &str) -> Result<Option<T>> {
+    let path = cache_dir(profile).join(filename);
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -34,8 +34,8 @@ fn read_cache<T: DeserializeOwned + Expiring>(filename: &str) -> Result<Option<T
 }
 
 /// Write a whole-file cache. Creates the cache directory if needed.
-fn write_cache<T: Serialize>(filename: &str, data: &T) -> Result<()> {
-    let dir = cache_dir();
+fn write_cache<T: Serialize>(profile: &str, filename: &str, data: &T) -> Result<()> {
+    let dir = cache_dir(profile);
     std::fs::create_dir_all(&dir)?;
     let content = serde_json::to_string_pretty(data)?;
     std::fs::write(dir.join(filename), content)?;
@@ -60,7 +60,8 @@ impl Expiring for TeamCache {
     }
 }
 
-pub fn cache_dir() -> PathBuf {
+/// Root cache directory: `$XDG_CACHE_HOME/jr` or `~/.cache/jr`.
+pub fn cache_root() -> PathBuf {
     if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
         PathBuf::from(xdg).join("jr")
     } else {
@@ -71,12 +72,28 @@ pub fn cache_dir() -> PathBuf {
     }
 }
 
-pub fn read_team_cache() -> Result<Option<TeamCache>> {
-    read_cache("teams.json")
+/// Per-profile cache directory: `<cache_root>/v1/<profile>/`.
+pub fn cache_dir(profile: &str) -> PathBuf {
+    cache_root().join("v1").join(profile)
 }
 
-pub fn write_team_cache(teams: &[CachedTeam]) -> Result<()> {
+/// Remove all cached data for a single profile. No-op if the directory does
+/// not exist; other profiles are untouched.
+pub fn clear_profile_cache(profile: &str) -> Result<()> {
+    let dir = cache_dir(profile);
+    if dir.exists() {
+        std::fs::remove_dir_all(dir)?;
+    }
+    Ok(())
+}
+
+pub fn read_team_cache(profile: &str) -> Result<Option<TeamCache>> {
+    read_cache(profile, "teams.json")
+}
+
+pub fn write_team_cache(profile: &str, teams: &[CachedTeam]) -> Result<()> {
     write_cache(
+        profile,
         "teams.json",
         &TeamCache {
             fetched_at: Utc::now(),
@@ -98,8 +115,8 @@ pub struct ProjectMeta {
 ///
 /// Keyed cache — not genericized because TTL is checked per-entry
 /// (`ProjectMeta.fetched_at`), unlike whole-file caches.
-pub fn read_project_meta(project_key: &str) -> Result<Option<ProjectMeta>> {
-    let path = cache_dir().join("project_meta.json");
+pub fn read_project_meta(profile: &str, project_key: &str) -> Result<Option<ProjectMeta>> {
+    let path = cache_dir(profile).join("project_meta.json");
     if !path.exists() {
         return Ok(None);
     }
@@ -129,8 +146,8 @@ pub fn read_project_meta(project_key: &str) -> Result<Option<ProjectMeta>> {
 /// Write cached project metadata for a specific project key.
 ///
 /// Merges into the existing map file, preserving entries for other projects.
-pub fn write_project_meta(project_key: &str, meta: &ProjectMeta) -> Result<()> {
-    let dir = cache_dir();
+pub fn write_project_meta(profile: &str, project_key: &str, meta: &ProjectMeta) -> Result<()> {
+    let dir = cache_dir(profile);
     std::fs::create_dir_all(&dir)?;
 
     let path = dir.join("project_meta.json");
@@ -167,12 +184,13 @@ impl Expiring for WorkspaceCache {
     }
 }
 
-pub fn read_workspace_cache() -> Result<Option<WorkspaceCache>> {
-    read_cache("workspace.json")
+pub fn read_workspace_cache(profile: &str) -> Result<Option<WorkspaceCache>> {
+    read_cache(profile, "workspace.json")
 }
 
-pub fn write_workspace_cache(workspace_id: &str) -> Result<()> {
+pub fn write_workspace_cache(profile: &str, workspace_id: &str) -> Result<()> {
     write_cache(
+        profile,
         "workspace.json",
         &WorkspaceCache {
             workspace_id: workspace_id.to_string(),
@@ -201,12 +219,13 @@ impl Expiring for ResolutionsCache {
     }
 }
 
-pub fn read_resolutions_cache() -> Result<Option<ResolutionsCache>> {
-    read_cache("resolutions.json")
+pub fn read_resolutions_cache(profile: &str) -> Result<Option<ResolutionsCache>> {
+    read_cache(profile, "resolutions.json")
 }
 
-pub fn write_resolutions_cache(resolutions: &[CachedResolution]) -> Result<()> {
+pub fn write_resolutions_cache(profile: &str, resolutions: &[CachedResolution]) -> Result<()> {
     write_cache(
+        profile,
         "resolutions.json",
         &ResolutionsCache {
             resolutions: resolutions.to_vec(),
@@ -227,12 +246,13 @@ impl Expiring for CmdbFieldsCache {
     }
 }
 
-pub fn read_cmdb_fields_cache() -> Result<Option<CmdbFieldsCache>> {
-    read_cache("cmdb_fields.json")
+pub fn read_cmdb_fields_cache(profile: &str) -> Result<Option<CmdbFieldsCache>> {
+    read_cache(profile, "cmdb_fields.json")
 }
 
-pub fn write_cmdb_fields_cache(fields: &[(String, String)]) -> Result<()> {
+pub fn write_cmdb_fields_cache(profile: &str, fields: &[(String, String)]) -> Result<()> {
     write_cache(
+        profile,
         "cmdb_fields.json",
         &CmdbFieldsCache {
             fields: fields.to_vec(),
@@ -267,9 +287,10 @@ pub struct ObjectTypeAttrCache {
 /// (`ObjectTypeAttrCache.fetched_at`) but lookup is per-key, with a different
 /// return type (`Vec<CachedObjectTypeAttr>`) than the stored wrapper struct.
 pub fn read_object_type_attr_cache(
+    profile: &str,
     object_type_id: &str,
 ) -> Result<Option<Vec<CachedObjectTypeAttr>>> {
-    let path = cache_dir().join("object_type_attrs.json");
+    let path = cache_dir(profile).join("object_type_attrs.json");
     if !path.exists() {
         return Ok(None);
     }
@@ -295,10 +316,11 @@ pub fn read_object_type_attr_cache(
 ///
 /// Merges into the existing map file, preserving entries for other object types.
 pub fn write_object_type_attr_cache(
+    profile: &str,
     object_type_id: &str,
     attrs: &[CachedObjectTypeAttr],
 ) -> Result<()> {
-    let dir = cache_dir();
+    let dir = cache_dir(profile);
     std::fs::create_dir_all(&dir)?;
 
     let path = dir.join("object_type_attrs.json");
@@ -357,9 +379,69 @@ mod tests {
     }
 
     #[test]
+    fn cache_dir_includes_v1_and_profile_subdir() {
+        with_temp_cache(|| {
+            let dir = cache_dir("default");
+            assert!(dir.ends_with("v1/default"), "got: {}", dir.display());
+        });
+    }
+
+    #[test]
+    fn cross_profile_isolation_team_cache() {
+        with_temp_cache(|| {
+            write_team_cache(
+                "prod",
+                &[CachedTeam {
+                    id: "t1".into(),
+                    name: "Prod Team".into(),
+                }],
+            )
+            .unwrap();
+
+            let prod = read_team_cache("prod").unwrap().unwrap();
+            assert_eq!(prod.teams[0].name, "Prod Team");
+
+            assert!(read_team_cache("sandbox").unwrap().is_none());
+        });
+    }
+
+    #[test]
+    fn clear_profile_cache_removes_only_that_profile() {
+        with_temp_cache(|| {
+            write_team_cache(
+                "prod",
+                &[CachedTeam {
+                    id: "p".into(),
+                    name: "P".into(),
+                }],
+            )
+            .unwrap();
+            write_team_cache(
+                "sandbox",
+                &[CachedTeam {
+                    id: "s".into(),
+                    name: "S".into(),
+                }],
+            )
+            .unwrap();
+
+            clear_profile_cache("prod").unwrap();
+
+            assert!(
+                read_team_cache("prod").unwrap().is_none(),
+                "prod cache cleared"
+            );
+            assert!(
+                read_team_cache("sandbox").unwrap().is_some(),
+                "sandbox cache preserved"
+            );
+        });
+    }
+
+    #[test]
     fn read_missing_cache_returns_none() {
         with_temp_cache(|| {
-            let result = read_team_cache().unwrap();
+            let result = read_team_cache("default").unwrap();
             assert!(result.is_none());
         });
     }
@@ -377,9 +459,11 @@ mod tests {
                     name: "Beta".into(),
                 },
             ];
-            write_team_cache(&teams).unwrap();
+            write_team_cache("default", &teams).unwrap();
 
-            let cache = read_team_cache().unwrap().expect("cache should exist");
+            let cache = read_team_cache("default")
+                .unwrap()
+                .expect("cache should exist");
             assert_eq!(cache.teams.len(), 2);
             assert_eq!(cache.teams[0].name, "Alpha");
             assert_eq!(cache.teams[1].name, "Beta");
@@ -396,12 +480,12 @@ mod tests {
                     name: "Old".into(),
                 }],
             };
-            let dir = cache_dir();
+            let dir = cache_dir("default");
             std::fs::create_dir_all(&dir).unwrap();
             let content = serde_json::to_string_pretty(&expired).unwrap();
             std::fs::write(dir.join("teams.json"), content).unwrap();
 
-            let result = read_team_cache().unwrap();
+            let result = read_team_cache("default").unwrap();
             assert!(result.is_none(), "expired cache should return None");
         });
     }
@@ -416,12 +500,14 @@ mod tests {
                     name: "Recent".into(),
                 }],
             };
-            let dir = cache_dir();
+            let dir = cache_dir("default");
             std::fs::create_dir_all(&dir).unwrap();
             let content = serde_json::to_string_pretty(&recent).unwrap();
             std::fs::write(dir.join("teams.json"), content).unwrap();
 
-            let cache = read_team_cache().unwrap().expect("cache should be valid");
+            let cache = read_team_cache("default")
+                .unwrap()
+                .expect("cache should be valid");
             assert_eq!(cache.teams.len(), 1);
             assert_eq!(cache.teams[0].name, "Recent");
         });
@@ -430,7 +516,7 @@ mod tests {
     #[test]
     fn read_missing_project_meta_returns_none() {
         with_temp_cache(|| {
-            let result = read_project_meta("NOEXIST").unwrap();
+            let result = read_project_meta("default", "NOEXIST").unwrap();
             assert!(result.is_none());
         });
     }
@@ -445,9 +531,9 @@ mod tests {
                 service_desk_id: Some("15".into()),
                 fetched_at: Utc::now(),
             };
-            write_project_meta("HELPDESK", &meta).unwrap();
+            write_project_meta("default", "HELPDESK", &meta).unwrap();
 
-            let loaded = read_project_meta("HELPDESK")
+            let loaded = read_project_meta("default", "HELPDESK")
                 .unwrap()
                 .expect("should exist");
             assert_eq!(loaded.project_type, "service_desk");
@@ -467,9 +553,9 @@ mod tests {
                 service_desk_id: Some("15".into()),
                 fetched_at: Utc::now() - chrono::Duration::days(8),
             };
-            write_project_meta("HELPDESK", &meta).unwrap();
+            write_project_meta("default", "HELPDESK", &meta).unwrap();
 
-            let result = read_project_meta("HELPDESK").unwrap();
+            let result = read_project_meta("default", "HELPDESK").unwrap();
             assert!(result.is_none(), "expired project meta should return None");
         });
     }
@@ -491,15 +577,17 @@ mod tests {
                 service_desk_id: None,
                 fetched_at: Utc::now(),
             };
-            write_project_meta("HELPDESK", &jsm).unwrap();
-            write_project_meta("DEV", &software).unwrap();
+            write_project_meta("default", "HELPDESK", &jsm).unwrap();
+            write_project_meta("default", "DEV", &software).unwrap();
 
-            let jsm_loaded = read_project_meta("HELPDESK")
+            let jsm_loaded = read_project_meta("default", "HELPDESK")
                 .unwrap()
                 .expect("should exist");
             assert_eq!(jsm_loaded.project_type, "service_desk");
 
-            let sw_loaded = read_project_meta("DEV").unwrap().expect("should exist");
+            let sw_loaded = read_project_meta("default", "DEV")
+                .unwrap()
+                .expect("should exist");
             assert_eq!(sw_loaded.project_type, "software");
             assert!(sw_loaded.service_desk_id.is_none());
         });
@@ -508,7 +596,7 @@ mod tests {
     #[test]
     fn read_missing_workspace_cache_returns_none() {
         with_temp_cache(|| {
-            let result = read_workspace_cache().unwrap();
+            let result = read_workspace_cache("default").unwrap();
             assert!(result.is_none());
         });
     }
@@ -516,9 +604,11 @@ mod tests {
     #[test]
     fn write_then_read_workspace_cache() {
         with_temp_cache(|| {
-            write_workspace_cache("abc-123-def").unwrap();
+            write_workspace_cache("default", "abc-123-def").unwrap();
 
-            let cache = read_workspace_cache().unwrap().expect("should exist");
+            let cache = read_workspace_cache("default")
+                .unwrap()
+                .expect("should exist");
             assert_eq!(cache.workspace_id, "abc-123-def");
         });
     }
@@ -530,12 +620,12 @@ mod tests {
                 workspace_id: "old-id".into(),
                 fetched_at: Utc::now() - chrono::Duration::days(8),
             };
-            let dir = cache_dir();
+            let dir = cache_dir("default");
             std::fs::create_dir_all(&dir).unwrap();
             let content = serde_json::to_string_pretty(&expired).unwrap();
             std::fs::write(dir.join("workspace.json"), content).unwrap();
 
-            let result = read_workspace_cache().unwrap();
+            let result = read_workspace_cache("default").unwrap();
             assert!(
                 result.is_none(),
                 "expired workspace cache should return None"
@@ -546,7 +636,7 @@ mod tests {
     #[test]
     fn read_missing_cmdb_fields_cache_returns_none() {
         with_temp_cache(|| {
-            let result = read_cmdb_fields_cache().unwrap();
+            let result = read_cmdb_fields_cache("default").unwrap();
             assert!(result.is_none());
         });
     }
@@ -554,13 +644,18 @@ mod tests {
     #[test]
     fn write_then_read_cmdb_fields_cache() {
         with_temp_cache(|| {
-            write_cmdb_fields_cache(&[
-                ("customfield_10191".into(), "Client".into()),
-                ("customfield_10245".into(), "Hardware".into()),
-            ])
+            write_cmdb_fields_cache(
+                "default",
+                &[
+                    ("customfield_10191".into(), "Client".into()),
+                    ("customfield_10245".into(), "Hardware".into()),
+                ],
+            )
             .unwrap();
 
-            let cache = read_cmdb_fields_cache().unwrap().expect("should exist");
+            let cache = read_cmdb_fields_cache("default")
+                .unwrap()
+                .expect("should exist");
             assert_eq!(
                 cache.fields,
                 vec![
@@ -578,12 +673,12 @@ mod tests {
                 fields: vec![("customfield_10191".into(), "Client".into())],
                 fetched_at: Utc::now() - chrono::Duration::days(8),
             };
-            let dir = cache_dir();
+            let dir = cache_dir("default");
             std::fs::create_dir_all(&dir).unwrap();
             let content = serde_json::to_string_pretty(&expired).unwrap();
             std::fs::write(dir.join("cmdb_fields.json"), content).unwrap();
 
-            let result = read_cmdb_fields_cache().unwrap();
+            let result = read_cmdb_fields_cache("default").unwrap();
             assert!(
                 result.is_none(),
                 "expired cmdb fields cache should return None"
@@ -594,7 +689,7 @@ mod tests {
     #[test]
     fn read_missing_object_type_attr_cache_returns_none() {
         with_temp_cache(|| {
-            let result = read_object_type_attr_cache("23").unwrap();
+            let result = read_object_type_attr_cache("default", "23").unwrap();
             assert!(result.is_none());
         });
     }
@@ -620,9 +715,9 @@ mod tests {
                     position: 1,
                 },
             ];
-            write_object_type_attr_cache("23", &attrs).unwrap();
+            write_object_type_attr_cache("default", "23", &attrs).unwrap();
 
-            let loaded = read_object_type_attr_cache("23")
+            let loaded = read_object_type_attr_cache("default", "23")
                 .unwrap()
                 .expect("should exist");
             assert_eq!(loaded.len(), 2);
@@ -654,12 +749,12 @@ mod tests {
                     m
                 },
             };
-            let dir = cache_dir();
+            let dir = cache_dir("default");
             std::fs::create_dir_all(&dir).unwrap();
             let content = serde_json::to_string_pretty(&expired).unwrap();
             std::fs::write(dir.join("object_type_attrs.json"), content).unwrap();
 
-            let result = read_object_type_attr_cache("23").unwrap();
+            let result = read_object_type_attr_cache("default", "23").unwrap();
             assert!(result.is_none(), "expired cache should return None");
         });
     }
@@ -683,15 +778,15 @@ mod tests {
                 label: false,
                 position: 3,
             }];
-            write_object_type_attr_cache("23", &attrs_a).unwrap();
-            write_object_type_attr_cache("45", &attrs_b).unwrap();
+            write_object_type_attr_cache("default", "23", &attrs_a).unwrap();
+            write_object_type_attr_cache("default", "45", &attrs_b).unwrap();
 
-            let loaded_a = read_object_type_attr_cache("23")
+            let loaded_a = read_object_type_attr_cache("default", "23")
                 .unwrap()
                 .expect("type 23 should exist");
             assert_eq!(loaded_a[0].name, "Key");
 
-            let loaded_b = read_object_type_attr_cache("45")
+            let loaded_b = read_object_type_attr_cache("default", "45")
                 .unwrap()
                 .expect("type 45 should exist");
             assert_eq!(loaded_b[0].name, "Hostname");
@@ -701,11 +796,11 @@ mod tests {
     #[test]
     fn object_type_attr_cache_corrupt_returns_none() {
         with_temp_cache(|| {
-            let dir = cache_dir();
+            let dir = cache_dir("default");
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(dir.join("object_type_attrs.json"), "not json").unwrap();
 
-            let result = read_object_type_attr_cache("23").unwrap();
+            let result = read_object_type_attr_cache("default", "23").unwrap();
             assert!(result.is_none(), "corrupt cache should return None");
         });
     }
@@ -713,17 +808,17 @@ mod tests {
     #[test]
     fn corrupt_team_cache_returns_none() {
         with_temp_cache(|| {
-            let dir = cache_dir();
+            let dir = cache_dir("default");
             std::fs::create_dir_all(&dir).unwrap();
 
             // Garbage data
             std::fs::write(dir.join("teams.json"), "not json").unwrap();
-            let result = read_team_cache().unwrap();
+            let result = read_team_cache("default").unwrap();
             assert!(result.is_none(), "garbage data should return None");
 
             // Valid JSON, wrong shape
             std::fs::write(dir.join("teams.json"), r#"{"unexpected": true}"#).unwrap();
-            let result = read_team_cache().unwrap();
+            let result = read_team_cache("default").unwrap();
             assert!(result.is_none(), "wrong-shape JSON should return None");
         });
     }
@@ -731,17 +826,17 @@ mod tests {
     #[test]
     fn corrupt_workspace_cache_returns_none() {
         with_temp_cache(|| {
-            let dir = cache_dir();
+            let dir = cache_dir("default");
             std::fs::create_dir_all(&dir).unwrap();
 
             // Garbage data
             std::fs::write(dir.join("workspace.json"), "not json").unwrap();
-            let result = read_workspace_cache().unwrap();
+            let result = read_workspace_cache("default").unwrap();
             assert!(result.is_none(), "garbage data should return None");
 
             // Valid JSON, wrong shape
             std::fs::write(dir.join("workspace.json"), r#"{"unexpected": true}"#).unwrap();
-            let result = read_workspace_cache().unwrap();
+            let result = read_workspace_cache("default").unwrap();
             assert!(result.is_none(), "wrong-shape JSON should return None");
         });
     }
@@ -749,17 +844,17 @@ mod tests {
     #[test]
     fn corrupt_project_meta_returns_none() {
         with_temp_cache(|| {
-            let dir = cache_dir();
+            let dir = cache_dir("default");
             std::fs::create_dir_all(&dir).unwrap();
 
             // Garbage data
             std::fs::write(dir.join("project_meta.json"), "not json").unwrap();
-            let result = read_project_meta("ANY").unwrap();
+            let result = read_project_meta("default", "ANY").unwrap();
             assert!(result.is_none(), "garbage data should return None");
 
             // Valid JSON, wrong shape
             std::fs::write(dir.join("project_meta.json"), r#"{"unexpected": true}"#).unwrap();
-            let result = read_project_meta("ANY").unwrap();
+            let result = read_project_meta("default", "ANY").unwrap();
             assert!(result.is_none(), "wrong-shape JSON should return None");
         });
     }
@@ -785,8 +880,8 @@ mod resolution_cache_tests {
                     description: None,
                 },
             ];
-            write_resolutions_cache(&input).unwrap();
-            let loaded = read_resolutions_cache().unwrap().unwrap();
+            write_resolutions_cache("default", &input).unwrap();
+            let loaded = read_resolutions_cache("default").unwrap().unwrap();
 
             assert_eq!(loaded.resolutions.len(), 2);
             assert_eq!(loaded.resolutions[0].name, "Done");
@@ -797,7 +892,7 @@ mod resolution_cache_tests {
     #[test]
     fn resolution_cache_missing_returns_none() {
         with_temp_cache(|| {
-            let loaded = read_resolutions_cache().unwrap();
+            let loaded = read_resolutions_cache("default").unwrap();
             assert!(loaded.is_none());
         });
     }

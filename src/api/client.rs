@@ -21,6 +21,10 @@ pub struct JiraClient {
     auth_header: String,
     verbose: bool,
     assets_base_url: Option<String>,
+    /// Active profile name, plumbed through so per-profile cache calls can
+    /// scope their reads/writes correctly without the call sites needing
+    /// access to `&Config`.
+    profile_name: String,
 }
 
 impl JiraClient {
@@ -32,22 +36,29 @@ impl JiraClient {
         // JR_BASE_URL overrides all URL targets (used by integration tests to inject wiremock).
         let test_override = std::env::var("JR_BASE_URL").ok();
 
+        // In test-override mode the profile is not consulted for any URL target,
+        // and JR_AUTH_HEADER short-circuits credential loading. In real-use mode
+        // the active profile is required to know URL, auth_method, and cloud_id.
+        let profile = if test_override.is_some() {
+            None
+        } else {
+            Some(config.active_profile_or_err()?)
+        };
+
         let instance_url = if let Some(ref override_url) = test_override {
             // Test mode: route all traffic (including instance and assets) to the mock server.
             override_url.trim_end_matches('/').to_string()
-        } else if let Some(url) = config.global.instance.url.as_ref() {
+        } else if let Some(url) = profile.and_then(|p| p.url.as_ref()) {
             url.trim_end_matches('/').to_string()
         } else {
-            return Err(JrError::ConfigError(
-                "No Jira instance configured. Run \"jr init\" first.".into(),
-            )
+            return Err(JrError::ConfigError(format!(
+                "Profile {:?} has no URL configured. Run \"jr auth login --profile {}\".",
+                config.active_profile_name, config.active_profile_name
+            ))
             .into());
         };
-        let auth_method = config
-            .global
-            .instance
-            .auth_method
-            .as_deref()
+        let auth_method = profile
+            .and_then(|p| p.auth_method.as_deref())
             .unwrap_or("api_token");
 
         // JR_AUTH_HEADER env var overrides keychain auth (used by tests to inject mock auth)
@@ -56,7 +67,8 @@ impl JiraClient {
         } else {
             match auth_method {
                 "oauth" => {
-                    let (access, _refresh) = crate::api::auth::load_oauth_tokens()?;
+                    let (access, _refresh) =
+                        crate::api::auth::load_oauth_tokens(&config.active_profile_name)?;
                     format!("Bearer {access}")
                 }
                 _ => {
@@ -75,7 +87,7 @@ impl JiraClient {
             // Test mode: assets API goes to the mock server under /jsm/assets.
             Some(format!("{}/jsm/assets", override_url.trim_end_matches('/')))
         } else {
-            config.global.instance.cloud_id.as_ref().map(|cloud_id| {
+            profile.and_then(|p| p.cloud_id.as_ref()).map(|cloud_id| {
                 format!(
                     "https://api.atlassian.com/ex/jira/{}/jsm/assets",
                     urlencoding::encode(cloud_id)
@@ -90,6 +102,7 @@ impl JiraClient {
             auth_header,
             verbose,
             assets_base_url,
+            profile_name: config.active_profile_name.clone(),
         })
     }
 
@@ -104,7 +117,15 @@ impl JiraClient {
             auth_header,
             verbose: false,
             assets_base_url,
+            profile_name: "default".to_string(),
         }
+    }
+
+    /// Active profile name this client is bound to. Used by per-profile
+    /// cache call sites (CMDB fields, workspace ID, project meta, resolutions,
+    /// object-type attrs) that have a `&JiraClient` but not `&Config`.
+    pub fn profile_name(&self) -> &str {
+        &self.profile_name
     }
 
     /// Whether the client was constructed with `--verbose` enabled.

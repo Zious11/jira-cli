@@ -46,6 +46,10 @@ pub fn print_success(msg: &str) {
     eprintln!("{}", msg.green());
 }
 
+pub fn print_warning(msg: &str) {
+    eprintln!("warning: {msg}");
+}
+
 pub fn print_error(msg: &str) {
     eprintln!("{}: {}", "Error".red().bold(), msg);
 }
