@@ -103,10 +103,10 @@ pub(crate) fn resolve_oauth_app_credentials(
         None
     };
     // Defer the XOR decode: only materialize the embedded plaintext
-    // `client_secret` when no higher-precedence source can resolve.
-    // BYO users never decode the embedded secret in their normal flow.
-    // Use the cheap `embedded_oauth_app_present()` constants-only check
-    // to short-circuit; only the late branch invokes `embedded_oauth_app()`
+    // `client_secret` when no higher-precedence source resolves.
+    // BYO users (flag/env/keychain) never trigger the embedded decode.
+    // The short-circuit below gates on whether any higher-precedence
+    // source has values; only the else-branch invokes `embedded_oauth_app()`
     // which triggers the XOR decode + OnceLock cache.
     let has_flag_pair = flag_id.as_deref().is_some_and(|s| !s.is_empty())
         && flag_secret.as_deref().is_some_and(|s| !s.is_empty());

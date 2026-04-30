@@ -3,7 +3,7 @@
 **Status:** Draft
 **Date:** 2026-04-30
 **Branch:** `feat/embedded-oauth-app`
-**Related ADR:** ADR-0006 (to be authored — supersedes ADR-0002)
+**Related ADR:** [ADR-0006: Embedded `jr` OAuth app](../../adr/0006-embedded-jr-oauth-app.md) — supersedes ADR-0002
 
 ## Problem
 
@@ -50,45 +50,46 @@ locked-down enterprise tenants, and source builds.
 ### High-level component diagram
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│ build.rs                                                         │
-│  - reads $JR_BUILD_OAUTH_CLIENT_ID, $JR_BUILD_OAUTH_CLIENT_SECRET│
-│  - generates random 32-byte XOR key                              │
-│  - emits $OUT_DIR/embedded_oauth.rs with:                        │
-│      pub const ID:        Option<&str>     = Some("...") | None  │
-│      pub const SECRET_XOR: Option<&[u8]>   = Some(b"...") | None │
-│      pub const SECRET_KEY: Option<&[u8;32]>= Some(b"...") | None │
-└──────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ build.rs                                                                     │
+│  - reads $JR_BUILD_OAUTH_CLIENT_ID, $JR_BUILD_OAUTH_CLIENT_SECRET            │
+│  - generates random 32-byte XOR key                                          │
+│  - emits $OUT_DIR/embedded_oauth.rs with:                                    │
+│      pub const EMBEDDED_ID:         Option<&str>      = Some("...") | None  │
+│      pub const EMBEDDED_SECRET_XOR: Option<&[u8]>     = Some(b"...") | None │
+│      pub const EMBEDDED_SECRET_KEY: Option<&[u8; 32]> = Some(b"...") | None │
+└──────────────────────────────────────────────────────────────────────────────┘
                           │
                           ▼ include!()
-┌──────────────────────────────────────────────────────────────────┐
-│ src/api/auth_embedded.rs   (new module — small, focused)         │
-│  pub struct EmbeddedOAuthApp { id, secret }                      │
-│  pub fn embedded_oauth_app() -> Option<EmbeddedOAuthApp>         │
-│      - lazy: OnceLock<Option<EmbeddedOAuthApp>>                  │
-│      - on first call, XOR-decodes secret, returns app            │
-│      - returns None when build had no embedded creds             │
-└──────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ src/api/auth_embedded.rs   (new module — small, focused)                     │
+│  pub struct EmbeddedOAuthApp { id, secret }                                  │
+│  pub fn embedded_oauth_app() -> Option<&'static EmbeddedOAuthApp>            │
+│      - lazy: OnceLock<Option<EmbeddedOAuthApp>>                              │
+│      - on first call, XOR-decodes secret, caches app, returns                │
+│        shared 'static reference                                              │
+│      - returns None when build had no embedded creds                         │
+└──────────────────────────────────────────────────────────────────────────────┘
                           │
                           ▼
-┌──────────────────────────────────────────────────────────────────┐
-│ src/cli/auth.rs::login_oauth                                     │
-│  resolve_oauth_credentials(profile, args) -> (id, secret, source)│
-│   1. flag (--client-id/--client-secret)                          │
-│   2. env  (JR_OAUTH_CLIENT_ID / _SECRET)                         │
-│   3. keychain (existing oauth_client_id / oauth_client_secret)   │
-│   4. embedded::embedded_oauth_app()                              │
-│   5. interactive prompt (TTY only; --no-input → error)           │
-└──────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ src/cli/auth.rs::login_oauth                                                 │
+│  resolve_oauth_credentials(profile, args) -> (id, secret, source)            │
+│   1. flag (--client-id/--client-secret)                                      │
+│   2. env  (JR_OAUTH_CLIENT_ID / _SECRET)                                     │
+│   3. keychain (existing oauth_client_id / oauth_client_secret)               │
+│   4. embedded::embedded_oauth_app()                                          │
+│   5. interactive prompt (TTY only; --no-input → error)                       │
+└──────────────────────────────────────────────────────────────────────────────┘
                           │
                           ▼
-┌──────────────────────────────────────────────────────────────────┐
-│ src/api/auth.rs::oauth_login                                     │
-│  takes new RedirectUriStrategy enum:                             │
-│    - DynamicPort               (BYO, existing behavior)          │
-│    - FixedPort(u16)            (embedded → 53682)                │
-│  binds listener accordingly; everything else unchanged.          │
-└──────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ src/api/auth.rs::oauth_login                                                 │
+│  takes new RedirectUriStrategy enum:                                         │
+│    - DynamicPort               (BYO, existing behavior)                      │
+│    - FixedPort(u16)            (embedded → 53682)                            │
+│  binds listener accordingly; everything else unchanged.                      │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### `build.rs`
