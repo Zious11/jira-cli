@@ -573,6 +573,19 @@ pub(super) fn prepare_login_target(
     Ok((global, target))
 }
 
+/// Inspect — without consuming or modifying — which source would supply
+/// OAuth app credentials on the next `refresh_oauth_token` call. Mirrors
+/// the resolver order in `api/auth.rs::resolve_refresh_app_credentials`.
+fn peek_oauth_app_source() -> OAuthAppSource {
+    if crate::api::auth::load_oauth_app_credentials().is_ok() {
+        return OAuthAppSource::Keychain;
+    }
+    if crate::api::auth_embedded::embedded_oauth_app().is_some() {
+        return OAuthAppSource::Embedded;
+    }
+    OAuthAppSource::None
+}
+
 /// Show authentication status: instance URL, auth method, credential availability.
 ///
 /// When `profile_arg` is `Some`, reports for that profile. Otherwise reports
@@ -651,6 +664,13 @@ pub async fn status(profile_arg: Option<&str>) -> Result<()> {
         println!("Credentials: stored in keychain");
     } else {
         println!("Credentials: not found");
+    }
+
+    // Report which OAuth app credentials would be used for the next refresh.
+    // This is the *future* source — same resolver as `refresh_oauth_token`.
+    if method == "oauth" {
+        let source = peek_oauth_app_source();
+        println!("OAuth app:   {}", source.label());
     }
 
     Ok(())
@@ -1744,5 +1764,21 @@ mod tests {
             });
             assert_eq!(result, raw, "input {raw:?} must pass through unchanged");
         }
+    }
+
+    /// On a default test build (no embedded credentials), with no keychain
+    /// pair seeded, the OAuth app source must report `(none)` or `keychain`.
+    /// `Embedded` would mean a release env var leaked into tests.
+    #[test]
+    fn peek_oauth_app_source_never_embedded_in_test_build() {
+        let source = peek_oauth_app_source();
+        assert!(
+            matches!(
+                source,
+                OAuthAppSource::Keychain | OAuthAppSource::None
+            ),
+            "unexpected source in test build: {:?}",
+            source
+        );
     }
 }
