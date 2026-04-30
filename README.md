@@ -103,10 +103,18 @@ jr auth login --oauth --profile my-site --url https://my-site.atlassian.net
 
 Your browser opens, you click "Allow" on the `jr` consent screen, done.
 
-Scopes default to Atlassian's recommended classic set; override per profile
-via `[profiles.<name>].oauth_scopes` in `config.toml` — see Configuration
-below. (Legacy `[instance].oauth_scopes` from pre-multi-profile configs is
-auto-migrated on first load.)
+By default, `jr` requests the Jira platform classic scopes plus the
+granular scopes used for JSM queues and Assets/CMDB features:
+
+- `read:jira-work`, `write:jira-work`, `read:jira-user` — Jira platform (issues, search, users)
+- `read:servicedesk-request` — JSM queues (`jr queue list/view`)
+- `read:cmdb-object:jira`, `read:cmdb-schema:jira` — Assets/CMDB (`jr assets ...`)
+- `offline_access` — refresh tokens (without this, sessions die after one hour)
+
+Override per profile via `[profiles.<name>].oauth_scopes` in `config.toml`
+— see Configuration below. (Legacy `[instance].oauth_scopes` from
+pre-multi-profile configs is auto-migrated on first load.) The canonical
+default lives at `DEFAULT_OAUTH_SCOPES` in `src/api/auth.rs`.
 
 #### Bring your own OAuth app
 

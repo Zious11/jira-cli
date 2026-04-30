@@ -48,10 +48,19 @@ fn oauth_refresh_key(profile: &str) -> String {
 /// app must be registered with this exact scope set in its Developer
 /// Console permissions, otherwise the authorize call rejects with
 /// `invalid_scope`.
-pub const DEFAULT_OAUTH_SCOPES: &str = "read:jira-work write:jira-work read:jira-user \
-     read:servicedesk-request \
-     read:cmdb-object:jira read:cmdb-schema:jira \
-     offline_access";
+// Built via `concat!` (vs. line-continuation in a string literal) to make
+// the absence of double spaces obvious to any reader, not dependent on the
+// `\<newline>` continuation rule that consumes following whitespace. Each
+// fragment ends with exactly one trailing space (or the final fragment has
+// none) so the joined string is single-space separated. A regression test
+// (`default_oauth_scopes_pins_the_full_set_with_offline_access`) asserts
+// no double spaces appear.
+pub const DEFAULT_OAUTH_SCOPES: &str = concat!(
+    "read:jira-work write:jira-work read:jira-user ",
+    "read:servicedesk-request ",
+    "read:cmdb-object:jira read:cmdb-schema:jira ",
+    "offline_access",
+);
 
 fn entry(key: &str) -> Result<Entry> {
     Entry::new(&service_name(), key).context("Failed to access keychain")

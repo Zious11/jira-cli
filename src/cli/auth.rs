@@ -1550,6 +1550,19 @@ mod tests {
                         offline_access";
         let normalize = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
         assert_eq!(normalize(scopes), normalize(expected));
+
+        // Regression guard for the multi-line literal: assert no double
+        // spaces in the actual constant. Atlassian's authorize endpoint
+        // percent-encodes scope values verbatim, so `%20%20` between
+        // scopes would be parsed as an empty scope and surface as
+        // `invalid_scope`. The current `concat!` form makes this
+        // structurally impossible, but pinning here catches a future
+        // refactor that drops back to a multi-line literal without the
+        // line-continuation escape.
+        assert!(
+            !scopes.contains("  "),
+            "DEFAULT_OAUTH_SCOPES has consecutive spaces: {scopes:?}"
+        );
     }
 
     #[test]
