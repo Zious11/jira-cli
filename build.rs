@@ -52,7 +52,8 @@ fn main() {
             .to_string(),
     };
 
-    fs::write(&out_path, body).expect("write embedded_oauth.rs");
+    fs::write(&out_path, body)
+        .unwrap_or_else(|e| panic!("build.rs: failed to write {}: {e}", out_path.display()));
 }
 
 /// 32 random bytes from the OS entropy source. Build scripts run on the
@@ -70,20 +71,26 @@ compile_error!(
 fn generate_xor_key() -> [u8; 32] {
     #[cfg(unix)]
     {
-        let mut f = fs::File::open("/dev/urandom").expect("open /dev/urandom");
+        let mut f = fs::File::open("/dev/urandom")
+            .unwrap_or_else(|e| panic!("build.rs: failed to open /dev/urandom: {e}"));
         let mut buf = [0u8; 32];
-        f.read_exact(&mut buf).expect("read /dev/urandom");
+        f.read_exact(&mut buf)
+            .unwrap_or_else(|e| panic!("build.rs: failed to read /dev/urandom: {e}"));
         buf
     }
     #[cfg(windows)]
     {
-        // BCryptGenRandom via a tiny inline shim — no extra build-deps.
-        // Fall back to system_clock-seeded LCG only if BCrypt fails (last-
-        // resort; the build host always has BCrypt available on supported
-        // Windows versions).
-        use std::time::SystemTime;
+        // Use BCryptGenRandom via a tiny inline shim — no extra build-deps.
+        // Windows release builds run in clean CI environments; if BCrypt
+        // truly fails (sandboxing, blocked DLL, registry corruption), we'd
+        // rather fail the build loudly than ship a low-entropy XOR key
+        // that defeats the obfuscation premise.
         let mut buf = [0u8; 32];
-        // Try BCrypt first.
+        // SAFETY: declaring the BCryptGenRandom signature exactly as it
+        // appears in <bcrypt.h>: ntstatus return, four parameters with
+        // matching types and ABI. Linking is via `#[link(name = "bcrypt")]`.
+        // No invariant beyond the ABI is required at the declaration site;
+        // the call site below establishes runtime safety.
         #[link(name = "bcrypt")]
         unsafe extern "system" {
             fn BCryptGenRandom(
@@ -100,20 +107,13 @@ fn generate_xor_key() -> [u8; 32] {
         // tells the API to use the system RNG without requiring a handle.
         let status =
             unsafe { BCryptGenRandom(std::ptr::null_mut(), buf.as_mut_ptr(), 32, 0x00000002) };
-        if status == 0 {
-            return buf;
-        }
-        // Fallback (should be unreachable on supported Windows).
-        let nanos = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos() as u64;
-        let mut s = nanos;
-        for b in buf.iter_mut() {
-            s = s
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            *b = (s >> 33) as u8;
+        if status != 0 {
+            panic!(
+                "build.rs: BCryptGenRandom returned NTSTATUS 0x{status:08x}. \
+                 The OAuth XOR key requires OS entropy. Ensure the build \
+                 environment is not blocking BCrypt (security software, \
+                 sandboxing, or corrupted cryptography registry settings)."
+            );
         }
         buf
     }
