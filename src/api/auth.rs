@@ -190,6 +190,28 @@ pub fn load_oauth_app_credentials() -> Result<(String, String)> {
     Ok((id, secret))
 }
 
+/// Probe whether OAuth app credentials are present in the keychain WITHOUT
+/// returning them. Distinguishes "absent" (NoEntry) from "present but
+/// inaccessible" (locked keychain, permission denied). Used by the refresh
+/// resolver and `jr auth status` to avoid silently flipping a BYO user
+/// onto the embedded app when the keychain is just temporarily locked.
+///
+/// Returns:
+/// - `Ok(true)` — both `oauth_client_id` and `oauth_client_secret` entries
+///   exist in the keychain.
+/// - `Ok(false)` — neither entry exists (clean fallback to embedded).
+/// - `Err(_)` — the keychain backend itself failed (locked, permission
+///   denied). Callers should propagate or surface this rather than
+///   masking it as "absent".
+///
+/// Empty-string entries are treated as ABSENT (matches the resolver's
+/// real intent — empty creds are useless to Atlassian).
+pub fn probe_oauth_app_credentials() -> Result<bool> {
+    let id = read_keyring_optional("oauth_client_id")?;
+    let secret = read_keyring_optional("oauth_client_secret")?;
+    Ok(matches!((id, secret), (Some(i), Some(s)) if !i.is_empty() && !s.is_empty()))
+}
+
 /// Clear OAuth tokens for a single profile (other profiles + shared keys
 /// such as email / api-token / oauth_client_id are untouched).
 ///
@@ -571,8 +593,23 @@ pub async fn refresh_oauth_token(profile: &str) -> Result<String> {
 /// silently flipping to the embedded app mid-session (which would invalidate
 /// their refresh token because it was issued by a different app).
 fn resolve_refresh_app_credentials() -> Result<(String, String, RefreshAppSource)> {
-    if let Ok((id, secret)) = load_oauth_app_credentials() {
-        return Ok((id, secret, RefreshAppSource::Keychain));
+    // Probe first: a locked keychain or permission denial is NOT the same
+    // as "no creds stored" — we must not silently flip the user onto the
+    // embedded app when their BYO creds are merely temporarily inaccessible.
+    match probe_oauth_app_credentials() {
+        Ok(true) => {
+            let (id, secret) = load_oauth_app_credentials()?;
+            return Ok((id, secret, RefreshAppSource::Keychain));
+        }
+        Ok(false) => {} // genuinely absent — fall through to embedded
+        Err(e) => {
+            return Err(anyhow::anyhow!(
+                "OAuth refresh: failed to probe the system keychain ({e:#}). \
+                 Unlock your keychain or grant access to jr, then retry. \
+                 If you intended to use the embedded jr OAuth app, run \
+                 `jr auth remove` first to clear stale BYO credentials."
+            ));
+        }
     }
     if let Some(app) = crate::api::auth_embedded::embedded_oauth_app() {
         return Ok((

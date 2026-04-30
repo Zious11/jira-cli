@@ -623,11 +623,24 @@ pub(super) fn prepare_login_target(
 /// Inspect — without consuming or modifying — which source would supply
 /// OAuth app credentials on the next `refresh_oauth_token` call. Mirrors
 /// the resolver order in `api/auth.rs::resolve_refresh_app_credentials`.
+///
+/// On keychain probe failure (locked keychain, permission denied) emits
+/// a stderr warning and returns `OAuthAppSource::None` rather than
+/// silently reporting `Embedded`. The status row would otherwise lie
+/// about which source the next refresh will use.
 fn peek_oauth_app_source() -> OAuthAppSource {
-    peek_oauth_app_source_for_test(
-        crate::api::auth::load_oauth_app_credentials().is_ok(),
-        crate::api::auth_embedded::embedded_oauth_app().is_some(),
-    )
+    let keychain_present = match crate::api::auth::probe_oauth_app_credentials() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!(
+                "warning: could not probe keychain for OAuth app credentials ({e:#}); \
+                 status report may be incomplete."
+            );
+            false
+        }
+    };
+    let embedded_present = crate::api::auth_embedded::embedded_oauth_app().is_some();
+    peek_oauth_app_source_for_test(keychain_present, embedded_present)
 }
 
 /// Pure helper for testing the precedence chain. Match the runtime
