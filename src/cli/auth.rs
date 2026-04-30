@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use dialoguer::{Input, Password};
 
 use crate::api::auth;
+use crate::api::auth_embedded::{OAuthAppSource, embedded_oauth_app};
 use crate::config::{Config, global_config_path};
 use crate::error::JrError;
 use crate::output;
@@ -68,6 +69,100 @@ pub(crate) fn resolve_credential(
             .interact_text()
             .with_context(|| format!("failed to read {prompt_label}"))
     }
+}
+
+/// Resolve the OAuth app credentials for a `login --oauth` invocation.
+/// Returns `(client_id, client_secret, source)`. The `source` flows into
+/// `jr auth status` so users can tell which path drove the session.
+///
+/// Order: flag → env → keychain → embedded → prompt.
+///
+/// Flag and env are pair-gated: both halves must be present, otherwise the
+/// resolver falls through (avoids sending a half-empty pair to Atlassian).
+// TODO(task-7): remove #[allow(dead_code)] once login_oauth calls this.
+#[allow(dead_code)]
+pub(crate) fn resolve_oauth_app_credentials(
+    flag_id: Option<String>,
+    flag_secret: Option<String>,
+    no_input: bool,
+) -> Result<(String, String, OAuthAppSource)> {
+    let env_id = std::env::var(ENV_OAUTH_CLIENT_ID)
+        .ok()
+        .filter(|s| !s.is_empty());
+    let env_secret = std::env::var(ENV_OAUTH_CLIENT_SECRET)
+        .ok()
+        .filter(|s| !s.is_empty());
+    let keychain = crate::api::auth::load_oauth_app_credentials().ok();
+    let embedded = embedded_oauth_app().map(|a| (a.client_id.clone(), a.client_secret.clone()));
+
+    resolve_oauth_app_credentials_for_test(
+        flag_id, flag_secret, env_id, env_secret, keychain, embedded, no_input,
+    )
+}
+
+/// Pure resolution function — accepts every potential source as an argument
+/// so unit tests can exercise the precedence chain without mutating env vars
+/// or the keychain.
+//
+// 7 parameters is deliberate: each layer of the resolution chain
+// (flag/env/keychain/embedded) must be independently substitutable.
+// Grouping into a struct would obscure the precedence semantics.
+#[allow(clippy::too_many_arguments)]
+fn resolve_oauth_app_credentials_for_test(
+    flag_id: Option<String>,
+    flag_secret: Option<String>,
+    env_id: Option<String>,
+    env_secret: Option<String>,
+    keychain: Option<(String, String)>,
+    embedded: Option<(String, String)>,
+    no_input: bool,
+) -> Result<(String, String, OAuthAppSource)> {
+    if let (Some(i), Some(s)) = (
+        flag_id.clone().filter(|v| !v.is_empty()),
+        flag_secret.clone().filter(|v| !v.is_empty()),
+    ) {
+        return Ok((i, s, OAuthAppSource::Flag));
+    }
+    if let (Some(i), Some(s)) = (env_id, env_secret) {
+        return Ok((i, s, OAuthAppSource::Env));
+    }
+    if let Some((i, s)) = keychain {
+        return Ok((i, s, OAuthAppSource::Keychain));
+    }
+    if let Some((i, s)) = embedded {
+        return Ok((i, s, OAuthAppSource::Embedded));
+    }
+    if no_input {
+        return Err(JrError::UserError(
+            "OAuth app credentials are required. Provide --client-id and --client-secret, \
+             or set JR_OAUTH_CLIENT_ID and JR_OAUTH_CLIENT_SECRET. This binary was not \
+             built with embedded credentials."
+                .to_string(),
+        )
+        .into());
+    }
+    // Fall back to the existing interactive prompt path. Re-enter
+    // resolve_credential for each so the existing UX (masked input,
+    // hint, retry) is preserved verbatim.
+    let id = resolve_credential(
+        None,
+        ENV_OAUTH_CLIENT_ID,
+        "--client-id",
+        "OAuth Client ID",
+        false,
+        false,
+        Some(OAUTH_APP_HINT),
+    )?;
+    let secret = resolve_credential(
+        None,
+        ENV_OAUTH_CLIENT_SECRET,
+        "--client-secret",
+        "OAuth Client Secret",
+        true,
+        false,
+        Some(OAUTH_APP_HINT),
+    )?;
+    Ok((id, secret, OAuthAppSource::Prompt))
 }
 
 /// Hint for OAuth client_id / client_secret errors so first-time agents
@@ -1520,6 +1615,123 @@ mod tests {
         assert_eq!(
             target, "from-env",
             "must follow active_profile_name, not default_profile field"
+        );
+    }
+
+    /// Resolution order: flag → env → keychain → embedded → prompt.
+    /// Flag wins even when env is set.
+    #[test]
+    fn resolve_oauth_app_credentials_flag_wins() {
+        let (id, secret, source) = resolve_oauth_app_credentials_for_test(
+            Some("flag-id".into()),
+            Some("flag-secret".into()),
+            None, // env_id
+            None, // env_secret
+            None, // keychain
+            None, // embedded
+            true, // no_input
+        )
+        .expect("flag path must succeed");
+        assert_eq!(id, "flag-id");
+        assert_eq!(secret, "flag-secret");
+        assert_eq!(source, crate::api::auth_embedded::OAuthAppSource::Flag);
+    }
+
+    #[test]
+    fn resolve_oauth_app_credentials_env_wins_over_keychain() {
+        let (id, secret, source) = resolve_oauth_app_credentials_for_test(
+            None,
+            None,
+            Some("env-id".into()),
+            Some("env-secret".into()),
+            Some(("kc-id".into(), "kc-secret".into())),
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            (id.as_str(), secret.as_str(), source),
+            (
+                "env-id",
+                "env-secret",
+                crate::api::auth_embedded::OAuthAppSource::Env
+            )
+        );
+    }
+
+    #[test]
+    fn resolve_oauth_app_credentials_keychain_wins_over_embedded() {
+        let (id, _, source) = resolve_oauth_app_credentials_for_test(
+            None,
+            None,
+            None,
+            None,
+            Some(("kc-id".into(), "kc-secret".into())),
+            Some(("embed-id".into(), "embed-secret".into())),
+            true,
+        )
+        .unwrap();
+        assert_eq!(id, "kc-id");
+        assert_eq!(
+            source,
+            crate::api::auth_embedded::OAuthAppSource::Keychain
+        );
+    }
+
+    #[test]
+    fn resolve_oauth_app_credentials_embedded_when_no_user_input() {
+        let (id, secret, source) = resolve_oauth_app_credentials_for_test(
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(("embed-id".into(), "embed-secret".into())),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            (id.as_str(), secret.as_str(), source),
+            (
+                "embed-id",
+                "embed-secret",
+                crate::api::auth_embedded::OAuthAppSource::Embedded
+            )
+        );
+    }
+
+    #[test]
+    fn resolve_oauth_app_credentials_no_input_errors_when_all_absent() {
+        let err = resolve_oauth_app_credentials_for_test(
+            None, None, None, None, None, None, true,
+        )
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("OAuth"), "got: {msg}");
+        assert!(
+            msg.contains("--client-id") || msg.contains("JR_OAUTH_CLIENT_ID"),
+            "error must cite the BYO escape hatch: {msg}"
+        );
+    }
+
+    /// Flag-without-secret (or vice versa) must NOT count as a flag hit —
+    /// otherwise we'd send a malformed pair to oauth_login.
+    #[test]
+    fn resolve_oauth_app_credentials_partial_flag_falls_through() {
+        let (id, _, source) = resolve_oauth_app_credentials_for_test(
+            Some("partial-id".into()),
+            None, // flag_secret missing
+            None,
+            None,
+            None,
+            Some(("embed-id".into(), "embed-secret".into())),
+            true,
+        )
+        .unwrap();
+        assert_eq!(id, "embed-id");
+        assert_eq!(
+            source,
+            crate::api::auth_embedded::OAuthAppSource::Embedded
         );
     }
 
