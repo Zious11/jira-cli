@@ -78,7 +78,17 @@ fn build_embedded_app(
         (Some(i), Some(x), Some(k)) => (i, x, k),
         _ => return None,
     };
+    // Reject empty inputs: a build pipeline that sets the env vars to ""
+    // would otherwise ship a binary that posts an empty client_id to
+    // Atlassian. None here means the binary falls through to BYO/prompt
+    // exactly as it would for a fork build.
+    if id.is_empty() || xor.is_empty() {
+        return None;
+    }
     let secret = decode(xor, key).ok()?;
+    if secret.is_empty() {
+        return None;
+    }
     Some(EmbeddedOAuthApp {
         client_id: id.to_string(),
         client_secret: secret,
@@ -145,6 +155,18 @@ mod tests {
         assert_eq!(build_embedded_app(Some("id"), None, Some(&key)), None);
         // key missing
         assert_eq!(build_embedded_app(Some("id"), Some(b"x"), None), None);
+    }
+
+    /// Empty-string id or zero-length ciphertext must produce None — a
+    /// build-pipeline misconfig that emits empty values should not ship a
+    /// binary that posts empty credentials to Atlassian.
+    #[test]
+    fn build_embedded_app_rejects_empty_inputs() {
+        let key = [0u8; 32];
+        // empty id
+        assert_eq!(build_embedded_app(Some(""), Some(b"x"), Some(&key)), None);
+        // empty ciphertext (would decode to empty secret)
+        assert_eq!(build_embedded_app(Some("id"), Some(&[]), Some(&key)), None);
     }
 
     /// Default test runs (no JR_BUILD_OAUTH_CLIENT_* env vars at compile time)
