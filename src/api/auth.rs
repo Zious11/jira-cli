@@ -1,9 +1,6 @@
-use std::net::TcpListener;
-
 use anyhow::{Context, Result};
 use keyring::Entry;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener as AsyncTcpListener;
 
 /// Default keychain service name for `jr` credentials. `JR_SERVICE_NAME`
 /// can override this at runtime; it is primarily used by tests to avoid
@@ -346,30 +343,52 @@ pub enum RedirectUriStrategyRequest {
 }
 
 impl RedirectUriStrategyRequest {
-    pub fn bind(self) -> Result<RedirectUriStrategy> {
+    /// Bind the local callback listener atomically. Returns a
+    /// [`ResolvedRedirect`] that owns the listener — `oauth_login` consumes
+    /// it directly instead of re-binding, eliminating the TOCTOU window
+    /// where another process could grab the fixed port between probe and
+    /// real-use.
+    pub fn bind(self) -> Result<ResolvedRedirect> {
         match self {
             RedirectUriStrategyRequest::Dynamic => {
-                let listener = TcpListener::bind("127.0.0.1:0")?;
-                let port = listener.local_addr()?.port();
-                drop(listener);
-                Ok(RedirectUriStrategy::DynamicPort(port))
+                let std_listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+                let port = std_listener.local_addr()?.port();
+                std_listener.set_nonblocking(true)?;
+                let listener = tokio::net::TcpListener::from_std(std_listener)?;
+                Ok(ResolvedRedirect {
+                    strategy: RedirectUriStrategy::DynamicPort(port),
+                    listener,
+                })
             }
             RedirectUriStrategyRequest::Fixed(p) => {
-                match TcpListener::bind(format!("127.0.0.1:{p}")) {
-                    Ok(l) => {
-                        drop(l);
-                        Ok(RedirectUriStrategy::FixedPort(p))
+                match std::net::TcpListener::bind(format!("127.0.0.1:{p}")) {
+                    Ok(std_listener) => {
+                        std_listener.set_nonblocking(true)?;
+                        let listener = tokio::net::TcpListener::from_std(std_listener)?;
+                        Ok(ResolvedRedirect {
+                            strategy: RedirectUriStrategy::FixedPort(p),
+                            listener,
+                        })
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => Err(anyhow::anyhow!(
                         "port {p} is in use; the jr OAuth callback needs this port. \
-                             Free it, or use --client-id/--client-secret with your own \
-                             OAuth app."
+                         Free it, or use --client-id/--client-secret with your own \
+                         OAuth app."
                     )),
                     Err(e) => Err(e.into()),
                 }
             }
         }
     }
+}
+
+/// Resolved redirect-URI binding — owns the actual `TcpListener` so
+/// `oauth_login` accepts directly on it without a second bind that could
+/// race against the OS port allocator.
+#[derive(Debug)]
+pub struct ResolvedRedirect {
+    pub strategy: RedirectUriStrategy,
+    pub listener: tokio::net::TcpListener,
 }
 
 /// Resolved port choice for `oauth_login`. Produced by
@@ -424,9 +443,8 @@ pub async fn oauth_login(
 ) -> Result<OAuthResult> {
     // 1. Resolve the strategy → owning the bound port up front so the
     //    callback URL we send to Atlassian matches what we'll listen on.
-    let strategy = strategy.bind()?;
-    let port = strategy.port();
-    let redirect_uri = strategy.redirect_uri();
+    let resolved = strategy.bind()?;
+    let redirect_uri = resolved.strategy.redirect_uri();
     let state = generate_state()?;
 
     let auth_url = build_authorize_url(client_id, scopes, &redirect_uri, &state);
@@ -439,9 +457,10 @@ pub async fn oauth_login(
         );
     }
 
-    // 2. Listen for the OAuth callback.
-    let async_listener = AsyncTcpListener::bind(format!("127.0.0.1:{port}")).await?;
-    let (mut stream, _) = async_listener.accept().await?;
+    // 2. Listen for the OAuth callback. The listener is already bound
+    //    atomically by RedirectUriStrategyRequest::bind; no re-bind here
+    //    means no TOCTOU window between probe and real use.
+    let (mut stream, _) = resolved.listener.accept().await?;
 
     let mut buf = vec![0u8; 4096];
     let n = stream.read(&mut buf).await?;
