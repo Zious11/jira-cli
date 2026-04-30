@@ -21,8 +21,12 @@ fn main() {
     println!("cargo:rerun-if-env-changed=JR_BUILD_OAUTH_CLIENT_ID");
     println!("cargo:rerun-if-env-changed=JR_BUILD_OAUTH_CLIENT_SECRET");
 
-    let id = env::var("JR_BUILD_OAUTH_CLIENT_ID").ok().filter(|s| !s.is_empty());
-    let secret = env::var("JR_BUILD_OAUTH_CLIENT_SECRET").ok().filter(|s| !s.is_empty());
+    let id = env::var("JR_BUILD_OAUTH_CLIENT_ID")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let secret = env::var("JR_BUILD_OAUTH_CLIENT_SECRET")
+        .ok()
+        .filter(|s| !s.is_empty());
 
     let out_dir = env::var("OUT_DIR").expect("cargo sets OUT_DIR for build scripts");
     let out_path = Path::new(&out_dir).join("embedded_oauth.rs");
@@ -42,12 +46,10 @@ fn main() {
                  pub const EMBEDDED_SECRET_KEY: Option<&[u8; 32]> = Some(&{key:?});\n"
             )
         }
-        _ => {
-            "pub const EMBEDDED_ID: Option<&str> = None;\n\
+        _ => "pub const EMBEDDED_ID: Option<&str> = None;\n\
              pub const EMBEDDED_SECRET_XOR: Option<&[u8]> = None;\n\
              pub const EMBEDDED_SECRET_KEY: Option<&[u8; 32]> = None;\n"
-                .to_string()
-        }
+            .to_string(),
     };
 
     fs::write(&out_path, body).expect("write embedded_oauth.rs");
@@ -96,9 +98,8 @@ fn generate_xor_key() -> [u8; 32] {
         // that outlives the call, with cbBuffer=32 matching the buffer size,
         // and dwFlags=BCRYPT_USE_SYSTEM_PREFERRED_RNG (0x00000002) which
         // tells the API to use the system RNG without requiring a handle.
-        let status = unsafe {
-            BCryptGenRandom(std::ptr::null_mut(), buf.as_mut_ptr(), 32, 0x00000002)
-        };
+        let status =
+            unsafe { BCryptGenRandom(std::ptr::null_mut(), buf.as_mut_ptr(), 32, 0x00000002) };
         if status == 0 {
             return buf;
         }
@@ -109,7 +110,9 @@ fn generate_xor_key() -> [u8; 32] {
             .as_nanos() as u64;
         let mut s = nanos;
         for b in buf.iter_mut() {
-            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             *b = (s >> 33) as u8;
         }
         buf

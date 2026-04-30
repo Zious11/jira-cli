@@ -330,13 +330,11 @@ impl RedirectUriStrategyRequest {
                         drop(l);
                         Ok(RedirectUriStrategy::FixedPort(p))
                     }
-                    Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-                        Err(anyhow::anyhow!(
-                            "port {p} is in use; the jr OAuth callback needs this port. \
+                    Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => Err(anyhow::anyhow!(
+                        "port {p} is in use; the jr OAuth callback needs this port. \
                              Free it, or use --client-id/--client-secret with your own \
                              OAuth app."
-                        ))
-                    }
+                    )),
                     Err(e) => Err(e.into()),
                 }
             }

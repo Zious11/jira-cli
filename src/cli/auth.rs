@@ -94,7 +94,13 @@ pub(crate) fn resolve_oauth_app_credentials(
     let embedded = embedded_oauth_app().map(|a| (a.client_id.clone(), a.client_secret.clone()));
 
     resolve_oauth_app_credentials_for_test(
-        flag_id, flag_secret, env_id, env_secret, keychain, embedded, no_input,
+        flag_id,
+        flag_secret,
+        env_id,
+        env_secret,
+        keychain,
+        embedded,
+        no_input,
     )
 }
 
@@ -334,12 +340,8 @@ pub async fn login_oauth(
     no_input: bool,
 ) -> Result<()> {
     if !no_input {
-        eprintln!(
-            "OAuth 2.0: by default, official jr binaries use the embedded \"jr\" app."
-        );
-        eprintln!(
-            "To use your own OAuth app instead, pass --client-id and --client-secret,"
-        );
+        eprintln!("OAuth 2.0: by default, official jr binaries use the embedded \"jr\" app.");
+        eprintln!("To use your own OAuth app instead, pass --client-id and --client-secret,");
         eprintln!("or set JR_OAUTH_CLIENT_ID and JR_OAUTH_CLIENT_SECRET.\n");
     }
 
@@ -350,9 +352,7 @@ pub async fn login_oauth(
     // source is BYO and stays on the historical dynamic-port flow — the
     // user has registered their own callback URL.
     let strategy = match source {
-        OAuthAppSource::Embedded => {
-            crate::api::auth::RedirectUriStrategyRequest::Fixed(53682)
-        }
+        OAuthAppSource::Embedded => crate::api::auth::RedirectUriStrategyRequest::Fixed(53682),
         _ => crate::api::auth::RedirectUriStrategyRequest::Dynamic,
     };
 
@@ -388,14 +388,9 @@ pub async fn login_oauth(
         crate::api::auth::store_oauth_app_credentials(&client_id, &client_secret)?;
     }
 
-    let result = crate::api::auth::oauth_login(
-        profile,
-        &client_id,
-        &client_secret,
-        &scopes,
-        strategy,
-    )
-    .await?;
+    let result =
+        crate::api::auth::oauth_login(profile, &client_id, &client_secret, &scopes, strategy)
+            .await?;
 
     // Persist site info to the named profile under [profiles.<name>], not
     // the legacy [instance] block. Reload to pick up any mutations made
@@ -1681,10 +1676,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(id, "kc-id");
-        assert_eq!(
-            source,
-            crate::api::auth_embedded::OAuthAppSource::Keychain
-        );
+        assert_eq!(source, crate::api::auth_embedded::OAuthAppSource::Keychain);
     }
 
     #[test]
@@ -1711,10 +1703,8 @@ mod tests {
 
     #[test]
     fn resolve_oauth_app_credentials_no_input_errors_when_all_absent() {
-        let err = resolve_oauth_app_credentials_for_test(
-            None, None, None, None, None, None, true,
-        )
-        .unwrap_err();
+        let err = resolve_oauth_app_credentials_for_test(None, None, None, None, None, None, true)
+            .unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.contains("OAuth"), "got: {msg}");
         assert!(
@@ -1738,10 +1728,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(id, "embed-id");
-        assert_eq!(
-            source,
-            crate::api::auth_embedded::OAuthAppSource::Embedded
-        );
+        assert_eq!(source, crate::api::auth_embedded::OAuthAppSource::Embedded);
     }
 
     /// `jr` deliberately does NOT reject mixed classic+granular scopes,
@@ -1773,10 +1760,7 @@ mod tests {
     fn peek_oauth_app_source_never_embedded_in_test_build() {
         let source = peek_oauth_app_source();
         assert!(
-            matches!(
-                source,
-                OAuthAppSource::Keychain | OAuthAppSource::None
-            ),
+            matches!(source, OAuthAppSource::Keychain | OAuthAppSource::None),
             "unexpected source in test build: {:?}",
             source
         );

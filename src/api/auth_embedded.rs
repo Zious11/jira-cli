@@ -90,10 +90,8 @@ fn build_embedded_app(
 /// for the process lifetime (needed for token refreshes).
 pub fn embedded_oauth_app() -> Option<&'static EmbeddedOAuthApp> {
     static APP: OnceLock<Option<EmbeddedOAuthApp>> = OnceLock::new();
-    APP.get_or_init(|| {
-        build_embedded_app(EMBEDDED_ID, EMBEDDED_SECRET_XOR, EMBEDDED_SECRET_KEY)
-    })
-    .as_ref()
+    APP.get_or_init(|| build_embedded_app(EMBEDDED_ID, EMBEDDED_SECRET_XOR, EMBEDDED_SECRET_KEY))
+        .as_ref()
 }
 
 #[cfg(test)]
