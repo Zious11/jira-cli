@@ -403,7 +403,11 @@ pub async fn oauth_login(
 
     eprintln!("Opening browser for authorization...");
     eprintln!("If browser doesn't open, visit: {auth_url}");
-    let _ = open::that(&auth_url);
+    if let Err(e) = open::that(&auth_url) {
+        eprintln!(
+            "(could not auto-open browser: {e}) — paste the URL above into a browser to continue."
+        );
+    }
 
     // 2. Listen for the OAuth callback.
     let async_listener = AsyncTcpListener::bind(format!("127.0.0.1:{port}")).await?;
