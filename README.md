@@ -103,8 +103,10 @@ jr auth login --oauth --profile my-site --url https://my-site.atlassian.net
 
 Your browser opens, you click "Allow" on the `jr` consent screen, done.
 
-Scopes default to Atlassian's recommended classic set; override via
-`[instance].oauth_scopes` in `config.toml` — see Configuration below.
+Scopes default to Atlassian's recommended classic set; override per profile
+via `[profiles.<name>].oauth_scopes` in `config.toml` — see Configuration
+below. (Legacy `[instance].oauth_scopes` from pre-multi-profile configs is
+auto-migrated on first load.)
 
 #### Bring your own OAuth app
 

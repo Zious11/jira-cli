@@ -62,7 +62,7 @@ locked-down enterprise tenants, and source builds.
                           │
                           ▼ include!()
 ┌──────────────────────────────────────────────────────────────────┐
-│ src/api/auth/embedded.rs   (new module — small, focused)         │
+│ src/api/auth_embedded.rs   (new module — small, focused)         │
 │  pub struct EmbeddedOAuthApp { id, secret }                      │
 │  pub fn embedded_oauth_app() -> Option<EmbeddedOAuthApp>         │
 │      - lazy: OnceLock<Option<EmbeddedOAuthApp>>                  │
@@ -139,7 +139,7 @@ Properties this gives us:
 
 ### Embedded module
 
-`src/api/auth/embedded.rs` (new file; today `auth.rs` is one flat 942-line
+`src/api/auth_embedded.rs` (new file; today `auth.rs` is one flat ~1100-line
 module — adding embedded OAuth as a sibling submodule keeps the obfuscation
 plumbing isolated from the keychain plumbing):
 
@@ -149,7 +149,7 @@ use std::sync::OnceLock;
 include!(concat!(env!("OUT_DIR"), "/embedded_oauth.rs"));
 
 pub struct EmbeddedOAuthApp {
-    pub client_id:     &'static str,
+    pub client_id:     String,
     pub client_secret: String,
 }
 
@@ -160,7 +160,7 @@ pub fn embedded_oauth_app() -> Option<&'static EmbeddedOAuthApp> {
         .get_or_init(|| match (EMBEDDED_ID, EMBEDDED_SECRET_XOR, EMBEDDED_SECRET_KEY) {
             (Some(id), Some(xor), Some(key)) => {
                 let secret = decode(xor, key);
-                Some(EmbeddedOAuthApp { client_id: id, client_secret: secret })
+                Some(EmbeddedOAuthApp { client_id: id.to_string(), client_secret: secret })
             }
             _ => None,
         })
