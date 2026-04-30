@@ -119,6 +119,22 @@ pub fn embedded_oauth_app() -> Option<&'static EmbeddedOAuthApp> {
         .as_ref()
 }
 
+/// Cheap presence check — does this binary have embedded OAuth credentials?
+/// Inspects only the build-emitted constants without invoking the XOR
+/// decode or materializing the plaintext `client_secret` in process memory.
+///
+/// Use this for status / diagnostic surfaces (`jr auth status`,
+/// `peek_oauth_app_source`) where you need to know *whether* embedded
+/// creds are available but don't need to actually use them. Defense in
+/// depth: a user running only read-only `jr auth status` on a release
+/// binary should not cause the live `client_secret` to be decoded into
+/// the process heap.
+pub fn embedded_oauth_app_present() -> bool {
+    EMBEDDED_ID.is_some_and(|s| !s.is_empty())
+        && EMBEDDED_SECRET_XOR.is_some_and(|x| !x.is_empty())
+        && EMBEDDED_SECRET_KEY.is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,6 +235,16 @@ mod tests {
         assert!(
             rendered.contains("<redacted>"),
             "redaction marker should be present: {rendered}"
+        );
+    }
+
+    /// Default test build (no JR_BUILD_OAUTH_CLIENT_* env vars at compile
+    /// time) → presence check returns false without decoding anything.
+    #[test]
+    fn embedded_oauth_app_present_is_false_in_default_test_build() {
+        assert!(
+            !embedded_oauth_app_present(),
+            "test builds must not have embedded credentials"
         );
     }
 }

@@ -190,22 +190,26 @@ pub fn load_oauth_app_credentials() -> Result<(String, String)> {
     Ok((id, secret))
 }
 
-/// Probe whether OAuth app credentials are present in the keychain WITHOUT
-/// returning them. Distinguishes "absent" (NoEntry) from "present but
-/// inaccessible" (locked keychain, permission denied). Used by the refresh
-/// resolver and `jr auth status` to avoid silently flipping a BYO user
-/// onto the embedded app when the keychain is just temporarily locked.
+/// Probe whether usable OAuth app credentials are present in the keychain
+/// WITHOUT returning them. Distinguishes a real backend failure (locked
+/// keychain, permission denied) from any "no usable creds here" condition,
+/// so the refresh resolver and `jr auth status` don't silently flip a BYO
+/// user onto the embedded app when the keychain is just temporarily
+/// inaccessible.
 ///
 /// Returns:
 /// - `Ok(true)` — both `oauth_client_id` and `oauth_client_secret` entries
-///   exist in the keychain.
-/// - `Ok(false)` — neither entry exists (clean fallback to embedded).
-/// - `Err(_)` — the keychain backend itself failed (locked, permission
-///   denied). Callers should propagate or surface this rather than
-///   masking it as "absent".
-///
-/// Empty-string entries are treated as ABSENT (matches the resolver's
-/// real intent — empty creds are useless to Atlassian).
+///   exist AND are non-empty. Safe to use for OAuth (would post a real
+///   pair to Atlassian).
+/// - `Ok(false)` — one or more of the following: neither entry exists; only
+///   one half is present (`partial` state); both exist but at least one is
+///   an empty string. All three collapse into "no usable BYO creds here"
+///   from the resolver's perspective — empty/partial creds are
+///   unauthenticatable at Atlassian, so falling through to embedded is the
+///   correct behavior. (Doc note: `Ok(false)` is the "no usable creds"
+///   sentinel, NOT "neither entry stored".)
+/// - `Err(_)` — the keychain backend itself failed. Callers must propagate
+///   or surface this rather than masking it as "absent".
 pub fn probe_oauth_app_credentials() -> Result<bool> {
     let id = read_keyring_optional("oauth_client_id")?;
     let secret = read_keyring_optional("oauth_client_secret")?;

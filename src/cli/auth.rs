@@ -90,7 +90,15 @@ pub(crate) fn resolve_oauth_app_credentials(
     let env_secret = std::env::var(ENV_OAUTH_CLIENT_SECRET)
         .ok()
         .filter(|s| !s.is_empty());
-    let keychain = crate::api::auth::load_oauth_app_credentials().ok();
+    // Probe first: a locked keychain or permission denial is NOT the same
+    // as "no creds stored" — we must not silently flip the user onto the
+    // embedded app when their BYO creds are merely temporarily inaccessible.
+    // Mirrors the refresh path in api/auth.rs::resolve_refresh_app_credentials.
+    let keychain = if crate::api::auth::probe_oauth_app_credentials()? {
+        Some(crate::api::auth::load_oauth_app_credentials()?)
+    } else {
+        None
+    };
     let embedded = embedded_oauth_app().map(|a| (a.client_id.clone(), a.client_secret.clone()));
 
     resolve_oauth_app_credentials_for_test(
@@ -643,7 +651,7 @@ fn peek_oauth_app_source() -> OAuthAppSource {
             false
         }
     };
-    let embedded_present = crate::api::auth_embedded::embedded_oauth_app().is_some();
+    let embedded_present = crate::api::auth_embedded::embedded_oauth_app_present();
     peek_oauth_app_source_for_test(keychain_present, embedded_present)
 }
 
