@@ -448,11 +448,11 @@ $ JR_OAUTH_CLIENT_ID=mine JR_OAUTH_CLIENT_SECRET=hers \
 2. **Distribution channels other than GitHub Releases.** A future Homebrew
    formula or Cargo registry publish would also need the build secrets
    threaded through. Out of scope here.
-3. **`acli` reference comparison.** Perplexity could not surface how
-   Atlassian's official `acli` CLI handles OAuth (whether it embeds
-   credentials or requires user-registered apps). Worth a manual check
-   during implementation to confirm we're not picking a path Atlassian
-   explicitly rejected.
+3. ~~**`acli` reference comparison.**~~ **Resolved.** Atlassian's official
+   `acli` CLI embeds OAuth app credentials and exposes only a `--web` flag —
+   users never supply `client_id` / `client_secret`
+   ([acli jira auth login docs](https://developer.atlassian.com/cloud/acli/reference/commands/jira-auth-login/)).
+   Our design follows Atlassian's own pattern, which validates the approach.
 
 ## Risks
 
