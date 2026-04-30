@@ -101,10 +101,11 @@ cargo deny check                     # License + vulnerability audit
 
 See `docs/adr/` for detailed rationale:
 - ADR-0001: Thin client vs generated API client
-- ADR-0002: OAuth 2.0 auth approach (superseded — no embedded secrets, user-provided OAuth credentials)
+- ADR-0002: OAuth 2.0 with embedded secret (superseded — see ADR-0006)
 - ADR-0003: reqwest with rustls-tls
 - ADR-0004: Per-feature specs, not a growing master spec
 - ADR-0005: GraphQL hostNames for org discovery (team support)
+- ADR-0006: Embedded `jr` OAuth app with compile-time XOR obfuscation (re-supersedes ADR-0002)
 
 ## Specs & Plans
 
@@ -127,6 +128,19 @@ When adding a new feature:
 - **`list.rs` is large (~970 lines):** Contains both `handle_list` and `handle_view` plus all JQL composition logic. If modifying, read the full function you're changing — context matters.
 - **`aqlFunction()` not `assetsQuery()`:** The Jira Assets JQL function is `aqlFunction()`. It requires the human-readable field **name**, not `cf[ID]` or `customfield_NNNNN`. AQL attribute for object key is `Key` (not `objectKey` — that's the JSON field name).
 - **Status category colors are fixed:** `green` = Done, `yellow` = In Progress, `blue-gray` = To Do. These mappings are hardcoded in Jira Cloud across all instances. Used by `--open` filtering.
+- **Embedded OAuth app uses fixed callback port 53682.** The release build
+  workflow injects `JR_BUILD_OAUTH_CLIENT_ID`/`_SECRET` (CI-only env vars)
+  via `build.rs`, which generates an XOR-obfuscated `embedded_oauth.rs` in
+  `$OUT_DIR`. The bound callback URL is `http://localhost:53682/callback`,
+  registered exactly in Atlassian Developer Console. Changing the port is a
+  breaking release. BYO sources (flag, env, keychain) keep the historical
+  dynamic-port behavior. See ADR-0006 and
+  `docs/superpowers/specs/2026-04-30-embedded-oauth-app-design.md`.
+- **`src/api/auth_embedded.rs` is a thin sibling module** to `auth.rs`. Keep
+  obfuscation plumbing there; keep keychain/OAuth flow plumbing in `auth.rs`.
+- **`refresh_oauth_token` resolves credentials internally** (keychain →
+  embedded) — callers pass only `profile`. Do not re-introduce
+  `client_id`/`client_secret` parameters; they short-circuit the resolver.
 
 ## AI Agent Notes
 
