@@ -10,9 +10,10 @@
 //! can still extract the plaintext from a debugger; the operational mitigation
 //! is `client_secret` rotation in Atlassian Developer Console (see ADR-0006).
 
-#[allow(unused_imports)]
 use std::sync::OnceLock;
 
+// Pulls in EMBEDDED_ID, EMBEDDED_SECRET_XOR, EMBEDDED_SECRET_KEY constants
+// emitted by build.rs.
 include!(concat!(env!("OUT_DIR"), "/embedded_oauth.rs"));
 
 /// Embedded OAuth app credentials. Plaintext after `decode()`; held in
@@ -34,6 +35,9 @@ pub enum OAuthAppSource {
     Keychain,
     Embedded,
     Prompt,
+    /// Sentinel for "no source resolved" — used only by the status display
+    /// surface (`peek_oauth_app_source`) so the rendered row can read
+    /// `(none)` without forcing every callsite to an `Option<OAuthAppSource>`.
     None,
 }
 
@@ -53,11 +57,6 @@ impl OAuthAppSource {
 /// Decode an XOR-obfuscated secret using the per-build key. Pure function;
 /// callers must supply both halves so tests can exercise it without
 /// touching `OUT_DIR`.
-// Task 4 will consume this from `build_embedded_app()`. Until then only
-// the unit test exercises it, so suppress the dead-code lint locally
-// rather than hide the helper behind `#[cfg(test)]` (which would force
-// us to delete and re-add it next commit).
-#[allow(dead_code)]
 fn decode(xored: &[u8], key: &[u8; 32]) -> Result<String, std::string::FromUtf8Error> {
     let bytes: Vec<u8> = xored
         .iter()
@@ -65,6 +64,36 @@ fn decode(xored: &[u8], key: &[u8; 32]) -> Result<String, std::string::FromUtf8E
         .map(|(i, b)| b ^ key[i % 32])
         .collect();
     String::from_utf8(bytes)
+}
+
+/// Construct an [`EmbeddedOAuthApp`] from raw build-emitted constants. Pure
+/// function so tests can exercise both the present and absent paths without
+/// rebuilding with different env vars.
+fn build_embedded_app(
+    id: Option<&str>,
+    xor: Option<&[u8]>,
+    key: Option<&[u8; 32]>,
+) -> Option<EmbeddedOAuthApp> {
+    let (id, xor, key) = match (id, xor, key) {
+        (Some(i), Some(x), Some(k)) => (i, x, k),
+        _ => return None,
+    };
+    let secret = decode(xor, key).ok()?;
+    Some(EmbeddedOAuthApp {
+        client_id: id.to_string(),
+        client_secret: secret,
+    })
+}
+
+/// Lazily-initialized cached embedded app. `OnceLock` ensures the XOR
+/// decode happens at most once per process; the plaintext is then held
+/// for the process lifetime (needed for token refreshes).
+pub fn embedded_oauth_app() -> Option<&'static EmbeddedOAuthApp> {
+    static APP: OnceLock<Option<EmbeddedOAuthApp>> = OnceLock::new();
+    APP.get_or_init(|| {
+        build_embedded_app(EMBEDDED_ID, EMBEDDED_SECRET_XOR, EMBEDDED_SECRET_KEY)
+    })
+    .as_ref()
 }
 
 #[cfg(test)]
@@ -84,5 +113,53 @@ mod tests {
 
         let decoded = decode(&xored, &key).expect("valid utf-8");
         assert_eq!(decoded, plaintext);
+    }
+
+    #[test]
+    fn build_embedded_app_none_when_constants_unset() {
+        let app = build_embedded_app(None, None, None);
+        assert_eq!(app, None);
+    }
+
+    #[test]
+    fn build_embedded_app_returns_decoded_when_all_set() {
+        let plaintext = "secret-xyz";
+        let key = [7u8; 32];
+        let xored: Vec<u8> = plaintext
+            .as_bytes()
+            .iter()
+            .enumerate()
+            .map(|(i, b)| b ^ key[i % 32])
+            .collect();
+
+        let app = build_embedded_app(Some("client-abc"), Some(&xored), Some(&key))
+            .expect("all three constants present → Some");
+        assert_eq!(app.client_id, "client-abc");
+        assert_eq!(app.client_secret, plaintext);
+    }
+
+    #[test]
+    fn build_embedded_app_none_when_any_constant_missing() {
+        let key = [0u8; 32];
+        // id missing
+        assert_eq!(build_embedded_app(None, Some(b"x"), Some(&key)), None);
+        // secret_xor missing
+        assert_eq!(build_embedded_app(Some("id"), None, Some(&key)), None);
+        // key missing
+        assert_eq!(build_embedded_app(Some("id"), Some(b"x"), None), None);
+    }
+
+    /// Default test runs (no JR_BUILD_OAUTH_CLIENT_* env vars at compile time)
+    /// must produce a binary where `embedded_oauth_app()` returns None. This
+    /// is the fork / local-build path. Branded builds get a separate
+    /// integration-test rig that sets the env vars.
+    #[test]
+    fn embedded_oauth_app_is_none_in_default_test_build() {
+        // If this assertion ever fails in CI, the release env var is leaking
+        // into test runs. Fix the workflow, not the test.
+        assert!(
+            embedded_oauth_app().is_none(),
+            "test builds must not have embedded credentials"
+        );
     }
 }
