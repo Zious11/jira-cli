@@ -77,8 +77,11 @@ pub(crate) fn resolve_credential(
 ///
 /// Order: flag → env → keychain → embedded → prompt.
 ///
-/// Flag and env are pair-gated: both halves must be present, otherwise the
-/// resolver falls through (avoids sending a half-empty pair to Atlassian).
+/// Flag and env are pair-gated: both halves must be present to use that
+/// source. Providing only one of the two values is an explicit error
+/// rather than a fall-through — the resolver returns `JrError::UserError`
+/// citing both flag/env names so a user who forgot the second half learns
+/// what's missing. Empty strings are treated as absent.
 pub(crate) fn resolve_oauth_app_credentials(
     flag_id: Option<String>,
     flag_secret: Option<String>,
@@ -99,7 +102,20 @@ pub(crate) fn resolve_oauth_app_credentials(
     } else {
         None
     };
-    let embedded = embedded_oauth_app().map(|a| (a.client_id.clone(), a.client_secret.clone()));
+    // Defer the XOR decode: only materialize the embedded plaintext
+    // `client_secret` when no higher-precedence source can resolve.
+    // BYO users never decode the embedded secret in their normal flow.
+    // Use the cheap `embedded_oauth_app_present()` constants-only check
+    // to short-circuit; only the late branch invokes `embedded_oauth_app()`
+    // which triggers the XOR decode + OnceLock cache.
+    let has_flag_pair = flag_id.as_deref().is_some_and(|s| !s.is_empty())
+        && flag_secret.as_deref().is_some_and(|s| !s.is_empty());
+    let has_env_pair = env_id.is_some() && env_secret.is_some();
+    let embedded = if has_flag_pair || has_env_pair || keychain.is_some() {
+        None
+    } else {
+        embedded_oauth_app().map(|a| (a.client_id.clone(), a.client_secret.clone()))
+    };
 
     resolve_oauth_app_credentials_for_test(
         flag_id,
@@ -400,9 +416,17 @@ pub async fn login_oauth(
     no_input: bool,
 ) -> Result<()> {
     if !no_input {
-        eprintln!("OAuth 2.0: by default, official jr binaries use the embedded \"jr\" app.");
-        eprintln!("To use your own OAuth app instead, pass --client-id and --client-secret,");
-        eprintln!("or set JR_OAUTH_CLIENT_ID and JR_OAUTH_CLIENT_SECRET.\n");
+        if crate::api::auth_embedded::embedded_oauth_app_present() {
+            eprintln!("OAuth 2.0: by default, official jr binaries use the embedded \"jr\" app.");
+            eprintln!("To use your own OAuth app instead, pass --client-id and --client-secret,");
+            eprintln!("or set JR_OAUTH_CLIENT_ID and JR_OAUTH_CLIENT_SECRET.\n");
+        } else {
+            eprintln!(
+                "OAuth 2.0: this build has no embedded OAuth app (likely a fork or source build)."
+            );
+            eprintln!("Pass --client-id and --client-secret,");
+            eprintln!("or set JR_OAUTH_CLIENT_ID and JR_OAUTH_CLIENT_SECRET.\n");
+        }
     }
 
     let (client_id, client_secret, source) =

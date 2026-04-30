@@ -16,11 +16,14 @@ async fn embedded_login_uses_fixed_port() {
         eprintln!("skipped: set JR_RUN_OAUTH_INTEGRATION=1 to run");
         return;
     }
-
-    // Implementation deferred — depends on a base-URL override in
-    // `crate::api::auth::oauth_login` to redirect the authorize +
-    // token-exchange calls at wiremock instead of `auth.atlassian.com`.
-    // See spec §"Testing strategy" → "Open question 3" and the
-    // implementation plan §"Task 13" for the deferral rationale.
-    eprintln!("placeholder: this test asserts shape via the release smoke step");
+    // Opting in to the integration suite without an actual implementation
+    // would silently pass and create a false coverage signal. Fail loudly
+    // until the deferred wiremock work lands (see spec's "Deferred
+    // coverage" section at docs/superpowers/specs/2026-04-30-embedded-
+    // oauth-app-design.md).
+    unimplemented!(
+        "JR_RUN_OAUTH_INTEGRATION=1 enabled but embedded OAuth integration \
+         test is not implemented yet; needs the base-URL override in \
+         oauth_login before a real wiremock-backed assertion can be written."
+    );
 }
