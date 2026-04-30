@@ -440,6 +440,16 @@ $ JR_OAUTH_CLIENT_ID=mine JR_OAUTH_CLIENT_SECRET=hers \
 - Output of `jr auth status` includes the new `oauth-app-source` field;
   insta snapshot covers each source.
 
+### Deferred coverage
+
+Full embedded-login integration testing is deferred until `oauth_login` is
+refactored to accept a base-URL override (needed to point at wiremock instead
+of `auth.atlassian.com`). The release workflow's "Verify embedded OAuth app
+present" step (`.github/workflows/release.yml`) covers the on-binary
+assertion in the meantime. The integration-test scaffold lives at
+`tests/oauth_embedded_login.rs` and is gated behind
+`JR_RUN_OAUTH_INTEGRATION=1`.
+
 ## Open questions
 
 1. **Dev-tag (pre-release) builds**: should `vX.Y.Z-dev.N` builds use the
