@@ -32,12 +32,26 @@ fn oauth_refresh_key(profile: &str) -> String {
 }
 
 /// Default OAuth 2.0 scopes used when `oauth_scopes` is not set in
-/// config.toml. Matches Atlassian's "classic" scope recommendation for
-/// Jira Platform apps. Users who configured their Developer Console app
-/// with granular scopes (e.g., for least-privilege agent use) should
-/// override via `[instance].oauth_scopes` in config.toml.
-pub const DEFAULT_OAUTH_SCOPES: &str =
-    "read:jira-work write:jira-work read:jira-user offline_access";
+/// config.toml. Covers every API surface `jr` exercises today:
+/// - `read:jira-work` / `write:jira-work` / `read:jira-user` — Jira issues,
+///   search, projects, fields, users (the bulk of `jr issue/board/sprint`).
+/// - `read:servicedesk-request` — JSM queues and queue issues
+///   (`jr queue list/view`).
+/// - `read:cmdb-object:jira` / `read:cmdb-schema:jira` — Assets/CMDB
+///   discovery (`jr assets search/view/tickets/schemas`).
+/// - `offline_access` — required for refresh tokens; without it, OAuth
+///   sessions die after one hour.
+///
+/// Users who configured their Developer Console app with granular scopes
+/// (e.g., for least-privilege agent use) should override via
+/// `[profiles.<name>].oauth_scopes` in config.toml. The embedded `jr`
+/// app must be registered with this exact scope set in its Developer
+/// Console permissions, otherwise the authorize call rejects with
+/// `invalid_scope`.
+pub const DEFAULT_OAUTH_SCOPES: &str = "read:jira-work write:jira-work read:jira-user \
+     read:servicedesk-request \
+     read:cmdb-object:jira read:cmdb-schema:jira \
+     offline_access";
 
 fn entry(key: &str) -> Result<Entry> {
     Entry::new(&service_name(), key).context("Failed to access keychain")

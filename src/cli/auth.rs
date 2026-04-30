@@ -1518,12 +1518,38 @@ mod tests {
     /// The default scope literal is a backward-compatibility contract for
     /// every user who hasn't opted into `oauth_scopes`. A typo that drops
     /// `offline_access` would silently break refresh tokens for everyone.
+    /// The literal must also stay in lockstep with the `jr` Atlassian
+    /// Developer Console app's registered permissions — a mismatch causes
+    /// authorize to reject with `invalid_scope`.
     #[test]
-    fn default_oauth_scopes_is_the_classic_set_with_offline_access() {
-        assert_eq!(
-            auth::DEFAULT_OAUTH_SCOPES,
-            "read:jira-work write:jira-work read:jira-user offline_access"
-        );
+    fn default_oauth_scopes_pins_the_full_set_with_offline_access() {
+        // Each scope is checked individually so a future addition can
+        // grow the set without churning a single string literal — but the
+        // assertion still pins each scope exactly to catch typos.
+        let scopes = auth::DEFAULT_OAUTH_SCOPES;
+        for required in [
+            "read:jira-work",
+            "write:jira-work",
+            "read:jira-user",
+            "read:servicedesk-request",
+            "read:cmdb-object:jira",
+            "read:cmdb-schema:jira",
+            "offline_access",
+        ] {
+            assert!(
+                scopes.split_whitespace().any(|s| s == required),
+                "DEFAULT_OAUTH_SCOPES is missing required scope `{required}`: {scopes:?}"
+            );
+        }
+        // Whole-string canary: a single trailing comma or stray comment
+        // would still satisfy the per-scope check above, so pin the full
+        // expected set.
+        let expected = "read:jira-work write:jira-work read:jira-user \
+                        read:servicedesk-request \
+                        read:cmdb-object:jira read:cmdb-schema:jira \
+                        offline_access";
+        let normalize = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert_eq!(normalize(scopes), normalize(expected));
     }
 
     #[test]

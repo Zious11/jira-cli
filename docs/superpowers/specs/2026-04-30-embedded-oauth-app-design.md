@@ -367,8 +367,17 @@ $ JR_OAUTH_CLIENT_ID=mine JR_OAUTH_CLIENT_SECRET=hers \
    - Name: `jr`
    - Callback URL: `http://localhost:53682/callback`
      (also `http://127.0.0.1:53682/callback` if console allows two)
-   - Scopes: `read:jira-work`, `write:jira-work`, `read:jira-user`,
-     `offline_access` (matches `DEFAULT_OAUTH_SCOPES`)
+   - Permissions: add **Jira API**, **Jira Service Management API**, and
+     the **Assets API** (or whichever console grouping currently exposes
+     CMDB scopes — Atlassian re-shuffles the names occasionally).
+   - Scopes (must match `DEFAULT_OAUTH_SCOPES` in `src/api/auth.rs` exactly,
+     otherwise authorize rejects with `invalid_scope`):
+     - `read:jira-work`, `write:jira-work`, `read:jira-user` (Jira platform)
+     - `read:servicedesk-request` (JSM queues / `jr queue list|view`)
+     - `read:cmdb-object:jira`, `read:cmdb-schema:jira` (Assets / CMDB —
+       `jr assets search|view|tickets|schemas|types|schema`)
+     - `offline_access` (refresh tokens — without this, sessions die
+       after one hour)
 2. Capture `client_id` (public) and `client_secret` (sensitive).
 3. Add to GitHub repository secrets:
    - `OAUTH_CLIENT_ID` (no real need for masking but keep secret-like
