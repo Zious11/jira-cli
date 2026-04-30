@@ -121,15 +121,67 @@ fn resolve_oauth_app_credentials_for_test(
     embedded: Option<(String, String)>,
     no_input: bool,
 ) -> Result<(String, String, OAuthAppSource)> {
-    if let (Some(i), Some(s)) = (
-        flag_id.clone().filter(|v| !v.is_empty()),
-        flag_secret.clone().filter(|v| !v.is_empty()),
-    ) {
-        return Ok((i, s, OAuthAppSource::Flag));
+    // Flag pair: must be all-or-nothing. A user passing only one half
+    // (e.g., --client-id alone) almost certainly meant BYO and forgot the
+    // other flag — silently falling through to embedded would surprise
+    // them. Hard-error with a specific recovery message instead.
+    let flag_id_present = flag_id.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+    let flag_secret_present = flag_secret
+        .as_deref()
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
+    match (flag_id_present, flag_secret_present) {
+        (true, true) => {
+            return Ok((flag_id.unwrap(), flag_secret.unwrap(), OAuthAppSource::Flag));
+        }
+        (true, false) => {
+            return Err(JrError::UserError(
+                "--client-id was provided without --client-secret. \
+                 Both flags must be supplied together for OAuth bring-your-own-app login."
+                    .to_string(),
+            )
+            .into());
+        }
+        (false, true) => {
+            return Err(JrError::UserError(
+                "--client-secret was provided without --client-id. \
+                 Both flags must be supplied together for OAuth bring-your-own-app login."
+                    .to_string(),
+            )
+            .into());
+        }
+        (false, false) => {} // fall through to env layer
     }
-    if let (Some(i), Some(s)) = (env_id, env_secret) {
-        return Ok((i, s, OAuthAppSource::Env));
+
+    // Env pair: same all-or-nothing rule.
+    let env_id_present = env_id.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+    let env_secret_present = env_secret
+        .as_deref()
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
+    match (env_id_present, env_secret_present) {
+        (true, true) => {
+            return Ok((env_id.unwrap(), env_secret.unwrap(), OAuthAppSource::Env));
+        }
+        (true, false) => {
+            return Err(JrError::UserError(
+                "JR_OAUTH_CLIENT_ID is set but JR_OAUTH_CLIENT_SECRET is not. \
+                 Both env vars must be set together for OAuth bring-your-own-app login."
+                    .to_string(),
+            )
+            .into());
+        }
+        (false, true) => {
+            return Err(JrError::UserError(
+                "JR_OAUTH_CLIENT_SECRET is set but JR_OAUTH_CLIENT_ID is not. \
+                 Both env vars must be set together for OAuth bring-your-own-app login."
+                    .to_string(),
+            )
+            .into());
+        }
+        (false, false) => {} // fall through to keychain layer
     }
+
     if let Some((i, s)) = keychain {
         return Ok((i, s, OAuthAppSource::Keychain));
     }
@@ -1713,22 +1765,55 @@ mod tests {
         );
     }
 
-    /// Flag-without-secret (or vice versa) must NOT count as a flag hit —
-    /// otherwise we'd send a malformed pair to oauth_login.
     #[test]
-    fn resolve_oauth_app_credentials_partial_flag_falls_through() {
-        let (id, _, source) = resolve_oauth_app_credentials_for_test(
+    fn resolve_oauth_app_credentials_partial_flag_id_errors() {
+        let err = resolve_oauth_app_credentials_for_test(
             Some("partial-id".into()),
-            None, // flag_secret missing
+            None, // missing flag_secret
             None,
             None,
             None,
             Some(("embed-id".into(), "embed-secret".into())),
             true,
         )
-        .unwrap();
-        assert_eq!(id, "embed-id");
-        assert_eq!(source, crate::api::auth_embedded::OAuthAppSource::Embedded);
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("--client-id"), "got: {msg}");
+        assert!(msg.contains("--client-secret"), "got: {msg}");
+    }
+
+    #[test]
+    fn resolve_oauth_app_credentials_partial_flag_secret_errors() {
+        let err = resolve_oauth_app_credentials_for_test(
+            None,
+            Some("partial-secret".into()),
+            None,
+            None,
+            None,
+            Some(("embed-id".into(), "embed-secret".into())),
+            true,
+        )
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("--client-id"), "got: {msg}");
+        assert!(msg.contains("--client-secret"), "got: {msg}");
+    }
+
+    #[test]
+    fn resolve_oauth_app_credentials_partial_env_id_errors() {
+        let err = resolve_oauth_app_credentials_for_test(
+            None,
+            None,
+            Some("env-id".into()),
+            None, // missing env_secret
+            None,
+            Some(("embed-id".into(), "embed-secret".into())),
+            true,
+        )
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("JR_OAUTH_CLIENT_ID"), "got: {msg}");
+        assert!(msg.contains("JR_OAUTH_CLIENT_SECRET"), "got: {msg}");
     }
 
     /// `jr` deliberately does NOT reject mixed classic+granular scopes,
