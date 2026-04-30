@@ -36,8 +36,13 @@ jobs:
         run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Build
+        env:
+          JR_BUILD_OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID }}
+          JR_BUILD_OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
         run: |
           if [ "${{ matrix.use_cross }}" = "true" ]; then
+            # cross runs cargo inside a container; pass the env through.
+            export CROSS_CONTAINER_OPTS="-e JR_BUILD_OAUTH_CLIENT_ID -e JR_BUILD_OAUTH_CLIENT_SECRET"
             cross build --release --target ${{ matrix.target }}
           else
             cargo build --release --target ${{ matrix.target }}
@@ -53,6 +58,34 @@ jobs:
           else
             shasum -a 256 jr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz > jr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz.sha256
           fi
+
+      - name: Verify embedded OAuth app present
+        run: |
+          BIN="target/${{ matrix.target }}/release/jr"
+          # Skip the assertion on cross-compiled non-native targets — we can't
+          # exec aarch64-linux on x86_64 hosts. Native targets only.
+          NATIVE_TRIPLE="$(rustc -vV | sed -n 's/host: //p')"
+          if [ "${{ matrix.target }}" != "$NATIVE_TRIPLE" ]; then
+            echo "Skipping embedded-creds smoke for non-native target ${{ matrix.target }}"
+            exit 0
+          fi
+          # `jr auth status` does not require live network. The auth-app row
+          # only appears when the active profile uses OAuth. We probe a
+          # synthetic profile with auth_method=oauth and check the row reads
+          # `embedded`.
+          export JR_PROFILE=__release_smoke
+          export JR_SERVICE_NAME=jr-release-smoke-$$
+          mkdir -p "$HOME/.config/jr"
+          cat > "$HOME/.config/jr/config.toml" <<EOF
+          default_profile = "__release_smoke"
+          [profiles.__release_smoke]
+          url = "https://example.atlassian.net"
+          auth_method = "oauth"
+          EOF
+          OUT="$($BIN auth status 2>&1 || true)"
+          echo "$OUT"
+          echo "$OUT" | grep -q "OAuth app: *embedded" \
+            || { echo "release binary missing embedded OAuth credentials"; exit 1; }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
