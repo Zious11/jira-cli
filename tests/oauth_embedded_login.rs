@@ -11,9 +11,12 @@
 //! present" smoke step.
 
 #[tokio::test]
+#[ignore = "set JR_RUN_OAUTH_INTEGRATION=1 and use --include-ignored to run"]
 async fn embedded_login_uses_fixed_port() {
     if std::env::var("JR_RUN_OAUTH_INTEGRATION").is_err() {
-        eprintln!("skipped: set JR_RUN_OAUTH_INTEGRATION=1 to run");
+        // Even when explicitly opted-in via `--include-ignored`, require
+        // the env-var so a one-off local opt-in doesn't accidentally fire
+        // an unimplemented test.
         return;
     }
     // Opting in to the integration suite without an actual implementation

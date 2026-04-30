@@ -93,15 +93,28 @@ pub(crate) fn resolve_oauth_app_credentials(
     let env_secret = std::env::var(ENV_OAUTH_CLIENT_SECRET)
         .ok()
         .filter(|s| !s.is_empty());
-    // Probe first: a locked keychain or permission denial is NOT the same
-    // as "no creds stored" — we must not silently flip the user onto the
-    // embedded app when their BYO creds are merely temporarily inaccessible.
-    // Mirrors the refresh path in api/auth.rs::resolve_refresh_app_credentials.
-    let keychain = if crate::api::auth::probe_oauth_app_credentials()? {
+
+    // Detect any flag/env presence WITHOUT touching the keychain.
+    // Using "any half present" (not "both halves") ensures we skip the
+    // keychain probe when a partial flag/env pair will hard-error in
+    // `_for_test` — a locked keychain must not mask the real error
+    // (the user forgetting one flag, or providing only one env var).
+    // This also means an explicit `--client-id`/`--client-secret` pair
+    // wins even when the keychain backend is unavailable.
+    let any_flag_present = flag_id.as_deref().is_some_and(|s| !s.is_empty())
+        || flag_secret.as_deref().is_some_and(|s| !s.is_empty());
+    let any_env_present = env_id.is_some() || env_secret.is_some();
+
+    let keychain = if any_flag_present || any_env_present {
+        // Flag or env will resolve OR hard-error first — never reaches
+        // the keychain layer in `_for_test`. Skip the probe entirely.
+        None
+    } else if crate::api::auth::probe_oauth_app_credentials()? {
         Some(crate::api::auth::load_oauth_app_credentials()?)
     } else {
         None
     };
+
     // Defer the XOR decode: only materialize the embedded plaintext
     // `client_secret` when no higher-precedence source resolves.
     // BYO users (flag/env/keychain) never trigger the embedded decode.
