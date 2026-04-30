@@ -476,8 +476,20 @@ pub async fn oauth_login(
         .first()
         .ok_or_else(|| anyhow::anyhow!("No accessible Jira sites found"))?;
 
-    // 5. Store tokens in the system keychain.
-    store_oauth_tokens(profile, &tokens.access_token, &tokens.refresh_token)?;
+    // 5. Store tokens in the system keychain. If this fails, the user has
+    //    successfully approved the grant in Atlassian — but jr can't see
+    //    the new tokens. Surface the partial state explicitly so they
+    //    know to retry (after fixing keychain access) rather than
+    //    re-approving from scratch.
+    store_oauth_tokens(profile, &tokens.access_token, &tokens.refresh_token).map_err(|e| {
+        anyhow::anyhow!(
+            "Authorization succeeded with Atlassian, but jr could not save the OAuth \
+             tokens to the system keychain ({e}). Unlock your keychain (or grant \
+             access to jr) and run `jr auth login --oauth --profile {profile}` again. \
+             To fully revoke the active grant first, see your Atlassian account's \
+             connected apps page."
+        )
+    })?;
 
     Ok(OAuthResult {
         cloud_id: resource.id.clone(),
