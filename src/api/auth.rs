@@ -383,8 +383,10 @@ impl RedirectUriStrategy {
 ///
 /// `scopes` is a space-separated scope string (URL-encoded internally).
 /// Callers should use [`DEFAULT_OAUTH_SCOPES`] when no user override is set.
-/// Note: [`refresh_oauth_token`] does NOT take a scope parameter — the
-/// `refresh_token` grant inherits scopes from the original authorization.
+/// Note: [`refresh_oauth_token`] takes only `profile` and resolves the
+/// OAuth app credentials internally (keychain → embedded). The
+/// `refresh_token` grant inherits scopes from the original authorization
+/// per RFC 6749 §6.
 pub async fn oauth_login(
     profile: &str,
     client_id: &str,
@@ -489,16 +491,12 @@ pub async fn oauth_login(
 /// Refresh the OAuth 2.0 access token using the stored refresh token.
 /// Returns the new access token on success.
 ///
-/// Intentionally takes no `scopes` parameter: the `refresh_token` grant
-/// inherits scopes from the original authorization per RFC 6749 §6. To
-/// pick up a changed `[profiles.<name>].oauth_scopes` in config.toml,
-/// the user must re-run `jr auth login --oauth` (refresh alone will
-/// keep the old scope set).
-pub async fn refresh_oauth_token(
-    profile: &str,
-    client_id: &str,
-    client_secret: &str,
-) -> Result<String> {
+/// Resolves the OAuth app credentials at call time via the refresh-side
+/// resolver (`keychain → embedded`). Flag and env are NOT consulted — refresh
+/// is a non-interactive path triggered by 401 handling, never by an explicit
+/// user invocation that takes flags.
+pub async fn refresh_oauth_token(profile: &str) -> Result<String> {
+    let (client_id, client_secret) = resolve_refresh_app_credentials()?;
     let (_, refresh_token) = load_oauth_tokens(profile)?;
 
     let client = reqwest::Client::new();
@@ -514,7 +512,10 @@ pub async fn refresh_oauth_token(
         .await?;
 
     if !response.status().is_success() {
-        anyhow::bail!("Token refresh failed. Run \"jr auth login\" to re-authenticate.");
+        anyhow::bail!(
+            "Token refresh failed (the embedded OAuth secret may have been rotated). \
+             Run \"jr auth login --oauth --profile {profile}\" to re-authenticate."
+        );
     }
 
     #[derive(serde::Deserialize)]
@@ -525,6 +526,28 @@ pub async fn refresh_oauth_token(
     let tokens: TokenResponse = response.json().await?;
     store_oauth_tokens(profile, &tokens.access_token, &tokens.refresh_token)?;
     Ok(tokens.access_token)
+}
+
+/// Refresh-side resolver: keychain wins, embedded falls back. Flag and env
+/// are deliberately omitted — refresh fires under 401-recovery and `jr auth
+/// refresh`, neither of which collects flag/env app credentials separately
+/// from a fresh login.
+///
+/// Keeping keychain ahead of embedded prevents a returning BYO user from
+/// silently flipping to the embedded app mid-session (which would invalidate
+/// their refresh token because it was issued by a different app).
+fn resolve_refresh_app_credentials() -> Result<(String, String)> {
+    if let Ok((id, secret)) = load_oauth_app_credentials() {
+        return Ok((id, secret));
+    }
+    if let Some(app) = crate::api::auth_embedded::embedded_oauth_app() {
+        return Ok((app.client_id.clone(), app.client_secret.clone()));
+    }
+    anyhow::bail!(
+        "OAuth refresh requires either previously-stored app credentials \
+         (run `jr auth login --oauth` once) or an embedded build. \
+         This binary has neither."
+    )
 }
 
 /// Build the Atlassian OAuth 2.0 authorize URL with all dynamic parameters
@@ -1027,6 +1050,35 @@ mod tests {
                 load_oauth_tokens("sandbox").is_err(),
                 "sandbox profile should NOT inherit legacy keys"
             );
+        });
+    }
+
+    /// Refresh resolver prefers keychain over embedded so a returning BYO
+    /// user does not silently flip onto the embedded app mid-session
+    /// (their refresh_token was issued by their own app and would be
+    /// rejected if presented with a different client_id).
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn resolve_refresh_app_credentials_prefers_keychain() {
+        with_test_keyring(|| {
+            store_oauth_app_credentials("kc-id", "kc-secret").unwrap();
+            let (id, secret) = resolve_refresh_app_credentials().unwrap();
+            assert_eq!(id, "kc-id");
+            assert_eq!(secret, "kc-secret");
+        });
+    }
+
+    /// Refresh resolver returns the embedded creds when no keychain pair
+    /// exists. In test builds embedded is None, so this test only validates
+    /// the *order* via the keychain-empty error path.
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn resolve_refresh_app_credentials_errors_when_both_absent() {
+        with_test_keyring(|| {
+            // No keychain entries, no embedded creds in default test build.
+            let err = resolve_refresh_app_credentials().unwrap_err();
+            let msg = format!("{err:#}");
+            assert!(msg.contains("embedded"), "got: {msg}");
         });
     }
 }
