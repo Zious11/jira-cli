@@ -19,10 +19,25 @@ include!(concat!(env!("OUT_DIR"), "/embedded_oauth.rs"));
 /// Embedded OAuth app credentials. Plaintext after `decode()`; held in
 /// process memory for the lifetime of the binary because `client_secret`
 /// is needed for every refresh-token grant.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct EmbeddedOAuthApp {
     pub client_id: String,
     pub client_secret: String,
+}
+
+/// Manual Debug that redacts `client_secret`. Defense in depth: release
+/// builds bake in real Atlassian credentials, so a stray `dbg!` or
+/// `tracing::debug!("{app:?}")` must not leak the live secret to logs.
+/// `client_id` is treated as non-secret and rendered verbatim (it
+/// identifies the OAuth app to Atlassian's authorize endpoint, not the
+/// user's session).
+impl std::fmt::Debug for EmbeddedOAuthApp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmbeddedOAuthApp")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"<redacted>")
+            .finish()
+    }
 }
 
 /// Source of the OAuth app credentials used for a login or refresh. Reported
@@ -180,6 +195,30 @@ mod tests {
         assert!(
             embedded_oauth_app().is_none(),
             "test builds must not have embedded credentials"
+        );
+    }
+
+    /// Defense in depth: `client_secret` must never appear in `Debug` output.
+    /// Release builds carry a real Atlassian secret; a stray `dbg!` or
+    /// log-call would otherwise leak it.
+    #[test]
+    fn embedded_oauth_app_debug_redacts_secret() {
+        let app = EmbeddedOAuthApp {
+            client_id: "visible-id".to_string(),
+            client_secret: "super-secret-must-not-leak".to_string(),
+        };
+        let rendered = format!("{app:?}");
+        assert!(
+            rendered.contains("visible-id"),
+            "client_id should be visible: {rendered}"
+        );
+        assert!(
+            !rendered.contains("super-secret-must-not-leak"),
+            "client_secret must not appear in Debug: {rendered}"
+        );
+        assert!(
+            rendered.contains("<redacted>"),
+            "redaction marker should be present: {rendered}"
         );
     }
 }
