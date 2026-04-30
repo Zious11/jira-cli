@@ -506,7 +506,7 @@ pub async fn oauth_login(
 /// is a non-interactive path triggered by 401 handling, never by an explicit
 /// user invocation that takes flags.
 pub async fn refresh_oauth_token(profile: &str) -> Result<String> {
-    let (client_id, client_secret) = resolve_refresh_app_credentials()?;
+    let (client_id, client_secret, source) = resolve_refresh_app_credentials()?;
     let (_, refresh_token) = load_oauth_tokens(profile)?;
 
     let client = reqwest::Client::new();
@@ -522,10 +522,30 @@ pub async fn refresh_oauth_token(profile: &str) -> Result<String> {
         .await?;
 
     if !response.status().is_success() {
-        anyhow::bail!(
-            "Token refresh failed (the embedded OAuth secret may have been rotated). \
-             Run \"jr auth login --oauth --profile {profile}\" to re-authenticate."
-        );
+        // Capture the response body — Atlassian returns RFC 6749 error
+        // shape (`error` + `error_description`) and including it cuts
+        // triage time massively (invalid_grant vs invalid_client vs
+        // network/clock-skew look identical without it).
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "(no body)".to_string());
+        let body_truncated: String = body.chars().take(500).collect();
+        let hint = match source {
+            RefreshAppSource::Embedded => format!(
+                "The embedded OAuth app credentials may have been rotated; \
+                 update jr (brew upgrade or curl-install) and run \
+                 `jr auth login --oauth --profile {profile}` again."
+            ),
+            RefreshAppSource::Keychain => format!(
+                "Your stored OAuth client_id/client_secret may be invalid \
+                 or revoked. Run `jr auth login --oauth --profile {profile}` \
+                 to re-store them, or revoke and re-create the app at \
+                 https://developer.atlassian.com/console/myapps/."
+            ),
+        };
+        anyhow::bail!("Token refresh failed: HTTP {status}: {body_truncated}\n\n{hint}");
     }
 
     #[derive(serde::Deserialize)]
@@ -546,18 +566,28 @@ pub async fn refresh_oauth_token(profile: &str) -> Result<String> {
 /// Keeping keychain ahead of embedded prevents a returning BYO user from
 /// silently flipping to the embedded app mid-session (which would invalidate
 /// their refresh token because it was issued by a different app).
-fn resolve_refresh_app_credentials() -> Result<(String, String)> {
+fn resolve_refresh_app_credentials() -> Result<(String, String, RefreshAppSource)> {
     if let Ok((id, secret)) = load_oauth_app_credentials() {
-        return Ok((id, secret));
+        return Ok((id, secret, RefreshAppSource::Keychain));
     }
     if let Some(app) = crate::api::auth_embedded::embedded_oauth_app() {
-        return Ok((app.client_id.clone(), app.client_secret.clone()));
+        return Ok((
+            app.client_id.clone(),
+            app.client_secret.clone(),
+            RefreshAppSource::Embedded,
+        ));
     }
     anyhow::bail!(
         "OAuth refresh requires either previously-stored app credentials \
          (run `jr auth login --oauth` once) or an embedded build. \
          This binary has neither."
     )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefreshAppSource {
+    Keychain,
+    Embedded,
 }
 
 /// Build the Atlassian OAuth 2.0 authorize URL with all dynamic parameters
@@ -1072,9 +1102,10 @@ mod tests {
     fn resolve_refresh_app_credentials_prefers_keychain() {
         with_test_keyring(|| {
             store_oauth_app_credentials("kc-id", "kc-secret").unwrap();
-            let (id, secret) = resolve_refresh_app_credentials().unwrap();
+            let (id, secret, source) = resolve_refresh_app_credentials().unwrap();
             assert_eq!(id, "kc-id");
             assert_eq!(secret, "kc-secret");
+            assert_eq!(source, RefreshAppSource::Keychain);
         });
     }
 
