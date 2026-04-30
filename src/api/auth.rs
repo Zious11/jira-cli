@@ -1122,4 +1122,29 @@ mod tests {
             assert!(msg.contains("embedded"), "got: {msg}");
         });
     }
+
+    /// User-facing error string when the embedded fixed port is occupied.
+    /// Locked in here because it's the entire payoff of the fixed-port
+    /// design — if a future refactor regresses the message, embedded users
+    /// hitting a port conflict have no actionable hint.
+    #[test]
+    fn fixed_port_strategy_eaddrinuse_friendly_error() {
+        // Pre-bind a random ephemeral port so we can deterministically
+        // reuse it in the Fixed bind attempt below.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // The listener stays alive for the duration of the test —
+        // its Drop happens after the assertions.
+
+        let err = RedirectUriStrategyRequest::Fixed(port).bind().unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains(&format!("port {port}")),
+            "expected port number in message, got: {msg}"
+        );
+        assert!(msg.contains("in use"), "got: {msg}");
+        assert!(msg.contains("--client-id"), "got: {msg}");
+
+        drop(listener);
+    }
 }

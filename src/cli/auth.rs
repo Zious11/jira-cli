@@ -624,10 +624,22 @@ pub(super) fn prepare_login_target(
 /// OAuth app credentials on the next `refresh_oauth_token` call. Mirrors
 /// the resolver order in `api/auth.rs::resolve_refresh_app_credentials`.
 fn peek_oauth_app_source() -> OAuthAppSource {
-    if crate::api::auth::load_oauth_app_credentials().is_ok() {
+    peek_oauth_app_source_for_test(
+        crate::api::auth::load_oauth_app_credentials().is_ok(),
+        crate::api::auth_embedded::embedded_oauth_app().is_some(),
+    )
+}
+
+/// Pure helper for testing the precedence chain. Match the runtime
+/// resolver: keychain wins, embedded falls back, otherwise (none).
+fn peek_oauth_app_source_for_test(
+    keychain_present: bool,
+    embedded_present: bool,
+) -> OAuthAppSource {
+    if keychain_present {
         return OAuthAppSource::Keychain;
     }
-    if crate::api::auth_embedded::embedded_oauth_app().is_some() {
+    if embedded_present {
         return OAuthAppSource::Embedded;
     }
     OAuthAppSource::None
@@ -1838,16 +1850,31 @@ mod tests {
         }
     }
 
-    /// On a default test build (no embedded credentials), with no keychain
-    /// pair seeded, the OAuth app source must report `(none)` or `keychain`.
-    /// `Embedded` would mean a release env var leaked into tests.
     #[test]
-    fn peek_oauth_app_source_never_embedded_in_test_build() {
-        let source = peek_oauth_app_source();
-        assert!(
-            matches!(source, OAuthAppSource::Keychain | OAuthAppSource::None),
-            "unexpected source in test build: {:?}",
-            source
+    fn peek_oauth_app_source_keychain_wins() {
+        assert_eq!(
+            peek_oauth_app_source_for_test(true, true),
+            OAuthAppSource::Keychain
+        );
+        assert_eq!(
+            peek_oauth_app_source_for_test(true, false),
+            OAuthAppSource::Keychain
+        );
+    }
+
+    #[test]
+    fn peek_oauth_app_source_embedded_when_no_keychain() {
+        assert_eq!(
+            peek_oauth_app_source_for_test(false, true),
+            OAuthAppSource::Embedded
+        );
+    }
+
+    #[test]
+    fn peek_oauth_app_source_none_when_nothing_resolves() {
+        assert_eq!(
+            peek_oauth_app_source_for_test(false, false),
+            OAuthAppSource::None
         );
     }
 }
