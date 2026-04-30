@@ -13,6 +13,7 @@
 
 use std::env;
 use std::fs;
+#[cfg(unix)]
 use std::io::Read;
 use std::path::Path;
 
@@ -54,7 +55,16 @@ fn main() {
 
 /// 32 random bytes from the OS entropy source. Build scripts run on the
 /// host's OS, so /dev/urandom (Unix) or BCryptGenRandom (Windows) is
-/// available.
+/// available. Other host targets are unsupported by `jr`'s release matrix
+/// (macOS / Linux / Windows only) — fail loudly there rather than silently
+/// emitting an empty `[u8; 32]`.
+#[cfg(not(any(unix, windows)))]
+compile_error!(
+    "build.rs: unsupported host platform — jr's build pipeline assumes a unix or windows host \
+     (the OAuth XOR key needs OS entropy via /dev/urandom or BCryptGenRandom). \
+     Add a host-OS branch in generate_xor_key if porting to a new platform."
+);
+
 fn generate_xor_key() -> [u8; 32] {
     #[cfg(unix)]
     {
@@ -81,6 +91,11 @@ fn generate_xor_key() -> [u8; 32] {
                 dwFlags: u32,
             ) -> i32;
         }
+        // SAFETY: BCryptGenRandom writes exactly cbBuffer=32 bytes into
+        // pbBuffer. We pass `buf.as_mut_ptr()` for a stack-owned [u8; 32]
+        // that outlives the call, with cbBuffer=32 matching the buffer size,
+        // and dwFlags=BCRYPT_USE_SYSTEM_PREFERRED_RNG (0x00000002) which
+        // tells the API to use the system RNG without requiring a handle.
         let status = unsafe {
             BCryptGenRandom(std::ptr::null_mut(), buf.as_mut_ptr(), 32, 0x00000002)
         };
