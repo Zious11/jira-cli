@@ -625,9 +625,13 @@ pub(super) fn prepare_login_target(
 /// the resolver order in `api/auth.rs::resolve_refresh_app_credentials`.
 ///
 /// On keychain probe failure (locked keychain, permission denied) emits
-/// a stderr warning and returns `OAuthAppSource::None` rather than
-/// silently reporting `Embedded`. The status row would otherwise lie
-/// about which source the next refresh will use.
+/// a stderr warning and falls through to the next source in the chain.
+/// The status row may therefore display `embedded` when the keychain is
+/// merely temporarily inaccessible — that's defensible for a status
+/// surface (display non-blocking, keep `auth status` usable) but it
+/// diverges from `resolve_refresh_app_credentials`, which hard-errors on
+/// the same condition. The stderr warning is the user's signal that the
+/// row may be incomplete.
 fn peek_oauth_app_source() -> OAuthAppSource {
     let keychain_present = match crate::api::auth::probe_oauth_app_credentials() {
         Ok(p) => p,

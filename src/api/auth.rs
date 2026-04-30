@@ -494,13 +494,29 @@ pub async fn oauth_login(
         url: String,
         name: String,
     }
-    let resources: Vec<AccessibleResource> = client
+    let resources_response = client
         .get("https://api.atlassian.com/oauth/token/accessible-resources")
         .bearer_auth(&tokens.access_token)
         .send()
-        .await?
+        .await
+        .context("failed to call Atlassian accessible-resources endpoint")?;
+    if !resources_response.status().is_success() {
+        let status = resources_response.status();
+        let body = resources_response
+            .text()
+            .await
+            .unwrap_or_else(|e| format!("(body read failed: {e:#})"));
+        let body_truncated: String = body.chars().take(500).collect();
+        anyhow::bail!(
+            "Atlassian accessible-resources lookup failed: HTTP {status}: {body_truncated}\n\n\
+             The OAuth grant succeeded but jr could not enumerate your accessible Jira sites. \
+             Confirm the OAuth app's scopes include `read:jira-user` and `read:jira-work`."
+        );
+    }
+    let resources: Vec<AccessibleResource> = resources_response
         .json()
-        .await?;
+        .await
+        .context("accessible-resources response body was not valid JSON")?;
 
     let resource = resources
         .first()
@@ -583,8 +599,23 @@ pub async fn refresh_oauth_token(profile: &str) -> Result<String> {
         access_token: String,
         refresh_token: String,
     }
-    let tokens: TokenResponse = response.json().await?;
-    store_oauth_tokens(profile, &tokens.access_token, &tokens.refresh_token)?;
+    let tokens: TokenResponse = response.json().await.context(
+        "refresh response body was not valid JSON; Atlassian may have changed \
+         the token endpoint shape",
+    )?;
+    // Same partial-state risk as oauth_login's keychain-write step:
+    // Atlassian rotated the tokens, but if the keychain write fails the
+    // new pair is lost and the next request will use the now-invalid
+    // refresh token. Surface the partial state explicitly.
+    store_oauth_tokens(profile, &tokens.access_token, &tokens.refresh_token).map_err(|e| {
+        anyhow::anyhow!(
+            "Token refresh succeeded with Atlassian, but jr could not save the new \
+             OAuth tokens to the system keychain ({e:#}). Unlock your keychain (or \
+             grant access to jr) and run `jr auth refresh --profile {profile}` again. \
+             If the problem persists, run `jr auth login --oauth --profile {profile}` \
+             to start fresh."
+        )
+    })?;
     Ok(tokens.access_token)
 }
 
