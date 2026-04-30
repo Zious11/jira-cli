@@ -304,8 +304,14 @@ pub async fn login_oauth(
     // Store OAuth app credentials in keychain (only after scopes validate)
     crate::api::auth::store_oauth_app_credentials(&client_id, &client_secret)?;
 
-    let result =
-        crate::api::auth::oauth_login(profile, &client_id, &client_secret, &scopes).await?;
+    let result = crate::api::auth::oauth_login(
+        profile,
+        &client_id,
+        &client_secret,
+        &scopes,
+        crate::api::auth::RedirectUriStrategyRequest::Dynamic,
+    )
+    .await?;
 
     // Persist site info to the named profile under [profiles.<name>], not
     // the legacy [instance] block. Reload to pick up any mutations made

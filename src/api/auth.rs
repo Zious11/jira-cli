@@ -300,6 +300,80 @@ pub struct OAuthResult {
     pub site_name: String,
 }
 
+/// Pre-bind variant. The caller picks intent (Dynamic vs Fixed); this
+/// helper performs the bind that resolves the actual port (Dynamic) or
+/// validates availability (Fixed) before we hit the network. Errors
+/// produce actionable messages — port-busy on Fixed surfaces the BYO
+/// override hint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RedirectUriStrategyRequest {
+    /// Bind a random ephemeral port. Used by BYO sources (flag/env/keychain
+    /// /prompt) that registered their own callback URL with Atlassian.
+    Dynamic,
+    /// Bind the given fixed port (53682 for the embedded `jr` app).
+    /// `EADDRINUSE` surfaces a friendly error directing the user to BYO override.
+    Fixed(u16),
+}
+
+impl RedirectUriStrategyRequest {
+    pub fn bind(self) -> Result<RedirectUriStrategy> {
+        match self {
+            RedirectUriStrategyRequest::Dynamic => {
+                let listener = TcpListener::bind("127.0.0.1:0")?;
+                let port = listener.local_addr()?.port();
+                drop(listener);
+                Ok(RedirectUriStrategy::DynamicPort(port))
+            }
+            RedirectUriStrategyRequest::Fixed(p) => {
+                match TcpListener::bind(format!("127.0.0.1:{p}")) {
+                    Ok(l) => {
+                        drop(l);
+                        Ok(RedirectUriStrategy::FixedPort(p))
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                        Err(anyhow::anyhow!(
+                            "port {p} is in use; the jr OAuth callback needs this port. \
+                             Free it, or use --client-id/--client-secret with your own \
+                             OAuth app."
+                        ))
+                    }
+                    Err(e) => Err(e.into()),
+                }
+            }
+        }
+    }
+}
+
+/// Resolved port choice for `oauth_login`. Produced by
+/// [`RedirectUriStrategyRequest::bind`]; carries the actual port number used
+/// for the local callback listener and the `redirect_uri` we send to
+/// Atlassian.
+///
+/// Embedded OAuth apps must use the exact `redirect_uri` registered in
+/// Atlassian Developer Console — Atlassian does not honor RFC 8252's
+/// "any loopback port" rule (https://jira.atlassian.com/browse/JRACLOUD-92180).
+/// BYO apps stay on the historical dynamic-port behavior since they
+/// register their own callback URL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RedirectUriStrategy {
+    /// Bound to a random ephemeral port; redirect_uri uses that port.
+    DynamicPort(u16),
+    /// Bound to the embedded `jr` app's registered fixed port (53682).
+    FixedPort(u16),
+}
+
+impl RedirectUriStrategy {
+    pub fn port(self) -> u16 {
+        match self {
+            RedirectUriStrategy::DynamicPort(p) | RedirectUriStrategy::FixedPort(p) => p,
+        }
+    }
+
+    pub fn redirect_uri(self) -> String {
+        format!("http://localhost:{}/callback", self.port())
+    }
+}
+
 /// Run the full OAuth 2.0 (3LO) authorization code flow:
 /// 1. Open browser to Atlassian authorization page requesting `scopes`
 /// 2. Listen on a local port for the callback
@@ -316,13 +390,13 @@ pub async fn oauth_login(
     client_id: &str,
     client_secret: &str,
     scopes: &str,
+    strategy: RedirectUriStrategyRequest,
 ) -> Result<OAuthResult> {
-    // 1. Find an available port for the local callback server.
-    let listener = TcpListener::bind("127.0.0.1:0")?;
-    let port = listener.local_addr()?.port();
-    drop(listener);
-
-    let redirect_uri = format!("http://localhost:{port}/callback");
+    // 1. Resolve the strategy → owning the bound port up front so the
+    //    callback URL we send to Atlassian matches what we'll listen on.
+    let strategy = strategy.bind()?;
+    let port = strategy.port();
+    let redirect_uri = strategy.redirect_uri();
     let state = generate_state()?;
 
     let auth_url = build_authorize_url(client_id, scopes, &redirect_uri, &state);
@@ -544,6 +618,22 @@ fn extract_query_param(request: &str, param: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FixedPort and DynamicPort produce well-formed `localhost`-host
+    /// callback URIs. Locked in here because the registered Developer
+    /// Console URL must match exactly — accidentally renaming the path
+    /// or switching to `127.0.0.1` would break the embedded login flow.
+    #[test]
+    fn redirect_uri_strategy_strings() {
+        assert_eq!(
+            RedirectUriStrategy::FixedPort(53682).redirect_uri(),
+            "http://localhost:53682/callback"
+        );
+        assert_eq!(
+            RedirectUriStrategy::DynamicPort(54321).redirect_uri(),
+            "http://localhost:54321/callback"
+        );
+    }
 
     #[test]
     fn test_extract_query_param_found() {
