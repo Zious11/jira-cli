@@ -644,7 +644,9 @@ fn peek_oauth_app_source() -> OAuthAppSource {
 }
 
 /// Pure helper for testing the precedence chain. Match the runtime
-/// resolver: keychain wins, embedded falls back, otherwise (none).
+/// resolver: keychain wins, embedded falls back, otherwise returns
+/// `OAuthAppSource::None` (the explicit sentinel variant for "no source
+/// resolved", not Rust's `Option::None`).
 fn peek_oauth_app_source_for_test(
     keychain_present: bool,
     embedded_present: bool,

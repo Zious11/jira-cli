@@ -324,9 +324,13 @@ pub struct OAuthResult {
 
 /// Pre-bind variant. The caller picks intent (Dynamic vs Fixed); this
 /// helper performs the bind that resolves the actual port (Dynamic) or
-/// validates availability (Fixed) before we hit the network. Errors
-/// produce actionable messages — port-busy on Fixed surfaces the BYO
-/// override hint.
+/// validates availability (Fixed) before we hit the network.
+///
+/// `Fixed` errors produce a friendly message that surfaces the BYO
+/// override hint (specifically for `EADDRINUSE`). `Dynamic` errors
+/// propagate the underlying `io::Error` directly — they're rare in
+/// practice (only the OS-level port-allocator running out of ephemeral
+/// ports can trip them) and have no actionable user-facing recovery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RedirectUriStrategyRequest {
     /// Bind a random ephemeral port. Used by BYO sources (flag/env/keychain
@@ -625,6 +629,14 @@ fn resolve_refresh_app_credentials() -> Result<(String, String, RefreshAppSource
     )
 }
 
+/// Where the OAuth app credentials for a token refresh resolved from.
+///
+/// Closed set of two variants — refresh by definition has credentials
+/// (otherwise `resolve_refresh_app_credentials` bails before this point),
+/// and the resolver only reads from keychain or embedded sources. Used
+/// to tailor the failure-message hint when Atlassian rejects the refresh
+/// (embedded → "secret may have been rotated, upgrade jr"; keychain →
+/// "stored creds may be invalid, re-run login").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RefreshAppSource {
     Keychain,
