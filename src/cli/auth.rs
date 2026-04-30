@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use dialoguer::{Input, Password};
 
 use crate::api::auth;
+use crate::api::auth_embedded::{OAuthAppSource, embedded_oauth_app};
 use crate::config::{Config, global_config_path};
 use crate::error::JrError;
 use crate::output;
@@ -68,6 +69,193 @@ pub(crate) fn resolve_credential(
             .interact_text()
             .with_context(|| format!("failed to read {prompt_label}"))
     }
+}
+
+/// Resolve the OAuth app credentials for a `login --oauth` invocation.
+/// Returns `(client_id, client_secret, source)`. The `source` flows into
+/// `jr auth status` so users can tell which path drove the session.
+///
+/// Order: flag → env → keychain → embedded → prompt.
+///
+/// Flag and env are pair-gated: both halves must be present to use that
+/// source. Providing only one of the two values is an explicit error
+/// rather than a fall-through — the resolver returns `JrError::UserError`
+/// citing both flag/env names so a user who forgot the second half learns
+/// what's missing. Empty strings are treated as absent.
+pub(crate) fn resolve_oauth_app_credentials(
+    flag_id: Option<String>,
+    flag_secret: Option<String>,
+    no_input: bool,
+) -> Result<(String, String, OAuthAppSource)> {
+    let env_id = std::env::var(ENV_OAUTH_CLIENT_ID)
+        .ok()
+        .filter(|s| !s.is_empty());
+    let env_secret = std::env::var(ENV_OAUTH_CLIENT_SECRET)
+        .ok()
+        .filter(|s| !s.is_empty());
+
+    // Detect any flag/env presence WITHOUT touching the keychain.
+    // Using "any half present" (not "both halves") ensures we skip the
+    // keychain probe when a partial flag/env pair will hard-error in
+    // `_for_test` — a locked keychain must not mask the real error
+    // (the user forgetting one flag, or providing only one env var).
+    // This also means an explicit `--client-id`/`--client-secret` pair
+    // wins even when the keychain backend is unavailable.
+    let any_flag_present = flag_id.as_deref().is_some_and(|s| !s.is_empty())
+        || flag_secret.as_deref().is_some_and(|s| !s.is_empty());
+    let any_env_present = env_id.is_some() || env_secret.is_some();
+
+    let keychain = if any_flag_present || any_env_present {
+        // Flag or env will resolve OR hard-error first — never reaches
+        // the keychain layer in `_for_test`. Skip the probe entirely.
+        None
+    } else if crate::api::auth::probe_oauth_app_credentials()? {
+        Some(crate::api::auth::load_oauth_app_credentials()?)
+    } else {
+        None
+    };
+
+    // Defer the XOR decode: only materialize the embedded plaintext
+    // `client_secret` when no higher-precedence source resolves.
+    // BYO users (flag/env/keychain) never trigger the embedded decode.
+    // The short-circuit below gates on whether any higher-precedence
+    // source has values; only the else-branch invokes `embedded_oauth_app()`
+    // which triggers the XOR decode + OnceLock cache.
+    let has_flag_pair = flag_id.as_deref().is_some_and(|s| !s.is_empty())
+        && flag_secret.as_deref().is_some_and(|s| !s.is_empty());
+    let has_env_pair = env_id.is_some() && env_secret.is_some();
+    let embedded = if has_flag_pair || has_env_pair || keychain.is_some() {
+        None
+    } else {
+        embedded_oauth_app().map(|a| (a.client_id.clone(), a.client_secret.clone()))
+    };
+
+    resolve_oauth_app_credentials_for_test(
+        flag_id,
+        flag_secret,
+        env_id,
+        env_secret,
+        keychain,
+        embedded,
+        no_input,
+    )
+}
+
+/// Pure resolution function — accepts every potential source as an argument
+/// so unit tests can exercise the precedence chain without mutating env vars
+/// or the keychain.
+//
+// 7 parameters is deliberate: each layer of the resolution chain
+// (flag/env/keychain/embedded) must be independently substitutable.
+// Grouping into a struct would obscure the precedence semantics.
+#[allow(clippy::too_many_arguments)]
+fn resolve_oauth_app_credentials_for_test(
+    flag_id: Option<String>,
+    flag_secret: Option<String>,
+    env_id: Option<String>,
+    env_secret: Option<String>,
+    keychain: Option<(String, String)>,
+    embedded: Option<(String, String)>,
+    no_input: bool,
+) -> Result<(String, String, OAuthAppSource)> {
+    // Flag pair: must be all-or-nothing. A user passing only one half
+    // (e.g., --client-id alone) almost certainly meant BYO and forgot the
+    // other flag — silently falling through to embedded would surprise
+    // them. Hard-error with a specific recovery message instead.
+    let flag_id_present = flag_id.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+    let flag_secret_present = flag_secret
+        .as_deref()
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
+    match (flag_id_present, flag_secret_present) {
+        (true, true) => {
+            return Ok((flag_id.unwrap(), flag_secret.unwrap(), OAuthAppSource::Flag));
+        }
+        (true, false) => {
+            return Err(JrError::UserError(
+                "--client-id was provided without --client-secret. \
+                 Both flags must be supplied together for OAuth bring-your-own-app login."
+                    .to_string(),
+            )
+            .into());
+        }
+        (false, true) => {
+            return Err(JrError::UserError(
+                "--client-secret was provided without --client-id. \
+                 Both flags must be supplied together for OAuth bring-your-own-app login."
+                    .to_string(),
+            )
+            .into());
+        }
+        (false, false) => {} // fall through to env layer
+    }
+
+    // Env pair: same all-or-nothing rule.
+    let env_id_present = env_id.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+    let env_secret_present = env_secret
+        .as_deref()
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
+    match (env_id_present, env_secret_present) {
+        (true, true) => {
+            return Ok((env_id.unwrap(), env_secret.unwrap(), OAuthAppSource::Env));
+        }
+        (true, false) => {
+            return Err(JrError::UserError(
+                "JR_OAUTH_CLIENT_ID is set but JR_OAUTH_CLIENT_SECRET is not. \
+                 Both env vars must be set together for OAuth bring-your-own-app login."
+                    .to_string(),
+            )
+            .into());
+        }
+        (false, true) => {
+            return Err(JrError::UserError(
+                "JR_OAUTH_CLIENT_SECRET is set but JR_OAUTH_CLIENT_ID is not. \
+                 Both env vars must be set together for OAuth bring-your-own-app login."
+                    .to_string(),
+            )
+            .into());
+        }
+        (false, false) => {} // fall through to keychain layer
+    }
+
+    if let Some((i, s)) = keychain {
+        return Ok((i, s, OAuthAppSource::Keychain));
+    }
+    if let Some((i, s)) = embedded {
+        return Ok((i, s, OAuthAppSource::Embedded));
+    }
+    if no_input {
+        return Err(JrError::UserError(
+            "OAuth app credentials are required. Provide --client-id and --client-secret, \
+             or set JR_OAUTH_CLIENT_ID and JR_OAUTH_CLIENT_SECRET. This binary was not \
+             built with embedded credentials."
+                .to_string(),
+        )
+        .into());
+    }
+    // Fall back to the existing interactive prompt path. Re-enter
+    // resolve_credential for each so the existing UX (masked input,
+    // hint, retry) is preserved verbatim.
+    let id = resolve_credential(
+        None,
+        ENV_OAUTH_CLIENT_ID,
+        "--client-id",
+        "OAuth Client ID",
+        false,
+        false,
+        Some(OAUTH_APP_HINT),
+    )?;
+    let secret = resolve_credential(
+        None,
+        ENV_OAUTH_CLIENT_SECRET,
+        "--client-secret",
+        "OAuth Client Secret",
+        true,
+        false,
+        Some(OAUTH_APP_HINT),
+    )?;
+    Ok((id, secret, OAuthAppSource::Prompt))
 }
 
 /// Hint for OAuth client_id / client_secret errors so first-time agents
@@ -241,48 +429,38 @@ pub async fn login_oauth(
     no_input: bool,
 ) -> Result<()> {
     if !no_input {
-        eprintln!("OAuth 2.0 requires your own Atlassian OAuth app.");
-        eprintln!("Create one at: https://developer.atlassian.com/console/myapps/\n");
+        if crate::api::auth_embedded::embedded_oauth_app_present() {
+            eprintln!("OAuth 2.0: by default, official jr binaries use the embedded \"jr\" app.");
+            eprintln!("To use your own OAuth app instead, pass --client-id and --client-secret,");
+            eprintln!("or set JR_OAUTH_CLIENT_ID and JR_OAUTH_CLIENT_SECRET.\n");
+        } else {
+            eprintln!(
+                "OAuth 2.0: this build has no embedded OAuth app (likely a fork or source build)."
+            );
+            eprintln!("Pass --client-id and --client-secret,");
+            eprintln!("or set JR_OAUTH_CLIENT_ID and JR_OAUTH_CLIENT_SECRET.\n");
+        }
     }
 
-    let client_id = resolve_credential(
-        client_id,
-        ENV_OAUTH_CLIENT_ID,
-        "--client-id",
-        "OAuth Client ID",
-        false,
-        no_input,
-        Some(OAUTH_APP_HINT),
-    )?;
-    let client_secret = resolve_credential(
-        client_secret,
-        ENV_OAUTH_CLIENT_SECRET,
-        "--client-secret",
-        "OAuth Client Secret",
-        true,
-        no_input,
-        Some(OAUTH_APP_HINT),
-    )?;
+    let (client_id, client_secret, source) =
+        resolve_oauth_app_credentials(client_id, client_secret, no_input)?;
+
+    // Embedded credentials get the registered fixed callback. Every other
+    // source is BYO and stays on the historical dynamic-port flow — the
+    // user has registered their own callback URL.
+    let strategy = match source {
+        OAuthAppSource::Embedded => crate::api::auth::RedirectUriStrategyRequest::Fixed(53682),
+        _ => crate::api::auth::RedirectUriStrategyRequest::Dynamic,
+    };
 
     // Resolve config and scopes BEFORE persisting credentials — a bad
-    // [instance].oauth_scopes (empty/whitespace-only) must fail fast, not
-    // leave new client_id/client_secret in the keychain alongside a login
-    // that never succeeded.
-    //
-    // Propagate load errors (malformed TOML, permission denied, etc.)
-    // instead of falling back to defaults. Falling back would cause the
-    // subsequent `save_global()` to overwrite the user's broken-but-
-    // recoverable config with a default payload, silently discarding
-    // settings they cared about (#258). figment's `Toml::file` already
-    // treats a missing file as empty, so a genuinely-absent config never
-    // reaches this error path — only real failures do.
+    // [profiles.<name>].oauth_scopes (empty/whitespace-only) must fail fast,
+    // not leave new client_id/client_secret in the keychain alongside a
+    // login that never succeeded.
     let config_path = global_config_path();
     // Use `load_lenient` (not `load`) so a `JR_PROFILE` pointing at an
     // unconfigured profile, or a target profile that doesn't yet exist,
     // can't trip the strict active-profile existence check mid-login.
-    // `handle_login` already did the lenient load up-front; this internal
-    // reload must agree, otherwise the orchestrator-allowed creation flow
-    // gets aborted halfway through.
     let config = Config::load_lenient_with(Some(profile)).map_err(|err| {
         JrError::ConfigError(format!(
             "Failed to load config: {err:#}\n\n\
@@ -291,8 +469,6 @@ pub async fn login_oauth(
             config_path = config_path.display()
         ))
     })?;
-    // Read scopes from the TARGET profile, not the active one — `login_oauth`
-    // may target a non-active profile (e.g., `jr auth login --profile X`).
     let target_profile = config
         .global
         .profiles
@@ -301,11 +477,17 @@ pub async fn login_oauth(
         .unwrap_or_default();
     let scopes = resolve_oauth_scopes(&target_profile)?;
 
-    // Store OAuth app credentials in keychain (only after scopes validate)
-    crate::api::auth::store_oauth_app_credentials(&client_id, &client_secret)?;
+    // Persist user-provided OAuth app creds to keychain so subsequent
+    // refreshes use the same app. Embedded credentials are NOT persisted —
+    // they re-decode from the binary every launch and would only pollute
+    // the keychain for the inevitable rotation cycle.
+    if !matches!(source, OAuthAppSource::Embedded) {
+        crate::api::auth::store_oauth_app_credentials(&client_id, &client_secret)?;
+    }
 
     let result =
-        crate::api::auth::oauth_login(profile, &client_id, &client_secret, &scopes).await?;
+        crate::api::auth::oauth_login(profile, &client_id, &client_secret, &scopes, strategy)
+            .await?;
 
     // Persist site info to the named profile under [profiles.<name>], not
     // the legacy [instance] block. Reload to pick up any mutations made
@@ -483,6 +665,50 @@ pub(super) fn prepare_login_target(
     Ok((global, target))
 }
 
+/// Inspect — without consuming or modifying — which source would supply
+/// OAuth app credentials on the next `refresh_oauth_token` call. Mirrors
+/// the resolver order in `api/auth.rs::resolve_refresh_app_credentials`.
+///
+/// On keychain probe failure (locked keychain, permission denied) emits
+/// a stderr warning and falls through to the next source in the chain.
+/// The status row may therefore display `embedded` when the keychain is
+/// merely temporarily inaccessible — that's defensible for a status
+/// surface (display non-blocking, keep `auth status` usable) but it
+/// diverges from `resolve_refresh_app_credentials`, which hard-errors on
+/// the same condition. The stderr warning is the user's signal that the
+/// row may be incomplete.
+fn peek_oauth_app_source() -> OAuthAppSource {
+    let keychain_present = match crate::api::auth::probe_oauth_app_credentials() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!(
+                "warning: could not probe keychain for OAuth app credentials ({e:#}); \
+                 status report may be incomplete."
+            );
+            false
+        }
+    };
+    let embedded_present = crate::api::auth_embedded::embedded_oauth_app_present();
+    peek_oauth_app_source_for_test(keychain_present, embedded_present)
+}
+
+/// Pure helper for testing the precedence chain. Match the runtime
+/// resolver: keychain wins, embedded falls back, otherwise returns
+/// `OAuthAppSource::None` (the explicit sentinel variant for "no source
+/// resolved", not Rust's `Option::None`).
+fn peek_oauth_app_source_for_test(
+    keychain_present: bool,
+    embedded_present: bool,
+) -> OAuthAppSource {
+    if keychain_present {
+        return OAuthAppSource::Keychain;
+    }
+    if embedded_present {
+        return OAuthAppSource::Embedded;
+    }
+    OAuthAppSource::None
+}
+
 /// Show authentication status: instance URL, auth method, credential availability.
 ///
 /// When `profile_arg` is `Some`, reports for that profile. Otherwise reports
@@ -561,6 +787,13 @@ pub async fn status(profile_arg: Option<&str>) -> Result<()> {
         println!("Credentials: stored in keychain");
     } else {
         println!("Credentials: not found");
+    }
+
+    // Report which OAuth app credentials would be used for the next refresh.
+    // This is the *future* source — same resolver as `refresh_oauth_token`.
+    if method == "oauth" {
+        let source = peek_oauth_app_source();
+        println!("OAuth app:   {}", source.label());
     }
 
     Ok(())
@@ -1517,6 +1750,165 @@ mod tests {
         );
     }
 
+    /// Resolution order: flag → env → keychain → embedded → prompt.
+    /// Flag wins even when env is set.
+    #[test]
+    fn resolve_oauth_app_credentials_flag_wins() {
+        let (id, secret, source) = resolve_oauth_app_credentials_for_test(
+            Some("flag-id".into()),
+            Some("flag-secret".into()),
+            None, // env_id
+            None, // env_secret
+            None, // keychain
+            None, // embedded
+            true, // no_input
+        )
+        .expect("flag path must succeed");
+        assert_eq!(id, "flag-id");
+        assert_eq!(secret, "flag-secret");
+        assert_eq!(source, crate::api::auth_embedded::OAuthAppSource::Flag);
+    }
+
+    #[test]
+    fn resolve_oauth_app_credentials_env_wins_over_keychain() {
+        let (id, secret, source) = resolve_oauth_app_credentials_for_test(
+            None,
+            None,
+            Some("env-id".into()),
+            Some("env-secret".into()),
+            Some(("kc-id".into(), "kc-secret".into())),
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            (id.as_str(), secret.as_str(), source),
+            (
+                "env-id",
+                "env-secret",
+                crate::api::auth_embedded::OAuthAppSource::Env
+            )
+        );
+    }
+
+    #[test]
+    fn resolve_oauth_app_credentials_keychain_wins_over_embedded() {
+        let (id, _, source) = resolve_oauth_app_credentials_for_test(
+            None,
+            None,
+            None,
+            None,
+            Some(("kc-id".into(), "kc-secret".into())),
+            Some(("embed-id".into(), "embed-secret".into())),
+            true,
+        )
+        .unwrap();
+        assert_eq!(id, "kc-id");
+        assert_eq!(source, crate::api::auth_embedded::OAuthAppSource::Keychain);
+    }
+
+    #[test]
+    fn resolve_oauth_app_credentials_embedded_when_no_user_input() {
+        let (id, secret, source) = resolve_oauth_app_credentials_for_test(
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(("embed-id".into(), "embed-secret".into())),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            (id.as_str(), secret.as_str(), source),
+            (
+                "embed-id",
+                "embed-secret",
+                crate::api::auth_embedded::OAuthAppSource::Embedded
+            )
+        );
+    }
+
+    #[test]
+    fn resolve_oauth_app_credentials_no_input_errors_when_all_absent() {
+        let err = resolve_oauth_app_credentials_for_test(None, None, None, None, None, None, true)
+            .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("OAuth"), "got: {msg}");
+        assert!(
+            msg.contains("--client-id") || msg.contains("JR_OAUTH_CLIENT_ID"),
+            "error must cite the BYO escape hatch: {msg}"
+        );
+    }
+
+    #[test]
+    fn resolve_oauth_app_credentials_partial_flag_id_errors() {
+        let err = resolve_oauth_app_credentials_for_test(
+            Some("partial-id".into()),
+            None, // missing flag_secret
+            None,
+            None,
+            None,
+            Some(("embed-id".into(), "embed-secret".into())),
+            true,
+        )
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("--client-id"), "got: {msg}");
+        assert!(msg.contains("--client-secret"), "got: {msg}");
+    }
+
+    #[test]
+    fn resolve_oauth_app_credentials_partial_flag_secret_errors() {
+        let err = resolve_oauth_app_credentials_for_test(
+            None,
+            Some("partial-secret".into()),
+            None,
+            None,
+            None,
+            Some(("embed-id".into(), "embed-secret".into())),
+            true,
+        )
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("--client-id"), "got: {msg}");
+        assert!(msg.contains("--client-secret"), "got: {msg}");
+    }
+
+    #[test]
+    fn resolve_oauth_app_credentials_partial_env_id_errors() {
+        let err = resolve_oauth_app_credentials_for_test(
+            None,
+            None,
+            Some("env-id".into()),
+            None, // missing env_secret
+            None,
+            Some(("embed-id".into(), "embed-secret".into())),
+            true,
+        )
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("JR_OAUTH_CLIENT_ID"), "got: {msg}");
+        assert!(msg.contains("JR_OAUTH_CLIENT_SECRET"), "got: {msg}");
+    }
+
+    #[test]
+    fn resolve_oauth_app_credentials_partial_env_secret_errors() {
+        let err = resolve_oauth_app_credentials_for_test(
+            None,
+            None,
+            None,
+            Some("env-secret".into()),
+            None,
+            Some(("embed-id".into(), "embed-secret".into())),
+            true,
+        )
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("JR_OAUTH_CLIENT_ID"), "got: {msg}");
+        assert!(msg.contains("JR_OAUTH_CLIENT_SECRET"), "got: {msg}");
+    }
+
     /// `jr` deliberately does NOT reject mixed classic+granular scopes,
     /// unknown scope names, or missing `offline_access` — Atlassian returns
     /// `invalid_scope` at token exchange per the spec's "Out of scope"
@@ -1537,5 +1929,33 @@ mod tests {
             });
             assert_eq!(result, raw, "input {raw:?} must pass through unchanged");
         }
+    }
+
+    #[test]
+    fn peek_oauth_app_source_keychain_wins() {
+        assert_eq!(
+            peek_oauth_app_source_for_test(true, true),
+            OAuthAppSource::Keychain
+        );
+        assert_eq!(
+            peek_oauth_app_source_for_test(true, false),
+            OAuthAppSource::Keychain
+        );
+    }
+
+    #[test]
+    fn peek_oauth_app_source_embedded_when_no_keychain() {
+        assert_eq!(
+            peek_oauth_app_source_for_test(false, true),
+            OAuthAppSource::Embedded
+        );
+    }
+
+    #[test]
+    fn peek_oauth_app_source_none_when_nothing_resolves() {
+        assert_eq!(
+            peek_oauth_app_source_for_test(false, false),
+            OAuthAppSource::None
+        );
     }
 }
