@@ -510,10 +510,10 @@ pub async fn oauth_login(
     store_oauth_tokens(profile, &tokens.access_token, &tokens.refresh_token).map_err(|e| {
         anyhow::anyhow!(
             "Authorization succeeded with Atlassian, but jr could not save the OAuth \
-             tokens to the system keychain ({e}). Unlock your keychain (or grant \
+             tokens to the system keychain ({e:#}). Unlock your keychain (or grant \
              access to jr) and run `jr auth login --oauth --profile {profile}` again. \
-             To fully revoke the active grant first, see your Atlassian account's \
-             connected apps page."
+             To fully revoke the active grant first, visit \
+             https://id.atlassian.com/manage-profile/apps."
         )
     })?;
 
@@ -556,7 +556,7 @@ pub async fn refresh_oauth_token(profile: &str) -> Result<String> {
         let body = response
             .text()
             .await
-            .unwrap_or_else(|_| "(no body)".to_string());
+            .unwrap_or_else(|e| format!("(body read failed: {e:#})"));
         let body_truncated: String = body.chars().take(500).collect();
         let hint = match source {
             RefreshAppSource::Embedded => format!(

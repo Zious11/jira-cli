@@ -1841,6 +1841,23 @@ mod tests {
         assert!(msg.contains("JR_OAUTH_CLIENT_SECRET"), "got: {msg}");
     }
 
+    #[test]
+    fn resolve_oauth_app_credentials_partial_env_secret_errors() {
+        let err = resolve_oauth_app_credentials_for_test(
+            None,
+            None,
+            None,
+            Some("env-secret".into()),
+            None,
+            Some(("embed-id".into(), "embed-secret".into())),
+            true,
+        )
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("JR_OAUTH_CLIENT_ID"), "got: {msg}");
+        assert!(msg.contains("JR_OAUTH_CLIENT_SECRET"), "got: {msg}");
+    }
+
     /// `jr` deliberately does NOT reject mixed classic+granular scopes,
     /// unknown scope names, or missing `offline_access` — Atlassian returns
     /// `invalid_scope` at token exchange per the spec's "Out of scope"
