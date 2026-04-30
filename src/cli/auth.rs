@@ -79,8 +79,6 @@ pub(crate) fn resolve_credential(
 ///
 /// Flag and env are pair-gated: both halves must be present, otherwise the
 /// resolver falls through (avoids sending a half-empty pair to Atlassian).
-// TODO(task-7): remove #[allow(dead_code)] once login_oauth calls this.
-#[allow(dead_code)]
 pub(crate) fn resolve_oauth_app_credentials(
     flag_id: Option<String>,
     flag_secret: Option<String>,
@@ -336,48 +334,36 @@ pub async fn login_oauth(
     no_input: bool,
 ) -> Result<()> {
     if !no_input {
-        eprintln!("OAuth 2.0 requires your own Atlassian OAuth app.");
-        eprintln!("Create one at: https://developer.atlassian.com/console/myapps/\n");
+        eprintln!(
+            "OAuth 2.0: by default, official jr binaries use the embedded \"jr\" app."
+        );
+        eprintln!(
+            "To use your own OAuth app instead, pass --client-id and --client-secret,"
+        );
+        eprintln!("or set JR_OAUTH_CLIENT_ID and JR_OAUTH_CLIENT_SECRET.\n");
     }
 
-    let client_id = resolve_credential(
-        client_id,
-        ENV_OAUTH_CLIENT_ID,
-        "--client-id",
-        "OAuth Client ID",
-        false,
-        no_input,
-        Some(OAUTH_APP_HINT),
-    )?;
-    let client_secret = resolve_credential(
-        client_secret,
-        ENV_OAUTH_CLIENT_SECRET,
-        "--client-secret",
-        "OAuth Client Secret",
-        true,
-        no_input,
-        Some(OAUTH_APP_HINT),
-    )?;
+    let (client_id, client_secret, source) =
+        resolve_oauth_app_credentials(client_id, client_secret, no_input)?;
+
+    // Embedded credentials get the registered fixed callback. Every other
+    // source is BYO and stays on the historical dynamic-port flow — the
+    // user has registered their own callback URL.
+    let strategy = match source {
+        OAuthAppSource::Embedded => {
+            crate::api::auth::RedirectUriStrategyRequest::Fixed(53682)
+        }
+        _ => crate::api::auth::RedirectUriStrategyRequest::Dynamic,
+    };
 
     // Resolve config and scopes BEFORE persisting credentials — a bad
-    // [instance].oauth_scopes (empty/whitespace-only) must fail fast, not
-    // leave new client_id/client_secret in the keychain alongside a login
-    // that never succeeded.
-    //
-    // Propagate load errors (malformed TOML, permission denied, etc.)
-    // instead of falling back to defaults. Falling back would cause the
-    // subsequent `save_global()` to overwrite the user's broken-but-
-    // recoverable config with a default payload, silently discarding
-    // settings they cared about (#258). figment's `Toml::file` already
-    // treats a missing file as empty, so a genuinely-absent config never
-    // reaches this error path — only real failures do.
+    // [profiles.<name>].oauth_scopes (empty/whitespace-only) must fail fast,
+    // not leave new client_id/client_secret in the keychain alongside a
+    // login that never succeeded.
     let config_path = global_config_path();
     // Use `load_lenient` (not `load`) so a `JR_PROFILE` pointing at an
     // unconfigured profile, or a target profile that doesn't yet exist,
     // can't trip the strict active-profile existence check mid-login.
-    // `handle_login` already did the lenient load up-front; this internal
-    // reload must agree, otherwise the orchestrator-allowed creation flow
-    // gets aborted halfway through.
     let config = Config::load_lenient_with(Some(profile)).map_err(|err| {
         JrError::ConfigError(format!(
             "Failed to load config: {err:#}\n\n\
@@ -386,8 +372,6 @@ pub async fn login_oauth(
             config_path = config_path.display()
         ))
     })?;
-    // Read scopes from the TARGET profile, not the active one — `login_oauth`
-    // may target a non-active profile (e.g., `jr auth login --profile X`).
     let target_profile = config
         .global
         .profiles
@@ -396,15 +380,20 @@ pub async fn login_oauth(
         .unwrap_or_default();
     let scopes = resolve_oauth_scopes(&target_profile)?;
 
-    // Store OAuth app credentials in keychain (only after scopes validate)
-    crate::api::auth::store_oauth_app_credentials(&client_id, &client_secret)?;
+    // Persist user-provided OAuth app creds to keychain so subsequent
+    // refreshes use the same app. Embedded credentials are NOT persisted —
+    // they re-decode from the binary every launch and would only pollute
+    // the keychain for the inevitable rotation cycle.
+    if !matches!(source, OAuthAppSource::Embedded) {
+        crate::api::auth::store_oauth_app_credentials(&client_id, &client_secret)?;
+    }
 
     let result = crate::api::auth::oauth_login(
         profile,
         &client_id,
         &client_secret,
         &scopes,
-        crate::api::auth::RedirectUriStrategyRequest::Dynamic,
+        strategy,
     )
     .await?;
 
