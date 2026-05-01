@@ -444,7 +444,9 @@ pub async fn login_oauth(
     // source is BYO and stays on the historical dynamic-port flow — the
     // user has registered their own callback URL.
     let strategy = match source {
-        OAuthAppSource::Embedded => crate::api::auth::RedirectUriStrategyRequest::Fixed(53682),
+        OAuthAppSource::Embedded => crate::api::auth::RedirectUriStrategyRequest::Fixed(
+            crate::api::auth::EMBEDDED_CALLBACK_PORT,
+        ),
         _ => crate::api::auth::RedirectUriStrategyRequest::Dynamic,
     };
 

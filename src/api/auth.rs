@@ -372,6 +372,18 @@ pub struct OAuthResult {
 }
 
 /// Pre-bind variant. The caller picks intent (Dynamic vs Fixed); this
+/// The fixed loopback port the embedded `jr` Atlassian OAuth app's callback
+/// URL is registered with (`http://127.0.0.1:53682/callback` in Developer
+/// Console). Atlassian validates `redirect_uri` by exact string match, so
+/// this is a long-lived contract — changing it is a breaking release that
+/// requires re-registering the callback URL.
+///
+/// Centralized here so every call site (CLI dispatch in
+/// `cli/auth.rs::login_oauth`, the CI smoke step that knows the port for
+/// runner setup, the spec/runbook, and tests) references a single source
+/// of truth instead of repeating the literal `53682`.
+pub const EMBEDDED_CALLBACK_PORT: u16 = 53682;
+
 /// helper performs the bind that resolves the actual port (Dynamic) or
 /// validates availability (Fixed) before we hit the network.
 ///
@@ -385,8 +397,9 @@ pub enum RedirectUriStrategyRequest {
     /// Bind a random ephemeral port. Used by BYO sources (flag/env/keychain
     /// /prompt) that registered their own callback URL with Atlassian.
     Dynamic,
-    /// Bind the given fixed port (53682 for the embedded `jr` app).
-    /// `EADDRINUSE` surfaces a friendly error directing the user to BYO override.
+    /// Bind the given fixed port. The embedded `jr` app uses
+    /// [`EMBEDDED_CALLBACK_PORT`] (53682). `EADDRINUSE` surfaces a friendly
+    /// error directing the user to BYO override.
     Fixed(u16),
 }
 
@@ -894,13 +907,22 @@ mod tests {
     #[test]
     fn redirect_uri_strategy_strings() {
         assert_eq!(
-            RedirectUriStrategy::FixedPort(53682).redirect_uri(),
+            RedirectUriStrategy::FixedPort(EMBEDDED_CALLBACK_PORT).redirect_uri(),
             "http://127.0.0.1:53682/callback"
         );
         assert_eq!(
             RedirectUriStrategy::DynamicPort(54321).redirect_uri(),
             "http://127.0.0.1:54321/callback"
         );
+    }
+
+    /// Lock the embedded callback port at the type-system level. Atlassian
+    /// validates `redirect_uri` by exact string match; this constant is a
+    /// long-lived contract registered in Developer Console as
+    /// `http://127.0.0.1:53682/callback`. Changing it is a breaking release.
+    #[test]
+    fn embedded_callback_port_is_53682() {
+        assert_eq!(EMBEDDED_CALLBACK_PORT, 53682);
     }
 
     #[test]

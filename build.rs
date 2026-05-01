@@ -40,15 +40,20 @@ fn main() {
                 .enumerate()
                 .map(|(i, b)| b ^ key[i % 32])
                 .collect();
+            // Module-private (no `pub`) so the obfuscation key/ciphertext
+            // don't become part of the crate's public surface. Only the
+            // `embedded_oauth_app()` accessor in `auth_embedded.rs` is
+            // public; these constants are an implementation detail and
+            // must not be reachable from external crate users.
             format!(
-                "pub const EMBEDDED_ID: Option<&str> = Some({id:?});\n\
-                 pub const EMBEDDED_SECRET_XOR: Option<&[u8]> = Some(&{xored:?});\n\
-                 pub const EMBEDDED_SECRET_KEY: Option<&[u8; 32]> = Some(&{key:?});\n"
+                "const EMBEDDED_ID: Option<&str> = Some({id:?});\n\
+                 const EMBEDDED_SECRET_XOR: Option<&[u8]> = Some(&{xored:?});\n\
+                 const EMBEDDED_SECRET_KEY: Option<&[u8; 32]> = Some(&{key:?});\n"
             )
         }
-        _ => "pub const EMBEDDED_ID: Option<&str> = None;\n\
-             pub const EMBEDDED_SECRET_XOR: Option<&[u8]> = None;\n\
-             pub const EMBEDDED_SECRET_KEY: Option<&[u8; 32]> = None;\n"
+        _ => "const EMBEDDED_ID: Option<&str> = None;\n\
+             const EMBEDDED_SECRET_XOR: Option<&[u8]> = None;\n\
+             const EMBEDDED_SECRET_KEY: Option<&[u8; 32]> = None;\n"
             .to_string(),
     };
 
