@@ -371,7 +371,6 @@ pub struct OAuthResult {
     pub site_name: String,
 }
 
-/// Pre-bind variant. The caller picks intent (Dynamic vs Fixed); this
 /// The fixed loopback port the embedded `jr` Atlassian OAuth app's callback
 /// URL is registered with (`http://127.0.0.1:53682/callback` in Developer
 /// Console). Atlassian validates `redirect_uri` by exact string match, so
@@ -384,13 +383,17 @@ pub struct OAuthResult {
 /// of truth instead of repeating the literal `53682`.
 pub const EMBEDDED_CALLBACK_PORT: u16 = 53682;
 
-/// helper performs the bind that resolves the actual port (Dynamic) or
-/// validates availability (Fixed) before we hit the network.
+/// `RedirectUriStrategyRequest` describes how the local OAuth callback
+/// listener should be bound before we hit the network — either by binding
+/// a random ephemeral port (`Dynamic`) or by validating availability of a
+/// specific registered port (`Fixed`). Threaded into `oauth_login` and
+/// resolved into a [`ResolvedRedirect`] (which owns the bound listener) by
+/// [`RedirectUriStrategyRequest::bind`].
 ///
 /// `Fixed` errors produce a friendly message that surfaces the BYO
 /// override hint (specifically for `EADDRINUSE`). `Dynamic` errors
 /// propagate the underlying `io::Error` directly — they're rare in
-/// practice (only the OS-level port-allocator running out of ephemeral
+/// practice (only the OS-level port allocator running out of ephemeral
 /// ports can trip them) and have no actionable user-facing recovery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RedirectUriStrategyRequest {
