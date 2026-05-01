@@ -60,7 +60,21 @@ jobs:
           fi
 
       - name: Verify embedded OAuth app present
+        env:
+          # Pass the secret-presence flag in via env so the bash check below
+          # can short-circuit cleanly. Forks (where Actions secrets aren't
+          # available) get OAUTH_CLIENT_ID == '' here, so we skip the smoke.
+          HAS_EMBED_SECRETS: ${{ (secrets.OAUTH_CLIENT_ID != '' && secrets.OAUTH_CLIENT_SECRET != '') && 'yes' || 'no' }}
         run: |
+          # Skip on forks: if the upstream-only secrets aren't configured for
+          # this run, the build legitimately produced an unbranded binary
+          # (no embedded creds). The smoke check would otherwise hard-fail
+          # the fork's release workflow even though there's nothing wrong.
+          if [ "$HAS_EMBED_SECRETS" != "yes" ]; then
+            echo "Skipping embedded-creds smoke: OAUTH_CLIENT_ID/_SECRET not configured."
+            echo "(Fork build, or upstream secrets are missing — release will ship the unbranded BYO binary.)"
+            exit 0
+          fi
           BIN="target/${{ matrix.target }}/release/jr"
           # Skip the assertion on cross-compiled non-native targets — we can't
           # exec aarch64-linux on x86_64 hosts. Native targets only.
@@ -73,6 +87,13 @@ jobs:
           # only appears when the active profile uses OAuth. We probe a
           # synthetic profile with auth_method=oauth and check the row reads
           # `embedded`.
+          # Force the config dir explicitly: `Config::load` honors
+          # XDG_CONFIG_HOME first and falls back to $HOME/.config. If the
+          # runner sets XDG_CONFIG_HOME (some self-hosted runners do),
+          # writing to $HOME/.config/jr/config.toml would be ignored. Pin
+          # XDG_CONFIG_HOME to $HOME/.config so the synthetic config is
+          # always discovered.
+          export XDG_CONFIG_HOME="$HOME/.config"
           export JR_PROFILE=__release_smoke
           export JR_SERVICE_NAME=jr-release-smoke-$$
           mkdir -p "$HOME/.config/jr"
