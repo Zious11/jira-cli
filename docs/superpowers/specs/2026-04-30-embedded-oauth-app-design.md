@@ -113,16 +113,20 @@ fn main() {
         (Some(id), Some(secret)) => {
             let key: [u8; 32] = generate_xor_key();
             let xored = xor(secret.as_bytes(), &key);
+            // Module-private (no `pub`): the obfuscation key/ciphertext are
+            // an implementation detail of `auth_embedded`, not part of the
+            // crate's public API. External users go through the
+            // `embedded_oauth_app()` accessor.
             format!(
-                "pub const EMBEDDED_ID:         Option<&str>      = Some({id:?});\n\
-                 pub const EMBEDDED_SECRET_XOR: Option<&[u8]>     = Some(&{xored:?});\n\
-                 pub const EMBEDDED_SECRET_KEY: Option<&[u8; 32]> = Some(&{key:?});\n"
+                "const EMBEDDED_ID:         Option<&str>      = Some({id:?});\n\
+                 const EMBEDDED_SECRET_XOR: Option<&[u8]>     = Some(&{xored:?});\n\
+                 const EMBEDDED_SECRET_KEY: Option<&[u8; 32]> = Some(&{key:?});\n"
             )
         }
         _ => {
-            "pub const EMBEDDED_ID:         Option<&str>      = None;\n\
-             pub const EMBEDDED_SECRET_XOR: Option<&[u8]>     = None;\n\
-             pub const EMBEDDED_SECRET_KEY: Option<&[u8; 32]> = None;\n"
+            "const EMBEDDED_ID:         Option<&str>      = None;\n\
+             const EMBEDDED_SECRET_XOR: Option<&[u8]>     = None;\n\
+             const EMBEDDED_SECRET_KEY: Option<&[u8; 32]> = None;\n"
                 .to_string()
         }
     };
@@ -160,7 +164,12 @@ pub fn embedded_oauth_app() -> Option<&'static EmbeddedOAuthApp> {
     EMBEDDED
         .get_or_init(|| match (EMBEDDED_ID, EMBEDDED_SECRET_XOR, EMBEDDED_SECRET_KEY) {
             (Some(id), Some(xor), Some(key)) => {
-                let secret = decode(xor, key);
+                // `decode()` is fallible — a non-UTF-8 result collapses to
+                // None via `.ok()?`, treated as "no embedded creds" by the
+                // resolver chain. Decode failure is theoretically reachable
+                // only via a corrupted build pipeline; in practice the XOR
+                // round-trip on valid-UTF-8 input always recovers valid UTF-8.
+                let secret = decode(xor, key).ok()?;
                 Some(EmbeddedOAuthApp { client_id: id.to_string(), client_secret: secret })
             }
             _ => None,
@@ -168,11 +177,10 @@ pub fn embedded_oauth_app() -> Option<&'static EmbeddedOAuthApp> {
         .as_ref()
 }
 
-fn decode(xored: &[u8], key: &[u8; 32]) -> String {
+fn decode(xored: &[u8], key: &[u8; 32]) -> Result<String, std::string::FromUtf8Error> {
     String::from_utf8(
         xored.iter().enumerate().map(|(i, b)| b ^ key[i % 32]).collect(),
     )
-    .expect("embedded secret is not valid UTF-8 — build pipeline broken")
 }
 ```
 

@@ -503,14 +503,29 @@ impl RedirectUriStrategy {
     }
 
     pub fn redirect_uri(self) -> String {
-        // Use the literal `127.0.0.1` (not `localhost`) to force IPv4 and
-        // match the loopback IPv4 address the listener is bound to.
-        // Modern macOS / Chrome resolve `localhost` to `::1` first; an
-        // IPv6-only browser connection to `localhost:53682` would fail
-        // to reach an IPv4-only listener. Atlassian validates redirect_uri
-        // by exact string match (no RFC 8252 normalization), so the same
-        // string must be registered in Developer Console.
-        format!("http://127.0.0.1:{}/callback", self.port())
+        match self {
+            // Embedded app: force IPv4 via the literal `127.0.0.1` so we
+            // match the loopback bind. Modern macOS / Chrome resolve
+            // `localhost` to `::1` first; an IPv6 browser connection to
+            // `localhost:53682` would fail against our IPv4-only listener.
+            // Atlassian validates redirect_uri by exact string match (no
+            // RFC 8252 normalization), and we control the registered URL,
+            // so `127.0.0.1:53682` is registered in Developer Console.
+            RedirectUriStrategy::FixedPort(port) => {
+                format!("http://127.0.0.1:{port}/callback")
+            }
+            // BYO (dynamic-port): preserve `localhost` for backward
+            // compatibility. Existing BYO users may have registered
+            // `http://localhost:...` callback URLs in their Developer
+            // Console apps; an unconditional switch to `127.0.0.1` would
+            // surface as `invalid_redirect_uri` for those users mid-PR.
+            // BYO users on macOS who hit the IPv6 resolver pitfall can
+            // re-register their app with `http://127.0.0.1:...` and the
+            // browser will follow whatever string Atlassian sends back.
+            RedirectUriStrategy::DynamicPort(port) => {
+                format!("http://localhost:{port}/callback")
+            }
+        }
     }
 }
 
@@ -902,11 +917,13 @@ fn extract_query_param(request: &str, param: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// FixedPort and DynamicPort produce well-formed `127.0.0.1`-host
-    /// callback URIs. Locked in here because the registered Developer
-    /// Console URL must match exactly. Using `127.0.0.1` (not `localhost`)
-    /// forces IPv4 and matches the listener bind, avoiding the
-    /// macOS/Chrome IPv6-resolver pitfall.
+    /// `FixedPort` and `DynamicPort` produce different host forms:
+    /// `FixedPort` (embedded app) uses `127.0.0.1` to force IPv4 and match
+    /// the registered Developer Console callback URL; `DynamicPort` (BYO)
+    /// keeps `localhost` for backward compatibility with existing BYO app
+    /// registrations whose callback URLs use the `localhost` host. Atlassian
+    /// validates `redirect_uri` by exact string match — both strings must
+    /// match what the user registered in their Developer Console.
     #[test]
     fn redirect_uri_strategy_strings() {
         assert_eq!(
@@ -915,7 +932,7 @@ mod tests {
         );
         assert_eq!(
             RedirectUriStrategy::DynamicPort(54321).redirect_uri(),
-            "http://127.0.0.1:54321/callback"
+            "http://localhost:54321/callback"
         );
     }
 

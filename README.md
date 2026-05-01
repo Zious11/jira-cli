@@ -126,8 +126,13 @@ then pass `--client-id`/`--client-secret` or set
 
 ```bash
 JR_OAUTH_CLIENT_ID="$ID" JR_OAUTH_CLIENT_SECRET="$SECRET" \
-    jr --no-input auth login --oauth
+    jr --no-input auth login --oauth \
+    --profile work --url https://your-domain.atlassian.net
 ```
+
+(`--profile` and `--url` are required on a fresh install — `auth login`
+needs to know the target profile name and the Jira instance URL when
+the profile doesn't exist yet.)
 
 ### Everyday commands
 
