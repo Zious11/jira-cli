@@ -38,7 +38,7 @@ fn oauth_refresh_key(profile: &str) -> String {
 /// - `read:servicedesk-request` — JSM queues and queue issues
 ///   (`jr queue list/view`).
 /// - `read:cmdb-object:jira` / `read:cmdb-schema:jira` — Assets/CMDB
-///   discovery (`jr assets search/view/tickets/schemas`).
+///   discovery (`jr assets search/view/tickets/schemas/types/schema`).
 /// - `offline_access` — required for refresh tokens; without it, OAuth
 ///   sessions die after one hour.
 ///
@@ -408,10 +408,30 @@ impl RedirectUriStrategyRequest {
 /// Resolved redirect-URI binding — owns the actual `TcpListener` so
 /// `oauth_login` accepts directly on it without a second bind that could
 /// race against the OS port allocator.
+///
+/// Fields are private to prevent a future caller from moving the
+/// listener out (which would let them derive a `redirect_uri` from the
+/// strategy that no longer matches the still-held listener — re-opening
+/// the TOCTOU the type was created to close).
 #[derive(Debug)]
 pub struct ResolvedRedirect {
-    pub strategy: RedirectUriStrategy,
-    pub listener: tokio::net::TcpListener,
+    strategy: RedirectUriStrategy,
+    listener: tokio::net::TcpListener,
+}
+
+impl ResolvedRedirect {
+    /// The resolved port + redirect-URI shape. `Copy`; safe to inspect
+    /// without consuming the binding.
+    pub fn strategy(&self) -> RedirectUriStrategy {
+        self.strategy
+    }
+
+    /// Consume the binding, yielding the strategy plus the bound listener.
+    /// `oauth_login` calls this exactly once to take ownership of the
+    /// listener for `accept()`.
+    pub fn into_parts(self) -> (RedirectUriStrategy, tokio::net::TcpListener) {
+        (self.strategy, self.listener)
+    }
 }
 
 /// Resolved port choice for `oauth_login`. Produced by
@@ -467,7 +487,8 @@ pub async fn oauth_login(
     // 1. Resolve the strategy → owning the bound port up front so the
     //    callback URL we send to Atlassian matches what we'll listen on.
     let resolved = strategy.bind()?;
-    let redirect_uri = resolved.strategy.redirect_uri();
+    let redirect_uri = resolved.strategy().redirect_uri();
+    let (_strategy, listener) = resolved.into_parts();
     let state = generate_state()?;
 
     let auth_url = build_authorize_url(client_id, scopes, &redirect_uri, &state);
@@ -483,10 +504,13 @@ pub async fn oauth_login(
     // 2. Listen for the OAuth callback. The listener is already bound
     //    atomically by RedirectUriStrategyRequest::bind; no re-bind here
     //    means no TOCTOU window between probe and real use.
-    let (mut stream, _) = resolved.listener.accept().await?;
+    let (mut stream, _) = listener.accept().await?;
 
     let mut buf = vec![0u8; 4096];
-    let n = stream.read(&mut buf).await?;
+    let n = stream.read(&mut buf).await.context(
+        "reading OAuth callback request from the local browser; \
+         the grant succeeded — re-running `jr auth login --oauth` is safe",
+    )?;
     let request = String::from_utf8_lossy(&buf[..n]);
 
     let code = extract_query_param(&request, "code")
@@ -505,7 +529,10 @@ pub async fn oauth_login(
                     <h2>Authorization successful!</h2>\
                     <p>You can close this tab.</p>\
                     </body></html>";
-    stream.write_all(response.as_bytes()).await?;
+    stream.write_all(response.as_bytes()).await.context(
+        "sending OAuth success page back to the local browser; \
+         the grant succeeded — tokens were already saved",
+    )?;
 
     // 3. Exchange the authorization code for tokens.
     let client = reqwest::Client::new();
@@ -531,7 +558,10 @@ pub async fn oauth_login(
         access_token: String,
         refresh_token: String,
     }
-    let tokens: TokenResponse = token_response.json().await?;
+    let tokens: TokenResponse = token_response.json().await.context(
+        "OAuth authorization-code grant response body was not valid JSON; \
+         Atlassian may have changed the token endpoint shape",
+    )?;
 
     // 4. Fetch accessible resources to discover cloud ID and site info.
     #[derive(serde::Deserialize)]
