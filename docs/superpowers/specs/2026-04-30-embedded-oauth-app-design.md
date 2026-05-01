@@ -239,12 +239,14 @@ change). The strategy is determined by the resolver and threaded into
 `oauth_login`.
 
 When `FixedPort(53682)` is in use:
-- Bind the local listener to `127.0.0.1:53682` (loopback, IPv4-only — Atlassian's
-  authorize endpoint will redirect the browser to whatever string we put in
-  `redirect_uri`; the resolver picks up `localhost` → `127.0.0.1`).
-- Set `redirect_uri = "http://localhost:53682/callback"` to match the registered
-  callback URL exactly. Using `localhost` (not `127.0.0.1`) keeps parity with
-  the existing BYO dynamic-port code.
+- Bind the local listener to `127.0.0.1:53682` (loopback, IPv4-only).
+- Set `redirect_uri = "http://127.0.0.1:53682/callback"` to match the
+  registered callback URL exactly. Using the literal `127.0.0.1`
+  (not `localhost`) forces IPv4 and matches the listener bind:
+  modern macOS/Chrome resolve `localhost` to `::1` (IPv6) first, which
+  an IPv4-only loopback listener cannot accept. Atlassian validates
+  `redirect_uri` by exact string match, so the registered value, the
+  resolver-emitted value, and the bind target must all agree.
 - On `EADDRINUSE`, error with:
   > `port 53682 is in use; the jr OAuth callback needs this port. Free it,
   > or use --client-id/--client-secret with your own OAuth app.`
@@ -276,9 +278,9 @@ $ jr auth login --oauth --profile prod --url https://acme.atlassian.net
    ↓
 1. resolve_oauth_app_credentials → no flag/env/keychain → embedded → (id, secret, Embedded)
 2. oauth_login(profile, id, secret, scopes, FixedPort(53682))
-3. Browser opens https://auth.atlassian.com/authorize?... (redirect_uri=http://localhost:53682/callback)
+3. Browser opens https://auth.atlassian.com/authorize?... (redirect_uri=http://127.0.0.1:53682/callback)
 4. User clicks "Allow" on the "jr" consent screen
-5. Browser → http://localhost:53682/callback?code=...&state=...
+5. Browser → http://127.0.0.1:53682/callback?code=...&state=...
 6. jr exchanges code for tokens (client_id + decoded client_secret)
 7. Tokens stored at <prod>:oauth-access-token / <prod>:oauth-refresh-token
 8. Note: nothing written to keychain oauth_client_id/oauth_client_secret —
@@ -365,8 +367,10 @@ $ JR_OAUTH_CLIENT_ID=mine JR_OAUTH_CLIENT_SECRET=hers \
 1. Register a new Atlassian OAuth 2.0 (3LO) app in
    [Developer Console](https://developer.atlassian.com/console/myapps/):
    - Name: `jr`
-   - Callback URL: `http://localhost:53682/callback`
-     (also `http://127.0.0.1:53682/callback` if console allows two)
+   - Callback URL: `http://127.0.0.1:53682/callback`
+     (use the literal `127.0.0.1` — not `localhost` — to force IPv4
+     and match the listener bind. macOS/Chrome resolve `localhost` to
+     `::1` first, which would fail to reach our IPv4 loopback listener.)
    - Permissions: add **Jira API**, **Jira Service Management API**, and
      the **Assets API** (or whichever console grouping currently exposes
      CMDB scopes — Atlassian re-shuffles the names occasionally).
@@ -436,10 +440,10 @@ $ JR_OAUTH_CLIENT_ID=mine JR_OAUTH_CLIENT_SECRET=hers \
 ### Integration tests
 - BYO regression: `jr auth login --oauth` with `--client-id`/`--client-secret`
   flags continues to use `DynamicPort` and reaches the OAuth flow against
-  wiremock — verify `redirect_uri` in the captured authorize call is `localhost:<dynamic>`.
+  wiremock — verify `redirect_uri` in the captured authorize call is `127.0.0.1:<dynamic>`.
 - Embedded happy path: build a test binary with stub embedded creds, run
   `jr auth login --oauth --profile prod` against wiremock — verify
-  `redirect_uri=http://localhost:53682/callback` in the captured authorize call.
+  `redirect_uri=http://127.0.0.1:53682/callback` in the captured authorize call.
 - Port-busy regression: pre-bind 53682 in the test, expect the friendly
   error message and non-zero exit.
 - Override regression: build a test binary WITH embedded creds, set

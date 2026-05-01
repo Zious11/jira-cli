@@ -131,7 +131,9 @@ When adding a new feature:
 - **Embedded OAuth app uses fixed callback port 53682.** The release build
   workflow injects `JR_BUILD_OAUTH_CLIENT_ID`/`_SECRET` (CI-only env vars)
   via `build.rs`, which generates an XOR-obfuscated `embedded_oauth.rs` in
-  `$OUT_DIR`. The bound callback URL is `http://localhost:53682/callback`,
+  `$OUT_DIR`. The bound callback URL is `http://127.0.0.1:53682/callback`
+  (literal `127.0.0.1`, not `localhost` — forces IPv4 to match the listener
+  bind and avoids the macOS/Chrome `localhost`→`::1` resolver pitfall),
   registered exactly in Atlassian Developer Console. Changing the port is a
   breaking release. BYO sources (flag, env, keychain) keep the historical
   dynamic-port behavior. See ADR-0006 and

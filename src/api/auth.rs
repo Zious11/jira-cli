@@ -460,7 +460,14 @@ impl RedirectUriStrategy {
     }
 
     pub fn redirect_uri(self) -> String {
-        format!("http://localhost:{}/callback", self.port())
+        // Use the literal `127.0.0.1` (not `localhost`) to force IPv4 and
+        // match the loopback IPv4 address the listener is bound to.
+        // Modern macOS / Chrome resolve `localhost` to `::1` first; an
+        // IPv6-only browser connection to `localhost:53682` would fail
+        // to reach an IPv4-only listener. Atlassian validates redirect_uri
+        // by exact string match (no RFC 8252 normalization), so the same
+        // string must be registered in Developer Console.
+        format!("http://127.0.0.1:{}/callback", self.port())
     }
 }
 
@@ -846,19 +853,20 @@ fn extract_query_param(request: &str, param: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// FixedPort and DynamicPort produce well-formed `localhost`-host
+    /// FixedPort and DynamicPort produce well-formed `127.0.0.1`-host
     /// callback URIs. Locked in here because the registered Developer
-    /// Console URL must match exactly — accidentally renaming the path
-    /// or switching to `127.0.0.1` would break the embedded login flow.
+    /// Console URL must match exactly. Using `127.0.0.1` (not `localhost`)
+    /// forces IPv4 and matches the listener bind, avoiding the
+    /// macOS/Chrome IPv6-resolver pitfall.
     #[test]
     fn redirect_uri_strategy_strings() {
         assert_eq!(
             RedirectUriStrategy::FixedPort(53682).redirect_uri(),
-            "http://localhost:53682/callback"
+            "http://127.0.0.1:53682/callback"
         );
         assert_eq!(
             RedirectUriStrategy::DynamicPort(54321).redirect_uri(),
-            "http://localhost:54321/callback"
+            "http://127.0.0.1:54321/callback"
         );
     }
 

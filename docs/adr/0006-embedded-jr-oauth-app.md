@@ -11,7 +11,7 @@ Atlassian OAuth 2.0 (3LO) requires a `client_secret` for the token exchange step
 ## Decision
 Ship official `jr` binaries with an embedded `client_id` and `client_secret` for a dedicated `jr` Atlassian OAuth app. The secret is obfuscated via a per-build random 32-byte XOR key to defeat automated secret scanners. Forks and source builds (no env vars at compile time) fall back to the existing BYO flow with zero behavior change. Power users on official binaries can still override with `--client-id` / `--client-secret` or `JR_OAUTH_CLIENT_ID` / `JR_OAUTH_CLIENT_SECRET`.
 
-The embedded app uses a fixed callback URL `http://localhost:53682/callback` because Atlassian's authorize endpoint requires exact `redirect_uri` match (https://jira.atlassian.com/browse/JRACLOUD-92180).
+The embedded app uses a fixed callback URL `http://127.0.0.1:53682/callback` because Atlassian's authorize endpoint requires exact `redirect_uri` match (https://jira.atlassian.com/browse/JRACLOUD-92180). The literal `127.0.0.1` (not `localhost`) forces IPv4 and matches the listener bind — modern macOS/Chrome resolve `localhost` to `::1` first, which would fail to reach our IPv4 loopback listener.
 
 ## Rationale
 - **UX win**: matches Atlassian's own `acli` ergonomics.
