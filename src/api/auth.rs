@@ -635,9 +635,14 @@ pub async fn oauth_login(
 /// Returns the new access token on success.
 ///
 /// Resolves the OAuth app credentials at call time via the refresh-side
-/// resolver (`keychain → embedded`). Flag and env are NOT consulted — refresh
-/// is a non-interactive path triggered by 401 handling, never by an explicit
-/// user invocation that takes flags.
+/// resolver (`keychain → embedded`). Flag and env are not consulted here;
+/// this helper performs a non-interactive refresh-token grant using the
+/// stored refresh token and the resolver-selected app credentials.
+///
+/// Currently has no production callers — it exists for a future 401 auto-
+/// refresh integration. `jr auth refresh` (the user-facing CLI command)
+/// uses the clear-and-relogin flow at `cli/auth.rs::refresh_credentials`,
+/// not this helper.
 pub async fn refresh_oauth_token(profile: &str) -> Result<String> {
     let (client_id, client_secret, source) = resolve_refresh_app_credentials()?;
     let (_, refresh_token) = load_oauth_tokens(profile)?;
@@ -707,13 +712,14 @@ pub async fn refresh_oauth_token(profile: &str) -> Result<String> {
 }
 
 /// Refresh-side resolver: keychain wins, embedded falls back. Flag and env
-/// are deliberately omitted — refresh fires under 401-recovery and `jr auth
-/// refresh`, neither of which collects flag/env app credentials separately
-/// from a fresh login.
+/// are deliberately omitted because this helper is only used by the
+/// non-interactive refresh-token grant path, which reuses the app
+/// credentials already associated with the stored refresh token rather
+/// than collecting new credentials as part of a fresh login.
 ///
 /// Keeping keychain ahead of embedded prevents a returning BYO user from
-/// silently flipping to the embedded app mid-session (which would invalidate
-/// their refresh token because it was issued by a different app).
+/// silently flipping onto the embedded app mid-session (which would
+/// invalidate their refresh token because it was issued by a different app).
 fn resolve_refresh_app_credentials() -> Result<(String, String, RefreshAppSource)> {
     // Probe first: a locked keychain or permission denial is NOT the same
     // as "no creds stored" — we must not silently flip the user onto the
