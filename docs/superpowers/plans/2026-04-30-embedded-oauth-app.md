@@ -532,10 +532,11 @@ git commit -m "feat(auth): build_embedded_app and embedded_oauth_app accessors"
 Add to the `#[cfg(test)] mod tests` block in `src/api/auth.rs`:
 
 ```rust
-    /// FixedPort and DynamicPort produce well-formed `localhost`-host
-    /// callback URIs. Locked in here because the registered Developer
-    /// Console URL must match exactly — accidentally renaming the path
-    /// or switching to `127.0.0.1` would break the embedded login flow.
+    /// FixedPort and DynamicPort produce well-formed literal
+    /// `127.0.0.1` callback URIs. Locked in here because the registered
+    /// Developer Console URL must match exactly. Using `127.0.0.1`
+    /// (not `localhost`) forces IPv4 and matches the listener bind,
+    /// avoiding the macOS/Chrome IPv6-resolver pitfall.
     #[test]
     fn redirect_uri_strategy_strings() {
         assert_eq!(
@@ -587,7 +588,7 @@ impl RedirectUriStrategy {
     }
 
     pub fn redirect_uri(self) -> String {
-        format!("http://localhost:{}/callback", self.port())
+        format!("http://127.0.0.1:{}/callback", self.port())
     }
 }
 ```
