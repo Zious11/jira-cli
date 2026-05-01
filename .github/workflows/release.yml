@@ -107,6 +107,29 @@ jobs:
           echo "$OUT"
           echo "$OUT" | grep -q "OAuth app: *embedded" \
             || { echo "release binary missing embedded OAuth credentials"; exit 1; }
+          # Defense in depth: parse the generated embedded_oauth.rs and
+          # confirm the constants are populated (Some, not None). The status
+          # row above only checks `embedded_oauth_app_present()` (a cheap
+          # constants-only check); this catches the case where build.rs ran
+          # but didn't see the env vars (e.g., a misconfigured `cross`
+          # container that didn't pipe them through). The remaining gap —
+          # constants populated but XOR decode produces non-UTF-8 — is
+          # unreachable for a valid round-trip and would require rebuilding
+          # for tests; documented as out-of-scope for this smoke.
+          EMBEDDED_OAUTH_RS="$(find target/${{ matrix.target }}/release/build -path '*/out/embedded_oauth.rs' -print -quit)"
+          if [ -z "$EMBEDDED_OAUTH_RS" ]; then
+            echo "embedded_oauth.rs not found at expected build output path"
+            exit 1
+          fi
+          if grep -q 'EMBEDDED_ID: Option<&str> = None' "$EMBEDDED_OAUTH_RS"; then
+            echo "embedded_oauth.rs has EMBEDDED_ID = None — build.rs did not see JR_BUILD_OAUTH_CLIENT_ID"
+            exit 1
+          fi
+          if grep -q 'EMBEDDED_SECRET_XOR: Option<&\[u8\]> = None' "$EMBEDDED_OAUTH_RS"; then
+            echo "embedded_oauth.rs has EMBEDDED_SECRET_XOR = None — build.rs did not see JR_BUILD_OAUTH_CLIENT_SECRET"
+            exit 1
+          fi
+          echo "embedded_oauth.rs at $EMBEDDED_OAUTH_RS has populated constants"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
