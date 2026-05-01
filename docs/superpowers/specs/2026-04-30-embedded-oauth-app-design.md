@@ -199,8 +199,10 @@ fn resolve_oauth_app_credentials(
 
 Order:
 1. **Flag** (`--client-id`/`--client-secret`) — both must be flag-provided to
-   count; one without the other falls through.
-2. **Env** (`JR_OAUTH_CLIENT_ID`/`JR_OAUTH_CLIENT_SECRET`) — same pairing rule.
+   count. Providing only one half is an explicit error (the resolver returns
+   `JrError::UserError` citing both flag names) — never a silent fall-through.
+2. **Env** (`JR_OAUTH_CLIENT_ID`/`JR_OAUTH_CLIENT_SECRET`) — same all-or-nothing
+   rule. Half-set env vars hard-error with the matching `JR_OAUTH_*` names.
 3. **Keychain** — `load_oauth_app_credentials()` returns the existing pair.
 4. **Embedded** — `embedded::embedded_oauth_app()`.
 5. **Prompt** — only when `!no_input` and no source above resolved.
@@ -225,18 +227,35 @@ to the keychain).
 
 ### Fixed callback port for embedded source
 
-A new enum:
+Two enums plus a resolved-listener struct (the implemented shape):
 
 ```rust
-enum RedirectUriStrategy {
-    DynamicPort,        // BYO: bind 127.0.0.1:0, existing behavior
-    FixedPort(u16),     // Embedded: bind 127.0.0.1:53682
+/// What the caller wants — pre-bind. Threaded into `oauth_login`.
+pub enum RedirectUriStrategyRequest {
+    Dynamic,        // BYO: bind 127.0.0.1:0, existing behavior
+    Fixed(u16),     // Embedded: bind 127.0.0.1:53682 exactly
+}
+
+/// What we actually got after binding (carries the chosen port).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RedirectUriStrategy {
+    DynamicPort(u16),
+    FixedPort(u16),
+}
+
+/// Owned listener so `oauth_login` can `accept()` directly without a
+/// second bind that would race against the port allocator (TOCTOU close).
+pub struct ResolvedRedirect { /* private fields */ }
+impl ResolvedRedirect {
+    pub fn strategy(&self) -> RedirectUriStrategy;
+    pub fn into_parts(self) -> (RedirectUriStrategy, tokio::net::TcpListener);
 }
 ```
 
-Embedded → `FixedPort(53682)`. All other sources → `DynamicPort` (zero behavior
-change). The strategy is determined by the resolver and threaded into
-`oauth_login`.
+Embedded → `RedirectUriStrategyRequest::Fixed(53682)`. All other sources →
+`Dynamic` (zero behavior change). The strategy is determined by the resolver,
+threaded into `oauth_login`, and `bind()` produces the `ResolvedRedirect`
+that `oauth_login` consumes.
 
 When `FixedPort(53682)` is in use:
 - Bind the local listener to `127.0.0.1:53682` (loopback, IPv4-only).
@@ -259,7 +278,7 @@ release.
 
 ### Transparency surface
 
-`jr auth status` gains an `oauth-app-source` row with one of:
+`jr auth status` gains an `OAuth app:` row with one of:
 - `flag` / `env` — set this invocation
 - `keychain` — stored from a prior `jr auth login --oauth`
 - `embedded` — using the baked-in `jr` app

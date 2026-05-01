@@ -24,7 +24,7 @@
 | `src/api/auth.rs:423` | Modify | `refresh_oauth_token` drops `client_id`/`client_secret` params, resolves internally. |
 | `src/cli/auth.rs:11-17` | Modify | Add `OAuthAppSource` enum import (defined in `auth_embedded`). |
 | `src/cli/auth.rs:237-335` | Modify | `login_oauth` calls new `resolve_oauth_app_credentials`; threads `RedirectUriStrategy` into `oauth_login`. |
-| `src/cli/auth.rs:540-567` | Modify | `handle_status` adds `oauth-app-source` row when method is `"oauth"`. |
+| `src/cli/auth.rs:540-567` | Modify | `handle_status` adds an `OAuth app:` row when method is `"oauth"`. |
 | `src/cli/auth.rs::tests` | Modify | Add resolver-precedence and status-output tests. |
 | `tests/oauth_embedded_login.rs` | Create | Integration test: embedded login flow against wiremock, fixed-port redirect. |
 | `tests/oauth_byo_login.rs` | Create | Regression test: BYO flow uses dynamic port. |
@@ -830,8 +830,9 @@ use crate::api::auth_embedded::{EmbeddedOAuthApp, OAuthAppSource, embedded_oauth
 ///
 /// Order: flag → env → keychain → embedded → prompt.
 ///
-/// Flag and env are pair-gated: both halves must be present, otherwise the
-/// resolver falls through (avoids sending a half-empty pair to Atlassian).
+/// Flag and env are pair-gated: both halves must be present to use that
+/// source. Providing only one of the two values is an explicit error rather
+/// than a fall-through (avoids sending a half-empty pair to Atlassian).
 pub(crate) fn resolve_oauth_app_credentials(
     flag_id: Option<String>,
     flag_secret: Option<String>,
