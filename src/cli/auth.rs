@@ -118,14 +118,13 @@ pub(crate) fn resolve_oauth_app_credentials(
 
     // Defer the XOR decode: only materialize the embedded plaintext
     // `client_secret` when no higher-precedence source resolves.
-    // BYO users (flag/env/keychain) never trigger the embedded decode.
-    // The short-circuit below gates on whether any higher-precedence
-    // source has values; only the else-branch invokes `embedded_oauth_app()`
-    // which triggers the XOR decode + OnceLock cache.
-    let has_flag_pair = flag_id.as_deref().is_some_and(|s| !s.is_empty())
-        && flag_secret.as_deref().is_some_and(|s| !s.is_empty());
-    let has_env_pair = env_id.is_some() && env_secret.is_some();
-    let embedded = if has_flag_pair || has_env_pair || keychain.is_some() {
+    // BYO users (flag/env/keychain) never trigger the embedded decode —
+    // including the partial-flag and partial-env cases that will hard-error
+    // in `_for_test` before reaching the embedded layer. Gate on
+    // `any_*_present` (not the pair-complete check) so a user passing
+    // `--client-id` without `--client-secret` doesn't silently materialize
+    // the embedded plaintext just to be told they forgot the second flag.
+    let embedded = if any_flag_present || any_env_present || keychain.is_some() {
         None
     } else {
         embedded_oauth_app().map(|a| (a.client_id.clone(), a.client_secret.clone()))

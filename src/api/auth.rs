@@ -420,8 +420,10 @@ impl RedirectUriStrategyRequest {
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => Err(anyhow::anyhow!(
                         "port {p} is in use; the jr OAuth callback needs this port. \
-                         Free it, or use --client-id/--client-secret with your own \
-                         OAuth app."
+                         Free it, or use your own OAuth app via \
+                         --client-id/--client-secret (or set \
+                         JR_OAUTH_CLIENT_ID/JR_OAUTH_CLIENT_SECRET) to fall \
+                         back to a dynamic port."
                     )),
                     Err(e) => Err(e.into()),
                 }

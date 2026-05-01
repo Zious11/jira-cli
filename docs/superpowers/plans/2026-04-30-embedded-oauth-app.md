@@ -59,7 +59,7 @@ Atlassian OAuth 2.0 (3LO) requires a `client_secret` for the token exchange step
 ## Decision
 Ship official `jr` binaries with an embedded `client_id` and `client_secret` for a dedicated `jr` Atlassian OAuth app. The secret is obfuscated via per-build random XOR key to defeat automated secret scanners. Forks and source builds (no env vars at compile time) fall back to the existing BYO flow with zero behavior change. Power users on official binaries can still override with `--client-id` / `--client-secret` or `JR_OAUTH_CLIENT_ID` / `JR_OAUTH_CLIENT_SECRET`.
 
-The embedded app uses a fixed callback URL `http://localhost:53682/callback` because Atlassian's authorize endpoint requires exact `redirect_uri` match (https://jira.atlassian.com/browse/JRACLOUD-92180).
+The embedded app uses a fixed callback URL `http://127.0.0.1:53682/callback` because Atlassian's authorize endpoint requires exact `redirect_uri` match (https://jira.atlassian.com/browse/JRACLOUD-92180). The literal `127.0.0.1` (not `localhost`) forces IPv4 and matches the listener bind — modern macOS/Chrome resolve `localhost` to `::1` first, which would fail to reach our IPv4 loopback listener.
 
 ## Rationale
 - **UX win**: matches Atlassian's own `acli` ergonomics.
@@ -540,11 +540,11 @@ Add to the `#[cfg(test)] mod tests` block in `src/api/auth.rs`:
     fn redirect_uri_strategy_strings() {
         assert_eq!(
             RedirectUriStrategy::FixedPort(53682).redirect_uri(),
-            "http://localhost:53682/callback"
+            "http://127.0.0.1:53682/callback"
         );
         assert_eq!(
             RedirectUriStrategy::DynamicPort(54321).redirect_uri(),
-            "http://localhost:54321/callback"
+            "http://127.0.0.1:54321/callback"
         );
     }
 ```
@@ -1393,7 +1393,7 @@ In `CLAUDE.md`, append to the Gotchas section:
 - **Embedded OAuth app uses fixed callback port 53682.** The release build
   workflow injects `JR_BUILD_OAUTH_CLIENT_ID`/`_SECRET` (CI-only env vars)
   via `build.rs`, which generates an XOR-obfuscated `embedded_oauth.rs` in
-  `$OUT_DIR`. The bound callback URL is `http://localhost:53682/callback`,
+  `$OUT_DIR`. The bound callback URL is `http://127.0.0.1:53682/callback`,
   registered exactly in Atlassian Developer Console. Changing the port is a
   breaking release. BYO sources (flag, env, keychain) keep the historical
   dynamic-port behavior. See ADR-0006 and
@@ -1453,7 +1453,7 @@ async fn embedded_login_uses_fixed_port() {
     //    Atlassian endpoints are baked into oauth_login at compile time
     //    (auth.atlassian.com), so this test does not exercise the real
     //    HTTP exchange — instead, it verifies the *redirect_uri* in the
-    //    authorize URL is fixed to localhost:53682. We pre-bind 53682 to
+    //    authorize URL is fixed to 127.0.0.1:53682. We pre-bind 53682 to
     //    a tiny tokio TCP listener and verify the callback HTTP request
     //    arrives there with the expected query.
 
@@ -1560,7 +1560,7 @@ Supersedes ADR-0002 with ADR-0006.
 
 ## Operational checklist before merge
 - [ ] `OAUTH_CLIENT_ID` and `OAUTH_CLIENT_SECRET` repo secrets created
-- [ ] Atlassian Developer Console app registered with callback `http://localhost:53682/callback`
+- [ ] Atlassian Developer Console app registered with callback `http://127.0.0.1:53682/callback` (literal `127.0.0.1`, not `localhost` — forces IPv4 to match the loopback bind)
 - [ ] Scopes match `DEFAULT_OAUTH_SCOPES`
 EOF
 )"
