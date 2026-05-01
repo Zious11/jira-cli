@@ -1,9 +1,6 @@
-use std::net::TcpListener;
-
 use anyhow::{Context, Result};
 use keyring::Entry;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener as AsyncTcpListener;
 
 /// Default keychain service name for `jr` credentials. `JR_SERVICE_NAME`
 /// can override this at runtime; it is primarily used by tests to avoid
@@ -35,12 +32,35 @@ fn oauth_refresh_key(profile: &str) -> String {
 }
 
 /// Default OAuth 2.0 scopes used when `oauth_scopes` is not set in
-/// config.toml. Matches Atlassian's "classic" scope recommendation for
-/// Jira Platform apps. Users who configured their Developer Console app
-/// with granular scopes (e.g., for least-privilege agent use) should
-/// override via `[instance].oauth_scopes` in config.toml.
-pub const DEFAULT_OAUTH_SCOPES: &str =
-    "read:jira-work write:jira-work read:jira-user offline_access";
+/// config.toml. Covers every API surface `jr` exercises today:
+/// - `read:jira-work` / `write:jira-work` / `read:jira-user` — Jira issues,
+///   search, projects, fields, users (the bulk of `jr issue/board/sprint`).
+/// - `read:servicedesk-request` — JSM queues and queue issues
+///   (`jr queue list/view`).
+/// - `read:cmdb-object:jira` / `read:cmdb-schema:jira` — Assets/CMDB
+///   discovery (`jr assets search/view/tickets/schemas/types/schema`).
+/// - `offline_access` — required for refresh tokens; without it, OAuth
+///   sessions die after one hour.
+///
+/// Users who configured their Developer Console app with granular scopes
+/// (e.g., for least-privilege agent use) should override via
+/// `[profiles.<name>].oauth_scopes` in config.toml. The embedded `jr`
+/// app must be registered with this exact scope set in its Developer
+/// Console permissions, otherwise the authorize call rejects with
+/// `invalid_scope`.
+// Built via `concat!` (vs. line-continuation in a string literal) to make
+// the absence of double spaces obvious to any reader, not dependent on the
+// `\<newline>` continuation rule that consumes following whitespace. Each
+// fragment ends with exactly one trailing space (or the final fragment has
+// none) so the joined string is single-space separated. A regression test
+// (`default_oauth_scopes_pins_the_full_set_with_offline_access`) asserts
+// no double spaces appear.
+pub const DEFAULT_OAUTH_SCOPES: &str = concat!(
+    "read:jira-work write:jira-work read:jira-user ",
+    "read:servicedesk-request ",
+    "read:cmdb-object:jira read:cmdb-schema:jira ",
+    "offline_access",
+);
 
 fn entry(key: &str) -> Result<Entry> {
     Entry::new(&service_name(), key).context("Failed to access keychain")
@@ -190,6 +210,57 @@ pub fn load_oauth_app_credentials() -> Result<(String, String)> {
     Ok((id, secret))
 }
 
+/// Probe whether usable OAuth app credentials are present in the keychain
+/// WITHOUT returning them. Distinguishes a real backend failure (locked
+/// keychain, permission denied) from any "no usable creds here" condition,
+/// so the refresh resolver and `jr auth status` don't silently flip a BYO
+/// user onto the embedded app when the keychain is just temporarily
+/// inaccessible.
+///
+/// Returns:
+/// - `Ok(true)` — both `oauth_client_id` and `oauth_client_secret` entries
+///   exist AND are non-empty. Safe to use for OAuth (would post a real
+///   pair to Atlassian).
+/// - `Ok(false)` — one or more of the following: neither entry exists; only
+///   one half is present (`partial` state); both exist but at least one is
+///   an empty string. All three collapse into "no usable BYO creds here"
+///   from the resolver's perspective — empty/partial creds are
+///   unauthenticatable at Atlassian, so falling through to embedded is the
+///   correct behavior. (Doc note: `Ok(false)` is the "no usable creds"
+///   sentinel, NOT "neither entry stored".)
+/// - `Err(_)` — the keychain backend itself failed. Callers must propagate
+///   or surface this rather than masking it as "absent".
+///
+/// Note: callers in resolver chains should prefer
+/// [`try_load_oauth_app_credentials`] which performs the same probe in a
+/// single read and yields the credentials when present, avoiding double
+/// keychain I/O and double OS prompts on platforms that prompt per access.
+pub fn probe_oauth_app_credentials() -> Result<bool> {
+    let id = read_keyring_optional("oauth_client_id")?;
+    let secret = read_keyring_optional("oauth_client_secret")?;
+    Ok(matches!((id, secret), (Some(i), Some(s)) if !i.is_empty() && !s.is_empty()))
+}
+
+/// Single-pass equivalent of `probe + load`. Reads both keychain entries
+/// once and returns:
+/// - `Ok(Some((id, secret)))` — both entries exist and are non-empty.
+/// - `Ok(None)` — anything else "unusable" (absent / partial / empty).
+///   Treated identically by the resolver chain.
+/// - `Err(_)` — keychain backend failure (locked / permission denied).
+///   Callers must propagate or surface, never collapse to `None`.
+///
+/// Use this from resolver call sites instead of `probe_oauth_app_credentials()?`
+/// followed by `load_oauth_app_credentials()?` — the two-call pattern
+/// reads both keychain entries twice and can multiply OS keychain prompts.
+pub fn try_load_oauth_app_credentials() -> Result<Option<(String, String)>> {
+    let id = read_keyring_optional("oauth_client_id")?;
+    let secret = read_keyring_optional("oauth_client_secret")?;
+    match (id, secret) {
+        (Some(i), Some(s)) if !i.is_empty() && !s.is_empty() => Ok(Some((i, s))),
+        _ => Ok(None),
+    }
+}
+
 /// Clear OAuth tokens for a single profile (other profiles + shared keys
 /// such as email / api-token / oauth_client_id are untouched).
 ///
@@ -300,6 +371,164 @@ pub struct OAuthResult {
     pub site_name: String,
 }
 
+/// The fixed loopback port the embedded `jr` Atlassian OAuth app's callback
+/// URL is registered with (`http://127.0.0.1:53682/callback` in Developer
+/// Console). Atlassian validates `redirect_uri` by exact string match, so
+/// this is a long-lived contract — changing it is a breaking release that
+/// requires re-registering the callback URL.
+///
+/// Centralized here so every call site (CLI dispatch in
+/// `cli/auth.rs::login_oauth`, the CI smoke step that knows the port for
+/// runner setup, the spec/runbook, and tests) references a single source
+/// of truth instead of repeating the literal `53682`.
+pub const EMBEDDED_CALLBACK_PORT: u16 = 53682;
+
+/// `RedirectUriStrategyRequest` describes how the local OAuth callback
+/// listener should be bound before we hit the network — either by binding
+/// a random ephemeral port (`Dynamic`) or by validating availability of a
+/// specific registered port (`Fixed`). Threaded into `oauth_login` and
+/// resolved into a [`ResolvedRedirect`] (which owns the bound listener) by
+/// [`RedirectUriStrategyRequest::bind`].
+///
+/// `Fixed` errors produce a friendly message that surfaces the BYO
+/// override hint (specifically for `EADDRINUSE`). `Dynamic` errors
+/// propagate the underlying `io::Error` directly — they're rare in
+/// practice (only the OS-level port allocator running out of ephemeral
+/// ports can trip them) and have no actionable user-facing recovery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RedirectUriStrategyRequest {
+    /// Bind a random ephemeral port. Used by BYO sources (flag/env/keychain
+    /// /prompt) that registered their own callback URL with Atlassian.
+    Dynamic,
+    /// Bind the given fixed port. The embedded `jr` app uses
+    /// [`EMBEDDED_CALLBACK_PORT`] (53682). `EADDRINUSE` surfaces a friendly
+    /// error directing the user to BYO override.
+    Fixed(u16),
+}
+
+impl RedirectUriStrategyRequest {
+    /// Bind the local callback listener atomically. Returns a
+    /// [`ResolvedRedirect`] that owns the listener — `oauth_login` consumes
+    /// it directly instead of re-binding, eliminating the TOCTOU window
+    /// where another process could grab the fixed port between probe and
+    /// real-use.
+    pub fn bind(self) -> Result<ResolvedRedirect> {
+        match self {
+            RedirectUriStrategyRequest::Dynamic => {
+                let std_listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+                let port = std_listener.local_addr()?.port();
+                std_listener.set_nonblocking(true)?;
+                let listener = tokio::net::TcpListener::from_std(std_listener)?;
+                Ok(ResolvedRedirect {
+                    strategy: RedirectUriStrategy::DynamicPort(port),
+                    listener,
+                })
+            }
+            RedirectUriStrategyRequest::Fixed(p) => {
+                match std::net::TcpListener::bind(format!("127.0.0.1:{p}")) {
+                    Ok(std_listener) => {
+                        std_listener.set_nonblocking(true)?;
+                        let listener = tokio::net::TcpListener::from_std(std_listener)?;
+                        Ok(ResolvedRedirect {
+                            strategy: RedirectUriStrategy::FixedPort(p),
+                            listener,
+                        })
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => Err(anyhow::anyhow!(
+                        "port {p} is in use; the jr OAuth callback needs this port. \
+                         Free it, or use your own OAuth app via \
+                         --client-id/--client-secret (or set \
+                         JR_OAUTH_CLIENT_ID/JR_OAUTH_CLIENT_SECRET) to fall \
+                         back to a dynamic port."
+                    )),
+                    Err(e) => Err(e.into()),
+                }
+            }
+        }
+    }
+}
+
+/// Resolved redirect-URI binding — owns the actual `TcpListener` so
+/// `oauth_login` accepts directly on it without a second bind that could
+/// race against the OS port allocator.
+///
+/// Fields are private to prevent a future caller from moving the
+/// listener out (which would let them derive a `redirect_uri` from the
+/// strategy that no longer matches the still-held listener — re-opening
+/// the TOCTOU the type was created to close).
+#[derive(Debug)]
+pub struct ResolvedRedirect {
+    strategy: RedirectUriStrategy,
+    listener: tokio::net::TcpListener,
+}
+
+impl ResolvedRedirect {
+    /// The resolved port + redirect-URI shape. `Copy`; safe to inspect
+    /// without consuming the binding.
+    pub fn strategy(&self) -> RedirectUriStrategy {
+        self.strategy
+    }
+
+    /// Consume the binding, yielding the strategy plus the bound listener.
+    /// `oauth_login` calls this exactly once to take ownership of the
+    /// listener for `accept()`.
+    pub fn into_parts(self) -> (RedirectUriStrategy, tokio::net::TcpListener) {
+        (self.strategy, self.listener)
+    }
+}
+
+/// Resolved port choice for `oauth_login`. Produced by
+/// [`RedirectUriStrategyRequest::bind`]; carries the actual port number used
+/// for the local callback listener and the `redirect_uri` we send to
+/// Atlassian.
+///
+/// Embedded OAuth apps must use the exact `redirect_uri` registered in
+/// Atlassian Developer Console — Atlassian does not honor RFC 8252's
+/// "any loopback port" rule (https://jira.atlassian.com/browse/JRACLOUD-92180).
+/// BYO apps stay on the historical dynamic-port behavior since they
+/// register their own callback URL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RedirectUriStrategy {
+    /// Bound to a random ephemeral port; redirect_uri uses that port.
+    DynamicPort(u16),
+    /// Bound to the embedded `jr` app's registered fixed port (53682).
+    FixedPort(u16),
+}
+
+impl RedirectUriStrategy {
+    pub fn port(self) -> u16 {
+        match self {
+            RedirectUriStrategy::DynamicPort(p) | RedirectUriStrategy::FixedPort(p) => p,
+        }
+    }
+
+    pub fn redirect_uri(self) -> String {
+        match self {
+            // Embedded app: force IPv4 via the literal `127.0.0.1` so we
+            // match the loopback bind. Modern macOS / Chrome resolve
+            // `localhost` to `::1` first; an IPv6 browser connection to
+            // `localhost:53682` would fail against our IPv4-only listener.
+            // Atlassian validates redirect_uri by exact string match (no
+            // RFC 8252 normalization), and we control the registered URL,
+            // so `127.0.0.1:53682` is registered in Developer Console.
+            RedirectUriStrategy::FixedPort(port) => {
+                format!("http://127.0.0.1:{port}/callback")
+            }
+            // BYO (dynamic-port): preserve `localhost` for backward
+            // compatibility. Existing BYO users may have registered
+            // `http://localhost:...` callback URLs in their Developer
+            // Console apps; an unconditional switch to `127.0.0.1` would
+            // surface as `invalid_redirect_uri` for those users mid-PR.
+            // BYO users on macOS who hit the IPv6 resolver pitfall can
+            // re-register their app with `http://127.0.0.1:...` and the
+            // browser will follow whatever string Atlassian sends back.
+            RedirectUriStrategy::DynamicPort(port) => {
+                format!("http://localhost:{port}/callback")
+            }
+        }
+    }
+}
+
 /// Run the full OAuth 2.0 (3LO) authorization code flow:
 /// 1. Open browser to Atlassian authorization page requesting `scopes`
 /// 2. Listen on a local port for the callback
@@ -309,34 +538,46 @@ pub struct OAuthResult {
 ///
 /// `scopes` is a space-separated scope string (URL-encoded internally).
 /// Callers should use [`DEFAULT_OAUTH_SCOPES`] when no user override is set.
-/// Note: [`refresh_oauth_token`] does NOT take a scope parameter — the
-/// `refresh_token` grant inherits scopes from the original authorization.
+/// Note: [`refresh_oauth_token`] takes only `profile` and resolves the
+/// OAuth app credentials internally (keychain → embedded). The
+/// `refresh_token` grant inherits scopes from the original authorization
+/// per RFC 6749 §6.
 pub async fn oauth_login(
     profile: &str,
     client_id: &str,
     client_secret: &str,
     scopes: &str,
+    strategy: RedirectUriStrategyRequest,
 ) -> Result<OAuthResult> {
-    // 1. Find an available port for the local callback server.
-    let listener = TcpListener::bind("127.0.0.1:0")?;
-    let port = listener.local_addr()?.port();
-    drop(listener);
-
-    let redirect_uri = format!("http://localhost:{port}/callback");
+    // 1. Resolve the strategy → owning the bound port up front so the
+    //    callback URL we send to Atlassian matches what we'll listen on.
+    let resolved = strategy.bind()?;
+    let redirect_uri = resolved.strategy().redirect_uri();
+    let (_strategy, listener) = resolved.into_parts();
     let state = generate_state()?;
 
     let auth_url = build_authorize_url(client_id, scopes, &redirect_uri, &state);
 
     eprintln!("Opening browser for authorization...");
     eprintln!("If browser doesn't open, visit: {auth_url}");
-    let _ = open::that(&auth_url);
+    if let Err(e) = open::that(&auth_url) {
+        eprintln!(
+            "(could not auto-open browser: {e}) — paste the URL above into a browser to continue."
+        );
+    }
 
-    // 2. Listen for the OAuth callback.
-    let async_listener = AsyncTcpListener::bind(format!("127.0.0.1:{port}")).await?;
-    let (mut stream, _) = async_listener.accept().await?;
+    // 2. Listen for the OAuth callback. The listener is already bound
+    //    atomically by RedirectUriStrategyRequest::bind; no re-bind here
+    //    means no TOCTOU window between probe and real use.
+    let (mut stream, _) = listener.accept().await?;
 
     let mut buf = vec![0u8; 4096];
-    let n = stream.read(&mut buf).await?;
+    let n = stream.read(&mut buf).await.context(
+        "reading OAuth callback request from the local browser; \
+         if you already approved in the browser, the authorization \
+         code is single-use and short-lived — re-running \
+         `jr auth login --oauth` is safe (the auth code expires unused)",
+    )?;
     let request = String::from_utf8_lossy(&buf[..n]);
 
     let code = extract_query_param(&request, "code")
@@ -355,7 +596,12 @@ pub async fn oauth_login(
                     <h2>Authorization successful!</h2>\
                     <p>You can close this tab.</p>\
                     </body></html>";
-    stream.write_all(response.as_bytes()).await?;
+    stream.write_all(response.as_bytes()).await.context(
+        "sending OAuth success page back to the local browser; \
+         the authorization code was received but tokens have NOT \
+         yet been exchanged or saved — re-running `jr auth login --oauth` \
+         may be required",
+    )?;
 
     // 3. Exchange the authorization code for tokens.
     let client = reqwest::Client::new();
@@ -381,7 +627,10 @@ pub async fn oauth_login(
         access_token: String,
         refresh_token: String,
     }
-    let tokens: TokenResponse = token_response.json().await?;
+    let tokens: TokenResponse = token_response.json().await.context(
+        "OAuth authorization-code grant response body was not valid JSON; \
+         Atlassian may have changed the token endpoint shape",
+    )?;
 
     // 4. Fetch accessible resources to discover cloud ID and site info.
     #[derive(serde::Deserialize)]
@@ -390,20 +639,48 @@ pub async fn oauth_login(
         url: String,
         name: String,
     }
-    let resources: Vec<AccessibleResource> = client
+    let resources_response = client
         .get("https://api.atlassian.com/oauth/token/accessible-resources")
         .bearer_auth(&tokens.access_token)
         .send()
-        .await?
+        .await
+        .context("failed to call Atlassian accessible-resources endpoint")?;
+    if !resources_response.status().is_success() {
+        let status = resources_response.status();
+        let body = resources_response
+            .text()
+            .await
+            .unwrap_or_else(|e| format!("(body read failed: {e:#})"));
+        let body_truncated: String = body.chars().take(500).collect();
+        anyhow::bail!(
+            "Atlassian accessible-resources lookup failed: HTTP {status}: {body_truncated}\n\n\
+             The OAuth grant succeeded but jr could not enumerate your accessible Jira sites. \
+             Confirm the OAuth app's scopes include `read:jira-user` and `read:jira-work`."
+        );
+    }
+    let resources: Vec<AccessibleResource> = resources_response
         .json()
-        .await?;
+        .await
+        .context("accessible-resources response body was not valid JSON")?;
 
     let resource = resources
         .first()
         .ok_or_else(|| anyhow::anyhow!("No accessible Jira sites found"))?;
 
-    // 5. Store tokens in the system keychain.
-    store_oauth_tokens(profile, &tokens.access_token, &tokens.refresh_token)?;
+    // 5. Store tokens in the system keychain. If this fails, the user has
+    //    successfully approved the grant in Atlassian — but jr can't see
+    //    the new tokens. Surface the partial state explicitly so they
+    //    know to retry (after fixing keychain access) rather than
+    //    re-approving from scratch.
+    store_oauth_tokens(profile, &tokens.access_token, &tokens.refresh_token).map_err(|e| {
+        anyhow::anyhow!(
+            "Authorization succeeded with Atlassian, but jr could not save the OAuth \
+             tokens to the system keychain ({e:#}). Unlock your keychain (or grant \
+             access to jr) and run `jr auth login --oauth --profile {profile}` again. \
+             To fully revoke the active grant first, visit \
+             https://id.atlassian.com/manage-profile/apps."
+        )
+    })?;
 
     Ok(OAuthResult {
         cloud_id: resource.id.clone(),
@@ -415,16 +692,17 @@ pub async fn oauth_login(
 /// Refresh the OAuth 2.0 access token using the stored refresh token.
 /// Returns the new access token on success.
 ///
-/// Intentionally takes no `scopes` parameter: the `refresh_token` grant
-/// inherits scopes from the original authorization per RFC 6749 §6. To
-/// pick up a changed `[profiles.<name>].oauth_scopes` in config.toml,
-/// the user must re-run `jr auth login --oauth` (refresh alone will
-/// keep the old scope set).
-pub async fn refresh_oauth_token(
-    profile: &str,
-    client_id: &str,
-    client_secret: &str,
-) -> Result<String> {
+/// Resolves the OAuth app credentials at call time via the refresh-side
+/// resolver (`keychain → embedded`). Flag and env are not consulted here;
+/// this helper performs a non-interactive refresh-token grant using the
+/// stored refresh token and the resolver-selected app credentials.
+///
+/// Currently has no production callers — it exists for a future 401 auto-
+/// refresh integration. `jr auth refresh` (the user-facing CLI command)
+/// uses the clear-and-relogin flow at `cli/auth.rs::refresh_credentials`,
+/// not this helper.
+pub async fn refresh_oauth_token(profile: &str) -> Result<String> {
+    let (client_id, client_secret, source) = resolve_refresh_app_credentials()?;
     let (_, refresh_token) = load_oauth_tokens(profile)?;
 
     let client = reqwest::Client::new();
@@ -440,7 +718,30 @@ pub async fn refresh_oauth_token(
         .await?;
 
     if !response.status().is_success() {
-        anyhow::bail!("Token refresh failed. Run \"jr auth login\" to re-authenticate.");
+        // Capture the response body — Atlassian returns RFC 6749 error
+        // shape (`error` + `error_description`) and including it cuts
+        // triage time massively (invalid_grant vs invalid_client vs
+        // network/clock-skew look identical without it).
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|e| format!("(body read failed: {e:#})"));
+        let body_truncated: String = body.chars().take(500).collect();
+        let hint = match source {
+            RefreshAppSource::Embedded => format!(
+                "The embedded OAuth app credentials may have been rotated; \
+                 update jr (brew upgrade or curl-install) and run \
+                 `jr auth login --oauth --profile {profile}` again."
+            ),
+            RefreshAppSource::Keychain => format!(
+                "Your stored OAuth client_id/client_secret may be invalid \
+                 or revoked. Run `jr auth login --oauth --profile {profile}` \
+                 to re-store them, or revoke and re-create the app at \
+                 https://developer.atlassian.com/console/myapps/."
+            ),
+        };
+        anyhow::bail!("Token refresh failed: HTTP {status}: {body_truncated}\n\n{hint}");
     }
 
     #[derive(serde::Deserialize)]
@@ -448,9 +749,80 @@ pub async fn refresh_oauth_token(
         access_token: String,
         refresh_token: String,
     }
-    let tokens: TokenResponse = response.json().await?;
-    store_oauth_tokens(profile, &tokens.access_token, &tokens.refresh_token)?;
+    let tokens: TokenResponse = response.json().await.context(
+        "refresh response body was not valid JSON; Atlassian may have changed \
+         the token endpoint shape",
+    )?;
+    // Same partial-state risk as oauth_login's keychain-write step:
+    // Atlassian rotated the tokens, but if the keychain write fails the
+    // new pair is lost and the next request will use the now-invalid
+    // refresh token. Surface the partial state explicitly.
+    store_oauth_tokens(profile, &tokens.access_token, &tokens.refresh_token).map_err(|e| {
+        anyhow::anyhow!(
+            "Token refresh succeeded with Atlassian, but jr could not save the new \
+             OAuth tokens to the system keychain ({e:#}). Unlock your keychain (or \
+             grant access to jr) and run `jr auth refresh --profile {profile}` again. \
+             If the problem persists, run `jr auth login --oauth --profile {profile}` \
+             to start fresh."
+        )
+    })?;
     Ok(tokens.access_token)
+}
+
+/// Refresh-side resolver: keychain wins, embedded falls back. Flag and env
+/// are deliberately omitted because this helper is only used by the
+/// non-interactive refresh-token grant path, which reuses the app
+/// credentials already associated with the stored refresh token rather
+/// than collecting new credentials as part of a fresh login.
+///
+/// Keeping keychain ahead of embedded prevents a returning BYO user from
+/// silently flipping onto the embedded app mid-session (which would
+/// invalidate their refresh token because it was issued by a different app).
+fn resolve_refresh_app_credentials() -> Result<(String, String, RefreshAppSource)> {
+    // Single-pass keychain read: a locked keychain or permission denial is
+    // NOT the same as "no creds stored" — we must not silently flip the
+    // user onto the embedded app when their BYO creds are merely
+    // temporarily inaccessible.
+    match try_load_oauth_app_credentials() {
+        Ok(Some((id, secret))) => {
+            return Ok((id, secret, RefreshAppSource::Keychain));
+        }
+        Ok(None) => {} // genuinely absent — fall through to embedded
+        Err(e) => {
+            return Err(anyhow::anyhow!(
+                "OAuth refresh: failed to read the system keychain ({e:#}). \
+                 Unlock your keychain or grant access to jr, then retry. \
+                 If you intended to use the embedded jr OAuth app, run \
+                 `jr auth remove` first to clear stale BYO credentials."
+            ));
+        }
+    }
+    if let Some(app) = crate::api::auth_embedded::embedded_oauth_app() {
+        return Ok((
+            app.client_id.clone(),
+            app.client_secret.clone(),
+            RefreshAppSource::Embedded,
+        ));
+    }
+    anyhow::bail!(
+        "OAuth refresh requires either previously-stored app credentials \
+         (run `jr auth login --oauth` once) or an embedded build. \
+         This binary has neither."
+    )
+}
+
+/// Where the OAuth app credentials for a token refresh resolved from.
+///
+/// Closed set of two variants — refresh by definition has credentials
+/// (otherwise `resolve_refresh_app_credentials` bails before this point),
+/// and the resolver only reads from keychain or embedded sources. Used
+/// to tailor the failure-message hint when Atlassian rejects the refresh
+/// (embedded → "secret may have been rotated, upgrade jr"; keychain →
+/// "stored creds may be invalid, re-run login").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefreshAppSource {
+    Keychain,
+    Embedded,
 }
 
 /// Build the Atlassian OAuth 2.0 authorize URL with all dynamic parameters
@@ -544,6 +916,34 @@ fn extract_query_param(request: &str, param: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `FixedPort` and `DynamicPort` produce different host forms:
+    /// `FixedPort` (embedded app) uses `127.0.0.1` to force IPv4 and match
+    /// the registered Developer Console callback URL; `DynamicPort` (BYO)
+    /// keeps `localhost` for backward compatibility with existing BYO app
+    /// registrations whose callback URLs use the `localhost` host. Atlassian
+    /// validates `redirect_uri` by exact string match — both strings must
+    /// match what the user registered in their Developer Console.
+    #[test]
+    fn redirect_uri_strategy_strings() {
+        assert_eq!(
+            RedirectUriStrategy::FixedPort(EMBEDDED_CALLBACK_PORT).redirect_uri(),
+            "http://127.0.0.1:53682/callback"
+        );
+        assert_eq!(
+            RedirectUriStrategy::DynamicPort(54321).redirect_uri(),
+            "http://localhost:54321/callback"
+        );
+    }
+
+    /// Lock the embedded callback port at the type-system level. Atlassian
+    /// validates `redirect_uri` by exact string match; this constant is a
+    /// long-lived contract registered in Developer Console as
+    /// `http://127.0.0.1:53682/callback`. Changing it is a breaking release.
+    #[test]
+    fn embedded_callback_port_is_53682() {
+        assert_eq!(EMBEDDED_CALLBACK_PORT, 53682);
+    }
 
     #[test]
     fn test_extract_query_param_found() {
@@ -938,5 +1338,60 @@ mod tests {
                 "sandbox profile should NOT inherit legacy keys"
             );
         });
+    }
+
+    /// Refresh resolver prefers keychain over embedded so a returning BYO
+    /// user does not silently flip onto the embedded app mid-session
+    /// (their refresh_token was issued by their own app and would be
+    /// rejected if presented with a different client_id).
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn resolve_refresh_app_credentials_prefers_keychain() {
+        with_test_keyring(|| {
+            store_oauth_app_credentials("kc-id", "kc-secret").unwrap();
+            let (id, secret, source) = resolve_refresh_app_credentials().unwrap();
+            assert_eq!(id, "kc-id");
+            assert_eq!(secret, "kc-secret");
+            assert_eq!(source, RefreshAppSource::Keychain);
+        });
+    }
+
+    /// Refresh resolver returns the embedded creds when no keychain pair
+    /// exists. In test builds embedded is None, so this test only validates
+    /// the *order* via the keychain-empty error path.
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn resolve_refresh_app_credentials_errors_when_both_absent() {
+        with_test_keyring(|| {
+            // No keychain entries, no embedded creds in default test build.
+            let err = resolve_refresh_app_credentials().unwrap_err();
+            let msg = format!("{err:#}");
+            assert!(msg.contains("embedded"), "got: {msg}");
+        });
+    }
+
+    /// User-facing error string when the embedded fixed port is occupied.
+    /// Locked in here because it's the entire payoff of the fixed-port
+    /// design — if a future refactor regresses the message, embedded users
+    /// hitting a port conflict have no actionable hint.
+    #[test]
+    fn fixed_port_strategy_eaddrinuse_friendly_error() {
+        // Pre-bind a random ephemeral port so we can deterministically
+        // reuse it in the Fixed bind attempt below.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // The listener stays alive for the duration of the test —
+        // its Drop happens after the assertions.
+
+        let err = RedirectUriStrategyRequest::Fixed(port).bind().unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains(&format!("port {port}")),
+            "expected port number in message, got: {msg}"
+        );
+        assert!(msg.contains("in use"), "got: {msg}");
+        assert!(msg.contains("--client-id"), "got: {msg}");
+
+        drop(listener);
     }
 }

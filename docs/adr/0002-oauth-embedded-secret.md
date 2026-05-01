@@ -30,3 +30,7 @@ This ADR is superseded. The new approach:
 - **OAuth 2.0 is optional** via `jr auth login --oauth` and requires the user to provide their own OAuth app credentials (client ID and client secret)
 - **No embedded secrets** — the binary does not ship with any client secret
 - **User-provided OAuth credentials are stored in the OS keychain** alongside tokens
+
+## Subsequent revision
+
+ADR-0006 (2026-04-30) re-introduces an embedded OAuth app with per-build XOR obfuscation while keeping the user-provided path as an escape hatch. See that ADR for current rationale.

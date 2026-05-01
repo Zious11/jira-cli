@@ -36,8 +36,13 @@ jobs:
         run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Build
+        env:
+          JR_BUILD_OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID }}
+          JR_BUILD_OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
         run: |
           if [ "${{ matrix.use_cross }}" = "true" ]; then
+            # cross runs cargo inside a container; pass the env through.
+            export CROSS_CONTAINER_OPTS="-e JR_BUILD_OAUTH_CLIENT_ID -e JR_BUILD_OAUTH_CLIENT_SECRET"
             cross build --release --target ${{ matrix.target }}
           else
             cargo build --release --target ${{ matrix.target }}
@@ -53,6 +58,78 @@ jobs:
           else
             shasum -a 256 jr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz > jr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz.sha256
           fi
+
+      - name: Verify embedded OAuth app present
+        env:
+          # Pass the secret-presence flag in via env so the bash check below
+          # can short-circuit cleanly. Forks (where Actions secrets aren't
+          # available) get OAUTH_CLIENT_ID == '' here, so we skip the smoke.
+          HAS_EMBED_SECRETS: ${{ (secrets.OAUTH_CLIENT_ID != '' && secrets.OAUTH_CLIENT_SECRET != '') && 'yes' || 'no' }}
+        run: |
+          # Skip on forks: if the upstream-only secrets aren't configured for
+          # this run, the build legitimately produced an unbranded binary
+          # (no embedded creds). The smoke check would otherwise hard-fail
+          # the fork's release workflow even though there's nothing wrong.
+          if [ "$HAS_EMBED_SECRETS" != "yes" ]; then
+            echo "Skipping embedded-creds smoke: OAUTH_CLIENT_ID/_SECRET not configured."
+            echo "(Fork build, or upstream secrets are missing — release will ship the unbranded BYO binary.)"
+            exit 0
+          fi
+          BIN="target/${{ matrix.target }}/release/jr"
+          # Skip the assertion on cross-compiled non-native targets — we can't
+          # exec aarch64-linux on x86_64 hosts. Native targets only.
+          NATIVE_TRIPLE="$(rustc -vV | sed -n 's/host: //p')"
+          if [ "${{ matrix.target }}" != "$NATIVE_TRIPLE" ]; then
+            echo "Skipping embedded-creds smoke for non-native target ${{ matrix.target }}"
+            exit 0
+          fi
+          # `jr auth status` does not require live network. The auth-app row
+          # only appears when the active profile uses OAuth. We probe a
+          # synthetic profile with auth_method=oauth and check the row reads
+          # `embedded`.
+          # Force the config dir explicitly: `Config::load` honors
+          # XDG_CONFIG_HOME first and falls back to $HOME/.config. If the
+          # runner sets XDG_CONFIG_HOME (some self-hosted runners do),
+          # writing to $HOME/.config/jr/config.toml would be ignored. Pin
+          # XDG_CONFIG_HOME to $HOME/.config so the synthetic config is
+          # always discovered.
+          export XDG_CONFIG_HOME="$HOME/.config"
+          export JR_PROFILE=__release_smoke
+          export JR_SERVICE_NAME=jr-release-smoke-$$
+          mkdir -p "$HOME/.config/jr"
+          cat > "$HOME/.config/jr/config.toml" <<EOF
+          default_profile = "__release_smoke"
+          [profiles.__release_smoke]
+          url = "https://example.atlassian.net"
+          auth_method = "oauth"
+          EOF
+          OUT="$($BIN auth status 2>&1 || true)"
+          echo "$OUT"
+          echo "$OUT" | grep -q "OAuth app: *embedded" \
+            || { echo "release binary missing embedded OAuth credentials"; exit 1; }
+          # Defense in depth: parse the generated embedded_oauth.rs and
+          # confirm the constants are populated (Some, not None). The status
+          # row above only checks `embedded_oauth_app_present()` (a cheap
+          # constants-only check); this catches the case where build.rs ran
+          # but didn't see the env vars (e.g., a misconfigured `cross`
+          # container that didn't pipe them through). The remaining gap —
+          # constants populated but XOR decode produces non-UTF-8 — is
+          # unreachable for a valid round-trip and would require rebuilding
+          # for tests; documented as out-of-scope for this smoke.
+          EMBEDDED_OAUTH_RS="$(find target/${{ matrix.target }}/release/build -path '*/out/embedded_oauth.rs' -print -quit)"
+          if [ -z "$EMBEDDED_OAUTH_RS" ]; then
+            echo "embedded_oauth.rs not found at expected build output path"
+            exit 1
+          fi
+          if grep -q 'EMBEDDED_ID: Option<&str> = None' "$EMBEDDED_OAUTH_RS"; then
+            echo "embedded_oauth.rs has EMBEDDED_ID = None — build.rs did not see JR_BUILD_OAUTH_CLIENT_ID"
+            exit 1
+          fi
+          if grep -q 'EMBEDDED_SECRET_XOR: Option<&\[u8\]> = None' "$EMBEDDED_OAUTH_RS"; then
+            echo "embedded_oauth.rs has EMBEDDED_SECRET_XOR = None — build.rs did not see JR_BUILD_OAUTH_CLIENT_SECRET"
+            exit 1
+          fi
+          echo "embedded_oauth.rs at $EMBEDDED_OAUTH_RS has populated constants"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7

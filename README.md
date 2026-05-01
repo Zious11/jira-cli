@@ -87,17 +87,57 @@ jr init
 # Authenticate with API token (default)
 jr auth login
 
-# Or authenticate with OAuth 2.0 (requires your own OAuth app)
-# Scopes default to Atlassian's recommended classic set; override via
-# [instance].oauth_scopes in config.toml — see Configuration below.
-jr auth login --oauth
-
-# Non-interactive (CI / agents): flags or env vars, no TTY required.
+# Non-interactive API token (CI / agents): flags or env vars, no TTY required.
 # Prefer env vars for secrets — bare CLI args can leak via process lists.
 JR_EMAIL="you@example.com" JR_API_TOKEN="$TOKEN" jr --no-input auth login
-JR_OAUTH_CLIENT_ID="$ID" JR_OAUTH_CLIENT_SECRET="$SECRET" \
-    jr --no-input auth login --oauth
+```
 
+### OAuth 2.0 (recommended on official binaries)
+
+Official `jr` releases ship with a built-in `jr` Atlassian OAuth app, so
+authentication is one command:
+
+```bash
+jr auth login --oauth --profile my-site --url https://my-site.atlassian.net
+```
+
+Your browser opens, you click "Allow" on the `jr` consent screen, done.
+
+By default, `jr` requests the Jira platform classic scopes plus the
+granular scopes used for JSM queues and Assets/CMDB features:
+
+- `read:jira-work`, `write:jira-work`, `read:jira-user` — Jira platform (issues, search, users)
+- `read:servicedesk-request` — JSM queues (`jr queue list/view`)
+- `read:cmdb-object:jira`, `read:cmdb-schema:jira` — Assets/CMDB (`jr assets ...`)
+- `offline_access` — refresh tokens (without this, sessions die after one hour)
+
+Override per profile via `[profiles.<name>].oauth_scopes` in `config.toml`
+— see Configuration below. (Legacy `[instance].oauth_scopes` from
+pre-multi-profile configs is auto-migrated on first load.) The canonical
+default lives at `DEFAULT_OAUTH_SCOPES` in `src/api/auth.rs`.
+
+#### Bring your own OAuth app
+
+If you're on a fork, source build, or enterprise tenant that requires its
+own OAuth app, register one at
+[Atlassian Developer Console](https://developer.atlassian.com/console/myapps/),
+then pass `--client-id`/`--client-secret` or set
+`JR_OAUTH_CLIENT_ID`/`JR_OAUTH_CLIENT_SECRET`:
+
+```bash
+JR_OAUTH_CLIENT_ID="$ID" JR_OAUTH_CLIENT_SECRET="$SECRET" \
+    jr --no-input auth login --oauth \
+    --profile work --url https://your-domain.atlassian.net
+```
+
+(For first-time setup in non-interactive mode, such as with `--no-input`,
+pass `--profile` and `--url` so `auth login` knows which profile to create
+and which Jira instance to use. Without `--no-input`, `auth login` can
+prompt for the URL and fall back to the default profile name.)
+
+### Everyday commands
+
+```bash
 # View your current sprint/board issues
 jr issue list --project FOO
 
