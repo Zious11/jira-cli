@@ -509,7 +509,9 @@ pub async fn oauth_login(
     let mut buf = vec![0u8; 4096];
     let n = stream.read(&mut buf).await.context(
         "reading OAuth callback request from the local browser; \
-         the grant succeeded — re-running `jr auth login --oauth` is safe",
+         if you already approved in the browser, the authorization \
+         code is single-use and short-lived — re-running \
+         `jr auth login --oauth` is safe (the auth code expires unused)",
     )?;
     let request = String::from_utf8_lossy(&buf[..n]);
 
@@ -531,7 +533,9 @@ pub async fn oauth_login(
                     </body></html>";
     stream.write_all(response.as_bytes()).await.context(
         "sending OAuth success page back to the local browser; \
-         the grant succeeded — tokens were already saved",
+         the authorization code was received but tokens have NOT \
+         yet been exchanged or saved — re-running `jr auth login --oauth` \
+         may be required",
     )?;
 
     // 3. Exchange the authorization code for tokens.
