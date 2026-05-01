@@ -144,11 +144,6 @@ pub(crate) fn resolve_oauth_app_credentials(
 /// Pure resolution function — accepts every potential source as an argument
 /// so unit tests can exercise the precedence chain without mutating env vars
 /// or the keychain.
-//
-// 7 parameters is deliberate: each layer of the resolution chain
-// (flag/env/keychain/embedded) must be independently substitutable.
-// Grouping into a struct would obscure the precedence semantics.
-#[allow(clippy::too_many_arguments)]
 fn resolve_oauth_app_credentials_for_test(
     flag_id: Option<String>,
     flag_secret: Option<String>,
