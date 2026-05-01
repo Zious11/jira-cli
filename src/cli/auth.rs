@@ -107,12 +107,13 @@ pub(crate) fn resolve_oauth_app_credentials(
 
     let keychain = if any_flag_present || any_env_present {
         // Flag or env will resolve OR hard-error first — never reaches
-        // the keychain layer in `_for_test`. Skip the probe entirely.
+        // the keychain layer in `_for_test`. Skip the read entirely.
         None
-    } else if crate::api::auth::probe_oauth_app_credentials()? {
-        Some(crate::api::auth::load_oauth_app_credentials()?)
     } else {
-        None
+        // Single-pass keychain read; combines probe + load to avoid
+        // double I/O and double keychain prompts on platforms that
+        // prompt per access.
+        crate::api::auth::try_load_oauth_app_credentials()?
     };
 
     // Defer the XOR decode: only materialize the embedded plaintext
@@ -678,11 +679,12 @@ pub(super) fn prepare_login_target(
 /// the same condition. The stderr warning is the user's signal that the
 /// row may be incomplete.
 fn peek_oauth_app_source() -> OAuthAppSource {
-    let keychain_present = match crate::api::auth::probe_oauth_app_credentials() {
-        Ok(p) => p,
+    let keychain_present = match crate::api::auth::try_load_oauth_app_credentials() {
+        Ok(Some(_)) => true,
+        Ok(None) => false,
         Err(e) => {
             eprintln!(
-                "warning: could not probe keychain for OAuth app credentials ({e:#}); \
+                "warning: could not read keychain for OAuth app credentials ({e:#}); \
                  status report may be incomplete."
             );
             false

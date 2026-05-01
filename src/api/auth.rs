@@ -230,10 +230,35 @@ pub fn load_oauth_app_credentials() -> Result<(String, String)> {
 ///   sentinel, NOT "neither entry stored".)
 /// - `Err(_)` — the keychain backend itself failed. Callers must propagate
 ///   or surface this rather than masking it as "absent".
+///
+/// Note: callers in resolver chains should prefer
+/// [`try_load_oauth_app_credentials`] which performs the same probe in a
+/// single read and yields the credentials when present, avoiding double
+/// keychain I/O and double OS prompts on platforms that prompt per access.
 pub fn probe_oauth_app_credentials() -> Result<bool> {
     let id = read_keyring_optional("oauth_client_id")?;
     let secret = read_keyring_optional("oauth_client_secret")?;
     Ok(matches!((id, secret), (Some(i), Some(s)) if !i.is_empty() && !s.is_empty()))
+}
+
+/// Single-pass equivalent of `probe + load`. Reads both keychain entries
+/// once and returns:
+/// - `Ok(Some((id, secret)))` — both entries exist and are non-empty.
+/// - `Ok(None)` — anything else "unusable" (absent / partial / empty).
+///   Treated identically by the resolver chain.
+/// - `Err(_)` — keychain backend failure (locked / permission denied).
+///   Callers must propagate or surface, never collapse to `None`.
+///
+/// Use this from resolver call sites instead of `probe_oauth_app_credentials()?`
+/// followed by `load_oauth_app_credentials()?` — the two-call pattern
+/// reads both keychain entries twice and can multiply OS keychain prompts.
+pub fn try_load_oauth_app_credentials() -> Result<Option<(String, String)>> {
+    let id = read_keyring_optional("oauth_client_id")?;
+    let secret = read_keyring_optional("oauth_client_secret")?;
+    match (id, secret) {
+        (Some(i), Some(s)) if !i.is_empty() && !s.is_empty() => Ok(Some((i, s))),
+        _ => Ok(None),
+    }
 }
 
 /// Clear OAuth tokens for a single profile (other profiles + shared keys
@@ -721,18 +746,18 @@ pub async fn refresh_oauth_token(profile: &str) -> Result<String> {
 /// silently flipping onto the embedded app mid-session (which would
 /// invalidate their refresh token because it was issued by a different app).
 fn resolve_refresh_app_credentials() -> Result<(String, String, RefreshAppSource)> {
-    // Probe first: a locked keychain or permission denial is NOT the same
-    // as "no creds stored" — we must not silently flip the user onto the
-    // embedded app when their BYO creds are merely temporarily inaccessible.
-    match probe_oauth_app_credentials() {
-        Ok(true) => {
-            let (id, secret) = load_oauth_app_credentials()?;
+    // Single-pass keychain read: a locked keychain or permission denial is
+    // NOT the same as "no creds stored" — we must not silently flip the
+    // user onto the embedded app when their BYO creds are merely
+    // temporarily inaccessible.
+    match try_load_oauth_app_credentials() {
+        Ok(Some((id, secret))) => {
             return Ok((id, secret, RefreshAppSource::Keychain));
         }
-        Ok(false) => {} // genuinely absent — fall through to embedded
+        Ok(None) => {} // genuinely absent — fall through to embedded
         Err(e) => {
             return Err(anyhow::anyhow!(
-                "OAuth refresh: failed to probe the system keychain ({e:#}). \
+                "OAuth refresh: failed to read the system keychain ({e:#}). \
                  Unlock your keychain or grant access to jr, then retry. \
                  If you intended to use the embedded jr OAuth app, run \
                  `jr auth remove` first to clear stale BYO credentials."
