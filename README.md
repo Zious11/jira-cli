@@ -130,9 +130,10 @@ JR_OAUTH_CLIENT_ID="$ID" JR_OAUTH_CLIENT_SECRET="$SECRET" \
     --profile work --url https://your-domain.atlassian.net
 ```
 
-(`--profile` and `--url` are required on a fresh install — `auth login`
-needs to know the target profile name and the Jira instance URL when
-the profile doesn't exist yet.)
+(For first-time setup in non-interactive mode, such as with `--no-input`,
+pass `--profile` and `--url` so `auth login` knows which profile to create
+and which Jira instance to use. Without `--no-input`, `auth login` can
+prompt for the URL and fall back to the default profile name.)
 
 ### Everyday commands
 
