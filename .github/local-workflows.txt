@@ -5,3 +5,4 @@
 .github/workflows/sign-and-publish.yml
 .github/workflows/sync-upstream.yml
 .github/workflows/backfill-release.yml
+.github/workflows/release-gap-fill.yml
