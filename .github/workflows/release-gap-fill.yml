@@ -52,15 +52,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          # All v* tags on origin (annotated and lightweight), sorted by version.
-          git tag -l 'v*' | sort -V > /tmp/all-tags.txt
+          # All v* tags on origin (annotated and lightweight), lexicographic
+          # sort because comm requires lexicographic order on both inputs.
+          git tag -l 'v*' | LC_ALL=C sort > /tmp/all-tags.txt
 
-          # All releases (up to 1000) sorted by version.
+          # All releases (up to 1000), filtered to v* and lex-sorted to match.
           gh release list --limit 1000 --json tagName --jq '.[].tagName' \
-            | sort -V > /tmp/all-releases.txt
+            | grep '^v' \
+            | LC_ALL=C sort > /tmp/all-releases.txt
 
-          # comm -23 = lines only in tags, not in releases.
-          comm -23 /tmp/all-tags.txt /tmp/all-releases.txt > /tmp/missing.txt
+          # comm -23 = lines only in tags, not in releases. Re-sort the
+          # output with -V so the report and trigger order are version-sane.
+          comm -23 /tmp/all-tags.txt /tmp/all-releases.txt | sort -V > /tmp/missing.txt
 
           MISSING=$(wc -l < /tmp/missing.txt | tr -d ' ')
           echo "missing=$MISSING" >> "$GITHUB_OUTPUT"
