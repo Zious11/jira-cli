@@ -245,3 +245,24 @@ LOW: ADV-P3-008 — H-022 BC refs appended with BC-1.6.045. ADV-P3-009 — NFR-R
 | state-manager | Write adv-p1-pass3.md; apply 9 fixes across 10 spec files; commit 69741c3 | factory-artifacts 69741c3 |
 | state-manager | Update STATE.md Phase Progress, Current Steps, Convergence Tracker, Session Checkpoint, burst-log | factory-artifacts (this commit) |
 
+## Burst 10 (2026-05-04)
+
+**Agents dispatched:** state-manager
+**Files touched:** cycles/cycle-001/adversarial-reviews/adv-p1-pass4.md, specs/prd/holdout-scenarios.md, specs/prd/nfr-catalog.md, architecture/README.md, STATE.md
+**Versions bumped:** (none)
+
+### Summary
+
+Pass 4 adversarial review (5 findings: 0C/0H/4M/1L) persisted and all 5 fixed. Trajectory: 30→15→9→5 (linear decay continuing). Convergence counter still 0/3 — Pass 5 dispatches next.
+
+MEDIUM: ADV-P4-001 — H-004 BC anchor corrected from BC-1.6.046 to BC-1.1.011 (auth refresh unconfigured profile). ADV-P4-002 — H-005 BC anchor corrected from BC-6.1.002 to BC-1.1.012 (malformed TOML); consistent with EC-AUTH-004. ADV-P4-003 — H-012 BC anchors corrected from BC-1.6.044/BC-X.1.007 to BC-1.6.042/BC-X.3.005 (scope-mismatch). ADV-P4-004 — architecture README risk count refreshed 26→27; site count updated 12+→14.
+
+LOW: ADV-P4-005 — nfr-catalog routing arithmetic corrected from 0M/3L to 2M/1L for FIX-IN-PHASE-3 bucket.
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| state-manager | Write adv-p1-pass4.md; apply 5 fixes across 3 spec files; commit | factory-artifacts |
+| state-manager | Update STATE.md Phase Progress, Current Steps, Session Checkpoint, burst-log | factory-artifacts (this commit) |
+

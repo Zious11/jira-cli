@@ -61,7 +61,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | pre-pipeline: Setup | complete | 2026-05-04 | 2026-05-04 | env-preflight | |
 | 0: Codebase Ingestion | **COMPLETE** | 2026-05-04 | 2026-05-04 | Phase A + B + B.5 + B.6 + C + gate APPROVED | |
 | 1: Spec Crystallization | **entry** | 2026-05-04 | | DEC-004 pending (scope choice) | |
-| 1d: Adversarial Spec Review | **Pass 3 fixes COMPLETE; Pass 4 next** | 2026-05-04 | | Pass 4 dispatching | 30→15→9 (P1: 30; P2: 15; P3: 9; 0 CRITICAL) |
+| 1d: Adversarial Spec Review | **Pass 4 fixes COMPLETE; Pass 5 next** | 2026-05-04 | | Pass 5 dispatching | 30→15→9→5 (P1: 30; P2: 15; P3: 9; P4: 5; 0 CRITICAL) |
 | 2: Story Decomposition | not-started | | | | |
 | 2-adv: Adversarial Story Review | not-started | | | | |
 | 3: TDD Implementation | not-started | | | | |
@@ -83,6 +83,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | Phase 0 gate closeout (Q1/Q2/Q4) | codebase-analyzer + state-manager | complete | 4 semport artifacts; commit d1a30f1 |
 | Phase 1d adversary Pass 2 fixes | product-owner + architect | complete | 13 files; 12/15 findings fixed; 3 deferred/no-action; convergence 0/3 |
 | Phase 1d adversary Pass 3 + fixes | state-manager | complete | adv-p1-pass3.md written; 8 fixed + 1 documented; 69741c3 |
+| Phase 1d adversary Pass 4 + fixes | state-manager | complete | adv-p1-pass4.md written; 5 FIXED (4M+1L); holdout anchors + arch README + NFR arithmetic |
 
 ## Pending Decisions
 
@@ -178,8 +179,8 @@ convergence_trajectory: []
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-04 |
-| **Position** | Phase 1 ACTIVE — Phase 1d adversary Pass 3 fixes COMPLETE (8/9 fixed; 1 documented). Site count canonicalized to 14. ADR-0007 fallback struck. error chain single-sourced to PRD. NFR-S-F added; catalog 41→42 (1C/6H/15M/20L). EC-AUTH anchors fixed. BC count 541→542. H-022 appended. Pass 4 dispatching. |
-| **Convergence counter** | 0 of 3 (clean passes needed; Pass 4 next) |
+| **Position** | Phase 1 ACTIVE — Phase 1d adversary Pass 4 fixes COMPLETE (5/5 fixed). Holdout anchors: H-004→BC-1.1.011, H-005→BC-1.1.012, H-012→BC-1.6.042+BC-X.3.005. Arch README: 26→27 risks; 12+→14 sites. NFR routing arithmetic: 0M/3L→2M/1L. Pass 5 dispatching. |
+| **Convergence counter** | 0 of 3 (clean passes needed; Pass 5 next) |
 
 ## Historical Content
 
