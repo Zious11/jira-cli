@@ -61,7 +61,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | pre-pipeline: Setup | complete | 2026-05-04 | 2026-05-04 | env-preflight | |
 | 0: Codebase Ingestion | **COMPLETE** | 2026-05-04 | 2026-05-04 | Phase A + B + B.5 + B.6 + C + gate APPROVED | |
 | 1: Spec Crystallization | **entry** | 2026-05-04 | | DEC-004 pending (scope choice) | |
-| 1d: Adversarial Spec Review | **Pass 2 fixes COMPLETE; Pass 3 next** | 2026-05-04 | | Pass 3 dispatching | 30→15 (Pass 1: 30; Pass 2: 15; 0 CRITICAL) |
+| 1d: Adversarial Spec Review | **Pass 3 fixes COMPLETE; Pass 4 next** | 2026-05-04 | | Pass 4 dispatching | 30→15→9 (P1: 30; P2: 15; P3: 9; 0 CRITICAL) |
 | 2: Story Decomposition | not-started | | | | |
 | 2-adv: Adversarial Story Review | not-started | | | | |
 | 3: TDD Implementation | not-started | | | | |
@@ -81,8 +81,8 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | Phase C final synthesis | codebase-analyzer | complete | semport/jira-cli/jira-cli-pass-8-deep-synthesis.md (750 lines) |
 | Q5 synthesis fixes | codebase-analyzer | complete | committed d8ca198 |
 | Phase 0 gate closeout (Q1/Q2/Q4) | codebase-analyzer + state-manager | complete | 4 semport artifacts; commit d1a30f1 |
-| Phase 1d adversary Pass 1 fixes | product-owner + architect | complete | 23 files; 29/30 findings addressed; e00d01e |
 | Phase 1d adversary Pass 2 fixes | product-owner + architect | complete | 13 files; 12/15 findings fixed; 3 deferred/no-action; convergence 0/3 |
+| Phase 1d adversary Pass 3 + fixes | state-manager | complete | adv-p1-pass3.md written; 8 fixed + 1 documented; 69741c3 |
 
 ## Pending Decisions
 
@@ -96,7 +96,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 |----|----------|-----------|-------|------|---------|
 | DEC-001 | Pre-VSDD docs treatment: RESOLVED — HARMONIZE per Q4 (74 specs become BC validation inputs; 1 archaeological excluded; 2 divergent need reconciliation; v1 design imported as historical with annotated supersessions on 3 sections; 75 plans SUPERSEDE) | Q4 harmonization plan confirmed 74 DELIVERED-AS-DESIGNED, 0 PARTIAL/UNDELIVERED. Plans dir cleanly SUPERSEDE. | Phase 0 | 2026-05-04 | human |
 | DEC-002 | Pre-VSDD docs at Phase 0→1 gate: RESOLVED — see DEC-001 | Consolidated into DEC-001 outcome | Phase 0 | 2026-05-04 | human |
-| DEC-003 | 5 MUST-FIX bugs treatment: PARTIALLY RESOLVED — NFR-R-D has draft BC (11 read sites in 5 files; holdout H-NEW-MP-001 proposed). 4 P0 bugs route to Phase 3 (decompose-stories) for fix-in-phase-3 treatment. | Draft BC ready for Phase 1 PRD formalization. | Phase 0 | 2026-05-04 | orchestrator + human |
+| DEC-003 | 5 MUST-FIX bugs treatment: PARTIALLY RESOLVED — NFR-R-D has draft BC (14 read sites in 6 files; holdout H-NEW-MP-001 proposed). 4 P0 bugs route to Phase 3 (decompose-stories) for fix-in-phase-3 treatment. | Draft BC ready for Phase 1 PRD formalization. | Phase 0 | 2026-05-04 | orchestrator + human |
 
 ## Skip Log
 
@@ -121,7 +121,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 ## Convergence Trackers
 
 ### Phase 1d — Adversarial Spec Review
-_Pass 2 fixes complete. Pass 3 dispatching._
+_Pass 3 fixes complete. Pass 4 dispatching._
 
 ```yaml
 convergence_trajectory:
@@ -139,6 +139,15 @@ convergence_trajectory:
     delta: -15
     trend: FAVORABLE
     fixes_committed: true
+  - pass: 3
+    findings: 9
+    severity: "1C/3H/3M/2L"
+    addressed: 8
+    documented: 1
+    delta: -6
+    trend: FAVORABLE
+    fixes_committed: true
+    commit: "69741c3"
 ```
 
 ### Phase 2-adv — Adversarial Story Review
@@ -169,8 +178,8 @@ convergence_trajectory: []
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-04 |
-| **Position** | Phase 1 ACTIVE — Phase 1d adversary Pass 2 fixes COMPLETE (12/15 addressed; 3 deferred LOW). NFR catalog reconciled to 41 entries; NFR-S-E → HIGH; risk total 26→27; SD deadlines scheduled; 12 holdout anchors corrected; error chain canonicalized. Pass 3 dispatching. |
-| **Convergence counter** | 0 of 3 (clean passes needed; Pass 3 next) |
+| **Position** | Phase 1 ACTIVE — Phase 1d adversary Pass 3 fixes COMPLETE (8/9 fixed; 1 documented). Site count canonicalized to 14. ADR-0007 fallback struck. error chain single-sourced to PRD. NFR-S-F added; catalog 41→42 (1C/6H/15M/20L). EC-AUTH anchors fixed. BC count 541→542. H-022 appended. Pass 4 dispatching. |
+| **Convergence counter** | 0 of 3 (clean passes needed; Pass 4 next) |
 
 ## Historical Content
 

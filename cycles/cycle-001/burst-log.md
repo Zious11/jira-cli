@@ -220,3 +220,28 @@ Convergence counter: 0/3 clean passes needed. Pass 3 dispatching next.
 | architect | ADV-P2-004/006/009 fixes: NFR-S-E HIGH, DTU count 48, SD deadlines, risk R-H7 | 6 architecture files |
 | state-manager | Stage + commit 13 files; update STATE.md + burst-log | factory-artifacts (this commit) |
 
+## Burst 9 (2026-05-04)
+
+**Agents dispatched:** state-manager
+**Files touched:** cycles/cycle-001/adversarial-reviews/adv-p1-pass3.md, specs/prd/bc-6-config-cache.md, specs/prd/README.md, specs/prd/BC-INDEX.md, specs/prd/nfr-catalog.md, specs/prd/edge-case-catalog.md, specs/prd/holdout-scenarios.md, architecture/adr/0007-multi-profile-fields-fix.md, architecture/risk-register.md, architecture/cross-cutting.md, STATE.md
+**Versions bumped:** (none)
+
+### Summary
+
+Pass 3 adversarial review (9 findings: 1C/3H/3M/2L) persisted and all 9 addressed (8 fixed, 1 documented with rationale). Trajectory: 30→15→9 (linear convergence). Convergence counter still 0/3 — Pass 4 dispatches next.
+
+CRITICAL: ADV-P3-001 — site count canonicalized to 14 across 4 docs (bc-6, ADR-0007, risk-register R-C1, nfr-catalog NFR-R-D). The BC table has 14 rows; "11 hot-path" and "12+" stale references removed.
+
+HIGH: ADV-P3-002 — ADR-0007 §Context fallback clause struck; no-fallback policy now unified with §Decision/§Consequences; rejected sub-option note added. ADV-P3-003 — cross-cutting.md error chain replaced with PRD-canonical 7-level table (Priority 4 = non-empty errors object; Priority 6 = errorMessage); old divergent chain removed; single-source note added. ADV-P3-004 — NFR catalog total reconciled to 42 (1C/6H/15M/20L) after NFR-S-F addition; README doc-map and supplement index updated.
+
+MEDIUM: ADV-P3-005 — EC-AUTH-002/003/004 BC mis-anchors fixed; spot-check of EC-CFG/HTTP/JQL/ASSET/SPRINT shows no additional errors. ADV-P3-006 — PRD README total BCs 541→542. ADV-P3-007 — NFR-S-F (cargo-deny multiple-versions) added as HIGH; R-H6 cross-linked; NFR totals propagated to 4 docs.
+
+LOW: ADV-P3-008 — H-022 BC refs appended with BC-1.6.045. ADV-P3-009 — NFR-R-NEW-1 severity LOW retained with inline rationale documented.
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| state-manager | Write adv-p1-pass3.md; apply 9 fixes across 10 spec files; commit 69741c3 | factory-artifacts 69741c3 |
+| state-manager | Update STATE.md Phase Progress, Current Steps, Convergence Tracker, Session Checkpoint, burst-log | factory-artifacts (this commit) |
+
