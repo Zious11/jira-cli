@@ -1,0 +1,23 @@
+# Reference Manifest
+# Source of truth for rebuilding .reference/ on a new system.
+# To rebuild: for each entry, run `git worktree add --detach .reference/<slug> <commit>`
+# Updated by /brownfield-ingest (Step 0) when new repos are added.
+#
+# Fields:
+#   url:      Git clone URL (HTTPS or SSH)
+#   commit:   SHA at time of ingestion (for reproducibility)
+#   ingested: Date the repo was cloned (YYYY-MM-DD)
+#   depth:    Clone depth (1 for shallow, full for complete history)
+#   focus:    What to analyze (full | plugins | src | <specific-dir>)
+#   status:   Lifecycle state (pending | ingesting | ingested | analyzed)
+#   note:     Optional context about this reference
+
+repos:
+  jira-cli:
+    url: https://github.com/Zious11/jira-cli.git
+    commit: dea166471e22eff55974d7675593469b37048c5f
+    ingested: 2026-05-04
+    depth: full
+    focus: full
+    status: ingesting
+    note: "self-ingest for VSDD brownfield Phase 0 activation"
