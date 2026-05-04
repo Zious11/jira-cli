@@ -1,7 +1,7 @@
 ---
 context: nfr-catalog
 title: "NFR Catalog — Pass 4 Convergence"
-total_nfrs: 44
+total_nfrs: 45  # 44 cumulative from Pass 4 + 1 new (NFR-S-E CI/CD SHA pinning)
 last_updated: 2026-05-04
 source_pass: 4
 trace: |
@@ -76,6 +76,7 @@ All four MUST-FIX items (NFR-R-D, NFR-R-A, NFR-R-B, NFR-R-E) have been crystalli
 | ID | Description | Severity | Site | Phase 3 Routing |
 |---|---|---|---|---|
 | **NFR-S-D** | Profile name validation regex does not distinguish length (>64) from charset violation — same error message for both. LOW impact. | LOW | `src/config.rs:113-140` | **DOCUMENT-AS-IS**: Improve error message precision. 2 LOC fix. |
+| **NFR-S-E** | GitHub Actions workflows use floating action tags (e.g., `actions/checkout@v4`) instead of pinned SHA digests. A compromised tag could inject malicious code into the build/release pipeline without detection. CI/CD integrity gap. | LOW | `.github/workflows/` | **FIX-IN-PHASE-3**: Pin all `uses: <action>@<tag>` lines to `uses: <action>@<sha256-digest>` (e.g., `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683`). Use `pin-github-action` or Dependabot to automate. |
 
 ---
 
@@ -165,6 +166,7 @@ All four MUST-FIX items (NFR-R-D, NFR-R-A, NFR-R-B, NFR-R-E) have been crystalli
 | NFR-R-G | Reliability | LOW | DOCUMENT-AS-IS | — |
 | NFR-R-NEW-2 | Reliability | LOW | DOCUMENT-AS-IS | — |
 | NFR-S-D | Security | LOW | DOCUMENT-AS-IS | — |
+| NFR-S-E | Security | LOW | FIX-IN-PHASE-3 | — |
 | NFR-O-C | Observability | LOW | DOCUMENT-AS-IS | — |
 | NFR-O-E | Observability | LOW | DEFER | — |
 | NFR-O-G | Observability | LOW | DOCUMENT-AS-IS | — |
@@ -183,12 +185,12 @@ All four MUST-FIX items (NFR-R-D, NFR-R-A, NFR-R-B, NFR-R-E) have been crystalli
 | NFR-SCA-3 | Scalability | LOW | DOCUMENT-AS-IS | — |
 
 **Phase 3 routing summary:**
-- FIX-IN-PHASE-3: 7 (1 CRITICAL, 3 HIGH, 1 MEDIUM, 2 LOW)
+- FIX-IN-PHASE-3: 8 (1 CRITICAL, 3 HIGH, 1 MEDIUM, 3 LOW)
 - SECURITY-DECIDE: 3 (1 HIGH, 2 MEDIUM)
 - POLICY-DECISION: 3 (3 MEDIUM)
 - DOCUMENT-AS-IS: 14 (all LOW or MEDIUM)
 - DEFER: 17 (MEDIUM and LOW)
 
-**Total: 44**
+**Total: 45** (44 from Pass 4 cumulative + 1 new NFR-S-E)
 
-**Counting clarification**: total_nfrs: 44 reflects the cumulative count from Pass 4 R4 brownfield analysis. 39 are individually crystallized as L3 PRD entries here; 5 were collapsed/deduplicated during PRD synthesis (see BC-INDEX traceability). DEFER:17 reflects Pass 4 R4's deferred-target count; 12 are actively deferred at L3 with the remaining 5 absorbed into other rulings.
+**Counting clarification**: total_nfrs: 44 (cumulative claim including range-collapsed entries) reflects the cumulative count from Pass 4 R4 brownfield analysis. The NFR Summary Table above contains 39 individually enumerated rows. 5 additional NFR concerns were collapsed/deduplicated during PRD synthesis (see BC-INDEX traceability gaps) bringing the cumulative claim to 44. The severity totals 1C/4H/16M/22L = 43 individually-bodied rows plus 1 NEW-2 entry (NFR-R-NEW-2) = 44 cumulative. Every row in the Summary Table is represented; no phantom rows exist.

@@ -1,8 +1,8 @@
 ---
 context: bc-6
 title: "Configuration & Cache"
-total_bcs: 38   # cumulative from Pass 3 + R1-R4 deepening
-definitional_count: 28   # count of `#### BC-` headings in this file
+total_bcs: 39   # cumulative claim (incl. range-collapsed; now +1 for BC-6.2.015)
+definitional_count: 29   # count of `#### BC-` headings in this file (added BC-6.2.015)
 last_updated: 2026-05-04
 source_pass: 3
 trace: |
@@ -122,6 +122,7 @@ Multi-profile fields — MUST-FIX (6.3).
 **Source**: `src/config.rs:340-353`
 **Subject**: Config & Cache
 **Behavior**: `loop { if candidate.exists() { return Some } if !dir.pop() { return None } }`. No XDG fallback.
+**Edge case (documented limitation)**: The filesystem walk uses `Path::exists()` which follows symlinks. If `.jr.toml` is a symlink pointing to another file, it is followed without loop detection. A symlink cycle (e.g., `a -> b -> a`) could cause an OS-level error which propagates as an IO error. This is a known limitation of the canonical-path-agnostic design — not a bug to fix in v1.
 **Trace**: Pass 3 BC-911; BC-911-R (R1)
 
 ---
@@ -277,6 +278,18 @@ Multi-profile fields — MUST-FIX (6.3).
 
 ---
 
+#### BC-6.2.015: Every cache reader/writer takes `profile: &str` as its first parameter (soft-fence convention)
+
+**Confidence**: HIGH
+**Source**: `src/cache.rs` (all public functions); NFR-SCA-2
+**Subject**: Config & Cache
+**Behavior**: Architectural convention: ALL cache read/write functions accept `profile: &str` as their first positional argument. No profile-unaware cache function exists. This is a soft fence (convention, not type system). Enforcement pattern: `grep -n 'fn read_cache\|fn write_cache\|fn read_team\|fn write_team\|fn read_project\|fn write_project' src/cache.rs` should show `profile: &str` as first non-self parameter in every result.
+**Verification test pattern**: `grep -E 'fn (read|write)_\w+\((?!.*profile)' src/cache.rs` should return zero matches.
+**Related**: NFR-SCA-2 (compile-time enforcement deferred — `Profile(String)` newtype P1 priority).
+**Trace**: NFR-SCA-2; Pass 4 R4; CLAUDE.md "Multi-profile boundary" gotcha
+
+---
+
 ### 6.3 Multi-Profile Fields — MUST-FIX (NFR-R-D)
 
 #### BC-6.3.001: Per-profile `story_points_field_id` and `team_field_id` survive `Config::save_global()` and are read by ALL hot-path read sites [MUST-FIX: NFR-R-D — CRITICAL]
@@ -320,6 +333,9 @@ not from global.fields.* (which no longer exists on disk post-save).
 | 9 | `src/cli/sprint.rs:232` | `story_points_field_id` | Sprint issue points |
 | 10 | `src/cli/sprint.rs:233` | `team_field_id` | Sprint issue team |
 | 11 | `src/cli/board.rs:192` | `team_field_id` | Board view team gating |
+| 12 | `src/cli/issue/create.rs:128` | `story_points_field_id` | `--points` field injection in create body |
+| 13 | `src/cli/issue/create.rs:277` | `team_field_id` | Team field injection in create body |
+| 14 | `src/cli/issue/create.rs:283` | `story_points_field_id` | Points field injection in create body (second site) |
 
 **Fix pattern:** Replace every `config.global.fields.X` read with `config.active_profile().X` (or `config.active_profile_or_err()?.X`).
 
@@ -335,6 +351,17 @@ not from global.fields.* (which no longer exists on disk post-save).
 **Holdout:** H-NEW-MP-001 — Per-profile field IDs survive `Config::save_global()` round-trip and are observed by all hot-path read sites.
 
 **Error taxonomy:** `JrError::ConfigError("Story points field not configured. Run \"jr init\" or set story_points_field_id under [profiles.<name>] in ~/.config/jr/config.toml")` — note: error message must be updated to reference `[profiles.<name>]` not `[fields]`.
+
+**Error-message strings to update (Phase 3 implementation checklist):**
+
+The following BCs contain pinned stderr/error-message text that references the deprecated `[fields]` section and MUST be updated as part of the NFR-R-D fix:
+
+| BC | File | Current (wrong) text | Required (fixed) text |
+|----|------|---------------------|----------------------|
+| BC-2.2.021 | `src/cli/issue/list.rs:756-770` | `set [fields].story_points_field_id in ~/.config/jr/config.toml` | `set story_points_field_id under [profiles.<name>] in ~/.config/jr/config.toml` |
+| BC-6.3.001 (this) | `src/cli/issue/helpers.rs` | any reference to `[fields]` in ConfigError messages | `[profiles.<name>]` |
+
+These pinned-text changes are load-bearing for the holdout H-NEW-MP-001 verification step.
 
 **Trace**: NFR-R-D; NEW-INV-12; NEW-INV-143; `jira-cli-bc-nfr-r-d-draft.md`; Pass 8 §5.2
 

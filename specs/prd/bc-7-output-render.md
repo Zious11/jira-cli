@@ -1,7 +1,7 @@
 ---
 context: bc-7
 title: "Output Rendering & Error"
-total_bcs: 80   # cumulative from Pass 3 + R1-R4 deepening
+total_bcs: 80   # cumulative claim (incl. range-collapsed); definitional_count below is individually-bodied headings
 definitional_count: 33   # count of `#### BC-` headings in this file
 last_updated: 2026-05-04
 source_pass: 3
@@ -166,7 +166,18 @@ Note: Broad pass had incorrect order (empty body was listed LAST). Corrected by 
 
 ---
 
-#### BC-7.3.005: `JrError::exit_code()` mapping
+#### BC-7.3.005: `--output json` + empty 4xx body → stderr JSON `{"error": "<status-code-derived>", "code": <exit>}`
+
+**Confidence**: HIGH
+**Source**: `src/main.rs:34-49`; `src/api/client.rs:440-490`
+**Subject**: Output rendering
+**Behavior**: When `--output json` is active AND the response has an empty body (4xx), the error message is status-code-derived (e.g., `"Bad request"` for 400, `"Not found"` for 404) — NOT the literal string `"<empty response body>"`. The JSON envelope is `{"error": "<status-derived-message>", "code": <exit-code>}` to stderr. `code` is the integer exit code matching `JrError::exit_code()`. This is because `extract_error_message` returns empty-body as level-1 (`None` → caller derives from status), which the error display path then formats.
+**Edge case**: If body is `{}` (empty JSON object, not truly empty), `extract_error_message` falls to level 7 (raw body `{}`), not the empty-body path. The `"<empty response body>"` literal only appears when the response body length is 0.
+**Trace**: Pass 3 BC-1208; BC-7.3.001 (extract_error_message); ADV-P1-026
+
+---
+
+#### BC-7.3.006: `JrError::exit_code()` mapping
 
 **Confidence**: HIGH
 **Source**: `src/error.rs:51-62`; 8 inline tests
@@ -176,7 +187,7 @@ Note: Broad pass had incorrect order (empty body was listed LAST). Corrected by 
 
 ---
 
-#### BC-7.3.006: All API errors must suggest a next step (CLAUDE.md convention)
+#### BC-7.3.007: All API errors must suggest a next step (CLAUDE.md convention)
 
 **Confidence**: HIGH
 **Source**: `tests/issue_list_errors.rs`, `tests/issue_resolution.rs`, `tests/auth_refresh.rs`, `tests/issue_view_errors.rs`
@@ -186,7 +197,7 @@ Note: Broad pass had incorrect order (empty body was listed LAST). Corrected by 
 
 ---
 
-#### BC-7.3.007: stderr must NEVER contain `panic`
+#### BC-7.3.008: stderr must NEVER contain `panic`
 
 **Confidence**: HIGH
 **Source**: 16+ tests across `tests/*_errors.rs` files asserting `!stderr.contains("panic")`
@@ -196,7 +207,7 @@ Note: Broad pass had incorrect order (empty body was listed LAST). Corrected by 
 
 ---
 
-#### BC-7.3.008: Internal errors prefix with `Internal error:`
+#### BC-7.3.009: Internal errors prefix with `Internal error:`
 
 **Confidence**: MEDIUM
 **Source**: `src/error.rs:30-36`

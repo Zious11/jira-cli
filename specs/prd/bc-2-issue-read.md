@@ -1,7 +1,7 @@
 ---
 context: bc-2
 title: "Issue Read (list/view/comments/changelog)"
-total_bcs: 91   # cumulative from Pass 3 + R1-R4 deepening
+total_bcs: 91   # cumulative claim (incl. range-collapsed); definitional_count below is individually-bodied headings
 definitional_count: 49   # count of `#### BC-` headings in this file
 last_updated: 2026-05-04
 source_pass: 3
@@ -230,7 +230,8 @@ behavior (2.2), Issue view (2.3), Comments (2.4), Changelog (2.5), API layer (2.
 **Confidence**: HIGH
 **Source**: `src/cli/issue/list.rs:756-770`
 **Subject**: Issue read
-**Behavior**: stderr: `"warning: --points ignored. Story points field not configured. Run "jr init" or set [fields].story_points_field_id in ~/.config/jr/config.toml"`. Non-fatal; list proceeds without points column.
+**Behavior**: stderr: `"warning: --points ignored. Story points field not configured. Run "jr init" or set story_points_field_id under [profiles.<name>] in ~/.config/jr/config.toml"`. Non-fatal; list proceeds without points column. Note: message must reference `[profiles.<name>]` not the deprecated `[fields]` section.
+**Related**: BC-6.3.001 (multi-profile fields MUST-FIX); the error message text updated here is one of the pinned-text changes required by that fix.
 **Trace**: Pass 3 BC-143 (R1)
 
 ---

@@ -1,7 +1,7 @@
 ---
 context: bc-1
 title: "Auth & Identity"
-total_bcs: 57   # cumulative from Pass 3 + R1-R4 deepening
+total_bcs: 57   # cumulative claim (incl. range-collapsed); definitional_count below is individually-bodied headings
 definitional_count: 46   # count of `#### BC-` headings in this file
 last_updated: 2026-05-04
 source_pass: 3

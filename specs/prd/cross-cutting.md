@@ -1,7 +1,7 @@
 ---
 context: bc-x
 title: "Cross-cutting (HTTP client, Runtime, Users, Teams, Worklogs, Projects, Queues, JQL, Partial-match)"
-total_bcs: 130   # cumulative from Pass 3 + R1-R4 deepening
+total_bcs: 130   # cumulative claim (incl. range-collapsed); definitional_count below is individually-bodied headings
 definitional_count: 63   # count of `#### BC-` headings in this file
 last_updated: 2026-05-04
 source_pass: 3
@@ -253,6 +253,18 @@ JQL utilities (X.9), Partial-match (X.10), Build-time (X.11).
 **Subject**: Rate limiting
 **Behavior**: `header.parse::<u64>()`. HTTP-date format → `None` → falls back to `DEFAULT_RETRY_SECS = 1`. No upper bound — `Retry-After: 86400` is honored as 24h (NFR-R-NEW-1, LOW). CONV-ABS-001 correction.
 **Trace**: Pass 3 BC-1403-R (R1)
+
+---
+
+#### BC-X.4.009: `MAX_RETRY_AFTER_SECS = 60` cap — Retry-After exceeding 60s prints warning and aborts retry
+
+**Confidence**: HIGH (PROPOSED — FIX-IN-PHASE-3)
+**Source**: `src/api/rate_limit.rs` (proposed addition)
+**Subject**: Rate limiting
+**Behavior**: When `Retry-After` header value is a valid u64 AND exceeds `MAX_RETRY_AFTER_SECS = 60`: (1) print to stderr `"warning: Retry-After <NNN>s exceeds 60s; aborting retry, run jr again later"` and (2) exit non-zero (the retry loop does NOT sleep and retry; it returns the 429 response). Values ≤ 60s continue to be honored as before.
+**Related**: NFR-R-NEW-1 (cross-link); H-027 (holdout that pins current no-upper-bound behavior — will need updating when this fix lands).
+**Note**: This BC describes the PROPOSED fixed behavior, not current behavior. Currently BC-X.4.002 documents no upper bound. This BC is the Phase 3 target state. H-027 documents the current gap.
+**Trace**: ADV-P1-029; NFR-R-NEW-1
 
 ---
 

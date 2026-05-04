@@ -1,7 +1,7 @@
 ---
 context: bc-4
 title: "Assets & CMDB"
-total_bcs: 32   # cumulative from Pass 3 + R1-R4 deepening
+total_bcs: 32   # cumulative claim (incl. range-collapsed); definitional_count below is individually-bodied headings
 definitional_count: 22   # count of `#### BC-` headings in this file
 last_updated: 2026-05-04
 source_pass: 3

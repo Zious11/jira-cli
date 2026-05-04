@@ -9,7 +9,7 @@
 ## SM-1: OAuth Login State Machine
 
 **Source pins:** `api/auth.rs:382-690`
-**BC anchors:** BC-1.1.001, BC-1.2.013..BC-1.2.018
+**BC anchors:** BC-1.5.031..BC-1.5.041 (OAuth login state machine BCs)
 **Failure modes:** EADDRINUSE (friendly error), CSRF mismatch (bail), partial keychain state (surface to user)
 
 ```mermaid
@@ -78,7 +78,7 @@ stateDiagram-v2
 
 - `ResolvedRedirect` holds the `TcpListener` in private fields — TOCTOU window is eliminated (verified `api/auth.rs:459-478`)
 - Fixed callback: `http://127.0.0.1:53682/callback` (literal IPv4, ADR-0006)
-- `generate_state`: 32 bytes from `OsRng` → 64 lowercase hex chars (BC-1.2.006)
+- `generate_state`: 32 bytes from `OsRng` → 64 lowercase hex chars (BC-1.5.035)
 - `resources.first()` is silent first-wins — a user with multiple cloud sites may authenticate to the wrong one (NFR-O-S)
 
 ---
@@ -86,7 +86,7 @@ stateDiagram-v2
 ## SM-2: OAuth Refresh State Machine (Dual-Path)
 
 **Source pins:** `cli/auth.rs::refresh_credentials`; `api/auth.rs:704-770`
-**BC anchors:** BC-1.2.013, BC-1.2.014
+**BC anchors:** BC-1.4.026 (refresh credential resolution), BC-1.4.030 (resolve_refresh_app_credentials Keychain→Embedded only)
 
 ```mermaid
 stateDiagram-v2

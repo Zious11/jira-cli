@@ -1,7 +1,7 @@
 ---
 context: bc-3
 title: "Issue Write (create/edit/move/assign/comment/link/open/remote-link)"
-total_bcs: 77   # cumulative from Pass 3 + R1-R4 deepening
+total_bcs: 77   # cumulative claim (incl. range-collapsed); definitional_count below is individually-bodied headings
 definitional_count: 48   # count of `#### BC-` headings in this file
 last_updated: 2026-05-04
 source_pass: 3
@@ -458,7 +458,7 @@ URL is composed as `format!("{}/browse/{}", client.instance_url(), key)`. `clien
 
 **Confidence**: HIGH
 **Source**: `tests/issue_remote_link.rs:309-348`
-**Behavior**: Scheme allowlist: only `http` and `ftp` rejected.
+**Behavior**: Scheme allowlist: only `http` and `https` accepted; all other schemes (e.g., `ftp`) rejected. Any URL whose scheme is not `http` or `https` triggers exit 64 with stderr containing `"http or https"` and the rejected scheme name.
 **Trace**: Pass 3 BC-1131 (R4)
 
 ---

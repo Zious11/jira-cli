@@ -2,8 +2,10 @@
 
 **traces_to:** README.md
 **Source:** Pass 1 R1 §5 (26 risks) + R2 §7 (1 severity escalation)
-**Total risks:** 26 (12 R1-NEW + 14 broad-pass)
+**Total risks:** 26 (11 R1-NEW + 14 broad-pass + 1 R1-NEW reclassified to CRITICAL)
 **Severity distribution:** 1 CRITICAL / 6 HIGH / 8 MEDIUM / 11 LOW
+
+> **Numbering note:** R1-NEW-10 (multi-profile fields silent regression, NFR-R-D) was elevated from MEDIUM to CRITICAL during Pass 4 R1 analysis and appears as R-C1 in the CRITICAL block below. The R1-NEW label is not repeated in the numbered sequence; the CRITICAL block carries it. Effective R1-NEW count in the MEDIUM/HIGH rows is 11 (NEW-1 through NEW-9, NEW-11, NEW-12).
 
 ---
 
