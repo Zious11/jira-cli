@@ -121,22 +121,24 @@ Error display (7.3), JSON output shapes (7.4), Observability (7.5).
 
 ### 7.3 Error Display
 
-#### BC-7.3.001: `extract_error_message` 6-level precedence chain (corrected order)
+#### BC-7.3.001: `extract_error_message` 7-step precedence chain (canonical from source)
 
 **Confidence**: HIGH
-**Source**: `src/api/client.rs:440-490`; `tests/api_client.rs:257-342`
+**Source**: `src/api/client.rs:448-490`; `tests/api_client.rs:257-342`
 **Subject**: Output rendering
-**Behavior**: Precedence (first match wins):
-1. Empty body → literal `"<empty response body>"`
-2. Non-UTF-8 bytes → `String::from_utf8_lossy` (replacement chars)
-3. `errorMessages[]` non-empty → `;`-joined
-4. `errors{}` non-empty → `field: msg` (string) or `field: {json}` (non-string); sorted alphabetically
-5. `message` field → as-is
-6. `errorMessage` field → as-is
-7. Raw body string fallback
+**Behavior**: Precedence (first match wins, returning `String`):
+1. Empty body (len == 0) → literal string `"<empty response body>"` (early return before UTF-8 check)
+2. Non-UTF-8 bytes → `String::from_utf8_lossy` with replacement chars (early return)
+3. `errorMessages[]` non-empty (JSON array with at least one string element) → elements joined with `"; "`
+4. `errors{}` non-empty (JSON object) → `"field: value"` pairs, alphabetically sorted, joined with `"; "`; non-string values use `serde_json::Value` display
+5. `message` string field → as-is
+6. `errorMessage` string field (singular; seen in JSM endpoints) → as-is
+7. Raw body string fallback (non-JSON or no recognized field matches)
 
-Note: Broad pass had incorrect order (empty body was listed LAST). Corrected by R1 CONV-ABS-004.
-**Trace**: Pass 3 BC-1201-R (R1)
+**Key invariant**: Empty body check is step 1 — the literal `"<empty response body>"` string IS the return value. There is no None/caller-derives path; the string propagates into `ApiError { message }`.
+
+Note: The function doc comment inside client.rs lists precedence as "1. errorMessages … 5. Empty body … 6. Raw body" — this comment is STALE and does NOT reflect code execution order. Steps 1–2 are early returns before JSON parsing begins. Source code is authoritative; doc comment will be fixed in Phase 3. Corrected by R1 CONV-ABS-004; further corrected by ADV-P2-001.
+**Trace**: Pass 3 BC-1201-R (R1); ADV-P2-001
 
 ---
 
@@ -166,14 +168,14 @@ Note: Broad pass had incorrect order (empty body was listed LAST). Corrected by 
 
 ---
 
-#### BC-7.3.005: `--output json` + empty 4xx body → stderr JSON `{"error": "<status-code-derived>", "code": <exit>}`
+#### BC-7.3.005: `--output json` + empty 4xx body → stderr JSON `{"error": "<empty response body>", "code": <exit>}`
 
 **Confidence**: HIGH
-**Source**: `src/main.rs:34-49`; `src/api/client.rs:440-490`
+**Source**: `src/main.rs:34-49`; `src/api/client.rs:448-490`
 **Subject**: Output rendering
-**Behavior**: When `--output json` is active AND the response has an empty body (4xx), the error message is status-code-derived (e.g., `"Bad request"` for 400, `"Not found"` for 404) — NOT the literal string `"<empty response body>"`. The JSON envelope is `{"error": "<status-derived-message>", "code": <exit-code>}` to stderr. `code` is the integer exit code matching `JrError::exit_code()`. This is because `extract_error_message` returns empty-body as level-1 (`None` → caller derives from status), which the error display path then formats.
-**Edge case**: If body is `{}` (empty JSON object, not truly empty), `extract_error_message` falls to level 7 (raw body `{}`), not the empty-body path. The `"<empty response body>"` literal only appears when the response body length is 0.
-**Trace**: Pass 3 BC-1208; BC-7.3.001 (extract_error_message); ADV-P1-026
+**Behavior**: When `--output json` is active AND the response has a zero-length body (4xx), `extract_error_message` returns the literal string `"<empty response body>"` (step 1 of BC-7.3.001). This string propagates into `JrError::ApiError { message }` and then into the JSON error envelope: `{"error": "<empty response body>", "code": <exit-code>}` to stderr. `code` is the integer exit code matching `JrError::exit_code()`. There is no status-code-derived substitution; the literal string IS the message.
+**Edge case**: If body is `{}` (empty JSON object, NOT zero-length bytes), `extract_error_message` falls to step 7 (raw body `{}`), not the empty-body path. The `"<empty response body>"` literal only appears when `body.is_empty()` is true (byte length == 0).
+**Trace**: Pass 3 BC-1208; BC-7.3.001 (extract_error_message); ADV-P1-026; ADV-P2-001
 
 ---
 

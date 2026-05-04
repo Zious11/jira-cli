@@ -2,7 +2,7 @@
 
 **Status:** PENDING
 **Owner:** Phase 3 SECURITY-DECIDE
-**Deadline:** TBD — must resolve before Phase 3 gate
+**Deadline:** Phase 1 → 2 gate (decision required before Phase 2 story decomposition begins)
 **References:** NFR-S-C (nfr-catalog.md), R-H3 (risk-register.md), `src/api/client.rs:200-203,274-278`
 
 ---
@@ -53,6 +53,7 @@ The `Authorization` header is NOT logged (only the request method and URL), but 
 | Date | Decision | Rationale |
 |------|----------|-----------|
 | TBD  | PENDING  | Awaiting Phase 3 security review |
+| **Decide-by** | **Phase 1 → 2 gate** | Required before Phase 2 story decomposition begins (ADV-P2-009) |
 
 ---
 

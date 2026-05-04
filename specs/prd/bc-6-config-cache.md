@@ -337,7 +337,9 @@ not from global.fields.* (which no longer exists on disk post-save).
 | 13 | `src/cli/issue/create.rs:277` | `team_field_id` | Team field injection in create body |
 | 14 | `src/cli/issue/create.rs:283` | `story_points_field_id` | Points field injection in create body (second site) |
 
-**Fix pattern:** Replace every `config.global.fields.X` read with `config.active_profile().X` (or `config.active_profile_or_err()?.X`).
+**Fix mechanism (per ADR-0007):** Route all field reads through the `Config::field_id(FieldKind, profile)` accessor introduced in ADR-0007. This accessor resolves to `config.global.profiles[profile].story_points_field_id` (or `team_field_id`), not to the deprecated `config.global.fields.*` path. No fallback to `global.fields.*` is permitted after the fix is applied.
+
+**Fix pattern (equivalent shorthand):** Replace every `config.global.fields.X` read with `config.active_profile().X` (or `config.active_profile_or_err()?.X`). The `Config::field_id` accessor is the preferred call site for new code.
 
 **User-visible symptoms (current bug state):**
 1. `jr issue list --points` — points column blank after first save

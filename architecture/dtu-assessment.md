@@ -165,7 +165,7 @@ Atlassian's Developer Program Agreement and Terms of Service prohibit reverse-en
 
 Without DTU clones, the Phase 4 holdout evaluation strategy is:
 
-1. **Holdout candidate set:** 47 holdout candidates (H-001..H-047) identified in Pass 3 R1–R4 behavioral contract analysis.
+1. **Holdout candidate set:** 48 holdout candidates (H-001..H-047 plus H-NEW-MP-001) identified in Pass 3 R1–R4 behavioral contract analysis.
 2. **Test execution:** All holdout tests run against `wiremock` servers configured with fixtures from `tests/common/fixtures.rs`. No live Atlassian API calls are made during evaluation.
 3. **Response fidelity:** Wiremock fixtures are authored to match the actual Atlassian API response shapes observed during semport analysis (Pass 2 domain model, Pass 3 behavioral contracts). Predetermined response shapes cover pagination envelopes (`OffsetPage`, `CursorPage`, `ServiceDeskPage`, `AssetsPage`), error envelopes (`errorMessages` array), and all 14 bounded context response types.
 4. **Output regression:** `insta` snapshots lock table and JSON output. Snapshot diff is the primary regression signal.

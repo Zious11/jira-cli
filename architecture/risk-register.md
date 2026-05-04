@@ -1,9 +1,9 @@
 # Risk Register — jr (jira-cli)
 
 **traces_to:** README.md
-**Source:** Pass 1 R1 §5 (26 risks) + R2 §7 (1 severity escalation)
-**Total risks:** 26 (11 R1-NEW + 14 broad-pass + 1 R1-NEW reclassified to CRITICAL)
-**Severity distribution:** 1 CRITICAL / 6 HIGH / 8 MEDIUM / 11 LOW
+**Source:** Pass 1 R1 §5 (26 risks) + R2 §7 (1 severity escalation) + Pass 2 ADV-P2-004 (1 new HIGH)
+**Total risks:** 27 (11 R1-NEW + 14 broad-pass + 1 R1-NEW reclassified to CRITICAL + 1 Pass-2 addition)
+**Severity distribution:** 1 CRITICAL / 7 HIGH / 8 MEDIUM / 11 LOW
 
 > **Numbering note:** R1-NEW-10 (multi-profile fields silent regression, NFR-R-D) was elevated from MEDIUM to CRITICAL during Pass 4 R1 analysis and appears as R-C1 in the CRITICAL block below. The R1-NEW label is not repeated in the numbered sequence; the CRITICAL block carries it. Effective R1-NEW count in the MEDIUM/HIGH rows is 11 (NEW-1 through NEW-9, NEW-11, NEW-12).
 
@@ -17,7 +17,7 @@
 
 ---
 
-## HIGH (6)
+## HIGH (7)
 
 | # | Risk | NFR | BC Anchor | ADR | Phase 3 Action |
 |---|------|-----|-----------|-----|----------------|
@@ -27,6 +27,7 @@
 | **R-H4** (R1-NEW-7) | `handle_open` uses `client.base_url()` not `instance_url()` (`workflow.rs:636`). For OAuth profiles, `base_url()` returns `https://api.atlassian.com/ex/jira/<cloud_id>` — browser opens 404. One-line fix. | NFR-R-B | BC-3.4.001 | ADR-0009 | FIX-IN-PHASE-3: `base_url()` → `instance_url()` |
 | **R-H5** (R1-NEW-8) | `list_worklogs` non-paginated: fetches `OffsetPage<Worklog>` and returns `.items().to_vec()` — no loop. Silent data loss past page 1 for issues with >50 worklogs. | NFR-R-A | BC-X.5.002 | ADR-0010 | FIX-IN-PHASE-3: Refactor to `paginate_offset` loop |
 | **R-H6** | Supply-chain: 332 transitive Cargo deps for an OAuth-handling CLI. `cargo-deny` is wired in CI but `multiple-versions = "warn"` policy means version dupes don't fail the build. No SBOM published. | — | — | — | DOCUMENT-AS-IS: Enforce `multiple-versions = "deny"` in Phase 3 as a CI hardening step |
+| **R-H7** (ADV-P2-004) | GitHub Actions floating-tag SHA pinning (NFR-S-E): all 8 action references in `ci.yml` + `release.yml` use mutable version tags (`@v6`, `@v2`, `@v7`, etc.) rather than full commit SHAs. A force-pushed tag can redirect to attacker-controlled code in the same pipeline that injects `JR_BUILD_OAUTH_CLIENT_ID`/`JR_BUILD_OAUTH_CLIENT_SECRET`. Rare event (requires tag-force-push on upstream action repos) but high impact (direct OAuth client secret exposure). Severity rebased to HIGH per Pass-2 ADV-P2-004 reconciliation (was CRITICAL in cicd-setup.md GAP-1). | NFR-S-E | — | — | FIX-IN-PHASE-3: Pin all 8 action references to full commit SHA in `ci.yml` + `release.yml`; enable dependabot github-actions ecosystem to keep SHAs current. See cicd-setup.md GAP-1. |
 
 ---
 
@@ -68,10 +69,10 @@
 | Severity | Count | Top action |
 |----------|------:|-----------|
 | CRITICAL | 1 | FIX-IN-PHASE-3 (NFR-R-D multi-profile fields) |
-| HIGH | 6 | 3× FIX-IN-PHASE-3, 2× SECURITY-DECIDE, 1× DOCUMENT-AS-IS |
+| HIGH | 7 | 4× FIX-IN-PHASE-3, 2× SECURITY-DECIDE, 1× DOCUMENT-AS-IS |
 | MEDIUM | 8 | 2× DEFER, 2× DOCUMENT-AS-IS, 1× FIX-IN-PHASE-3, 1× SECURITY-DECIDE, 2× mixed |
 | LOW | 11 | 7× DOCUMENT-AS-IS, 3× DEFER, 1× POLICY-DECISION |
-| **Total** | **26** | |
+| **Total** | **27** | |
 
 ---
 

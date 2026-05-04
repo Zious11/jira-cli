@@ -256,6 +256,8 @@ JQL utilities (X.9), Partial-match (X.10), Build-time (X.11).
 
 ---
 
+ > [BC-X.4.003..008 are range-collapsed in BC-INDEX.md; not individually bodied]
+
 #### BC-X.4.009: `MAX_RETRY_AFTER_SECS = 60` cap — Retry-After exceeding 60s prints warning and aborts retry
 
 **Confidence**: HIGH (PROPOSED — FIX-IN-PHASE-3)

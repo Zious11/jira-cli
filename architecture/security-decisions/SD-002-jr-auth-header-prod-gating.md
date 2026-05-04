@@ -2,7 +2,7 @@
 
 **Status:** PENDING
 **Owner:** Phase 3 SECURITY-DECIDE
-**Deadline:** TBD — must resolve before Phase 3 gate
+**Deadline:** Phase 1 → 2 gate (decision required before Phase 2 story decomposition begins)
 **References:** NFR-S-B (nfr-catalog.md), R-H2 (risk-register.md), `src/api/client.rs:64-66`
 
 ---
@@ -38,6 +38,7 @@
 | Date | Decision | Rationale |
 |------|----------|-----------|
 | TBD  | PENDING  | Awaiting Phase 3 security review |
+| **Decide-by** | **Phase 1 → 2 gate** | Required before Phase 2 story decomposition begins (ADV-P2-009) |
 
 ---
 

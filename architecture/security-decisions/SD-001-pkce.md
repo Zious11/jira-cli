@@ -2,7 +2,7 @@
 
 **Status:** PENDING
 **Owner:** Phase 3 SECURITY-DECIDE
-**Deadline:** TBD — must resolve before Phase 3 gate
+**Deadline:** Phase 1 → 2 gate (decision required before Phase 2 story decomposition begins)
 **References:** ADR-0006, NFR-S-A (nfr-catalog.md), NEW-INV-178, BC-1.5.036, R-M1 (risk-register.md)
 
 ---
@@ -47,6 +47,7 @@ RFC 8252 §8.1 recommends PKCE for native apps regardless of confidential-client
 | Date | Decision | Rationale |
 |------|----------|-----------|
 | TBD  | PENDING  | Awaiting Phase 3 security review and Atlassian API verification |
+| **Decide-by** | **Phase 1 → 2 gate** | Required before Phase 2 story decomposition begins (ADV-P2-009) |
 
 ---
 

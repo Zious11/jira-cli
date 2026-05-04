@@ -40,7 +40,7 @@ Setup uses:
 **Action**: `jr auth list --output json`
 **Expected**: exit 0; stdout = `[]`.
 **Why hidden**: JSON shape is the parsing contract for orchestrators.
-**BC refs**: BC-1.2.013
+**BC refs**: BC-1.1.001
 
 ---
 
@@ -96,7 +96,7 @@ Setup uses:
 **Action**: `jr --no-input issue list --status prog` (in `.jr.toml::project="PROJ"` cwd)
 **Expected**: exit 64; stderr `Ambiguous status` + `In Progress`. JQL search mock not called.
 **Why hidden**: Pin from issue #193 — strict-matching rollout. Behavior boundary invisible without mock count.
-**BC refs**: BC-2.1.007
+**BC refs**: BC-2.1.013
 
 ---
 
@@ -105,7 +105,7 @@ Setup uses:
 **Action**: `jr issue view PROJ-1`
 **Expected**: exit 0; stdout contains `<u>` AND `name not cached` AND `jr team list --refresh`. stderr no panic.
 **Why hidden**: Format-change graceful degradation.
-**BC refs**: BC-6.2.003
+**BC refs**: BC-2.3.035
 **Source**: `tests/issue_view_errors.rs:BC-1135d`
 
 ---
@@ -115,7 +115,7 @@ Setup uses:
 **Action**: `jr issue list --jql "project = X" --all --output json` then `jr issue list --jql "project = X" --output json`
 **Expected**: first → JSON array length 35. Second → JSON array length 30 AND stderr contains `Showing 30 results` or `~`.
 **Why hidden**: Pagination cap regulated by request body shape; invisible from output count alone.
-**BC refs**: BC-2.3.001, BC-2.3.002
+**BC refs**: BC-2.2.018, BC-2.2.019
 
 ---
 
@@ -124,7 +124,7 @@ Setup uses:
 **Action**: load config twice (e.g., `jr auth list` twice).
 **Expected**: After first load, on-disk file has `[profiles.default]`, no `[instance]`/`[fields]`. After second load, file is byte-identical to after first.
 **Why hidden**: Migration is one-shot and silent; idempotency invisible without bytewise comparison.
-**BC refs**: BC-6.1.003
+**BC refs**: BC-6.1.001, BC-6.1.002
 
 ---
 
@@ -162,7 +162,7 @@ Setup uses:
 **Action**: `jr issue list --all --limit 10`
 **Expected**: exit non-zero; stderr contains `cannot be used with`.
 **Why hidden**: Many subcommands have similar conflicts; checking one regression-detects refactor mistakes.
-**BC refs**: BC-2.6.003
+**BC refs**: BC-2.2.020
 
 ---
 
@@ -171,7 +171,7 @@ Setup uses:
 **Action**: `jr --no-input auth remove default`
 **Expected**: exit 64; stderr contains `cannot remove active`. Config file unchanged.
 **Why hidden**: Destructive operation safety; failure here would break invariants others depend on.
-**BC refs**: BC-1.2.015
+**BC refs**: BC-1.1.006
 
 ---
 
@@ -208,7 +208,7 @@ Setup uses:
 **Action**: above.
 **Expected**: exit 64; stderr is parseable JSON with keys `error` (string) and `code` (number 64).
 **Why hidden**: Programmatic consumers depend on this shape; not asserted by most unit tests.
-**BC refs**: BC-7.4.012
+**BC refs**: BC-7.3.005
 
 ---
 
@@ -235,7 +235,7 @@ Setup uses:
 **Action**: `jr --no-input issue list --asset Acme`
 **Expected**: exit 64 + stderr `Multiple assets match` + both candidate labels. JQL search mock NOT called.
 **Why hidden**: Pin against asset-resolution short-circuit regression.
-**BC refs**: BC-2.1.010
+**BC refs**: BC-2.1.012
 
 ---
 
@@ -253,7 +253,7 @@ Setup uses:
 **Action**: `jr issue view PROJ-1` against issue with team UUID.
 **Expected**: exit 0 + UUID + "name not cached" hint inline.
 **Why hidden**: Pin against a future "atomic-write" refactor; current contract IS non-atomic-write + read-side resilience.
-**BC refs**: BC-6.2.004
+**BC refs**: BC-6.2.014
 
 ---
 
@@ -290,17 +290,17 @@ Setup uses:
 **Action**: Inspect callback URL in each case.
 **Expected**: (a) callback URL = `http://127.0.0.1:53682/callback` (exact literal). (b) callback URL = `http://localhost:<random_port>/callback` (dynamic, NOT 53682, NOT IPv4).
 **Why hidden**: Pin ADR-0006's "BYO sources keep dynamic-port behavior" contract.
-**BC refs**: BC-1.3.022, BC-1.3.020
+**BC refs**: BC-1.5.034, BC-1.5.031
 
 ---
 
 ## Group 2: Issue Read, JQL, and Filtering (H-030..H-035)
 
 ### H-030: `extract_error_message` empty-body precedence (FIRST not LAST)
-**Setup**: Wiremock returns 400 with empty response body.
+**Setup**: Wiremock returns 400 with empty response body (byte length == 0).
 **Action**: any command that triggers a 400.
-**Expected**: stderr message is status-code-derived (e.g., `"Bad request"`) — NOT `"<empty response body>"` string literal.
-**Why hidden**: CONV-ABS-004 — broad pass had empty-body LAST; corrected to FIRST. Easy to regress on ordering changes.
+**Expected**: stderr message contains the literal string `"<empty response body>"` — this IS the return value from `extract_error_message` for a zero-length body. There is no status-code-derived substitution.
+**Why hidden**: CONV-ABS-004 — broad pass had empty-body LAST; corrected to FIRST. ADV-P2-001 corrected the expected behavior from "status-derived" to "literal string". Easy to regress on ordering changes.
 **BC refs**: BC-7.3.001
 
 ---
@@ -462,7 +462,7 @@ Setup uses:
 **Action**: `jr auth login --oauth --client-id X --client-secret Y --no-input`
 **Expected**: Authenticated to `cloud-A` (first result wins). No disambiguation or error.
 **Purpose**: Pin the known-gap behavior; when NFR-O-S is fixed (add `--cloud-id` flag), this holdout becomes a MUST-FAIL that drives the fix.
-**BC refs**: BC-1.5.033 (multi-resource known gap)
+**BC refs**: BC-1.5.038
 
 ---
 

@@ -161,7 +161,7 @@ Searched for: `.pre-commit-config.yaml`, `lefthook.yml`, `lefthook.yaml`, `.left
 
 ## §4: Gap Analysis
 
-### GAP-1: No action SHA pinning (CRITICAL)
+### GAP-1: No action SHA pinning (HIGH)
 
 **What's missing:** All GitHub Actions references use mutable version tags (`actions/checkout@v6`, `Swatinem/rust-cache@v2`, `EmbarkStudios/cargo-deny-action@v2`, `softprops/action-gh-release@v2`, `actions/upload-artifact@v7`, `actions/download-artifact@v8`, `codecov/codecov-action@v6`, `taiki-e/install-action@cargo-llvm-cov`). A tag can be force-pushed to point at malicious content at any time.
 
@@ -172,7 +172,9 @@ Searched for: `.pre-commit-config.yaml`, `lefthook.yml`, `lefthook.yaml`, `.left
 uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 ```
 
-**Severity: CRITICAL**
+**Severity: HIGH**
+
+> **Post-Pass-2 reconciliation note:** Severity rebased to HIGH from CRITICAL post-Pass-2 reconciliation: rare event but high impact (direct OAuth client secret exposure). NFR-S-E action SHA pinning registered as R-H7 in risk-register.md.
 
 ---
 
@@ -292,7 +294,7 @@ gh api repos/Zious11/jira-cli/branches/main/protection
 
 | Gap | Action | Effort |
 |---|---|---|
-| GAP-1 (CRITICAL): Action SHA pinning | Pin all 8 action references to full SHA in `ci.yml` and `release.yml`. Use `dependabot` (already configured for github-actions) to keep SHAs current. | 30 min |
+| GAP-1 (HIGH): Action SHA pinning | Pin all 8 action references to full SHA in `ci.yml` and `release.yml`. Use `dependabot` (already configured for github-actions) to keep SHAs current. | 30 min |
 | GAP-2 (HIGH): Job timeouts | Add `timeout-minutes:` to every job in both workflow files. | 15 min |
 | GAP-3 (HIGH): Secrets scanning | Enable GitHub secret scanning at repository level (Settings toggle, no code change). Optionally add `gitleaks` step to a new `security.yml`. | 1 hour |
 

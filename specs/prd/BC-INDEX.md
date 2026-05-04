@@ -459,11 +459,11 @@ R1/R4 prefix = deepening round that introduced it.
 
 | L3 BC ID | Summary | Pass 3 BC ID | Source | Confidence |
 |---|---|---|---|---|
-| BC-7.3.001 | `extract_error_message` 6-level precedence chain (corrected order: empty body FIRST) | BC-1201-R (R1) | src/api/client.rs:440-490 | HIGH |
+| BC-7.3.001 | `extract_error_message` 7-step precedence chain (empty body → literal string FIRST; no None/status-derived path) | BC-1201-R (R1); ADV-P2-001 | src/api/client.rs:448-490 | HIGH |
 | BC-7.3.002 | `errors{}` string values: `field: <value>`; non-string: `field: <serde_json::Value debug>` | BC-1201a (R1) | src/api/client.rs:469-475 | HIGH |
 | BC-7.3.003 | `errors{}` iteration is alphabetically sorted (deterministic) | BC-1201b (R1) | src/api/client.rs:477 | HIGH |
 | BC-7.3.004 | Empty `errorMessages[]` and empty `errors{}` fall through to raw body (no early exit) | BC-1201c (R1) | src/api/client.rs:459-466 | HIGH |
-| BC-7.3.005 | `--output json` + empty 4xx body → stderr JSON `{"error": "<status-code-derived>", "code": <exit>}` | BC-1208; ADV-P1-026 | src/main.rs:34-49 | HIGH |
+| BC-7.3.005 | `--output json` + empty 4xx body → stderr JSON `{"error": "<empty response body>", "code": <exit>}` (literal string, not status-derived) | BC-1208; ADV-P1-026; ADV-P2-001 | src/main.rs:34-49 | HIGH |
 | BC-7.3.006 | `JrError::exit_code()` mapping | BC-1204 | src/error.rs:51-62 | HIGH |
 | BC-7.3.007 | All API errors must suggest a next step (CLAUDE.md convention) | BC-1212 | tests/*_errors.rs | HIGH |
 | BC-7.3.008 | stderr must NEVER contain `panic` | BC-1205 | 16+ tests | HIGH |
