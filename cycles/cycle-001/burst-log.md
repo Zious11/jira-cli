@@ -146,3 +146,23 @@ DEC-001/DEC-002/DEC-003 resolved. DEC-004 added (streamlined vs full Phase 1 sco
 | state-manager | Update STATE.md — Phase 0 COMPLETE, Phase 1 entry, DEC-001-004 | factory-artifacts (commit 2, pending) |
 
 ---
+
+## Burst 6 (2026-05-04)
+
+**Agents dispatched:** state-manager, product-owner, architect (parallel)
+**Files touched:** specs/prd/BC-INDEX.md, specs/prd/bc-1-auth-identity.md, specs/prd/bc-2-issue-read.md, specs/prd/bc-3-issue-write.md, specs/prd/bc-4-assets-cmdb.md, specs/prd/bc-5-boards-sprints.md, specs/prd/bc-6-config-cache.md, specs/prd/bc-7-output-render.md, specs/prd/cross-cutting.md, specs/prd/edge-case-catalog.md, specs/prd/holdout-scenarios.md, specs/prd/nfr-catalog.md, architecture/cross-cutting.md, architecture/dtu-assessment.md, architecture/state-machines.md, architecture/risk-register.md, architecture/adr-index.md, architecture/adr/0007-multi-profile-fields-fix.md, architecture/adr/0009-handle-open-instance-url.md, architecture/security-decisions/SD-001-pkce.md, architecture/security-decisions/SD-002-jr-auth-header-prod-gating.md, architecture/security-decisions/SD-003-verbose-pii-redaction.md, cicd-setup.md
+**Versions bumped:** (none)
+
+### Summary
+
+Phase 1d adversary Pass 1 + fixes. Adversarial review produced 30 findings (4C/11H/12M/3L). 29 addressed, 1 deferred (ADV-P1-030 — orchestrator process-gap, .factory/policies.yaml — codification task post Phase 1). BC-INDEX rebuilt from canonical body files (CRITICAL). 3 SD-NNN security decision artifacts created. Adversary Pass 2 next.
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| product-owner | BC-INDEX rebuild; 9 holdout anchors; BC-2.2.021, BC-3.7.004, BC-6.3.001, BC-6.2.015, BC-7.3.005, BC-X.4.009; EC-CFG-001/002 swap; NFR-S-E; NFR count reconciliation; BC-6.1.011 | 12 specs/prd files |
+| architect | extract_error_message chain 7-level; DTU PKCE struck; ADR-0007 Option A; SM-1/SM-2 anchors; risk register numbering; cicd-setup §7; ADR-0009; 3 SD-NNN artifacts; adr-index harmonization | 8 architecture files + 3 new SD-NNN |
+| state-manager | Stage + commit 23 files; update STATE.md + burst-log | factory-artifacts e00d01e (fixes), + state commit (this) |
+
+---

@@ -61,7 +61,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | pre-pipeline: Setup | complete | 2026-05-04 | 2026-05-04 | env-preflight | |
 | 0: Codebase Ingestion | **COMPLETE** | 2026-05-04 | 2026-05-04 | Phase A + B + B.5 + B.6 + C + gate APPROVED | |
 | 1: Spec Crystallization | **entry** | 2026-05-04 | | DEC-004 pending (scope choice) | |
-| 1d: Adversarial Spec Review | not-started | | | | |
+| 1d: Adversarial Spec Review | **Pass 1 COMPLETE** | 2026-05-04 | | Pass 2 next | 30→? (Pass 1: 30 findings; 29 addressed, 1 deferred) |
 | 2: Story Decomposition | not-started | | | | |
 | 2-adv: Adversarial Story Review | not-started | | | | |
 | 3: TDD Implementation | not-started | | | | |
@@ -81,7 +81,8 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | Phase C final synthesis | codebase-analyzer | complete | semport/jira-cli/jira-cli-pass-8-deep-synthesis.md (750 lines) |
 | Q5 synthesis fixes | codebase-analyzer | complete | committed d8ca198 |
 | Phase 0 gate closeout (Q1/Q2/Q4) | codebase-analyzer + state-manager | complete | 4 semport artifacts; commit d1a30f1 |
-| Phase 1 entry | state-manager | in-progress | DEC-004 scope choice pending |
+| Phase 1 spec crystallization (Bursts 1-5) | product-owner + architect + state-manager | complete | PRD, architecture, consistency audit, adversary Pass 1 fixes committed e00d01e |
+| Phase 1d adversary Pass 1 fixes | product-owner + architect | complete | 23 files; 29/30 findings addressed; e00d01e |
 
 ## Pending Decisions
 
@@ -120,10 +121,16 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 ## Convergence Trackers
 
 ### Phase 1d — Adversarial Spec Review
-_Not started. Initialized empty._
+_Pass 1 complete. Pass 2 next._
 
 ```yaml
-convergence_trajectory: []
+convergence_trajectory:
+  - pass: 1
+    findings: 30
+    severity: "4C/11H/12M/3L"
+    addressed: 29
+    deferred: 1
+    delta: null
 ```
 
 ### Phase 2-adv — Adversarial Story Review
@@ -154,8 +161,8 @@ convergence_trajectory: []
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-04 |
-| **Position** | Phase 0 COMPLETE — gate APPROVED by human. Phase 1 entry. DEC-001/DEC-002/DEC-003 RESOLVED (see Decisions Log). DEC-004 pending (streamlined vs full Phase 1 scope). factory-artifacts HEAD d1a30f1. Key ingestion findings: 540 BCs, 47 holdouts, 44 NFR gaps (1 CRITICAL multi-profile), 74 spec inputs for BC validation, 75 plans SUPERSEDE. Next action: human decides DEC-004, then /vsdd-factory:phase-1-spec-crystallization. |
-| **Convergence counter** | 0 of 3 |
+| **Position** | Phase 1 ACTIVE — Phase 1d adversary Pass 1 COMPLETE (30 findings; 29 addressed, 1 deferred). factory-artifacts HEAD e00d01e (Pass 1 fixes). BC-INDEX rebuilt. 3 SD-NNN security decisions created. Next action: dispatch adversary Pass 2 (/vsdd-factory:phase-1d-adversarial-spec-review Pass 2). |
+| **Convergence counter** | 1 of 3 |
 
 ## Historical Content
 
