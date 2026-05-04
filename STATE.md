@@ -1,1 +1,164 @@
-# STATE.md (placeholder — state-manager will populate)
+---
+document_type: pipeline-state
+level: ops
+version: "2.0"
+status: active
+producer: state-manager
+timestamp: 2026-05-04T00:00:00
+phase: pre-pipeline
+inputs: []
+input-hash: "[live-state]"
+traces_to: ""
+project: jira-cli
+mode: BROWNFIELD
+current_step: "env-preflight"
+current_cycle: "cycle-001"
+dtu_required: false
+activation_head: "dea166471e22eff55974d7675593469b37048c5f"
+activation_version: "v0.5.0-dev.7"
+---
+
+<!--
+  STATE.md SIZE BUDGET: Keep this file under 200 lines.
+  A hook warns at 200 and blocks at 500 (unless compacting).
+
+  Historical content belongs in cycle files, NOT here:
+  - Burst narratives → cycles/<cycle>/burst-log.md
+  - Adversary pass details → cycles/<cycle>/convergence-trajectory.md
+  - Old session checkpoints → cycles/<cycle>/session-checkpoints.md
+  - Lessons learned → cycles/<cycle>/lessons.md
+  - Resolved blockers → cycles/<cycle>/blocking-issues-resolved.md
+
+  Run /vsdd-factory:compact-state if this file grows past 200 lines.
+-->
+
+# Pipeline State: jira-cli
+
+## Project Metadata
+
+| Field | Value |
+|-------|-------|
+| **Product** | jr (Jira CLI) |
+| **Repository** | /Users/zious/Documents/GITHUB/jira-cli |
+| **Mode** | BROWNFIELD |
+| **Language** | Rust |
+| **Target Workspace** | develop → main |
+| **Started** | 2026-05-04 |
+| **Last Updated** | 2026-05-04 |
+| **Current Phase** | pre-pipeline / setup |
+| **Next Phase** | phase-0-codebase-ingestion |
+| **Activation HEAD** | dea166471e22eff55974d7675593469b37048c5f (v0.5.0-dev.7) |
+| **factory-artifacts SHA** | b8f66501d12a37f7669e01cc95cdb24029a1b4b2 |
+
+## Pipeline Goal
+
+Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with VSDD specs, holdouts, and verification; AND use VSDD pipeline for all post-v0.5.0 feature work.
+
+## Phase Progress
+
+| Phase | Status | Started | Completed | Gate | Finding Progression |
+|-------|--------|---------|-----------|------|---------------------|
+| pre-pipeline: Setup | in-progress | 2026-05-04 | | env-preflight | |
+| 0: Codebase Ingestion | not-started | | | | |
+| 1: Spec Crystallization | not-started | | | | |
+| 1d: Adversarial Spec Review | not-started | | | | |
+| 2: Story Decomposition | not-started | | | | |
+| 2-adv: Adversarial Story Review | not-started | | | | |
+| 3: TDD Implementation | not-started | | | | |
+| 3-adv: Wave Adversarial Reviews | not-started | | | | |
+| 4: Holdout Evaluation | not-started | | | | |
+| 5: Adversarial Refinement | not-started | | | | |
+| 6: Formal Hardening | not-started | | | | |
+| 7: Convergence | not-started | | | | |
+
+## Current Phase Steps
+
+<!-- Keep last 5 rows only. Archive older rows to cycles/cycle-001/burst-log.md. -->
+
+| Step | Agent | Status | Output |
+|------|-------|--------|--------|
+| Factory infrastructure bootstrap | devops-engineer | complete | factory-artifacts b8f665 |
+| Seed initial STATE.md | state-manager | complete | .factory/STATE.md |
+| Env preflight | dx-engineer | in-progress | (running in parallel) |
+
+## Pending Decisions
+
+| ID | Decision | Options | Due | Decided By |
+|----|----------|---------|-----|------------|
+| DEC-001 | Pre-VSDD docs treatment (`docs/superpowers/specs/`, `docs/superpowers/plans/`, `docs/specs/`, `docs/adr/`) — harmonize vs reference-only vs supersede | harmonize-into-specs / reference-only / supersede | Phase 0 → Phase 1 gate | orchestrator + human |
+
+## Decisions Log
+
+| ID | Decision | Rationale | Phase | Date | Made By |
+|----|----------|-----------|-------|------|---------|
+| | | | | | |
+
+## Skip Log
+
+| Step | Skipped? | Justification |
+|------|----------|---------------|
+| | | |
+
+## Blocking Issues
+
+<!-- Open issues only. Move resolved issues to cycles/cycle-001/blocking-issues-resolved.md. -->
+
+| ID | Issue | Severity | Blocking Phase | Owner | Resolution |
+|----|-------|----------|----------------|-------|------------|
+
+## Drift Items
+
+<!-- Populated during Phase 0 codebase ingestion. -->
+
+| ID | Area | Description | Severity | Status |
+|----|------|-------------|----------|--------|
+
+## Convergence Trackers
+
+### Phase 1d — Adversarial Spec Review
+_Not started. Initialized empty._
+
+```yaml
+convergence_trajectory: []
+```
+
+### Phase 2-adv — Adversarial Story Review
+_Not started. Initialized empty._
+
+```yaml
+convergence_trajectory: []
+```
+
+### Phase 3-adv — Wave Adversarial Reviews (per-story + wave)
+_Not started. Initialized empty._
+
+```yaml
+convergence_trajectory: []
+```
+
+### Phase 5-adv — Adversarial Refinement
+_Not started. Initialized empty._
+
+```yaml
+convergence_trajectory: []
+```
+
+## Session Resume Checkpoint
+
+<!-- Keep ONLY the latest checkpoint. Archive prior checkpoints to cycles/cycle-001/session-checkpoints.md. -->
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-04 |
+| **Position** | pre-pipeline; env-preflight running; next: phase-0-codebase-ingestion |
+| **Convergence counter** | 0 of 3 |
+
+## Historical Content
+
+| Content | Location |
+|---------|----------|
+| Burst history | `cycles/cycle-001/burst-log.md` |
+| Convergence trajectory | `cycles/cycle-001/convergence-trajectory.md` |
+| Session checkpoints | `cycles/cycle-001/session-checkpoints.md` |
+| Lessons learned | `cycles/cycle-001/lessons.md` |
+| Resolved blockers | `cycles/cycle-001/blocking-issues-resolved.md` |
