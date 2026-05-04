@@ -56,3 +56,36 @@ Phase A brownfield ingest of jira-cli complete. codebase-analyzer ran 7 broad pa
 | state-manager | Commit Phase A artifacts + .gitignore + STATE.md update | factory-artifacts 0380885 |
 
 ---
+
+## Burst 3 (2026-05-04)
+
+**Agents dispatched:** codebase-analyzer ×20 rounds across 6 passes, state-manager
+**Files touched:** semport/jira-cli/ (21 deep-round files), .factory/STATE.md, .factory/cycles/cycle-001/burst-log.md
+**Versions bumped:** (none)
+
+### Summary
+
+Phase B convergence deepening complete. All 6 passes converged to NITPICK via iterative deepening. codebase-analyzer ran 20 total rounds (Pass 0: R1-R2, Pass 1: R1-R2, Pass 2: R1-R7, Pass 3: R1-R4, Pass 4: R1-R4, Pass 5: R1-R2). 21 deep-round artifacts committed to factory-artifacts (SHA 257bdd7). 5 cross-pollination bugs verified at source. 12+ hallucinations caught and retracted (CONV-ABS markers). DEC-003 added: address 4 MUST-FIX bugs at Phase 0→1 gate. Phase B.5 coverage audit is next.
+
+Key findings cataloged:
+- 540 BCs total (475 HIGH / 59 MEDIUM / 6 LOW), 47 holdout scenarios
+- 411 domain invariants, 265 domain entities
+- 44 NFR gaps (1 CRITICAL / 4 HIGH / 16 MEDIUM / 22 LOW)
+- 7 architectural patterns + 7 anti-patterns identified
+- 4 MUST-FIX correctness bugs: handle_open OAuth, list_worklogs truncation, hardcoded 8h/5d, multi-workspace HashMap
+- CRITICAL multi-profile fields silent regression (12 read sites)
+- 2 security gaps: JR_AUTH_HEADER no production gating, --verbose header dump
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| codebase-analyzer | Pass 0 — deepening R1-R2 (metric corrections, orphan modules) | jira-cli-pass-0-deep-r1.md, jira-cli-pass-0-deep-r2.md |
+| codebase-analyzer | Pass 1 — deepening R1-R2 (5 new state machines, 26 risks) | jira-cli-pass-1-deep-r1.md, jira-cli-pass-1-deep-r2.md |
+| codebase-analyzer | Pass 2 — deepening R1-R7 (265 entities, 411 invariants) | jira-cli-pass-2-deep-r1.md through jira-cli-pass-2-deep-r7.md |
+| codebase-analyzer | Pass 3 — deepening R1-R4 (540 BCs, 47 holdouts) | jira-cli-pass-3-deep-r1.md through jira-cli-pass-3-deep-r4.md |
+| codebase-analyzer | Pass 4 — deepening R1-R4 (44 NFR gaps, 4 MUST-FIX bugs) | jira-cli-pass-4-deep-r1.md through jira-cli-pass-4-deep-r4.md |
+| codebase-analyzer | Pass 5 — deepening R1-R2 (7 patterns, 7 anti-patterns) | jira-cli-pass-5-deep-r1.md, jira-cli-pass-5-deep-r2.md |
+| state-manager | Commit Phase B artifacts + STATE.md update | factory-artifacts 257bdd7 |
+
+---
