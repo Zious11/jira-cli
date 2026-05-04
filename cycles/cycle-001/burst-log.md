@@ -192,3 +192,31 @@ Key HIGH findings:
 | adversary | Phase 1d adversarial spec review Pass 2 (fresh-context) | adv-p1-pass2.md (15 findings; 0C/6H/6M/3L) |
 | state-manager | Persist Pass 2 findings; update STATE.md convergence + checkpoint; commit | factory-artifacts (this commit) |
 
+---
+
+## Burst 8 (2026-05-04)
+
+**Agents dispatched:** product-owner, architect (parallel)
+**Files touched:** specs/prd/bc-7-output-render.md, specs/prd/error-taxonomy.md, specs/prd/BC-INDEX.md, specs/prd/holdout-scenarios.md, specs/prd/nfr-catalog.md, specs/prd/cross-cutting.md, specs/prd/bc-6-config-cache.md, architecture/dtu-assessment.md, architecture/cicd-setup.md, architecture/risk-register.md, architecture/security-decisions/SD-001-pkce.md, architecture/security-decisions/SD-002-jr-auth-header-prod-gating.md, architecture/security-decisions/SD-003-verbose-pii-redaction.md
+**Versions bumped:** (none)
+
+### Summary
+
+Pass 2 fixes (product-owner + architect parallel). 12 of 15 findings addressed; 3 deferred/no-action.
+
+Product-owner fixes (10 findings): extract_error_message chain canonicalized to 7-step from source (src/api/client.rs:448-490) — empty-body → literal "<empty response body>", errorMessage as level 6 (not errorDescription); BC-7.3.001/005, error-taxonomy, BC-INDEX all aligned. 12 holdout BC anchors corrected (H-002/008/009/010/011/015/016/020/023/025/029/030/047). NFR-R-NEW-1 (Retry-After unbounded LOW) added to nfr-catalog.md. NFR catalog reconciled to 41 entries (1C/5H/15M/20L); all 4 totals unified. cross-cutting.md range-collapsed marker for BC-X.4.003..008. BC-6.3.001 cross-references ADR-0007 Config::field_id() accessor.
+
+Architect fixes (3 findings, 1 shared): DTU holdout count corrected 47 → 48. NFR-S-E severity reconciled to HIGH (was LOW in catalog, CRITICAL in cicd-setup); R-H7 added to risk register; risk total 26 → 27. SD-001/002/003 deadlines scheduled for Phase 1 → 2 gate.
+
+Deferred: ADV-P2-013 (LOW) — BC-X.4.003..008 numbering aesthetic; ADV-P2-014 (LOW) — H-014 intentional 3-pass-3-BC collapse; ADV-P2-015 — resolved by ADV-P2-001 fix.
+
+Convergence counter: 0/3 clean passes needed. Pass 3 dispatching next.
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| product-owner | ADV-P2-001/002/003/005/007/011 fixes: error chain, holdout anchors, NFR-R-NEW-1, NFR catalog totals, cross-cutting range-collapse, BC-6.3.001 ADR ref | 7 specs/prd files |
+| architect | ADV-P2-004/006/009 fixes: NFR-S-E HIGH, DTU count 48, SD deadlines, risk R-H7 | 6 architecture files |
+| state-manager | Stage + commit 13 files; update STATE.md + burst-log | factory-artifacts (this commit) |
+

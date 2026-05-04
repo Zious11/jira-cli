@@ -61,7 +61,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | pre-pipeline: Setup | complete | 2026-05-04 | 2026-05-04 | env-preflight | |
 | 0: Codebase Ingestion | **COMPLETE** | 2026-05-04 | 2026-05-04 | Phase A + B + B.5 + B.6 + C + gate APPROVED | |
 | 1: Spec Crystallization | **entry** | 2026-05-04 | | DEC-004 pending (scope choice) | |
-| 1d: Adversarial Spec Review | **Pass 2 COMPLETE** | 2026-05-04 | | Pass 3 next (after fixes) | 30→15 (Pass 1: 30; Pass 2: 15; 0 CRITICAL) |
+| 1d: Adversarial Spec Review | **Pass 2 fixes COMPLETE; Pass 3 next** | 2026-05-04 | | Pass 3 dispatching | 30→15 (Pass 1: 30; Pass 2: 15; 0 CRITICAL) |
 | 2: Story Decomposition | not-started | | | | |
 | 2-adv: Adversarial Story Review | not-started | | | | |
 | 3: TDD Implementation | not-started | | | | |
@@ -81,8 +81,8 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | Phase C final synthesis | codebase-analyzer | complete | semport/jira-cli/jira-cli-pass-8-deep-synthesis.md (750 lines) |
 | Q5 synthesis fixes | codebase-analyzer | complete | committed d8ca198 |
 | Phase 0 gate closeout (Q1/Q2/Q4) | codebase-analyzer + state-manager | complete | 4 semport artifacts; commit d1a30f1 |
-| Phase 1 spec crystallization (Bursts 1-5) | product-owner + architect + state-manager | complete | PRD, architecture, consistency audit, adversary Pass 1 fixes committed e00d01e |
 | Phase 1d adversary Pass 1 fixes | product-owner + architect | complete | 23 files; 29/30 findings addressed; e00d01e |
+| Phase 1d adversary Pass 2 fixes | product-owner + architect | complete | 13 files; 12/15 findings fixed; 3 deferred/no-action; convergence 0/3 |
 
 ## Pending Decisions
 
@@ -121,7 +121,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 ## Convergence Trackers
 
 ### Phase 1d — Adversarial Spec Review
-_Pass 2 complete. Fixes needed before Pass 3._
+_Pass 2 fixes complete. Pass 3 dispatching._
 
 ```yaml
 convergence_trajectory:
@@ -134,8 +134,11 @@ convergence_trajectory:
   - pass: 2
     findings: 15
     severity: "0C/6H/6M/3L"
+    addressed: 12
+    deferred: 3
     delta: -15
     trend: FAVORABLE
+    fixes_committed: true
 ```
 
 ### Phase 2-adv — Adversarial Story Review
@@ -166,8 +169,8 @@ convergence_trajectory: []
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-04 |
-| **Position** | Phase 1 ACTIVE — Phase 1d adversary Pass 2 COMPLETE (15 findings; 0 CRITICAL). Trend favorable (30→15). HIGH: extract_error_message 3-way contradiction; ≥11 holdout anchor errors; NFR-R-NEW-1 orphan; NFR-S-E severity disagreement; NFR catalog 4-way count drift; DTU holdout count off-by-one. Next action: route fixes to product-owner + architect, then Pass 3. |
-| **Convergence counter** | 0 of 3 (clean passes needed; Pass 2 had 6 HIGH) |
+| **Position** | Phase 1 ACTIVE — Phase 1d adversary Pass 2 fixes COMPLETE (12/15 addressed; 3 deferred LOW). NFR catalog reconciled to 41 entries; NFR-S-E → HIGH; risk total 26→27; SD deadlines scheduled; 12 holdout anchors corrected; error chain canonicalized. Pass 3 dispatching. |
+| **Convergence counter** | 0 of 3 (clean passes needed; Pass 3 next) |
 
 ## Historical Content
 
