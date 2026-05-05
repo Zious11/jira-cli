@@ -426,3 +426,24 @@ No findings. All Pass 9 fixes verified propagated cleanly. NFR catalog 41, risk 
 | adversary | Phase 1d adversarial spec review Pass 10 (CLEAN-PASS) | adv-p1-pass10.md (0 findings) |
 | state-manager | Persist Pass 10 CLEAN-PASS; update STATE.md convergence counter 0/3 → 1/3; commit | factory-artifacts (this commit) |
 
+## Burst 17 (2026-05-04)
+
+**Agents dispatched:** state-manager
+**Files touched:** cycles/cycle-001/adversarial-reviews/adv-p1-pass11.md, specs/prd/nfr-catalog.md, architecture/cross-cutting.md, specs/domain-spec/state-machines.md, architecture/state-machines.md, STATE.md, cycles/cycle-001/burst-log.md
+**Versions bumped:** (none)
+
+### Summary
+
+Burst 17 — Pass 11 + fixes: 2 findings (1H/1M), all FIXED. New lenses surfaced dep-fact contradiction + cache-count semantic. Counter REGRESSED 1/3 → 0/3.
+
+HIGH: ADV-P11-001 — nfr-catalog.md NFR-O-A + arch cross-cutting.md corrected: `tracing` is NOT a current dep (Cargo.toml:14-37 verified). L2 was correct; PRD and arch claimed it was "already a dep". Phase 3 task clarified to dep-add + subscriber wire-up.
+
+MEDIUM: ADV-P11-002 — L2 state-machines.md + arch state-machines.md cache count corrected "7 distinct" → "6 distinct". Hybrid breakdown: 4 pure-Expiring + 1 keyed-map + 1 hybrid (object_type_attrs is BOTH, not a 7th category). Table already had 6 rows — only header and body text were wrong.
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| state-manager | Write adv-p1-pass11.md; apply 4 edits across 4 spec/arch files | factory-artifacts |
+| state-manager | Update STATE.md Phase Progress, Convergence Tracker, Session Checkpoint, burst-log | factory-artifacts (this commit) |
+
