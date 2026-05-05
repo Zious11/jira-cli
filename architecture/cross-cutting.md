@@ -145,7 +145,7 @@ Case-insensitive substring matching with explicit disambiguation semantics.
 ```
 MatchResult::Exact(String)          — exactly one item whose name matches exactly (case-insensitive)
 MatchResult::ExactMultiple(String)  — multiple case-variant matches; carries the first matching candidate (no disambiguation triggered; first wins). See src/partial_match.rs:6-7 + PRD error-taxonomy.md §5.
-MatchResult::Ambiguous(Vec<String>) — multiple items contain the needle substring
+MatchResult::Ambiguous(Vec<String>) — one or more items contain the needle substring (single substring hit is also `Ambiguous` — fail-closed design). See src/partial_match.rs:39-42 + PRD error-taxonomy.md §5.
 MatchResult::None(Vec<String>)      — no items match; Vec contains the search candidates for error display
 ```
 

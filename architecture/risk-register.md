@@ -68,9 +68,9 @@
 | Severity | Count | Top action |
 |----------|------:|-----------|
 | CRITICAL | 1 | FIX-IN-PHASE-3 (NFR-R-D multi-profile fields) |
-| HIGH | 6 | 4× FIX-IN-PHASE-3, 2× SECURITY-DECIDE |
-| MEDIUM | 8 | 3× DEFER, 2× DOCUMENT-AS-IS, 1× FIX-IN-PHASE-3, 2× SECURITY-DECIDE (R-M3 merged into R-L11 at Pass 8) |
-| LOW | 11 | 7× DOCUMENT-AS-IS, 3× DEFER, 1× POLICY-DECISION |
+| HIGH | 6 | 5× FIX-IN-PHASE-3, 1× SECURITY-DECIDE |
+| MEDIUM | 8 | 4× DEFER, 1× DOCUMENT-AS-IS, 1× FIX-IN-PHASE-3, 2× SECURITY-DECIDE (R-M3 merged into R-L11 at Pass 8) |
+| LOW | 11 | 8× DOCUMENT-AS-IS, 2× DEFER, 1× POLICY-DECISION |
 | **Total** | **26** | |
 
 ---
