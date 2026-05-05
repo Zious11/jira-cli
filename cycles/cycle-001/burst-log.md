@@ -407,3 +407,22 @@ ADV-P9-004 FIXED (MEDIUM): arch cross-cutting.md MatchResult::Ambiguous descript
 | state-manager | Write adv-p1-pass9.md; apply 4 fixes across 3 spec/arch files | factory-artifacts |
 | state-manager | Update STATE.md Phase Progress, Convergence Tracker, Session Checkpoint, burst-log | factory-artifacts (this commit) |
 
+## Burst 16 (2026-05-04)
+
+**Agents dispatched:** state-manager, adversary
+**Files touched:** cycles/cycle-001/adversarial-reviews/adv-p1-pass10.md, STATE.md, cycles/cycle-001/burst-log.md
+**Versions bumped:** (none)
+
+### Summary
+
+Burst 16 — Pass 10 (state-manager + adversary): CLEAN-PASS achieved! Trajectory 30→15→9→5→10→5→4→3→4→0. Counter 0/3 → 1/3. First clean pass after 9 fix-bursts. Pass 11 next (target 2/3).
+
+No findings. All Pass 9 fixes verified propagated cleanly. NFR catalog 41, risk register 26, BC count 542, holdouts 48 — all reconcile. MUST-FIX register consistent across 5+ docs. ADR-0009 anchor correct. 5 BC source-line spot-checks exact.
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| adversary | Phase 1d adversarial spec review Pass 10 (CLEAN-PASS) | adv-p1-pass10.md (0 findings) |
+| state-manager | Persist Pass 10 CLEAN-PASS; update STATE.md convergence counter 0/3 → 1/3; commit | factory-artifacts (this commit) |
+

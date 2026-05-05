@@ -49,7 +49,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | pre-pipeline: Setup | complete | 2026-05-04 | 2026-05-04 | env-preflight | |
 | 0: Codebase Ingestion | **COMPLETE** | 2026-05-04 | 2026-05-04 | Phase A + B + B.5 + B.6 + C + gate APPROVED | |
 | 1: Spec Crystallization | **entry** | 2026-05-04 | | DEC-004 pending (scope choice) | |
-| 1d: Adversarial Spec Review | **Pass 9 fixes COMPLETE; Pass 10 next** | 2026-05-04 | | Pass 10 dispatching | 30→15→9→5→10→5→4→3→4 (P9: 0C/0H/4M/0L; 0/3 clean passes) |
+| 1d: Adversarial Spec Review | **Pass 10 CLEAN-PASS; 1/3 clean passes; Pass 11 next** | 2026-05-04 | | Pass 11 dispatching | 30→15→9→5→10→5→4→3→4→**0** (P10: CLEAN; 1/3 clean passes) |
 | 2: Story Decomposition | not-started | | | | |
 | 2-adv: Adversarial Story Review | not-started | | | | |
 | 3: TDD Implementation | not-started | | | | |
@@ -68,6 +68,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | Phase 1d adversary Pass 7 + fixes | state-manager | complete | adv-p1-pass7.md; 4 FIXED; trajectory →4; NFR-O-K merged (42→41) |
 | Phase 1d adversary Pass 8 + fixes | state-manager | complete | adv-p1-pass8.md; 3 FIXED; trajectory →3; risks 27→26 (R-M3→R-L11) |
 | Phase 1d adversary Pass 9 + fixes | state-manager | complete | adv-p1-pass9.md; 4 FIXED; trajectory →4; plateau in 3-5 range; 0/3 |
+| Phase 1d adversary Pass 10 (state-manager + adversary) | state-manager | complete | adv-p1-pass10.md; CLEAN-PASS; trajectory →0; counter 1/3 |
 
 ## Pending Decisions
 
@@ -106,7 +107,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 ## Convergence Trackers
 
 ### Phase 1d — Adversarial Spec Review
-_Pass 9 fixes complete. Trajectory 30→15→9→5→10→5→4→3→4. Counter 0/3. Pass 10 next._
+_Pass 10 CLEAN-PASS. First clean pass achieved at Pass 10. Trajectory 30→15→9→5→10→5→4→3→4→0. Counter 1/3. Pass 11 next._
 
 ```yaml
 convergence_trajectory:
@@ -139,6 +140,15 @@ convergence_trajectory:
     delta: +1
     trend: PLATEAU
     fixes_committed: true
+  - pass: 10
+    findings: 0
+    severity: "CLEAN-PASS"
+    addressed: 0
+    delta: -4
+    trend: CONVERGING
+    fixes_committed: true
+    clean_pass: true
+    clean_pass_count: "1/3"
 ```
 
 ### Phase 2-adv — Adversarial Story Review
@@ -169,8 +179,8 @@ convergence_trajectory: []
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-04 |
-| **Position** | Phase 1 ACTIVE — Phase 1d adversary Pass 9 fixes COMPLETE (4 findings, all fixed). Trajectory 30→15→9→5→10→5→4→3→4 (plateau). Manifest: 542 BCs / 41 NFRs / 48 holdouts / 26 risks. Drift concentrates in summary arithmetic and cross-doc anchors. Pass 10 next. |
-| **Convergence counter** | 0 of 3 (clean passes needed; Pass 10 next) |
+| **Position** | Phase 1 ACTIVE — Phase 1d adversary Pass 10 CLEAN-PASS (0 findings). First clean pass achieved after 9 fix-bursts. Trajectory 30→15→9→5→10→5→4→3→4→0. Manifest: 542 BCs / 41 NFRs / 48 holdouts / 26 risks. Pass 11 next (target 2/3). |
+| **Convergence counter** | 1 of 3 (clean passes needed; Pass 11 next) |
 
 ## Historical Content
 
