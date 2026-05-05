@@ -521,3 +521,41 @@ No substantive findings. 2 nitpicks honestly demoted to LOW (holdout Group 1 lab
 | adversary | Phase 1d adversarial spec review Pass 14 (CLEAN-PASS) | adv-p1-pass14.md (0 findings) |
 | state-manager | Persist Pass 14 CLEAN-PASS; update STATE.md convergence counter 0/3 → 1/3; burst-log; commit | factory-artifacts (this commit) |
 
+---
+
+## Burst 21 (2026-05-04)
+
+**Agents dispatched:** state-manager
+**Files touched:** cycles/cycle-001/adversarial-reviews/adv-p1-pass15.md, specs/prd/bc-3-issue-write.md, specs/prd/bc-1-auth-identity.md, STATE.md, cycles/cycle-001/burst-log.md
+**Versions bumped:** (none)
+
+### Summary
+
+Burst 21 — Pass 15 + bc-*.md body sweep: 2 findings + per-file body audit. Counter 1/3 → 0/3 reset.
+
+Pass 15 trajectory: 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2. Counter regress 1/3 → 0/3.
+
+ADV-P15-001 (HIGH): bc-3-issue-write.md end-of-file "Total BCs in this file: 40" corrected to "48 individually-bodied (cumulative 77 incl. range-collapsed)".
+
+ADV-P15-002 (MEDIUM): bc-3-issue-write.md body intro enumeration corrected — "7 subdomains" kept (matches 7 `### N.N` headings); 8-item list collapsed to 7 by merging Edit+Open under 3.4 (reflecting combined section header "### 3.4 Edit and Open").
+
+Pre-Pass-16 body sweep across all 8 bc-*.md files:
+- bc-1-auth-identity.md: DRIFT — body claimed "5 subdomains" but 6 `### N.N` headings present (1.1–1.6); corrected to "6 subdomains" with 1.6 Auth error handling listed.
+- bc-2-issue-read.md: CLEAN — "6 subdomains" matches 6 headings; end-of-file "Total: 49" matches definitional_count: 49.
+- bc-3-issue-write.md: FIXED (ADV-P15-001 + ADV-P15-002 above).
+- bc-4-assets-cmdb.md: CLEAN — "4 subdomains" matches 4 headings; no end-of-file total line.
+- bc-5-boards-sprints.md: CLEAN — "4 subdomains" matches 4 headings; no end-of-file total line.
+- bc-6-config-cache.md: CLEAN — "3 subdomains" matches 3 headings; no end-of-file total line.
+- bc-7-output-render.md: CLEAN — "5 subdomains" matches 5 headings; no end-of-file total line.
+- cross-cutting.md: CLEAN — no `### N.N` subdomains (uses `### X.N` style with 0 matches); no end-of-file total line.
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| state-manager | Persist adv-p1-pass15.md (2 findings: 1H/1M) | cycles/cycle-001/adversarial-reviews/adv-p1-pass15.md |
+| state-manager | ADV-P15-001 fix: bc-3 end-of-file "40" → "48 individually-bodied" | specs/prd/bc-3-issue-write.md |
+| state-manager | ADV-P15-002 fix: bc-3 intro 8-item list → 7 items (Edit+Open merged under 3.4) | specs/prd/bc-3-issue-write.md |
+| state-manager | Body sweep drift: bc-1 "5 subdomains" → "6 subdomains" (1.6 added) | specs/prd/bc-1-auth-identity.md |
+| state-manager | Update STATE.md (counter 1/3 → 0/3, trajectory, checkpoint, steps); burst-log; commit | factory-artifacts |
+
