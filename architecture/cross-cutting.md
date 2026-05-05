@@ -183,4 +183,4 @@ Used at exactly 2 call sites (Pass 1 R2 verified):
 
 **Pattern:** each call site has a `static LOGGED: AtomicBool = AtomicBool::new(false)`. On first parse failure, logs `[verbose] parse failure at {site}: "{iso}"` to stderr. Subsequent failures at the same site are silent. Prevents log flooding for chronic parse failures.
 
-**No tracing crate.** No structured logging. All diagnostic output is `--verbose`-gated `eprintln!`. NFR-O-A (MEDIUM, DEFERRED) tracks adoption of the `tracing` crate (already a dependency — `tracing` is in `[dependencies]` — but not wired to any subscriber in production).
+**No tracing crate.** No structured logging. All diagnostic output is `--verbose`-gated `eprintln!`. NFR-O-A (MEDIUM, DEFERRED) tracks adoption of the `tracing` crate. `tracing` is NOT currently a dependency (verified Cargo.toml:14-37). Source uses inline `eprintln!` and `static AtomicBool` flags via `observability.rs`. Phase 3 adoption requires `cargo add tracing tracing-subscriber` + subscriber init in `main.rs`.

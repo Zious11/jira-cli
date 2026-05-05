@@ -266,7 +266,7 @@ stateDiagram-v2
     end note
 ```
 
-### Cache types (7 distinct)
+### Cache types (6 distinct)
 
 | Cache file | Key strategy | TTL | Notes |
 |-----------|-------------|-----|-------|

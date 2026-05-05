@@ -297,7 +297,7 @@ Five state machines that materially drive the `jr` system. All are verified from
 - Non-atomic write (`fs::write`): crash-window exists. Self-heals via `CORRUPT → MISS` on next read.
 - Map-cache writes (project_meta, object_type_attrs) on CORRUPT: silently replace entire map with just the new entry. All other keys lost. NEW-INV-07.
 - `clear_profile_cache(name)`: no-op when `~/.cache/jr/v1/<name>/` absent.
-- 7 distinct cache categories; 5 use `Expiring` trait generic; 2 are keyed-map (`project_meta`, `object_type_attrs`).
+- 6 distinct cache categories: 4 use `Expiring` only (teams, workspace, cmdb_fields, resolutions); 1 uses keyed-map only (project_meta); 1 uses both `Expiring` AND keyed-map (object_type_attrs, hybrid).
 - `project_meta` uses per-entry TTL; `object_type_attrs` uses file-level TTL. Asymmetric design.
 
 ---
