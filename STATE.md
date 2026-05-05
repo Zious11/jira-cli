@@ -188,8 +188,8 @@ convergence_trajectory: []
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-04 |
-| **Position** | Phase 1 ACTIVE — Phase 1d adversary Pass 6 fixes COMPLETE (5 findings, all fixed). Trajectory 30→15→9→5→10→5. Manifest: 542 BCs / 42 NFRs / 48 holdouts / 27 risks (HIGH 7→6, MEDIUM 8→9 after R-H3 demotion). Pass 7 dispatching. |
-| **Convergence counter** | 0 of 3 (clean passes needed; Pass 7 next) |
+| **Position** | Phase 1 ACTIVE — Phase 1d adversary Pass 7 fixes COMPLETE (4 findings, all fixed). Trajectory 30→15→9→5→10→5→4. Manifest: 542 BCs / 41 NFRs / 48 holdouts / 27 risks. NFR-O-K merged into NFR-S-D (42→41). Pass 8 next. |
+| **Convergence counter** | 0 of 3 (clean passes needed; Pass 8 next) |
 
 ## Historical Content
 

@@ -334,3 +334,28 @@ LOW: ADV-P6-005 — arch README risk arithmetic corrected to match risk-register
 | state-manager | Write adv-p1-pass6.md; apply 5 fixes across 4 spec/arch files | factory-artifacts |
 | state-manager | Update STATE.md Phase Progress, Convergence Tracker, Session Checkpoint, burst-log | factory-artifacts (this commit) |
 
+## Burst 13 (2026-05-04)
+
+**Agents dispatched:** state-manager
+**Files touched:** cycles/cycle-001/adversarial-reviews/adv-p1-pass7.md, specs/prd/nfr-catalog.md, specs/prd/cross-cutting.md, specs/prd/README.md, specs/prd/BC-INDEX.md, architecture/cross-cutting.md, STATE.md, cycles/cycle-001/burst-log.md
+**Versions bumped:** (none)
+
+### Summary
+
+Pass 7 adversarial review (4 findings: 0C/0H/3M/1L) persisted and all 4 fixed. Trajectory: 30→15→9→5→10→5→4. Convergence counter still 0/3 — Pass 8 dispatches next.
+
+ADV-P7-001 CLOSED (no change): BC count 542 is correct — BC-INDEX table sums 541 from sections + 1 new BC-X.4.009 = 542. Finding was a false alarm.
+
+ADV-P7-002 FIXED: NFR-O-K (duplicate of NFR-S-D; same site src/config.rs:113-140, same routing DOCUMENT-AS-IS) merged into NFR-S-D with cross-reference note. NFR total 42→41; severity 1C/6H/15M/19L=41. Count propagated to nfr-catalog.md frontmatter, header totals, routing summary, README.md (×2), BC-INDEX.md.
+
+ADV-P7-003 FIXED: cross-cutting.md definitional_count corrected 63→64 (actual `#### BC-` heading count = 64; BC-INDEX already showed 64 individually-bodied — now in sync).
+
+ADV-P7-004 FIXED: arch cross-cutting.md MatchResult::ExactMultiple description rewritten — "first wins, no disambiguation" replaces misleading "used for disambiguation".
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| state-manager | Write adv-p1-pass7.md; apply 3 real fixes + 1 sweep | factory-artifacts |
+| state-manager | Update STATE.md Position, Convergence counter, burst-log | factory-artifacts (this commit) |
+
