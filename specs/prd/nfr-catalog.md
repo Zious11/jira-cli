@@ -46,7 +46,7 @@ All four MUST-FIX items (NFR-R-D, NFR-R-A, NFR-R-B, NFR-R-E) have been crystalli
 |---|---|---|---|---|
 | **NFR-R-C** | Worklog duration uses hardcoded `8h/day, 5d/week` constants. Jira instances can configure these via `/rest/api/3/configuration/timetracking`. Silent wrong-answer for 7.5h or 4-day setups. | MEDIUM | `src/cli/worklog.rs:32` | **FIX-IN-PHASE-3**: Fetch + cache timetracking config from Jira instance (7-day TTL); fall back to 8/5 on miss |
 | **NFR-R-F** | `get_changelog` anti-loop guard present (breaks if nextPage URL == current URL). `search_issues` cursor loop has no analogous guard against cursor == cursor regression. | MEDIUM | `src/api/jira/issues.rs:222-230` | **DOCUMENT-AS-IS**: Add similar guard to `search_issues`; document pattern |
-| **NFR-R-NEW-1** | `Retry-After` header has no upper-bound cap in current code. `Retry-After: 86400` causes the retry loop to sleep for 24 hours with no user escape (other than Ctrl+C). BC-X.4.009 proposes `MAX_RETRY_AFTER_SECS = 60` cap as Phase 3 fix. Current behavior: any valid u64 value is honored as-is. **Severity LOW (ADV-P3-009 reviewed, retained):** Single-user CLI — user can Ctrl+C at any time; not a service-grade SLA concern. Atlassian does not send multi-hour `Retry-After` values in practice. | LOW | `src/api/rate_limit.rs:14-19` | **DOCUMENT-AS-IS**: Document current no-cap behavior in CLAUDE.md. Phase 3 fix: BC-X.4.009 (`MAX_RETRY_AFTER_SECS = 60` cap). H-027 pins current gap. |
+| **NFR-R-NEW-1** | `Retry-After` header has no upper-bound cap in current code. `Retry-After: 86400` causes the retry loop to sleep for 24 hours with no user escape (other than Ctrl+C). BC-X.4.009 proposes `MAX_RETRY_AFTER_SECS = 60` cap as Phase 3 fix. Current behavior: any valid u64 value is honored as-is. **Severity LOW (ADV-P3-009 reviewed, retained):** Single-user CLI — user can Ctrl+C at any time; not a service-grade SLA concern. Atlassian does not send multi-hour `Retry-After` values in practice. | LOW | `src/api/rate_limit.rs:14-19` | **FIX-IN-PHASE-3**: Implement `MAX_RETRY_AFTER_SECS = 60` cap per BC-X.4.009. Print warning and abort retry when cap exceeded. H-027 pins current gap (to be updated when fix lands). |
 | **NFR-R-NEW-2** | `parse_duration` silently wraps on multiplicative overflow for pathological inputs (e.g., `99999999999999w`). Release builds have `panic=abort` which disables debug overflow checks — silent wrapped value sent to Jira API. | LOW | `src/duration.rs:29-32` | **DOCUMENT-AS-IS**: Use `checked_mul`; bail with "duration too large" error. ~5 LOC fix. Acceptable for v1. |
 
 ### LOW
@@ -166,7 +166,7 @@ All four MUST-FIX items (NFR-R-D, NFR-R-A, NFR-R-B, NFR-R-E) have been crystalli
 | NFR-O-W | Observability | MEDIUM | POLICY-DECISION | — |
 | NFR-P-NEW-1 | Performance | MEDIUM | DEFER | — |
 | NFR-R-G | Reliability | LOW | DOCUMENT-AS-IS | — |
-| NFR-R-NEW-1 | Reliability | LOW | DOCUMENT-AS-IS | BC-X.4.009 (proposed fix) |
+| NFR-R-NEW-1 | Reliability | LOW | FIX-IN-PHASE-3 | BC-X.4.009 (proposed fix) |
 | NFR-R-NEW-2 | Reliability | LOW | DOCUMENT-AS-IS | — |
 | NFR-S-D | Security | LOW | DOCUMENT-AS-IS | — |
 | NFR-S-E | Security | HIGH | FIX-IN-PHASE-3 | — |
@@ -189,10 +189,10 @@ All four MUST-FIX items (NFR-R-D, NFR-R-A, NFR-R-B, NFR-R-E) have been crystalli
 | NFR-SCA-3 | Scalability | LOW | DOCUMENT-AS-IS | — |
 
 **Phase 3 routing summary:**
-- FIX-IN-PHASE-3: 9 (1 CRITICAL, 5 HIGH, 2 MEDIUM, 1 LOW)
+- FIX-IN-PHASE-3: 10 (1 CRITICAL, 5 HIGH, 2 MEDIUM, 2 LOW — includes NFR-R-NEW-1)
 - SECURITY-DECIDE: 3 (1 HIGH, 2 MEDIUM)
 - POLICY-DECISION: 3 (3 MEDIUM)
-- DOCUMENT-AS-IS: 15 (LOW or MEDIUM, includes NFR-R-NEW-1)
+- DOCUMENT-AS-IS: 14 (LOW or MEDIUM; NFR-R-NEW-1 moved to FIX-IN-PHASE-3)
 - DEFER: 17 (MEDIUM and LOW)
 
 **Total: 42** (41 enumerated rows + NFR-S-F added per ADV-P3-007. NFR-S-E severity promoted LOW→HIGH per ADV-P2-004.)

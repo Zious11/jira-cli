@@ -15,7 +15,7 @@ trace: |
 
 # BC-6 — Configuration & Cache
 
-38 behavioral contracts across 3 subdomains: Configuration (6.1), Cache (6.2),
+39 behavioral contracts across 3 subdomains: Configuration (6.1), Cache (6.2),
 Multi-profile fields — MUST-FIX (6.3).
 
 ---
@@ -301,7 +301,7 @@ Multi-profile fields — MUST-FIX (6.3).
 > from `config.global.fields.story_points_field_id` / `config.global.fields.team_field_id`
 > (the legacy `[fields]` block). After ANY `Config::save_global()` call (e.g., `jr auth login`,
 > `jr auth switch`, `jr init`), the `[fields]` block is dropped from disk (due to
-> `#[serde(default, skip_serializing)]` at `src/config.rs:43-48`). All 11 read sites
+> `#[serde(default, skip_serializing)]` at `src/config.rs:43-48`). All 14 read sites
 > then observe `None` — columns silently disappear. This contract describes the FIXED behavior.
 
 **Spec contract (fixed behavior — round-trip invariant):**

@@ -39,14 +39,14 @@ the gap between current code and these contracts.
 | [bc-3-issue-write.md](bc-3-issue-write.md) | Issue Write | BC-3.*.* (77) | BC-201..225 + BC-1056..1081 |
 | [bc-4-assets-cmdb.md](bc-4-assets-cmdb.md) | Assets & CMDB | BC-4.*.* (32) | BC-301..315 + BC-316..324 + BC-1136..1137 |
 | [bc-5-boards-sprints.md](bc-5-boards-sprints.md) | Boards & Sprints | BC-5.*.* (35) | BC-401..410 + BC-1138 |
-| [bc-6-config-cache.md](bc-6-config-cache.md) | Configuration & Cache | BC-6.*.* (38) | BC-901..911 + BC-1001..1016 + BC-6.3.001 (NFR-R-D) |
+| [bc-6-config-cache.md](bc-6-config-cache.md) | Configuration & Cache | BC-6.*.* (39) | BC-901..911 + BC-1001..1016 + BC-6.3.001 (NFR-R-D) + BC-6.2.015 (profile-fence) |
 | [bc-7-output-render.md](bc-7-output-render.md) | Output Rendering | BC-7.*.* (80) | BC-1101..1118 + BC-1104..1118 (snapshots) + ADF (54) |
 | [cross-cutting.md](cross-cutting.md) | Cross-cutting | BC-X.*.* (130) | BC-601..606 + BC-701..709 + BC-801..808 + BC-1082..1103 + BC-1201..1214 + BC-1401..1411 + Worklogs/Teams/Users/Projects |
 | [nfr-catalog.md](nfr-catalog.md) | NFR Catalog | 42 NFRs | Pass 4 R4 + ADV-P3-007 (1C/6H/15M/20L); reconciled per ADV-P2-005 + ADV-P3-004 |
 | [error-taxonomy.md](error-taxonomy.md) | Error taxonomy | 11 variants | BC-1204 + exit code table |
 | [edge-case-catalog.md](edge-case-catalog.md) | Edge cases | cross-cutting | Pass 3 §5 untested gaps |
 | [holdout-scenarios.md](holdout-scenarios.md) | Holdout scenarios | 48 | H-001..H-047 + H-NEW-MP-001 |
-| [BC-INDEX.md](BC-INDEX.md) | Master BC index | 541 | All BCs with traceability |
+| [BC-INDEX.md](BC-INDEX.md) | Master BC index | 542 | All BCs with traceability |
 
 **Total BCs in PRD:** 542 (540 imported + 2 formalized: BC-6.3.001 from NFR-R-D draft + BC-6.2.015 profile-fence)
 
@@ -103,7 +103,7 @@ These four BCs describe the CORRECT (post-fix) behavior. Phase 3 must turn them 
 | File | Consumer | Contents |
 |------|----------|----------|
 | [nfr-catalog.md](nfr-catalog.md) | Architect, Phase 3 | 42 NFR gaps (1C/6H/15M/20L); severity, recommendation, Phase 3 routing |
-| [error-taxonomy.md](error-taxonomy.md) | Implementer, Test-writer | 11 JrError variants × exit codes; 6-level `extract_error_message` chain |
+| [error-taxonomy.md](error-taxonomy.md) | Implementer, Test-writer | 11 JrError variants × exit codes; 7-level `extract_error_message` chain |
 | [edge-case-catalog.md](edge-case-catalog.md) | Test-writer, Holdout-evaluator | Cross-cutting edge cases; untested behavior gaps from Pass 3 §5 |
 | [holdout-scenarios.md](holdout-scenarios.md) | Holdout-evaluator | 48 holdout scenarios (H-001..H-047 + H-NEW-MP-001) |
 
@@ -113,10 +113,10 @@ These four BCs describe the CORRECT (post-fix) behavior. Phase 3 must turn them 
 
 | Differentiator | BC anchors |
 |----------------|-----------|
-| Multi-profile auth with per-profile credential isolation | BC-1.1.007, BC-1.2.013, BC-1.2.023-R, BC-6.1.*, BC-X.5.* |
-| Embedded OAuth app (no user setup required) | BC-1.3.019, BC-1.3.020, BC-1.3.021, BC-1.3.031, BC-X.9.001 |
-| Fully non-interactive mode (`--no-input`) for CI/AI agents | BC-2.1.005, BC-3.1.006, BC-X.4.001 |
+| Multi-profile auth with per-profile credential isolation | BC-1.1.007, BC-1.2.013, BC-1.2.023-R, BC-6.1.*, BC-6.2.009, BC-6.2.010, BC-1.4.027 |
+| Embedded OAuth app (no user setup required) | BC-1.3.019, BC-1.3.020, BC-1.3.021, BC-1.3.022, BC-1.5.031, BC-1.5.034 |
+| Fully non-interactive mode (`--no-input`) for CI/AI agents | BC-7.1.003, BC-3.2.008, BC-X.7.004, BC-X.3.007 |
 | Idempotent state mutations | BC-3.1.007 (move), BC-3.1.004 (assign), BC-3.5.001 (link) |
 | Assets/CMDB inline in issue list | BC-4.1.001, BC-2.1.016 (--asset filter) |
-| Actionable error messages with remediation hints | BC-X.3.012 (convention) |
+| Actionable error messages with remediation hints | BC-X.3.007 (next-step convention, universal) |
 | Multi-workspace asset enrichment (post-fix) | BC-4.3.001 (NFR-R-E fix) |

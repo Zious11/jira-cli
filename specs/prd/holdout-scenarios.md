@@ -328,7 +328,7 @@ Setup uses:
 **Action**: `jr issue remote-link FOO-1 --url ftp://example.com`
 **Expected**: exit 64; stderr contains `"http or https"` AND `"ftp"`. Zero HTTP calls.
 **Why hidden**: Scheme allowlist is a user-safety contract; easy to regress.
-**BC refs**: BC-3.7.003
+**BC refs**: BC-3.7.004
 
 ---
 

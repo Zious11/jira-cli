@@ -70,7 +70,7 @@ Categories:
 ### EC-AUTH-008: OAuth callback loopback IPv4 vs IPv6
 **Boundary**: System resolves `localhost` to `::1` (IPv6) on macOS; callback listener binds `127.0.0.1`.
 **Expected**: Callback URL is literal `http://127.0.0.1:53682/callback` — forces IPv4 to match listener.
-**Status**: Covered by BC-1.3.021 (ADR-0006 invariant). Not tested via actual HTTP — assertion is code-level.
+**Status**: Covered by BC-1.5.031 (ADR-0006 invariant). Not tested via actual HTTP — assertion is code-level.
 
 ### EC-AUTH-009: `InsufficientScope` substring match precision
 **Boundary**: 401 body contains "scope does not match" (exact substring).
@@ -114,7 +114,7 @@ Categories:
 ### EC-HTTP-001: 429 retry — MAX_RETRIES=3 and then passthrough for send_raw
 **Boundary**: Server returns 429 for 4 consecutive calls.
 **Expected**: `send` raises error after 3 retries. `send_raw` returns 429 response to caller (NOT error).
-**Status**: Covered by BC-X.2.004; holdout H-013.
+**Status**: Covered by BC-X.1.005; holdout H-013.
 
 ### EC-HTTP-002: Retry-After integer-only parsing
 **Boundary**: Server sends `Retry-After: Mon, 04 May 2026 00:00:00 GMT` (HTTP-date format).
@@ -221,7 +221,7 @@ Categories:
 ### EC-SPRINT-002: `issue list` on kanban board — silent degrade
 **Boundary**: `jr issue list` when no scrum board found for project.
 **Expected**: Silent degrade — no error, just no sprint filter applied. (Asymmetry with sprint commands — DOCUMENTED.)
-**Status**: Covered by BC-X.3.001 cross-cutting note.
+**Status**: Covered by BC-2.1.004 (kanban board uses project JQL, no error) and BC-2.2.027 (no active sprint fallback).
 
 ### EC-SPRINT-003: Sprint add/remove cap — MAX_SPRINT_ISSUES=50
 **Boundary**: `jr sprint add --sprint 1 <51 issue keys>`.
@@ -264,8 +264,8 @@ Categories:
 
 ### EC-OUT-005: `extract_error_message` empty body (FIRST priority)
 **Boundary**: API returns 4xx with empty response body.
-**Expected**: Returns `None` → caller uses status-code message (NOT attempts to parse `{}`).
-**Status**: Covered by BC-7.3.001 (corrected from broad pass per CONV-ABS-004).
+**Expected**: Returns literal string `<empty response body>` (per BC-7.3.005); NOT attempts to parse `{}`.
+**Status**: Covered by BC-7.3.005 (corrected from broad pass per CONV-ABS-004; further corrected per ADV-P5-002).
 
 ### EC-OUT-006: `--no-input` auto-set for non-TTY
 **Boundary**: Command invoked from CI / piped context where stdin is not TTY.
@@ -275,7 +275,7 @@ Categories:
 ### EC-OUT-007: `--output json` error format — structured to stderr
 **Boundary**: Any command errors with `--output json` active.
 **Expected**: stderr is parseable JSON `{"error": "<msg>", "code": <int>}`; stdout empty or absent.
-**Status**: Covered by BC-7.4.012; holdout H-020.
+**Status**: Covered by BC-7.3.005; holdout H-020. (BC-7.4.012 is user view hidden email — unrelated.)
 
 ---
 

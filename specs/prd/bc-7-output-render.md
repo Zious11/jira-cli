@@ -2,7 +2,7 @@
 context: bc-7
 title: "Output Rendering & Error"
 total_bcs: 80   # cumulative claim (incl. range-collapsed); definitional_count below is individually-bodied headings
-definitional_count: 33   # count of `#### BC-` headings in this file
+definitional_count: 34   # count of `#### BC-` headings in this file
 last_updated: 2026-05-04
 source_pass: 3
 trace: |
