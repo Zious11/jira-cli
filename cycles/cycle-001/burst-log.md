@@ -580,3 +580,32 @@ No findings. CANONICAL-COUNTS.md arithmetic verified (541 grand total, 309 bodie
 | adversary | Phase 1d adversarial spec review Pass 16 (CLEAN-PASS) | adv-p1-pass16.md (0 findings) |
 | state-manager | Persist Pass 16 CLEAN-PASS; update STATE.md convergence counter 0/3 → 1/3; burst-log; commit | factory-artifacts (this commit) |
 
+---
+
+## Burst 23 (2026-05-04)
+
+**Agents dispatched:** state-manager
+**Files touched:** cycles/cycle-001/adversarial-reviews/adv-p1-pass17.md, architecture/security-decisions/SD-003-verbose-pii-redaction.md, specs/domain-spec/state-machines.md, specs/domain-spec/bc-04-assets-cmdb.md, specs/domain-spec/bc-06-config-cache.md, specs/domain-spec/bc-07-output-render.md, specs/prd/CANONICAL-COUNTS.md, STATE.md, cycles/cycle-001/burst-log.md
+**Versions bumped:** (none)
+
+### Summary
+
+Burst 23 — Pass 17 + fixes: 3 findings (1H/2M), all FIXED. 4th counter reset (1/3 → 0/3 across 17 passes). Convergence asymptotic. Awaiting orchestrator decision on continuation strategy.
+
+ADV-P17-001 FIXED (HIGH): SD-003-verbose-pii-redaction.md reference corrected R-H3 → R-M0 (risk-register.md). R-H3 is handle_open URL bug (post Pass 6 reclassification); R-M0 is canonical for verbose body PII.
+
+ADV-P17-002 FIXED (MEDIUM): domain-spec/state-machines.md phantom NFR-R-NEW-3 replaced with NFR-O-B (refresh_oauth_token zero-callers — correct canonical NFR).
+
+ADV-P17-003 FIXED (MEDIUM): L2 bc_count frontmatter synced to L3 total_bcs for 3 files: bc-04 (44→32), bc-06 (38→39), bc-07 (126→80). bc-01/02/03/05 were already aligned. CANONICAL-COUNTS.md updated with L2↔L3 alignment table.
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| state-manager | Persist adv-p1-pass17.md (3 findings: 1H/2M) | cycles/cycle-001/adversarial-reviews/adv-p1-pass17.md |
+| state-manager | ADV-P17-001: SD-003 R-H3 → R-M0 | architecture/security-decisions/SD-003-verbose-pii-redaction.md |
+| state-manager | ADV-P17-002: state-machines NFR-R-NEW-3 → NFR-O-B | specs/domain-spec/state-machines.md |
+| state-manager | ADV-P17-003: L2 bc_count bc-04/06/07 synced to L3 total_bcs | specs/domain-spec/bc-04-assets-cmdb.md, bc-06-config-cache.md, bc-07-output-render.md |
+| state-manager | CANONICAL-COUNTS.md L2↔L3 alignment table added | specs/prd/CANONICAL-COUNTS.md |
+| state-manager | Update STATE.md (counter 1/3 → 0/3, trajectory, checkpoint, steps); burst-log; commit | factory-artifacts |
+

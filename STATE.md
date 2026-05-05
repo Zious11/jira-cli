@@ -49,7 +49,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | pre-pipeline: Setup | complete | 2026-05-04 | 2026-05-04 | env-preflight | |
 | 0: Codebase Ingestion | **COMPLETE** | 2026-05-04 | 2026-05-04 | Phase A + B + B.5 + B.6 + C + gate APPROVED | |
 | 1: Spec Crystallization | **entry** | 2026-05-04 | | DEC-004 pending (scope choice) | |
-| 1d: Adversarial Spec Review | **Pass 16: CLEAN-PASS; counter 1/3; Pass 17 next** | 2026-05-04 | | Pass 17 dispatching | 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→**0** (P16: clean; counter 1/3) |
+| 1d: Adversarial Spec Review | **Pass 17: 3 findings FIXED; counter 1/3 → 0/3 (4th reset); Pass 18 next** | 2026-05-04 | | Awaiting orchestrator strategy decision | 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→**3** (P17: 1H/2M; 4th reset) |
 | 2: Story Decomposition | not-started | | | | |
 | 2-adv: Adversarial Story Review | not-started | | | | |
 | 3: TDD Implementation | not-started | | | | |
@@ -65,11 +65,11 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 
 | Step | Agent | Status | Output |
 |------|-------|--------|--------|
-| Phase 1d adversary Pass 12 (state-manager + adversary) | state-manager | complete | adv-p1-pass12.md; CLEAN-PASS; trajectory →0; counter 1/3; Pass 11 regression healed |
 | Phase 1d adversary Pass 13 + fixes + 4-sweep audit | state-manager | complete | adv-p1-pass13.md; 3 MEDIUM FIXED; BC=541; CANONICAL-COUNTS.md; trajectory →3; counter 0/3 |
 | Phase 1d adversary Pass 14 (CLEAN-PASS) | state-manager | complete | adv-p1-pass14.md; 0 findings; CANONICAL-COUNTS adoption healed P13 regression; counter 0/3 → 1/3 |
 | Phase 1d Pass 15 + fixes + bc-*.md body sweep | state-manager | complete | adv-p1-pass15.md; 2 FIXED (ADV-P15-001 bc-3 "40"→"48", ADV-P15-002 enumeration 8→7); bc-1 sweep drift fixed; counter 1/3 → 0/3 |
 | Phase 1d adversary Pass 16 (CLEAN-PASS) | state-manager | complete | adv-p1-pass16.md; 0 findings; bc-*.md body sweep effective; counter 0/3 → 1/3 |
+| Phase 1d Pass 17 + fixes | state-manager | complete | adv-p1-pass17.md; 3 FIXED (1H/2M); SD-003 R-H3→R-M0; state-machines NFR-R-NEW-3→NFR-O-B; L2 bc_count sync bc-04/06/07; counter 1/3 → 0/3 |
 
 ## Pending Decisions
 
@@ -108,31 +108,12 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 ## Convergence Trackers
 
 ### Phase 1d — Adversarial Spec Review
-_Pass 16: CLEAN-PASS. Counter 0/3 → 1/3. bc-*.md body sweep prevented Pass 14-style regression. Trajectory 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0. Pass 17 next (target 2/3)._
+_Pass 17: 3 findings (1H/2M), all FIXED. Counter 1/3 → 0/3 (4th reset across 17 passes). Convergence asymptotic. Awaiting orchestrator strategy decision. Trajectory 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3._
 
 ```yaml
 convergence_trajectory:
-  # Passes 1-12 archived to cycles/cycle-001/convergence-trajectory.md
-  # Trajectory: 30→15→9→5→10→5→4→3→4→0→2→0
-  - pass: 13
-    findings: 3
-    severity: "0C/0H/3M/0L"
-    addressed: 3
-    delta: +3
-    trend: REGRESSION
-    fixes_committed: true
-    clean_pass: false
-    clean_pass_count: "0/3"
-  - pass: 14
-    findings: 0
-    severity: "CLEAN-PASS"
-    addressed: 0
-    delta: -3
-    trend: CONVERGING
-    fixes_committed: true
-    clean_pass: true
-    clean_pass_count: "1/3"
-    note: "Comprehensive sweep + CANONICAL-COUNTS.md adoption healed P13 regression"
+  # Passes 1-14 archived to cycles/cycle-001/convergence-trajectory.md
+  # Trajectory: 30→15→9→5→10→5→4→3→4→0→2→0→3→0
   - pass: 15
     findings: 2
     severity: "0C/1H/1M/0L"
@@ -153,6 +134,16 @@ convergence_trajectory:
     clean_pass: true
     clean_pass_count: "1/3"
     note: "bc-*.md body sweep effective; CANONICAL-COUNTS adoption stable; MUST-FIX P0 register integrity holding"
+  - pass: 17
+    findings: 3
+    severity: "0C/1H/2M/0L"
+    addressed: 3
+    delta: +3
+    trend: REGRESSION
+    fixes_committed: true
+    clean_pass: false
+    clean_pass_count: "0/3"
+    note: "SD-003 R-H3→R-M0; state-machines NFR-R-NEW-3→NFR-O-B; L2 bc_count sync bc-04/06/07; 4th counter reset across 17 passes"
 ```
 
 ### Phase 2-adv — Adversarial Story Review
@@ -183,8 +174,8 @@ convergence_trajectory: []
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-04 |
-| **Position** | Phase 1 ACTIVE — Phase 1d adversary Pass 16: CLEAN-PASS. Counter 0/3 → 1/3. Trajectory 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0. bc-*.md body sweep effective: prevented regression. Manifest: 541 BCs / 41 NFRs / 48 holdouts / 26 risks. Pass 17 next (target 2/3). |
-| **Convergence counter** | 1 of 3 (Pass 16 clean; 2 more consecutive clean passes required) |
+| **Position** | Phase 1 ACTIVE — Phase 1d adversary Pass 17: 3 findings (1H/2M), all FIXED. Counter 1/3 → 0/3 (4th reset). Trajectory 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3. Manifest: 541 BCs / 41 NFRs / 48 holdouts / 26 risks. Convergence asymptotic; awaiting orchestrator strategy decision on continuation. |
+| **Convergence counter** | 0 of 3 (4th reset; Pass 17 regression 1/3 → 0/3; orchestrator decision pending on strategy) |
 
 ## Historical Content
 
