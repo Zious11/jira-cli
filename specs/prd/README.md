@@ -46,9 +46,9 @@ the gap between current code and these contracts.
 | [error-taxonomy.md](error-taxonomy.md) | Error taxonomy | 11 variants | BC-1204 + exit code table |
 | [edge-case-catalog.md](edge-case-catalog.md) | Edge cases | cross-cutting | Pass 3 §5 untested gaps |
 | [holdout-scenarios.md](holdout-scenarios.md) | Holdout scenarios | 48 | H-001..H-047 + H-NEW-MP-001 |
-| [BC-INDEX.md](BC-INDEX.md) | Master BC index | 542 | All BCs with traceability |
+| [BC-INDEX.md](BC-INDEX.md) | Master BC index | 541 | All BCs with traceability |
 
-**Total BCs in PRD:** 542 (540 imported + 2 formalized: BC-6.3.001 from NFR-R-D draft + BC-6.2.015 profile-fence)
+**Total BCs in PRD:** 541 (538 imported range-collapsed + 3 formalized: BC-6.3.001 from NFR-R-D draft + BC-6.2.015 profile-fence + BC-X.4.009 from ADV-P1-029; BC-X.4.009 is included in cross-cutting total_bcs=130 — no separate +1 adjustment needed)
 
 ---
 

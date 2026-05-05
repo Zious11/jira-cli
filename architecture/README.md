@@ -25,6 +25,12 @@
 | [adr-index.md](adr-index.md) | ADR-0001..0012 table with harmonization notes |
 | [adr/](adr/) | New ADRs: 0007..0012 |
 | [dtu-assessment.md](dtu-assessment.md) | DTU assessment (DTU_REQUIRED: false — pure local/OS execution) |
+| [security-decisions/](security-decisions/) | SD-001 (PKCE), SD-002 (JR_AUTH_HEADER prod gating), SD-003 (--verbose PII redaction) |
+
+**Related (in `.factory/`):**
+| File | Contents |
+|------|----------|
+| [`../cicd-setup.md`](../cicd-setup.md) | CI/CD gap analysis — GAP-1 SHA pinning (cross-referenced by risk-register.md R-H6), GAP-2 deny.toml, GAP-3..5 |
 
 ---
 

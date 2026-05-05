@@ -1,7 +1,7 @@
 ---
 context: bc-index
 title: "BC Master Index"
-total_bcs: 542  # cumulative claim (incl. range-collapsed) — see preamble below
+total_bcs: 541  # cumulative claim (incl. range-collapsed) — see preamble below
 last_updated: 2026-05-04
 source_pass: 3
 sections:
@@ -645,9 +645,9 @@ R1/R4 prefix = deepening round that introduced it.
 | X: Cross-Cutting | 130 | 64 |
 | **Total** | **541** | **309** |
 
-Plus 1 NEW BC (BC-X.4.009 / ADV-P1-029) = **542 cumulative total**.
+**Note**: BC-X.4.009 (ADV-P1-029) is included in cross-cutting's `total_bcs: 130` and in the 541 sum above — it was assigned a `#### BC-` heading in cross-cutting.md at ADV-P1-029 (Pass 10 fix). Canonical total is **541**.
 
-**Note**: Cumulative total (542) ≠ individually-bodied count (309). The difference (233) comprises range-collapsed BCs that exist in the cumulative claim but are not individually headlined in body files. This is by design — range-collapsed BCs trace to Pass 3 source material but were not individually expanded. The 4 MUST-FIX BCs are included in the individually-bodied count.
+Cumulative total (541) ≠ individually-bodied count (309). The difference (232) comprises range-collapsed BCs that exist in the cumulative claim but are not individually headlined in body files. This is by design — range-collapsed BCs trace to Pass 3 source material but were not individually expanded. The 4 MUST-FIX BCs are included in the individually-bodied count.
 
 ---
 
