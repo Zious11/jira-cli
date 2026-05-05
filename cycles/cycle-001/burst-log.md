@@ -266,3 +266,48 @@ LOW: ADV-P4-005 — nfr-catalog routing arithmetic corrected from 0M/3L to 2M/1L
 | state-manager | Write adv-p1-pass4.md; apply 5 fixes across 3 spec files; commit | factory-artifacts |
 | state-manager | Update STATE.md Phase Progress, Current Steps, Session Checkpoint, burst-log | factory-artifacts (this commit) |
 
+## Burst 11 (2026-05-04)
+
+**Agents dispatched:** product-owner, architect, state-manager
+**Files touched:** 8 spec/arch files + adv-p1-pass5.md + STATE.md + burst-log.md
+**Versions bumped:** (none)
+
+### Summary
+
+Pass 5 + comprehensive sweep (product-owner + architect): 10 cited findings FIXED + 4 sweep additionals. REGRESSION from Pass 4 (5→10). Root cause: anchor tables in supplement files (Competitive Differentiators table in PRD README, edge-case-catalog EC-OUT-005) not subjected to same audit as BC bodies in prior passes. Counter remains 0/3. Pass 6 dispatches next.
+
+Final count manifest: 542 BCs / 42 NFRs / 48 holdouts / 27 risks.
+
+### 10 Cited Findings Fixed
+
+| Finding | Fix |
+|---------|-----|
+| ADV-P5-001 | PRD README "6-level" → "7-level" extract_error_message |
+| ADV-P5-002 | EC-OUT-005 empty-body propagation completed |
+| ADV-P5-003 | BC-6.3.001 "11 read sites" → "14" |
+| ADV-P5-004 | bc-6 body "38" → "39" (matches frontmatter) |
+| ADV-P5-005 | 4 PRD Competitive Differentiators anchor fixes |
+| ADV-P5-006 | EC-OUT-007 → BC-7.3.005 |
+| ADV-P5-007 | 542 BC count formula reconciled across PRD + BC-INDEX |
+| ADV-P5-008 | bc-7 definitional_count 33 → 34 |
+| ADV-P5-009 | NFR-R-NEW-1 routing harmonized to FIX-IN-PHASE-3 |
+| ADV-P5-010 | DTU assessment "14" → "7" bounded contexts |
+
+### 4 Comprehensive Sweep Additionals Fixed
+
+| Item | Fix |
+|------|-----|
+| A. Holdout BC anchors (all 48 verified) | H-033 fixed |
+| B. EC-* anchors sweep | EC-HTTP-001, EC-AUTH-008, EC-SPRINT-002 fixed |
+| C. PRD README + BC-INDEX MUST-FIX registers | verified clean |
+| D. Cross-reference recount | complete |
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| product-owner | Fix 9 cited findings (P5-001..009) across 7 spec files | specs/prd/*.md, architecture/dtu-assessment.md |
+| architect | Fix ADV-P5-010 (DTU bounded context count) | architecture/dtu-assessment.md |
+| state-manager | Write adv-p1-pass5.md; commit fixes (826bd67) | factory-artifacts |
+| state-manager | Update STATE.md Phase Progress, Convergence Tracker, Session Checkpoint, burst-log | factory-artifacts (this commit) |
+
