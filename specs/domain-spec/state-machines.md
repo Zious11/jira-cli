@@ -145,7 +145,7 @@ Five state machines that materially drive the `jr` system. All are verified from
 ### Key Invariants
 
 - Production `jr auth refresh` = clear-and-relogin (destructive but idempotent).
-- `refresh_oauth_token` has ZERO production callers. It exists for future 401 auto-refresh integration (NFR-R-NEW-3).
+- `refresh_oauth_token` has ZERO production callers. It exists for future 401 auto-refresh integration (NFR-O-B — refresh_oauth_token zero-callers).
 - `resolve_refresh_app_credentials` uses only 2 sources (Keychain > Embedded), not the 6-source login chain.
 - Callers of `refresh_oauth_token` pass only `profile: &str`. No `client_id`/`client_secret` parameters — they are resolved internally (CLAUDE.md gotcha).
 

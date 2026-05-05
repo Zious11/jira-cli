@@ -6,7 +6,7 @@ traces_to: "README.md"
 source_passes: "Pass 2 broad §2a.2 Config+Cache + R1 §3.4,3.5 T-05,T-07 + Pass 8 §2.2 BC#11,12"
 entity_count: 22
 invariant_count: 26
-bc_count: 38
+bc_count: 39
 risk_level: HIGH
 ---
 

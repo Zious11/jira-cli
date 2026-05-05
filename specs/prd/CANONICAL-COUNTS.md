@@ -2,7 +2,7 @@
 document_type: canonical-counts
 product: jr (jira-cli)
 generated: "2026-05-04"
-last_verified: "Pass 13 + pre-Pass-14 audit"
+last_verified: "Pass 17 fixes (ADV-P17-003 L2 bc_count sync)"
 ---
 
 # Canonical Counts — jr (jira-cli) L3 PRD
@@ -68,6 +68,23 @@ Breakdown:
 - The 541 sum already includes this
 - BC-INDEX.md and README.md incorrectly added another +1 claiming 542
 - Pass 13 fix: corrected all 542 claims to 541
+
+### L2 domain-spec bc_count vs L3 total_bcs alignment (ADV-P17-003)
+
+L2 frontmatter `bc_count` values are now aligned to match L3 `total_bcs` values.
+bc_count in L2 represents the same cumulative claim (individually-bodied + range-collapsed).
+
+| L2 File | L2 bc_count (after P17 fix) | L3 File | L3 total_bcs | Aligned? |
+|---------|----------------------------|---------|--------------|----------|
+| bc-01-auth-identity.md | 57 | bc-1-auth-identity.md | 57 | YES |
+| bc-02-issue-read.md | 91 | bc-2-issue-read.md | 91 | YES |
+| bc-03-issue-write.md | 77 | bc-3-issue-write.md | 77 | YES |
+| bc-04-assets-cmdb.md | 32 | bc-4-assets-cmdb.md | 32 | YES (was 44) |
+| bc-05-boards-sprints.md | 35 | bc-5-boards-sprints.md | 35 | YES |
+| bc-06-config-cache.md | 39 | bc-6-config-cache.md | 39 | YES (was 38) |
+| bc-07-output-render.md | 80 | bc-7-output-render.md | 80 | YES (was 126) |
+
+Note: bc-01/02/03/05 were already aligned pre-Pass 17. bc-04/06/07 corrected at Pass 17.
 
 ---
 

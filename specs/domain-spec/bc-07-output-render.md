@@ -6,7 +6,7 @@ traces_to: "README.md"
 source_passes: "Pass 2 broad §2a.2 Errors + §2a.3 Value objects + R1 §3.6 T-09 ADF + Pass 8 §2.2 BC#13,14"
 entity_count: 16
 invariant_count: 18
-bc_count: 126
+bc_count: 80
 risk_level: HIGH
 ---
 

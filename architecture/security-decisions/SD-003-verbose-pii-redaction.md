@@ -3,7 +3,7 @@
 **Status:** PENDING
 **Owner:** Phase 3 SECURITY-DECIDE
 **Deadline:** Phase 1 → 2 gate (decision required before Phase 2 story decomposition begins)
-**References:** NFR-S-C (nfr-catalog.md), R-H3 (risk-register.md), `src/api/client.rs:200-203,274-278`
+**References:** NFR-S-C (nfr-catalog.md), R-M0 (risk-register.md; previously tracked as R-H3 — see Pass 6 reclassification), `src/api/client.rs:200-203,274-278`
 
 ---
 
