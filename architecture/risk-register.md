@@ -1,9 +1,9 @@
 # Risk Register — jr (jira-cli)
 
 **traces_to:** README.md
-**Source:** Pass 1 R1 §5 (26 risks) + R2 §7 (1 severity escalation) + Pass 2 ADV-P2-004 (1 new HIGH) + Pass 6 ADV-P6-004 (R-H3 demoted HIGH→MEDIUM)
-**Total risks:** 27 (11 R1-NEW + 14 broad-pass + 1 R1-NEW reclassified to CRITICAL + 1 Pass-2 addition)
-**Severity distribution:** 1 CRITICAL / 6 HIGH / 9 MEDIUM / 11 LOW
+**Source:** Pass 1 R1 §5 (26 risks) + R2 §7 (1 severity escalation) + Pass 2 ADV-P2-004 (1 new HIGH) + Pass 6 ADV-P6-004 (R-H3 demoted HIGH→MEDIUM) + Pass 8 ADV-P8-003 (R-M3 merged into R-L11 — Retry-After duplicate)
+**Total risks:** 26 (11 R1-NEW + 14 broad-pass + 1 R1-NEW reclassified to CRITICAL + 1 Pass-2 addition; R-M3 merged into R-L11 at Pass 8)
+**Severity distribution:** 1 CRITICAL / 6 HIGH / 8 MEDIUM / 11 LOW
 
 > **Numbering note:** R1-NEW-10 (multi-profile fields silent regression, NFR-R-D) was elevated from MEDIUM to CRITICAL during Pass 4 R1 analysis and appears as R-C1 in the CRITICAL block below. The R1-NEW label is not repeated in the numbered sequence; the CRITICAL block carries it. Effective R1-NEW count in the MEDIUM/HIGH rows is 11 (NEW-1 through NEW-9, NEW-11, NEW-12).
 
@@ -30,14 +30,13 @@
 
 ---
 
-## MEDIUM (9)
+## MEDIUM (8)
 
 | # | Risk | NFR | Phase 3 Action |
 |---|------|-----|----------------|
 | **R-M0** (R1-NEW-3; formerly R-H3 — reclassified MEDIUM per ADV-P6-004) | `--verbose` dumps full HTTP request bodies including user-typed content (comments, summaries, descriptions, accountIds, emails). Authorization header is NOT logged, but body is. Users piping `2>log.txt` for debugging leak payload bytes. **MEDIUM rationale:** `--verbose` is opt-in; Auth header already redacted; PII exposure is user-controlled. Matches NFR-S-C (MEDIUM). ID R-H3 retained in pass-6 notes for traceability; canonical ID here is R-M0. | NFR-S-C | SECURITY-DECIDE: Add `redact_body()` helper; or default verbose to header-only with `--verbose-bodies` opt-in |
 | **R-M1** (R1-NEW-4) | OAuth flow uses NO PKCE (NEW-INV-178). `build_authorize_url` sends no `code_challenge`. `exchange_code_for_token` sends no `code_verifier`. RFC 8252 recommends PKCE for native apps. ADR-0006 accepts the confidential-client model with embedded secret; PKCE is an addendum question. | NFR-S-A | SECURITY-DECIDE: Add RFC 7636 PKCE (~30 LOC). Cross-reference ADR-0006 addendum. |
 | **R-M2** (R1-NEW-5) | `accessible_resources` first-result-wins (`api/auth.rs:666-668`). No `--site` flag, no count, no disambiguation. User with multiple cloud sites may silently authenticate to the wrong one. | NFR-O-S | DEFER: Add `--cloud-id <ID>` flag + interactive prompt or `--no-input` error. P1 priority. |
-| **R-M3** (R1-NEW-6) | `Retry-After` parser supports only integer seconds (RFC 7231 §7.1.3 also permits HTTP-date format). HTTP-date `Retry-After` silently falls through to `DEFAULT_RETRY_SECS = 1` — fast-retry against rate-limited server. | NFR-SCA-1 | DOCUMENT-AS-IS: Add HTTP-date fallback via `chrono` when/if observed in production. |
 | **R-M4** (R1-NEW-9) | `worklog add` hardcodes 8h/day, 5d/week constants. Jira instances can configure different values via `/rest/api/3/configuration/timetracking`. Silent wrong-answer for non-standard setups. | NFR-R-C | FIX-IN-PHASE-3: Fetch + cache timetracking config (7-day TTL); fall back to 8/5 on miss. |
 | **R-M5** | `cli/issue/list.rs` at 1,083 LOC is past the ~1000 LOC shard threshold. High branch density (booleans, Options, mutually-exclusive flag pairs). Continued growth risks undocumented edge cases. | NFR-O-D | DEFER: Per ADR-0012, the shard rule is now codified; future additions to `list.rs` trigger a new shard spec. |
 | **R-M6** | `cli/auth.rs` at 1,998 LOC is the largest single file. Contains: API-token login, OAuth flow orchestration, credential resolution, profile lifecycle (7 subcommands). Cohesive but expensive to evolve safely. | NFR-O-D | DEFER: Shard via `cli/auth/{login,switch,status,refresh,logout,remove,helpers}.rs`. P1 priority. |
@@ -60,7 +59,7 @@
 | **R-L8** | Non-atomic cache writes (`std::fs::write`). Crash between start and end leaves indeterminate state. Mitigation: deserialization failure on next read → `Ok(None)` (self-healing). | NFR-R-G | DOCUMENT-AS-IS: Self-healing already. Optional: use temp-file + rename pattern. |
 | **R-L9** | `parse_duration` silently wraps on multiplicative overflow for pathological inputs in release builds (`panic=abort`). Wrong duration value sent to Jira API. | NFR-R-NEW-2 | DOCUMENT-AS-IS: Use `checked_mul`; bail with error. ~5 LOC fix. |
 | **R-L10** | 4 distinct JSON boolean field names in write-op output (`changed`, `updated`, `linked`, `unlinked`). AI-agent integrators must learn per-command semantics. Snapshot-pinned (change is high-friction). | NFR-O-J | POLICY-DECISION: Adopt `success: bool` + `action: string` canonical shape, OR document 4-name vocabulary as deliberate verb-aligned. |
-| **R-L11** | `Retry-After` parser: integer-only (no HTTP-date). Atlassian sends integers in practice; low observed risk. | NFR-SCA-1 | DOCUMENT-AS-IS: Add HTTP-date fallback if observed in production. |
+| **R-L11** | `Retry-After` parser: integer-only (no HTTP-date). Atlassian sends integers in practice; low observed risk. (R-M3 merged here at adversary Pass 8 — same concern, NFR-SCA-1 LOW is authoritative.) | NFR-SCA-1 | DOCUMENT-AS-IS: Add HTTP-date fallback if observed in production. |
 
 ---
 
@@ -70,9 +69,9 @@
 |----------|------:|-----------|
 | CRITICAL | 1 | FIX-IN-PHASE-3 (NFR-R-D multi-profile fields) |
 | HIGH | 6 | 4× FIX-IN-PHASE-3, 2× SECURITY-DECIDE |
-| MEDIUM | 9 | 3× DEFER, 2× DOCUMENT-AS-IS, 1× FIX-IN-PHASE-3, 2× SECURITY-DECIDE, 1× mixed |
+| MEDIUM | 8 | 3× DEFER, 2× DOCUMENT-AS-IS, 1× FIX-IN-PHASE-3, 2× SECURITY-DECIDE (R-M3 merged into R-L11 at Pass 8) |
 | LOW | 11 | 7× DOCUMENT-AS-IS, 3× DEFER, 1× POLICY-DECISION |
-| **Total** | **27** | |
+| **Total** | **26** | |
 
 ---
 

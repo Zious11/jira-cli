@@ -18,7 +18,7 @@
 | [ADR-0006](#adr-0006-embedded-oauth) | Embedded `jr` OAuth App with XOR Obfuscation | **Accepted** | state-machines.md §SM-1 |
 | [ADR-0007](adr/0007-multi-profile-fields-fix.md) | Multi-Profile Fields Bug Fix Strategy | **Accepted** | risk-register.md §R-C1 |
 | [ADR-0008](adr/0008-asset-enrichment-key-correctness.md) | Asset Enrichment HashMap Key Correctness | **Accepted** | state-machines.md §SM-3 |
-| [ADR-0009](adr/0009-handle-open-instance-url.md) | handle_open Instance URL Fix | **Accepted** | risk-register.md §R-H4 |
+| [ADR-0009](adr/0009-handle-open-instance-url.md) | handle_open Instance URL Fix | **Accepted** | risk-register.md §R-H3 |
 | [ADR-0010](adr/0010-list-worklogs-pagination.md) | list_worklogs Pagination Fix | **Accepted** | cross-cutting.md §4 |
 | [ADR-0011](adr/0011-type-level-profile-fence.md) | Type-Level Profile Fence (Newtype) | **Deferred** | risk-register.md §R-L1 |
 | [ADR-0012](adr/0012-shard-rule.md) | Module Shard Rule Codification | **Accepted** | risk-register.md §R-M5 |

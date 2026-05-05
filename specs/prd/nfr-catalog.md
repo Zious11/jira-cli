@@ -190,7 +190,7 @@ All four MUST-FIX items (NFR-R-D, NFR-R-A, NFR-R-B, NFR-R-E) have been crystalli
 - SECURITY-DECIDE: 3 (1 HIGH, 2 MEDIUM)
 - POLICY-DECISION: 3 (3 MEDIUM)
 - DOCUMENT-AS-IS: 13 (LOW or MEDIUM; NFR-R-NEW-1 moved to FIX-IN-PHASE-3; NFR-O-K merged into NFR-S-D at Pass 7)
-- DEFER: 17 (MEDIUM and LOW)
+- DEFER: 12 (MEDIUM and LOW)
 
 **Total: 41** (42 rows − NFR-O-K merged into NFR-S-D at adversary Pass 7. NFR-S-F added per ADV-P3-007. NFR-S-E severity promoted LOW→HIGH per ADV-P2-004.)
 
