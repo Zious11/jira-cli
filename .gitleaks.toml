@@ -1,0 +1,27 @@
+title = "jr secret scan config"
+version = 8
+
+# Use the default gitleaks rule set; add only project-specific allowlist entries.
+
+[allowlist]
+description = "Project-specific allowlist for jr"
+
+[[allowlist.regexes]]
+description = "Test fixture credentials in auth_embedded.rs (deliberately fake round-trip tests)"
+regex = '''(hello-world-secret|secret-xyz|client-abc|super-secret-must-not-leak)'''
+
+[[allowlist.regexes]]
+description = "Base64-encoded test:test used as mock Basic auth header in integration tests"
+regex = '''Basic dGVzdDp0ZXN0'''
+
+[[allowlist.paths]]
+description = "build.rs reads JR_BUILD_OAUTH_CLIENT_SECRET from env; no hardcoded secret present"
+regex = '''build\.rs'''
+
+[[allowlist.paths]]
+description = "Embedded OAuth XOR constants are generated into OUT_DIR at build time, not stored in source"
+regex = '''src/api/auth_embedded\.rs'''
+
+[[allowlist.paths]]
+description = "Test files use mock credentials only — no real secrets"
+regex = '''tests/.*'''
