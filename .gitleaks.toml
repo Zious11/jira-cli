@@ -21,7 +21,3 @@ regex = '''build\.rs'''
 [[allowlist.paths]]
 description = "Embedded OAuth XOR constants are generated into OUT_DIR at build time, not stored in source"
 regex = '''src/api/auth_embedded\.rs'''
-
-[[allowlist.paths]]
-description = "Test files use mock credentials only — no real secrets"
-regex = '''tests/.*'''
