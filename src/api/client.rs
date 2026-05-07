@@ -131,12 +131,20 @@ impl JiraClient {
     /// This is **not** gated behind `#[cfg(test)]` so that integration tests in
     /// `tests/` can use it (mirrors the gating pattern of `new_for_test`).
     pub fn new_for_test_with_instance_url(
-        _base_url: &str,
-        _instance_url: &str,
-        _auth_header: &str,
+        base_url: &str,
+        instance_url: &str,
+        auth_header: &str,
     ) -> Self {
-        // S-0.01 stub — implementer fills in
-        todo!("S-0.01 stub — implementer fills in")
+        let assets_base_url = Some(format!("{}/jsm/assets", base_url));
+        Self {
+            client: Client::new(),
+            base_url: base_url.to_string(),
+            instance_url: instance_url.trim_end_matches('/').to_string(),
+            auth_header: auth_header.to_string(),
+            verbose: false,
+            assets_base_url,
+            profile_name: "default".to_string(),
+        }
     }
 
     /// Active profile name this client is bound to. Used by per-profile
