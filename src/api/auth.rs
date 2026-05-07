@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use keyring::Entry;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tracing::{debug, info};
 
 /// Default keychain service name for `jr` credentials. `JR_SERVICE_NAME`
 /// can override this at runtime; it is primarily used by tests to avoid
@@ -549,6 +550,18 @@ pub async fn oauth_login(
     scopes: &str,
     strategy: RedirectUriStrategyRequest,
 ) -> Result<OAuthResult> {
+    // AC-005: emit structured tracing at OAuth flow entry point.
+    // client_secret is intentionally NOT logged — only the profile and
+    // whether a secret is present (a boolean probe). Secrets must never
+    // appear in tracing field lists per the architecture compliance rule.
+    info!(target: "jr::auth", profile = %profile, "oauth_login_start");
+    debug!(
+        target: "jr::auth",
+        profile = %profile,
+        has_client_secret = !client_secret.is_empty(),
+        "oauth_login_credentials_resolved"
+    );
+
     // 1. Resolve the strategy → owning the bound port up front so the
     //    callback URL we send to Atlassian matches what we'll listen on.
     let resolved = strategy.bind()?;
@@ -604,6 +617,8 @@ pub async fn oauth_login(
     )?;
 
     // 3. Exchange the authorization code for tokens.
+    // AC-005: emit structured tracing at token exchange entry point.
+    debug!(target: "jr::auth", profile = %profile, "oauth_token_exchange_start");
     let client = reqwest::Client::new();
     let token_response = client
         .post("https://auth.atlassian.com/oauth/token")
@@ -702,7 +717,19 @@ pub async fn oauth_login(
 /// uses the clear-and-relogin flow at `cli/auth.rs::refresh_credentials`,
 /// not this helper.
 pub async fn refresh_oauth_token(profile: &str) -> Result<String> {
+    // AC-005: emit structured tracing at refresh entry point.
+    // refresh_token value is intentionally NOT logged — only the profile.
+    info!(target: "jr::auth", profile = %profile, "refresh_oauth_token_start");
     let (client_id, client_secret, source) = resolve_refresh_app_credentials()?;
+    // Log that we resolved credentials without logging their values.
+    debug!(
+        target: "jr::auth",
+        profile = %profile,
+        has_client_id = !client_id.is_empty(),
+        has_client_secret = !client_secret.is_empty(),
+        source = ?source,
+        "refresh_credentials_resolved"
+    );
     let (_, refresh_token) = load_oauth_tokens(profile)?;
 
     let client = reqwest::Client::new();

@@ -6,6 +6,39 @@ use jr::config;
 use jr::error;
 use jr::output;
 
+/// Initialize the tracing subscriber based on CLI verbosity flags.
+///
+/// - Default (no verbose flags): WARN level — silent in normal use.
+/// - `--verbose`: DEBUG level — shows request method+URL, response status.
+/// - `--verbose-bodies`: TRACE level — shows full request/response bodies.
+/// - `RUST_LOG` env var overrides the CLI-derived level (via `EnvFilter`).
+///
+/// Initialized with `.try_init().ok()` instead of `.init()` so that calling
+/// this multiple times in the same process (e.g., integration tests that spawn
+/// a subprocess but also call lib code) does not panic on double-init.
+fn init_tracing(cli: &Cli) {
+    use tracing::Level;
+    use tracing_subscriber::{EnvFilter, fmt};
+
+    let default_level = if cli.verbose_bodies {
+        Level::TRACE
+    } else if cli.verbose {
+        Level::DEBUG
+    } else {
+        Level::WARN
+    };
+
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(default_level.to_string()));
+
+    fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .with_ansi(false)
+        .try_init()
+        .ok();
+}
+
 #[tokio::main]
 async fn main() {
     let mut cli = Cli::parse();
@@ -21,6 +54,11 @@ async fn main() {
             cli.no_input = true;
         }
     }
+
+    // Initialize structured logging before any command dispatch.
+    // Output goes to stderr; stdout is reserved for data output.
+    // RUST_LOG env var overrides the CLI-derived log level.
+    init_tracing(&cli);
 
     let output_format = cli.output;
     let result = run(cli).await;

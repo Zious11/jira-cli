@@ -251,8 +251,7 @@ fn test_s_1_03_client_no_verbose_request_eprintln() {
         .count();
 
     assert_eq!(
-        request_eprintln_count,
-        0,
+        request_eprintln_count, 0,
         "src/api/client.rs must NOT use eprintln! for method+URL and rate-limit verbose \
          output (AC-003). Found {request_eprintln_count} occurrences of \
          `eprintln!(\"[verbose]` with method/rate-limit content — \
