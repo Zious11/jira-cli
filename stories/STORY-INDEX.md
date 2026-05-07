@@ -55,7 +55,8 @@ Wave 0 story files: `stories/wave-0/S-0.NN-*.md`
 
 Wave 1 covers HIGH-priority security posture, supply-chain hardening, structured logging,
 and critical regression-pinning holdouts. All stories are independent of each other
-(except S-1.03 depends on S-0.06) and can be implemented in parallel groups.
+except S-1.03 (depends on S-0.06) and S-1.06 (depends on S-0.05 — OAuth holdout suite
+benefits from S-0.05's `#[cfg(test)]` gate landing first). Can otherwise be implemented in parallel groups.
 
 Parallel group A: S-1.01, S-1.02, S-1.04, S-1.05 (CI/CD hardening, no code deps)
 Parallel group B: S-1.06, S-1.07, S-1.08 (holdout test suites, each independent)
@@ -159,7 +160,7 @@ All of the following must be true before Phase 2 is considered fully complete:
 - S-3.01: `cargo test --lib` green after cli/auth.rs shard split; no shard file >800 LOC
 - S-3.02: `cargo test --lib` green after cli/assets.rs shard split; H-037, H-038 still green
 - S-3.03: `refresh_oauth_token` either wired (Option A test green) or removed (no dead_code lint)
-- S-3.04: H-047 updated from KNOWN-GAP to MUST-PASS; AC-001, AC-002, and AC-006 green
+- S-3.04: H-047 updated from KNOWN-GAP to MUST-PASS; AC-002 and AC-006 green (AC-001 is the --cloud-id flag-override regression guard, not the H-047 fixture)
 - S-3.05: asset enrichment concurrency cap ≤8; H-038 still green
 - S-3.06: `scripts/check-spec-counts.sh` exits 0 on current spec corpus; exits 1 on corrupted frontmatter
 - S-3.07: H-027 updated from KNOWN-GAP to MUST-PASS; `parse_duration("99999999999999w")` returns Err

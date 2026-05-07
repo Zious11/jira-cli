@@ -57,11 +57,11 @@ Recommended parallel groups:
 | S-1.03 | tracing/observability wire-up | NFR-O-A | S-0.06 | draft | medium |
 | S-1.04 | CI job timeouts | R-L12 | — | draft | xsmall |
 | S-1.05 | GitHub secret scanning | NFR-S-B, R-L13 | — | draft | small |
-| S-1.06 | OAuth flow holdout suite | BC-1.1.001/002, H-001..H-006, H-022, H-029 | — | draft | medium |
+| S-1.06 | OAuth flow holdout suite | BC-1.1.001/002, H-001..H-006, H-022, H-029 | S-0.05 | draft | medium |
 | S-1.07 | Rate-limit holdout suite | BC-X.4.002, H-013, H-027 | — | draft | small |
 | S-1.08 | Keychain round-trip holdout | BC-1.4.027, H-016 | — | draft | small |
 
-**Wave 1 parallel groups:** {S-1.01, S-1.02, S-1.04, S-1.05} CI infra (parallel); {S-1.03} blocked by S-0.06; {S-1.06, S-1.07, S-1.08} regression pins (parallel).
+**Wave 1 parallel groups:** {S-1.01, S-1.02, S-1.04, S-1.05} CI infra (parallel); {S-1.03} blocked by S-0.06; {S-1.07, S-1.08} regression pins (parallel); {S-1.06} OAuth holdout suite (depends on S-0.05 — start after S-0.05 merges).
 
 **Exit gate:** All 8 Wave 1 stories merged + holdouts written + SHA pinning + cargo-deny + tracing layer landed.
 

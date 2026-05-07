@@ -11,7 +11,7 @@ input-hash: "[live-state]"
 traces_to: ""
 project: jira-cli
 mode: BROWNFIELD
-current_step: "phase-2-adv-pass-5-pending"
+current_step: "phase-2-adv-pass-6-pending"
 current_cycle: "cycle-001"
 dtu_required: false
 activation_head: "dea166471e22eff55974d7675593469b37048c5f"
@@ -33,7 +33,7 @@ activation_version: "v0.5.0-dev.7"
 | **Target Workspace** | develop → main |
 | **Started** | 2026-05-04 |
 | **Last Updated** | 2026-05-06 |
-| **Current Phase** | Phase 2-adv — Adversarial Story Review (active; Pass 4 complete; 0/3) |
+| **Current Phase** | Phase 2-adv — Adversarial Story Review (active; Pass 5 complete; 0/3) |
 | **Next Phase** | phase-3-tdd-implementation |
 | **Activation HEAD** | dea166471e22eff55974d7675593469b37048c5f (v0.5.0-dev.7) |
 | **factory-artifacts SHA** | 0b01262 (Phase 1 gate APPROVE; phase-1-converged tag) |
@@ -52,7 +52,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | 1d: Adversarial Spec Review | **COMPLETE** — **3/3 CONVERGED** at Pass 28 after 28 passes (5 counter resets, 3 consecutive clean P26-P27-P28) | 2026-05-04 | 2026-05-04 | 3/3 FULL CONVERGENCE | 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3→0→3→5→3→4→5→5→5→2→0→0→0 |
 | 1-gate-prep: Consistency Validation + Drift Items | **COMPLETE** | 2026-05-06 | 2026-05-04 | DEC-006/007/008 resolved; ADR-0013 created | CV: 4H/1M; CV-001/003/005 FIXED; CV-002 resolved (SD-001=C/SD-002=A/SD-003=B); CV-004 DRIFT-002 resolved post-SD-002 |
 | 2: Story Decomposition | **complete** (story creation phase) | 2026-05-04 | 2026-05-06 | 30 stories created (W0:7 + W1:8 + W2:7 + W3:8); Phase 2-adv pending | |
-| 2-adv: Adversarial Story Review | **active** — Pass 4 COMPLETE (5 findings FIXED) | 2026-05-06 | | 3 consecutive CLEAN-PASS required | 14→5→5→5 |
+| 2-adv: Adversarial Story Review | **active** — Pass 5 COMPLETE (4 findings FIXED) | 2026-05-06 | | 3 consecutive CLEAN-PASS required | 14→5→5→5→4 |
 | 3: TDD Implementation | not-started | | | | |
 | 3-adv: Wave Adversarial Reviews | not-started | | | | |
 | 4: Holdout Evaluation | not-started | | | | |
@@ -67,10 +67,10 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | Step | Agent | Status | Output |
 |------|-------|--------|--------|
 | Phase 2 Burst 4 — Wave 3 (8 stories) | story-writer | complete | LOW NFRs + DEFER + DRIFT-001 codification + cleanup; STORY-INDEX v1.3.0; total=30 |
-| Phase 2-adv Pass 1 + fixes | adversary + story-writer + state-manager | complete | 14 findings FIXED; S-3.09 added; STORY-INDEX v1.4.0; 31 stories total |
 | Phase 2-adv Pass 2 + fixes | adversary + state-manager | complete | 5 FIXED (0C/0H/3M/1L); S-2.02 H-021 propagation; 3 BC mis-anchorings in appendix; counter 0/3 |
 | Phase 2-adv Pass 3 + fixes | adversary + state-manager | complete | 5 FIXED (0C/1H/3M/1L); WAVE-PLAN v1.1.0 (Wave 1/2/3 concrete tables); GAP-H-006 BC fix; S-2.07 H-020; S-1.06 H-008 OoS; S-2.06 AC-005 precision |
 | Phase 2-adv Pass 4 + fixes | adversary + state-manager | complete | 5 FIXED (0C/0H/4M/1L); WAVE-PLAN ↔ STORY-INDEX sibling sync (P-001/002/003); S-0.01 Test Plan decisive (Option 1 constructor); S-0.02 OffsetPage accessors deterministic (pub fields); DRIFT-003 added |
+| Phase 2-adv Pass 5 + fixes | adversary + state-manager | complete | 4 FIXED (0C/1H/1M/2L); S-3.07 BC anchors + AC-006/007 trace BC-1.1.007→BC-6.4.001; S-3.05 Holdout Strategy added (H-038 regression pin); S-1.06 depends_on:S-0.05 propagated to WAVE-PLAN+STORY-INDEX; STORY-INDEX:163 exit gate cites AC-002/AC-006 |
 
 ## Decisions Log
 
@@ -136,7 +136,7 @@ convergence_trajectory:
 ```
 
 ### Phase 2-adv — Adversarial Story Review
-_Pass 4 SUBSTANTIVE (5 findings, all FIXED). Counter 0/3. Pass 5 pending._
+_Pass 5 SUBSTANTIVE (4 findings, all FIXED). Counter 0/3. Pass 6 pending._
 
 ```yaml
 phase-2-adv-convergence:
@@ -180,6 +180,16 @@ phase-2-adv-convergence:
     clean_pass: false
     clean_pass_count: "0/3"
     note: "WAVE-PLAN ↔ STORY-INDEX sibling-propagation pattern recurs (P-001/002/003). Pass 1 fix to S-3.04 BC anchors didn't propagate to WAVE-PLAN. Pass 4 fixes WAVE-PLAN to match STORY-INDEX. S-2.05 NFR-O-R added to STORY-INDEX (WAVE-PLAN was correct). Wave 3 efforts reconciled (S-3.02 small, S-3.03 medium, S-3.07 small) in WAVE-PLAN. S-0.01 Test Plan decisively chooses Option (1) constructor extension. S-0.02 conditional language resolved: total/start_at are pub fields, not methods. DRIFT-003 added (sibling-sweep process gap). Trajectory 14→5→5→5."
+  - pass: 5
+    findings: 4
+    severity: "0C/1H/1M/2L"
+    addressed: 4
+    delta: -1
+    trend: ASYMPTOTIC
+    fixes_committed: true
+    clean_pass: false
+    clean_pass_count: "0/3"
+    note: "P4 fixes 5/5 verified clean. New pattern: AC-trace target BCs not in bc_anchors (S-3.07 — surfaces semantic mis-anchor + frontmatter coherence issue). S-3.05 missing Holdout Strategy section. S-1.06 dep propagation gap. Trajectory 14→5→5→5→4."
 ```
 
 ### Phase 3-adv — Wave Adversarial Reviews (per-story + wave)
@@ -203,8 +213,8 @@ convergence_trajectory: []
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-06 |
-| **Position** | Phase 2-adv Pass 4 COMPLETE. 5 findings FIXED (0C/0H/4M/1L). WAVE-PLAN ↔ STORY-INDEX sibling sync: S-2.05 NFR-O-R added to STORY-INDEX; S-3.04 BC anchors added to WAVE-PLAN; S-3.02/03/07 effort estimates reconciled in WAVE-PLAN. S-0.01 Test Plan decisive (Option 1 constructor). S-0.02 OffsetPage pub fields deterministic. DRIFT-003 added. Trajectory 14→5→5→5. Counter 0/3. Next: Phase 2-adv Pass 5. |
-| **Convergence counter** | 0/3 (Phase 2-adv; Pass 4 SUBSTANTIVE — 5 findings FIXED; Pass 5 pending) |
+| **Position** | Phase 2-adv Pass 5 COMPLETE. 4 findings FIXED (0C/1H/1M/2L). S-3.07 bc_anchors now include BC-6.4.001 + BC-2.1.001; AC-006/007 trace corrected BC-1.1.007→BC-6.4.001; BC body entries added. S-3.05 Holdout Strategy section added (H-038 regression pin). S-1.06 depends_on:S-0.05 propagated to WAVE-PLAN (table + parallel groups text) and STORY-INDEX prose. STORY-INDEX:163 S-3.04 exit gate now cites AC-002+AC-006 (AC-001 is flag-override regression guard). P4 fixes 5/5 verified clean. Trajectory 14→5→5→5→4. Counter 0/3. Next: Phase 2-adv Pass 6. |
+| **Convergence counter** | 0/3 (Phase 2-adv; Pass 5 SUBSTANTIVE — 4 findings FIXED; Pass 6 pending) |
 
 ## Historical Content
 
