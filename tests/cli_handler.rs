@@ -1741,8 +1741,10 @@ async fn test_assign_user_substring_rejects_with_exit_64() {
     );
 }
 
+/// SD-003 (v0.6 breaking change): --verbose suppresses request body and emits a suppression hint.
+/// To inspect the body, use --verbose-bodies (which triggers a PII warning).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_verbose_logs_request_body_for_put() {
+async fn test_verbose_suppresses_request_body_for_put() {
     let server = MockServer::start().await;
 
     Mock::given(method("PUT"))
@@ -1759,13 +1761,20 @@ async fn test_verbose_logs_request_body_for_put() {
         .args(["issue", "edit", "HDL-1", "--summary", "new summary"])
         .assert()
         .success()
+        // --verbose still logs the method + URL line.
         .stderr(predicate::str::contains("[verbose] PUT"))
-        .stderr(predicate::str::contains("[verbose] body:"))
-        .stderr(predicate::str::contains("\"summary\":\"new summary\""));
+        // --verbose MUST emit the suppression hint (SD-003 AC-002).
+        .stderr(predicate::str::contains(
+            "body suppressed (use --verbose-bodies to inspect, will print PII)",
+        ))
+        // --verbose must NOT emit the raw body bytes (SD-003 AC-002).
+        .stderr(predicate::str::contains("\"summary\":\"new summary\"").not());
 }
 
+/// SD-003 (v0.6 breaking change): --verbose suppresses the body for send_raw (jr api) and emits
+/// a suppression hint. The raw body must not appear in stderr without --verbose-bodies.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_verbose_logs_request_body_for_send_raw() {
+async fn test_verbose_suppresses_request_body_for_send_raw() {
     let server = MockServer::start().await;
 
     Mock::given(method("POST"))
@@ -1786,10 +1795,14 @@ async fn test_verbose_logs_request_body_for_send_raw() {
         ])
         .assert()
         .success()
+        // --verbose still logs the method + URL line.
         .stderr(predicate::str::contains("[verbose] POST"))
+        // --verbose MUST emit the suppression hint (SD-003 AC-002).
         .stderr(predicate::str::contains(
-            "[verbose] body: {\"transition\":{\"id\":\"31\"}}",
-        ));
+            "body suppressed (use --verbose-bodies to inspect, will print PII)",
+        ))
+        // --verbose must NOT emit the raw body bytes (SD-003 AC-002).
+        .stderr(predicate::str::contains("{\"transition\":{\"id\":\"31\"}}").not());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

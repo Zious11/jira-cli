@@ -72,11 +72,7 @@ url = "{server_uri}"
 }
 
 /// Build a `jr` command wired to a mock server with auth bypass and --no-input.
-fn jr_cmd(
-    server_uri: &str,
-    cache_dir: &std::path::Path,
-    config_dir: &std::path::Path,
-) -> Command {
+fn jr_cmd(server_uri: &str, cache_dir: &std::path::Path, config_dir: &std::path::Path) -> Command {
     let mut cmd = Command::cargo_bin("jr").unwrap();
     cmd.env("JR_BASE_URL", server_uri)
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
@@ -124,15 +120,12 @@ async fn test_sd_003_verbose_bodies_emits_pii_warning() {
         "stderr must contain PII warning line 1; got: {stderr}"
     );
     assert!(
-        stderr.contains(
-            "[jr] These bodies contain PII (accountId, emailAddress, ADF text content)."
-        ),
+        stderr
+            .contains("[jr] These bodies contain PII (accountId, emailAddress, ADF text content)."),
         "stderr must contain PII warning line 2; got: {stderr}"
     );
     assert!(
-        stderr.contains(
-            "[jr] Do not pipe to AI-agent contexts or shared logs without consent."
-        ),
+        stderr.contains("[jr] Do not pipe to AI-agent contexts or shared logs without consent."),
         "stderr must contain PII warning line 3; got: {stderr}"
     );
 }
@@ -294,19 +287,17 @@ async fn test_sd_003_verbose_bodies_alone_prints_body_without_url_line() {
     // The [verbose] prefix on method+URL lines is: "[verbose] GET https://..."
     // Body lines use "[verbose] body: ..." — so we check for absence of
     // "[verbose] GET" and "[verbose] POST" patterns (HTTP method after [verbose]).
-    let has_method_url_line = stderr
-        .lines()
-        .any(|line| {
-            let trimmed = line.trim_start_matches("[verbose] ");
-            // A method+URL line looks like "[verbose] GET http://..." where the remainder
-            // starts with an HTTP method verb followed by a space and URL.
-            line.starts_with("[verbose] ")
-                && (trimmed.starts_with("GET ")
-                    || trimmed.starts_with("POST ")
-                    || trimmed.starts_with("PUT ")
-                    || trimmed.starts_with("DELETE ")
-                    || trimmed.starts_with("PATCH "))
-        });
+    let has_method_url_line = stderr.lines().any(|line| {
+        let trimmed = line.trim_start_matches("[verbose] ");
+        // A method+URL line looks like "[verbose] GET http://..." where the remainder
+        // starts with an HTTP method verb followed by a space and URL.
+        line.starts_with("[verbose] ")
+            && (trimmed.starts_with("GET ")
+                || trimmed.starts_with("POST ")
+                || trimmed.starts_with("PUT ")
+                || trimmed.starts_with("DELETE ")
+                || trimmed.starts_with("PATCH "))
+    });
 
     assert!(
         !has_method_url_line,

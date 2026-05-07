@@ -151,7 +151,7 @@ pub async fn handle() -> Result<()> {
 
     // Step 4: Per-project setup
     let config = Config::load_with(Some(&profile_name))?;
-    let client = api::client::JiraClient::from_config(&config, false)?;
+    let client = api::client::JiraClient::from_config(&config, false, false)?;
 
     let setup_project = Confirm::new()
         .with_prompt("Configure this directory as a Jira project?")
