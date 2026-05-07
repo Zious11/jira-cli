@@ -130,8 +130,7 @@ async fn test_bc_4_3_001_multi_workspace_no_collision() {
         .and(path("/jsm/assets/workspace/ws-A/v1/object/88"))
         .and(query_param("includeAttributes", "false"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(asset_response("WS-A-88", "Acme Corp")),
+            ResponseTemplate::new(200).set_body_json(asset_response("WS-A-88", "Acme Corp")),
         )
         .mount(&server)
         .await;
@@ -141,8 +140,7 @@ async fn test_bc_4_3_001_multi_workspace_no_collision() {
         .and(path("/jsm/assets/workspace/ws-B/v1/object/88"))
         .and(query_param("includeAttributes", "false"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(asset_response("WS-B-88", "Widgets Inc")),
+            ResponseTemplate::new(200).set_body_json(asset_response("WS-B-88", "Widgets Inc")),
         )
         .mount(&server)
         .await;
@@ -160,11 +158,7 @@ async fn test_bc_4_3_001_multi_workspace_no_collision() {
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
     let project_dir = tempfile::tempdir().unwrap();
-    std::fs::write(
-        project_dir.path().join(".jr.toml"),
-        "project = \"PROJ\"\n",
-    )
-    .unwrap();
+    std::fs::write(project_dir.path().join(".jr.toml"), "project = \"PROJ\"\n").unwrap();
 
     let output = assert_cmd::Command::cargo_bin("jr")
         .unwrap()
@@ -273,11 +267,7 @@ async fn test_bc_4_3_001_single_workspace_regression_guard() {
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
     let project_dir = tempfile::tempdir().unwrap();
-    std::fs::write(
-        project_dir.path().join(".jr.toml"),
-        "project = \"PROJ\"\n",
-    )
-    .unwrap();
+    std::fs::write(project_dir.path().join(".jr.toml"), "project = \"PROJ\"\n").unwrap();
 
     let output = assert_cmd::Command::cargo_bin("jr")
         .unwrap()
