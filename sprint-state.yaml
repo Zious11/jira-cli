@@ -4,6 +4,7 @@
 # Updated: 2026-05-07
 
 active_wave: 0
+wave_0_progress: "1/7"  # S-0.01 complete
 
 attack_order_wave_0:
   - S-0.01  # Single-file fix, smallest blast radius — first delivery validates per-story pipeline end-to-end
@@ -19,21 +20,24 @@ wave_0:
     title: "handle_open OAuth instance URL fix"
     type: MUST-FIX
     priority: HIGH
-    status: pending
+    status: completed
+    pr: 289
+    merge_sha: b7b9c9c30d4d32270b67a40493895a1a37048781
+    merged_at: 2026-05-07T16:07:09Z
     depends_on: []
-    bc_anchors: [BC-1.6.040]
-    holdout_anchors: [H-NEW-MP-001]
-    notes: "Single-file fix (api/auth.rs). Smallest blast radius. First story to deliver — validates per-story pipeline."
+    bc_anchors: [BC-3.4.001]
+    holdout_anchors: [H-046]
+    notes: "Single-file fix (api/auth.rs). Smallest blast radius. First story to deliver — validates per-story pipeline. MERGED via PR #289; BC-3.4.001 satisfied; H-046 MUST-PASS active."
 
   - id: S-0.02
     title: "list_worklogs pagination truncation fix"
     type: MUST-FIX
     priority: HIGH
-    status: pending
+    status: active
     depends_on: []
-    bc_anchors: [BC-2.5.001]
+    bc_anchors: [BC-X.5.002]
     holdout_anchors: []
-    notes: "Independent MUST-FIX. Parallelizable after S-0.01 validates pipeline."
+    notes: "Independent MUST-FIX. Active — in progress post S-0.01 merge."
 
   - id: S-0.03
     title: "hardcoded 8h/5d worklog billing fix"
