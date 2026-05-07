@@ -68,7 +68,7 @@ Sequential: S-1.03 after S-0.06 merges (tracing depends on --verbose-bodies flag
 | S-1.02 | cargo-deny supply chain hardening | NFR-S-F | — | draft | small |
 | S-1.03 | Add tracing + wire structured logging | NFR-O-A | — | draft | medium |
 | S-1.04 | Add timeout-minutes to all CI/CD jobs | R-L12 | — | draft | xsmall |
-| S-1.05 | GitHub secret scanning + gitleaks CI | NFR-S-B, R-L13 | — | draft | small |
+| S-1.05 | GitHub secret scanning + gitleaks CI | NFR-S-E, R-L13 | — | draft | small |
 | S-1.06 | OAuth flow holdout suite | BC-1.1.001, BC-1.1.002 | H-001..H-006, H-022, H-029 | draft | medium |
 | S-1.07 | Rate-limit holdout suite | BC-X.1.005, BC-X.4.002 | H-013, H-027 | draft | small |
 | S-1.08 | Keychain per-profile layout holdout | BC-1.4.027, BC-1.4.025 | H-016 | draft | small |
@@ -192,18 +192,18 @@ into the story's test file if the story creates a new file for that BC area.
 
 | Holdout | Behavioral Contract | Pre-existing Test File | Line(s) | Anchored In |
 |---------|---------------------|------------------------|---------|-------------|
-| H-009 | BC-X.8.001 (corrupt teams.json graceful degrade) | `tests/issue_view_errors.rs` | 146 | (no story anchor — gap, see below) |
-| H-010 | BC-2.1.002 (issue list default truncates at 30) | `tests/all_flag_behavior.rs` | 90 | (no story anchor — gap, see below) |
-| H-011 | BC-6.1.001 (legacy config migration + idempotency) | `tests/migration_legacy.rs` | 94, 146 | (no story anchor — gap, see below) |
-| H-012 | BC-1.1.001 (auth method dispatch on scope mismatch) | `tests/api_client.rs` | 100, 184, 219 | (no story anchor — gap, see below) |
-| H-015 | BC-X.6.001 (--all + --limit clap mutual exclusion) | `tests/cli_smoke.rs` | 263 | (no story anchor — gap, see below) |
+| H-009 | BC-2.3.035 (corrupt teams.json graceful degrade) | `tests/issue_view_errors.rs` | 146 | (no story anchor — gap, see below) |
+| H-010 | BC-2.2.018 / BC-2.2.019 (issue list default truncates at 30; --all bypasses cap) | `tests/all_flag_behavior.rs` | 90 | (no story anchor — gap, see below) |
+| H-011 | BC-6.1.001 / BC-6.1.002 (legacy config migration + idempotency) | `tests/migration_legacy.rs` | 94, 146 | (no story anchor — gap, see below) |
+| H-012 | BC-1.6.042 / BC-X.3.005 (401 scope-mismatch InsufficientScope + workaround docs) | `tests/api_client.rs` | 100, 184, 219 | (no story anchor — gap, see below) |
+| H-015 | BC-2.2.020 (--all + --limit clap mutual exclusion) | `tests/cli_smoke.rs` | 263 | (no story anchor — gap, see below) |
 | H-017 | BC-4.1.002 (AQL clause uses field NAME + capital Key) | `src/jql.rs` | 278–308 | (no story anchor — gap, see below) |
-| H-018 | BC-X.5.005 / BC-X.9.002 (parse_duration combined units vs validate_duration) | `src/duration.rs::tests::test_complex` | 90 | S-2.06 |
+| H-018 | BC-X.9.002 / BC-X.9.003 (parse_duration combined units vs validate_duration) | `src/duration.rs::tests::test_complex` | 90 | S-2.06 |
 | H-019 | BC-6.1.004 (validate_profile_name rejects reserved/invalid names) | `src/config.rs` | 759, 769 | (no story anchor — gap, see below) |
 | H-021 | BC-2.1.007 (--status ambiguous short-circuit, no JQL fired) | `tests/issue_list_errors.rs` | 369 | S-2.01 (AC-007) |
 | H-023 | BC-2.1.012 (--asset substring ambiguous rejection) | `tests/assets.rs` | 1485, 1553 | S-2.01 (via BC-2.1.012 in bc_anchors) |
-| H-024 | BC-4.2.006 (assets schema --type substring ambiguous) | `tests/assets.rs` | 1696 | S-2.03 |
-| H-026 | BC-X.1.003 (extract_error_message errors object mixed values) | `tests/api_client.rs` | 310 | (no story anchor — gap, see below) |
+| H-024 | BC-4.2.007 (assets schema --type substring ambiguous) | `tests/assets.rs` | 1696 | S-2.03 |
+| H-026 | BC-7.3.002 (extract_error_message errors object mixed values) | `tests/api_client.rs` | 310 | (no story anchor — gap, see below) |
 
 ### Gap Register — Unanchored Holdouts
 
@@ -212,13 +212,13 @@ gaps that are not blocking for v0.5 but should be tracked.
 
 | Gap ID | Holdout | BC | Pre-existing Test | Justification | Resolution Target |
 |--------|---------|-----|------------------|---------------|-------------------|
-| GAP-H-001 | H-009 | BC-X.8.001 | `tests/issue_view_errors.rs:146` (partial) | Existing test covers the corrupt teams.json path; no story formally anchors it. Add to S-2.01 Out of Scope note — covered by pre-existing test. | v0.5 (no action needed; existing test is sufficient) |
-| GAP-H-002 | H-010 | BC-2.1.002 | `tests/all_flag_behavior.rs:90` | 30-item truncation behavior is tested; no dedicated holdout story. Acceptable — test is stable. | v0.5 (no action needed) |
-| GAP-H-003 | H-011 | BC-6.1.001 | `tests/migration_legacy.rs:94,146` | Migration + idempotency well covered by existing tests. No story anchor needed. | v0.5 (no action needed) |
-| GAP-H-004 | H-012 | BC-1.1.001 | `tests/api_client.rs:100,184,219` | Auth dispatch on scope mismatch tested at unit level. Coverage adequate. | v0.5 (no action needed) |
-| GAP-H-005 | H-015 | BC-X.6.001 | `tests/cli_smoke.rs:263` | Clap mutual exclusion tested. No story anchor needed. | v0.5 (no action needed) |
+| GAP-H-001 | H-009 | BC-2.3.035 | `tests/issue_view_errors.rs:146` (partial) | Existing test covers the corrupt teams.json path; no story formally anchors it. Add to S-2.01 Out of Scope note — covered by pre-existing test. | v0.5 (no action needed; existing test is sufficient) |
+| GAP-H-002 | H-010 | BC-2.2.018 / BC-2.2.019 | `tests/all_flag_behavior.rs:90` | 30-item truncation behavior is tested; no dedicated holdout story. Acceptable — test is stable. | v0.5 (no action needed) |
+| GAP-H-003 | H-011 | BC-6.1.001 / BC-6.1.002 | `tests/migration_legacy.rs:94,146` | Migration + idempotency well covered by existing tests. No story anchor needed. | v0.5 (no action needed) |
+| GAP-H-004 | H-012 | BC-1.6.042 / BC-X.3.005 | `tests/api_client.rs:100,184,219` | Auth dispatch on scope mismatch tested at unit level. Coverage adequate. | v0.5 (no action needed) |
+| GAP-H-005 | H-015 | BC-2.2.020 | `tests/cli_smoke.rs:263` | Clap mutual exclusion tested. No story anchor needed. | v0.5 (no action needed) |
 | GAP-H-006 | H-017 | BC-4.1.002 | `src/jql.rs:278-308` (unit tests) | JQL asset clause tested at unit level in the source file. No integration test gap. | v0.5 (no action needed) |
 | GAP-H-007 | H-019 | BC-6.1.004 | `src/config.rs:759,769` (unit tests) | Profile name validation tested at unit level. Adequate coverage. | v0.5 (no action needed) |
 | GAP-H-008 | H-025 | BC-6.2.014 | None found | Cache write atomicity (temp file + rename) has no test pin at activation HEAD. The behavior exists in `src/cache.rs` but is untested. Adding a test is safe but non-critical — atomic rename is well-established OS behavior. | v0.6 (low priority — document in S-2.06 or create S-4.NN if needed) |
-| GAP-H-009 | H-026 | BC-X.1.003 | `tests/api_client.rs:310` | `extract_error_message` mixed-values path tested. Pre-existing coverage adequate; no story anchor needed. | v0.5 (no action needed) |
+| GAP-H-009 | H-026 | BC-7.3.002 | `tests/api_client.rs:310` | `extract_error_message` mixed-values path tested. Pre-existing coverage adequate; no story anchor needed. | v0.5 (no action needed) |
 | GAP-H-010 | H-028 | BC-6.1.005 | None found | Hand-edited config with `foo:bar` profile key (config-file-load boundary) has no specific test. `JR_PROFILE` env var and `--profile` flag validation are tested (H-019), but the config-file load path rejecting invalid profile keys is a distinct code path not yet covered. | v0.6 (add to S-3.06 scope or create S-4.NN for config boundary tests) |

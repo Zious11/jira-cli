@@ -2,7 +2,10 @@
 context: holdout-scenarios
 title: "Holdout Scenarios"
 total_holdouts: 48
-last_updated: 2026-05-04
+# Note: H-NEW-AUTH-002 will be added by S-0.07 implementation (Phase 3).
+# Wave 0 exit gate references H-NEW-AUTH-002 as MUST-PASS pending S-0.07 landing.
+# Total will become 49 once S-0.07 ships.
+last_updated: 2026-05-06
 source_pass: 3
 trace: |
   - L2: .factory/specs/domain-spec/
@@ -21,6 +24,8 @@ Setup uses:
 - `JR_BASE_URL` pointing to a local wiremock/mock server (Rust `wiremock` crate pattern)
 - `JR_SERVICE_NAME=jr-jira-cli-test` to isolate keychain (where applicable)
 - `assert_cmd` (process-spawn) or `JiraClient::new_for_test` (library-level) for invocation
+
+**Note on H-NEW-* format**: Holdouts H-NEW-MP-001 (and future H-NEW-AUTH-002) use an extended format with explicit `**Status**`, `**Verification**`, and prepended NFR/BC fields. This is deliberate for net-new holdouts that anchor MUST-FIX BCs discovered post-corpus-lock. H-001..H-047 use the legacy compact format established during corpus creation. Phase 4 evaluators should parse both shapes.
 
 ---
 

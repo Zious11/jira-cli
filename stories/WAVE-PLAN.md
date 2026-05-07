@@ -56,7 +56,7 @@ Recommended parallel groups:
 | S-1.02 | cargo-deny supply-chain audit | NFR-S-F | — | draft | small |
 | S-1.03 | tracing/observability wire-up | NFR-O-A | S-0.06 | draft | medium |
 | S-1.04 | CI job timeouts | R-L12 | — | draft | xsmall |
-| S-1.05 | GitHub secret scanning | NFR-S-B, R-L13 | — | draft | small |
+| S-1.05 | GitHub secret scanning | NFR-S-E, R-L13 | — | draft | small |
 | S-1.06 | OAuth flow holdout suite | BC-1.1.001/002, H-001..H-006, H-022, H-029 | S-0.05 | draft | medium |
 | S-1.07 | Rate-limit holdout suite | BC-X.4.002, H-013, H-027 | — | draft | small |
 | S-1.08 | Keychain round-trip holdout | BC-1.4.027, H-016 | — | draft | small |
