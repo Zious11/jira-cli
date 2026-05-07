@@ -2,8 +2,8 @@
 document_type: wave-plan
 phase: phase-2-story-decomposition
 producer: story-writer
-version: "1.1.0"
-last_updated: 2026-05-04
+version: "1.1.1"
+last_updated: 2026-05-07
 activation_head: dea1664
 ---
 
@@ -34,7 +34,7 @@ All of the following must be true before Wave 1 dispatch:
 - H-036 (multi-workspace asset HashMap): MUST-PASS
 - H-NEW-MP-001 (multi-profile fields): MUST-PASS
 - H-NEW-AUTH-002 (`JR_AUTH_HEADER` not honored in release): MUST-PASS
-- SD-003 verbose-bodies holdouts (2): MUST-PASS
+- H-NEW-VERBOSE-001 + H-NEW-VERBOSE-002 (SD-003 verbose-bodies): MUST-PASS
 - No regression on H-001..H-044, H-047 (the non-MUST-FIX holdouts)
 
 ### Story ordering within Wave 0

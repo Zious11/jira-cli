@@ -2,7 +2,7 @@
 document_type: story-index
 phase: phase-2-story-decomposition
 producer: story-writer
-version: "1.4.0"
+version: "1.4.2"
 total_stories: 31
 total_waves: 4
 status: complete-pending-adv-review
@@ -107,7 +107,7 @@ Note: S-2.03's S-0.03 dependency was demoted to a recommended merge order (no lo
 | S-2.01 | BC-2 issue-read holdout suite | BC-2.1.001, BC-2.1.007, BC-2.1.012, BC-X.7.006, BC-X.2.005, BC-X.2.006, BC-3.7.001, BC-3.7.004, BC-7.3.001 | H-021, H-030..H-035 | draft | medium |
 | S-2.02 | BC-3 issue-write holdout suite | BC-3.2.001, BC-3.2.009, BC-2.1.013, BC-X.7.004 | H-006, H-007, H-008, H-014 | draft | medium |
 | S-2.03 | BC-4 assets/CMDB holdout suite | BC-4.2.001, BC-4.3.002, BC-4.2.006 | H-037, H-038, H-039 | draft | small |
-| S-2.04 | BC-5/7 boards, sprints, ADF holdout suite | BC-5.2.001, BC-5.2.005, BC-7.2.001 | H-040..H-044 | draft | medium |
+| S-2.04 | BC-5/7 boards, sprints, ADF holdout suite | BC-5.2.001, BC-5.2.005, BC-5.2.007, BC-5.2.008, BC-5.3.001, BC-5.3.002, BC-7.2.001 | H-040..H-044 | draft | medium |
 | S-2.05 | CLAUDE.md documentation update | NFR-O-L, NFR-O-M, NFR-O-O, NFR-O-V, NFR-O-R, NFR-R-F | — | draft | small |
 | S-2.06 | Worklog duration config + CMDB cache tuple | NFR-R-C, BC-X.5.009, BC-6.2.013 | — | draft | medium |
 | S-2.07 | JSON output policy + test naming convention | NFR-O-F, NFR-O-J, NFR-O-W | H-020 | draft | medium |
@@ -222,3 +222,61 @@ gaps that are not blocking for v0.5 but should be tracked.
 | GAP-H-008 | H-025 | BC-6.2.014 | None found | Cache write atomicity (temp file + rename) has no test pin at activation HEAD. The behavior exists in `src/cache.rs` but is untested. Adding a test is safe but non-critical — atomic rename is well-established OS behavior. | v0.6 (low priority — document in S-2.06 or create S-4.NN if needed) |
 | GAP-H-009 | H-026 | BC-7.3.002 | `tests/api_client.rs:310` | `extract_error_message` mixed-values path tested. Pre-existing coverage adequate; no story anchor needed. | v0.5 (no action needed) |
 | GAP-H-010 | H-028 | BC-6.1.005 | None found | Hand-edited config with `foo:bar` profile key (config-file-load boundary) has no specific test. `JR_PROFILE` env var and `--profile` flag validation are tested (H-019), but the config-file load path rejecting invalid profile keys is a distinct code path not yet covered. | v0.6 (add to S-3.06 scope or create S-4.NN for config boundary tests) |
+
+---
+
+## Story Manifest
+
+Complete mapping of every `story_id` to its absolute file path. Generated 2026-05-07.
+Total rows: 31 (matches `total_stories: 31` in frontmatter).
+
+### Wave 0
+
+| story_id | wave | file_path |
+|----------|------|-----------|
+| S-0.01 | 0 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-0/S-0.01-fix-handle-open-oauth-instance-url.md |
+| S-0.02 | 0 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-0/S-0.02-paginate-list-worklogs.md |
+| S-0.03 | 0 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-0/S-0.03-multi-workspace-asset-hashmap-key.md |
+| S-0.04 | 0 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-0/S-0.04-multi-profile-fields-active.md |
+| S-0.05 | 0 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-0/S-0.05-jr-auth-header-cfg-test-gate.md |
+| S-0.06 | 0 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-0/S-0.06-verbose-bodies-flag-and-pii-warning.md |
+| S-0.07 | 0 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-0/S-0.07-formalize-h-new-auth-002-holdout.md |
+
+### Wave 1
+
+| story_id | wave | file_path |
+|----------|------|-----------|
+| S-1.01 | 1 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-1/S-1.01-pin-github-actions-shas.md |
+| S-1.02 | 1 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-1/S-1.02-cargo-deny-supply-chain-audit.md |
+| S-1.03 | 1 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-1/S-1.03-tracing-observability-wire-up.md |
+| S-1.04 | 1 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-1/S-1.04-ci-job-timeouts.md |
+| S-1.05 | 1 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-1/S-1.05-github-secret-scanning.md |
+| S-1.06 | 1 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-1/S-1.06-oauth-flow-holdout-suite.md |
+| S-1.07 | 1 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-1/S-1.07-rate-limit-holdout-suite.md |
+| S-1.08 | 1 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-1/S-1.08-keychain-roundtrip-holdout.md |
+
+### Wave 2
+
+| story_id | wave | file_path |
+|----------|------|-----------|
+| S-2.01 | 2 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-2/S-2.01-bc-2-issue-read-holdout-suite.md |
+| S-2.02 | 2 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-2/S-2.02-bc-3-issue-write-holdout-suite.md |
+| S-2.03 | 2 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-2/S-2.03-bc-4-asset-enrichment-holdout-suite.md |
+| S-2.04 | 2 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-2/S-2.04-bc-5-boards-sprints-holdout-suite.md |
+| S-2.05 | 2 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-2/S-2.05-claude-md-documentation-update.md |
+| S-2.06 | 2 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-2/S-2.06-worklog-duration-and-cmdb-cache-tuple.md |
+| S-2.07 | 2 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-2/S-2.07-json-output-policy-and-test-naming.md |
+
+### Wave 3
+
+| story_id | wave | file_path |
+|----------|------|-----------|
+| S-3.01 | 3 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-3/S-3.01-refactor-auth-rs-shard-split.md |
+| S-3.02 | 3 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-3/S-3.02-refactor-cli-assets-shard-split.md |
+| S-3.03 | 3 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-3/S-3.03-refresh-oauth-token-investigation.md |
+| S-3.04 | 3 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-3/S-3.04-multi-cloudid-disambiguation.md |
+| S-3.05 | 3 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-3/S-3.05-asset-enrichment-concurrency-cap.md |
+| S-3.06 | 3 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-3/S-3.06-spec-numeric-claim-checker.md |
+| S-3.07 | 3 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-3/S-3.07-low-nfr-code-cleanup.md |
+| S-3.08 | 3 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-3/S-3.08-low-nfr-document-as-is.md |
+| S-3.09 | 3 | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/wave-3/S-3.09-pkce-decision-deferred.md |

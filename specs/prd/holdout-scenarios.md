@@ -1,11 +1,13 @@
 ---
 context: holdout-scenarios
 title: "Holdout Scenarios"
-total_holdouts: 48
+total_holdouts: 50
 # Note: H-NEW-AUTH-002 will be added by S-0.07 implementation (Phase 3).
 # Wave 0 exit gate references H-NEW-AUTH-002 as MUST-PASS pending S-0.07 landing.
-# Total will become 49 once S-0.07 ships.
-last_updated: 2026-05-06
+# Total will become 51 once S-0.07 ships.
+# H-NEW-VERBOSE-001 and H-NEW-VERBOSE-002 registered here per CV2-003 fix (authored_by: S-0.06).
+version: "1.1.0"
+last_updated: 2026-05-07
 source_pass: 3
 trace: |
   - L2: .factory/specs/domain-spec/
@@ -25,7 +27,7 @@ Setup uses:
 - `JR_SERVICE_NAME=jr-jira-cli-test` to isolate keychain (where applicable)
 - `assert_cmd` (process-spawn) or `JiraClient::new_for_test` (library-level) for invocation
 
-**Note on H-NEW-* format**: Holdouts H-NEW-MP-001 (and future H-NEW-AUTH-002) use an extended format with explicit `**Status**`, `**Verification**`, and prepended NFR/BC fields. This is deliberate for net-new holdouts that anchor MUST-FIX BCs discovered post-corpus-lock. H-001..H-047 use the legacy compact format established during corpus creation. Phase 4 evaluators should parse both shapes.
+**Note on H-NEW-* format**: Holdouts H-NEW-MP-001, H-NEW-VERBOSE-001, H-NEW-VERBOSE-002 (and future H-NEW-AUTH-002) use an extended format with explicit `**Status**`, `**Verification**`, and prepended NFR/BC fields. This is deliberate for net-new holdouts that anchor MUST-FIX BCs discovered post-corpus-lock. H-001..H-047 use the legacy compact format established during corpus creation. Phase 4 evaluators should parse both shapes.
 
 ---
 
@@ -494,3 +496,64 @@ Setup uses:
 **Verification**:
 - Round-trip test: create profile `A` (field ID `customfield_A`) and `B` (field ID `customfield_B`). Assert each uses its own when `--profile A` or `--profile B` is set.
 - Error message test: when `[profiles.sandbox]` has no `story_points_field_id`, error must reference `[profiles.sandbox]` not deprecated `[fields]`.
+
+---
+
+## Group 7: SD-003 Verbose-Bodies PII Safety (H-NEW-VERBOSE-001..H-NEW-VERBOSE-002)
+
+### H-NEW-VERBOSE-001: `--verbose-bodies` emits PII warning to stderr (MUST-PASS)
+**NFR source**: NFR-S-C
+**BC**: BC-7.5.001
+**SD anchor**: SD-003
+**Authored by**: S-0.06
+
+**Setup**:
+1. Wiremock at `JR_BASE_URL` returns any valid 200 response for a simple GET (e.g., `GET /rest/api/3/myself`).
+2. Config with a valid profile (real or mocked auth header via `JR_AUTH_HEADER` or test fixture).
+
+**Action**: `jr --verbose-bodies auth status` (or any command that triggers at least one HTTP call)
+
+**Expected (MUST-PASS)**:
+- exit 0
+- stderr contains ALL THREE of the following lines (in any order relative to body content, but before the first `[verbose] body:` line):
+  1. `[jr] WARNING: --verbose-bodies prints request/response bodies to stderr.`
+  2. `[jr] These bodies contain PII (accountId, emailAddress, ADF text content).`
+  3. `[jr] Do not pipe to AI-agent contexts or shared logs without consent.`
+- stderr also contains at least one `[verbose] body:` line (body content is printed)
+- stderr does NOT contain the suppression hint `[verbose] body suppressed (use --verbose-bodies to inspect, will print PII)` (that hint is `--verbose`-only)
+
+**Status**: MUST-PASS. Verifies SD-003 Option B postcondition: explicit opt-in body logging with mandatory PII warning.
+
+**Verification**:
+- Process-spawn test in `tests/verbose_bodies.rs`: assert stderr contains all three warning lines.
+- Regression check: if a future change removes the warning or gates it behind another flag, this holdout fails.
+- Cross-reference: SD-003 Resolution §3 lines 79-83; S-0.06 AC-003.
+
+---
+
+### H-NEW-VERBOSE-002: `--verbose` alone does NOT print body content (MUST-PASS + regression pin)
+**NFR source**: NFR-S-C
+**BC**: BC-7.5.001
+**SD anchor**: SD-003
+**Authored by**: S-0.06
+
+**Setup**:
+1. Wiremock at `JR_BASE_URL` returns a 200 response with a non-empty JSON body (e.g., `{"accountType": "atlassian", "emailAddress": "user@example.com"}`).
+2. Config with a valid profile.
+
+**Action**: `jr --verbose auth status` (without `--verbose-bodies`)
+
+**Expected (MUST-PASS)**:
+- exit 0
+- stderr contains `[verbose] GET /rest/api/3/myself` (or equivalent method+URL line for the command)
+- stderr contains the suppression hint: `[verbose] body suppressed (use --verbose-bodies to inspect, will print PII)`
+- stderr does NOT contain `[verbose] body:` (no raw body bytes printed)
+- stderr does NOT contain `emailAddress` or any PII field values from the response body
+- stderr does NOT contain ANY of the three PII warning lines (`[jr] WARNING: --verbose-bodies...`, `[jr] These bodies contain PII...`, `[jr] Do not pipe...`) — those warnings appear ONLY with `--verbose-bodies`
+
+**Status**: MUST-PASS. Regression pin: if a future change inadvertently re-enables body printing under `--verbose` alone (reverting SD-003 Option B), this holdout fails.
+
+**Verification**:
+- Process-spawn test in `tests/verbose_bodies.rs`: assert stderr contains suppression hint and does NOT contain `[verbose] body:`.
+- Three-variant test: (a) `--verbose` alone → suppression hint, no body; (b) `--verbose-bodies` alone → warning + body, no suppression hint; (c) `--verbose --verbose-bodies` → warning + body + method/URL lines.
+- Cross-reference: SD-003 Resolution §3 lines 68-76; S-0.06 AC-001, AC-002; H-NEW-VERBOSE-001.

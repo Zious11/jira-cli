@@ -11,7 +11,7 @@ input-hash: "[live-state]"
 traces_to: ""
 project: jira-cli
 mode: BROWNFIELD
-current_step: "phase-2-adv-converged"
+current_step: "phase-2-to-3-gate-prep"
 current_cycle: "cycle-001"
 dtu_required: false
 activation_head: "dea166471e22eff55974d7675593469b37048c5f"
@@ -51,7 +51,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | 1: Spec Crystallization | **COMPLETE** | 2026-05-04 | 2026-05-04 | PASSED — DEC-006 (SD-001=C), DEC-007 (SD-002=A), DEC-008 (SD-003=B), gate APPROVE | |
 | 1d: Adversarial Spec Review | **COMPLETE** — **3/3 CONVERGED** at Pass 28 after 28 passes (5 counter resets, 3 consecutive clean P26-P27-P28) | 2026-05-04 | 2026-05-04 | 3/3 FULL CONVERGENCE | 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3→0→3→5→3→4→5→5→5→2→0→0→0 |
 | 1-gate-prep: Consistency Validation + Drift Items | **COMPLETE** | 2026-05-06 | 2026-05-04 | DEC-006/007/008 resolved; ADR-0013 created | CV: 4H/1M; CV-001/003/005 FIXED; CV-002 resolved (SD-001=C/SD-002=A/SD-003=B); CV-004 DRIFT-002 resolved post-SD-002 |
-| 2: Story Decomposition | **complete** (story creation phase) | 2026-05-04 | 2026-05-06 | 30 stories created (W0:7 + W1:8 + W2:7 + W3:8); Phase 2-adv pending | |
+| 2: Story Decomposition | **complete** (story creation phase) | 2026-05-04 | 2026-05-06 | 31 stories created (W0:7 + W1:8 + W2:7 + W3:9); Phase 2-adv pending | |
 | 2-adv: Adversarial Story Review | **CONVERGED** — Pass 13 CLEAN-PASS; Counter 3/3 | 2026-05-06 | 2026-05-07 | 3/3 FULL CONVERGENCE | 14→5→5→5→4→5→4→4→4→1→0→1→0 |
 | 3: TDD Implementation | not-started | | | | |
 | 3-adv: Wave Adversarial Reviews | not-started | | | | |
@@ -111,6 +111,9 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | ADV-P2-S12-001 | S-1.08 body propagation gap (line 274) | Pass 10 fix updated frontmatter `depends_on: []` + WAVE-PLAN correctly, but body line 274 still asserted "Depends on S-0.05". DRIFT-003 recurrence (fourth instance of partial-fix body-sweep miss). | MEDIUM | **RESOLVED** — 2026-05-07 — body line 274 updated to "No Wave 0 dependencies..." by story-writer this burst |
 | OBS-13-1 | JiaClient cosmetic typo recurrence | `JiaClient` typo (for `JiraClient`) found at S-0.05:62, S-0.05:206, S-1.06:165 — survived previous passes as sub-threshold. | LOW | **RESOLVED** — 2026-05-07 — global sweep performed; 0 remaining matches |
 | OBS-13-2 | Story manifest tooling gap | Adversary read-only profile could not enumerate wave dirs; no canonical flat manifest existed in STORY-INDEX.md. | LOW | **RESOLVED** — 2026-05-07 — `## Story Manifest` table (31 rows) added to STORY-INDEX.md; version bumped to 1.4.1 |
+| CV2-001 | STATE.md stale story count | Line 54 of STATE.md reported 30 stories (W3:8) after S-3.09 was added, making the total 31 (W3:9). | MEDIUM | **RESOLVED** — 2026-05-07 — STATE.md line 54 stale story count fixed (30→31, W3:8→W3:9) |
+| CV2-002 | STORY-INDEX S-2.04 BC column incomplete | S-2.04 BC anchor list showed 3 BCs but the story body contained 7 BCs — story-writer verified and expanded to 7. | MEDIUM | **RESOLVED** — 2026-05-07 — STORY-INDEX S-2.04 BC column completed (3→7 BCs); version 1.4.1 → 1.4.2 |
+| CV2-003 | SD-003 holdout gap | H-NEW-VERBOSE-001/002 not registered in holdout-scenarios.md; WAVE-PLAN.md exit gate missing reference; S-0.06 cross-link absent. | MEDIUM | **RESOLVED** — 2026-05-07 — H-NEW-VERBOSE-001/002 registered in holdout-scenarios.md (v1.1.0); WAVE-PLAN gate ref updated (v1.1.1); S-0.06 cross-link added |
 
 ## Convergence Trackers
 
@@ -231,7 +234,7 @@ convergence_trajectory: []
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-07 |
-| **Position** | Phase 2-adv CONVERGED at Pass 13. 0 substantive findings. Counter 2/3 → 3/3 FULL CONVERGENCE. OBS-13-1 RESOLVED (JiaClient typo global sweep, 0 remaining). OBS-13-2 RESOLVED (Story Manifest added to STORY-INDEX v1.4.1, 31 rows). Final trajectory: 14→5→5→5→4→5→4→4→4→1→0→1→0. Next: Phase 2 → Phase 3 human gate prep (consistency-validator fresh-context audit + input-hash drift check + gate doc). |
+| **Position** | Phase 2-adv CONVERGED. Pre-gate consistency audit complete (PASS-WITH-NITS, 96/100 → all 3 MEDIUM findings RESOLVED). CV2-001: STATE.md stale count fixed (30→31, W3:8→W3:9). CV2-002: STORY-INDEX S-2.04 BC column completed (3→7 BCs, v1.4.2). CV2-003: H-NEW-VERBOSE-001/002 registered; WAVE-PLAN exit gate updated (v1.1.1); S-0.06 cross-link added. Input-hash drift sweep: 3 artifacts checked, 0 true drift (2 STALE are live-state sentinels, not actionable). Next: Phase 2→3 gate document prep + human approval. |
 | **Convergence counter** | 3/3 CONVERGED (Phase 2-adv; Pass 13 CLEAN-PASS — 0 substantive findings; full convergence achieved) |
 
 ## Historical Content
