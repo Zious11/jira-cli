@@ -8,7 +8,7 @@ source_passes: "Pass 2 broad §2b.3 + Pass 8 §2.5 + Pass 1 R1 §4"
 
 # State Machines
 
-Five state machines that materially drive the `jr` system. All are verified from source in Pass 2 broad §2b.3 and Pass 8 §2.5. Diagrams use ASCII flowchart notation; prose annotations cite source locations.
+Five canonical state machines (plus SM-06 Profile Lifecycle as bonus context) that materially drive the `jr` system. All are verified from source in Pass 2 broad §2b.3 and Pass 8 §2.5. Diagrams use ASCII flowchart notation; prose annotations cite source locations.
 
 ---
 
@@ -153,7 +153,7 @@ Five state machines that materially drive the `jr` system. All are verified from
 
 ## SM-03: Asset Enrichment 3-Pass State Machine
 
-**Source**: `cli/issue/list.rs:390-487`. Pass 1 R1 §4c, NEW-INV-227..231.
+**Source**: `cli/issue/list.rs:395-463`. Pass 1 R1 §4c, NEW-INV-227..231.
 
 ### States
 

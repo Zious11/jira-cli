@@ -49,7 +49,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | pre-pipeline: Setup | complete | 2026-05-04 | 2026-05-04 | env-preflight | |
 | 0: Codebase Ingestion | **COMPLETE** | 2026-05-04 | 2026-05-04 | Phase A + B + B.5 + B.6 + C + gate APPROVED | |
 | 1: Spec Crystallization | **entry** | 2026-05-04 | | DEC-004 pending (scope choice) | |
-| 1d: Adversarial Spec Review | **Pass 23: 5 findings FIXED (0C/1H/3M/1L); P22 fixes verified; counter 0/3; Pass 24 next** | 2026-05-04 | | Awaiting orchestrator strategy decision | 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3→0→3→5→3→4→5→**5** (P23: 0C/1H/3M/1L; L2 6→7-level chain P22 propagation gap; 17→18 API files; H-017 fixture; Group 1+2 headers) |
+| 1d: Adversarial Spec Review | **Pass 24: 5 findings FIXED (0C/0H/1M/4L); P23 verified+sweep clean; severity down; counter 0/3; Pass 25 next** | 2026-05-04 | | Awaiting orchestrator strategy decision | 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3→0→3→5→3→4→5→5→**5** (P24: 0C/0H/1M/4L; BC-2.1.006 12→13; nfr line 15 =41; L2 SM count 5+bonus; SM-3 source align 395-463; JiaClient typo) |
 | 2: Story Decomposition | not-started | | | | |
 | 2-adv: Adversarial Story Review | not-started | | | | |
 | 3: TDD Implementation | not-started | | | | |
@@ -65,11 +65,10 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 
 | Step | Agent | Status | Output |
 |------|-------|--------|--------|
-| Phase 1d Pass 19 + fixes | state-manager | complete | adv-p1-pass19.md; 5 FIXED (1C/1H/3M); SM-5 anchor BC-X.8.001→BC-X.8.003 + range BC-6.2.015; cache count 7→6 in INV-CACHE-003; H-027 BC-X.4.009 trace; 3 MUST-FIX BCs holdout cross-refs (H-036/H-045/H-046) |
-| Phase 1d Pass 20 + fixes | state-manager | complete | adv-p1-pass20.md; 3 FIXED (0C/1H/1M/1L); G-EO1 tracing dep + call sites corrected; EC-CFG-005/EC-ASSET-006 holdout refs; P19 fixes 6/6 verified |
 | Phase 1d Pass 21 + fixes | state-manager | complete | adv-p1-pass21.md; 4 FIXED (0C/1H/2M/1L); BC-7.2 54→51 reconciles 541 grand total; component-graph cli_board/cli_sprint nodes; EC-AUTH-009 BC-1.6.044→BC-1.6.042; 6 EC holdout cross-refs |
 | Phase 1d Pass 22 + fixes | state-manager | complete | adv-p1-pass22.md; 5 FIXED (0C/0H/4M/1L); P21 propagation gaps swept (H-044 BC range, L2 54→51, mermaid 6→7); H-027 reframe as parsing test; CANONICAL-COUNTS MEDIUM pruned |
 | Phase 1d Pass 23 + fixes | state-manager | complete | adv-p1-pass23.md; 5 FIXED (0C/1H/3M/1L); L2 6→7-level chain (P22 propagation); 17→18 API files; H-017 fixture; Group 1+2 headers |
+| Phase 1d Pass 24 + fixes | state-manager | complete | adv-p1-pass24.md; 5 FIXED (0C/0H/1M/4L); severity-down trend; BC-2.1.006 12→13; nfr 42→41; L2 SM count; SM-3 source align; JiaClient typo |
 
 ## Pending Decisions
 
@@ -104,12 +103,12 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 
 | ID | Area | Description | Severity | Status |
 |----|------|-------------|----------|--------|
-| DRIFT-001 | Pass 21+ propagation (recurring) | Count/chain-length fixes require downstream grep sweep across L2/architecture/edge-case-catalog using literal old value — P21 missed H-044+L2; P23-001 reaffirms same pattern. Every count/chain-length L3 change must trigger grep sweep. Recommend automation as pre-merge gate. | MEDIUM | process-gap recurring (escalate to self-improvement epic) |
+| DRIFT-001 | Pass 21+ propagation (recurring) | Count/chain-length fixes require downstream grep sweep across L2/architecture/edge-case-catalog using literal old value — P21 missed H-044+L2; P23-001 reaffirms same pattern; ADV-P24-001 is THIRD recurrence (BC-2.1.006 12 vs 13). Codify as S-7.01 lesson before next phase. Every count/chain-length L3 change must trigger grep sweep. Recommend automation as pre-merge gate. | MEDIUM | process-gap recurring (S-7.01 codification due before Phase 2) |
 
 ## Convergence Trackers
 
 ### Phase 1d — Adversarial Spec Review
-_Pass 23: 5 findings (0C/1H/3M/1L), all FIXED. Counter 0/3 (no advance). P22 fixes 5/5 verified at primary targets. ADV-P23-001 confirms propagation pattern recurrence (bc-07 L2 6-level chain missed in P22 fix scope). DRIFT-001 escalated to process-gap recurring. Convergence asymptotic. Trajectory 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3→0→3→5→3→4→5→5._
+_Pass 24: 5 findings (0C/0H/1M/4L), all FIXED. Counter 0/3 (no advance). P23 fixes 5/5 verified + downstream sweep clean. Severity distribution dramatic shift (4M/1L → 1M/4L); adversary self-notes spec approaching floor. DRIFT-001: third recurrence of count-claim drift; S-7.01 codification due before Phase 2. Convergence asymptotic. Trajectory 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3→0→3→5→3→4→5→5→5._
 
 ```yaml
 convergence_trajectory:
@@ -155,6 +154,16 @@ convergence_trajectory:
     clean_pass: false
     clean_pass_count: "0/3"
     note: "P22 fixes 5/5 verified. Same propagation pattern recurs (L2 6-level missed in P22 fix scope). 17→18 API file count drift; H-017 fixture broken citation; Group 1 header arithmetic; Group 2 categorization. Codify downstream-grep sweep as gate (OBS-001)."
+  - pass: 24
+    findings: 5
+    severity: "0C/0H/1M/4L"
+    addressed: 5
+    delta: 0
+    trend: SEVERITY-DOWN
+    fixes_committed: true
+    clean_pass: false
+    clean_pass_count: "0/3"
+    note: "Severity distribution dramatic shift (4M/1L → 1M/4L). Adversary self-notes spec approaching floor. P23 verified clean + downstream sweep clean. Findings: BC-2.1.006 12→13, nfr line 15 = 41, SM count 5+1 bonus, SM-3 source pin align, JiaClient typo. Predict CLEAN-PASS pass 25-26."
 ```
 
 ### Phase 2-adv — Adversarial Story Review
@@ -185,8 +194,8 @@ convergence_trajectory: []
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-04 |
-| **Position** | Phase 1 ACTIVE — Phase 1d adversary Pass 23: 5 findings (0C/1H/3M/1L), all FIXED. P22 fixes 5/5 verified at primary targets. Counter 0/3 (no advance). Trajectory 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3→0→3→5→3→4→5→5. Manifest: 541 BCs / 41 NFRs / 48 holdouts / 26 risks. Convergence asymptotic; P23-001 confirms propagation pattern recurrence (bc-07 L2 6-level chain); DRIFT-001 escalated to process-gap recurring; 17→18 API files; H-017 fixture fixed; Group 1+2 headers corrected; Pass 24 next. |
-| **Convergence counter** | 0 of 3 (no advance; Pass 23 delta 0 from Pass 22; asymptotic regime) |
+| **Position** | Phase 1 ACTIVE — Phase 1d adversary Pass 24: 5 findings (0C/0H/1M/4L), all FIXED. P23 fixes 5/5 verified + downstream sweep clean. Counter 0/3 (no advance). Trajectory 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3→0→3→5→3→4→5→5→5. Manifest: 541 BCs / 41 NFRs / 48 holdouts / 26 risks. Severity distribution dramatic shift (4M/1L → 1M/4L); spec approaching floor; DRIFT-001: third recurrence of count-claim drift, S-7.01 codification due before Phase 2; Pass 25 next. |
+| **Convergence counter** | 0 of 3 (no advance; Pass 24 delta 0 from Pass 23; SEVERITY-DOWN trend; asymptotic regime) |
 
 ## Historical Content
 

@@ -72,7 +72,7 @@ behavior (2.2), Issue view (2.3), Comments (2.4), Changelog (2.5), API layer (2.
 
 ---
 
-#### BC-2.1.006: No project AND no filters AND no `--jql` → exit 64 listing all 12 filter sources
+#### BC-2.1.006: No project AND no filters AND no `--jql` → exit 64 listing all 13 filter sources
 
 **Confidence**: HIGH
 **Source**: `src/cli/issue/list.rs:344-351`

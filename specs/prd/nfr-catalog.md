@@ -12,7 +12,7 @@ trace: |
 
 # NFR Catalog — jira-cli Pass 4 Convergence
 
-42 individually-enumerated NFR rows. Pass 4 produced: broad (23) + R1 deepening (+18) + NFR-R-E re-promotion (0 net) + R4 NEW-2 (+1) = 42 entries then reconciled to 40 summary rows + NFR-R-NEW-1 added by ADV-P2-003 = 41 total. NFR-S-E severity promoted from LOW to HIGH per ADV-P2-004. NFR-S-F (cargo-deny supply chain) added per ADV-P3-007 = 42 total.
+42 individually-enumerated NFR rows. Pass 4 produced: broad (23) + R1 deepening (+18) + NFR-R-E re-promotion (0 net) + R4 NEW-2 (+1) = 42 entries then reconciled to 40 summary rows + NFR-R-NEW-1 added by ADV-P2-003 = 41 total. NFR-S-E severity promoted from LOW to HIGH per ADV-P2-004. NFR-S-F (cargo-deny supply chain) added per ADV-P3-007 = 42 total then NFR-O-K merged into NFR-S-D at ADV-P7-002 = 41 total.
 
 **Severity totals: 1 CRITICAL / 6 HIGH / 15 MEDIUM / 19 LOW = 41 total** (NFR-O-K merged into NFR-S-D at ADV-P7-002)
 

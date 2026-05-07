@@ -20,7 +20,7 @@ Setup uses:
 - `XDG_CONFIG_HOME` / `XDG_CACHE_HOME` pointing to temp directories
 - `JR_BASE_URL` pointing to a local wiremock/mock server (Rust `wiremock` crate pattern)
 - `JR_SERVICE_NAME=jr-jira-cli-test` to isolate keychain (where applicable)
-- `assert_cmd` (process-spawn) or `JiaClient::new_for_test` (library-level) for invocation
+- `assert_cmd` (process-spawn) or `JiraClient::new_for_test` (library-level) for invocation
 
 ---
 
