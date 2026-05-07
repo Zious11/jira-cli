@@ -49,7 +49,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | pre-pipeline: Setup | complete | 2026-05-04 | 2026-05-04 | env-preflight | |
 | 0: Codebase Ingestion | **COMPLETE** | 2026-05-04 | 2026-05-04 | Phase A + B + B.5 + B.6 + C + gate APPROVED | |
 | 1: Spec Crystallization | **entry** | 2026-05-04 | | DEC-004 pending (scope choice) | |
-| 1d: Adversarial Spec Review | **Pass 20: 3 findings FIXED (0C/1H/1M/1L); P19 fixes verified; counter 0/3; Pass 21 next** | 2026-05-04 | | Awaiting orchestrator strategy decision | 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3→0→3→5→**3** (P20: 0C/1H/1M/1L; edge-case-catalog) |
+| 1d: Adversarial Spec Review | **Pass 21: 4 findings FIXED (0C/1H/2M/1L); P20 fixes verified; counter 0/3; Pass 22 next** | 2026-05-04 | | Awaiting orchestrator strategy decision | 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3→0→3→5→3→**4** (P21: 0C/1H/2M/1L; BC-7.2 count math + propagation) |
 | 2: Story Decomposition | not-started | | | | |
 | 2-adv: Adversarial Story Review | not-started | | | | |
 | 3: TDD Implementation | not-started | | | | |
@@ -65,11 +65,10 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 
 | Step | Agent | Status | Output |
 |------|-------|--------|--------|
-| Phase 1d Pass 16 (CLEAN-PASS) | state-manager | complete | adv-p1-pass16.md; 0 findings; bc-*.md body sweep effective; counter 0/3 → 1/3 |
-| Phase 1d Pass 17 + fixes | state-manager | complete | adv-p1-pass17.md; 3 FIXED (1H/2M); SD-003 R-H3→R-M0; state-machines NFR-R-NEW-3→NFR-O-B; L2 bc_count sync bc-04/06/07; counter 1/3 → 0/3 |
 | Phase 1d Pass 18 + fixes | state-manager | complete | adv-p1-pass18.md; 3 FIXED (0H/2M/1L); arch BC-4 map adds cli/assets.rs; BC-INDEX:630 line 440 sync; H-046 fixture mechanism specified; counter 1/3 → 0/3 (5th reset) |
 | Phase 1d Pass 19 + fixes | state-manager | complete | adv-p1-pass19.md; 5 FIXED (1C/1H/3M); SM-5 anchor BC-X.8.001→BC-X.8.003 + range BC-6.2.015; cache count 7→6 in INV-CACHE-003; H-027 BC-X.4.009 trace; 3 MUST-FIX BCs holdout cross-refs (H-036/H-045/H-046) |
 | Phase 1d Pass 20 + fixes | state-manager | complete | adv-p1-pass20.md; 3 FIXED (0C/1H/1M/1L); G-EO1 tracing dep + call sites corrected; EC-CFG-005/EC-ASSET-006 holdout refs; P19 fixes 6/6 verified |
+| Phase 1d Pass 21 + fixes | state-manager | complete | adv-p1-pass21.md; 4 FIXED (0C/1H/2M/1L); BC-7.2 54→51 reconciles 541 grand total; component-graph cli_board/cli_sprint nodes; EC-AUTH-009 BC-1.6.044→BC-1.6.042; 6 EC holdout cross-refs |
 
 ## Pending Decisions
 
@@ -108,7 +107,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 ## Convergence Trackers
 
 ### Phase 1d — Adversarial Spec Review
-_Pass 20: 3 findings (0C/1H/1M/1L), all FIXED. Counter 0/3 (no advance). P19 fixes 6/6 verified. Findings localized to edge-case-catalog.md (previously under-examined). Convergence asymptotic. Trajectory 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3→0→3→5→3._
+_Pass 21: 4 findings (0C/1H/2M/1L), all FIXED. Counter 0/3 (no advance). P20 fixes 3/3 verified. BC-7.2 cumulative count math reconciled (54→51 preserves 541 grand total); component-graph cli_board/cli_sprint nodes added; EC-AUTH-009 BC anchor corrected; 6 non-MUST-FIX ECs gain holdout citations. Convergence asymptotic. Trajectory 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3→0→3→5→3→4._
 
 ```yaml
 convergence_trajectory:
@@ -174,6 +173,16 @@ convergence_trajectory:
     clean_pass: false
     clean_pass_count: "0/3"
     note: "P19 fixes verified clean (6/6). Findings localized to edge-case-catalog.md (previously under-examined). G-EO1 contradicts Cargo.toml + arch on tracing dep + call site count. EC-CFG-005/EC-ASSET-006 partial-fix propagation."
+  - pass: 21
+    findings: 4
+    severity: "0C/1H/2M/1L"
+    addressed: 4
+    delta: +1
+    trend: ASYMPTOTIC
+    fixes_committed: true
+    clean_pass: false
+    clean_pass_count: "0/3"
+    note: "P20 fixes verified 3/3 clean. BC-7.2 cumulative count math (54→51) for grand-total 541 reconciliation; component-graph cli_board/cli_sprint nodes added (P18 propagation gap); EC-AUTH-009 anchor BC-1.6.044→BC-1.6.042 semantic correction; 6 non-MUST-FIX ECs gain holdout citations."
 ```
 
 ### Phase 2-adv — Adversarial Story Review
@@ -204,8 +213,8 @@ convergence_trajectory: []
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-04 |
-| **Position** | Phase 1 ACTIVE — Phase 1d adversary Pass 20: 3 findings (0C/1H/1M/1L), all FIXED. P19 fixes 6/6 verified. Counter 0/3 (no advance). Trajectory 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3→0→3→5→3. Manifest: 541 BCs / 41 NFRs / 48 holdouts / 26 risks. Convergence asymptotic; edge-case-catalog.md G-EO1 + MUST-FIX holdout refs corrected; Pass 21 next. |
-| **Convergence counter** | 0 of 3 (no advance; Pass 20 delta -2 from Pass 19; asymptotic regime) |
+| **Position** | Phase 1 ACTIVE — Phase 1d adversary Pass 21: 4 findings (0C/1H/2M/1L), all FIXED. P20 fixes 3/3 verified. Counter 0/3 (no advance). Trajectory 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3→0→3→5→3→4. Manifest: 541 BCs / 41 NFRs / 48 holdouts / 26 risks. Convergence asymptotic; BC-7.2 count math reconciled (54→51); component-graph cli_board/cli_sprint nodes added; EC-AUTH-009 BC anchor corrected; 6 EC holdout cross-refs added; Pass 22 next. |
+| **Convergence counter** | 0 of 3 (no advance; Pass 21 delta +1 from Pass 20; asymptotic regime) |
 
 ## Historical Content
 

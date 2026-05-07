@@ -70,7 +70,7 @@ Error display (7.3), JSON output shapes (7.4), Observability (7.5).
 
 ---
 
-### 7.2 ADF Rendering (54 contracts)
+### 7.2 ADF Rendering (51 contracts)
 
 #### BC-7.2.001: `text_to_adf("hello")` emits `{type:"doc", version:1, content:[{type:"paragraph", content:[{type:"text", text:"hello"}]}]}`
 

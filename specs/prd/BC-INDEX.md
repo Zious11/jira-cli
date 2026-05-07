@@ -444,7 +444,7 @@ R1/R4 prefix = deepening round that introduced it.
 | BC-7.1.004 | Truncation hint emitted to stderr (NOT stdout); `--all` suppresses hint | BC-1110, BC-1111 | tests/sprint_commands.rs:97-100, 175-179 | HIGH |
 | BC-7.1.005 | `--output json` error shape: `{"error": "<message>", "code": <exit>}` to stderr | BC-1208 | src/main.rs:34-49 | MEDIUM |
 
-### 7.2 ADF Rendering (5 individually-bodied BCs: BC-7.2.001..005; 54 BCs cumulative including range-collapsed)
+### 7.2 ADF Rendering (5 individually-bodied BCs: BC-7.2.001..005; 51 BCs cumulative including range-collapsed)
 
 | L3 BC ID | Summary | Pass 3 BC ID | Source | Confidence |
 |---|---|---|---|---|
@@ -453,7 +453,7 @@ R1/R4 prefix = deepening round that introduced it.
 | BC-7.2.003 | ADF markdown round-trip covers: headings, lists, code blocks, blockquotes, tables, links | BC-1117 (R4) | src/snapshots/ | HIGH |
 | BC-7.2.004 | ADF→text rendering: table render, code, headings preserved; lossy nodes silently dropped | BC-1106; BC-1116 (R4) | src/adf.rs::tests | HIGH |
 | BC-7.2.005 | `markdown_to_adf("**bold text**")` body on wire: `marks: [{type: "strong"}]`; `text` is `"bold text"` NOT `"**bold text**"` | BC-1056 (R4) | tests/issue_commands.rs:647-687 | HIGH |
-| BC-7.2.006..054 | Additional ADF contracts (range-collapsed from bc-7 body) [range-collapsed; not individually-bodied] | BC-1106..1117 | src/adf.rs::tests (69 tests) | HIGH |
+| BC-7.2.006..051 | Additional ADF contracts (range-collapsed from bc-7 body) [range-collapsed; not individually-bodied] | BC-1106..1117 | src/adf.rs::tests (69 tests) | HIGH |
 
 ### 7.3 Error Display (9 BCs: BC-7.3.001..009)
 

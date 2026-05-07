@@ -75,7 +75,7 @@ Categories:
 ### EC-AUTH-009: `InsufficientScope` substring match precision
 **Boundary**: 401 body contains "scope does not match" (exact substring).
 **Expected**: `InsufficientScope` variant raised (not generic `NotAuthenticated`).
-**Status**: Covered by BC-1.6.044; holdout H-012.
+**Status**: Covered by BC-1.6.042; holdout H-012.
 **Test gap**: Any future tightening of the substring match would silently break this.
 
 ---
@@ -187,12 +187,12 @@ Categories:
 ### EC-ASSET-003: `enrich_assets` — id-only asset only
 **Boundary**: `LinkedAsset` has `id` set but `key` and `name` are None.
 **Expected**: GET fired to resolve; after enrichment: `key`, `name`, `asset_type` populated.
-**Status**: Covered by BC-4.3.002.
+**Status**: Covered by BC-4.3.002; holdout H-038.
 
 ### EC-ASSET-004: `enrich_assets` — already-resolved asset skipped
 **Boundary**: `LinkedAsset` has both `key` and `name` populated.
 **Expected**: No GET fired (skip).
-**Status**: Covered by BC-4.3.002.
+**Status**: Covered by BC-4.3.002; holdout H-038.
 
 ### EC-ASSET-005: `LinkedAsset::display()` id-fallback hint
 **Boundary**: Asset has only `id` (no key, no name).
@@ -207,7 +207,7 @@ Categories:
 ### EC-ASSET-007: Workspace ID — cache hit vs miss
 **Boundary**: Workspace cache exists with TTL <7d vs >7d.
 **Expected**: Cache hit → no HTTP; cache miss → GET `rest/servicedeskapi/assets/workspace` → re-cache.
-**Status**: Covered by BC-4.2.001.
+**Status**: Covered by BC-4.2.001; holdout H-037.
 
 ---
 
@@ -216,7 +216,7 @@ Categories:
 ### EC-SPRINT-001: Kanban board sprint commands — hard error
 **Boundary**: `jr sprint current` on a kanban board.
 **Expected**: Exit non-zero; literal message `"Sprint commands are only available for scrum boards"`.
-**Status**: Covered by BC-5.2.001.
+**Status**: Covered by BC-5.2.001; holdout H-042.
 
 ### EC-SPRINT-002: `issue list` on kanban board — silent degrade
 **Boundary**: `jr issue list` when no scrum board found for project.
@@ -231,12 +231,12 @@ Categories:
 ### EC-SPRINT-004: `sprint current` under-limit (10 issues)
 **Boundary**: Sprint has 10 issues; default limit = 30.
 **Expected**: All 10 returned; NO truncation hint on stderr.
-**Status**: Covered by BC-5.2.005.
+**Status**: Covered by BC-5.2.005; holdout H-040.
 
 ### EC-SPRINT-005: Sprint JSON `sprint_id` asymmetry
 **Boundary**: `sprint add` vs `sprint remove` JSON output.
 **Expected**: Add response includes `sprint_id`; remove response does NOT include `sprint_id`.
-**Status**: Covered by BC-5.2.007 and BC-5.2.008 (insta snapshots).
+**Status**: Covered by BC-5.2.007 and BC-5.2.008 (insta snapshots); holdout H-041.
 
 ---
 
@@ -245,7 +245,7 @@ Categories:
 ### EC-OUT-001: Team column — conjunctive gate
 **Boundary**: `team_field_id` configured but no issue has team UUID.
 **Expected**: Team column omitted (both conditions must be true: configured AND populated).
-**Status**: Covered by BC-5.3.001 and BC-5.3.002.
+**Status**: Covered by BC-5.3.001 and BC-5.3.002; holdout H-043.
 
 ### EC-OUT-002: Stale team cache — UUID fallback with hint
 **Boundary**: Issue has team UUID but team name not in cache.

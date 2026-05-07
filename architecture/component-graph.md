@@ -49,6 +49,9 @@ graph TD
     cli_assets --> assets_workspace["api::assets::workspace\n58 LOC"]
     cli_assets --> assets_schemas["api::assets::schemas\n45 LOC"]
 
+    cli_board["cli::board (L2)\n334 LOC"] --> boards_impl
+    cli_sprint["cli::sprint (L2)\n438 LOC"] --> sprints_impl
+
     cli_issue_assets --> assets_linked["api::assets::linked\n557 LOC"]
     cli_issue_list --> assets_linked
     cli_issue_list --> jql
