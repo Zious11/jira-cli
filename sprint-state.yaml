@@ -4,7 +4,7 @@
 # Updated: 2026-05-07
 
 active_wave: 0
-wave_0_progress: "5/7"  # S-0.01, S-0.02, S-0.03, S-0.04, S-0.05 complete
+wave_0_progress: "6/7"  # S-0.01, S-0.02, S-0.03, S-0.04, S-0.05, S-0.06 complete
 
 attack_order_wave_0:
   - S-0.01  # Single-file fix, smallest blast radius — first delivery validates per-story pipeline end-to-end
@@ -86,21 +86,25 @@ wave_0:
     title: "SD-003 --verbose-bodies flag + holdouts"
     type: SD-implementation
     priority: MEDIUM
-    status: active
+    status: completed
+    pr: 294
+    merge_sha: 06ecd6a028895de30789f8c8d6bd438c3baac154
+    merged_at: 2026-05-07T20:06:59Z
+    merged_by: "user (manual gh CLI; dispatcher block recurrence #2)"
     depends_on: []
     bc_anchors: []
     holdout_anchors: [H-NEW-VERBOSE-001, H-NEW-VERBOSE-002]
-    notes: "Security decision SD-003 (Option B). Standalone — no dependency on S-0.05. Active as of 2026-05-07 post S-0.05 merge."
+    notes: "Security decision SD-003 (Option B: --verbose-bodies flag + PII warning). Standalone — no dependency on S-0.05. MERGED via PR #294 at 06ecd6a (2026-05-07T20:06:59Z). 7/7 CI green; review APPROVE; SD-003 satisfied; H-NEW-VERBOSE-001 + H-NEW-VERBOSE-002 holdouts MUST-PASS. 6 ACs covered by 6 new tests + 2 rewritten existing tests (1 deviation accepted: cli_handler tests rewritten for SD-003 contract per requirements-changed rule). BREAKING CHANGE documented in CHANGELOG.md. Manual user merge — factory-dispatcher blocked programmatic admin merge (recurrence #2 of Lesson 2)."
 
   - id: S-0.07
     title: "H-NEW-AUTH-002 holdout authoring"
     type: holdout
     priority: MEDIUM
-    status: pending
+    status: active
     depends_on: [S-0.05]
     bc_anchors: []
     holdout_anchors: [H-NEW-AUTH-002]
-    notes: "Authors the holdout scenario established by S-0.05. Must follow S-0.05 completion."
+    notes: "Authors the holdout scenario established by S-0.05. Final Wave 0 story. Active as of 2026-05-07 post S-0.06 merge."
 
 wave_0_exit_gate: "All 4 MUST-FIX stories green; SD-002 and SD-003 implemented; H-NEW-AUTH-002 and H-NEW-VERBOSE-001/002 holdouts registered."
 
