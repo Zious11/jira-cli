@@ -144,8 +144,9 @@ pub(super) async fn handle_list(
         None
     };
 
-    let sp_field_id = config.global.fields.story_points_field_id.as_deref();
-    let team_field_id = config.global.fields.team_field_id.as_deref();
+    let active = config.active_profile();
+    let sp_field_id = active.story_points_field_id.as_deref();
+    let team_field_id = active.team_field_id.as_deref();
     let mut extra: Vec<&str> = sp_field_id.iter().copied().collect();
     // Request team field on list output so handle_list can surface a Team
     // column per #191 (shown only when ≥1 issue has a populated team).
@@ -597,7 +598,7 @@ fn resolve_show_points(show_points: bool, sp_field_id: Option<&str>) -> Option<&
             None => {
                 eprintln!(
                     "warning: --points ignored. Story points field not configured. \
-                     Run \"jr init\" or set [fields].story_points_field_id in ~/.config/jr/config.toml"
+                     Run \"jr init\" or set story_points_field_id under [profiles.<name>] in ~/.config/jr/config.toml"
                 );
                 None
             }

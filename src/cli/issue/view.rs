@@ -25,8 +25,9 @@ pub(super) async fn handle_view(
         unreachable!()
     };
 
-    let sp_field_id = config.global.fields.story_points_field_id.as_deref();
-    let team_field_id: Option<&str> = config.global.fields.team_field_id.as_deref();
+    let active = config.active_profile();
+    let sp_field_id = active.story_points_field_id.as_deref();
+    let team_field_id: Option<&str> = active.team_field_id.as_deref();
     let cmdb_fields = get_or_fetch_cmdb_fields(client).await.unwrap_or_default();
     let extra_owned = helpers::compose_extra_fields(config, &cmdb_fields);
     let extra: Vec<&str> = extra_owned.iter().map(String::as_str).collect();
