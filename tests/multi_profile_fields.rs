@@ -330,8 +330,9 @@ async fn test_bc_6_3_001_sprint_current_shows_team_and_points_after_save_round_t
     );
 
     // Write a team cache so the UUID can be resolved to a display name.
+    // Write to the canonical v1/<profile>/ path to match production cache layout.
     {
-        let teams_dir = cache_dir.path().join("jr");
+        let teams_dir = cache_dir.path().join("jr").join("v1").join("default");
         std::fs::create_dir_all(&teams_dir).unwrap();
         let cache = jr::cache::TeamCache {
             fetched_at: chrono::Utc::now(),
@@ -425,9 +426,9 @@ async fn test_bc_6_3_001_board_view_shows_team_after_save_round_trip() {
         "customfield_10100",
     );
 
-    // Write a team cache.
+    // Write a team cache to the canonical v1/<profile>/ path.
     {
-        let teams_dir = cache_dir.path().join("jr");
+        let teams_dir = cache_dir.path().join("jr").join("v1").join("default");
         std::fs::create_dir_all(&teams_dir).unwrap();
         let cache = jr::cache::TeamCache {
             fetched_at: chrono::Utc::now(),
