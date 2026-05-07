@@ -24,23 +24,24 @@ impl JiraClient {
 
     /// List all worklogs on an issue, paginating until all pages are fetched.
     ///
-    /// BC-X.5.002: iterates with offset-based pagination until `total <= start_at + count`.
+    /// BC-X.5.002: iterates with offset-based pagination via `OffsetPage::has_more` /
+    /// `OffsetPage::next_start` until all pages are consumed.
     pub async fn list_worklogs(&self, key: &str) -> Result<Vec<Worklog>> {
         let base_path = format!("/rest/api/3/issue/{}/worklog", urlencoding::encode(key));
         let mut all_items: Vec<Worklog> = Vec::new();
-        let mut start_at: usize = 0;
+        let mut start_at: u32 = 0;
 
         loop {
             let path = format!("{}?startAt={}", base_path, start_at);
             let page: OffsetPage<Worklog> = self.get(&path).await?;
-            let count = page.items().len();
+            let has_more = page.has_more();
+            let next = page.next_start();
             all_items.extend_from_slice(page.items());
 
-            let fetched_up_to = start_at + count;
-            if (page.total as usize) <= fetched_up_to || count == 0 {
+            if !has_more {
                 break;
             }
-            start_at = fetched_up_to;
+            start_at = next;
         }
 
         Ok(all_items)
