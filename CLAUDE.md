@@ -140,6 +140,7 @@ When adding a new feature:
   `docs/superpowers/specs/2026-04-30-embedded-oauth-app-design.md`.
 - **`src/api/auth_embedded.rs` is a thin sibling module** to `auth.rs`. Keep
   obfuscation plumbing there; keep keychain/OAuth flow plumbing in `auth.rs`.
+- **`--verbose` is header-only (SD-003 breaking change):** As of v0.6, `--verbose` shows method + URL + status only. It does NOT print request/response bodies. To inspect bodies (e.g., for debugging API calls), use `--verbose-bodies`. This flag emits a 3-line PII warning to stderr because bodies contain accountIds, email addresses, and ADF content. Do not use `--verbose-bodies` in shared terminals, debug log files piped to shared storage, or AI-agent context windows. Migration: `jr ... --verbose` → `jr ... --verbose --verbose-bodies` if body inspection was relied upon.
 - **`refresh_oauth_token` resolves credentials internally** (keychain →
   embedded) — callers pass only `profile`. Do not re-introduce
   `client_id`/`client_secret` parameters; they short-circuit the resolver.

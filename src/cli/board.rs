@@ -189,7 +189,8 @@ async fn handle_view(
 
     // Request the team field alongside issues so handle_view can surface a
     // Team column matching `jr issue list` — per #246 parity follow-up.
-    let team_field_id = config.global.fields.team_field_id.as_deref();
+    let active = config.active_profile();
+    let team_field_id = active.team_field_id.as_deref();
     let extra: Vec<&str> = team_field_id.iter().copied().collect();
 
     let (issues, has_more) = if board_type == "scrum" {

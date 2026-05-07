@@ -20,6 +20,7 @@ pub struct JiraClient {
     instance_url: String,
     auth_header: String,
     verbose: bool,
+    verbose_bodies: bool,
     assets_base_url: Option<String>,
     /// Active profile name, plumbed through so per-profile cache calls can
     /// scope their reads/writes correctly without the call sites needing
@@ -30,7 +31,11 @@ pub struct JiraClient {
 impl JiraClient {
     /// Build a `JiraClient` from the application config, loading auth credentials
     /// from the system keychain.
-    pub fn from_config(config: &Config, verbose: bool) -> anyhow::Result<Self> {
+    pub fn from_config(
+        config: &Config,
+        verbose: bool,
+        verbose_bodies: bool,
+    ) -> anyhow::Result<Self> {
         let base_url = config.base_url()?;
 
         // JR_BASE_URL overrides all URL targets (used by integration tests to inject wiremock).
@@ -61,25 +66,16 @@ impl JiraClient {
             .and_then(|p| p.auth_method.as_deref())
             .unwrap_or("api_token");
 
-        // JR_AUTH_HEADER env var overrides keychain auth (used by tests to inject mock auth)
+        // JR_AUTH_HEADER env var overrides keychain auth (debug builds only — excluded from
+        // release binaries via #[cfg(debug_assertions)] gate per SD-002 resolution).
+        #[cfg(debug_assertions)]
         let auth_header = if let Ok(header) = std::env::var("JR_AUTH_HEADER") {
             header
         } else {
-            match auth_method {
-                "oauth" => {
-                    let (access, _refresh) =
-                        crate::api::auth::load_oauth_tokens(&config.active_profile_name)?;
-                    format!("Bearer {access}")
-                }
-                _ => {
-                    // api_token (default)
-                    let (email, token) = crate::api::auth::load_api_token()?;
-                    let encoded = base64::engine::general_purpose::STANDARD
-                        .encode(format!("{email}:{token}"));
-                    format!("Basic {encoded}")
-                }
-            }
+            Self::load_auth_from_keychain(auth_method, &config.active_profile_name)?
         };
+        #[cfg(not(debug_assertions))]
+        let auth_header = Self::load_auth_from_keychain(auth_method, &config.active_profile_name)?;
 
         let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
 
@@ -95,15 +91,42 @@ impl JiraClient {
             })
         };
 
+        if verbose_bodies {
+            eprintln!("[jr] WARNING: --verbose-bodies prints request/response bodies to stderr.");
+            eprintln!("[jr] These bodies contain PII (accountId, emailAddress, ADF text content).");
+            eprintln!("[jr] Do not pipe to AI-agent contexts or shared logs without consent.");
+        }
+
         Ok(Self {
             client,
             base_url,
             instance_url,
             auth_header,
             verbose,
+            verbose_bodies,
             assets_base_url,
             profile_name: config.active_profile_name.clone(),
         })
+    }
+
+    /// Load the auth header value from the system keychain based on the configured auth method.
+    ///
+    /// Shared by the `#[cfg(debug_assertions)]` and `#[cfg(not(debug_assertions))]` branches
+    /// of `from_config` to avoid duplicating the `oauth`/`api_token` match arms.
+    fn load_auth_from_keychain(auth_method: &str, profile_name: &str) -> anyhow::Result<String> {
+        match auth_method {
+            "oauth" => {
+                let (access, _refresh) = crate::api::auth::load_oauth_tokens(profile_name)?;
+                Ok(format!("Bearer {access}"))
+            }
+            _ => {
+                // api_token (default)
+                let (email, token) = crate::api::auth::load_api_token()?;
+                let encoded =
+                    base64::engine::general_purpose::STANDARD.encode(format!("{email}:{token}"));
+                Ok(format!("Basic {encoded}"))
+            }
+        }
     }
 
     /// Create a client for integration testing. This is **not** gated behind
@@ -116,6 +139,7 @@ impl JiraClient {
             base_url,
             auth_header,
             verbose: false,
+            verbose_bodies: false,
             assets_base_url,
             profile_name: "default".to_string(),
         }
@@ -142,6 +166,7 @@ impl JiraClient {
             instance_url: instance_url.trim_end_matches('/').to_string(),
             auth_header: auth_header.to_string(),
             verbose: false,
+            verbose_bodies: false,
             assets_base_url,
             profile_name: "default".to_string(),
         }
@@ -160,13 +185,38 @@ impl JiraClient {
         self.verbose
     }
 
+    /// Read a response body as raw bytes, optionally printing it to stderr
+    /// when `--verbose-bodies` is enabled. Returns the bytes for deserialization.
+    ///
+    /// - When `verbose_bodies` is set: prints the raw response bytes to stderr.
+    /// - When only `verbose` is set: prints a suppression hint so users know
+    ///   how to enable body inspection.
+    /// - Otherwise: silent.
+    ///
+    /// Centralises response-body logging so all `get*` / `post*` methods share
+    /// the same logic without duplicating it at each call site.
+    async fn collect_response_body(&self, response: Response) -> anyhow::Result<Vec<u8>> {
+        let bytes = response.bytes().await?;
+        if self.verbose_bodies {
+            eprintln!(
+                "[verbose] response body: {}",
+                String::from_utf8_lossy(&bytes)
+            );
+        } else if self.verbose {
+            eprintln!(
+                "[verbose] body suppressed (use --verbose-bodies to inspect, will print PII)"
+            );
+        }
+        Ok(bytes.to_vec())
+    }
+
     /// Perform a GET request and deserialize the JSON response.
     pub async fn get<T: DeserializeOwned>(&self, path: &str) -> anyhow::Result<T> {
         let url = format!("{}{}", self.base_url, path);
         let request = self.client.get(&url);
         let response = self.send(request).await?;
-        let body = response.json::<T>().await?;
-        Ok(body)
+        let bytes = self.collect_response_body(response).await?;
+        Ok(serde_json::from_slice(&bytes)?)
     }
 
     /// Perform a POST request with a JSON body and deserialize the response.
@@ -178,8 +228,8 @@ impl JiraClient {
         let url = format!("{}{}", self.base_url, path);
         let request = self.client.post(&url).json(body);
         let response = self.send(request).await?;
-        let parsed = response.json::<T>().await?;
-        Ok(parsed)
+        let bytes = self.collect_response_body(response).await?;
+        Ok(serde_json::from_slice(&bytes)?)
     }
 
     /// Perform a PUT request with a JSON body. Returns `()` on success.
@@ -220,11 +270,19 @@ impl JiraClient {
 
             let req = req.header("Authorization", &self.auth_header);
 
-            if self.verbose {
+            if self.verbose || self.verbose_bodies {
                 if let Some(ref r) = req.try_clone().and_then(|r| r.build().ok()) {
-                    eprintln!("[verbose] {} {}", r.method(), r.url());
+                    if self.verbose {
+                        eprintln!("[verbose] {} {}", r.method(), r.url());
+                    }
                     if let Some(bytes) = r.body().and_then(|b| b.as_bytes()) {
-                        eprintln!("[verbose] body: {}", String::from_utf8_lossy(bytes));
+                        if self.verbose_bodies {
+                            eprintln!("[verbose] body: {}", String::from_utf8_lossy(bytes));
+                        } else {
+                            eprintln!(
+                                "[verbose] body suppressed (use --verbose-bodies to inspect, will print PII)"
+                            );
+                        }
                     }
                 }
             }
@@ -297,10 +355,18 @@ impl JiraClient {
                 )
             })?;
 
-            if self.verbose {
-                eprintln!("[verbose] {} {}", req.method(), req.url());
+            if self.verbose || self.verbose_bodies {
+                if self.verbose {
+                    eprintln!("[verbose] {} {}", req.method(), req.url());
+                }
                 if let Some(bytes) = req.body().and_then(|b| b.as_bytes()) {
-                    eprintln!("[verbose] body: {}", String::from_utf8_lossy(bytes));
+                    if self.verbose_bodies {
+                        eprintln!("[verbose] body: {}", String::from_utf8_lossy(bytes));
+                    } else {
+                        eprintln!(
+                            "[verbose] body suppressed (use --verbose-bodies to inspect, will print PII)"
+                        );
+                    }
                 }
             }
 
@@ -388,8 +454,8 @@ impl JiraClient {
         let url = format!("{}{}", self.instance_url, path);
         let request = self.client.get(&url);
         let response = self.send(request).await?;
-        let body = response.json::<T>().await?;
-        Ok(body)
+        let bytes = self.collect_response_body(response).await?;
+        Ok(serde_json::from_slice(&bytes)?)
     }
 
     /// Perform a POST request against the real Jira instance URL (bypasses OAuth proxy base_url).
@@ -401,8 +467,8 @@ impl JiraClient {
         let url = format!("{}{}", self.instance_url, path);
         let request = self.client.post(&url).json(body);
         let response = self.send(request).await?;
-        let parsed = response.json::<T>().await?;
-        Ok(parsed)
+        let bytes = self.collect_response_body(response).await?;
+        Ok(serde_json::from_slice(&bytes)?)
     }
 
     /// Perform a GET request against the Assets/CMDB API gateway.
@@ -427,7 +493,8 @@ impl JiraClient {
         );
         let request = self.client.get(&url);
         let response = self.send(request).await?;
-        Ok(response.json::<T>().await?)
+        let bytes = self.collect_response_body(response).await?;
+        Ok(serde_json::from_slice(&bytes)?)
     }
 
     /// Perform a POST request against the Assets/CMDB API gateway.
@@ -450,7 +517,8 @@ impl JiraClient {
         );
         let request = self.client.post(&url).json(body);
         let response = self.send(request).await?;
-        Ok(response.json::<T>().await?)
+        let bytes = self.collect_response_body(response).await?;
+        Ok(serde_json::from_slice(&bytes)?)
     }
 
     /// Returns the HTTP method for building requests externally (if needed).

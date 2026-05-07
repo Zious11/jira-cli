@@ -35,9 +35,13 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub no_input: bool,
 
-    /// Enable verbose output
+    /// verbose mode (headers + status + URL only; use --verbose-bodies for full body inspection)
     #[arg(long, global = true)]
     pub verbose: bool,
+
+    /// print full HTTP request/response bodies to stderr (PII warning emitted; use with care — see CLAUDE.md)
+    #[arg(long, global = true)]
+    pub verbose_bodies: bool,
 
     /// Override the active profile (precedence: this flag > JR_PROFILE > config > "default")
     #[arg(long, global = true)]

@@ -229,8 +229,9 @@ async fn handle_current(
     }
 
     let sprint = &sprints[0];
-    let sp_field_id = config.global.fields.story_points_field_id.as_deref();
-    let team_field_id = config.global.fields.team_field_id.as_deref();
+    let active = config.active_profile();
+    let sp_field_id = active.story_points_field_id.as_deref();
+    let team_field_id = active.team_field_id.as_deref();
     let mut extra: Vec<&str> = sp_field_id.iter().copied().collect();
     // Request the team field so handle_current can surface a Team column
     // matching `jr issue list` — per #246 parity follow-up to #191.
