@@ -77,7 +77,8 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             cli::Command::Init => cli::init::handle().await,
             cli::Command::Assets { command } => {
                 let config = config::Config::load_with(cli.profile.as_deref())?;
-                let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
+                let client =
+                    api::client::JiraClient::from_config(&config, cli.verbose, cli.verbose_bodies)?;
                 cli::assets::handle(command, &cli.output, &client).await
             }
             cli::Command::Auth { command } => match command {
@@ -151,7 +152,8 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             },
             cli::Command::Me => {
                 let config = config::Config::load_with(cli.profile.as_deref())?;
-                let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
+                let client =
+                    api::client::JiraClient::from_config(&config, cli.verbose, cli.verbose_bodies)?;
                 let user = client.get_myself().await?;
                 output::print_output(
                     &cli.output,
@@ -170,7 +172,8 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             }
             cli::Command::Project { command } => {
                 let config = config::Config::load_with(cli.profile.as_deref())?;
-                let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
+                let client =
+                    api::client::JiraClient::from_config(&config, cli.verbose, cli.verbose_bodies)?;
                 cli::project::handle(
                     command,
                     &config,
@@ -182,7 +185,8 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             }
             cli::Command::Issue { command } => {
                 let config = config::Config::load_with(cli.profile.as_deref())?;
-                let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
+                let client =
+                    api::client::JiraClient::from_config(&config, cli.verbose, cli.verbose_bodies)?;
                 cli::issue::handle(
                     *command,
                     &cli.output,
@@ -196,7 +200,8 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             }
             cli::Command::Board { command } => {
                 let config = config::Config::load_with(cli.profile.as_deref())?;
-                let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
+                let client =
+                    api::client::JiraClient::from_config(&config, cli.verbose, cli.verbose_bodies)?;
                 cli::board::handle(
                     command,
                     &config,
@@ -208,7 +213,8 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             }
             cli::Command::Sprint { command } => {
                 let config = config::Config::load_with(cli.profile.as_deref())?;
-                let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
+                let client =
+                    api::client::JiraClient::from_config(&config, cli.verbose, cli.verbose_bodies)?;
                 cli::sprint::handle(
                     command,
                     &config,
@@ -220,22 +226,26 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             }
             cli::Command::Worklog { command } => {
                 let config = config::Config::load_with(cli.profile.as_deref())?;
-                let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
+                let client =
+                    api::client::JiraClient::from_config(&config, cli.verbose, cli.verbose_bodies)?;
                 cli::worklog::handle(command, &client, &cli.output).await
             }
             cli::Command::Team { command } => {
                 let config = config::Config::load_with(cli.profile.as_deref())?;
-                let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
+                let client =
+                    api::client::JiraClient::from_config(&config, cli.verbose, cli.verbose_bodies)?;
                 cli::team::handle(command, &cli.output, &config, &client).await
             }
             cli::Command::User { command } => {
                 let config = config::Config::load_with(cli.profile.as_deref())?;
-                let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
+                let client =
+                    api::client::JiraClient::from_config(&config, cli.verbose, cli.verbose_bodies)?;
                 cli::user::handle(command, &cli.output, &client).await
             }
             cli::Command::Queue { command } => {
                 let config = config::Config::load_with(cli.profile.as_deref())?;
-                let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
+                let client =
+                    api::client::JiraClient::from_config(&config, cli.verbose, cli.verbose_bodies)?;
                 cli::queue::handle(
                     command,
                     &cli.output,
@@ -252,7 +262,8 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 header,
             } => {
                 let config = config::Config::load_with(cli.profile.as_deref())?;
-                let client = api::client::JiraClient::from_config(&config, cli.verbose)?;
+                let client =
+                    api::client::JiraClient::from_config(&config, cli.verbose, cli.verbose_bodies)?;
                 cli::api::handle_api(path, method, data, header, &client).await
             }
         }
