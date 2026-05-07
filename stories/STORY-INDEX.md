@@ -85,7 +85,7 @@ All of the following must be true before Wave 2 dispatch:
 - All Wave 0 holdouts remain green (no regression)
 - NFR-S-E: no floating action tags in `.github/workflows/` (S-1.01)
 - NFR-S-F: `cargo deny check bans` exits 0 (S-1.02)
-- NFR-S-B: gitleaks CI job passes (S-1.05)
+- NFR-S-E: gitleaks CI job passes (S-1.05)
 - S-1.03 (tracing): `cargo test --all-features` green; verbose behavior unchanged
 
 ---
@@ -104,7 +104,7 @@ Note: S-2.03's S-0.03 dependency was demoted to a recommended merge order (no lo
 
 | Story ID | Title | NFR/BC Anchors | Holdout Anchors | Status | Est. Effort |
 |----------|-------|----------------|-----------------|--------|-------------|
-| S-2.01 | BC-2 issue-read holdout suite | BC-2.1.001, BC-2.1.007, BC-7.3.001, BC-X.7.006 | H-021, H-030..H-035 | draft | medium |
+| S-2.01 | BC-2 issue-read holdout suite | BC-2.1.001, BC-2.1.007, BC-2.1.012, BC-X.7.006, BC-X.2.005, BC-X.2.006, BC-3.7.001, BC-3.7.004, BC-7.3.001 | H-021, H-030..H-035 | draft | medium |
 | S-2.02 | BC-3 issue-write holdout suite | BC-3.2.001, BC-3.2.009, BC-2.1.013, BC-X.7.004 | H-006, H-007, H-008, H-014 | draft | medium |
 | S-2.03 | BC-4 assets/CMDB holdout suite | BC-4.2.001, BC-4.3.002, BC-4.2.006 | H-037, H-038, H-039 | draft | small |
 | S-2.04 | BC-5/7 boards, sprints, ADF holdout suite | BC-5.2.001, BC-5.2.005, BC-7.2.001 | H-040..H-044 | draft | medium |

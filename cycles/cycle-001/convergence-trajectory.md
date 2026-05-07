@@ -206,3 +206,100 @@ BC-INDEX:630 line-440 sync; arch BC-4 map adds cli/assets.rs; H-046 fixture mech
 **Convergence counter:** 0 of 3 (REGRESSION)
 
 5 findings via rotated lenses (state-machine↔BC, cache audit, holdout↔BC bidirectional). CRITICAL SM-5 BC-X.8.001→BC-X.8.003. HIGH cache count drift 7→6. Partial-fix propagation pattern.
+
+---
+
+## Phase 2-adv — Adversarial Story Review
+
+| Pass | Date | Total | CRIT | HIGH | MED | LOW | Counter | Verdict |
+|------|------|-------|------|------|-----|-----|---------|---------|
+| 1 | 2026-05-06 | 14 | 2 | 5 | 5 | 2 | 0/3 | FINDINGS_REMAIN |
+| 2 | 2026-05-06 | 5 | 0 | 0 | 3 | 1 | 0/3 | CONVERGING |
+| 3 | 2026-05-06 | 5 | 0 | 1 | 3 | 1 | 0/3 | ASYMPTOTIC |
+| 4 | 2026-05-06 | 5 | 0 | 0 | 4 | 1 | 0/3 | ASYMPTOTIC |
+| 5 | 2026-05-06 | 4 | 0 | 1 | 1 | 2 | 0/3 | ASYMPTOTIC |
+| 6 | 2026-05-06 | 5 | 1 | 1 | 2 | 1 | 0/3 | REGRESSION |
+| 7 | 2026-05-06 | 4 | 0 | 1 | 2 | 1 | 0/3 | ASYMPTOTIC |
+| 8 | 2026-05-06 | 4 | 0 | 1 | 1 | 2 | 0/3 | ASYMPTOTIC |
+| 9 | 2026-05-06 | 4 | 0 | 2 | 2 | 0 | 0/3 | ASYMPTOTIC |
+
+**Trajectory:** 14→5→5→5→4→5→4→4→4
+
+### Pass 1 (2026-05-06)
+
+**Findings:** 14 (2C/5H/5M/2L)
+**Convergence counter:** 0 of 3
+
+Pass 1: 2 CRITICAL mis-anchorings (S-3.01 file, S-1.06 holdout claim). 5 HIGH (holdout coverage gaps, NFR-S-A orphan). 5 MEDIUM (BC mis-anchor S-3.04, frontmatter schema, refresh_oauth_token signature, sizing). All FIXED. New story S-3.09 added. STORY-INDEX v1.4.0, 31 stories total.
+
+---
+
+### Pass 2 (2026-05-06)
+
+**Findings:** 5 (0C/0H/3M/1L)
+**Convergence counter:** 0 of 3
+
+Severity dropping (CRITICAL/HIGH→MED/LOW). Trajectory 14→5. P1 fixes 7/10 verified clean; 1/10 partial (sibling-text propagation gap S-2.02→H-021). 3 BC mis-anchorings in Pre-existing Test Coverage appendix (P1-introduced content). Trend converging.
+
+---
+
+### Pass 3 (2026-05-06)
+
+**Findings:** 5 (0C/1H/3M/1L)
+**Convergence counter:** 0 of 3
+
+P2 fix gap caught (GAP-H-006 BC residue). HIGH WAVE-PLAN drift caught (Wave 1/2/3 still TBD placeholders post-burst). S-2.07 H-020 false attribution to S-1.06. S-1.06 Out of Scope missing H-008. S-2.06 AC-005 path-dependence resolved with concrete invocation. Trajectory 14→5→5.
+
+---
+
+### Pass 4 (2026-05-06)
+
+**Findings:** 5 (0C/0H/4M/1L)
+**Convergence counter:** 0 of 3
+
+WAVE-PLAN ↔ STORY-INDEX sibling-propagation pattern recurs (P-001/002/003). Pass 1 fix to S-3.04 BC anchors didn't propagate to WAVE-PLAN. Pass 4 fixes WAVE-PLAN to match STORY-INDEX. S-2.05 NFR-O-R added to STORY-INDEX (WAVE-PLAN was correct). Wave 3 efforts reconciled (S-3.02 small, S-3.03 medium, S-3.07 small) in WAVE-PLAN. S-0.01 Test Plan decisively chooses Option (1) constructor extension. S-0.02 conditional language resolved: total/start_at are pub fields, not methods. DRIFT-003 added (sibling-sweep process gap). Trajectory 14→5→5→5.
+
+---
+
+### Pass 5 (2026-05-06)
+
+**Findings:** 4 (0C/1H/1M/2L)
+**Convergence counter:** 0 of 3
+
+P4 fixes 5/5 verified clean. New pattern: AC-trace target BCs not in bc_anchors (S-3.07 — surfaces semantic mis-anchor + frontmatter coherence issue). S-3.05 missing Holdout Strategy section. S-1.06 dep propagation gap. Trajectory 14→5→5→5→4.
+
+---
+
+### Pass 6 (2026-05-06)
+
+**Findings:** 5 (1C/1H/2M/1L) — REGRESSION
+**Convergence counter:** 0 of 3
+
+CRITICAL discovery: BC-6.4.* dangling in STORY-INDEX (since corpus inception, propagated by P5 fix). Fresh-context BC catalog walk surfaced this. Replaced 7 sites with BC-6.1.004/BC-6.1.005. BC-2.1.001 mis-anchor removed from S-3.07 (anti-loop guard now NFR-R-F-anchored only). 4 P5 propagation gaps caught + fixed. DRIFT-004 added.
+
+---
+
+### Pass 7 (2026-05-06)
+
+**Findings:** 4 (0C/1H/2M/1L)
+**Convergence counter:** 0 of 3
+
+P6 fixes 5/5 verified clean. DRIFT-004 deep BC sweep CLEAN. New finding classes: risk_anchors semantic mis-anchor (R-M5→R-M2 in S-3.04); fabricated BC anchor (S-2.05 BC-6.1.001 stretched paraphrase, removed); STORY-INDEX:108 BC-2.1.013 propagation gap (DRIFT-003 recurrence); S-1.06 ADR-0013 forward-ref annotated. Trajectory 14→5→5→5→4→5→4.
+
+---
+
+### Pass 8 (2026-05-06)
+
+**Findings:** 4 (0C/1H/1M/2L)
+**Convergence counter:** 0 of 3
+
+HIGH: H-009 row mis-anchor in Pre-existing Test Coverage (sibling-sweep miss from Pass 2 fix family; BC-X.8.001→BC-2.3.035). MEDIUM: S-1.05 NFR-S-B→NFR-S-E (S-0.05 owns NFR-S-B; S-1.05 owns CI/CD config NFR-S-E). LOW: H-NEW-AUTH-002 absence annotated in holdout-scenarios.md frontmatter; H-NEW-MP-001 dual-format documented in preamble. Proactive appendix audit performed — 6 additional BC mismatches corrected: H-010/H-011/H-012/H-015/H-018/H-024/H-026 + Gap Register sync. DRIFT-003 recurrence: sibling-sweep miss at H-009. Trajectory 14→5→5→5→4→5→4→4.
+
+---
+
+### Pass 9 (2026-05-06)
+
+**Findings:** 4 (0C/2H/2M/0L)
+**Convergence counter:** 0 of 3
+
+All 4 findings = DRIFT-003 sibling-propagation recurrences. P8 NFR-S-B→S-E body propagation miss (HIGH): S-1.05 body + AC-001 + AC-005 + STORY-INDEX:88 exit gate updated. S-2.01 frontmatter 10 BCs vs index 4 (HIGH): BC-2.1.013 removed (single-owner with S-2.02); STORY-INDEX:107 reconciled to 9 BCs. S-0.07 fabricated BC paraphrase (MED): bc_anchors cleared, AC-001 trace retargeted to SD-002 resolution. WAVE-PLAN drift (MED): S-1.07 +BC-X.1.005, S-1.08 +BC-1.4.025, S-2.07 effort small→medium. Trajectory 14→5→5→5→4→5→4→4→4.
