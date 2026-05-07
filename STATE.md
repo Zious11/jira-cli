@@ -49,7 +49,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | pre-pipeline: Setup | complete | 2026-05-04 | 2026-05-04 | env-preflight | |
 | 0: Codebase Ingestion | **COMPLETE** | 2026-05-04 | 2026-05-04 | Phase A + B + B.5 + B.6 + C + gate APPROVED | |
 | 1: Spec Crystallization | **entry** | 2026-05-04 | | DEC-004 pending (scope choice) | |
-| 1d: Adversarial Spec Review | **Pass 21: 4 findings FIXED (0C/1H/2M/1L); P20 fixes verified; counter 0/3; Pass 22 next** | 2026-05-04 | | Awaiting orchestrator strategy decision | 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3→0→3→5→3→**4** (P21: 0C/1H/2M/1L; BC-7.2 count math + propagation) |
+| 1d: Adversarial Spec Review | **Pass 22: 5 findings FIXED (0C/0H/4M/1L); P21 fixes verified; counter 0/3; Pass 23 next** | 2026-05-04 | | Awaiting orchestrator strategy decision | 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3→0→3→5→3→4→**5** (P22: 0C/0H/4M/1L; P21 propagation sweep + H-027 reframe + CANONICAL-COUNTS MEDIUM pruned) |
 | 2: Story Decomposition | not-started | | | | |
 | 2-adv: Adversarial Story Review | not-started | | | | |
 | 3: TDD Implementation | not-started | | | | |
@@ -69,6 +69,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | Phase 1d Pass 19 + fixes | state-manager | complete | adv-p1-pass19.md; 5 FIXED (1C/1H/3M); SM-5 anchor BC-X.8.001→BC-X.8.003 + range BC-6.2.015; cache count 7→6 in INV-CACHE-003; H-027 BC-X.4.009 trace; 3 MUST-FIX BCs holdout cross-refs (H-036/H-045/H-046) |
 | Phase 1d Pass 20 + fixes | state-manager | complete | adv-p1-pass20.md; 3 FIXED (0C/1H/1M/1L); G-EO1 tracing dep + call sites corrected; EC-CFG-005/EC-ASSET-006 holdout refs; P19 fixes 6/6 verified |
 | Phase 1d Pass 21 + fixes | state-manager | complete | adv-p1-pass21.md; 4 FIXED (0C/1H/2M/1L); BC-7.2 54→51 reconciles 541 grand total; component-graph cli_board/cli_sprint nodes; EC-AUTH-009 BC-1.6.044→BC-1.6.042; 6 EC holdout cross-refs |
+| Phase 1d Pass 22 + fixes | state-manager | complete | adv-p1-pass22.md; 5 FIXED (0C/0H/4M/1L); P21 propagation gaps swept (H-044 BC range, L2 54→51, mermaid 6→7); H-027 reframe as parsing test; CANONICAL-COUNTS MEDIUM pruned |
 
 ## Pending Decisions
 
@@ -103,66 +104,17 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 
 | ID | Area | Description | Severity | Status |
 |----|------|-------------|----------|--------|
+| DRIFT-001 | Pass 21+ propagation | Count-changing fixes (e.g., BC-7.2 54→51) require downstream grep sweep — primary-fix verification missed H-044 and L2 references | MEDIUM | process-gap (track for self-improvement epic) |
 
 ## Convergence Trackers
 
 ### Phase 1d — Adversarial Spec Review
-_Pass 21: 4 findings (0C/1H/2M/1L), all FIXED. Counter 0/3 (no advance). P20 fixes 3/3 verified. BC-7.2 cumulative count math reconciled (54→51 preserves 541 grand total); component-graph cli_board/cli_sprint nodes added; EC-AUTH-009 BC anchor corrected; 6 non-MUST-FIX ECs gain holdout citations. Convergence asymptotic. Trajectory 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3→0→3→5→3→4._
+_Pass 22: 5 findings (0C/0H/4M/1L), all FIXED. Counter 0/3 (no advance). P21 fixes 4/4 verified at primary targets; 3 of 5 P22 findings were P21 downstream propagation gaps. H-027 holdout retry/timing math contradiction reframed as parsing test. CANONICAL-COUNTS MEDIUM list pruned of LOW NFRs. Convergence asymptotic. Trajectory 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3→0→3→5→3→4→5._
 
 ```yaml
 convergence_trajectory:
-  # Passes 1-14 archived to cycles/cycle-001/convergence-trajectory.md
-  # Trajectory: 30→15→9→5→10→5→4→3→4→0→2→0→3→0
-  - pass: 15
-    findings: 2
-    severity: "0C/1H/1M/0L"
-    addressed: 2
-    delta: +2
-    trend: REGRESSION
-    fixes_committed: true
-    clean_pass: false
-    clean_pass_count: "0/3"
-    note: "bc-3 body 'Total:40'→'48 individually-bodied'; bc-3 subdomain 8→7; bc-1 sweep drift fixed (5→6 subdomains)"
-  - pass: 16
-    findings: 0
-    severity: "CLEAN-PASS"
-    addressed: 0
-    delta: -2
-    trend: CONVERGING
-    fixes_committed: false
-    clean_pass: true
-    clean_pass_count: "1/3"
-    note: "bc-*.md body sweep effective; CANONICAL-COUNTS adoption stable; MUST-FIX P0 register integrity holding"
-  - pass: 17
-    findings: 3
-    severity: "0C/1H/2M/0L"
-    addressed: 3
-    delta: +3
-    trend: REGRESSION
-    fixes_committed: true
-    clean_pass: false
-    clean_pass_count: "0/3"
-    note: "SD-003 R-H3→R-M0; state-machines NFR-R-NEW-3→NFR-O-B; L2 bc_count sync bc-04/06/07; 4th counter reset across 17 passes"
-  - pass: 18
-    findings: 3
-    severity: "0C/0H/2M/1L"
-    addressed: 3
-    delta: 0
-    trend: ASYMPTOTIC
-    fixes_committed: true
-    clean_pass: false
-    clean_pass_count: "0/3"
-    note: "5th reset; BC-INDEX:630 line-440 sync; arch BC-4 map adds cli/assets.rs; H-046 fixture mechanism specified"
-  - pass: 19
-    findings: 5
-    severity: "1C/1H/3M/0L"
-    addressed: 5
-    delta: +2
-    trend: REGRESSION
-    fixes_committed: true
-    clean_pass: false
-    clean_pass_count: "0/3"
-    note: "5 findings via rotated lenses (state-machine↔BC, cache audit, holdout↔BC bidirectional). CRITICAL SM-5 BC-X.8.001→BC-X.8.003. HIGH cache count drift 7→6. Partial-fix propagation pattern."
+  # Passes 1-19 archived to cycles/cycle-001/convergence-trajectory.md
+  # Trajectory: 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3→0→3
   - pass: 20
     findings: 3
     severity: "0C/1H/1M/1L"
@@ -183,6 +135,16 @@ convergence_trajectory:
     clean_pass: false
     clean_pass_count: "0/3"
     note: "P20 fixes verified 3/3 clean. BC-7.2 cumulative count math (54→51) for grand-total 541 reconciliation; component-graph cli_board/cli_sprint nodes added (P18 propagation gap); EC-AUTH-009 anchor BC-1.6.044→BC-1.6.042 semantic correction; 6 non-MUST-FIX ECs gain holdout citations."
+  - pass: 22
+    findings: 5
+    severity: "0C/0H/4M/1L"
+    addressed: 5
+    delta: +1
+    trend: ASYMPTOTIC
+    fixes_committed: true
+    clean_pass: false
+    clean_pass_count: "0/3"
+    note: "P21 fixes 4/4 verified at primary targets but 3 propagation gaps surfaced (H-044 BC range, L2 54 BCs refs, mermaid 6-level→7-level). H-027 holdout retry/timing math contradiction reframed as parsing test. CANONICAL-COUNTS MEDIUM list pruned of LOW NFRs."
 ```
 
 ### Phase 2-adv — Adversarial Story Review
@@ -213,8 +175,8 @@ convergence_trajectory: []
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-04 |
-| **Position** | Phase 1 ACTIVE — Phase 1d adversary Pass 21: 4 findings (0C/1H/2M/1L), all FIXED. P20 fixes 3/3 verified. Counter 0/3 (no advance). Trajectory 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3→0→3→5→3→4. Manifest: 541 BCs / 41 NFRs / 48 holdouts / 26 risks. Convergence asymptotic; BC-7.2 count math reconciled (54→51); component-graph cli_board/cli_sprint nodes added; EC-AUTH-009 BC anchor corrected; 6 EC holdout cross-refs added; Pass 22 next. |
-| **Convergence counter** | 0 of 3 (no advance; Pass 21 delta +1 from Pass 20; asymptotic regime) |
+| **Position** | Phase 1 ACTIVE — Phase 1d adversary Pass 22: 5 findings (0C/0H/4M/1L), all FIXED. P21 fixes 4/4 verified at primary targets. Counter 0/3 (no advance). Trajectory 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3→0→3→5→3→4→5. Manifest: 541 BCs / 41 NFRs / 48 holdouts / 26 risks. Convergence asymptotic; P21 propagation gaps swept (H-044 BC range, L2 54→51, mermaid 6→7); H-027 reframed as parsing test; CANONICAL-COUNTS MEDIUM pruned; DRIFT-001 logged; Pass 23 next. |
+| **Convergence counter** | 0 of 3 (no advance; Pass 22 delta +1 from Pass 21; asymptotic regime) |
 
 ## Historical Content
 

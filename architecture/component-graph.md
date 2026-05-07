@@ -130,7 +130,7 @@ flowchart LR
     Conv --> Send["fn send()\nauth header injected\n429 retry x3\nparse_error on 4xx/5xx\nreturns deserialized T"]
     RawPair --> SendRaw["fn send_raw()\nauth header injected\n429 retry x3\nNO error parsing\nreturns reqwest::Response"]
 
-    Send --> ParseError["parse_error()\nextract_error_message 6-level chain\n401 sub-classify: InsufficientScope / NotAuthenticated"]
+    Send --> ParseError["parse_error()\nextract_error_message 7-level chain\n401 sub-classify: InsufficientScope / NotAuthenticated"]
 
     ParseError --> JrError["JrError variants\nexit codes: 0/1/2/64/78/130"]
     SendRaw --> RawCaller["cli/api.rs handles raw response\nwrites status+body verbatim to stdout/stderr"]

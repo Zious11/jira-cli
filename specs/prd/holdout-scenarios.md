@@ -266,12 +266,12 @@ Setup uses:
 
 ---
 
-### H-027: `Retry-After: 86400` (24h) honored without upper bound (KNOWN-GAP pin)
-**Setup**: Wiremock 429 with `Retry-After: 86400` (literal). Expect call count = 2.
-**Action**: any API call (library level, NOT process-spawn — avoid actual 24h sleep).
-**Expected**: The parsed delay value is 86400 seconds (no upper bound applied). Evaluator waits 5s; if no second call is fired within that window, mark as `"honored unbounded" PASS` — the very absence of a retry proves the large delay is being honored. stderr MUST contain `"warning: rate limited by Jira"`.
-**Why hidden**: Pin Pass 4 §7.1.3 NFR gap as an explicit holdout against silent fixes that add an upper bound.
-**BC refs**: BC-X.4.002 (current behavior pinned); BC-X.4.009 (future MUST-FAIL target when fix lands)
+### H-027: `Retry-After: 86400` (24h) — parsed value preserved without upper bound (KNOWN-GAP pin)
+**Setup**: Construct a `http::HeaderMap` containing `Retry-After: 86400`. Call `RateLimitInfo::from_headers(&headers)` directly (unit test — no Wiremock, no process spawn, no real-time clock dependency).
+**Action**: Assert `rate_limit_info.retry_after_secs == 86400`.
+**Expected**: Parsing succeeds; the literal value 86400 is preserved without clamping or truncation. No upper bound applied. Test passes against current code (KNOWN-GAP: current code has no cap).
+**Why hidden**: Pin Pass 4 §7.1.3 NFR gap as an explicit holdout against silent fixes that add an upper bound cap. Reframed from retry-loop test (ADV-P22-004: Mock::expect(2) + 5s window were internally contradictory with an 86400s delay).
+**BC refs**: BC-X.4.002 (current behavior pinned — no cap); BC-X.4.009 (future MUST-FAIL when MAX_RETRY_AFTER_SECS=60 cap is implemented — flip assertion to `retry_after_secs == 60`)
 
 ---
 
@@ -433,7 +433,7 @@ Setup uses:
 **Action**: `jr issue view PROJ-1`
 **Expected**: exit 0; stdout contains the heading text and paragraph text (rendered). Mention node silently dropped (current behavior). No panic on any node type.
 **Why hidden**: ADF node rendering is a large surface; easy to panic on unexpected node types.
-**BC refs**: BC-7.2.001..BC-7.2.054
+**BC refs**: BC-7.2.001..BC-7.2.051
 
 ---
 

@@ -12,7 +12,7 @@ risk_level: HIGH
 
 # BC-07: Output Rendering & Error Handling
 
-Covers all output formatting (table and JSON), ADF rendering, the `JrError` type, and the runtime concerns of `main.rs`. The ADF renderer alone is 1,826 LOC and accounts for 54 BCs in the pass-3 contract index.
+Covers all output formatting (table and JSON), ADF rendering, the `JrError` type, and the runtime concerns of `main.rs`. The ADF renderer alone is 1,826 LOC and accounts for 51 BCs in the pass-3 contract index.
 
 ---
 
@@ -124,7 +124,7 @@ Covers all output formatting (table and JSON), ADF rendering, the `JrError` type
 
 - **`JrError`** is the single error type aggregating all domain errors. Exit codes are the public contract (`exit_code()` method).
 - **`JiraClient`** is the single HTTP-layer aggregate. The L3 bifurcation (validated vs raw) is an internal design choice, not a public boundary.
-- **ADF renderer** (`adf.rs`) is a self-contained subdomain (1,826 LOC, 54 BCs). No external dependencies beyond `pulldown-cmark` and `serde_json`.
+- **ADF renderer** (`adf.rs`) is a self-contained subdomain (1,826 LOC, 51 BCs). No external dependencies beyond `pulldown-cmark` and `serde_json`.
 
 ---
 

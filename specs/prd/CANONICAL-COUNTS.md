@@ -100,7 +100,7 @@ grep -c '^| \*\*NFR-' .factory/specs/prd/nfr-catalog.md
 Severity distribution per nfr-catalog.md routing table:
 - CRITICAL: 1 (NFR-R-D)
 - HIGH: 6 (NFR-R-A, NFR-R-B, NFR-R-E, NFR-S-B, NFR-S-E, NFR-S-F)
-- MEDIUM: 15 (NFR-R-C, NFR-R-F, NFR-R-NEW-1, NFR-R-NEW-2, NFR-S-A, NFR-S-C, NFR-O-A, NFR-O-B, NFR-O-D, NFR-O-F, NFR-O-J, NFR-O-L, NFR-O-M, NFR-O-O, NFR-O-S, NFR-O-W, NFR-P-NEW-1) — check nfr-catalog.md §Summary for exact split
+- MEDIUM: 15 (NFR-R-C, NFR-R-F, NFR-S-A, NFR-S-C, NFR-O-A, NFR-O-B, NFR-O-D, NFR-O-F, NFR-O-J, NFR-O-L, NFR-O-M, NFR-O-O, NFR-O-S, NFR-O-W, NFR-P-NEW-1) — check nfr-catalog.md §Summary for exact split
 - LOW: 19 (remainder)
 - **Total: 41** (confirmed by grep count above)
 

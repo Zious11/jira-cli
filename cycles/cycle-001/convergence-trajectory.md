@@ -161,3 +161,48 @@ MEDIUM: BC grand total 542→541 (double-count corrected in BC-INDEX footnote); 
 **Convergence counter:** 1 of 3
 
 Comprehensive sweep + CANONICAL-COUNTS.md adoption healed Pass 13 regression. 4/4 source-truth spot checks exact. CANONICAL-COUNTS = 541/41/48/26 stable. 2 nitpicks demoted (holdout Group 1 label; "12+" vs "14" in L2 README — non-contradictory).
+
+---
+
+### Pass 15 (2026-05-04)
+
+**Findings:** 2 (0C/1H/1M/0L)
+**Convergence counter:** 0 of 3 (REGRESSION from 1/3; 5th counter reset)
+
+bc-3 body 'Total:40'→'48 individually-bodied'; bc-3 subdomain 8→7; bc-1 sweep drift fixed (5→6 subdomains).
+
+---
+
+### Pass 16 (2026-05-04)
+
+**Findings:** 0 — CLEAN-PASS
+**Convergence counter:** 1 of 3
+
+bc-*.md body sweep effective; CANONICAL-COUNTS adoption stable; MUST-FIX P0 register integrity holding.
+
+---
+
+### Pass 17 (2026-05-04)
+
+**Findings:** 3 (0C/1H/2M/0L)
+**Convergence counter:** 0 of 3 (REGRESSION; 4th counter reset across 17 passes)
+
+SD-003 R-H3→R-M0; state-machines NFR-R-NEW-3→NFR-O-B; L2 bc_count sync bc-04/06/07.
+
+---
+
+### Pass 18 (2026-05-04)
+
+**Findings:** 3 (0C/0H/2M/1L)
+**Convergence counter:** 0 of 3 (5th counter reset)
+
+BC-INDEX:630 line-440 sync; arch BC-4 map adds cli/assets.rs; H-046 fixture mechanism specified.
+
+---
+
+### Pass 19 (2026-05-04)
+
+**Findings:** 5 (1C/1H/3M/0L)
+**Convergence counter:** 0 of 3 (REGRESSION)
+
+5 findings via rotated lenses (state-machine↔BC, cache audit, holdout↔BC bidirectional). CRITICAL SM-5 BC-X.8.001→BC-X.8.003. HIGH cache count drift 7→6. Partial-fix propagation pattern.
