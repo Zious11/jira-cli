@@ -61,25 +61,16 @@ impl JiraClient {
             .and_then(|p| p.auth_method.as_deref())
             .unwrap_or("api_token");
 
-        // JR_AUTH_HEADER env var overrides keychain auth (used by tests to inject mock auth)
+        // JR_AUTH_HEADER env var overrides keychain auth (debug builds only — excluded from
+        // release binaries via #[cfg(debug_assertions)] gate per SD-002 resolution).
+        #[cfg(debug_assertions)]
         let auth_header = if let Ok(header) = std::env::var("JR_AUTH_HEADER") {
             header
         } else {
-            match auth_method {
-                "oauth" => {
-                    let (access, _refresh) =
-                        crate::api::auth::load_oauth_tokens(&config.active_profile_name)?;
-                    format!("Bearer {access}")
-                }
-                _ => {
-                    // api_token (default)
-                    let (email, token) = crate::api::auth::load_api_token()?;
-                    let encoded = base64::engine::general_purpose::STANDARD
-                        .encode(format!("{email}:{token}"));
-                    format!("Basic {encoded}")
-                }
-            }
+            Self::load_auth_from_keychain(auth_method, &config.active_profile_name)?
         };
+        #[cfg(not(debug_assertions))]
+        let auth_header = Self::load_auth_from_keychain(auth_method, &config.active_profile_name)?;
 
         let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
 
@@ -104,6 +95,26 @@ impl JiraClient {
             assets_base_url,
             profile_name: config.active_profile_name.clone(),
         })
+    }
+
+    /// Load the auth header value from the system keychain based on the configured auth method.
+    ///
+    /// Shared by the `#[cfg(debug_assertions)]` and `#[cfg(not(debug_assertions))]` branches
+    /// of `from_config` to avoid duplicating the `oauth`/`api_token` match arms.
+    fn load_auth_from_keychain(auth_method: &str, profile_name: &str) -> anyhow::Result<String> {
+        match auth_method {
+            "oauth" => {
+                let (access, _refresh) = crate::api::auth::load_oauth_tokens(profile_name)?;
+                Ok(format!("Bearer {access}"))
+            }
+            _ => {
+                // api_token (default)
+                let (email, token) = crate::api::auth::load_api_token()?;
+                let encoded =
+                    base64::engine::general_purpose::STANDARD.encode(format!("{email}:{token}"));
+                Ok(format!("Basic {encoded}"))
+            }
+        }
     }
 
     /// Create a client for integration testing. This is **not** gated behind

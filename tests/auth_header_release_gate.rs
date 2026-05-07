@@ -1,5 +1,19 @@
-//! Red Gate tests for SD-002: `JR_AUTH_HEADER` must be gated behind `#[cfg(test)]`
+//! Red Gate tests for SD-002: `JR_AUTH_HEADER` must be gated behind `#[cfg(debug_assertions)]`
 //! in `src/api/client.rs`.
+//!
+//! # Gate mechanism: `#[cfg(debug_assertions)]` (Option B)
+//!
+//! SD-002 was originally resolved with `#[cfg(test)]` (Option A), but during Red Gate
+//! analysis the test-writer identified a blast-radius problem: ~150 existing subprocess
+//! integration tests use `.env("JR_AUTH_HEADER", ...)` on `Command::cargo_bin("jr")`.
+//! Those subprocess binaries are compiled WITHOUT `cfg(test)`, so Option A would break
+//! them all.  The orchestrator approved `#[cfg(debug_assertions)]` as the implementation
+//! gate (Option B) because:
+//!   - Release binaries (`cargo build --release`) still do NOT honor `JR_AUTH_HEADER`
+//!     (the original SD-002 security goal is met).
+//!   - Debug binaries spawned by `cargo test` (`cargo_bin("jr")`) still honor it.
+//!   - Zero test migration is required in this story scope.
+//! A follow-up doc update will canonicalize this deviation in SD-002.
 //!
 //! # Test inventory
 //!
@@ -15,10 +29,8 @@
 //!
 //! All `JR_AUTH_HEADER` references in `tests/` are subprocess-only: they appear as
 //! `.env("JR_AUTH_HEADER", ...)` on a `Command::cargo_bin("jr")` builder. The `jr`
-//! subprocess binary (debug or release) is compiled WITHOUT `#[cfg(test)]` active.
-//! After S-0.05 lands, those subprocess tests will require migration to pass
-//! `JR_AUTH_HEADER` through a mechanism that works outside `cfg(test)`. That
-//! migration is tracked as holdout H-NEW-AUTH-002, formalized in S-0.07.
+//! subprocess binary is compiled in debug mode by `cargo test` and therefore still
+//! honors `JR_AUTH_HEADER` under the `#[cfg(debug_assertions)]` gate.
 //!
 //! The only non-subprocess `JR_AUTH_HEADER` usage is in `migration_legacy.rs`,
 //! which merely scrubs the env var before running in-process `Config::load` tests.
@@ -30,14 +42,20 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// AC-002 SOURCE INSPECTION — **RED GATE TEST**
 ///
-/// Verifies that `#[cfg(test)]` appears adjacent to the `JR_AUTH_HEADER` read
-/// in `src/api/client.rs`. Pre-fix: no `#[cfg(test)]` annotation is present
-/// (FAILS). Post-fix: the annotation wraps the env-var block (PASSES).
+/// Verifies that `#[cfg(debug_assertions)]` appears adjacent to the `JR_AUTH_HEADER`
+/// read in `src/api/client.rs`. Pre-fix: no cfg gate annotation is present (FAILS).
+/// Post-fix: the `#[cfg(debug_assertions)]` annotation wraps the env-var block (PASSES).
 ///
-/// Strategy: look for `#[cfg(test)]` within 5 source lines of the
-/// `JR_AUTH_HEADER` string literal. This is intentionally simple and
-/// whitespace-tolerant — it catches both the block form and the attribute form
-/// of the gate.
+/// Gate choice rationale: SD-002 originally specified `#[cfg(test)]`, but that would
+/// break ~150 subprocess integration tests (`cargo_bin("jr").env("JR_AUTH_HEADER", ...)`).
+/// `#[cfg(debug_assertions)]` achieves the same release-binary security goal — release
+/// builds (`cargo build --release`) still do NOT honor `JR_AUTH_HEADER` — while
+/// preserving the subprocess test pattern (debug binaries spawned by `cargo test` still
+/// honor the env var).  The orchestrator approved this deviation; SD-002 will be updated
+/// in a follow-up doc commit.
+///
+/// Strategy: look for `#[cfg(debug_assertions)]` within 5 source lines of the
+/// `JR_AUTH_HEADER` string literal. This is intentionally simple and whitespace-tolerant.
 #[test]
 fn test_sd_002_cfg_test_gate_present_in_source() {
     let source = include_str!("../src/api/client.rs");
@@ -53,17 +71,20 @@ fn test_sd_002_cfg_test_gate_present_in_source() {
         );
 
     // Search the 5 lines immediately preceding the env-var read for the
-    // `#[cfg(test)]` attribute. The implementation may place it 1-4 lines above.
+    // `#[cfg(debug_assertions)]` attribute. The implementation may place it 1-4 lines above.
     let window_start = auth_header_line.saturating_sub(5);
     let window = &lines[window_start..=auth_header_line];
-    let gate_present = window.iter().any(|l| l.contains("#[cfg(test)]"));
+    let gate_present = window
+        .iter()
+        .any(|l| l.contains("#[cfg(debug_assertions)]"));
 
     assert!(
         gate_present,
-        "SD-002 VIOLATION: `#[cfg(test)]` not found within 5 lines of the \
+        "SD-002 VIOLATION: `#[cfg(debug_assertions)]` not found within 5 lines of the \
          `JR_AUTH_HEADER` env-var read at line {} of src/api/client.rs.\n\
-         The env-var read block MUST be gated with `#[cfg(test)]` so it is \
-         excluded from release binaries (SD-002 resolution, Option A).\n\
+         The env-var read block MUST be gated with `#[cfg(debug_assertions)]` so it is \
+         excluded from release binaries (SD-002 resolution, Option B — approved by \
+         orchestrator to preserve subprocess test compat).\n\
          Relevant source window:\n{}",
         auth_header_line + 1, // 1-indexed for human readability
         window.join("\n")
@@ -133,8 +154,10 @@ async fn test_sd_002_new_for_test_honors_auth_header() {
 #[test]
 fn test_sd_002_new_for_test_signature_unchanged() {
     // This call compiles only if new_for_test accepts (String, String) -> JiraClient.
-    let client: JiraClient =
-        JiraClient::new_for_test("http://localhost:9999".to_string(), "Bearer token".to_string());
+    let client: JiraClient = JiraClient::new_for_test(
+        "http://localhost:9999".to_string(),
+        "Bearer token".to_string(),
+    );
 
     // Confirm the constructed client is a valid JiraClient by calling a
     // pure accessor. (profile_name is not public; we use the Debug-absent
@@ -150,20 +173,15 @@ fn test_sd_002_new_for_test_signature_unchanged() {
 /// Audit result (recorded statically): every `JR_AUTH_HEADER` reference in
 /// `tests/` is a subprocess call — `.env("JR_AUTH_HEADER", ...)` on a
 /// `Command::cargo_bin("jr")` builder via `assert_cmd`. These tests spawn the
-/// `jr` binary as a child process. The `jr` subprocess binary is compiled
-/// WITHOUT `cfg(test)` active, so it is architecturally distinct from the
-/// in-process `from_config` path being gated here.
-///
-/// After S-0.05 lands, those subprocess tests will no longer work with
-/// `JR_AUTH_HEADER` as their auth mechanism. Migration is deferred to holdout
-/// H-NEW-AUTH-002, formalized in S-0.07.
+/// `jr` binary as a child process. Under the `#[cfg(debug_assertions)]` gate
+/// (Option B), debug-mode subprocess binaries still honor `JR_AUTH_HEADER` —
+/// so NO migration of those subprocess tests is required.
 ///
 /// The one non-subprocess reference (`migration_legacy.rs:35`) scrubs
 /// `JR_AUTH_HEADER` from the environment before calling `Config::load` —
 /// that scrub is safe and correct in all build modes.
 ///
-/// Zero tests require immediate migration (no in-process `from_config` calls
-/// rely on `JR_AUTH_HEADER`). This satisfies AC-004 for this story.
+/// Zero tests require immediate migration. This satisfies AC-004 for this story.
 ///
 /// This test uses `std::process::Command` to grep the `tests/` directory for
 /// `env::var("JR_AUTH_HEADER")` — any match indicates an in-process reader
