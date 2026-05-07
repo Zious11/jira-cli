@@ -105,7 +105,7 @@ Categories:
 ### EC-CFG-005: Multi-profile fields bug — MUST-FIX
 **Boundary**: Profile `sandbox` has `story_points_field_id = "customfield_10099"`. Command run with `--profile sandbox`.
 **Expected (FIXED behavior)**: Request body uses `customfield_10099`. Error message references `[profiles.sandbox]` not deprecated `[fields]`.
-**Status**: MUST-FIX (NFR-R-D) → BC-6.3.001. Current behavior silently uses `config.global.fields.*`.
+**Status**: MUST-FIX (NFR-R-D) → BC-6.3.001; holdout H-NEW-MP-001. Current behavior silently uses `config.global.fields.*`.
 
 ---
 
@@ -202,7 +202,7 @@ Categories:
 ### EC-ASSET-006: Multi-workspace `resolved` HashMap collision — MUST-FIX
 **Boundary**: Two workspaces share `oid = "OBJ-88"` for different objects.
 **Expected (FIXED behavior)**: `resolved` keyed by `(workspace_id, oid)` — no collision.
-**Status**: MUST-FIX (NFR-R-E) → BC-4.3.001. Current code uses `oid`-only key (last-write-wins).
+**Status**: MUST-FIX (NFR-R-E) → BC-4.3.001; holdout H-036. Current code uses `oid`-only key (last-write-wins).
 
 ### EC-ASSET-007: Workspace ID — cache hit vs miss
 **Boundary**: Workspace cache exists with TTL <7d vs >7d.
@@ -302,6 +302,6 @@ These are invariants from Pass 3 §3.5 (INV-10..25) that have no integration tes
 | G-C1 | `cli/issue/list.rs` asset enrichment `join_all` unbounded concurrency | P2 — `buffer_unordered(8)` |
 | G-D1 | Profile name 64-char error message doesn't distinguish length from charset violation | LOW — 2 LOC fix |
 | G-E1 | `search_issues` cursor loop has no anti-loop guard (unlike `get_changelog`) | LOW — document/optional add |
-| G-EO1 | `observability.rs` is 39 LOC with one function at 3 sites; no tracing crate integration despite dep present | MEDIUM — Phase 3 |
+| G-EO1 | `observability.rs` is 39 LOC with one function at 2 sites; no tracing crate integration; tracing crate not present in Cargo.toml | MEDIUM — Phase 3 |
 | G-EO2 | CLAUDE.md missing `cli/issue/view.rs`, `cli/issue/comments.rs`, `observability.rs`, `api/assets/schemas.rs` | MEDIUM — Phase 3 doc |
 | G-EO3 | User pagination fixed-advance by `USER_PAGE_SIZE` not returned-count (JRACLOUD-71293 workaround) — undocumented | LOW — add source comment |
