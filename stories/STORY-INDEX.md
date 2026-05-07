@@ -2,10 +2,10 @@
 document_type: story-index
 phase: phase-2-story-decomposition
 producer: story-writer
-version: "1.0.0"
-total_stories: 7
+version: "1.1.0"
+total_stories: 15
 total_waves: 4
-status: wave-0-active
+status: wave-1-added
 last_updated: 2026-05-06
 activation_head: dea1664
 ---
@@ -49,13 +49,40 @@ Wave 0 story files: `stories/wave-0/S-0.NN-*.md`
 
 ---
 
-## Wave 1 — High Priority Features (Pending — next burst)
+## Wave 1 — High Priority Infrastructure (Added 2026-05-06)
 
-Placeholder. Will be populated in Phase 2 Burst 2 by walking BC-INDEX for HIGH-NFR-anchored BCs and P0/P1 capability gaps.
+Wave 1 covers HIGH-priority security posture, supply-chain hardening, structured logging,
+and critical regression-pinning holdouts. All stories are independent of each other
+(except S-1.03 depends on S-0.06) and can be implemented in parallel groups.
 
-| Story ID | Title | BC Anchors | Status |
-|----------|-------|------------|--------|
-| TBD | ... | ... | placeholder |
+Parallel group A: S-1.01, S-1.02, S-1.04, S-1.05 (CI/CD hardening, no code deps)
+Parallel group B: S-1.06, S-1.07, S-1.08 (holdout test suites, each independent)
+Sequential: S-1.03 after S-0.06 merges (tracing depends on --verbose-bodies flag)
+
+| Story ID | Title | NFR/BC Anchors | Holdout Anchors | Status | Est. Effort |
+|----------|-------|----------------|-----------------|--------|-------------|
+| S-1.01 | Pin GitHub Actions to full commit SHAs | NFR-S-E, R-H6 | — | draft | small |
+| S-1.02 | cargo-deny supply chain hardening | NFR-S-F | — | draft | small |
+| S-1.03 | Add tracing + wire structured logging | NFR-O-A | — | draft | medium |
+| S-1.04 | Add timeout-minutes to all CI/CD jobs | R-L12 | — | draft | xsmall |
+| S-1.05 | GitHub secret scanning + gitleaks CI | NFR-S-B, R-L13 | — | draft | small |
+| S-1.06 | OAuth flow holdout suite | BC-1.1.001, BC-1.1.002 | H-001..H-008, H-022, H-029 | draft | medium |
+| S-1.07 | Rate-limit holdout suite | BC-X.1.005, BC-X.4.002 | H-013, H-027 | draft | small |
+| S-1.08 | Keychain per-profile layout holdout | BC-1.4.027, BC-1.4.025 | H-016 | draft | small |
+
+Wave 1 story files: `stories/wave-1/S-1.NN-*.md`
+
+### Wave 1 exit gate
+
+All of the following must be true before Wave 2 dispatch:
+- H-001, H-002, H-003, H-004, H-005, H-022, H-029 MUST-PASS (S-1.06 test suite green)
+- H-013, H-027 MUST-PASS (S-1.07 test suite green)
+- H-016 MUST-PASS (S-1.08 test suite green)
+- All Wave 0 holdouts remain green (no regression)
+- NFR-S-E: no floating action tags in `.github/workflows/` (S-1.01)
+- NFR-S-F: `cargo deny check bans` exits 0 (S-1.02)
+- NFR-S-B: gitleaks CI job passes (S-1.05)
+- S-1.03 (tracing): `cargo test --all-features` green; verbose behavior unchanged
 
 ---
 
