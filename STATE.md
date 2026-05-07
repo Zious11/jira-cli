@@ -49,7 +49,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | pre-pipeline: Setup | complete | 2026-05-04 | 2026-05-04 | env-preflight | |
 | 0: Codebase Ingestion | **COMPLETE** | 2026-05-04 | 2026-05-04 | Phase A + B + B.5 + B.6 + C + gate APPROVED | |
 | 1: Spec Crystallization | **entry** | 2026-05-04 | | DEC-004 pending (scope choice) | |
-| 1d: Adversarial Spec Review | **Pass 26: CLEAN-PASS! 0 findings; counter 1/3; Pass 27 next (need 2 more clean for convergence)** | 2026-05-04 | | Awaiting orchestrator strategy decision | 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3→0→3→5→3→4→5→5→5→2→**0** (P26: CLEAN-PASS; 0C/0H/0M/0L; all P25 fixes verified; propagation sweep clean) |
+| 1d: Adversarial Spec Review | **Pass 27: CLEAN-PASS! 0 findings; counter 2/3; Pass 28 next (1 more for 3/3 convergence!)** | 2026-05-04 | | Awaiting orchestrator strategy decision | 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3→0→3→5→3→4→5→5→5→2→0→**0** (P27: CLEAN-PASS; 0C/0H/0M/0L; P26 sanity verified; cross-cutting parity, JrError variants, Trace fields, frontmatter all clean) |
 | 2: Story Decomposition | not-started | | | | |
 | 2-adv: Adversarial Story Review | not-started | | | | |
 | 3: TDD Implementation | not-started | | | | |
@@ -65,11 +65,11 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 
 | Step | Agent | Status | Output |
 |------|-------|--------|--------|
-| Phase 1d Pass 22 + fixes | state-manager | complete | adv-p1-pass22.md; 5 FIXED (0C/0H/4M/1L); P21 propagation gaps swept (H-044 BC range, L2 54→51, mermaid 6→7); H-027 reframe as parsing test; CANONICAL-COUNTS MEDIUM pruned |
 | Phase 1d Pass 23 + fixes | state-manager | complete | adv-p1-pass23.md; 5 FIXED (0C/1H/3M/1L); L2 6→7-level chain (P22 propagation); 17→18 API files; H-017 fixture; Group 1+2 headers |
 | Phase 1d Pass 24 + fixes | state-manager | complete | adv-p1-pass24.md; 5 FIXED (0C/0H/1M/4L); severity-down trend; BC-2.1.006 12→13; nfr 42→41; L2 SM count; SM-3 source align; JiaClient typo |
 | Phase 1d Pass 25 + fixes | state-manager | complete | adv-p1-pass25.md; 2 FIXED (0C/0H/1M/1L); BC-INDEX:141 12→13 (P24 sibling); README SM canonical+bonus; trajectory ...→5→5→2; convergence inflection |
 | Phase 1d Pass 26 CLEAN-PASS! | adversary | complete | adv-p1-pass26.md; 0 findings; P25 verified clean+sweep clean; counter 1/3; need 2 more consecutive |
+| Phase 1d Pass 27 CLEAN-PASS! | adversary | complete | adv-p1-pass27.md; 0 findings; P26 sanity verified; counter 2/3; one more for 3/3 |
 
 ## Pending Decisions
 
@@ -109,7 +109,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 ## Convergence Trackers
 
 ### Phase 1d — Adversarial Spec Review
-_Pass 26 CLEAN-PASS achieved (counter 1/3). 25 substantive passes preceded with full asymptotic descent (30→…→2→0). Trajectory shows healthy severity-down curve in last 6 passes (5→3→4→5→5→5→2→0). 6 counter resets across 26 passes. Need 2 more consecutive CLEAN-PASS for 3/3 full convergence per Phase 1d gate._
+_Pass 27 CLEAN-PASS achieved (counter 2/3). Trajectory ...→5→5→5→2→0→0. Spec at convergence floor — no substantive findings on lens-rotated fresh-context review. One more consecutive CLEAN-PASS needed for full 3/3 phase-1d convergence._
 
 ```yaml
 convergence_trajectory:
@@ -185,6 +185,16 @@ convergence_trajectory:
     clean_pass: true
     clean_pass_count: "1/3"
     note: "FIRST CLEAN-PASS after 25 substantive passes. P25 prediction confirmed. All P22-P25 propagation residuals swept clean. Architecture state-machines.md '5 SMs' legitimately scoped (SM-06 is L2 bonus). Need 2 more consecutive clean for full 3/3 convergence."
+  - pass: 27
+    findings: 0
+    severity: "CLEAN-PASS"
+    addressed: 0
+    delta: 0
+    trend: CONVERGING
+    fixes_committed: false
+    clean_pass: true
+    clean_pass_count: "2/3"
+    note: "SECOND consecutive CLEAN-PASS. P26 sanity-check verified. Cross-cutting parity, JrError variants, Trace fields, frontmatter conventions all verified clean. One more consecutive clean for 3/3 convergence."
 ```
 
 ### Phase 2-adv — Adversarial Story Review
@@ -215,8 +225,8 @@ convergence_trajectory: []
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-04 |
-| **Position** | Phase 1 ACTIVE — Phase 1d adversary Pass 26: CLEAN-PASS! 0 findings. Counter 1/3. Trajectory 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3→0→3→5→3→4→5→5→5→2→0. Manifest: 541 BCs / 41 NFRs / 48 holdouts / 26 risks. P25 fixes verified clean + propagation sweep clean. Pass 27 next (need 2 more consecutive CLEAN-PASS for 3/3 convergence). |
-| **Convergence counter** | 1 of 3 (first CLEAN-PASS; Pass 26 delta -2; CONVERGED trend; need 2 more consecutive for gate) |
+| **Position** | Phase 1 ACTIVE — Phase 1d adversary Pass 27: CLEAN-PASS! 0 findings. Counter 2/3. Trajectory 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3→0→3→5→3→4→5→5→5→2→0→0. Manifest: 541 BCs / 41 NFRs / 48 holdouts / 26 risks. P26 sanity verified + cross-cutting parity + JrError variants + Trace fields + frontmatter all clean. Pass 28 next (1 more for 3/3 convergence!). |
+| **Convergence counter** | 2 of 3 (second consecutive CLEAN-PASS; Pass 27 delta 0; CONVERGING trend; 1 more for gate) |
 
 ## Historical Content
 
