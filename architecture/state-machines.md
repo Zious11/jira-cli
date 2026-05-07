@@ -233,7 +233,7 @@ Both implement the same semantic ("not done") via different mechanisms. Intentio
 ## SM-5: Cache Lifecycle
 
 **Source pins:** `cache.rs:16-150`
-**BC anchors:** BC-6.2.001..BC-6.2.014, BC-X.8.001
+**BC anchors:** BC-6.2.001..BC-6.2.015, BC-X.8.003
 
 ```mermaid
 stateDiagram-v2

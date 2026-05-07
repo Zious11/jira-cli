@@ -271,7 +271,7 @@ Setup uses:
 **Action**: any API call (library level, NOT process-spawn — avoid actual 24h sleep).
 **Expected**: The parsed delay value is 86400 seconds (no upper bound applied). Evaluator waits 5s; if no second call is fired within that window, mark as `"honored unbounded" PASS` — the very absence of a retry proves the large delay is being honored. stderr MUST contain `"warning: rate limited by Jira"`.
 **Why hidden**: Pin Pass 4 §7.1.3 NFR gap as an explicit holdout against silent fixes that add an upper bound.
-**BC refs**: BC-X.4.002
+**BC refs**: BC-X.4.002 (current behavior pinned); BC-X.4.009 (future MUST-FAIL target when fix lands)
 
 ---
 

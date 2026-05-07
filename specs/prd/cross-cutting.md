@@ -292,6 +292,7 @@ JQL utilities (X.9), Partial-match (X.10), Build-time (X.11).
 **Spec contract (fixed behavior):**
 `list_worklogs` MUST paginate in a loop until `page.total <= page.start_at + page.items().len()`. All pages concatenated and returned to caller. No silent truncation.
 
+**Holdout:** H-045 — `list_worklogs` pagination — all pages returned.
 **Trace**: Pass 3 BC-502; NFR-R-A; Pass 4 R4 §1.1
 
 ---

@@ -105,7 +105,7 @@ The Configuration & Cache bounded context owns all persistent non-credential sta
 | INV-CONFIG-010 | `Config::active_profile_or_err()` returns borrowed `&ProfileConfig` (hot path). `Config::active_profile()` returns owned `ProfileConfig` (cold path). Two distinct accessors. | `config.rs` |
 | INV-CACHE-001 | Cache reads return `Ok(None)` — never `Err` — for missing, expired (≥7d), or deserialized-failed files. `NotFound` → `Ok(None)`. Deser failure → `eprintln!` warning + `Ok(None)`. | `cache.rs:14-34` |
 | INV-CACHE-002 | Cache miss policy: "corrupt = miss." A corrupt file stays on disk until next write. Self-healing with no operator intervention required. | `cache.rs:14-34` |
-| INV-CACHE-003 | TTL is exactly 7 days. Not configurable. Applies uniformly across all 7 cache categories. | `cache.rs:7` |
+| INV-CACHE-003 | TTL is exactly 7 days. Not configurable. Applies uniformly across all 6 cache categories. | `cache.rs:7` |
 | INV-CACHE-004 | Per-profile cache boundary enforced by convention: every read/write function takes `profile: &str` as first argument. No compile-time fence. Future contributors could break this. | `cache.rs`, NEW-INV-08 |
 | INV-CACHE-005 | `clear_profile_cache(name)` is no-op when `~/.cache/jr/v1/<name>/` does not exist. | `cache.rs:82-88` |
 | INV-CACHE-006 | Map-cache writes (`project_meta`, `object_type_attrs`) on deserialization failure of the existing file silently destroy ALL other entries in that map. Not a partial update — the file is completely replaced with just the new entry. | `cache.rs:158-162,330-338`, NEW-INV-07 |

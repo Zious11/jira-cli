@@ -311,6 +311,7 @@ Create (3.3), Edit+Open (3.4), Comment (3.5), Links (3.6), Remote links (3.7).
 URL is composed as `format!("{}/browse/{}", client.instance_url(), key)`. `client.instance_url()` returns the real `*.atlassian.net` URL even for OAuth profiles. Fix is one line.
 
 **Effects**: `issue open` and `issue open --url-only` produce correct browse URLs for OAuth users.
+**Holdout:** H-046 — `jr issue open FOO-1` uses instance URL, not API gateway URL.
 **Trace**: Pass 3 BC-220; NFR-R-B; BC-1010 (R4)
 
 ---

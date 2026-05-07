@@ -193,6 +193,7 @@ Asset search & view (4.2), Asset enrichment — MUST-FIX (4.3), Error handling (
 - Line 456: `resolved.get(&(wid.clone(), oid.clone()))` — workspace-qualified lookup
 
 **Effects**: Multi-workspace tenants see correct asset names. Single-workspace tenants unaffected.
+**Holdout:** H-036 — Multi-workspace asset HashMap composite key.
 **Trace**: Pass 3 BC-147 (R1); NFR-R-E; Pass 4 R4 §1.4
 
 ---
