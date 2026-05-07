@@ -18,9 +18,129 @@ allow = [
 confidence-threshold = 0.8
 
 [bans]
-multiple-versions = "warn"
-wildcards = "allow"
+multiple-versions = "deny"
+# "deny" is safe: Cargo.toml has no wildcard version deps (verified 2026-05-07)
+wildcards = "deny"
+
+# Unavoidable duplicate crate versions as of 2026-05-07.
+# Each entry documents the root cause and the blocking dependency that prevents unification.
+
+[[bans.skip]]
+name = "core-foundation"
+version = "0.9"
+reason = "keyring v3.6.3 requires core-foundation 0.9; reqwest/rustls-platform-verifier requires 0.10. Two separate macOS keychain client crates are on different major versions; neither can be bumped without a keyring or reqwest major release."
+
+[[bans.skip]]
+name = "getrandom"
+version = "0.2"
+reason = "redox_users v0.5.2 (via dirs v6) requires getrandom 0.2; getrandom 0.3 and 0.4 are pulled by rand_core 0.9 and tempfile respectively. Three semver-incompatible majors required by independent transitive deps; unification blocked upstream."
+
+[[bans.skip]]
+name = "getrandom"
+version = "0.3"
+reason = "rand_core 0.9 / jobserver (via cc/aws-lc-sys build dep) requires getrandom 0.3; other deps require 0.2 and 0.4. Three semver-incompatible majors; unification blocked upstream."
+
+[[bans.skip]]
+name = "getrandom"
+version = "0.4"
+reason = "tempfile v3.27.0 (via dialoguer, insta, proptest) requires getrandom 0.4; other deps require 0.2 and 0.3. Three semver-incompatible majors; unification blocked upstream."
+
+[[bans.skip]]
+name = "r-efi"
+version = "5"
+reason = "getrandom 0.3 (via rand_core/cc/aws-lc-sys) pulls r-efi 5; getrandom 0.4 (via tempfile) pulls r-efi 6. Duplicate is a transitive side-effect of the getrandom split; cannot be resolved without upstream unification."
+
+[[bans.skip]]
+name = "r-efi"
+version = "6"
+reason = "getrandom 0.4 (via tempfile/dialoguer/insta/proptest) pulls r-efi 6; getrandom 0.3 pulls r-efi 5. Transitive side-effect of getrandom version split; unification blocked upstream."
+
+[[bans.skip]]
+name = "security-framework"
+version = "2"
+reason = "keyring v3.6.3 requires security-framework 2.x; rustls-platform-verifier/rustls-native-certs require security-framework 3.x. Blocked by keyring not yet releasing support for security-framework 3."
+
+[[bans.skip]]
+name = "serde_spanned"
+version = "0.6"
+reason = "figment v0.10.19 depends on toml 0.8 which requires serde_spanned 0.6; jr directly depends on toml 1.x which requires serde_spanned 1.x. Blocked by figment not yet upgrading to toml 1.x."
+
+[[bans.skip]]
+name = "serde_spanned"
+version = "1"
+reason = "jr directly depends on toml 1.x (serde_spanned 1.x); figment 0.10.19 pulls toml 0.8 (serde_spanned 0.6). Dual version is unavoidable until figment upgrades to toml 1.x."
+
+[[bans.skip]]
+name = "thiserror"
+version = "1"
+reason = "jni v0.21.1 (via rustls-platform-verifier/reqwest) requires thiserror 1.x; jr and redox_users use thiserror 2.x. Blocked by jni not yet releasing thiserror 2.x support."
+
+[[bans.skip]]
+name = "thiserror"
+version = "2"
+reason = "jr and redox_users (via dirs) require thiserror 2.x; jni 0.21.1 (via rustls-platform-verifier) requires thiserror 1.x. Dual version unavoidable until jni releases with thiserror 2.x."
+
+[[bans.skip]]
+name = "thiserror-impl"
+version = "1"
+reason = "proc-macro companion to thiserror 1.x, pulled by jni v0.21.1 via rustls-platform-verifier. Unavoidable as long as thiserror 1.x is present (see thiserror skip above)."
+
+[[bans.skip]]
+name = "thiserror-impl"
+version = "2"
+reason = "proc-macro companion to thiserror 2.x, used by jr directly and redox_users. Unavoidable as long as thiserror 2.x is present alongside thiserror 1.x (see thiserror skip above)."
+
+[[bans.skip]]
+name = "toml"
+version = "0.8"
+reason = "figment v0.10.19 requires toml 0.8; jr directly depends on toml 1.x for TOML 1.1 spec support. Blocked by figment not yet releasing a toml 1.x-compatible version."
+
+[[bans.skip]]
+name = "toml"
+version = "1"
+reason = "jr directly depends on toml 1.x; figment 0.10.19 pulls toml 0.8. Dual version unavoidable until figment upgrades."
+
+[[bans.skip]]
+name = "toml_datetime"
+version = "0.6"
+reason = "toml 0.8 (via figment) requires toml_datetime 0.6; toml 1.x requires toml_datetime 1.x. Transitive side-effect of toml split; unification blocked until figment upgrades."
+
+[[bans.skip]]
+name = "toml_datetime"
+version = "1"
+reason = "toml 1.x (direct dep) requires toml_datetime 1.x; toml 0.8 (via figment) requires 0.6. Unavoidable until figment upgrades to toml 1.x."
+
+[[bans.skip]]
+name = "windows-sys"
+version = "0.45"
+reason = "jni v0.21.1 (via rustls-platform-verifier/reqwest) requires windows-sys 0.45; the majority of the crate graph uses windows-sys 0.61. Blocked by jni not yet releasing with windows-sys 0.6x support."
+
+[[bans.skip]]
+name = "windows-sys"
+version = "0.61"
+reason = "clap, tokio, reqwest and most of the dependency graph use windows-sys 0.61; jni 0.21.1 requires 0.45. Dual version is unavoidable until jni upgrades."
+
+[[bans.skip]]
+name = "winnow"
+version = "0.7"
+reason = "toml 0.8 (via figment) depends on toml_edit 0.22 which requires winnow 0.7; toml 1.x requires winnow 1.x. Transitive side-effect of the toml split; unification blocked by figment."
+
+[[bans.skip]]
+name = "winnow"
+version = "1"
+reason = "toml 1.x (direct dep) requires winnow 1.x; toml 0.8 (via figment) requires winnow 0.7. Unavoidable until figment upgrades to toml 1.x."
+
+[[bans.skip]]
+name = "wit-bindgen"
+version = "0.46"
+reason = "wasip2 v1.0.1 (via getrandom 0.3 WASI backend) requires wit-bindgen 0.46; wasip3 (via getrandom 0.4) requires wit-bindgen 0.51. Transitive side-effect of the getrandom version split across WASI backends."
+
+[[bans.skip]]
+name = "wit-bindgen"
+version = "0.51"
+reason = "wasip3 v0.4.0 (via getrandom 0.4 WASI backend) requires wit-bindgen 0.51; wasip2 (via getrandom 0.3) requires wit-bindgen 0.46. Transitive side-effect of the getrandom version split across WASI backends."
 
 [sources]
-unknown-registry = "warn"
-unknown-git = "warn"
+# No non-crates.io registries or git deps in Cargo.toml (verified 2026-05-07)
+unknown-registry = "deny"
+unknown-git = "deny"
