@@ -2,8 +2,8 @@
 document_type: story-index
 phase: phase-2-story-decomposition
 producer: story-writer
-version: "1.3.0"
-total_stories: 30
+version: "1.4.0"
+total_stories: 31
 total_waves: 4
 status: complete-pending-adv-review
 last_updated: 2026-05-06
@@ -22,11 +22,11 @@ Phase 1 converged at adversary Pass 28. Gate approved 2026-05-04.
 | Wave | Theme | Story count | Estimated effort | Gate |
 |------|-------|-------------|------------------|------|
 | 0 | MUST-FIX bugs + SD-002/SD-003 security + H-NEW-AUTH-002 holdout | 7 | ~5-6 dev-days | All H-MUST-FAIL holdouts become MUST-PASS; no regression on H-001..H-047 |
-| 1 | High-priority security posture, supply-chain hardening, structured logging, regression holdouts | 8 | ~6-7 dev-days | NFR-S-E/F gate; wave-0 holdouts green; H-001..H-008 MUST-PASS |
+| 1 | High-priority security posture, supply-chain hardening, structured logging, regression holdouts | 8 | ~6-7 dev-days | NFR-S-E/F gate; wave-0 holdouts green; H-001..H-006 MUST-PASS |
 | 2 | Medium-priority NFRs, BC-2/3/4/5 holdout suites, JSON output policy, documentation | 7 | ~5-6 dev-days | NFR-P-* gate; H-030..H-044 MUST-PASS |
-| 3 | Low priority + deferred (DEFER NFRs, shard splits, process codification, DOCUMENT-AS-IS) | 8 | ~5-6 dev-days | Per-story gates; no v0.5 blocking |
+| 3 | Low priority + deferred (DEFER NFRs, shard splits, process codification, DOCUMENT-AS-IS) | 9 | ~5-7 dev-days | Per-story gates; no v0.5 blocking |
 
-**Final totals: 30 stories across 4 waves.** Wave 0: 7, Wave 1: 8, Wave 2: 7, Wave 3: 8.
+**Final totals: 31 stories across 4 waves.** Wave 0: 7, Wave 1: 8, Wave 2: 7, Wave 3: 9.
 
 Story file naming: `stories/wave-W/S-W.NN-short-slug.md`
 Story ID convention: `S-W.NN` (e.g., `S-0.01`, `S-1.03`)
@@ -68,7 +68,7 @@ Sequential: S-1.03 after S-0.06 merges (tracing depends on --verbose-bodies flag
 | S-1.03 | Add tracing + wire structured logging | NFR-O-A | — | draft | medium |
 | S-1.04 | Add timeout-minutes to all CI/CD jobs | R-L12 | — | draft | xsmall |
 | S-1.05 | GitHub secret scanning + gitleaks CI | NFR-S-B, R-L13 | — | draft | small |
-| S-1.06 | OAuth flow holdout suite | BC-1.1.001, BC-1.1.002 | H-001..H-008, H-022, H-029 | draft | medium |
+| S-1.06 | OAuth flow holdout suite | BC-1.1.001, BC-1.1.002 | H-001..H-006, H-022, H-029 | draft | medium |
 | S-1.07 | Rate-limit holdout suite | BC-X.1.005, BC-X.4.002 | H-013, H-027 | draft | small |
 | S-1.08 | Keychain per-profile layout holdout | BC-1.4.027, BC-1.4.025 | H-016 | draft | small |
 
@@ -77,7 +77,8 @@ Wave 1 story files: `stories/wave-1/S-1.NN-*.md`
 ### Wave 1 exit gate
 
 All of the following must be true before Wave 2 dispatch:
-- H-001, H-002, H-003, H-004, H-005, H-022, H-029 MUST-PASS (S-1.06 test suite green)
+- H-001, H-002, H-003, H-004, H-005, H-006, H-022, H-029 MUST-PASS (S-1.06 test suite green)
+  (Note: H-007, H-008 are in S-2.02 scope; H-006 is in BOTH S-1.06 and S-2.02 for dual coverage)
 - H-013, H-027 MUST-PASS (S-1.07 test suite green)
 - H-016 MUST-PASS (S-1.08 test suite green)
 - All Wave 0 holdouts remain green (no regression)
@@ -97,12 +98,12 @@ shapes and test naming conventions.
 Parallel group A: S-2.01, S-2.02, S-2.03, S-2.04 (holdout suites, no code deps between them)
 Parallel group B: S-2.05 (documentation only, no code changes)
 Parallel group C: S-2.06, S-2.07 (code changes, independent of each other)
-Note: S-2.03 depends on S-0.03 (precautionary); S-2.07 and S-2.05 both modify CLAUDE.md
+Note: S-2.03's S-0.03 dependency was demoted to a recommended merge order (no longer blocks); S-2.07 and S-2.05 both modify CLAUDE.md
 (coordinate merge order to avoid conflicts).
 
 | Story ID | Title | NFR/BC Anchors | Holdout Anchors | Status | Est. Effort |
 |----------|-------|----------------|-----------------|--------|-------------|
-| S-2.01 | BC-2 issue-read holdout suite | BC-2.1.001, BC-7.3.001, BC-X.7.006 | H-030..H-035 | draft | medium |
+| S-2.01 | BC-2 issue-read holdout suite | BC-2.1.001, BC-2.1.007, BC-7.3.001, BC-X.7.006 | H-021, H-030..H-035 | draft | medium |
 | S-2.02 | BC-3 issue-write holdout suite | BC-3.2.001, BC-3.2.009, BC-X.7.004 | H-006, H-007, H-008, H-014 | draft | medium |
 | S-2.03 | BC-4 assets/CMDB holdout suite | BC-4.2.001, BC-4.3.002, BC-4.2.006 | H-037, H-038, H-039 | draft | small |
 | S-2.04 | BC-5/7 boards, sprints, ADF holdout suite | BC-5.2.001, BC-5.2.005, BC-7.2.001 | H-040..H-044 | draft | medium |
@@ -115,7 +116,7 @@ Wave 2 story files: `stories/wave-2/S-2.NN-*.md`
 ### Wave 2 exit gate
 
 All of the following must be true before Wave 3 dispatch:
-- H-030..H-035 MUST-PASS (S-2.01 test suite green)
+- H-021, H-030..H-035 MUST-PASS (S-2.01 test suite green; H-021 pre-existing at tests/issue_list_errors.rs:369)
 - H-006, H-007, H-008, H-014 MUST-PASS (S-2.02 test suite green)
 - H-037, H-038, H-039 MUST-PASS (S-2.03 test suite green)
 - H-040..H-044 MUST-PASS (S-2.04 test suite green)
@@ -135,33 +136,35 @@ all remaining LOW NFRs. All stories are independent and can be implemented in pa
 
 Parallel group A: S-3.01, S-3.02 (shard splits — independent of each other, no deps)
 Parallel group B: S-3.03, S-3.04, S-3.05 (OAuth + asset concurrency — independent)
-Parallel group C: S-3.06, S-3.07, S-3.08 (process + documentation — independent)
+Parallel group C: S-3.06, S-3.07, S-3.08, S-3.09 (process + documentation — independent)
 Note: S-3.08 depends on S-2.05 merging first (CLAUDE.md conflict risk).
 
 | Story ID | Title | NFR/BC Anchors | Holdout Anchors | Status | Est. Effort |
 |----------|-------|----------------|-----------------|--------|-------------|
-| S-3.01 | Shard-split src/api/auth.rs (1,998 LOC) | NFR-O-D, BC-1.1.001, BC-1.4.027 | — | draft | medium |
+| S-3.01 | Shard-split src/cli/auth.rs (1,998 LOC) | NFR-O-D, BC-1.1.001, BC-1.4.027 | — | draft | medium |
 | S-3.02 | Shard-split src/cli/assets.rs (1,055 LOC) | NFR-O-D, BC-4.2.001, BC-4.2.006 | H-037, H-038 | draft | small |
 | S-3.03 | Investigate + wire refresh_oauth_token | NFR-O-B, BC-1.1.002, BC-1.4.027 | — | draft | medium |
-| S-3.04 | Multi-cloudId --cloud-id flag + prompt | NFR-O-S, BC-1.1.007, BC-1.5.031 | H-047 | draft | medium |
+| S-3.04 | Multi-cloudId --cloud-id flag + prompt | NFR-O-S, BC-1.5.038, BC-1.1.007, BC-1.5.031 | H-047 | draft | medium |
 | S-3.05 | Asset enrichment join_all → buffer_unordered(8) | NFR-P-NEW-1, BC-4.3.002, BC-X.1.005 | H-038 | draft | small |
 | S-3.06 | Pre-merge spec numeric claim checker (DRIFT-001) | — | — | draft | small |
 | S-3.07 | LOW NFR code fixes: Retry-After cap, overflow guard, profile name error, anti-loop | NFR-R-NEW-1, NFR-R-NEW-2, NFR-S-D, NFR-R-F, BC-X.4.009, BC-X.9.002 | H-027 | draft | small |
 | S-3.08 | DOCUMENT-AS-IS LOW NFR closures: source comments + CLAUDE.md additions | NFR-R-G, NFR-O-C/E/G/H/I/N/P/R/T/U/X, NFR-SCA-1/2/3 | — | draft | small |
+| S-3.09 | Formally record PKCE deferral (SD-001 → DEFER; ADR-0013) | NFR-S-A, BC-1.5.036 | — | draft | xsmall |
 
 Wave 3 story files: `stories/wave-3/S-3.NN-*.md`
 
 ### Wave 3 exit gate
 
 All of the following must be true before Phase 2 is considered fully complete:
-- S-3.01: `cargo test --lib` green after auth.rs shard split; no shard file >800 LOC
+- S-3.01: `cargo test --lib` green after cli/auth.rs shard split; no shard file >800 LOC
 - S-3.02: `cargo test --lib` green after cli/assets.rs shard split; H-037, H-038 still green
 - S-3.03: `refresh_oauth_token` either wired (Option A test green) or removed (no dead_code lint)
-- S-3.04: H-047 updated from KNOWN-GAP to MUST-PASS; AC-001 and AC-002 green
+- S-3.04: H-047 updated from KNOWN-GAP to MUST-PASS; AC-001, AC-002, and AC-006 green
 - S-3.05: asset enrichment concurrency cap ≤8; H-038 still green
 - S-3.06: `scripts/check-spec-counts.sh` exits 0 on current spec corpus; exits 1 on corrupted frontmatter
 - S-3.07: H-027 updated from KNOWN-GAP to MUST-PASS; `parse_duration("99999999999999w")` returns Err
 - S-3.08: `cargo clippy -- -D warnings` exits 0; all 15 DOCUMENT-AS-IS LOW NFRs have a paper trail
+- S-3.09: NFR-S-A routing column in nfr-catalog.md reads `DEFER (per ADR-0013)`; ADR-0013 has Reactivation section
 
 ---
 
@@ -171,7 +174,50 @@ Each story frontmatter uses:
 - `bc_anchors:` — list of BC-S.SS.NNN IDs this story implements
 - `holdout_anchors:` — list of H-NNN IDs (MUST-FAIL pre-fix, MUST-PASS post-fix)
 - `nfr_anchors:` — NFR IDs this story satisfies
+- `risk_anchors:` — Risk register IDs (R-NNN) mitigated or pinned by this story
 - `adr_refs:` — ADR IDs that constrain this story
 - `sd_refs:` — Security Decision IDs (if applicable)
 - `files_modified:` — source files touched (with line ranges)
 - `test_files:` — test files to create or modify
+
+---
+
+## Pre-existing Test Coverage
+
+Holdouts confirmed covered by tests present in the codebase at activation HEAD dea1664.
+These are formally anchored in story `holdout_anchors:` but do not require net-new test
+code — the implementer should verify the existing test still passes and consolidate it
+into the story's test file if the story creates a new file for that BC area.
+
+| Holdout | Behavioral Contract | Pre-existing Test File | Line(s) | Anchored In |
+|---------|---------------------|------------------------|---------|-------------|
+| H-009 | BC-X.8.001 (corrupt teams.json graceful degrade) | `tests/issue_view_errors.rs` | 146 | (no story anchor — gap, see below) |
+| H-010 | BC-2.1.002 (issue list default truncates at 30) | `tests/all_flag_behavior.rs` | 90 | (no story anchor — gap, see below) |
+| H-011 | BC-6.1.001 (legacy config migration + idempotency) | `tests/migration_legacy.rs` | 94, 146 | (no story anchor — gap, see below) |
+| H-012 | BC-1.1.001 (auth method dispatch on scope mismatch) | `tests/api_client.rs` | 100, 184, 219 | (no story anchor — gap, see below) |
+| H-015 | BC-X.6.001 (--all + --limit clap mutual exclusion) | `tests/cli_smoke.rs` | 263 | (no story anchor — gap, see below) |
+| H-017 | BC-X.8.003 (build_asset_clause JQL correctness) | `src/jql.rs` | 278–308 | (no story anchor — gap, see below) |
+| H-018 | BC-X.9.001 (parse_duration combined units: 1h30m) | `src/duration.rs` | 92 | S-2.06 |
+| H-019 | BC-6.4.001 (validate_profile_name rejects reserved/invalid names) | `src/config.rs` | 759, 769 | (no story anchor — gap, see below) |
+| H-021 | BC-2.1.007 (--status ambiguous short-circuit, no JQL fired) | `tests/issue_list_errors.rs` | 369 | S-2.01 (AC-007) |
+| H-023 | BC-2.1.012 (--asset substring ambiguous rejection) | `tests/assets.rs` | 1485, 1553 | S-2.01 (via BC-2.1.012 in bc_anchors) |
+| H-024 | BC-4.2.006 (assets schema --type substring ambiguous) | `tests/assets.rs` | 1696 | S-2.03 |
+| H-026 | BC-X.1.003 (extract_error_message errors object mixed values) | `tests/api_client.rs` | 310 | (no story anchor — gap, see below) |
+
+### Gap Register — Unanchored Holdouts
+
+Holdouts with no story anchor and no pre-existing formal test. These represent coverage
+gaps that are not blocking for v0.5 but should be tracked.
+
+| Gap ID | Holdout | BC | Pre-existing Test | Justification | Resolution Target |
+|--------|---------|-----|------------------|---------------|-------------------|
+| GAP-H-001 | H-009 | BC-X.8.001 | `tests/issue_view_errors.rs:146` (partial) | Existing test covers the corrupt teams.json path; no story formally anchors it. Add to S-2.01 Out of Scope note — covered by pre-existing test. | v0.5 (no action needed; existing test is sufficient) |
+| GAP-H-002 | H-010 | BC-2.1.002 | `tests/all_flag_behavior.rs:90` | 30-item truncation behavior is tested; no dedicated holdout story. Acceptable — test is stable. | v0.5 (no action needed) |
+| GAP-H-003 | H-011 | BC-6.1.001 | `tests/migration_legacy.rs:94,146` | Migration + idempotency well covered by existing tests. No story anchor needed. | v0.5 (no action needed) |
+| GAP-H-004 | H-012 | BC-1.1.001 | `tests/api_client.rs:100,184,219` | Auth dispatch on scope mismatch tested at unit level. Coverage adequate. | v0.5 (no action needed) |
+| GAP-H-005 | H-015 | BC-X.6.001 | `tests/cli_smoke.rs:263` | Clap mutual exclusion tested. No story anchor needed. | v0.5 (no action needed) |
+| GAP-H-006 | H-017 | BC-X.8.003 | `src/jql.rs:278-308` (unit tests) | JQL asset clause tested at unit level in the source file. No integration test gap. | v0.5 (no action needed) |
+| GAP-H-007 | H-019 | BC-6.4.001 | `src/config.rs:759,769` (unit tests) | Profile name validation tested at unit level. Adequate coverage. | v0.5 (no action needed) |
+| GAP-H-008 | H-025 | BC-6.2.014 | None found | Cache write atomicity (temp file + rename) has no test pin at activation HEAD. The behavior exists in `src/cache.rs` but is untested. Adding a test is safe but non-critical — atomic rename is well-established OS behavior. | v0.6 (low priority — document in S-2.06 or create S-4.NN if needed) |
+| GAP-H-009 | H-026 | BC-X.1.003 | `tests/api_client.rs:310` | `extract_error_message` mixed-values path tested. Pre-existing coverage adequate; no story anchor needed. | v0.5 (no action needed) |
+| GAP-H-010 | H-028 | BC-6.4.002 | None found | Hand-edited config with `foo:bar` profile key (config-file-load boundary) has no specific test. `JR_PROFILE` env var and `--profile` flag validation are tested (H-019), but the config-file load path rejecting invalid profile keys is a distinct code path not yet covered. | v0.6 (add to S-3.06 scope or create S-4.NN for config boundary tests) |
