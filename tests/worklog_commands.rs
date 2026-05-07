@@ -208,10 +208,7 @@ async fn test_bc_x_5_002_two_page_result_returns_all_80_items() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/PROJ-1/worklog"))
         .and(query_param("startAt", "0"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(make_worklogs_page(0, 80, 50)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(make_worklogs_page(0, 80, 50)))
         .expect(1)
         .mount(&server)
         .await;
@@ -220,18 +217,13 @@ async fn test_bc_x_5_002_two_page_result_returns_all_80_items() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/PROJ-1/worklog"))
         .and(query_param("startAt", "50"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(make_worklogs_page(50, 80, 30)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(make_worklogs_page(50, 80, 30)))
         .expect(1)
         .mount(&server)
         .await;
 
-    let client = jr::api::client::JiraClient::new_for_test(
-        server.uri(),
-        "Basic dGVzdDp0ZXN0".to_string(),
-    );
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
     let worklogs = client.list_worklogs("PROJ-1").await.unwrap();
 
     assert_eq!(
@@ -255,10 +247,7 @@ async fn test_bc_x_5_002_both_pages_fetched() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/PROJ-1/worklog"))
         .and(query_param("startAt", "0"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(make_worklogs_page(0, 80, 50)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(make_worklogs_page(0, 80, 50)))
         .expect(1)
         .mount(&server)
         .await;
@@ -267,18 +256,13 @@ async fn test_bc_x_5_002_both_pages_fetched() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/PROJ-1/worklog"))
         .and(query_param("startAt", "50"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(make_worklogs_page(50, 80, 30)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(make_worklogs_page(50, 80, 30)))
         .expect(1)
         .mount(&server)
         .await;
 
-    let client = jr::api::client::JiraClient::new_for_test(
-        server.uri(),
-        "Basic dGVzdDp0ZXN0".to_string(),
-    );
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
     let worklogs = client.list_worklogs("PROJ-1").await.unwrap();
 
     // Both pages together must produce exactly 80 items.
@@ -299,8 +283,16 @@ async fn test_bc_x_5_002_both_pages_fetched() {
         })
         .collect();
 
-    assert_eq!(page1_items.len(), 50, "AC-002: expected 50 items from page 1");
-    assert_eq!(page2_items.len(), 30, "AC-002: expected 30 items from page 2");
+    assert_eq!(
+        page1_items.len(),
+        50,
+        "AC-002: expected 50 items from page 1"
+    );
+    assert_eq!(
+        page2_items.len(),
+        30,
+        "AC-002: expected 30 items from page 2"
+    );
     // wiremock verifies both mocks had exactly 1 call each on server drop
 }
 
@@ -324,18 +316,13 @@ async fn test_bc_x_5_002_single_page_no_extra_fetch() {
     // (?startAt=0) call patterns.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/PROJ-1/worklog"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(make_worklogs_page(0, 30, 30)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(make_worklogs_page(0, 30, 30)))
         .expect(1)
         .mount(&server)
         .await;
 
-    let client = jr::api::client::JiraClient::new_for_test(
-        server.uri(),
-        "Basic dGVzdDp0ZXN0".to_string(),
-    );
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
     let worklogs = client.list_worklogs("PROJ-1").await.unwrap();
 
     assert_eq!(
@@ -359,22 +346,18 @@ async fn test_bc_x_5_002_empty_issue_returns_zero_items() {
     // Empty result: total=0, no items.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/PROJ-1/worklog"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "startAt": 0,
-                "maxResults": 50,
-                "total": 0,
-                "worklogs": []
-            })),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "startAt": 0,
+            "maxResults": 50,
+            "total": 0,
+            "worklogs": []
+        })))
         .expect(1)
         .mount(&server)
         .await;
 
-    let client = jr::api::client::JiraClient::new_for_test(
-        server.uri(),
-        "Basic dGVzdDp0ZXN0".to_string(),
-    );
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
     let worklogs = client.list_worklogs("PROJ-1").await.unwrap();
 
     assert_eq!(

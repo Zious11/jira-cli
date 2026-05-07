@@ -22,10 +22,27 @@ impl JiraClient {
         self.post(&path, &body).await
     }
 
-    /// List all worklogs on an issue.
+    /// List all worklogs on an issue, paginating until all pages are fetched.
+    ///
+    /// BC-X.5.002: iterates with offset-based pagination until `total <= start_at + count`.
     pub async fn list_worklogs(&self, key: &str) -> Result<Vec<Worklog>> {
-        let path = format!("/rest/api/3/issue/{}/worklog", urlencoding::encode(key));
-        let page: OffsetPage<Worklog> = self.get(&path).await?;
-        Ok(page.items().to_vec())
+        let base_path = format!("/rest/api/3/issue/{}/worklog", urlencoding::encode(key));
+        let mut all_items: Vec<Worklog> = Vec::new();
+        let mut start_at: usize = 0;
+
+        loop {
+            let path = format!("{}?startAt={}", base_path, start_at);
+            let page: OffsetPage<Worklog> = self.get(&path).await?;
+            let count = page.items().len();
+            all_items.extend_from_slice(page.items());
+
+            let fetched_up_to = start_at + count;
+            if (page.total as usize) <= fetched_up_to || count == 0 {
+                break;
+            }
+            start_at = fetched_up_to;
+        }
+
+        Ok(all_items)
     }
 }
