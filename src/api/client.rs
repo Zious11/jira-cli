@@ -121,6 +121,24 @@ impl JiraClient {
         }
     }
 
+    /// Create a client for integration testing with distinct base_url and instance_url.
+    ///
+    /// Mirrors `new_for_test` but allows `base_url` (the OAuth API gateway, e.g.
+    /// `https://api.atlassian.com/ex/jira/<cloudId>`) to differ from `instance_url`
+    /// (the real `*.atlassian.net` browse URL). This replicates the OAuth URL
+    /// divergence that `handle_open` must handle correctly (BC-3.4.001).
+    ///
+    /// This is **not** gated behind `#[cfg(test)]` so that integration tests in
+    /// `tests/` can use it (mirrors the gating pattern of `new_for_test`).
+    pub fn new_for_test_with_instance_url(
+        _base_url: &str,
+        _instance_url: &str,
+        _auth_header: &str,
+    ) -> Self {
+        // S-0.01 stub — implementer fills in
+        todo!("S-0.01 stub — implementer fills in")
+    }
+
     /// Active profile name this client is bound to. Used by per-profile
     /// cache call sites (CMDB fields, workspace ID, project meta, resolutions,
     /// object-type attrs) that have a `&JiraClient` but not `&Config`.
