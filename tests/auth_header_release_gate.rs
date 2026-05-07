@@ -13,6 +13,7 @@
 //!     (the original SD-002 security goal is met).
 //!   - Debug binaries spawned by `cargo test` (`cargo_bin("jr")`) still honor it.
 //!   - Zero test migration is required in this story scope.
+//!
 //! A follow-up doc update will canonicalize this deviation in SD-002.
 //!
 //! # Test inventory
@@ -20,7 +21,7 @@
 //! | Test | AC | Red pre-fix | Green post-fix |
 //! |------|----|-------------|----------------|
 //! | test_sd_002_cfg_test_gate_present_in_source | AC-002 | FAIL | PASS |
-//! | test_sd_002_cfg_test_is_active_in_test_binary | AC-002 | PASS | PASS |
+//! | test_sd_002_debug_assertions_active_in_test_binary | AC-002 | PASS | PASS |
 //! | test_sd_002_new_for_test_honors_auth_header | AC-001 | PASS | PASS |
 //! | test_sd_002_new_for_test_signature_unchanged | AC-003 | PASS | PASS |
 //! | test_sd_002_ac004_audit_subprocess_pattern | AC-004 | PASS | PASS |
@@ -91,18 +92,26 @@ fn test_sd_002_cfg_test_gate_present_in_source() {
     );
 }
 
-/// AC-002 IN-PROCESS — always passes in any `cargo test` binary.
+/// AC-002 IN-PROCESS — compile-time evidence that the `#[cfg(debug_assertions)]` gate is active.
 ///
-/// Confirms that `cfg!(test)` evaluates to `true` in the test binary.
-/// Combined with `test_sd_002_cfg_test_gate_present_in_source`, this
-/// confirms the `#[cfg(test)]` gate compiles correctly for test builds.
+/// Confirms that `cfg!(debug_assertions)` evaluates to `true` when this test binary
+/// is compiled. `cargo test` compiles test binaries in debug mode by default, so
+/// debug_assertions is always set — meaning the `#[cfg(debug_assertions)]` gate IS
+/// active here. This is expressed as a `const` assertion (clippy-clean form of a
+/// tautological check) to make it a compile-time guarantee rather than a runtime one.
+/// Combined with `test_sd_002_cfg_test_gate_present_in_source`, this provides
+/// both source-level and compile-time evidence that the gate is correctly wired for
+/// debug builds (and therefore for `cargo test` runs).
 #[test]
-fn test_sd_002_cfg_test_is_active_in_test_binary() {
-    assert!(
-        cfg!(test),
-        "cfg!(test) must be true in a test binary — something is very wrong \
-         with the build configuration."
-    );
+fn test_sd_002_debug_assertions_active_in_test_binary() {
+    const {
+        assert!(
+            cfg!(debug_assertions),
+            "debug_assertions must be true when compiling this test binary — \
+             SD-002 requires the #[cfg(debug_assertions)] guard on JR_AUTH_HEADER \
+             to be active in test builds so integration tests can inject auth headers."
+        )
+    }
 }
 
 /// AC-001 REGRESSION GUARD — `JiraClient::new_for_test` honors the auth
