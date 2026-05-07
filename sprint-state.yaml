@@ -4,7 +4,7 @@
 # Updated: 2026-05-07
 
 active_wave: 0
-wave_0_progress: "1/7"  # S-0.01 complete
+wave_0_progress: "2/7"  # S-0.01, S-0.02 complete
 
 attack_order_wave_0:
   - S-0.01  # Single-file fix, smallest blast radius — first delivery validates per-story pipeline end-to-end
@@ -33,21 +33,24 @@ wave_0:
     title: "list_worklogs pagination truncation fix"
     type: MUST-FIX
     priority: HIGH
-    status: active
+    status: completed
+    pr: 290
+    merge_sha: a84e0635dd1727f77935c0ed3d8e36f3f78f7a58
+    merged_at: 2026-05-07
     depends_on: []
     bc_anchors: [BC-X.5.002]
-    holdout_anchors: []
-    notes: "Independent MUST-FIX. Active — in progress post S-0.01 merge."
+    holdout_anchors: [H-045]
+    notes: "Independent MUST-FIX. MERGED via PR #290; BC-X.5.002 satisfied; H-045 MUST-PASS active. 7/7 CI green; 2-cycle review (cycle 1: SHOULD-FIX applied — refactored to use OffsetPage::has_more()/next_start() helpers). 0 deferred findings."
 
   - id: S-0.03
     title: "hardcoded 8h/5d worklog billing fix"
     type: MUST-FIX
     priority: HIGH
-    status: pending
+    status: active
     depends_on: []
     bc_anchors: [BC-2.5.010]
     holdout_anchors: []
-    notes: "Independent MUST-FIX. Parallelizable."
+    notes: "Independent MUST-FIX. Active — started 2026-05-07 post S-0.02 merge."
 
   - id: S-0.04
     title: "multi-workspace HashMap type regression fix"

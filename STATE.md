@@ -11,7 +11,7 @@ input-hash: "[live-state]"
 traces_to: ""
 project: jira-cli
 mode: BROWNFIELD
-current_step: "phase-3-wave-0-S-0.02-start"
+current_step: "phase-3-wave-0-S-0.03-start"
 current_cycle: "cycle-001"
 dtu_required: false
 phase_2_status: APPROVED
@@ -37,7 +37,7 @@ activation_version: "v0.5.0-dev.7"
 | **Target Workspace** | develop → main |
 | **Started** | 2026-05-04 |
 | **Last Updated** | 2026-05-07 |
-| **Current Phase** | Phase 3 — TDD Implementation **IN PROGRESS** (Wave 0 active; S-0.01 MERGED; active: S-0.02) |
+| **Current Phase** | Phase 3 — TDD Implementation **IN PROGRESS** (Wave 0 active; S-0.01 MERGED; S-0.02 MERGED; active: S-0.03) |
 | **Next Phase** | phase-3-wave-0 delivery |
 | **Activation HEAD** | dea166471e22eff55974d7675593469b37048c5f (v0.5.0-dev.7) |
 | **factory-artifacts SHA** | 0b01262 (Phase 1 gate APPROVE; phase-1-converged tag) |
@@ -58,7 +58,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | 2: Story Decomposition | **complete** (story creation phase) | 2026-05-04 | 2026-05-06 | 31 stories created (W0:7 + W1:8 + W2:7 + W3:9); Phase 2-adv pending | |
 | 2-adv: Adversarial Story Review | **CONVERGED** — Pass 13 CLEAN-PASS; Counter 3/3 | 2026-05-06 | 2026-05-07 | 3/3 FULL CONVERGENCE | 14→5→5→5→4→5→4→4→4→1→0→1→0 |
 | Phase 2 gate | **APPROVED** (2026-05-07) — 31 stories locked, ready for TDD | — | 2026-05-07 | APPROVED by human | — |
-| 3: TDD Implementation | **IN_PROGRESS** — Wave 0 active (1/7) | 2026-05-07 | | | S-0.01 MERGED at b7b9c9c (2026-05-07) — PR #289; BC-3.4.001 satisfied; H-046 MUST-PASS active. 2 deferred review findings logged (R1-001, R1-002). Wave 0 progress: 1/7. |
+| 3: TDD Implementation | **IN_PROGRESS** — Wave 0 active (2/7) | 2026-05-07 | | | S-0.01 MERGED at b7b9c9c (PR #289; BC-3.4.001 satisfied; H-046 MUST-PASS). S-0.02 MERGED at a84e063 (PR #290; BC-X.5.002 satisfied; H-045 MUST-PASS; 2-cycle review, 1 SHOULD-FIX applied: page.has_more() helper refactor). Phase 3 Wave 0 progress: 2/7. |
 | 3-adv: Wave Adversarial Reviews | not-started | | | | |
 | 4: Holdout Evaluation | not-started | | | | |
 | 5: Adversarial Refinement | not-started | | | | |
@@ -71,12 +71,11 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 
 | Step | Agent | Status | Output |
 |------|-------|--------|--------|
-| Phase 2-adv CONVERGED (Pass 13) | adversary + state-manager | complete | 3/3 FULL CONVERGENCE; trajectory 14→5→5→5→4→5→4→4→4→1→0→1→0 |
-| Phase 2→3 gate | human | **APPROVED** | Approved without conditions 2026-05-07; 31 stories locked |
 | Phase 3 prerequisites verified | state-manager | complete | CI/CD workflows PASS; branch-protection DOCUMENTED; DTU N/A; .worktrees/ PASS |
 | Phase 3 STARTED — Wave 0 active | state-manager | complete | sprint-state.yaml initialized; first story: S-0.01 |
-| S-0.01 MERGED — BC-3.4.001 satisfied | devops-engineer + review | **complete** | PR #289 squash-merged to develop at b7b9c9c (2026-05-07T16:07:09Z); 7/7 CI green; H-046 MUST-PASS active; R1-001/R1-002 deferred |
-| S-0.02 START — Wave 0 active (1/7) | state-manager | **active** | paginate list-worklogs MUST-FIX (BC-X.5.002); worktree creation next; then test-writer for stubs + Red Gate |
+| S-0.01 MERGED — BC-3.4.001 satisfied | devops-engineer + review | complete | PR #289 squash-merged to develop at b7b9c9c (2026-05-07T16:07:09Z); 7/7 CI green; H-046 MUST-PASS active; R1-001/R1-002 deferred |
+| S-0.02 MERGED — BC-X.5.002 satisfied | devops-engineer + review | **complete** | PR #290 squash-merged to develop at a84e063 (2026-05-07); 7/7 CI green; H-045 MUST-PASS active; 2-cycle review (SHOULD-FIX: refactored to OffsetPage::has_more()/next_start() helpers); 0 deferred findings |
+| S-0.03 START — Wave 0 active (2/7) | state-manager | **active** | hardcoded 8h/5d worklog billing fix MUST-FIX (BC-2.5.010); worktree being created; next: test-writer for stubs + Red Gate |
 
 ## Decisions Log
 
@@ -182,7 +181,7 @@ _Not started._
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-07 |
-| **Position** | S-0.01 merged (PR #289, develop SHA b7b9c9c, 2026-05-07T16:07:09Z). BC-3.4.001 satisfied; H-046 MUST-PASS active. Deferred: R1-001 (test-infra ergonomics), R1-002 (stale doc comment). Wave 0 progress: 1/7. Active story: S-0.02 (paginate list-worklogs MUST-FIX, BC-X.5.002). Next: devops-engineer creates worktree for S-0.02, then test-writer for stubs + Red Gate. |
+| **Position** | S-0.02 merged (PR #290, develop SHA a84e063, 2026-05-07). BC-X.5.002 satisfied; H-045 MUST-PASS active. Deferred: R1-001 (test-infra ergonomics), R1-002 (stale doc comment). Wave 0 progress: 2/7. Active story: S-0.03 (hardcoded 8h/5d worklog billing fix MUST-FIX, BC-2.5.010). Worktree being created. Next: test-writer for stubs + Red Gate. |
 | **Convergence counter** | 3/3 CONVERGED (Phase 2-adv; Pass 13 CLEAN-PASS — final trajectory: 14→5→5→5→4→5→4→4→4→1→0→1→0) |
 
 ## Historical Content
