@@ -2,8 +2,8 @@
 
 **traces_to:** README.md
 **Source:** Pass 1 R1 §5 (26 risks) + R2 §7 (1 severity escalation) + Pass 2 ADV-P2-004 (1 new HIGH) + Pass 6 ADV-P6-004 (R-H3 demoted HIGH→MEDIUM) + Pass 8 ADV-P8-003 (R-M3 merged into R-L11 — Retry-After duplicate)
-**Total risks:** 26 (11 R1-NEW + 14 broad-pass + 1 R1-NEW reclassified to CRITICAL + 1 Pass-2 addition; R-M3 merged into R-L11 at Pass 8)
-**Severity distribution:** 1 CRITICAL / 6 HIGH / 8 MEDIUM / 11 LOW
+**Total risks:** 28 (11 R1-NEW + 14 broad-pass + 1 R1-NEW reclassified to CRITICAL + 1 Pass-2 addition; R-M3 merged into R-L11 at Pass 8; R-L12 + R-L13 added at CV-003 gate prep)
+**Severity distribution:** 1 CRITICAL / 6 HIGH / 8 MEDIUM / 13 LOW
 
 > **Numbering note:** R1-NEW-10 (multi-profile fields silent regression, NFR-R-D) was elevated from MEDIUM to CRITICAL during Pass 4 R1 analysis and appears as R-C1 in the CRITICAL block below. The R1-NEW label is not repeated in the numbered sequence; the CRITICAL block carries it. Effective R1-NEW count in the MEDIUM/HIGH rows is 11 (NEW-1 through NEW-9, NEW-11, NEW-12).
 
@@ -60,6 +60,8 @@
 | **R-L9** | `parse_duration` silently wraps on multiplicative overflow for pathological inputs in release builds (`panic=abort`). Wrong duration value sent to Jira API. | NFR-R-NEW-2 | DOCUMENT-AS-IS: Use `checked_mul`; bail with error. ~5 LOC fix. |
 | **R-L10** | 4 distinct JSON boolean field names in write-op output (`changed`, `updated`, `linked`, `unlinked`). AI-agent integrators must learn per-command semantics. Snapshot-pinned (change is high-friction). | NFR-O-J | POLICY-DECISION: Adopt `success: bool` + `action: string` canonical shape, OR document 4-name vocabulary as deliberate verb-aligned. |
 | **R-L11** | `Retry-After` parser: integer-only (no HTTP-date). Atlassian sends integers in practice; low observed risk. (R-M3 merged here at adversary Pass 8 — same concern, NFR-SCA-1 LOW is authoritative.) | NFR-SCA-1 | DOCUMENT-AS-IS: Add HTTP-date fallback if observed in production. |
+| **R-L12** (CV-003) | CI/CD job timeouts not configured (`timeout-minutes:` missing on all jobs in `ci.yml` + `release.yml`). Without timeouts, a hung build consumes up to 24 runner-hours (4-target release matrix) before GitHub times out at 6h default. Classified LOW here (HIGH per cicd-setup.md §4 GAP-2) pending CI/CD policy formalization. | NFR-S-E | FIX-IN-PHASE-3: Add `timeout-minutes: 30` (CI jobs) / `timeout-minutes: 60` (release build jobs) / `timeout-minutes: 5` (fmt, deny). See cicd-setup.md §4 GAP-2. |
+| **R-L13** (CV-003) | Secrets scanning not enabled in CI or at repository level. Inadvertent commit of a `.env` file, OAuth token, or debug echo of `OAUTH_CLIENT_SECRET` would not be detected. Project handles OAuth tokens and API tokens. Classified LOW here (HIGH per cicd-setup.md §4 GAP-3) pending CI/CD policy formalization. | NFR-S-E | FIX-IN-PHASE-3: Enable GitHub secret scanning at repo level (Settings > Security > Secret scanning). Optionally add `gitleaks` step to a new `security.yml`. See cicd-setup.md §4 GAP-3. |
 
 ---
 
@@ -70,8 +72,8 @@
 | CRITICAL | 1 | FIX-IN-PHASE-3 (NFR-R-D multi-profile fields) |
 | HIGH | 6 | 5× FIX-IN-PHASE-3, 1× SECURITY-DECIDE |
 | MEDIUM | 8 | 4× DEFER, 1× DOCUMENT-AS-IS, 1× FIX-IN-PHASE-3, 2× SECURITY-DECIDE (R-M3 merged into R-L11 at Pass 8) |
-| LOW | 11 | 8× DOCUMENT-AS-IS, 2× DEFER, 1× POLICY-DECISION |
-| **Total** | **26** | |
+| LOW | 13 | 10× DOCUMENT-AS-IS/FIX-IN-PHASE-3, 2× DEFER, 1× POLICY-DECISION (R-L12 + R-L13 added at CV-003) |
+| **Total** | **28** | |
 
 ---
 

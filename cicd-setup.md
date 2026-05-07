@@ -174,7 +174,7 @@ uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
 **Severity: HIGH**
 
-> **Post-Pass-2 reconciliation note:** Severity rebased to HIGH from CRITICAL post-Pass-2 reconciliation: rare event but high impact (direct OAuth client secret exposure). NFR-S-E action SHA pinning registered as R-H7 in risk-register.md.
+> **Post-Pass-2 reconciliation note:** Severity rebased to HIGH from CRITICAL post-Pass-2 reconciliation: rare event but high impact (direct OAuth client secret exposure). NFR-S-E action SHA pinning registered as R-H6 in risk-register.md.
 
 ---
 

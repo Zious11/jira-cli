@@ -123,7 +123,7 @@ Expected: 48 (H-001..H-047 + H-NEW-MP-001)
 
 ## Risk Register
 
-**Canonical risk total: 26**
+**Canonical risk total: 28**
 
 Verification command:
 ```bash
@@ -132,12 +132,12 @@ grep -c '^| \*\*R-[CHML]' .factory/architecture/risk-register.md
 
 Severity distribution:
 - CRITICAL: 1 (R-C1)
-- HIGH: 6 (R-H1..R-H6)
-- MEDIUM: 8 (R-M0..R-M5 + R-M7 + R-M8 — check risk-register.md for exact IDs; R-M3 merged into R-L11 at Pass 8)
-- LOW: 11 (R-L1..R-L11)
-- **Total: 26**
+- HIGH: 6 (R-H1, R-H2, R-H3, R-H4, R-H5, R-H6)
+- MEDIUM: 8 (R-M0, R-M1, R-M2, R-M4, R-M5, R-M6, R-M7, R-M8; R-M3 merged into R-L11 at Pass 8)
+- LOW: 13 (R-L1..R-L11; R-L12 + R-L13 added at CV-003 gate prep)
+- **Total: 28**
 
-Note: R-M3 was merged into R-L11 at Pass 8 (net -1). R-H7 was added, then check for final state. risk-register.md header says "26 total" — use that as authority.
+Note: R-M3 was merged into R-L11 at Pass 8 (net -1). R-L12 and R-L13 added at Phase 1→2 gate prep (CV-003): CI/CD job timeouts and secrets scanning gaps. risk-register.md header is authoritative.
 
 ---
 

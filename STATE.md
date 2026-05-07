@@ -11,7 +11,7 @@ input-hash: "[live-state]"
 traces_to: ""
 project: jira-cli
 mode: BROWNFIELD
-current_step: "phase-1-burst-6-gate-prep"
+current_step: "phase-1-gate-prep-decisions-pending"
 current_cycle: "cycle-001"
 dtu_required: false
 activation_head: "dea166471e22eff55974d7675593469b37048c5f"
@@ -50,6 +50,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | 0: Codebase Ingestion | **COMPLETE** | 2026-05-04 | 2026-05-04 | Phase A + B + B.5 + B.6 + C + gate APPROVED | |
 | 1: Spec Crystallization | **entry** | 2026-05-04 | | DEC-004 pending (scope choice) | |
 | 1d: Adversarial Spec Review | **COMPLETE** — **3/3 CONVERGED** at Pass 28 after 28 passes (5 counter resets, 3 consecutive clean P26-P27-P28) | 2026-05-04 | 2026-05-04 | 3/3 FULL CONVERGENCE | 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3→0→3→5→3→4→5→5→5→2→0→0→0 |
+| 1-gate-prep: Consistency Validation + Drift Items | **active** | 2026-05-06 | | DEC-006/007/008 pending human decisions | CV: 4H/1M; CV-001/003/005 FIXED; CV-002 (SD-001/002/003) deferred to human; CV-004 DRIFT-002 deferred post-SD-002 |
 | 2: Story Decomposition | not-started | | | | |
 | 2-adv: Adversarial Story Review | not-started | | | | |
 | 3: TDD Implementation | not-started | | | | |
@@ -65,16 +66,19 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 
 | Step | Agent | Status | Output |
 |------|-------|--------|--------|
-| Phase 1d Pass 25 + fixes | state-manager | complete | adv-p1-pass25.md; 2 FIXED (0C/0H/1M/1L); BC-INDEX:141 12→13 (P24 sibling); README SM canonical+bonus; trajectory ...→5→5→2; convergence inflection |
 | Phase 1d Pass 26 CLEAN-PASS! | adversary | complete | adv-p1-pass26.md; 0 findings; P25 verified clean+sweep clean; counter 1/3; need 2 more consecutive |
 | Phase 1d Pass 27 CLEAN-PASS! | adversary | complete | adv-p1-pass27.md; 0 findings; P26 sanity verified; counter 2/3; one more for 3/3 |
 | Phase 1d Pass 28 CLEAN-PASS — 3/3 CONVERGED! | adversary | complete | adv-p1-pass28.md; 0 findings; Phase 1d EXITS; 28 total passes; ready for Phase 1→2 gate |
+| Phase 1→2 gate prep: consistency-validation + 3 mechanical fixes | state-manager + consistency-validator | complete | CV-001/003/005 FIXED; CV-002 (SD-001/002/003) human decisions pending (DEC-006/007/008); CV-004 deferred (DRIFT-002); risk total 26→28 (R-L12/R-L13 added) |
 
 ## Pending Decisions
 
 | ID | Decision | Options | Due | Decided By |
 |----|----------|---------|-----|------------|
 | DEC-004 | Phase 1 spec crystallization scope: full pipeline (market intel → L2 → L3 → architecture → DTU → CI/CD → adversarial) vs streamlined brownfield-Phase-1 (skip market intel for shipped product; skip DTU since no third-party clone need; harmonize existing ADRs/specs into L2/L3). Recommended: streamlined. | full / streamlined (recommended) | Phase 1 start | orchestrator + human |
+| DEC-006 | SD-001 PKCE adoption — see `.factory/architecture/security-decisions/SD-001-pkce.md` for full option analysis | A: Full PKCE on all flows / B: PKCE on BYO only / C: Defer | Phase 1→2 gate | human |
+| DEC-007 | SD-002 JR_AUTH_HEADER production gating — see `.factory/architecture/security-decisions/SD-002-jr-auth-header-prod-gating.md` | A: Compile-time gate `#[cfg(test)]` / B: Runtime env-flag gate (require JR_BASE_URL simultaneously) | Phase 1→2 gate | human |
+| DEC-008 | SD-003 verbose PII redaction — see `.factory/architecture/security-decisions/SD-003-verbose-pii-redaction.md` | A: Allowlist redactor / B: Denylist redactor / C: Strip --verbose entirely | Phase 1→2 gate | human |
 
 ## Decisions Log
 
@@ -105,11 +109,12 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | ID | Area | Description | Severity | Status |
 |----|------|-------------|----------|--------|
 | DRIFT-001 | Pass 21+ propagation (recurring) | Count/chain-length fixes require downstream grep sweep across L2/architecture/edge-case-catalog using literal old value — P21 missed H-044+L2; P23-001 reaffirms same pattern; ADV-P24-001 is THIRD recurrence (BC-2.1.006 12 vs 13). Codify as S-7.01 lesson before next phase. Every count/chain-length L3 change must trigger grep sweep. Recommend automation as pre-merge gate. | MEDIUM | process-gap recurring (S-7.01 codification due before Phase 2) |
+| DRIFT-002 | NFR-S-B holdout gap (CV-004) | EC-AUTH-006 documents expected post-fix behavior for JR_AUTH_HEADER bypass but no holdout H-NNN is registered. Deferred: holdout cannot be written until SD-002 (DEC-007) is resolved — the fix approach (Option A vs B) determines what behavioral invariant to pin. Add holdout post-SD-002 decision. | MEDIUM | deferred to post-SD-002 decision (CV-004) |
 
 ## Convergence Trackers
 
 ### Phase 1d — Adversarial Spec Review
-_Phase 1d Adversarial Spec Review **3/3 FULLY CONVERGED** at Pass 28 (2026-05-04). 28 total passes: 25 SUBSTANTIVE, 3 final consecutive CLEAN-PASS (P26-P27-P28). Trajectory descended monotonically from 30 to 0 across 5 counter resets. ~80+ findings addressed across passes 1-25. Final 3 passes verified zero regressions across 7+ distinct adversarial lens axes including brave-skeptic deep dive. Spec corpus locked at 541 BCs, 41 NFRs, 48 holdouts, 26 risks, 12 ADRs, 3 SD docs. **READY FOR PHASE 2 STORY DECOMPOSITION**._
+_Phase 1d Adversarial Spec Review **3/3 FULLY CONVERGED** at Pass 28 (2026-05-04). 28 total passes: 25 SUBSTANTIVE, 3 final consecutive CLEAN-PASS (P26-P27-P28). Trajectory descended monotonically from 30 to 0 across 5 counter resets. ~80+ findings addressed across passes 1-25. Final 3 passes verified zero regressions across 7+ distinct adversarial lens axes including brave-skeptic deep dive. Spec corpus at convergence: 541 BCs, 41 NFRs, 48 holdouts, 26 risks, 12 ADRs, 3 SD docs. Post-convergence gate-prep (2026-05-06) added 2 risk entries (R-L12, R-L13 via CV-003); risk total now 28. **PHASE 2 GATED ON DEC-006/007/008 (SD-001/002/003 human decisions)**._
 
 ```yaml
 convergence_trajectory:
@@ -235,9 +240,9 @@ convergence_trajectory: []
 
 | Field | Value |
 |-------|-------|
-| **Date** | 2026-05-04 |
-| **Position** | Phase 1 CONVERGED — Phase 1d 3/3 FULL CONVERGENCE at Pass 28. Trajectory 30→15→9→5→10→5→4→3→4→0→2→0→3→0→2→0→3→0→3→5→3→4→5→5→5→2→0→0→0. Manifest: 541 BCs / 41 NFRs / 48 holdouts / 26 risks / 12 ADRs / 3 SD. Phase 1d EXITS. Awaiting Phase 1→2 human approval gate (Burst 6). DEC-004 scope decision still pending before Phase 2 begins. |
-| **Convergence counter** | 3 of 3 (FULL CONVERGENCE; Phase 1d COMPLETE; ready for Phase 1→2 gate) |
+| **Date** | 2026-05-06 |
+| **Position** | Phase 1→2 gate prep. Phase 1d 3/3 FULL CONVERGENCE at Pass 28. Consistency validation complete: 5 findings (4H/1M); CV-001/003/005 FIXED; CV-002 (SD-001/002/003) awaiting human decisions (DEC-006/007/008); CV-004 (NFR-S-B holdout) deferred as DRIFT-002. Manifest: 541 BCs / 41 NFRs / 48 holdouts / 28 risks / 12 ADRs / 3 SD. Phase 2 gated on DEC-006/007/008. |
+| **Convergence counter** | 3 of 3 (FULL CONVERGENCE; Phase 1d COMPLETE; Phase 1→2 gate PENDING human decisions on SD-001/002/003) |
 
 ## Historical Content
 
