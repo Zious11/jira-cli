@@ -633,7 +633,7 @@ pub(super) async fn handle_open(command: IssueCommand, client: &JiraClient) -> R
         unreachable!()
     };
 
-    let url = format!("{}/browse/{}", client.base_url(), key);
+    let url = format!("{}/browse/{}", client.instance_url(), key);
 
     if url_only {
         println!("{}", url);
