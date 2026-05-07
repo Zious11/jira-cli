@@ -1099,7 +1099,7 @@ mod tests {
     //           through AC-001 (fixing line 446 without touching line 398 keeps
     //           `to_enrich` correct).
 
-    /// test_BC_4_3_001_bare_oid_key_collides_on_shared_oid (FAILS pre-fix, H-036)
+    /// test_bc_4_3_001_bare_oid_key_collides_on_shared_oid (FAILS pre-fix, H-036)
     ///
     /// Demonstrates the bug: two (wid, oid) pairs with the same oid but
     /// different workspace_ids collapse to a single entry in a
@@ -1108,7 +1108,7 @@ mod tests {
     /// ("Widgets Inc" for ws-B).  Pre-fix: only "Widgets Inc" survives, so
     /// `resolved_bare.get("88") == Some("Acme Corp")` is false → test FAILS.
     #[test]
-    fn test_BC_4_3_001_bare_oid_key_collides_on_shared_oid() {
+    fn test_bc_4_3_001_bare_oid_key_collides_on_shared_oid() {
         use std::collections::HashMap as StdHashMap;
 
         // Simulate what the buggy code at line 446 does:
@@ -1136,14 +1136,14 @@ mod tests {
         );
     }
 
-    /// test_BC_4_3_001_composite_key_preserves_both_workspaces (PASSES always)
+    /// test_bc_4_3_001_composite_key_preserves_both_workspaces (PASSES always)
     ///
     /// Demonstrates the correct fix: a composite `(wid, oid)` key preserves
     /// both entries when two workspaces share the same oid.  This test passes
     /// on both the pre-fix and post-fix branches and serves as documentation
     /// of the intended post-fix behaviour (AC-002 invariant).
     #[test]
-    fn test_BC_4_3_001_composite_key_preserves_both_workspaces() {
+    fn test_bc_4_3_001_composite_key_preserves_both_workspaces() {
         use std::collections::HashMap as StdHashMap;
 
         // The fixed type from BC-4.3.001: HashMap<(String, String), _>
@@ -1178,7 +1178,7 @@ mod tests {
         assert_eq!(label_b, "Widgets Inc");
     }
 
-    /// test_BC_4_3_001_to_enrich_composite_key_unchanged (AC-003, PASSES always)
+    /// test_bc_4_3_001_to_enrich_composite_key_unchanged (AC-003, PASSES always)
     ///
     /// Verifies that `to_enrich: HashMap<(String, String), ()>` (line 398,
     /// already correct) correctly deduplicates by (workspace_id, oid) pairs
@@ -1186,7 +1186,7 @@ mod tests {
     /// This test is structural: it passes on both branches because line 398
     /// is not touched by the fix.
     #[test]
-    fn test_BC_4_3_001_to_enrich_composite_key_unchanged() {
+    fn test_bc_4_3_001_to_enrich_composite_key_unchanged() {
         use std::collections::HashMap as StdHashMap;
 
         // Mirror of the `to_enrich` map at line 398 in list.rs.

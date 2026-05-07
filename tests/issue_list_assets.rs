@@ -78,7 +78,7 @@ fn asset_response(object_key: &str, label: &str) -> serde_json::Value {
 
 // ── AC-001: multi-workspace collision (FAILS pre-fix, PASSES post-fix) ──────
 
-/// test_BC_4_3_001_multi_workspace_no_collision
+/// test_bc_4_3_001_multi_workspace_no_collision
 ///
 /// Two issues from different workspaces (ws-A and ws-B) both reference an
 /// asset with objectId "88", but each workspace maps "88" to a different
@@ -92,7 +92,7 @@ fn asset_response(object_key: &str, label: &str) -> serde_json::Value {
 /// Post-fix: `resolved: HashMap<(String, String), _>` preserves both entries
 /// → both labels appear in the output → test passes.
 #[tokio::test]
-async fn test_BC_4_3_001_multi_workspace_no_collision() {
+async fn test_bc_4_3_001_multi_workspace_no_collision() {
     let server = MockServer::start().await;
 
     // Project existence check (`project_exists` calls GET /rest/api/3/project/PROJ).
@@ -212,13 +212,13 @@ async fn test_BC_4_3_001_multi_workspace_no_collision() {
 
 // ── AC-002: single-workspace regression guard (PASSES pre-fix and post-fix) ──
 
-/// test_BC_4_3_001_single_workspace_regression_guard
+/// test_bc_4_3_001_single_workspace_regression_guard
 ///
 /// One workspace, one issue, one asset.  The fix must not break this
 /// common-case path.  This test is expected to PASS on the current (buggy)
 /// branch and must continue to PASS after the fix is applied.
 #[tokio::test]
-async fn test_BC_4_3_001_single_workspace_regression_guard() {
+async fn test_bc_4_3_001_single_workspace_regression_guard() {
     let server = MockServer::start().await;
 
     // Project existence check.
