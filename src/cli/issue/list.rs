@@ -437,23 +437,37 @@ pub(super) async fn handle_list(
                     let oid = oid.clone();
                     async move {
                         let result = client.get_asset(&wid, &oid, false).await;
-                        (oid, result)
+                        (wid, oid, result)
                     }
                 })
                 .collect();
 
             let results = futures::future::join_all(futures).await;
-            let mut resolved: StdHashMap<String, (String, String, String)> = StdHashMap::new();
-            for (oid, result) in results {
+            let mut resolved: StdHashMap<(String, String), (String, String, String)> =
+                StdHashMap::new();
+            for (wid, oid, result) in results {
                 if let Ok(obj) = result {
-                    resolved.insert(oid, (obj.object_key, obj.label, obj.object_type.name));
+                    resolved.insert(
+                        (wid.clone(), oid.clone()),
+                        (obj.object_key, obj.label, obj.object_type.name),
+                    );
                 }
             }
 
             // Apply enrichment back to assets.
+            // Mirror the same wid-resolution logic used when building futures:
+            // an empty workspace_id falls back to fallback_wid (the same value
+            // used as the key in `resolved`).
             for (i, j) in &enrich_indices {
-                if let Some(oid) = &issue_assets[*i][*j].id.clone() {
-                    if let Some((key, name, asset_type)) = resolved.get(oid) {
+                let asset = &issue_assets[*i][*j];
+                if let Some(oid) = asset.id.clone() {
+                    let raw_wid = asset.workspace_id.clone().unwrap_or_default();
+                    let effective_wid = if raw_wid.is_empty() {
+                        fallback_wid.clone().unwrap_or_default()
+                    } else {
+                        raw_wid
+                    };
+                    if let Some((key, name, asset_type)) = resolved.get(&(effective_wid, oid)) {
                         issue_assets[*i][*j].key = Some(key.clone());
                         issue_assets[*i][*j].name = Some(name.clone());
                         issue_assets[*i][*j].asset_type = Some(asset_type.clone());
@@ -1099,40 +1113,53 @@ mod tests {
     //           through AC-001 (fixing line 446 without touching line 398 keeps
     //           `to_enrich` correct).
 
-    /// test_bc_4_3_001_bare_oid_key_collides_on_shared_oid (FAILS pre-fix, H-036)
+    /// test_bc_4_3_001_bare_oid_key_collides_on_shared_oid (H-036, PASSES post-fix)
     ///
-    /// Demonstrates the bug: two (wid, oid) pairs with the same oid but
-    /// different workspace_ids collapse to a single entry in a
-    /// `HashMap<String, _>`.  The test asserts that the FIRST-inserted label
-    /// ("Acme Corp" for ws-A) is still present after the SECOND insert
-    /// ("Widgets Inc" for ws-B).  Pre-fix: only "Widgets Inc" survives, so
-    /// `resolved_bare.get("88") == Some("Acme Corp")` is false → test FAILS.
+    /// Verifies that the production `resolved` map — now keyed on composite
+    /// `(workspace_id, oid)` — preserves both workspace-A and workspace-B
+    /// entries for the same bare `oid`.  Pre-fix (bare `HashMap<String, _>`
+    /// key), the second insert would have overwritten the first, so only
+    /// "Widgets Inc" would survive.  Post-fix the composite key keeps both.
+    ///
+    /// H-036: MUST-PASS after the BC-4.3.001 fix is merged.
     #[test]
     fn test_bc_4_3_001_bare_oid_key_collides_on_shared_oid() {
         use std::collections::HashMap as StdHashMap;
 
-        // Simulate what the buggy code at line 446 does:
-        // resolved: HashMap<String, (String, String, String)>
-        // keyed on oid alone.
-        let mut resolved_buggy: StdHashMap<String, (String, String, String)> = StdHashMap::new();
+        // Post-fix type: HashMap<(String, String), _> — composite (wid, oid) key.
+        let mut resolved: StdHashMap<(String, String), (String, String, String)> =
+            StdHashMap::new();
+
+        let oid = "88".to_string();
 
         // Insert ws-A / oid "88" → "Acme Corp"
-        let oid = "88".to_string();
-        resolved_buggy.insert(oid.clone(), ("WS-A-88".into(), "Acme Corp".into(), "Client".into()));
+        resolved.insert(
+            ("ws-A".to_string(), oid.clone()),
+            ("WS-A-88".into(), "Acme Corp".into(), "Client".into()),
+        );
 
-        // Insert ws-B / oid "88" → "Widgets Inc" — OVERWRITES the previous entry
-        resolved_buggy.insert(oid.clone(), ("WS-B-88".into(), "Widgets Inc".into(), "Client".into()));
+        // Insert ws-B / oid "88" → "Widgets Inc" — must NOT overwrite ws-A
+        resolved.insert(
+            ("ws-B".to_string(), oid.clone()),
+            ("WS-B-88".into(), "Widgets Inc".into(), "Client".into()),
+        );
 
-        // The buggy map has only ONE entry for "88".  The ws-A label is gone.
-        // This assertion demonstrates the last-write-wins collision.
-        // It FAILS pre-fix (the value is "Widgets Inc", not "Acme Corp"),
-        // confirming the Red Gate for BC-4.3.001 / H-036.
-        let (_, label, _) = resolved_buggy.get("88").unwrap();
+        // Both entries must be independently addressable (H-036 postcondition).
+        let (_, label_a, _) = resolved
+            .get(&("ws-A".to_string(), oid.clone()))
+            .expect("ws-A entry must be present after fix");
         assert_eq!(
-            label, "Acme Corp",
-            "BC-4.3.001 MUST-FAIL pre-fix: bare oid key causes last-write-wins; \
-             ws-A label 'Acme Corp' was overwritten by ws-B label 'Widgets Inc'. \
-             Fix: use composite (workspace_id, oid) key."
+            label_a, "Acme Corp",
+            "BC-4.3.001: ws-A label 'Acme Corp' must survive the ws-B insert. \
+             Composite (workspace_id, oid) key preserves both entries."
+        );
+
+        let (_, label_b, _) = resolved
+            .get(&("ws-B".to_string(), oid.clone()))
+            .expect("ws-B entry must be present after fix");
+        assert_eq!(
+            label_b, "Widgets Inc",
+            "BC-4.3.001: ws-B label must be 'Widgets Inc'"
         );
     }
 
@@ -1165,7 +1192,11 @@ mod tests {
         );
 
         // Both entries are present and independently addressable.
-        assert_eq!(resolved_fixed.len(), 2, "Composite key map must hold two distinct entries");
+        assert_eq!(
+            resolved_fixed.len(),
+            2,
+            "Composite key map must hold two distinct entries"
+        );
 
         let (_, label_a, _) = resolved_fixed
             .get(&("ws-A".to_string(), oid.clone()))
