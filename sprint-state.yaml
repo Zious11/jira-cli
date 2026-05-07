@@ -4,7 +4,7 @@
 # Updated: 2026-05-07
 
 active_wave: 0
-wave_0_progress: "2/7"  # S-0.01, S-0.02 complete
+wave_0_progress: "3/7"  # S-0.01, S-0.02, S-0.03 complete
 
 attack_order_wave_0:
   - S-0.01  # Single-file fix, smallest blast radius — first delivery validates per-story pipeline end-to-end
@@ -43,24 +43,27 @@ wave_0:
     notes: "Independent MUST-FIX. MERGED via PR #290; BC-X.5.002 satisfied; H-045 MUST-PASS active. 7/7 CI green; 2-cycle review (cycle 1: SHOULD-FIX applied — refactored to use OffsetPage::has_more()/next_start() helpers). 0 deferred findings."
 
   - id: S-0.03
-    title: "hardcoded 8h/5d worklog billing fix"
+    title: "multi-workspace asset HashMap composite key fix"
     type: MUST-FIX
     priority: HIGH
-    status: active
+    status: completed
+    pr: 291
+    merge_sha: cb2c612df339f766abd01a9ad461d1618f2d9576
+    merged_at: 2026-05-07T17:28:03Z
     depends_on: []
-    bc_anchors: [BC-2.5.010]
-    holdout_anchors: []
-    notes: "Independent MUST-FIX. Active — started 2026-05-07 post S-0.02 merge."
+    bc_anchors: [BC-4.3.001]
+    holdout_anchors: [H-036]
+    notes: "Independent MUST-FIX. MERGED via PR #291 (admin bypass); BC-4.3.001 satisfied; H-036 MUST-PASS active. 7/7 CI green; 1-cycle review APPROVE (0 critical, 0 important, 1 suggestion deferred). Security review CLEAN. HashMap<String,_> → HashMap<(String,String),_> at src/cli/issue/list.rs:446; 5 tests green (3 unit + 2 integration). 1 deferred finding S-0.03-S1 (fallback_wid path test gap at list.rs:464-470)."
 
   - id: S-0.04
     title: "multi-workspace HashMap type regression fix"
     type: MUST-FIX
     priority: HIGH
-    status: pending
+    status: active
     depends_on: []
-    bc_anchors: [BC-4.1.001]
+    bc_anchors: [BC-6.3.001]
     holdout_anchors: []
-    notes: "Independent MUST-FIX. Parallelizable."
+    notes: "Independent MUST-FIX. Active — started 2026-05-07 post S-0.03 merge."
 
   - id: S-0.05
     title: "SD-002 #[cfg(test)] compile-time gate"

@@ -11,7 +11,7 @@ input-hash: "[live-state]"
 traces_to: ""
 project: jira-cli
 mode: BROWNFIELD
-current_step: "phase-3-wave-0-S-0.03-start"
+current_step: "phase-3-wave-0-S-0.04-start"
 current_cycle: "cycle-001"
 dtu_required: false
 phase_2_status: APPROVED
@@ -37,7 +37,7 @@ activation_version: "v0.5.0-dev.7"
 | **Target Workspace** | develop → main |
 | **Started** | 2026-05-04 |
 | **Last Updated** | 2026-05-07 |
-| **Current Phase** | Phase 3 — TDD Implementation **IN PROGRESS** (Wave 0 active; S-0.01 MERGED; S-0.02 MERGED; active: S-0.03) |
+| **Current Phase** | Phase 3 — TDD Implementation **IN PROGRESS** (Wave 0 active; S-0.01 MERGED; S-0.02 MERGED; S-0.03 MERGED; active: S-0.04) |
 | **Next Phase** | phase-3-wave-0 delivery |
 | **Activation HEAD** | dea166471e22eff55974d7675593469b37048c5f (v0.5.0-dev.7) |
 | **factory-artifacts SHA** | 0b01262 (Phase 1 gate APPROVE; phase-1-converged tag) |
@@ -58,7 +58,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | 2: Story Decomposition | **complete** (story creation phase) | 2026-05-04 | 2026-05-06 | 31 stories created (W0:7 + W1:8 + W2:7 + W3:9); Phase 2-adv pending | |
 | 2-adv: Adversarial Story Review | **CONVERGED** — Pass 13 CLEAN-PASS; Counter 3/3 | 2026-05-06 | 2026-05-07 | 3/3 FULL CONVERGENCE | 14→5→5→5→4→5→4→4→4→1→0→1→0 |
 | Phase 2 gate | **APPROVED** (2026-05-07) — 31 stories locked, ready for TDD | — | 2026-05-07 | APPROVED by human | — |
-| 3: TDD Implementation | **IN_PROGRESS** — Wave 0 active (2/7) | 2026-05-07 | | | S-0.01 MERGED at b7b9c9c (PR #289; BC-3.4.001 satisfied; H-046 MUST-PASS). S-0.02 MERGED at a84e063 (PR #290; BC-X.5.002 satisfied; H-045 MUST-PASS; 2-cycle review, 1 SHOULD-FIX applied: page.has_more() helper refactor). Phase 3 Wave 0 progress: 2/7. |
+| 3: TDD Implementation | **IN_PROGRESS** — Wave 0 active (3/7) | 2026-05-07 | | | S-0.01 MERGED at b7b9c9c (PR #289; BC-3.4.001; H-046 MUST-PASS). S-0.02 MERGED at a84e063 (PR #290; BC-X.5.002; H-045 MUST-PASS). S-0.03 MERGED at cb2c612 — PR #291; BC-4.3.001 satisfied; H-036 MUST-PASS active. 1-cycle review APPROVE; security CLEAN. 1 deferred (S-0.03-S1: fallback_wid path test gap). Phase 3 Wave 0 progress: 3/7. |
 | 3-adv: Wave Adversarial Reviews | not-started | | | | |
 | 4: Holdout Evaluation | not-started | | | | |
 | 5: Adversarial Refinement | not-started | | | | |
@@ -71,11 +71,10 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 
 | Step | Agent | Status | Output |
 |------|-------|--------|--------|
-| Phase 3 prerequisites verified | state-manager | complete | CI/CD workflows PASS; branch-protection DOCUMENTED; DTU N/A; .worktrees/ PASS |
-| Phase 3 STARTED — Wave 0 active | state-manager | complete | sprint-state.yaml initialized; first story: S-0.01 |
 | S-0.01 MERGED — BC-3.4.001 satisfied | devops-engineer + review | complete | PR #289 squash-merged to develop at b7b9c9c (2026-05-07T16:07:09Z); 7/7 CI green; H-046 MUST-PASS active; R1-001/R1-002 deferred |
-| S-0.02 MERGED — BC-X.5.002 satisfied | devops-engineer + review | **complete** | PR #290 squash-merged to develop at a84e063 (2026-05-07); 7/7 CI green; H-045 MUST-PASS active; 2-cycle review (SHOULD-FIX: refactored to OffsetPage::has_more()/next_start() helpers); 0 deferred findings |
-| S-0.03 START — Wave 0 active (2/7) | state-manager | **active** | hardcoded 8h/5d worklog billing fix MUST-FIX (BC-2.5.010); worktree being created; next: test-writer for stubs + Red Gate |
+| S-0.02 MERGED — BC-X.5.002 satisfied | devops-engineer + review | complete | PR #290 squash-merged to develop at a84e063 (2026-05-07); 7/7 CI green; H-045 MUST-PASS active; 2-cycle review (SHOULD-FIX: OffsetPage::has_more()/next_start() helpers); 0 deferred findings |
+| S-0.03 MERGED — BC-4.3.001 satisfied | devops-engineer + review | **complete** | PR #291 squash-merged to develop at cb2c612 (2026-05-07T17:28:03Z) via admin bypass; 7/7 CI green; H-036 MUST-PASS active; 1-cycle review APPROVE; security CLEAN; 1 deferred (S-0.03-S1: fallback_wid path test gap) |
+| S-0.04 START — Wave 0 active (3/7) | state-manager | **active** | multi-workspace HashMap type regression fix MUST-FIX (BC-6.3.001); worktree being created; next: test-writer for Red Gate |
 
 ## Decisions Log
 
@@ -121,6 +120,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | CV2-003 | SD-003 holdout gap | **RESOLVED** — 2026-05-07 — H-NEW-VERBOSE-001/002 registered; WAVE-PLAN updated (v1.1.1); S-0.06 cross-link added | MEDIUM | **RESOLVED** |
 | R1-001 | JiraClient::new_for_test_with_instance_url ergonomics | DEFERRED — 2026-05-07 — takes (base_url, instance_url) where one concept might suffice. Test-infra only; no correctness impact. Target: bundle into next workflow.rs/client.rs touch (likely Wave 3 cleanup or absorbed by S-0.05/0.06). | LOW | DEFERRED |
 | R1-002 | Stale doc comment in workflow.rs handle_open | DEFERRED — 2026-05-07 — referenced "base URL" pre-fix; one-line text fix. Target: assign to next implementer touching workflow.rs. | LOW | DEFERRED |
+| S-0.03-S1 | Missing integration test for effective_wid fallback path at list.rs:464-470 | DEFERRED — 2026-05-07 — raw_wid empty → fallback_wid lookup branch has no integration test. Logic correct; coverage gap. Target: bundle into next list.rs/CMDB-related touch (likely Wave 2 issue-list test suite expansion S-2.01/S-2.02) OR add as a follow-up small story in the CMDB epic. | LOW | DEFERRED |
 
 ## Convergence Trackers
 
@@ -181,7 +181,7 @@ _Not started._
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-07 |
-| **Position** | S-0.02 merged (PR #290, develop SHA a84e063, 2026-05-07). BC-X.5.002 satisfied; H-045 MUST-PASS active. Deferred: R1-001 (test-infra ergonomics), R1-002 (stale doc comment). Wave 0 progress: 2/7. Active story: S-0.03 (hardcoded 8h/5d worklog billing fix MUST-FIX, BC-2.5.010). Worktree being created. Next: test-writer for stubs + Red Gate. |
+| **Position** | S-0.03 merged via admin bypass (PR #291, develop SHA cb2c612, 2026-05-07T17:28:03Z). BC-4.3.001 satisfied; H-036 MUST-PASS active. Deferred: R1-001, R1-002, S-0.03-S1 (fallback_wid path test gap). Wave 0 progress: 3/7. Active story: S-0.04 (multi-workspace HashMap type regression fix MUST-FIX, BC-6.3.001). Worktree being created. Next: test-writer for Red Gate. |
 | **Convergence counter** | 3/3 CONVERGED (Phase 2-adv; Pass 13 CLEAN-PASS — final trajectory: 14→5→5→5→4→5→4→4→4→1→0→1→0) |
 
 ## Historical Content
