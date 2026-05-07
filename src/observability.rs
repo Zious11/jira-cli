@@ -1,9 +1,9 @@
 //! Lightweight observability primitives shared across commands.
 //!
-//! Intentionally tiny: the project has no tracing/log crate, and a
-//! single `--verbose`-gated `eprintln!` is the established pattern
-//! (see `src/api/client.rs` for HTTP-request logging). Expand to a
-//! real tracing layer when there is cross-subsystem need.
+//! The `tracing` crate is wired up as of S-1.03 — see `src/main.rs` for
+//! subscriber initialization. This module provides shared helper utilities
+//! (e.g. `log_parse_failure_once`) that CLI handlers use independently of
+//! the HTTP-layer tracing events in `src/api/client.rs` and `src/api/auth.rs`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
