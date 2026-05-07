@@ -5,15 +5,19 @@ version: "2.0"
 status: active
 producer: state-manager
 timestamp: 2026-05-07T00:00:00
-phase: phase-2-adv-converged
+phase: phase-3-tdd-implementation
 inputs: []
 input-hash: "[live-state]"
 traces_to: ""
 project: jira-cli
 mode: BROWNFIELD
-current_step: "phase-2-to-3-gate-prep"
+current_step: "phase-3-wave-0-S-0.01-start"
 current_cycle: "cycle-001"
 dtu_required: false
+phase_2_status: APPROVED
+phase_2_approved_at: 2026-05-07
+phase_2_approved_by: "human (user)"
+phase_3_status: STARTED
 activation_head: "dea166471e22eff55974d7675593469b37048c5f"
 activation_version: "v0.5.0-dev.7"
 ---
@@ -33,8 +37,8 @@ activation_version: "v0.5.0-dev.7"
 | **Target Workspace** | develop → main |
 | **Started** | 2026-05-04 |
 | **Last Updated** | 2026-05-07 |
-| **Current Phase** | Phase 2-adv — Adversarial Story Review **CONVERGED** (Pass 13 CLEAN-PASS; 3/3) |
-| **Next Phase** | phase-3-tdd-implementation (pending Phase 2→3 human gate) |
+| **Current Phase** | Phase 3 — TDD Implementation **STARTED** (Wave 0 active; next: S-0.01) |
+| **Next Phase** | phase-3-wave-0 delivery |
 | **Activation HEAD** | dea166471e22eff55974d7675593469b37048c5f (v0.5.0-dev.7) |
 | **factory-artifacts SHA** | 0b01262 (Phase 1 gate APPROVE; phase-1-converged tag) |
 
@@ -53,7 +57,8 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | 1-gate-prep: Consistency Validation + Drift Items | **COMPLETE** | 2026-05-06 | 2026-05-04 | DEC-006/007/008 resolved; ADR-0013 created | CV: 4H/1M; CV-001/003/005 FIXED; CV-002 resolved (SD-001=C/SD-002=A/SD-003=B); CV-004 DRIFT-002 resolved post-SD-002 |
 | 2: Story Decomposition | **complete** (story creation phase) | 2026-05-04 | 2026-05-06 | 31 stories created (W0:7 + W1:8 + W2:7 + W3:9); Phase 2-adv pending | |
 | 2-adv: Adversarial Story Review | **CONVERGED** — Pass 13 CLEAN-PASS; Counter 3/3 | 2026-05-06 | 2026-05-07 | 3/3 FULL CONVERGENCE | 14→5→5→5→4→5→4→4→4→1→0→1→0 |
-| 3: TDD Implementation | not-started | | | | |
+| Phase 2 gate | **APPROVED** (2026-05-07) — 31 stories locked, ready for TDD | — | 2026-05-07 | APPROVED by human | — |
+| 3: TDD Implementation | **STARTED** — Wave 0 active | 2026-05-07 | | | |
 | 3-adv: Wave Adversarial Reviews | not-started | | | | |
 | 4: Holdout Evaluation | not-started | | | | |
 | 5: Adversarial Refinement | not-started | | | | |
@@ -66,11 +71,11 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 
 | Step | Agent | Status | Output |
 |------|-------|--------|--------|
-| Phase 2-adv Pass 10 + fix | adversary + state-manager | complete | 1 FIXED (MED); S-1.08 depends_on:[S-0.05] removed (over-declared mirror of S-1.06); convergence approaching |
-| Phase 2-adv Pass 11 CLEAN-PASS! | adversary | complete | 0 findings; P10 fix verified across 4 surfaces; counter 1/3; need 2 more consecutive |
-| Phase 2-adv Pass 12 CLEAN-PASS! | adversary + state-manager | complete | 1 sub-threshold MEDIUM (ADV-P2-S12-001 RESOLVED); S-1.08 line 274 body stale dep ref fixed; counter 2/3; need 1 more |
-| Phase 2-adv Pass 13 CLEAN-PASS — CONVERGED | adversary + state-manager | complete | 0 substantive findings; OBS-13-1 RESOLVED (JiaClient typo global sweep, 0 remaining); OBS-13-2 RESOLVED (Story Manifest added to STORY-INDEX v1.4.1, 31 rows); counter 3/3 FULL CONVERGENCE; final trajectory 14→5→5→5→4→5→4→4→4→1→0→1→0 |
-| Phase 2→3 gate prep (compact STATE + gate doc) | state-manager | complete | STATE.md compacted; phase-2-to-3-gate.md written; awaiting human approval |
+| Phase 2-adv CONVERGED (Pass 13) | adversary + state-manager | complete | 3/3 FULL CONVERGENCE; trajectory 14→5→5→5→4→5→4→4→4→1→0→1→0 |
+| Phase 2→3 gate prep | state-manager | complete | gate doc written; CV2-001/002/003 RESOLVED; input-hash drift CLEAN |
+| Phase 2→3 gate | human | **APPROVED** | Approved without conditions 2026-05-07; 31 stories locked |
+| Phase 3 prerequisites verified | state-manager | complete | CI/CD workflows PASS; branch-protection DOCUMENTED; DTU N/A; .worktrees/ PASS |
+| Phase 3 STARTED — Wave 0 active | state-manager | complete | sprint-state.yaml initialized; first story: S-0.01 |
 
 ## Decisions Log
 
@@ -174,8 +179,8 @@ _Not started._
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-07 |
-| **Position** | Phase 2-adv CONVERGED. Pre-gate consistency audit complete (PASS-WITH-NITS, 96/100 → all 3 MEDIUM findings RESOLVED). CV2-001: STATE.md stale count fixed (30→31, W3:8→W3:9). CV2-002: STORY-INDEX S-2.04 BC column completed (3→7 BCs, v1.4.2). CV2-003: H-NEW-VERBOSE-001/002 registered; WAVE-PLAN exit gate updated (v1.1.1); S-0.06 cross-link added. Input-hash drift sweep: 3 artifacts checked, 0 true drift (2 STALE are live-state sentinels, not actionable). STATE.md compacted. Phase 2→3 gate doc written. Awaiting human approval to proceed to Phase 3 TDD implementation. |
-| **Convergence counter** | 3/3 CONVERGED (Phase 2-adv; Pass 13 CLEAN-PASS — 0 substantive findings) |
+| **Position** | Phase 3 STARTED. Human approved Phase 2→3 gate (2026-05-07) without conditions. 31 stories locked across Wave 0/1/2/3. sprint-state.yaml initialized; Wave 0 active. Prerequisites verified: CI/CD PASS, DTU N/A, .worktrees/ PASS, branch-protection DOCUMENTED. Active wave: Wave 0. Next story: S-0.01 (handle_open OAuth instance URL MUST-FIX). Next agent: devops-engineer to create worktree for S-0.01, then test-writer for stubs (Red Gate). |
+| **Convergence counter** | 3/3 CONVERGED (Phase 2-adv; Pass 13 CLEAN-PASS — final trajectory: 14→5→5→5→4→5→4→4→4→1→0→1→0) |
 
 ## Historical Content
 

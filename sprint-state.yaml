@@ -1,0 +1,127 @@
+# sprint-state.yaml
+# Phase 3 TDD Implementation — Wave-based story delivery state
+# Initialized: 2026-05-07
+# Updated: 2026-05-07
+
+active_wave: 0
+
+attack_order_wave_0:
+  - S-0.01  # Single-file fix, smallest blast radius — first delivery validates per-story pipeline end-to-end
+  - S-0.02  # Independent MUST-FIX — can parallelize after S-0.01 validates pipeline
+  - S-0.03  # Independent MUST-FIX — can parallelize
+  - S-0.04  # Independent MUST-FIX — can parallelize
+  - S-0.05  # SD-002 cfg(test) gate — sequential after MUST-FIX wave
+  - S-0.06  # SD-003 --verbose-bodies + holdouts — standalone, no deps
+  - S-0.07  # H-NEW-AUTH-002 holdout authoring — depends on S-0.05
+
+wave_0:
+  - id: S-0.01
+    title: "handle_open OAuth instance URL fix"
+    type: MUST-FIX
+    priority: HIGH
+    status: pending
+    depends_on: []
+    bc_anchors: [BC-1.6.040]
+    holdout_anchors: [H-NEW-MP-001]
+    notes: "Single-file fix (api/auth.rs). Smallest blast radius. First story to deliver — validates per-story pipeline."
+
+  - id: S-0.02
+    title: "list_worklogs pagination truncation fix"
+    type: MUST-FIX
+    priority: HIGH
+    status: pending
+    depends_on: []
+    bc_anchors: [BC-2.5.001]
+    holdout_anchors: []
+    notes: "Independent MUST-FIX. Parallelizable after S-0.01 validates pipeline."
+
+  - id: S-0.03
+    title: "hardcoded 8h/5d worklog billing fix"
+    type: MUST-FIX
+    priority: HIGH
+    status: pending
+    depends_on: []
+    bc_anchors: [BC-2.5.010]
+    holdout_anchors: []
+    notes: "Independent MUST-FIX. Parallelizable."
+
+  - id: S-0.04
+    title: "multi-workspace HashMap type regression fix"
+    type: MUST-FIX
+    priority: HIGH
+    status: pending
+    depends_on: []
+    bc_anchors: [BC-4.1.001]
+    holdout_anchors: []
+    notes: "Independent MUST-FIX. Parallelizable."
+
+  - id: S-0.05
+    title: "SD-002 #[cfg(test)] compile-time gate"
+    type: SD-implementation
+    priority: MEDIUM
+    status: pending
+    depends_on: []
+    bc_anchors: [BC-X.7.001]
+    holdout_anchors: [H-NEW-AUTH-002]
+    notes: "Security decision SD-002 (Option A). S-0.07 depends on this story."
+
+  - id: S-0.06
+    title: "SD-003 --verbose-bodies flag + holdouts"
+    type: SD-implementation
+    priority: MEDIUM
+    status: pending
+    depends_on: []
+    bc_anchors: []
+    holdout_anchors: [H-NEW-VERBOSE-001, H-NEW-VERBOSE-002]
+    notes: "Security decision SD-003 (Option B). Standalone — no dependency on S-0.05."
+
+  - id: S-0.07
+    title: "H-NEW-AUTH-002 holdout authoring"
+    type: holdout
+    priority: MEDIUM
+    status: pending
+    depends_on: [S-0.05]
+    bc_anchors: []
+    holdout_anchors: [H-NEW-AUTH-002]
+    notes: "Authors the holdout scenario established by S-0.05. Must follow S-0.05 completion."
+
+wave_0_exit_gate: "All 4 MUST-FIX stories green; SD-002 and SD-003 implemented; H-NEW-AUTH-002 and H-NEW-VERBOSE-001/002 holdouts registered."
+
+wave_1:
+  status: blocked
+  unblocks_when: wave-0-complete
+  stories:
+    - { id: S-1.01, title: "SHA-pinned CI/CD workflow", status: blocked }
+    - { id: S-1.02, title: "OAuth token lifecycle holdout suite", status: blocked }
+    - { id: S-1.03, title: "Rate-limit retry holdout suite", status: blocked }
+    - { id: S-1.04, title: "Keychain error-path holdout suite", status: blocked }
+    - { id: S-1.05, title: "CI/CD config NFR-S-E tests", status: blocked }
+    - { id: S-1.06, title: "Regression pin suite (Phase 3 entry gate)", status: blocked }
+    - { id: S-1.07, title: "Multi-profile field isolation regression", status: blocked }
+    - { id: S-1.08, title: "Retry-After integration tests", status: blocked }
+
+wave_2:
+  status: blocked
+  unblocks_when: wave-1-complete
+  stories:
+    - { id: S-2.01, title: "Issue-read holdout suite", status: blocked }
+    - { id: S-2.02, title: "Issue-write holdout suite", status: blocked }
+    - { id: S-2.03, title: "Board/sprint holdout suite", status: blocked }
+    - { id: S-2.04, title: "Assets/CMDB holdout suite", status: blocked }
+    - { id: S-2.05, title: "Config/cache holdout suite", status: blocked }
+    - { id: S-2.06, title: "Worklog + duration + CMDB tuple", status: blocked }
+    - { id: S-2.07, title: "CLAUDE.md doc-as-tested", status: blocked }
+
+wave_3:
+  status: blocked
+  unblocks_when: wave-2-complete
+  stories:
+    - { id: S-3.01, title: "Output format holdout suite", status: blocked }
+    - { id: S-3.02, title: "JSM queue holdout suite", status: blocked }
+    - { id: S-3.03, title: "User/team holdout suite", status: blocked }
+    - { id: S-3.04, title: "JQL/AQL correctness holdout", status: blocked }
+    - { id: S-3.05, title: "Error-path taxonomy holdout", status: blocked }
+    - { id: S-3.06, title: "Numeric-claim spec checker", status: blocked }
+    - { id: S-3.07, title: "Auth error-path holdout", status: blocked }
+    - { id: S-3.08, title: "Doc-as-is pass", status: blocked }
+    - { id: S-3.09, title: "ADR-0013 PKCE monitoring task", status: blocked }
