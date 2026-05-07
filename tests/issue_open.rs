@@ -76,8 +76,7 @@ fn test_bc_3_4_001_oauth_uses_instance_url() {
         "browse URL must NOT contain the API gateway host, got: {browse_url}"
     );
     assert_eq!(
-        browse_url,
-        "https://mycompany.atlassian.net/browse/PROJ-123",
+        browse_url, "https://mycompany.atlassian.net/browse/PROJ-123",
         "browse URL must be exactly <instance_url>/browse/<key>"
     );
 }
