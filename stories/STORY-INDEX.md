@@ -43,7 +43,7 @@ All Wave 0 stories are CRITICAL or HIGH priority. No v0.5 release without green 
 | S-0.02 | Paginate `list_worklogs` | BC-X.5.002 | H-045 | draft | small |
 | S-0.03 | Multi-workspace asset HashMap composite key | BC-4.3.001 | H-036 | draft | small |
 | S-0.04 | Multi-profile fields active-profile migration | BC-6.3.001 | H-NEW-MP-001 | draft | medium |
-| S-0.05 | Gate `JR_AUTH_HEADER` behind `#[cfg(test)]` | SD-002 / NFR-S-B | H-NEW-AUTH-002 | draft | small |
+| S-0.05 | Gate `JR_AUTH_HEADER` behind `#[cfg(debug_assertions)]` (canonized from `#[cfg(test)]`) | SD-002 / NFR-S-B | H-NEW-AUTH-002 | draft | small |
 | S-0.06 | Add `--verbose-bodies` flag + PII warning | SD-003 / NFR-S-C | (new holdout per SD-003) | draft | small |
 | S-0.07 | Formalize holdout H-NEW-AUTH-002 in spec | SD-002 (docs) | H-NEW-AUTH-002 | draft | xsmall |
 
@@ -56,7 +56,7 @@ Wave 0 story files: `stories/wave-0/S-0.NN-*.md`
 Wave 1 covers HIGH-priority security posture, supply-chain hardening, structured logging,
 and critical regression-pinning holdouts. All stories are independent of each other
 except S-1.03 (depends on S-0.06) and S-1.06 (depends on S-0.05 — OAuth holdout suite
-benefits from S-0.05's `#[cfg(test)]` gate landing first). Can otherwise be implemented in parallel groups.
+benefits from S-0.05's `#[cfg(debug_assertions)]` gate landing first). Can otherwise be implemented in parallel groups.
 
 Parallel group A: S-1.01, S-1.02, S-1.04, S-1.05 (CI/CD hardening, no code deps)
 Parallel group B: S-1.07, S-1.08 (independent holdout suites); S-1.06 starts after S-0.05 merges

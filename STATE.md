@@ -74,7 +74,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | S-0.02 MERGED — BC-X.5.002 satisfied | devops-engineer + review | complete | PR #290 squash-merged to develop at a84e063 (2026-05-07); 7/7 CI green; H-045 MUST-PASS active; 2-cycle review (SHOULD-FIX: OffsetPage::has_more()/next_start() helpers); 0 deferred findings |
 | S-0.03 MERGED — BC-4.3.001 satisfied | devops-engineer + review | complete | PR #291 squash-merged to develop at cb2c612 (2026-05-07T17:28:03Z) via admin bypass; 7/7 CI green; H-036 MUST-PASS active; 1-cycle review APPROVE; security CLEAN; 1 deferred (S-0.03-S1: fallback_wid path test gap) |
 | S-0.04 MERGED — BC-6.3.001 satisfied | devops-engineer + review | **complete** | PR #292 squash-merged to develop at dbbea12 (2026-05-07) via admin bypass; 7/7 CI green; H-NEW-MP-001 MUST-PASS active; 2-cycle review APPROVE (cycle 1: Deviation 1 cache.rs fallback REVERTED per CLAUDE.md); security CLEAN; 0 deferred findings |
-| S-0.05 START — Wave 0 active (4/7) | state-manager | **active** | SD-002 #[cfg(test)] compile-time gate for JR_AUTH_HEADER; worktree being created; next: test-writer for Red Gate |
+| S-0.05 START — Wave 0 active (4/7) | state-manager | **active** | SD-002 #[cfg(debug_assertions)] compile-time gate for JR_AUTH_HEADER (canonized from #[cfg(test)] — 151 subprocess tests preserved); worktree being created; next: implementer for Green Gate |
 
 ## Decisions Log
 
@@ -85,7 +85,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | DEC-003 | 5 MUST-FIX bugs treatment: PARTIALLY RESOLVED — NFR-R-D has draft BC (14 read sites in 6 files; holdout H-NEW-MP-001 proposed). 4 P0 bugs route to Phase 3 (decompose-stories) for fix-in-phase-3 treatment. | Draft BC ready for Phase 1 PRD formalization. | Phase 0 | 2026-05-04 | orchestrator + human |
 | DEC-005 | Phase 1d Adversarial Spec Review converged 3/3 at Pass 28 | 28 total passes (25 SUBSTANTIVE + 3 consecutive CLEAN-PASS). 80+ findings addressed across rotating lens axes. Trajectory shows healthy descent. Spec corpus locked: 541 BCs, 41 NFRs, 48 holdouts, 26 risks, 12 ADRs, 3 SD. | Phase 1d | 2026-05-04 | orchestrator + adversary |
 | DEC-006 | SD-001 = Option C — PKCE deferred with ADR-0013 | Atlassian Cloud doesn't publicly support PKCE; Options A/B technically infeasible. Threat model documented with mitigations. Reactivation trigger set. | Phase 1→2 gate | 2026-05-04 | human + perplexity research |
-| DEC-007 | SD-002 = Option A — `#[cfg(test)]` compile-time gate for JR_AUTH_HEADER | Categorical security; env-var excluded from release binary entirely. Phase 3 migration bounded (most tests use new_for_test already). | Phase 1→2 gate | 2026-05-04 | human + perplexity research |
+| DEC-007 | SD-002 = Option A (`#[cfg(test)]`) at gate; canonized to Option B-revised (`#[cfg(debug_assertions)]`) during S-0.05 implementation (2026-05-07) | ~151 subprocess tests use `cargo_bin("jr").env("JR_AUTH_HEADER", ...)` — subprocess binary has no cfg(test); `#[cfg(debug_assertions)]` achieves identical release-binary security. See SD-002 canonization. | Phase 1→2 gate / S-0.05 | 2026-05-04 / 2026-05-07 | human + perplexity research / implementer |
 | DEC-008 | SD-003 = Option B — header-only `--verbose` default + opt-in `--verbose-bodies` with PII warning | Strongest default security; mitigates AI-agent context capture (EDPB Apr 2025). Breaking change for v0.6. | Phase 1→2 gate | 2026-05-04 | human + perplexity research |
 | DEC-009 | Phase 1 → Phase 2 gate APPROVED | All pending decisions resolved (DEC-006/007/008). Spec corpus locked: 541 BCs / 41 NFRs / 48 holdouts / 28 risks / 13 ADRs / 3 SDs. | Phase 1→2 gate | 2026-05-04 | human |
 
@@ -121,6 +121,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | R1-001 | JiraClient::new_for_test_with_instance_url ergonomics | DEFERRED — 2026-05-07 — takes (base_url, instance_url) where one concept might suffice. Test-infra only; no correctness impact. Target: bundle into next workflow.rs/client.rs touch (likely Wave 3 cleanup or absorbed by S-0.05/0.06). | LOW | DEFERRED |
 | R1-002 | Stale doc comment in workflow.rs handle_open | DEFERRED — 2026-05-07 — referenced "base URL" pre-fix; one-line text fix. Target: assign to next implementer touching workflow.rs. | LOW | DEFERRED |
 | S-0.03-S1 | Missing integration test for effective_wid fallback path at list.rs:464-470 | DEFERRED — 2026-05-07 — raw_wid empty → fallback_wid lookup branch has no integration test. Logic correct; coverage gap. Target: bundle into next list.rs/CMDB-related touch (likely Wave 2 issue-list test suite expansion S-2.01/S-2.02) OR add as a follow-up small story in the CMDB epic. | LOW | DEFERRED |
+| S-0.05-DEV | SD-002 doc-vs-code drift (gate canonization) | **RESOLVED** — 2026-05-07 — SD-002 canonized to Option B-revised (`#[cfg(debug_assertions)]`) during S-0.05 implementation. 151-subprocess-test compatibility preserved. Threat model mitigation equivalent to Option A original. Doc updates: SD-002.md (Resolution, Options, Decision Log, version 1.0.1) + S-0.05 (Context, BC, ACs, Implementation Notes, Compliance Rules) + S-0.07 (Context, AC-004, holdout spec SD field) + STATE.md (DEC-007, Current Phase Steps). | MEDIUM | **RESOLVED** |
 
 ## Convergence Trackers
 
@@ -181,7 +182,7 @@ _Not started._
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-07 |
-| **Position** | S-0.04 merged via admin bypass (PR #292, develop SHA dbbea12, 2026-05-07). BC-6.3.001 satisfied; H-NEW-MP-001 MUST-PASS active. Deferred: R1-001, R1-002, S-0.03-S1. Wave 0 progress: 4/7. Active story: S-0.05 (SD-002 implementation: gate JR_AUTH_HEADER behind #[cfg(test)]). Worktree being created. Next: test-writer for Red Gate. |
+| **Position** | S-0.04 merged via admin bypass (PR #292, develop SHA dbbea12, 2026-05-07). BC-6.3.001 satisfied; H-NEW-MP-001 MUST-PASS active. Deferred: R1-001, R1-002, S-0.03-S1. Wave 0 progress: 4/7. Active story: S-0.05 (SD-002 implementation: gate JR_AUTH_HEADER behind #[cfg(debug_assertions)] — canonized from #[cfg(test)]; Red Gate VERIFIED; 151 subprocess tests preserved). Next: implementer for Green Gate. SD-002 doc canonization complete (S-0.05-DEV RESOLVED). |
 | **Convergence counter** | 3/3 CONVERGED (Phase 2-adv; Pass 13 CLEAN-PASS — final trajectory: 14→5→5→5→4→5→4→4→4→1→0→1→0) |
 
 ## Historical Content

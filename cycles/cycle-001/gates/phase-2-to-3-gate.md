@@ -36,7 +36,7 @@ The story corpus is ready for Phase 3 TDD implementation, pending human approval
 | Wave 3 stories (9) | `.factory/stories/wave-3/S-3.01..S-3.09-*.md` | per file |
 | Holdout scenarios | `.factory/specs/prd/holdout-scenarios.md` | 1.1.0 |
 | SD-001 PKCE deferral | `.factory/architecture/security-decisions/SD-001-pkce.md` | RESOLVED (Option C) |
-| SD-002 cfg(test) gate | `.factory/architecture/security-decisions/SD-002-jr-auth-header-prod-gating.md` | RESOLVED (Option A) |
+| SD-002 cfg(debug_assertions) gate | `.factory/architecture/security-decisions/SD-002-jr-auth-header-prod-gating.md` | RESOLVED (Option B-revised, canonized 2026-05-07; was Option A at gate) |
 | SD-003 verbose-bodies | `.factory/architecture/security-decisions/SD-003-verbose-pii-redaction.md` | RESOLVED (Option B) |
 | ADR-0013 PKCE deferral | `.factory/architecture/adr/0013-pkce-deferral.md` | Accepted |
 | Pre-Phase-3 consistency audit | `.factory/cycles/cycle-001/audits/pre-phase-3-gate-consistency-audit.md` | — |
@@ -56,7 +56,7 @@ The story corpus is ready for Phase 3 TDD implementation, pending human approval
 | S-0.02 | list_worklogs truncation fix | MUST-FIX | BC-2.5.001 |
 | S-0.03 | hardcoded 8h/5d fix | MUST-FIX | BC-2.5.010 |
 | S-0.04 | multi-workspace HashMap fix | MUST-FIX | BC-4.1.001 |
-| S-0.05 | SD-002 `#[cfg(test)]` gate | SD implementation | BC-X.7.001; H-NEW-AUTH-002 |
+| S-0.05 | SD-002 `#[cfg(debug_assertions)]` gate (canonized from `#[cfg(test)]`) | SD implementation | BC-X.7.001; H-NEW-AUTH-002 |
 | S-0.06 | SD-003 `--verbose-bodies` | SD implementation | H-NEW-VERBOSE-001/002 |
 | S-0.07 | H-NEW-AUTH-002 holdout authoring | Holdout | Authored by S-0.07; owned by S-0.05 |
 
@@ -117,7 +117,7 @@ All 4 MUST-FIX correctness bugs have implementing stories in Wave 0:
 
 All 3 resolved SDs have an implementing or deferral path:
 - **SD-001 PKCE** → deferred via ADR-0013 (no implementation story; reactivation trigger documented: "Atlassian announces public PKCE for 3LO Jira Cloud"). S-3.09 tracks monitoring.
-- **SD-002 `#[cfg(test)]` gate** → S-0.05 implements; S-0.07 authors the associated holdout.
+- **SD-002 `#[cfg(debug_assertions)]` gate** (canonized from `#[cfg(test)]` during S-0.05 implementation) → S-0.05 implements; S-0.07 authors the associated holdout.
 - **SD-003 `--verbose-bodies`** → S-0.06 implements; H-NEW-VERBOSE-001/002 registered in holdout-scenarios.md (v1.1.0); WAVE-PLAN exit gate references both holdouts.
 
 ### Holdout Coverage

@@ -11,7 +11,7 @@ attack_order_wave_0:
   - S-0.02  # Independent MUST-FIX — can parallelize after S-0.01 validates pipeline
   - S-0.03  # Independent MUST-FIX — can parallelize
   - S-0.04  # Independent MUST-FIX — can parallelize
-  - S-0.05  # SD-002 cfg(test) gate — sequential after MUST-FIX wave
+  - S-0.05  # SD-002 cfg(debug_assertions) gate — sequential after MUST-FIX wave (canonized from cfg(test) 2026-05-07)
   - S-0.06  # SD-003 --verbose-bodies + holdouts — standalone, no deps
   - S-0.07  # H-NEW-AUTH-002 holdout authoring — depends on S-0.05
 
@@ -69,14 +69,14 @@ wave_0:
     notes: "Independent MUST-FIX. MERGED via PR #292 (admin bypass); BC-6.3.001 satisfied; H-NEW-MP-001 MUST-PASS active. 7/7 CI green; 2-cycle review APPROVE (cycle 1: 1 blocking — Deviation 1 cache.rs fallback REVERTED per CLAUDE.md cross-profile leakage rule; test fixtures updated to canonical v1/default/teams.json path; cycle 2: clean). Security CLEAN. 14 field-read sites + 2 error strings migrated to active_profile(). 0 deferred findings (all 3 deviations resolved before merge)."
 
   - id: S-0.05
-    title: "SD-002 #[cfg(test)] compile-time gate"
+    title: "SD-002 #[cfg(debug_assertions)] compile-time gate (canonized 2026-05-07)"
     type: SD-implementation
     priority: MEDIUM
     status: active
     depends_on: []
     bc_anchors: [BC-X.7.001]
     holdout_anchors: [H-NEW-AUTH-002]
-    notes: "Security decision SD-002 (Option A). S-0.07 depends on this story. Active — started 2026-05-07 post S-0.04 merge."
+    notes: "Security decision SD-002 (Option B-revised: #[cfg(debug_assertions)] canonized from Option A #[cfg(test)]). ~151 subprocess tests preserved. S-0.07 depends on this story. Active — started 2026-05-07 post S-0.04 merge. Red Gate VERIFIED."
 
   - id: S-0.06
     title: "SD-003 --verbose-bodies flag + holdouts"
