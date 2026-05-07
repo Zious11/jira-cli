@@ -40,8 +40,8 @@ pub(super) async fn resolve_team_field(
     no_input: bool,
 ) -> Result<(String, String)> {
     // 1. Resolve team_field_id
-    let field_id = if let Some(id) = &config.global.fields.team_field_id {
-        id.clone()
+    let field_id = if let Some(id) = config.active_profile().team_field_id {
+        id
     } else {
         client
             .find_team_field_id()
@@ -190,14 +190,15 @@ pub(super) fn compose_extra_fields(
     config: &Config,
     cmdb_fields: &[(String, String)],
 ) -> Vec<String> {
+    let active = config.active_profile();
     let mut extra: Vec<String> = Vec::new();
-    if let Some(sp) = config.global.fields.story_points_field_id.as_deref() {
+    if let Some(sp) = active.story_points_field_id.as_deref() {
         extra.push(sp.to_string());
     }
     for (id, _) in cmdb_fields {
         extra.push(id.clone());
     }
-    if let Some(t) = config.global.fields.team_field_id.as_deref() {
+    if let Some(t) = active.team_field_id.as_deref() {
         extra.push(t.to_string());
     }
     extra
@@ -205,14 +206,13 @@ pub(super) fn compose_extra_fields(
 
 pub(super) fn resolve_story_points_field_id(config: &Config) -> Result<String> {
     Ok(config
-        .global
-        .fields
+        .active_profile()
         .story_points_field_id
-        .clone()
         .ok_or_else(|| {
-            JrError::ConfigError(
-                "Story points field not configured. Run \"jr init\" or set story_points_field_id under [fields] in ~/.config/jr/config.toml".into(),
-            )
+            JrError::ConfigError(format!(
+                "Story points field not configured. Run \"jr init\" or set story_points_field_id under [profiles.{}] in ~/.config/jr/config.toml",
+                config.active_profile_name,
+            ))
         })?)
 }
 
@@ -771,11 +771,26 @@ mod tests {
 
     #[test]
     fn extra_fields_for_issue_composes_sp_team_and_cmdb() {
-        use crate::config::Config;
+        use crate::config::{Config, GlobalConfig, ProfileConfig};
+        use std::collections::BTreeMap;
 
-        let mut config = Config::default();
-        config.global.fields.story_points_field_id = Some("customfield_10016".into());
-        config.global.fields.team_field_id = Some("customfield_10001".into());
+        let mut profiles = BTreeMap::new();
+        profiles.insert(
+            "default".to_string(),
+            ProfileConfig {
+                story_points_field_id: Some("customfield_10016".into()),
+                team_field_id: Some("customfield_10001".into()),
+                ..ProfileConfig::default()
+            },
+        );
+        let config = Config {
+            global: GlobalConfig {
+                profiles,
+                ..GlobalConfig::default()
+            },
+            active_profile_name: "default".into(),
+            ..Config::default()
+        };
         let cmdb_fields = vec![
             (
                 "customfield_12345".to_string(),

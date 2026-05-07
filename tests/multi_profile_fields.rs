@@ -73,11 +73,7 @@ team_field_id = "{team_field_id}"
 
 /// Build a `jr` command targeting a wiremock server, pointing XDG dirs at the
 /// temp dirs, and appending `--no-input`.
-fn jr_cmd(
-    server_uri: &str,
-    cache_dir: &std::path::Path,
-    config_dir: &std::path::Path,
-) -> Command {
+fn jr_cmd(server_uri: &str, cache_dir: &std::path::Path, config_dir: &std::path::Path) -> Command {
     let mut cmd = Command::cargo_bin("jr").unwrap();
     cmd.env("JR_BASE_URL", server_uri)
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
@@ -276,13 +272,7 @@ async fn test_bc_6_3_001_points_column_present_after_save_round_trip() {
         .await;
 
     let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
-        .args([
-            "--project",
-            "PROJ",
-            "issue",
-            "list",
-            "--points",
-        ])
+        .args(["--project", "PROJ", "issue", "list", "--points"])
         .output()
         .unwrap();
 
@@ -479,8 +469,7 @@ async fn test_bc_6_3_001_board_view_shows_team_after_save_round_trip() {
 
     // Issue with team UUID in the team field.
     let issue = {
-        let mut base =
-            common::fixtures::issue_response("PROJ-10", "Board ticket", "In Progress");
+        let mut base = common::fixtures::issue_response("PROJ-10", "Board ticket", "In Progress");
         base["fields"]["customfield_10100"] = json!("team-uuid-beta");
         base
     };
@@ -651,15 +640,13 @@ url = "https://acme.atlassian.net"
     // with a warning because the field isn't configured).
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(
-                common::fixtures::issue_search_response(vec![common::fixtures::issue_response(
-                    "PROJ-1",
-                    "No points issue",
-                    "To Do",
-                )]),
-            ),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::issue_search_response(vec![common::fixtures::issue_response(
+                "PROJ-1",
+                "No points issue",
+                "To Do",
+            )]),
+        ))
         .mount(&server)
         .await;
 
@@ -756,7 +743,10 @@ fn test_bc_6_3_001_active_profile_returns_per_profile_field_ids() {
 /// invocation.
 #[test]
 fn test_bc_6_3_001_field_ids_survive_toml_save_round_trip() {
-    use figment::{Figment, providers::{Format, Toml}};
+    use figment::{
+        Figment,
+        providers::{Format, Toml},
+    };
     use jr::config::{GlobalConfig, ProfileConfig};
     use std::collections::BTreeMap;
 
@@ -777,8 +767,8 @@ fn test_bc_6_3_001_field_ids_survive_toml_save_round_trip() {
     };
 
     // Serialize (save_global would do this via toml::to_string_pretty).
-    let serialized = toml::to_string_pretty(&global)
-        .expect("GlobalConfig must serialize to valid TOML");
+    let serialized =
+        toml::to_string_pretty(&global).expect("GlobalConfig must serialize to valid TOML");
 
     // Verify the legacy [fields] block is absent (it is skip_serializing).
     assert!(
@@ -792,7 +782,10 @@ fn test_bc_6_3_001_field_ids_survive_toml_save_round_trip() {
         .extract()
         .expect("GlobalConfig must deserialize from serialized TOML");
 
-    let p = reloaded.profiles.get("sandbox").expect("sandbox profile must survive round-trip");
+    let p = reloaded
+        .profiles
+        .get("sandbox")
+        .expect("sandbox profile must survive round-trip");
     assert_eq!(
         p.story_points_field_id.as_deref(),
         Some("customfield_10099"),

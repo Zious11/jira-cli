@@ -88,7 +88,23 @@ pub fn clear_profile_cache(profile: &str) -> Result<()> {
 }
 
 pub fn read_team_cache(profile: &str) -> Result<Option<TeamCache>> {
-    read_cache(profile, "teams.json")
+    // Primary: per-profile versioned path (e.g. ~/.cache/jr/v1/default/teams.json).
+    if let Some(found) = read_cache(profile, "teams.json")? {
+        return Ok(Some(found));
+    }
+    // Legacy fallback: pre-versioned path at cache root (e.g. ~/.cache/jr/teams.json).
+    // Checked on miss so existing users upgrading from the pre-profile cache layout
+    // still see resolved team names until they run `jr team list --refresh`.
+    let legacy_path = cache_root().join("teams.json");
+    if legacy_path.exists() {
+        let content = std::fs::read_to_string(&legacy_path)?;
+        if let Ok(cache) = serde_json::from_str::<TeamCache>(&content) {
+            if (Utc::now() - cache.fetched_at).num_days() < CACHE_TTL_DAYS {
+                return Ok(Some(cache));
+            }
+        }
+    }
+    Ok(None)
 }
 
 pub fn write_team_cache(profile: &str, teams: &[CachedTeam]) -> Result<()> {
