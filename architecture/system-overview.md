@@ -37,7 +37,7 @@ L3  api/ (HTTP plumbing — bifurcated into two paths; see below)
       ├── api/pagination.rs (374 LOC) — 4 pagination shapes
       └── api/rate_limit.rs (56 LOC) — Retry-After integer parser
 
-L4  api resource impls (impl JiraClient blocks, 17 files)
+L4  api resource impls (impl JiraClient blocks, 18 files)
       ├── api/jira/{issues,boards,sprints,fields,statuses,links,teams,worklogs,projects,users,resolutions}.rs
       ├── api/jsm/{queues,servicedesks}.rs
       └── api/assets/{linked,objects,workspace,schemas,tickets}.rs

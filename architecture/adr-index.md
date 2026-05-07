@@ -30,7 +30,7 @@
 **Decision:** Wrap reqwest directly, hand-write API call functions. Reject OpenAPI-generated client and separate SDK crate.
 
 **Harmonization with current architecture:**
-- Reaffirmed. All 17 `impl JiraClient` resource files (`api/jira/*`, `api/jsm/*`, `api/assets/*`) follow this pattern.
+- Reaffirmed. All 18 `impl JiraClient` resource files (`api/jira/*`, `api/jsm/*`, `api/assets/*`) follow this pattern.
 - The product-namespaced directory structure (`api/jira/`, `api/jsm/`, `api/assets/`) is the architectural expression of this decision.
 - Applies to both the validated and raw-passthrough HTTP paths.
 - **No tension** with L3 PRD BCs.

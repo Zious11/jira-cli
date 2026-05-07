@@ -32,7 +32,7 @@ Covers all output formatting (table and JSON), ADF rendering, the `JrError` type
 | **Write-op JSON shape** | The JSON structure returned by state-changing commands. Varies by operation (see BC-03). |
 | **`JrError`** | The crate's error enum. 11 variants with distinct exit codes. `Display` is user-facing. |
 | **exit code** | `0` success, `1` generic error, `2` auth error, `64` user input error, `78` config error, `130` interrupted. |
-| **`extract_error_message`** | 6-level precedence chain for extracting human-readable messages from Jira API responses: `errorMessages[]` > `errors{field:msg}` > `errors.field.messages[]` > top-level `message` > `errorDescription` > raw body text. |
+| **`extract_error_message`** | 7-level precedence chain for extracting human-readable messages from Jira API responses: (1) empty body literal "Empty error response from Jira API"; (2) non-UTF-8 lossy decode; (3) `errorMessages[]`; (4) `errors{field:msg}`; (5) top-level `message`; (6) `errorMessage` (singular, JSM); (7) raw body text. |
 | **ADF lossy nodes** | `mention`, `emoji`, `inlineCard`, `media` — dropped silently in `adf_to_text`. Documented at source as "per #202 spec". NFR-O-A (MEDIUM). |
 
 ---
@@ -69,7 +69,7 @@ Covers all output formatting (table and JSON), ADF rendering, the `JrError` type
 | `NotAuthenticated` | 2 | 401 with no auth, or no stored credentials |
 | `InsufficientScope { message }` | 2 | 401 + body containing `"scope does not match"` (case-insensitive). Display includes 5 required substrings (BC-1085). |
 | `NetworkError(String)` | 1 | reqwest reachability failure (DNS, connect) |
-| `ApiError { status, message }` | 1 | Any 4xx/5xx not specialised above; `message` from 6-level `extract_error_message` chain |
+| `ApiError { status, message }` | 1 | Any 4xx/5xx not specialised above; `message` from 7-level `extract_error_message` chain |
 | `ConfigError(String)` | 78 | Missing config, unconfigured profile |
 | `UserError(String)` | 64 | Bad CLI input: invalid profile name, ambiguous match, empty selection |
 | `Internal(String)` | 1 | "Should never happen" violations; must be prefixed `"Internal error:"` by callers |
@@ -112,7 +112,7 @@ Covers all output formatting (table and JSON), ADF rendering, the `JrError` type
 | INV-OUT-011 | ADF `listItem` wraps children to satisfy ADF schema. Widened allowlist — spec + extra children tolerated. | `adf.rs:163-188`, NEW-INV-16 |
 | INV-OUT-012 | ADF `tableCell` content always wrapped in a block. | `adf.rs:201-211`, NEW-INV-17 |
 | INV-OUT-013 | ADF roundtrip (text→ADF→text or markdown→ADF→text) is lossy in both directions. No round-trip fidelity guarantee. | NEW-INV-14 |
-| INV-OUT-014 | `extract_error_message` 6-level precedence: `errorMessages[]` > `errors{field:msg}` > `errors.field.messages[]` > top-level `message` > `errorDescription` > raw body text. | `api/client.rs`, Pass 1 §3 |
+| INV-OUT-014 | `extract_error_message` 7-level precedence: (1) empty body literal; (2) non-UTF-8 lossy; (3) `errorMessages[]`; (4) `errors{field:msg}`; (5) top-level `message`; (6) `errorMessage` (singular, JSM); (7) raw body text. | `api/client.rs`, Pass 1 §3 |
 | INV-OUT-015 | `--verbose` logs request METHOD + URL to stderr. Authorization header is NOT logged. Request body IS logged (full, via `String::from_utf8_lossy`). Body PII not redacted (NFR-S-C MEDIUM). | `api/client.rs:197-278` |
 | INV-OUT-016 | `observability::log_parse_failure_once` fires at most one line per call-site per process (via caller-supplied `&AtomicBool` gate). Not verbose-gated — always fires when triggered. | `observability.rs:1-39` |
 | INV-OUT-017 | Cache-corruption warning is ALWAYS emitted to stderr (not verbose-gated): `"warning: cache file <name> unreadable (<err>); will refetch"`. | `cache.rs:26,128,159` |

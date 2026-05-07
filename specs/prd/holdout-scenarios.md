@@ -24,7 +24,7 @@ Setup uses:
 
 ---
 
-## Group 1: Auth & Profile Edge Cases (H-001..H-008, H-016, H-019, H-021..H-029)
+## Group 1: Foundational / Mixed Edge Cases (H-001..H-029)
 
 ### H-001: `auth status` first-run gives helpful guidance, not error
 **Setup**: empty `XDG_CONFIG_HOME`. No env vars.
@@ -181,7 +181,7 @@ Setup uses:
 **Expected**: exact string `"Client" IN aqlFunction("Key = \"CUST-5\"")`. Not `customfield_10191`; capital `Key` not `objectKey`.
 **Why hidden**: Two CLAUDE.md gotchas conflated in one helper.
 **BC refs**: BC-4.1.002
-**Source**: `tests/h017_aql_clause`
+**Source**: `src/jql.rs:278-308 (build_asset_clause_* unit tests)`
 
 ---
 
@@ -294,7 +294,7 @@ Setup uses:
 
 ---
 
-## Group 2: Issue Read, JQL, and Filtering (H-030..H-035)
+## Group 2: Issue Read, JQL, Filtering, and Error Extraction (H-030..H-035)
 
 ### H-030: `extract_error_message` empty-body precedence (FIRST not LAST)
 **Setup**: Wiremock returns 400 with empty response body (byte length == 0).
