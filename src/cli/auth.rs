@@ -2051,4 +2051,140 @@ mod tests {
             "None sentinel must be returned when no credential source is available"
         );
     }
+
+    // ── S-2.07 AC-002: refresh_success_payload regression-pin ────────────
+    //
+    // These two tests are REGRESSION-PINS for the already-shipped
+    // `refresh_success_payload(AuthFlow)` helper. They must PASS on develop
+    // before any implementation work begins. If they fail, stop and
+    // investigate — the helper may have been accidentally modified.
+    //
+    // The tests pin:
+    //   - `AuthFlow::Token` → `{"status": "refreshed", "auth_method": "api_token", "next_step": <hint>}`
+    //   - `AuthFlow::OAuth` → `{"status": "refreshed", "auth_method": "oauth", "next_step": <hint>}`
+    //
+    // Per spec: AC-002 (traces to BC-7.3.004 postcondition, revised v2.0.0).
+    // The `auth refresh` shape is ASYMMETRIC from the four new auth subcommands'
+    // `{"profile", "action", "ok"}` shape — this is intentional (documented in
+    // `docs/specs/json-output-shapes.md`).
+
+    /// AC-002a (BC-7.3.004 regression-pin): `refresh_success_payload(AuthFlow::Token)`
+    /// must emit `{"status": "refreshed", "auth_method": "api_token", ...}`.
+    /// Expected Red Gate state: GREEN (helper already shipped on develop).
+    #[test]
+    fn test_refresh_success_payload_emits_status_refreshed_for_token_flow() {
+        let payload = refresh_success_payload(AuthFlow::Token);
+        assert_eq!(
+            payload["status"], "refreshed",
+            "status field must be 'refreshed', got: {}",
+            payload["status"]
+        );
+        assert_eq!(
+            payload["auth_method"], "api_token",
+            "auth_method must be 'api_token' for Token flow, got: {}",
+            payload["auth_method"]
+        );
+        assert!(
+            payload["next_step"].as_str().is_some_and(|s| !s.is_empty()),
+            "next_step must be a non-empty string hint, got: {}",
+            payload["next_step"]
+        );
+        assert!(
+            payload["next_step"]
+                .as_str()
+                .is_some_and(|s| s.contains("Always Allow")),
+            "next_step must mention 'Always Allow' for keychain guidance, got: {}",
+            payload["next_step"]
+        );
+    }
+
+    /// AC-002b (BC-7.3.004 regression-pin): `refresh_success_payload(AuthFlow::OAuth)`
+    /// must emit `{"status": "refreshed", "auth_method": "oauth", ...}`.
+    /// Expected Red Gate state: GREEN (helper already shipped on develop).
+    #[test]
+    fn test_refresh_success_payload_emits_status_refreshed_for_oauth_flow() {
+        let payload = refresh_success_payload(AuthFlow::OAuth);
+        assert_eq!(
+            payload["status"], "refreshed",
+            "status field must be 'refreshed', got: {}",
+            payload["status"]
+        );
+        assert_eq!(
+            payload["auth_method"], "oauth",
+            "auth_method must be 'oauth' for OAuth flow, got: {}",
+            payload["auth_method"]
+        );
+        assert!(
+            payload["next_step"].as_str().is_some_and(|s| !s.is_empty()),
+            "next_step must be a non-empty string hint, got: {}",
+            payload["next_step"]
+        );
+    }
+
+    // ── S-2.07 AC-006: auth subcommand JSON shape snapshot tests ─────────
+    //
+    // These four tests snapshot-pin the `{"profile", "action", "ok": true}`
+    // shape for the four newly-JSON-emitting auth subcommands. The tests
+    // construct the expected JSON value directly (as the implementer's output
+    // helper will) and call `insta::assert_json_snapshot!`.
+    //
+    // Red Gate strategy: On first run (no snapshot file yet), insta writes a
+    // `.snap.new` file and FAILS the test. The tests remain RED until:
+    //   1. The implementer adds the `OutputFormat::Json` branches in the
+    //      four handler functions, AND
+    //   2. `cargo insta review` is run to accept the new snapshot files.
+    //
+    // The snapshot files will land in `src/cli/snapshots/` (insta default
+    // for unit tests in this module).
+    //
+    // Test names follow AC-006: `test_auth_<verb>_json_shape`.
+    // All tests follow AC-009 `test_<verb>_<subject>_<expected_outcome>`.
+
+    /// AC-006 (BC-7.3.004 invariant): snapshot-pin the `login` auth JSON shape.
+    /// Expected Red Gate state: RED (no snapshot file exists yet).
+    #[test]
+    fn test_auth_login_json_shape() {
+        let value = serde_json::json!({
+            "profile": "testprof",
+            "action": "login",
+            "ok": true
+        });
+        insta::assert_json_snapshot!("auth_login_json_shape", value);
+    }
+
+    /// AC-006 (BC-7.3.004 invariant): snapshot-pin the `switch` auth JSON shape.
+    /// Expected Red Gate state: RED (no snapshot file exists yet).
+    #[test]
+    fn test_auth_switch_json_shape() {
+        let value = serde_json::json!({
+            "profile": "default",
+            "action": "switch",
+            "ok": true
+        });
+        insta::assert_json_snapshot!("auth_switch_json_shape", value);
+    }
+
+    /// AC-006 (BC-7.3.004 invariant): snapshot-pin the `logout` auth JSON shape.
+    /// Expected Red Gate state: RED (no snapshot file exists yet).
+    #[test]
+    fn test_auth_logout_json_shape() {
+        let value = serde_json::json!({
+            "profile": "default",
+            "action": "logout",
+            "ok": true
+        });
+        insta::assert_json_snapshot!("auth_logout_json_shape", value);
+    }
+
+    /// AC-006 (BC-7.3.004 invariant): snapshot-pin the `remove` auth JSON shape.
+    /// Expected Red Gate state: RED (no snapshot file exists yet).
+    #[test]
+    fn test_auth_remove_json_shape() {
+        let value = serde_json::json!({
+            "profile": "staging",
+            "action": "remove",
+            "ok": true
+        });
+        insta::assert_json_snapshot!("auth_remove_json_shape", value);
+    }
 }
