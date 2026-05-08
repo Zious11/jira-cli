@@ -374,7 +374,6 @@ async fn test_s_2_06_ac_003_bc_x_5_009_invalid_duration_rejected_before_network(
 ///   3. Keep only unit validation (w, d, h, m); remove seconds arithmetic.
 ///   4. Remove the `#[cfg(any())]` line below (or replace with `#[test]`).
 ///   5. Run `cargo test --test worklog_duration_holdouts` — AC-004 must now PASS.
-#[cfg(any())] // RED-GATE-COMPILE: remove this line when parse_duration_validate is implemented
 #[test]
 fn test_s_2_06_ac_004_bc_x_5_009_parse_duration_validator_unit() {
     // RED-GATE-COMPILE: `parse_duration_validate` does not exist yet.
