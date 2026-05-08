@@ -369,3 +369,53 @@ access to `enrich_assets`).
 | S-2.04-DEFER-01 | Story spec AC-004 quotes kanban literal prefix only; production code emits prefix + suffix '. Board {id} is a {type} board.'. Test uses contains(prefix) — correct and robust. Update spec text in follow-up doc PR. | LOW |
 | S-2.04-DEFER-02 | Story spec H-043 implementation notes use 'displayName'; CachedTeam struct uses 'name'. Test uses production struct directly. Update spec text in follow-up doc PR. | LOW |
 | S-2.04-DOC-01 | Pre-existing: tests/team_column_parity.rs::write_team_cache writes to non-canonical XDG path (missing v1/default/). Not introduced by S-2.04. Target: separate fix story. | LOW |
+
+---
+
+# Red Gate Log — S-2.05 (CLAUDE.md documentation update)
+
+**Date:** 2026-05-08
+**Story:** S-2.05 — CLAUDE.md documentation update for NFR-O-L/M/O/V/R + NFR-R-F gap + bonus NFR-O-H
+**Feature branch commit:** 594f00c
+**Squash-merge SHA:** 7f004ca (PR #307)
+**Files modified:** `CLAUDE.md` (+35), `src/api/jira/users.rs` (+9), `src/api/jira/issues.rs` (+7)
+
+## Summary
+
+For documentation-only stories, the Red Gate concept does NOT apply. There are no tests to write, no tests to fail, and no production behavior to verify. The story's "green gate" is grep verification: confirm that every AC — the presence of specific text in CLAUDE.md and source comment strings in the named functions — is satisfied. This is a departure from the TDD Red Gate framing and is deliberate and correct per the story type.
+
+## Verification: Grep Checks (ALL PASS)
+
+The following grep checks were performed to verify every acceptance criterion. All 9 checks PASSED.
+
+| # | Path | Pattern | AC | Result |
+|---|------|---------|-----|--------|
+| 1 | `CLAUDE.md` | `view.rs` (orphan module entry) | NFR-O-L / AC-001 | PASS |
+| 2 | `CLAUDE.md` | `comments.rs` (orphan module entry) | NFR-O-L / AC-001 | PASS |
+| 3 | `CLAUDE.md` | `assets.rs.*search enrichment` | NFR-O-M / AC-002 | PASS |
+| 4 | `src/api/jira/users.rs` | comment in `search_users_all` | NFR-O-O / AC-003 | PASS |
+| 5 | `src/api/jira/users.rs` | comment in `search_assignable_users_by_project_all` | NFR-O-O / AC-003 | PASS |
+| 6 | `src/api/jira/issues.rs` | comment in `get_changelog` | NFR-O-O / AC-003 | PASS |
+| 7 | `src/api/jira/issues.rs` | comment in `search_issues` | NFR-O-O / AC-003 | PASS |
+| 8 | `src/api/jira/issues.rs` | comment in `filter_tickets` | NFR-O-O / AC-003 | PASS |
+| 9 | All modified files | No line-number references (e.g., `:NNN`) in new comments | NFR-O-V / AC-004 | PASS |
+
+## Lib Baseline Preserved
+
+Test baseline at merge (post-S-2.04, unchanged by S-2.05):
+
+```
+test result: ok. 1091 passed; 0 failed; 13 ignored; 0 measured; 0 filtered out
+```
+
+(13 ignored = pre-existing keyring-gated tests behind `#[ignore]`; 0 regressions)
+
+## Production Code Modifications
+
+Comments only. Zero behavioral change. No function signatures altered. No control flow changed. No dev-deps added. Cargo.toml and Cargo.lock are identical to the pre-S-2.05 state.
+
+## Deferred
+
+| ID | Description | Severity |
+|----|-------------|----------|
+| S-2.05-DEFER-01 | CLAUDE.md `list.rs` description text reads 'list + view + comments' but `view.rs` and `comments.rs` are now separately documented sibling modules after S-2.05. Pre-existing text; not introduced by S-2.05. Target: bundle into next small CLAUDE.md cleanup PR. | LOW |

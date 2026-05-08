@@ -1,7 +1,7 @@
 # sprint-state.yaml
 # Phase 3 TDD Implementation — Wave-based story delivery state
 # Initialized: 2026-05-07
-# Updated: 2026-05-08 (S-2.04 MERGED via PR #306 at ada9126; S-2.05 active; Wave 2 progress 4/7 merged)
+# Updated: 2026-05-08 (S-2.05 MERGED via PR #307 at 7f004ca; S-2.06 active; Wave 2 progress 5/7 merged)
 
 active_wave: 2
 wave_0_progress: "7/7 — WAVE 0 COMPLETE"  # All stories merged/delivered: S-0.01..S-0.06 via PRs #289-#294; S-0.07 spec-only via factory-artifacts direct
@@ -114,7 +114,7 @@ wave_0_exit_gate: "PASSED — All 4 MUST-FIX stories green; SD-002 and SD-003 im
 wave_1_progress: "8/8 — WAVE 1 COMPLETE"
 wave_1_exit_gate: "PASSED — All 8 Wave 1 stories merged via PRs #295-#302. 0 regressions; ~50 new tests; 5 deferred items + 1 PENDING_MANUAL. 2026-05-08."
 
-wave_2_progress: "4/7 — S-2.01, S-2.02, S-2.03, S-2.04 MERGED"
+wave_2_progress: "5/7 — S-2.01..S-2.05 MERGED"
 
 wave_1:
   status: active
@@ -230,9 +230,30 @@ wave_2:
       holdout_anchors: [H-040, H-041, H-042, H-043, H-044]
       notes: "9 regression-pin tests (770 lines) for H-040..H-044 across 7 BCs. H-040 split into 3 cases; H-043 split into 2 cases. All-integration placement in tests/boards_sprints_holdouts.rs via assert_cmd process-spawn. Production code untouched. Demo evidence: docs/demo-evidence/S-2.04/ (AC-004-kanban-error, AC-007-adf-rendering). Test commits: e71a61e (tests), 893d45a (demo evidence). 8/8 CI green; review APPROVE 1 cycle; 0 blocking findings. 3 LOW deferred: S-2.04-DEFER-01 (AC-004 spec quotes kanban literal prefix only; production emits prefix+suffix — test uses contains(prefix)); S-2.04-DEFER-02 (H-043 spec uses displayName for team-cache shape; CachedTeam struct uses name — test uses production struct); S-2.04-DOC-01 (pre-existing: write_team_cache in tests/team_column_parity.rs writes to non-canonical path missing v1/default/ segment). Code-delivery artifacts: .factory/code-delivery/S-2.04/pr-description.md, .factory/code-delivery/S-2.04/review-findings.md."
     - id: S-2.05
-      title: "CLAUDE.md documentation update"
+      title: "CLAUDE.md documentation update for NFR-O-L/M/O/V/R + NFR-R-F gap + bonus NFR-O-H"
+      type: documentation-only
+      status: completed
+      pr: 307
+      merge_sha: 7f004ca
+      merged_at: 2026-05-08
+      merged_via: "gh pr merge --squash --delete-branch"
+      feature_branch_commit: 594f00c
+      nfr_anchors: [NFR-O-L, NFR-O-M, NFR-O-O, NFR-O-V, NFR-O-R, NFR-R-F, NFR-O-H]
+      bc_anchors: []
+      holdout_anchors: []
+      files_modified: ["CLAUDE.md (+35)", "src/api/jira/users.rs (+9)", "src/api/jira/issues.rs (+7)"]
+      insertions: 51
+      deletions: 0
+      test_baseline: "1091 passed / 0 failed / 13 ignored"
+      ci_result: "8/8 SUCCESS (Format, Clippy, Test ubuntu, Test macos, MSRV 1.85.0, Deny, Coverage, Secret Scan gitleaks)"
+      review_result: "APPROVE 1 cycle; 0 blocking findings; 1 LOW suggestion deferred (S-2.05-DEFER-01)"
+      no_test_phase: true
+      no_demo_phase: true
+      deviation_note: "Doc-only story; no test-writer or demo-recorder phase. PR body is the evidence (embedded grep checks). No demo-evidence directory created."
+      notes: "Documentation-only delivery. 6 NFRs resolved as DOCUMENT-AS-IS (NFR-O-L/M/O/O/V/R + bonus NFR-O-H). Source comments added to search_users_all, search_assignable_users_by_project_all (users.rs) and get_changelog, search_issues, filter_tickets (issues.rs) using function names per Architecture Compliance Rules. CLAUDE.md updated with orphan module descriptions. 51 insertions / 0 deletions. Cargo.toml/Cargo.lock unchanged. 1 LOW deferred: S-2.05-DEFER-01 (pre-existing list.rs description text stale after S-2.05 adds view.rs + comments.rs sibling modules). Worktree cleanup complete."
+    - id: S-2.06
+      title: "Worklog duration config + CMDB cache tuple"
       status: active
-    - { id: S-2.06, title: "Worklog duration config + CMDB cache tuple", status: pending }
     - { id: S-2.07, title: "JSON output policy + test naming convention", status: pending }
 
 wave_3:

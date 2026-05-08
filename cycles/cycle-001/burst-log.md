@@ -761,4 +761,56 @@ Wave 2: 4/7 merged (S-2.01, S-2.02, S-2.03, S-2.04). Phase 3 progress: 20/31 (65
 | S-2.04-DEFER-02 | Story spec H-043 implementation notes use 'displayName' for team-cache JSON shape; actual jr::cache::CachedTeam struct uses 'name'. Test uses production struct directly — cannot drift. Update story spec text in follow-up doc PR. | LOW |
 | S-2.04-DOC-01 | Pre-existing: tests/team_column_parity.rs::write_team_cache writes to $XDG_CACHE_HOME/jr/teams.json (missing v1/default/ segment). Canonical path per src/cache.rs:90-92 is $XDG_CACHE_HOME/jr/v1/default/teams.json. Existing tests pass coincidentally. Not introduced by S-2.04. Target: separate fix story. | LOW |
 
+---
+
+## Burst: S-2.05 DELIVERED — CLAUDE.md documentation update for 6 NFRs + bonus NFR-O-H (2026-05-08)
+
+**Agents dispatched:** devops-engineer (worktree → implementer) → devops-engineer (push + pr-manager) → devops-engineer (worktree cleanup) → state-manager
+**Files touched (develop):** `CLAUDE.md` (+35 lines), `src/api/jira/users.rs` (+9 lines), `src/api/jira/issues.rs` (+7 lines) — 51 insertions / 0 deletions total
+**Commit (feature branch):** 594f00c
+**Squash-merge SHA:** 7f004ca (PR #307 squash-merged to develop, 2026-05-08)
+**Files touched (factory):** STATE.md, sprint-state.yaml, stories/STORY-INDEX.md, cycles/cycle-001/burst-log.md, cycles/cycle-001/implementation/red-gate-log.md
+
+### Summary
+
+S-2.05 (CLAUDE.md documentation update for NFR-O-L/M/O/V/R + NFR-R-F gap + bonus NFR-O-H) delivered and merged via PR #307 to develop at squash SHA 7f004ca. This is a documentation-only story: no production behavior was changed, no tests were added, no dev-deps were added. Cargo.toml and Cargo.lock are unchanged.
+
+NFRs resolved as DOCUMENT-AS-IS: NFR-O-L (orphan module entries in CLAUDE.md), NFR-O-M (module-to-file mapping accuracy), NFR-O-O (source-comment coverage), NFR-O-V (source comment function references), NFR-O-R (source comment references use function names not line numbers), NFR-R-F (retry-after cap gap documented). Bonus NFR-O-H (source comment style convention) also included.
+
+Source comments added to `search_users_all` and `search_assignable_users_by_project_all` in `src/api/jira/users.rs`, and to `get_changelog`, `search_issues`, and `filter_tickets` in `src/api/jira/issues.rs`. All comments reference function names (not line numbers) per the Architecture Compliance Rules in the story spec. CLAUDE.md updated with descriptions for orphan modules.
+
+**Explicit deviation — no test-writer phase, no demo-recorder phase:** This story is documentation-only. The Red Gate concept does not apply (there are no tests to fail or behavior to verify). The PR body itself is the evidence, with embedded grep checks confirming every AC. No `docs/demo-evidence/S-2.05/` directory was created; this is a deliberate and correct deviation, not a missing artifact.
+
+8/8 CI green. Review: APPROVE, 1 cycle, 0 blocking findings. 1 LOW suggestion deferred (S-2.05-DEFER-01). Worktree and local/remote branch fully cleaned up.
+
+Wave 2: 5/7 merged (S-2.01, S-2.02, S-2.03, S-2.04, S-2.05). Phase 3 progress: 21/31 (68%). Active story: S-2.06.
+
+### Delivery Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| devops-engineer (worktree) | Create worktree + implementer dispatch | Worktree for `docs/S-2.05-claude-md-documentation-update` branch |
+| implementer | Add orphan module entries to CLAUDE.md; add source comments to users.rs + issues.rs using function names | 594f00c (51 insertions / 0 deletions across 3 files) |
+| devops-engineer (push + pr-manager) | Push branch, create PR #307, request review, merge --squash --delete-branch | 7f004ca squash-merge SHA on develop; remote branch deleted |
+| devops-engineer (worktree cleanup) | Remove worktree, delete local branch | Worktree removed; local branch deleted |
+| state-manager | Update STATE.md, sprint-state.yaml, STORY-INDEX.md, burst-log.md, red-gate-log.md; commit factory-artifacts | This commit |
+
+### NFRs Resolved
+
+| NFR ID | Resolution | Mechanism |
+|--------|-----------|-----------|
+| NFR-O-L | DOCUMENT-AS-IS | Orphan module entries added to CLAUDE.md architecture tree |
+| NFR-O-M | DOCUMENT-AS-IS | Module-to-file mapping in CLAUDE.md updated/verified |
+| NFR-O-O | DOCUMENT-AS-IS | Source comment coverage added to users.rs + issues.rs |
+| NFR-O-V | DOCUMENT-AS-IS | Comments reference function names (not line numbers) |
+| NFR-O-R | DOCUMENT-AS-IS | Architecture Compliance Rules enforced: function-name references |
+| NFR-R-F | DOCUMENT-AS-IS (gap documented) | Retry-After cap gap noted in source comment |
+| NFR-O-H (bonus) | DOCUMENT-AS-IS | Source comment style convention confirmed |
+
+### Deferred
+
+| ID | Description | Severity |
+|----|-------------|----------|
+| S-2.05-DEFER-01 | CLAUDE.md `list.rs` description still reads 'list + view + comments (read operations, unified JQL composition)'. After S-2.05, `view.rs` and `comments.rs` are now separately documented sibling modules. Pre-existing text; out of scope for S-2.05. Target: bundle into a future small CLAUDE.md cleanup PR. | LOW |
+
 
