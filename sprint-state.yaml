@@ -1,7 +1,7 @@
 # sprint-state.yaml
 # Phase 3 TDD Implementation — Wave-based story delivery state
 # Initialized: 2026-05-07
-# Updated: 2026-05-07 (S-1.03 MERGED; S-1.04 active; Wave 1 progress 3/8)
+# Updated: 2026-05-08 (S-1.05 MERGED; S-1.06 active; Wave 1 progress 5/8)
 
 active_wave: 1
 wave_0_progress: "7/7 — WAVE 0 COMPLETE"  # All stories merged/delivered: S-0.01..S-0.06 via PRs #289-#294; S-0.07 spec-only via factory-artifacts direct
@@ -111,7 +111,7 @@ wave_0:
 
 wave_0_exit_gate: "PASSED — All 4 MUST-FIX stories green; SD-002 and SD-003 implemented; H-NEW-AUTH-002 and H-NEW-VERBOSE-001/002 holdouts registered. 7/7 stories complete. 2026-05-07."
 
-wave_1_progress: "3/8"
+wave_1_progress: "5/8"
 
 wave_1:
   status: active
@@ -149,9 +149,23 @@ wave_1:
       notes: "tracing 0.1.41 + tracing-subscriber 0.3.19 wired into main.rs/client.rs/auth.rs. NFR-O-A satisfied; SD-003 contract preserved via variable-extraction trick (6 --verbose-bodies regression tests green). 10 new observability tests + 6 SD-003 + 600 lib + integration all green. 7/7 CI; review APPROVE 1 cycle (1 SHOULD-FIX docstring fix applied as commit 06c2252). 1 deferred (S-1.03-DEFER): body-tracing migration → Wave 2."
     - id: S-1.04
       title: "CI job timeouts"
+      status: completed
+      pr: 298
+      merge_sha: e0ea180
+      merged_at: 2026-05-07
+      merged_via: "gh pr merge --squash --delete-branch"
+      notes: "8 timeout-minutes added (6 ci.yml + 2 release.yml); R-L12 satisfied; 7/7 CI green; review APPROVE 0 blocking; 3 deferred (DEFER-01/02/03)."
+    - id: S-1.05
+      title: "GitHub secret scanning"
+      status: completed
+      pr: 299
+      merge_sha: da4c52751d3f63531156a3912d0e3bd0c643cd41
+      merged_at: 2026-05-08
+      merged_via: "gh pr merge --squash --delete-branch (2-cycle review)"
+      notes: "gitleaks/gitleaks-action@ff98106e (v2.3.9) added as security CI job (PR-only, 10m timeout, contents:read); .gitleaks.toml allowlist; 8/8 CI green (including first gitleaks self-validation); review 2 cycles APPROVE (1 SHOULD-FIX: removed blanket tests/.* allowlist — scanner blind spot); 2 deferred: S-1.05-DEFER-01 (Node.js 20→24 deadline Jun 2026), S-1.05-AC-001 (PENDING_MANUAL repo Settings → Code security → Secret scanning)."
+    - id: S-1.06
+      title: "OAuth flow holdout suite"
       status: active
-    - { id: S-1.05, title: "GitHub secret scanning", status: pending }
-    - { id: S-1.06, title: "OAuth flow holdout suite", status: pending }
     - { id: S-1.07, title: "Rate-limit holdout suite", status: pending }
     - { id: S-1.08, title: "Keychain round-trip holdout", status: pending }
 

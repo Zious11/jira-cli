@@ -4,14 +4,14 @@ level: ops
 version: "2.0"
 status: active
 producer: state-manager
-timestamp: 2026-05-07T01:00:00
+timestamp: 2026-05-08T00:00:00
 phase: phase-3-tdd-implementation
 inputs: []
 input-hash: "[live-state]"
 traces_to: ""
 project: jira-cli
 mode: BROWNFIELD
-current_step: "phase-3-wave-1-S-1.05-start"
+current_step: "phase-3-wave-1-S-1.06-start"
 current_cycle: "cycle-001"
 dtu_required: false
 phase_2_status: APPROVED
@@ -36,8 +36,8 @@ activation_version: "v0.5.0-dev.7"
 | **Language** | Rust |
 | **Target Workspace** | develop → main |
 | **Started** | 2026-05-04 |
-| **Last Updated** | 2026-05-07 (S-1.04 MERGED via PR #298; Wave 1 progress 4/8 — halfway) |
-| **Current Phase** | Phase 3 — TDD Implementation **IN PROGRESS** (Wave 0 COMPLETE 7/7; Wave 1 ACTIVE — 8 stories, 4/8 done; next: S-1.05 GitHub secret scanning) |
+| **Last Updated** | 2026-05-08 (S-1.05 MERGED via PR #299; Wave 1 progress 5/8) |
+| **Current Phase** | Phase 3 — TDD Implementation **IN PROGRESS** (Wave 0 COMPLETE 7/7; Wave 1 ACTIVE — 8 stories, 5/8 done; next: S-1.06 OAuth flow holdout suite) |
 | **Next Phase** | Phase 3 Wave 1 delivery |
 | **Activation HEAD** | dea166471e22eff55974d7675593469b37048c5f (v0.5.0-dev.7) |
 | **factory-artifacts SHA** | 0b01262 (Phase 1 gate APPROVE; phase-1-converged tag) |
@@ -58,7 +58,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | 2: Story Decomposition | **complete** (story creation phase) | 2026-05-04 | 2026-05-06 | 31 stories created (W0:7 + W1:8 + W2:7 + W3:9); Phase 2-adv pending | |
 | 2-adv: Adversarial Story Review | **CONVERGED** — Pass 13 CLEAN-PASS; Counter 3/3 | 2026-05-06 | 2026-05-07 | 3/3 FULL CONVERGENCE | 14→5→5→5→4→5→4→4→4→1→0→1→0 |
 | Phase 2 gate | **APPROVED** (2026-05-07) — 31 stories locked, ready for TDD | — | 2026-05-07 | APPROVED by human | — |
-| 3: TDD Implementation | **IN_PROGRESS** — Wave 0 COMPLETE (7/7); Wave 1 progress 4/8 (halfway) | 2026-05-07 | | | Wave 0: COMPLETE — 7/7 stories via PRs #289-#294 + S-0.07 spec-only. Wave 1: S-1.01 MERGED at adae3c5 — PR #295; 20 GitHub Actions pinned to SHAs; 0 deferred. S-1.02 MERGED at 88a2e02 — PR #296; deny.toml tightened (4 settings to "deny", 22 skip entries documented); NFR-S-F satisfied; 7/7 CI green; review APPROVE 1 cycle; 1 deferred (S-1.02-DEFER: dedupe tracking). S-1.03 MERGED at 2d64112 — PR #297; tracing crate + tracing-subscriber wired in main.rs/client.rs/auth.rs; NFR-O-A satisfied; SD-003 contract preserved; 7/7 CI green; review APPROVE 1 cycle (1 SHOULD-FIX docstring fix applied as 06c2252); 1 deferred (S-1.03-DEFER body-tracing → Wave 2). S-1.04 MERGED at e0ea180 — PR #298; 8 timeout-minutes added across ci.yml (6) + release.yml (2); R-L12 satisfied; 7/7 CI green; review APPROVE 0 blocking; 3 deferred (DEFER-01/02/03). Phase 3 Wave 1 progress: 4/8 (halfway). Active: S-1.05 (GitHub secret scanning). |
+| 3: TDD Implementation | **IN_PROGRESS** — Wave 0 COMPLETE (7/7); Wave 1 progress 5/8 | 2026-05-07 | | | Wave 0: COMPLETE — 7/7 stories via PRs #289-#294 + S-0.07 spec-only. Wave 1: S-1.01 MERGED at adae3c5 — PR #295; 20 GitHub Actions pinned to SHAs; 0 deferred. S-1.02 MERGED at 88a2e02 — PR #296; deny.toml tightened (4 settings to "deny", 22 skip entries documented); NFR-S-F satisfied; 7/7 CI green; review APPROVE 1 cycle; 1 deferred (S-1.02-DEFER: dedupe tracking). S-1.03 MERGED at 2d64112 — PR #297; tracing crate + tracing-subscriber wired in main.rs/client.rs/auth.rs; NFR-O-A satisfied; SD-003 contract preserved; 7/7 CI green; review APPROVE 1 cycle (1 SHOULD-FIX docstring fix applied as 06c2252); 1 deferred (S-1.03-DEFER body-tracing → Wave 2). S-1.04 MERGED at e0ea180 — PR #298; 8 timeout-minutes added across ci.yml (6) + release.yml (2); R-L12 satisfied; 7/7 CI green; review APPROVE 0 blocking; 3 deferred (DEFER-01/02/03). S-1.05 MERGED at da4c5275 — PR #299; gitleaks/gitleaks-action@ff98106e (v2.3.9) added as security CI job (PR-only, 10m timeout, contents:read); .gitleaks.toml allowlist; 8/8 CI green; review 2 cycles APPROVE (1 SHOULD-FIX: removed blanket tests/.* allowlist); 2 deferred (DEFER-01 Node.js 24 deadline, AC-001 pending manual repo Settings toggle). Phase 3 Wave 1 progress: 5/8. Active: S-1.06 (OAuth flow holdout suite). |
 | 3-adv: Wave Adversarial Reviews | not-started | | | | |
 | 4: Holdout Evaluation | not-started | | | | |
 | 5: Adversarial Refinement | not-started | | | | |
@@ -71,10 +71,10 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 
 | Step | Agent | Status | Output |
 |------|-------|--------|--------|
-| S-1.02 MERGED — cargo-deny supply-chain audit | devops-engineer | complete | PR #296 squash-merged to develop at 88a2e02 (2026-05-07); no admin needed (Lesson 4 confirmed); 4 settings to "deny"; 22 skip entries documented; NFR-S-F satisfied; 7/7 CI green; APPROVE 1 cycle; 1 deferred (S-1.02-DEFER). Wave 1: 2/8. |
 | S-1.03 MERGED — tracing/observability wire-up | devops-engineer | complete | PR #297 squash-merged to develop at 2d64112 (2026-05-07); tracing 0.1.41 + tracing-subscriber 0.3.19; NFR-O-A satisfied; SD-003 contract preserved (variable-extraction trick); 7/7 CI green; APPROVE 1 cycle (1 SHOULD-FIX docstring applied 06c2252); 1 deferred (S-1.03-DEFER). Wave 1: 3/8. |
 | S-1.04 MERGED — CI job timeouts | devops-engineer | complete | PR #298 squash-merged to develop at e0ea180 (2026-05-07); 8 timeout-minutes added (6 ci.yml + 2 release.yml); R-L12 satisfied; 7/7 CI green; APPROVE 0 blocking; 3 deferred (DEFER-01/02/03). Wave 1: 4/8. |
-| S-1.05 START — GitHub secret scanning | orchestrator | active | Next Wave 1 story. No Wave 1 deps. Next: implementer or test-writer. |
+| S-1.05 MERGED — GitHub secret scanning | devops-engineer | complete | PR #299 squash-merged to develop at da4c5275 (2026-05-08); gitleaks/gitleaks-action@ff98106e (v2.3.9) PR-only CI job (10m timeout, contents:read); .gitleaks.toml allowlist; 8/8 CI green; review 2 cycles APPROVE (1 SHOULD-FIX: blanket tests/.* allowlist removed); 2 deferred (S-1.05-DEFER-01 Node.js 24 deadline Jun 2026, S-1.05-AC-001 PENDING_MANUAL repo Settings → Secret scanning). Wave 1: 5/8. |
+| S-1.06 START — OAuth flow holdout suite | orchestrator | active | Next Wave 1 story. Active: implementer or test-writer. |
 
 ## Decisions Log
 
@@ -130,6 +130,8 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | S-1.04-DEFER-01 | No fail-fast: false on test matrix; if a platform fails, other legs cancel before timeout fires. Pre-existing behavior. Target: separate matrix-strategy story if cross-platform flakiness becomes an issue. | LOW | DEFERRED — 2026-05-07 |
 | S-1.04-DEFER-02 | coverage timeout (30m) matches test (30m); coverage runs instrumented build (~2-3x slower). Today fine (~2m observed); revisit if codebase grows significantly. | LOW | DEFERRED — 2026-05-07 |
 | S-1.04-DEFER-03 | release.yml uses job-level timeout-minutes only; no step-level timeouts on long-running steps (LTO link, cross-compile install). Revisit if a single step hangs inside the job window. | LOW | DEFERRED — 2026-05-07 |
+| S-1.05-DEFER-01 | gitleaks-action ff98106e (v2.3.9) runs on Node.js 20; GitHub forces Node.js 24 starting June 2, 2026. Action upgrade required before that date. Target: Wave 2 maintenance sweep, OR Dependabot weekly PR pickup. | MEDIUM | DEFERRED — 2026-05-08 |
+| S-1.05-AC-001 | Repo-level GitHub Secret Scanning must be enabled at https://github.com/Zious11/jira-cli/settings/security_analysis (Settings → Code security → Secret scanning → Enable). Cannot be automated via workflow files. Required maintainer action; orchestrator surfaced to user post-merge. Track in STATE.md until confirmation; remove this row once user confirms enablement. | HIGH | PENDING_MANUAL — 2026-05-08 |
 
 ## Convergence Trackers
 
@@ -151,8 +153,8 @@ _Not started._
 
 | Field | Value |
 |-------|-------|
-| **Date** | 2026-05-07 |
-| **Position** | S-1.04 merged (PR #298 at e0ea180). Wave 1 progress: 4/8 (50%). Active story: S-1.05 (GitHub secret scanning). Next: implementer or test-writer. Open deferred: R1-001, R1-002, S-0.03-S1, S-0.05-F1, S-0.05-F2 (TO_VERIFY), S-0.05-F3, S-1.02-DEFER, S-1.03-DEFER (body-tracing → Wave 2), S-1.04-DEFER-01/02/03. Wave 0 holdouts active: H-045, H-046, H-036, H-NEW-MP-001, H-NEW-VERBOSE-001/002; H-NEW-AUTH-002 gated behind JR_RUN_RELEASE_AUTH_GATE_TEST=1. |
+| **Date** | 2026-05-08 |
+| **Position** | S-1.05 merged (PR #299 at da4c5275). Wave 1 progress: 5/8. Active story: S-1.06 (OAuth flow holdout suite). Next: implementer or test-writer. Open deferred: R1-001, R1-002, S-0.03-S1, S-0.05-F1, S-0.05-F2 (TO_VERIFY), S-0.05-F3, S-1.02-DEFER, S-1.03-DEFER (body-tracing → Wave 2), S-1.04-DEFER-01/02/03, S-1.05-DEFER-01 (Node.js 24 deadline Jun 2026). Manual user action pending: enable repo Settings → Code security → Secret scanning (S-1.05-AC-001 — HIGH). Wave 0 holdouts active: H-045, H-046, H-036, H-NEW-MP-001, H-NEW-VERBOSE-001/002; H-NEW-AUTH-002 gated behind JR_RUN_RELEASE_AUTH_GATE_TEST=1. |
 | **Convergence counter** | 3/3 CONVERGED (Phase 2-adv; Pass 13 CLEAN-PASS — final trajectory: 14→5→5→5→4→5→4→4→4→1→0→1→0) |
 
 ## Historical Content
