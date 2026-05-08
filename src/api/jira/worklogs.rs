@@ -6,15 +6,20 @@ use serde_json::Value;
 
 impl JiraClient {
     /// Add a worklog entry to an issue.
+    ///
+    /// `time_spent` is passed verbatim to the Jira API's `timeSpent` field.
+    /// Jira Cloud parses the string server-side (e.g. `"1d"`, `"2d 3h 30m"`).
+    /// The caller is responsible for validating `time_spent` before calling this
+    /// function (use `duration::parse_duration_validate`).
     pub async fn add_worklog(
         &self,
         key: &str,
-        time_spent_seconds: u64,
+        time_spent: &str,
         comment: Option<Value>,
     ) -> Result<Worklog> {
         let path = format!("/rest/api/3/issue/{}/worklog", urlencoding::encode(key));
         let mut body = serde_json::json!({
-            "timeSpentSeconds": time_spent_seconds,
+            "timeSpent": time_spent,
         });
         if let Some(c) = comment {
             body["comment"] = c;
