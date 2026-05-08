@@ -1,0 +1,44 @@
+$ cargo test --test asset_holdouts
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/asset_holdouts.rs (target/debug/deps/asset_holdouts-3e93ee528c8a4e20)
+
+running 3 tests
+test test_s_2_03_h_038_bc_4_3_002_enrich_assets_skips_already_resolved ... ok
+test test_s_2_03_h_039_bc_4_2_006_assets_tickets_ambiguous_status_exits_64 ... ok
+test test_s_2_03_h_037_bc_4_2_001_workspace_id_cached_after_first_call ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.77s
+
+---
+Individual test runs (with --nocapture):
+
+$ cargo test --test asset_holdouts test_s_2_03_h_037_bc_4_2_001_workspace_id_cached_after_first_call -- --nocapture
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/asset_holdouts.rs (target/debug/deps/asset_holdouts-3e93ee528c8a4e20)
+
+running 1 test
+test test_s_2_03_h_037_bc_4_2_001_workspace_id_cached_after_first_call ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.70s
+
+---
+
+$ cargo test --test asset_holdouts test_s_2_03_h_038_bc_4_3_002_enrich_assets_skips_already_resolved -- --nocapture
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/asset_holdouts.rs (target/debug/deps/asset_holdouts-3e93ee528c8a4e20)
+
+running 1 test
+test test_s_2_03_h_038_bc_4_3_002_enrich_assets_skips_already_resolved ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+---
+
+$ cargo test --test asset_holdouts test_s_2_03_h_039_bc_4_2_006_assets_tickets_ambiguous_status_exits_64 -- --nocapture
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/asset_holdouts.rs (target/debug/deps/asset_holdouts-3e93ee528c8a4e20)
+
+running 1 test
+test test_s_2_03_h_039_bc_4_2_006_assets_tickets_ambiguous_status_exits_64 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.69s
