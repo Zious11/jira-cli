@@ -2,8 +2,9 @@
 context: nfr-catalog
 title: "NFR Catalog — Pass 4 Convergence"
 total_nfrs: 41  # 42 − NFR-O-K (merged into NFR-S-D at ADV-P7-002)
-last_updated: 2026-05-04
+last_updated: 2026-05-08
 source_pass: 4
+revision_note: "2026-05-08 — Wave 2 closure swept 10 additional NFRs to RESOLVED (NFR-O-F/J/L/M/O/W/H/R/V via S-2.05/S-2.07; NFR-R-F via S-2.05). Per WV2-ADV-02, the body table and Summary Table required catch-up updates that the per-story state-manager dispatches missed."
 trace: |
   - L2: .factory/specs/domain-spec/
   - Source: .factory/semport/jira-cli/jira-cli-pass-4-deep-r4.md §2,§3,§4
@@ -45,7 +46,7 @@ All four MUST-FIX items (NFR-R-D, NFR-R-A, NFR-R-B, NFR-R-E) have been crystalli
 | ID | Description | Severity | Site | Phase 3 Routing |
 |---|---|---|---|---|
 | **NFR-R-C** | Worklog duration constants no longer apply. Worklog POST sends `timeSpent` (string) and Jira's server applies its configured `workingHoursPerDay`/`workingDaysPerWeek`. Resolves silent wrong-answer on customized instances. | MEDIUM | `src/cli/worklog.rs` + `src/api/jira/worklogs.rs` | **RESOLVED — 2026-05-08 — S-2.06 v2.0.0 (PR #308 / c8f15d8) via Option 1 (timeSpent string passthrough; matches `ankitpokhrel/jira-cli` pattern). Original FIX-IN-PHASE-3 plan (admin-only `/rest/api/3/configuration/timetracking` endpoint fetch) was BLOCKED by Perplexity verification 2026-05-08; see DEC-010 and `.factory/research/S-2.06-jira-timetracking-verification.md`.** |
-| **NFR-R-F** | `get_changelog` anti-loop guard present (breaks if nextPage URL == current URL). `search_issues` cursor loop has no analogous guard against cursor == cursor regression. | MEDIUM | `src/api/jira/issues.rs:222-230` | **DOCUMENT-AS-IS**: Add similar guard to `search_issues`; document pattern |
+| **NFR-R-F** | `get_changelog` anti-loop guard present (breaks if nextPage URL == current URL). `search_issues` cursor loop has no analogous guard against cursor == cursor regression. | MEDIUM | `src/api/jira/issues.rs:222-230` | **RESOLVED — 2026-05-08 — S-2.05 (PR #307 / 7f004ca) via KNOWN-GAP comment added near `search_issues` cursor loop and CLAUDE.md Gotcha documenting the gap. Original DOCUMENT-AS-IS plan executed.** |
 ### LOW
 
 | ID | Description | Severity | Site | Phase 3 Routing |
@@ -90,13 +91,13 @@ All four MUST-FIX items (NFR-R-D, NFR-R-A, NFR-R-B, NFR-R-E) have been crystalli
 | **NFR-O-A** | No structured logging (tracing crate). `tracing` is NOT currently a dependency. 47 `eprintln!` + 103 `println!` across 24 CLI handlers with no structured spans. AI-agent integration hampered by unparseable strings. | MEDIUM | `src/observability.rs`, `src/main.rs` | **DEFER**: Adopt `tracing` crate + `tracing-subscriber` in `main.rs` per `--verbose`. `tracing` is NOT currently a dependency. Adoption requires adding `tracing` + `tracing-subscriber` to `[dependencies]`. Phase 3 task: dep-add + subscriber wire-up. Replace `eprintln!("[verbose]...")` with `tracing::debug!`. P2 priority. |
 | **NFR-O-B** | `refresh_oauth_token` is public with zero production callers — limbo state. Exists at `src/api/auth.rs:704-770` for a future 401 auto-refresh integration per CLAUDE.md. | MEDIUM | `src/api/auth.rs:704-770` | **DEFER**: Wire into `JiraClient::send` (one-attempt refresh on 401 expired_token). P1 priority. |
 | **NFR-O-D** | `cli/auth.rs` (1,998 LOC) and `cli/assets.rs` (1,055 LOC) violate implicit ~1000 LOC shard rule. Same split approach as `cli/issue/`. | MEDIUM | `src/cli/auth.rs`, `src/cli/assets.rs` | **DEFER**: Create `src/cli/auth/{login,switch,list,status,refresh,logout,remove,helpers}.rs`. P1 priority. |
-| **NFR-O-F** | 5 auth subcommands (login/switch/logout/remove/refresh) have no `--output json` paths — only human-readable output. | MEDIUM | `src/cli/auth.rs` | **POLICY-DECISION**: Add JSON shapes for auth subcommands (e.g., `{"profile": "X", "ok": true}`). |
-| **NFR-O-J** | JSON field naming inconsistency: write-ops use 4 distinct booleans (`changed`, `updated`, `linked`, `unlinked`). No single canonical field name. | MEDIUM | various CLI handlers | **POLICY-DECISION**: Adopt `success: bool` + `action: string` OR document 4-distinct-name vocabulary as deliberate verb-aligned. Snapshot-pinned so change is high-friction. |
-| **NFR-O-L** | CLAUDE.md does not document `cli/issue/view.rs` (286 LOC), `cli/issue/comments.rs` (61), `observability.rs` (39), `api/assets/schemas.rs` (44) — 4 undocumented orphan modules. | MEDIUM | `CLAUDE.md` | **FIX-IN-PHASE-3**: Update CLAUDE.md to include 12 deviations (D1-D12 from Pass 1 R1 §3d). |
-| **NFR-O-M** | `--open` filter uses two mechanisms: JQL `statusCategory != Done` for Jira issues (server-side); `status.colorName != "green"` for connected tickets (client-side). Not documented as intentional. | MEDIUM | `src/cli/issue/list.rs:303,308,625`, `src/cli/assets.rs:303-321` | **DOCUMENT-AS-IS**: Add to CLAUDE.md "Gotchas" explaining the two-mechanism single semantic. |
-| **NFR-O-O** | User pagination advances by `USER_PAGE_SIZE` not returned-count — deliberate workaround for JRACLOUD-71293. Undocumented in source. A future contributor "fixing" this would regress the workaround. | MEDIUM | `src/api/jira/users.rs` | **DOCUMENT-AS-IS**: Add source comment + CLAUDE.md "Gotchas" entry. |
+| **NFR-O-F** | 5 auth subcommands (login/switch/logout/remove/refresh) have no `--output json` paths — only human-readable output. | MEDIUM | `src/cli/auth.rs` | **RESOLVED — 2026-05-08 — S-2.07 (PR #309 / ca22be0) via `--output json` implemented for login/switch/logout/remove (4 subcommands; refresh deferred). JSON shape `{"profile": "X", "action": "Y", "ok": true}` pinned in snapshots. Original POLICY-DECISION resolved as Option 1 verb-aligned shapes.** |
+| **NFR-O-J** | JSON field naming inconsistency: write-ops use 4 distinct booleans (`changed`, `updated`, `linked`, `unlinked`). No single canonical field name. | MEDIUM | various CLI handlers | **RESOLVED — 2026-05-08 — S-2.07 (PR #309 / ca22be0) via verb-aligned JSON policy documented in `docs/specs/json-output-shapes.md`; existing 4-distinct-name vocabulary codified as deliberate (snapshot-pinned shapes preserved). Original POLICY-DECISION resolved as documented vocabulary.** |
+| **NFR-O-L** | CLAUDE.md does not document `cli/issue/view.rs` (286 LOC), `cli/issue/comments.rs` (61), `observability.rs` (39), `api/assets/schemas.rs` (44) — 4 undocumented orphan modules. | MEDIUM | `CLAUDE.md` | **RESOLVED — 2026-05-08 — S-2.05 (PR #307 / 7f004ca) via all 4 orphan modules added to CLAUDE.md `src/` tree with descriptions. Original FIX-IN-PHASE-3 plan executed.** |
+| **NFR-O-M** | `--open` filter uses two mechanisms: JQL `statusCategory != Done` for Jira issues (server-side); `status.colorName != "green"` for connected tickets (client-side). Not documented as intentional. | MEDIUM | `src/cli/issue/list.rs:303,308,625`, `src/cli/assets.rs:303-321` | **RESOLVED — 2026-05-08 — S-2.05 (PR #307 / 7f004ca) via `--open` dual-mechanism Gotcha added to CLAUDE.md. Original DOCUMENT-AS-IS plan executed.** |
+| **NFR-O-O** | User pagination advances by `USER_PAGE_SIZE` not returned-count — deliberate workaround for JRACLOUD-71293. Undocumented in source. A future contributor "fixing" this would regress the workaround. | MEDIUM | `src/api/jira/users.rs` | **RESOLVED — 2026-05-08 — S-2.05 (PR #307 / 7f004ca) via JRACLOUD-71293 source comment added inline and CLAUDE.md Gotcha added. Original DOCUMENT-AS-IS plan executed.** |
 | **NFR-O-S** | `accessible_resources` uses `resources.first()` — silent first-result-wins for multi-site OAuth users. No disambiguation or `--cloud-id` flag. | MEDIUM | `src/api/auth.rs:666-668` | **DEFER**: Add `--cloud-id <ID>` flag + interactive prompt or `--no-input` error. P1 priority. |
-| **NFR-O-W** | Mixed test prefix styles: 108 `test_<verb>_<subject>` + 212 `<subject>_<verb>_<expected>` no-prefix. No codified convention for new tests. | MEDIUM | tests/ | **POLICY-DECISION**: Codify single style for new tests. |
+| **NFR-O-W** | Mixed test prefix styles: 108 `test_<verb>_<subject>` + 212 `<subject>_<verb>_<expected>` no-prefix. No codified convention for new tests. | MEDIUM | tests/ | **RESOLVED — 2026-05-08 — S-2.07 (PR #309 / ca22be0) via `docs/specs/test-naming-convention.md` created codifying `test_<subject>_<verb>_<expected>` as the single convention for new tests. Original POLICY-DECISION resolved by adopting the dominant existing style.** |
 
 ### LOW (observability items classified as LOW)
 
@@ -105,14 +106,14 @@ All four MUST-FIX items (NFR-R-D, NFR-R-A, NFR-R-B, NFR-R-E) have been crystalli
 | **NFR-O-C** | No `--dry-run` flag on state-changing commands. Already documented as out-of-scope in v1 design spec. | LOW | `src/cli/issue/workflow.rs` | **DOCUMENT-AS-IS**: Retain out-of-scope status. |
 | **NFR-O-E** | No progress indicator for long-running operations (asset enrichment, team list with many pages). | LOW | `src/cli/assets.rs`, `src/cli/team.rs` | **DEFER**: Consider for v2 UX pass. |
 | **NFR-O-G** | `cli/issue/list.rs` is 1,083 LOC (post-split via `docs/specs/list-rs-split.md`; spec target was ≤750 but actual landed at 1,083 — see `component-graph.md` and risk-register R-M5). `view.rs` and `comments.rs` are already split out. CLAUDE.md still describes undivided `list.rs`. | LOW | `CLAUDE.md` | **DOCUMENT-AS-IS**: CLAUDE.md update covers this (NFR-O-L fix). |
-| **NFR-O-H** | `JR_RUN_OAUTH_INTEGRATION` env-var gates 1 ignored test but not documented in CLAUDE.md "AI Agent Notes". | LOW | `CLAUDE.md` | **FIX-IN-PHASE-3**: Add alongside `JR_RUN_KEYRING_TESTS`. |
+| **NFR-O-H** | `JR_RUN_OAUTH_INTEGRATION` env-var gates 1 ignored test but not documented in CLAUDE.md "AI Agent Notes". | LOW | `CLAUDE.md` | **RESOLVED — 2026-05-08 — S-2.05 (PR #307 / 7f004ca) via `JR_RUN_OAUTH_INTEGRATION` bullet added to CLAUDE.md "AI Agent Notes" alongside `JR_RUN_KEYRING_TESTS`. Original FIX-IN-PHASE-3 plan executed.** |
 | **NFR-O-I** | `ADF::to_text` silently drops mention/emoji/inlineCard/media nodes (`_` fall-through at `adf.rs:531-540`). Documented in source as deliberate per issue #202. | LOW | `src/adf.rs:531-540` | **DEFER**: Render `@<displayName>` for mentions; `:emoji:` for emojis; `[<title>](url)` for inlineCard. Medium-effort. |
 | **NFR-O-N** | `5 auth subcommands` lack JSON output paths (mentioned in NFR-O-F); also no `--output json` test coverage for `auth status` with multiple profiles. | LOW | `src/cli/auth.rs` | **DEFER**: Cover in auth JSON shape work (NFR-O-F). |
 | **NFR-O-P** | No API version field in JSON output. Downstream parsers cannot detect schema changes. | LOW | `src/output.rs` | **DEFER**: Consider `"_meta": {"version": "1"}` envelope for v2. |
-| **NFR-O-R** | `eprintln!` for human hints and `println!` for data are implicit contracts; no typed channel enum. 5 categorical profiles (Pure/Read-only/Mixed/Symmetric/no-log-facade) emerge by code-review only. | LOW | 24 CLI handler files | **DOCUMENT-AS-IS**: Document the 5 profiles in a source comment or CLAUDE.md. |
+| **NFR-O-R** | `eprintln!` for human hints and `println!` for data are implicit contracts; no typed channel enum. 5 categorical profiles (Pure/Read-only/Mixed/Symmetric/no-log-facade) emerge by code-review only. | LOW | 24 CLI handler files | **RESOLVED — 2026-05-08 — S-2.05 (PR #307 / 7f004ca) via Output channels subsection added to CLAUDE.md documenting the 5 output profiles. Original DOCUMENT-AS-IS plan executed.** |
 | **NFR-O-T** | `worklog list` default page size undocumented (currently whatever `OffsetPage` returns from Atlassian default). | LOW | `src/api/jira/worklogs.rs` | **DOCUMENT-AS-IS**: After NFR-R-A fix, document max-results parameter. |
 | **NFR-O-U** | `sprint list` does not show sprint start/end dates in table output. Present in API response. | LOW | `src/cli/sprint.rs` | **DEFER**: UX pass v2. |
-| **NFR-O-V** | `board view` truncation hint emitted to stderr (consistent with `issue list`/`sprint current`). Not documented. | LOW | `src/cli/board.rs` | **DOCUMENT-AS-IS**: Add to CLAUDE.md convention list. |
+| **NFR-O-V** | `board view` truncation hint emitted to stderr (consistent with `issue list`/`sprint current`). Not documented. | LOW | `src/cli/board.rs` | **RESOLVED — 2026-05-08 — S-2.05 (PR #307 / 7f004ca) via `board view` stderr truncation hint added to CLAUDE.md convention list. Original DOCUMENT-AS-IS plan executed.** |
 | **NFR-O-X** | No `jr version --output json` path (exists only as human-readable). | LOW | `src/main.rs` | **DEFER**: Low priority. |
 
 ---
@@ -149,19 +150,19 @@ All four MUST-FIX items (NFR-R-D, NFR-R-A, NFR-R-B, NFR-R-E) have been crystalli
 | NFR-R-E | Reliability | HIGH | FIX-IN-PHASE-3 | BC-4.3.001 |
 | NFR-S-B | Security | HIGH | SECURITY-DECIDE | — |
 | NFR-R-C | Reliability | MEDIUM | RESOLVED (2026-05-08, S-2.06 v2.0.0, PR #308 / c8f15d8) | — |
-| NFR-R-F | Reliability | MEDIUM | DOCUMENT-AS-IS | — |
+| NFR-R-F | Reliability | MEDIUM | RESOLVED (2026-05-08, S-2.05, PR #307 / 7f004ca) | — |
 | NFR-S-A | Security | MEDIUM | SECURITY-DECIDE | — |
 | NFR-S-C | Security | MEDIUM | SECURITY-DECIDE | — |
 | NFR-O-A | Observability | MEDIUM | DEFER | — |
 | NFR-O-B | Observability | MEDIUM | DEFER | — |
 | NFR-O-D | Observability | MEDIUM | DEFER | — |
-| NFR-O-F | Observability | MEDIUM | POLICY-DECISION | — |
-| NFR-O-J | Observability | MEDIUM | POLICY-DECISION | — |
-| NFR-O-L | Observability | MEDIUM | FIX-IN-PHASE-3 | — |
-| NFR-O-M | Observability | MEDIUM | DOCUMENT-AS-IS | — |
-| NFR-O-O | Observability | MEDIUM | DOCUMENT-AS-IS | — |
+| NFR-O-F | Observability | MEDIUM | RESOLVED (2026-05-08, S-2.07, PR #309 / ca22be0) | — |
+| NFR-O-J | Observability | MEDIUM | RESOLVED (2026-05-08, S-2.07, PR #309 / ca22be0) | — |
+| NFR-O-L | Observability | MEDIUM | RESOLVED (2026-05-08, S-2.05, PR #307 / 7f004ca) | — |
+| NFR-O-M | Observability | MEDIUM | RESOLVED (2026-05-08, S-2.05, PR #307 / 7f004ca) | — |
+| NFR-O-O | Observability | MEDIUM | RESOLVED (2026-05-08, S-2.05, PR #307 / 7f004ca) | — |
 | NFR-O-S | Observability | MEDIUM | DEFER | — |
-| NFR-O-W | Observability | MEDIUM | POLICY-DECISION | — |
+| NFR-O-W | Observability | MEDIUM | RESOLVED (2026-05-08, S-2.07, PR #309 / ca22be0) | — |
 | NFR-P-NEW-1 | Performance | MEDIUM | DEFER | — |
 | NFR-R-G | Reliability | LOW | DOCUMENT-AS-IS | — |
 | NFR-R-NEW-1 | Reliability | LOW | FIX-IN-PHASE-3 | BC-X.4.009 (proposed fix) |
@@ -172,24 +173,25 @@ All four MUST-FIX items (NFR-R-D, NFR-R-A, NFR-R-B, NFR-R-E) have been crystalli
 | NFR-O-C | Observability | LOW | DOCUMENT-AS-IS | — |
 | NFR-O-E | Observability | LOW | DEFER | — |
 | NFR-O-G | Observability | LOW | DOCUMENT-AS-IS | — |
-| NFR-O-H | Observability | LOW | FIX-IN-PHASE-3 | — |
+| NFR-O-H | Observability | LOW | RESOLVED (2026-05-08, S-2.05, PR #307 / 7f004ca) | — |
 | NFR-O-I | Observability | LOW | DEFER | — |
 | NFR-O-N | Observability | LOW | DEFER | — |
 | NFR-O-P | Observability | LOW | DEFER | — |
-| NFR-O-R | Observability | LOW | DOCUMENT-AS-IS | — |
+| NFR-O-R | Observability | LOW | RESOLVED (2026-05-08, S-2.05, PR #307 / 7f004ca) | — |
 | NFR-O-T | Observability | LOW | DOCUMENT-AS-IS | — |
 | NFR-O-U | Observability | LOW | DEFER | — |
-| NFR-O-V | Observability | LOW | DOCUMENT-AS-IS | — |
+| NFR-O-V | Observability | LOW | RESOLVED (2026-05-08, S-2.05, PR #307 / 7f004ca) | — |
 | NFR-O-X | Observability | LOW | DEFER | — |
 | NFR-SCA-1 | Scalability | LOW | DOCUMENT-AS-IS | — |
 | NFR-SCA-2 | Scalability | LOW | DEFER | — |
 | NFR-SCA-3 | Scalability | LOW | DOCUMENT-AS-IS | — |
 
-**Phase 3 routing summary:**
-- FIX-IN-PHASE-3: 10 (1 CRITICAL, 5 HIGH, 2 MEDIUM, 2 LOW — includes NFR-R-NEW-1)
-- SECURITY-DECIDE: 3 (1 HIGH, 2 MEDIUM)
-- POLICY-DECISION: 3 (3 MEDIUM)
-- DOCUMENT-AS-IS: 13 (LOW or MEDIUM; NFR-R-NEW-1 moved to FIX-IN-PHASE-3; NFR-O-K merged into NFR-S-D at Pass 7)
+**Phase 3 routing summary (post Wave 2 closure, 2026-05-08):**
+- RESOLVED: 11 (NFR-R-C via S-2.06; NFR-R-F/NFR-O-H/NFR-O-L/NFR-O-M/NFR-O-O/NFR-O-R/NFR-O-V via S-2.05; NFR-O-F/NFR-O-J/NFR-O-W via S-2.07)
+- FIX-IN-PHASE-3: 7 (1 CRITICAL: NFR-R-D; 5 HIGH: NFR-R-A, NFR-R-B, NFR-R-E, NFR-S-E, NFR-S-F; 1 LOW: NFR-R-NEW-1)
+- SECURITY-DECIDE: 3 (1 HIGH: NFR-S-B; 2 MEDIUM: NFR-S-A, NFR-S-C)
+- POLICY-DECISION: 0 (all 3 closed by Wave 2: NFR-O-F, NFR-O-J, NFR-O-W)
+- DOCUMENT-AS-IS: 8 (LOW or MEDIUM; NFR-R-NEW-1 moved to FIX-IN-PHASE-3; NFR-O-K merged into NFR-S-D at Pass 7; 5 items swept to RESOLVED by Wave 2)
 - DEFER: 12 (MEDIUM and LOW)
 
 **Total: 41** (42 rows − NFR-O-K merged into NFR-S-D at adversary Pass 7. NFR-S-F added per ADV-P3-007. NFR-S-E severity promoted LOW→HIGH per ADV-P2-004.)
