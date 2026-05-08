@@ -1995,4 +1995,60 @@ mod tests {
             OAuthAppSource::None
         );
     }
+
+    // -------------------------------------------------------------------------
+    // S-1.08 holdout tests: credential resolver precedence (BC-1.4.030)
+    // -------------------------------------------------------------------------
+
+    /// AC-005 (BC-1.4.030): When both keychain BYO credentials AND embedded
+    /// app are present, `peek_oauth_app_source_for_test(true, true)` must
+    /// return `OAuthAppSource::Keychain` (keychain wins).
+    ///
+    /// This enforces the contract that a BYO user is never silently flipped
+    /// onto the embedded app mid-session. Their refresh_token was issued by
+    /// their own OAuth app and would be rejected by the embedded app's
+    /// client_id.
+    #[test]
+    fn test_s_1_08_ac005_keychain_wins_over_embedded_when_both_present() {
+        assert_eq!(
+            peek_oauth_app_source_for_test(true, true),
+            OAuthAppSource::Keychain,
+            "keychain must beat embedded when both are present"
+        );
+    }
+
+    /// AC-005 (BC-1.4.030): Keychain-only (no embedded) must also return
+    /// `OAuthAppSource::Keychain`.
+    #[test]
+    fn test_s_1_08_ac005_keychain_wins_when_only_keychain_present() {
+        assert_eq!(
+            peek_oauth_app_source_for_test(true, false),
+            OAuthAppSource::Keychain,
+            "keychain must be returned when keychain is present and embedded is absent"
+        );
+    }
+
+    /// AC-005 (BC-1.4.030): When keychain is absent but embedded is present,
+    /// `peek_oauth_app_source_for_test(false, true)` must return
+    /// `OAuthAppSource::Embedded` (embedded fallback).
+    #[test]
+    fn test_s_1_08_ac005_embedded_fallback_when_no_keychain() {
+        assert_eq!(
+            peek_oauth_app_source_for_test(false, true),
+            OAuthAppSource::Embedded,
+            "embedded must be the fallback when keychain is absent"
+        );
+    }
+
+    /// AC-005 (BC-1.4.030): When neither keychain nor embedded is present,
+    /// `peek_oauth_app_source_for_test(false, false)` must return
+    /// `OAuthAppSource::None` (no credential source resolved).
+    #[test]
+    fn test_s_1_08_ac005_none_when_no_source_resolved() {
+        assert_eq!(
+            peek_oauth_app_source_for_test(false, false),
+            OAuthAppSource::None,
+            "None sentinel must be returned when no credential source is available"
+        );
+    }
 }
