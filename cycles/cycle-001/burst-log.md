@@ -686,3 +686,40 @@ All 7 Wave 0 stories complete. 6 via PRs to develop; 1 (S-0.07) spec-only on fac
 - 0 production regressions; subprocess test compat preserved through Option B canonization
 - 3 new lessons learned (PR deviations tracking; dispatcher block pattern; clippy version skew)
 
+---
+
+## Burst: S-2.03 DELIVERED — BC-4 assets/CMDB holdout suite (2026-05-08)
+
+**Agents dispatched:** test-writer → demo-recorder → devops-engineer (push + pr-manager) → devops-engineer (worktree cleanup) → state-manager
+**Files touched (develop):** `tests/asset_holdouts.rs` (417 lines, new), `docs/demo-evidence/S-2.03/` (evidence-report.md, combined-transcript.txt, AC-003-ambiguous-status.tape/.gif/.webm)
+**Commits:** dd5c41f (tests/asset_holdouts.rs — 3 regression-pin tests), 212a237 (demo evidence)
+**Squash-merge SHA:** e9c2ba8 (PR #305 squash-merged to develop, 2026-05-08)
+**Files touched (factory):** STATE.md, sprint-state.yaml, stories/STORY-INDEX.md, cycles/cycle-001/burst-log.md, cycles/cycle-001/implementation/red-gate-log.md
+
+### Summary
+
+S-2.03 (BC-4 assets/CMDB regression holdout suite) delivered and merged via PR #305 to develop at squash SHA e9c2ba8. This is a regression-pin holdout story: 3 tests were written in `tests/asset_holdouts.rs` against existing correct production behavior at activation HEAD dea1664. Tests PASS on first run by design — they pin the existing behavior rather than driving new code (no production code changes). 8/8 CI green. Review: APPROVE, 1 cycle, 0 blocking findings. Worktree and local/remote branch `test/S-2.03-bc-4-asset-enrichment-holdout-suite` fully cleaned up. 1 LOW deferred: S-2.03-DOC-01 (story spec line ~123 names cache file `workspace_id.json` but actual filename in `src/cache.rs` and tests is `workspace.json`; tests are correct; spec text needs follow-up doc PR).
+
+Wave 2: 3/7 merged (S-2.01, S-2.02, S-2.03). Phase 3 progress: 19/31 (61%). Active story: S-2.04.
+
+### Delivery Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| test-writer | Write 3 regression-pin tests for H-037/H-038/H-039 in `tests/asset_holdouts.rs` | dd5c41f (417 lines); passes green against unmodified production code |
+| demo-recorder | Record demo evidence for S-2.03 ACs | 212a237; `docs/demo-evidence/S-2.03/` (evidence-report.md, combined-transcript.txt, AC-003-ambiguous-status.tape/.gif/.webm) |
+| devops-engineer | Push branch, create PR #305, merge --squash --delete-branch | e9c2ba8 squash-merge SHA on develop; remote branch deleted |
+| devops-engineer | Worktree cleanup | Worktree removed; local branch `test/S-2.03-bc-4-asset-enrichment-holdout-suite` deleted |
+| state-manager | Update STATE.md, sprint-state.yaml, STORY-INDEX.md, burst-log.md, red-gate-log.md; commit factory-artifacts | This commit |
+
+### H-038 Placement Note
+
+H-038 pins `enrich_assets` (BC-4.3.002 — asset enrichment join_all concurrency). `enrich_assets` is declared `pub` in `src/cli/assets.rs` and re-exported via the `pub mod api` chain in `src/lib.rs`. A library-level integration test in `tests/asset_holdouts.rs` is the correct placement for this function — no workaround or special access was required.
+
+### Deferred
+
+| ID | Description | Severity |
+|----|-------------|----------|
+| S-2.03-DOC-01 | Story spec line ~123 names workspace cache file `workspace_id.json` but actual filename per `src/cache.rs` and tests is `workspace.json`. Tests use correct filename. Update story spec in a follow-up doc PR. | LOW |
+
+

@@ -2,11 +2,11 @@
 document_type: story-index
 phase: phase-2-story-decomposition
 producer: story-writer
-version: "1.4.2"
+version: "1.4.3"
 total_stories: 31
 total_waves: 4
 status: complete-pending-adv-review
-last_updated: 2026-05-06
+last_updated: 2026-05-08
 activation_head: dea1664
 ---
 
@@ -104,9 +104,9 @@ Note: S-2.03's S-0.03 dependency was demoted to a recommended merge order (no lo
 
 | Story ID | Title | NFR/BC Anchors | Holdout Anchors | Status | Est. Effort |
 |----------|-------|----------------|-----------------|--------|-------------|
-| S-2.01 | BC-2 issue-read holdout suite | BC-2.1.001, BC-2.1.007, BC-2.1.012, BC-X.7.006, BC-X.2.005, BC-X.2.006, BC-3.7.001, BC-3.7.004, BC-7.3.001 | H-021, H-030..H-035 | draft | medium |
-| S-2.02 | BC-3 issue-write holdout suite | BC-3.2.001, BC-3.2.009, BC-2.1.013, BC-X.7.004 | H-006, H-007, H-008, H-014 | draft | medium |
-| S-2.03 | BC-4 assets/CMDB holdout suite | BC-4.2.001, BC-4.3.002, BC-4.2.006 | H-037, H-038, H-039 | draft | small |
+| S-2.01 | BC-2 issue-read holdout suite | BC-2.1.001, BC-2.1.007, BC-2.1.012, BC-X.7.006, BC-X.2.005, BC-X.2.006, BC-3.7.001, BC-3.7.004, BC-7.3.001 | H-021, H-030..H-035 | merged (PR #303 / f6516f8) | medium |
+| S-2.02 | BC-3 issue-write holdout suite | BC-3.2.001, BC-3.2.009, BC-2.1.013, BC-X.7.004 | H-006, H-007, H-008, H-014 | merged (PR #304 / 7528960) | medium |
+| S-2.03 | BC-4 assets/CMDB holdout suite | BC-4.2.001, BC-4.3.002, BC-4.2.006 | H-037, H-038, H-039 | merged (PR #305 / e9c2ba8) | small |
 | S-2.04 | BC-5/7 boards, sprints, ADF holdout suite | BC-5.2.001, BC-5.2.005, BC-5.2.007, BC-5.2.008, BC-5.3.001, BC-5.3.002, BC-7.2.001 | H-040..H-044 | draft | medium |
 | S-2.05 | CLAUDE.md documentation update | NFR-O-L, NFR-O-M, NFR-O-O, NFR-O-V, NFR-O-R, NFR-R-F | — | draft | small |
 | S-2.06 | Worklog duration config + CMDB cache tuple | NFR-R-C, BC-X.5.009, BC-6.2.013 | — | draft | medium |

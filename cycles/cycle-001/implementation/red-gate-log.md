@@ -241,3 +241,63 @@ errors). Fix the 14 call sites listed in S-0.04 and update the 2 error message
 strings to make each test pass. The two unit tests must continue to pass.
 
 Fix pattern: `config.global.fields.X` → `config.active_profile().X`
+
+---
+
+# Red Gate Log — S-2.03 (BC-4 assets/CMDB holdout suite)
+
+**Date:** 2026-05-08
+**Story:** S-2.03 — BC-4 assets/CMDB regression holdout suite (H-037, H-038, H-039)
+**Test file:** `tests/asset_holdouts.rs` (417 lines)
+**Commits:** dd5c41f (tests), 212a237 (demo evidence)
+**Squash-merge SHA:** e9c2ba8 (PR #305 to develop)
+**Branch:** `test/S-2.03-bc-4-asset-enrichment-holdout-suite` (deleted post-merge)
+
+## Inverted Red Gate (Regression-Pin Pattern)
+
+S-2.03 is a regression-pin holdout story. The Red Gate discipline is intentionally
+inverted: the 3 tests are written against EXISTING CORRECT behavior at activation
+HEAD dea1664. Tests PASS on first run because they pin production behavior that is
+already present and correct — not because the tests are vacuous.
+
+This is not a discipline violation. The purpose of the Red Gate is to ensure tests
+fail for the right reason before implementation. For regression-pin holdouts, "the
+right reason to pass" IS the point: the test is a behavioral contract pin, not a
+TDD driver. Recording the explicit framing here so future reviewers understand the
+distinction.
+
+Lib baseline at test-write time:
+
+```
+test result: ok. 614 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+(~550 integration tests also green; 0 regressions)
+
+## Tests Written
+
+| Test Name | Holdout | BC Anchor | Pass/Fail at Write |
+|-----------|---------|-----------|-------------------|
+| `test_h037_assets_search_returns_structured_data` | H-037 | BC-4.2.001 (asset search returns structured AQL results) | PASS (pins existing correct behavior) |
+| `test_h038_enrich_assets_adds_object_attributes` | H-038 | BC-4.3.002 (enrich_assets join_all concurrency + attribute merge) | PASS (pins existing correct behavior) |
+| `test_h039_assets_schema_type_filters_correctly` | H-039 | BC-4.2.006 (--type filter narrows schema objects) | PASS (pins existing correct behavior) |
+
+## H-038 Placement Rationale
+
+H-038 pins `enrich_assets` (BC-4.3.002). `enrich_assets` is declared `pub` in
+`src/cli/assets.rs` and is accessible from a library-level integration test because
+`src/lib.rs` exports `pub mod api` which re-exports the function via the module
+chain. Placement in `tests/asset_holdouts.rs` as a library-level test is the
+correct approach — no access workaround was needed.
+
+## Production Code Modifications
+
+NONE. S-2.03 is a test-only delivery. All 3 source files (src/cli/assets.rs,
+src/api/assets/linked.rs, src/api/assets/objects.rs) are untouched.
+
+## Deferred
+
+S-2.03-DOC-01 (LOW): Story spec line ~123 names workspace cache file
+`workspace_id.json`. Actual filename per `src/cache.rs` and tests is `workspace.json`.
+Tests use the correct filename. Story spec text needs a follow-up doc PR — not a
+production correctness issue.
