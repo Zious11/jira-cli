@@ -179,6 +179,25 @@ When adding a new feature:
   columns — use --all to see everything") is written to stderr, consistent with the
   convention used by `issue list` and `sprint current`. This is intentional — stderr
   keeps hints out of `--output json` and pipe-friendly stdout.
+- **Atlassian's expired-access-token 401 response shape:** The Jira REST API v3 returns
+  `HTTP 401` with body `{"errorMessages": ["The access token provided is expired, revoked,
+  malformed, or invalid for other reasons."]}` — there is NO machine-readable `code` field
+  and NO RFC-6750-compliant `WWW-Authenticate: Bearer error="invalid_token"` header.
+  Auto-refresh wiring (S-3.03) uses blanket-401 trigger (matches `gh` CLI pattern), not
+  substring-match (locale-fragile) and not RFC-6750 header inspection (Atlassian doesn't
+  follow the spec). Source: `.factory/research/S-3.03-wave3-verification.md` (Claim 2, REFUTED).
+- **Refresh-token rotation is strictly single-use on Atlassian.** The "10-minute reuse
+  window" mentioned in some secondary sources (Nango.dev, etc.) is NOT documented by
+  Atlassian and is known to fail in clusters. Treat each refresh token as one-shot.
+  Concurrent refresh attempts MUST go through `src/api/refresh_coordinator.rs`
+  per-profile single-flight to avoid `invalid_grant` races. Source:
+  `.factory/research/S-3.03-v2-design-verification.md` (Claim 5, REFUTED).
+- **`refresh_coordinator.rs` mutex layering rule:** outer `std::sync::Mutex<HashMap<...>>`
+  is held ONLY BRIEFLY for HashMap lookup/insert; it is released BEFORE any `.await`.
+  Inner `tokio::sync::Mutex<RefreshState>` is held across the refresh `.await`. NEVER
+  use `std::sync::Mutex` for the inner mutex — `tokio::sync::Mutex` is mandatory because
+  it does NOT poison on panic, which is the correct semantic for refresh (a panicked
+  refresh should not permanently break the coordinator). Source: S-3.03 v2 spec.
 
 ## AI Agent Notes
 
