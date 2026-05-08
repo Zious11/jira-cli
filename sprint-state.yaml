@@ -319,13 +319,13 @@ wave_3:
   status: blocked
   unblocks_when: wave-2-complete
   stories:
-    - { id: S-3.01, title: "Output format holdout suite", status: blocked }
-    - { id: S-3.02, title: "JSM queue holdout suite", status: blocked }
-    - { id: S-3.03, title: "User/team holdout suite", status: blocked }
-    - { id: S-3.04, title: "JQL/AQL correctness holdout", status: blocked }
-    - { id: S-3.05, title: "Error-path taxonomy holdout", status: blocked }
-    - { id: S-3.06, title: "Numeric-claim spec checker", status: blocked }
-    - { id: S-3.07, title: "Auth error-path holdout", status: blocked }
-    - { id: S-3.08, title: "Doc-as-is pass", status: blocked }
-    - { id: S-3.09, title: "ADR-0013 PKCE monitoring task", status: blocked }
-    - { id: S-3.10, title: "Rewrite format_roundtrip proptest + delete deprecated parse_duration calculator + retire H-018", status: blocked } # Added during Wave 2 as S-2.06 DEFER-01 follow-up
+    - { id: S-3.01, title: "Shard-split src/cli/auth.rs (1,998 LOC) into cli/auth sub-modules", status: blocked }
+    - { id: S-3.02, title: "Shard-split src/cli/assets.rs (1,055 LOC) by command theme", status: blocked }
+    - { id: S-3.03, title: "Investigate and wire (or document removal of) refresh_oauth_token", status: blocked }
+    - { id: S-3.04, title: "Multi-cloudId disambiguation: --cloud-id flag + prompt for ambiguous orgs", status: blocked }
+    - { id: S-3.05, title: "Cap asset enrichment join_all concurrency with buffer_unordered(8)", status: blocked }
+    - { id: S-3.06, title: "Codify pre-merge numeric claim checker for BC heading/body drift (DRIFT-001)", status: blocked }
+    - { id: S-3.07, title: "Consolidated LOW NFR code fixes: Retry-After cap, parse_duration overflow, profile name error, anti-loop guard", status: blocked }
+    - { id: S-3.08, title: "Consolidated DOCUMENT-AS-IS LOW NFRs: source comments and CLAUDE.md additions", status: blocked }
+    - { id: S-3.09, title: "Formally record PKCE deferral (SD-001 → DEFER; ADR-0013)", status: blocked }
+    - { id: S-3.10, title: "Rewrite format_roundtrip proptest + delete deprecated 3-arg parse_duration calculator + retire H-018", status: blocked } # Added during Wave 2 as S-2.06 DEFER-01 follow-up
