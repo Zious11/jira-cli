@@ -14,8 +14,10 @@
 //!   → exit 64, "http or https" + "ftp" in stderr, ZERO HTTP calls
 //! - AC-005 / H-034 / BC-3.7.001: `jr issue remote-link --url https://example.com`
 //!   → POST body normalized to `https://example.com/` (trailing slash from url crate)
-//! - AC-006 / H-035 / BC-2.1.001: combined filters (--open --assignee --created-after
-//!   --status --team) → exit 0, 5-element JSON array, no panic
+//! - AC-006 / H-035 / BC-2.1.001: combined filters (--assignee --created-after
+//!   --status --team) → exit 0, JSON array, no panic.
+//!   Note: `--open` and `--status` declared `conflicts_with` at clap layer
+//!   (`src/cli/mod.rs:168,171`); test uses 4 non-conflicting filters.
 //! - AC-007 / H-021 / BC-2.1.007: `--status prog` ambiguous → exit 64,
 //!   "Ambiguous status" in stderr, JQL mock not invoked
 //!   (anchors pre-existing tests/issue_list_errors.rs:369 coverage)
