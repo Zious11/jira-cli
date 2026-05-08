@@ -1,0 +1,10 @@
+---
+source: src/cli/auth.rs
+assertion_line: 2176
+expression: value
+---
+{
+  "action": "logout",
+  "ok": true,
+  "profile": "default"
+}

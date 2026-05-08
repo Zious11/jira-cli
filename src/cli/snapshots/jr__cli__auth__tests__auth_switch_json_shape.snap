@@ -1,0 +1,10 @@
+---
+source: src/cli/auth.rs
+assertion_line: 2164
+expression: value
+---
+{
+  "action": "switch",
+  "ok": true,
+  "profile": "default"
+}

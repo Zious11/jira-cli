@@ -100,6 +100,7 @@ cargo deny check                     # License + vulnerability audit
 - **No unsafe code** without explicit justification in a comment.
 - **No lint suppression without refactoring.** If clippy warns (e.g., `too_many_arguments`), refactor to fix the root cause — don't add `#[allow]`. If refactoring is impractical, ask the user before suppressing and include a justification comment.
 - **Default to fixing code, not tests.** When a test fails, assume the test is correct and fix the implementation using idiomatic Rust. Only modify a test when requirements have changed — not to accommodate non-idiomatic code or lint workarounds.
+- **Test naming:** New tests use `test_<verb>_<subject>_<expected_outcome>` (e.g., `test_auth_switch_returns_json_ok`). Existing tests with no-prefix names are NOT renamed; this convention applies to new tests only. See `docs/specs/test-naming-convention.md`.
 
 ### Output channels
 
