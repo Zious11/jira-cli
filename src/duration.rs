@@ -2,6 +2,14 @@ use anyhow::{Result, bail};
 
 use crate::error::JrError;
 
+/// Maximum byte length accepted by `parse_duration_validate`.
+///
+/// The longest realistic duration string a user would type is something like
+/// "99w 99d 99h 99m" (17 bytes). 64 bytes gives generous headroom while
+/// bounding allocation before any whitespace-strip or heap allocation occurs.
+/// Inputs over this limit are rejected with exit code 64 (user error).
+pub(crate) const MAX_DURATION_INPUT_LEN: usize = 64;
+
 /// Validates a Jira worklog duration string syntactically.
 ///
 /// Accepts compact (`1h30m`, `1w2d3h30m`) and space-separated forms
@@ -11,6 +19,15 @@ use crate::error::JrError;
 /// Returns `Ok(())` for valid syntax, `Err(JrError::UserError(...))` for invalid
 /// input so callers get exit code 64.
 pub fn parse_duration_validate(input: &str) -> Result<()> {
+    if input.len() > MAX_DURATION_INPUT_LEN {
+        return Err(JrError::UserError(format!(
+            "Duration string too long ({} bytes; max {}). Use format: Nw Nd Nh Nm (e.g., 1w2d3h30m, 2d 3h, 30m).",
+            input.len(),
+            MAX_DURATION_INPUT_LEN
+        ))
+        .into());
+    }
+
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Err(JrError::UserError(
@@ -182,6 +199,44 @@ mod tests {
     fn test_invalid_unit_fails() {
         assert!(parse_duration("5x", HPD, DPW).is_err());
     }
+
+    // WV2-SEC-01 regression pins: input length cap on parse_duration_validate
+
+    #[test]
+    fn test_parse_duration_validate_rejects_input_longer_than_max() {
+        let too_long = "1d".repeat(40); // 80 bytes — over the 64-byte cap
+        let result = parse_duration_validate(&too_long);
+        assert!(result.is_err(), "input over cap must be rejected");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("too long"),
+            "error must mention size; got: {}",
+            err_msg
+        );
+        assert!(
+            err_msg.contains("64"),
+            "error must cite the cap; got: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_parse_duration_validate_accepts_input_at_max_boundary() {
+        // "1m" repeated 31 times = 62 bytes; under the 64-byte cap and syntactically valid
+        let just_under_cap = "1m".repeat(31);
+        assert_eq!(
+            just_under_cap.len(),
+            62,
+            "precondition: input must be 62 bytes"
+        );
+        let result = parse_duration_validate(&just_under_cap);
+        assert!(
+            result.is_ok(),
+            "input under cap with valid syntax must be accepted; got: {:?}",
+            result
+        );
+    }
+
     #[test]
     fn test_format_minutes() {
         assert_eq!(format_duration(1800), "30m");
