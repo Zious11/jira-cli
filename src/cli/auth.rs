@@ -3,6 +3,7 @@ use dialoguer::{Input, Password};
 
 use crate::api::auth;
 use crate::api::auth_embedded::{OAuthAppSource, embedded_oauth_app};
+use crate::cli::OutputFormat;
 use crate::config::{Config, global_config_path};
 use crate::error::JrError;
 use crate::output;
@@ -256,6 +257,22 @@ fn resolve_oauth_app_credentials_for_test(
 /// Hint for OAuth client_id / client_secret errors so first-time agents
 /// discover they must create an OAuth app before passing credentials.
 const OAUTH_APP_HINT: &str = "Create one at https://developer.atlassian.com/console/myapps/.";
+
+/// Build the verb-aligned `--output json` success payload for the four auth
+/// subcommands that mutate profile state (login, switch, logout, remove).
+///
+/// The shape `{"profile", "action", "ok": true}` is the canonical contract
+/// documented in `docs/specs/json-output-shapes.md`. Kept separate from
+/// `refresh_success_payload` because `auth refresh` is a re-authentication
+/// trigger with its own richer payload — see json-output-shapes.md for
+/// the rationale.
+fn auth_json_response(profile: &str, action: &str) -> serde_json::Value {
+    serde_json::json!({
+        "profile": profile,
+        "action": action,
+        "ok": true,
+    })
+}
 
 /// Which auth flow `jr auth refresh` should dispatch to.
 ///
@@ -529,6 +546,7 @@ pub struct LoginArgs {
     pub client_id: Option<String>,
     pub client_secret: Option<String>,
     pub no_input: bool,
+    pub output: OutputFormat,
 }
 
 /// Orchestrate `jr auth login`: ensure the target profile exists with the
@@ -604,10 +622,18 @@ pub async fn handle_login(args: LoginArgs) -> Result<()> {
     config.global = global;
     config.save_global()?;
     if args.oauth {
-        login_oauth(&target, args.client_id, args.client_secret, args.no_input).await
+        login_oauth(&target, args.client_id, args.client_secret, args.no_input).await?;
     } else {
-        login_token(&target, args.email, args.token, args.no_input).await
+        login_token(&target, args.email, args.token, args.no_input).await?;
     }
+    if matches!(args.output, OutputFormat::Json) {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&auth_json_response(&target, "login"))
+                .expect("auth JSON response serialization cannot fail")
+        );
+    }
+    Ok(())
 }
 
 /// Pure logic for ensuring a target profile exists with the given URL.
@@ -951,7 +977,7 @@ pub(super) fn resolve_logout_target(
 /// metadata. The shared API-token credential is intentionally NOT cleared
 /// (it's keyed by host, not profile, so wiping it would log every profile
 /// out of API-token mode).
-pub async fn handle_logout(profile_arg: Option<&str>) -> anyhow::Result<()> {
+pub async fn handle_logout(profile_arg: Option<&str>, output: &OutputFormat) -> anyhow::Result<()> {
     let config = crate::config::Config::load_with(profile_arg)?;
     let target = resolve_logout_target(&config.global, profile_arg, &config.active_profile_name);
     crate::config::validate_profile_name(&target)?;
@@ -968,7 +994,15 @@ pub async fn handle_logout(profile_arg: Option<&str>) -> anyhow::Result<()> {
         .into());
     }
     crate::api::auth::clear_profile_creds(&target)?;
-    crate::output::print_success(&format!("Logged out of profile {target:?}"));
+    if matches!(output, OutputFormat::Json) {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&auth_json_response(&target, "logout"))
+                .expect("auth JSON response serialization cannot fail")
+        );
+    } else {
+        crate::output::print_success(&format!("Logged out of profile {target:?}"));
+    }
     Ok(())
 }
 
@@ -1036,6 +1070,7 @@ pub async fn handle_remove(
     target: &str,
     no_input: bool,
     cli_profile: Option<&str>,
+    output: &OutputFormat,
 ) -> anyhow::Result<()> {
     let mut config = Config::load_with(cli_profile)?;
     crate::config::validate_profile_name(target)?;
@@ -1083,7 +1118,15 @@ pub async fn handle_remove(
             cache_path.display()
         ));
     }
-    crate::output::print_success(&format!("Removed profile {target:?}"));
+    if matches!(output, OutputFormat::Json) {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&auth_json_response(target, "remove"))
+                .expect("auth JSON response serialization cannot fail")
+        );
+    } else {
+        crate::output::print_success(&format!("Removed profile {target:?}"));
+    }
     Ok(())
 }
 
@@ -1110,11 +1153,23 @@ pub(super) fn handle_switch_in_memory(
 }
 
 /// `jr auth switch <name>` — set the default profile in `config.toml`.
-pub async fn handle_switch(target: &str, cli_profile: Option<&str>) -> Result<()> {
+pub async fn handle_switch(
+    target: &str,
+    cli_profile: Option<&str>,
+    output: &OutputFormat,
+) -> Result<()> {
     let mut config = Config::load_with(cli_profile)?;
     config.global = handle_switch_in_memory(config.global, target)?;
     config.save_global()?;
-    output::print_success(&format!("Active profile set to {target:?}"));
+    if matches!(output, OutputFormat::Json) {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&auth_json_response(target, "switch"))
+                .expect("auth JSON response serialization cannot fail")
+        );
+    } else {
+        output::print_success(&format!("Active profile set to {target:?}"));
+    }
     Ok(())
 }
 

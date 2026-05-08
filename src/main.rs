@@ -146,6 +146,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                         client_id,
                         client_secret,
                         no_input: cli.no_input,
+                        output: cli.output,
                     })
                     .await
                 }
@@ -175,17 +176,23 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                     .await
                 }
                 cli::AuthCommand::Switch { name } => {
-                    cli::auth::handle_switch(&name, cli.profile.as_deref()).await
+                    cli::auth::handle_switch(&name, cli.profile.as_deref(), &cli.output).await
                 }
                 cli::AuthCommand::List => {
                     cli::auth::handle_list(&cli.output, cli.profile.as_deref()).await
                 }
                 cli::AuthCommand::Logout { profile } => {
                     let effective_profile = profile.or_else(|| cli.profile.clone());
-                    cli::auth::handle_logout(effective_profile.as_deref()).await
+                    cli::auth::handle_logout(effective_profile.as_deref(), &cli.output).await
                 }
                 cli::AuthCommand::Remove { name } => {
-                    cli::auth::handle_remove(&name, cli.no_input, cli.profile.as_deref()).await
+                    cli::auth::handle_remove(
+                        &name,
+                        cli.no_input,
+                        cli.profile.as_deref(),
+                        &cli.output,
+                    )
+                    .await
                 }
             },
             cli::Command::Me => {
