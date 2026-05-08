@@ -1093,4 +1093,10 @@ Gate status: PENDING. Orchestrator dispatches Phase 3-adv next.
 |------|-------|--------|--------|
 | S-2.04 MERGED — Boards/sprints/ADF holdout suite | devops-engineer | complete | PR #306 squash-merged to develop at ada9126 (2026-05-08); 9 regression-pin tests for H-040..H-044 across 7 BCs; 8/8 CI green; APPROVE 1 cycle; 0 blocking; 3 LOW deferred (S-2.04-DEFER-01/-02 spec text + S-2.04-DOC-01 pre-existing path bug). Wave 2: 4/7. Phase 3: 20/31 (65%). |
 
+## Archived Step: S-2.05 MERGED (archived from STATE.md Current Phase Steps on 2026-05-08)
+
+| Step | Agent | Status | Output |
+|------|-------|--------|--------|
+| S-2.05 MERGED — CLAUDE.md doc update | devops-engineer | complete | PR #307 squash-merged to develop at 7f004ca (2026-05-08); doc-only — 6 NFRs DOCUMENT-AS-IS + bonus NFR-O-H; 51/0 insertions; 8/8 CI green; APPROVE 1 cycle; 0 blocking; 1 LOW deferred (S-2.05-DEFER-01). Wave 2: 5/7. Phase 3: 21/31 (68%). |
+
 
