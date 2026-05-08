@@ -870,4 +870,154 @@ Wave 2: 6/7 merged (S-2.01, S-2.02, S-2.03, S-2.04, S-2.05, S-2.06). Phase 3 pro
 | S-2.06-DEFER-02 | tests/worklog_duration_holdouts.rs AC-003 stderr OR-chain assertion is lenient (passes if any one of Nw/Nd/Nh/Nm appears). Could be tightened to require all four substrings. Target: future test cleanup. | LOW |
 | S-2.06-DEFER-03 | src/duration.rs:65 !found_any guard reachability is constrained by prior guards — logically sound but slightly defensive. No action needed. | LOW |
 
+---
+
+## Burst: S-2.07 DELIVERED — Auth --output json (4 subcommands) + verb-aligned JSON policy + test naming (2026-05-08)
+
+**Story:** S-2.07 (v2.0.0 — pivoted from v1.0.0 after Perplexity verification 2026-05-08)
+**Agents dispatched:** research-agent (Perplexity + WebSearch + WebFetch) → story-writer (v2.0.0 pivot) → technical-writer (retroactive S-2.06 sweep: H-018 fix in holdout-scenarios.md, closes S-2.02-DEFER) → story-writer (H-018 replacement + S-3.10 queue) → devops-engineer (worktree) → test-writer (Red Gate tests) → implementer (Green Gate) → demo-recorder → devops-engineer (push + pr-manager) → devops-engineer (worktree cleanup) → state-manager
+**Files touched (develop):** `src/cli/auth.rs` (+205, -9), `src/main.rs` (+12, -4), 4 snapshot files (auth_login_json.snap, auth_switch_json.snap, auth_logout_json.snap, auth_remove_json.snap — all new), `tests/auth_output_json.rs` (new, 363 lines), `docs/specs/json-output-shapes.md` (new, 41 lines), `docs/specs/test-naming-convention.md` (new, 41 lines), `CLAUDE.md` (+1 bullet), `docs/demo-evidence/S-2.07/` (8 artifacts)
+**Commits (feature branch → squash):** 6348037 (Red Gate tests — auth_output_json.rs + refresh regression-pin), 082169a (impl — auth.rs + main.rs), 9f456d9 (snapshots — cargo insta accept), cd69fd6 (json-output-shapes spec), ae38093 (test-naming-convention spec), d445b7c (CLAUDE.md bullet), 23227a9 (demo evidence)
+**Squash-merge SHA:** ca22be0 (PR #309 squash-merged to develop, 2026-05-08)
+**Files touched (factory):** STATE.md, sprint-state.yaml, stories/STORY-INDEX.md, cycles/cycle-001/burst-log.md, cycles/cycle-001/implementation/red-gate-log.md
+
+### Pivot Narrative (v1.0.0 → v2.0.0)
+
+v1.0.0 of this story contained three concrete errors discovered by research-agent (Perplexity + WebSearch + WebFetch) on 2026-05-08:
+
+1. **AC-002 wiremock premise structurally untestable** — `jr auth refresh` re-runs the full OAuth 3LO flow via `login_oauth`, never calling a refresh-token API endpoint. The v1 spec's wiremock fixture for a `/oauth/token` refresh response was architecturally impossible to trigger from the current implementation.
+
+2. **NFR-O-F shape conflict** — v1 prescribed a uniform `{profile, action, ok}` shape for all auth subcommands including `refresh`. But `auth refresh` had already shipped a distinct `{status, auth_method, next_step}` shape in a pre-existing `refresh_success_payload` helper. Forcing refresh to emit the uniform shape would be a silent behavior regression on already-shipped output.
+
+3. **AC-005 `transitioned` vs `changed` ambiguity** — Verified at `src/cli/issue/json_output.rs:4-10` that the canonical field name is `changed`, not `transitioned`. This also resolved S-2.02-DEFER, which had been open since the issue-write holdout suite story.
+
+User chose **Option A: apply all 3 corrections**. v2.0.0 spec written and committed to factory-artifacts. Verification report at `.factory/research/S-2.07-json-policy-and-conventions-research.md`.
+
+### Summary
+
+S-2.07 (v2.0.0) delivered and merged via PR #309 to develop at squash SHA ca22be0. This is the second Wave 2 story with a production code change (the first being S-2.06) and the LAST Wave 2 story.
+
+Behavioral delta: `jr auth login/switch/logout/remove --output json` now each emit `{"profile": "<name>", "action": "<verb>", "ok": true}` to stdout. `jr auth refresh --output json` retains its existing asymmetric shape `{"status": "refreshed", "auth_method": "<method>", "next_step": "<desc>"}` — this asymmetry is intentional (refresh triggers re-auth, not a state mutation) and is documented in the new `docs/specs/json-output-shapes.md` shapes registry.
+
+AC-003 (auth JSON error path) was already satisfied by `main.rs`'s existing `--output json` error wrapper — all propagated `JrError` values get `{"error": "<msg>", "code": <N>}` to stderr. This was confirmed as already-working and documented as S-2.07-DEFER-01.
+
+New spec docs shipped: `docs/specs/json-output-shapes.md` (canonical JSON output shapes registry, 41 lines) and `docs/specs/test-naming-convention.md` (naming convention for all test functions, 41 lines). Both referenced from CLAUDE.md (1-line addition).
+
+True Red Gate at 6348037 (before implementation):
+- 4 process-spawn tests (auth_output_json.rs: login, switch, logout, remove) — FAILED with assertion errors (handlers not yet emitting JSON)
+- 4 snapshot tests (cli::auth::tests in auth.rs) — FAILED (snapshot files did not exist; insta wrote `.snap.new`)
+- 2 refresh regression-pin unit tests — PASSED (helper already shipped)
+- 1 unexpected pass: `test_auth_switch_unknown_profile_returns_json_error` — already PASSED on develop (S-2.07-DEFER-01 confirmed: main.rs error wrapper was already active)
+
+Green Gate at 23227a9 (after implementation): 5/5 process-spawn pass; 4/4 snapshot tests pass (after `cargo insta accept` at 9f456d9); 2/2 refresh regression-pin tests still pass. Full lib suite: 620 passed, 0 failed, 10 ignored. Clippy clean, fmt clean.
+
+8/8 CI green. Review: APPROVE, 1 cycle, 0 blocking findings, 2 non-blocking nits → 2 LOW deferred items. Worktree and local/remote branch fully cleaned up.
+
+Wave 2: 7/7 merged (S-2.01 through S-2.07). **Wave 2 COMPLETE.** Phase 3 progress: 23/31 (74%). Next: Wave 2 Integration Gate.
+
+### Delivery Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| research-agent | Verify S-2.07 v1 spec — AC-002 wiremock architecture, NFR-O-F shape conflict, AC-005 field name, AC-006 snapshot reuse | Verification report: .factory/research/S-2.07-json-policy-and-conventions-research.md; v1.0.0 3 errors found |
+| story-writer | Write v2.0.0 spec (Option A: 3 corrections) | .factory/stories/wave-2/S-2.07-... updated; committed to factory-artifacts |
+| technical-writer | Retroactive S-2.06 sweep: replace H-018 inline in holdout-scenarios.md (Option 2); queue S-3.10 in STORY-INDEX + sprint-state.yaml | H-018 holdout replaced in place; S-2.02-DEFER resolved (changed confirmed); S-3.10 queued |
+| devops-engineer | Create worktree + test-writer dispatch | Worktree for S-2.07 feature branch |
+| test-writer | Write Red Gate tests (6348037) | tests/auth_output_json.rs (363 lines): 4 process-spawn + 2 refresh pin; 4 snapshot tests in auth.rs |
+| implementer | Add --output json handlers to 4 auth subcommands + snapshot accepted | 082169a (auth.rs +205/-9, main.rs +12/-4); 9f456d9 (cargo insta accept: 4 .snap files) |
+| technical-writer | Write new spec docs | cd69fd6 (json-output-shapes.md); ae38093 (test-naming-convention.md); d445b7c (CLAUDE.md +1) |
+| demo-recorder | Record demo evidence for S-2.07 ACs | 23227a9; docs/demo-evidence/S-2.07/ (8 artifacts) |
+| devops-engineer | Push branch, create PR #309, request review, merge --squash --delete-branch | ca22be0 squash-merge SHA on develop; remote branch deleted |
+| devops-engineer | Worktree cleanup | Worktree removed; local branch deleted |
+| state-manager | Update STATE.md, sprint-state.yaml, STORY-INDEX.md, burst-log.md, red-gate-log.md; commit factory-artifacts | This commit |
+
+### BCs and NFRs Resolved
+
+| Anchor | Resolution |
+|--------|-----------|
+| BC-7.3.004 | RESOLVED — auth login/switch/logout/remove emit {profile, action, ok: true} under --output json |
+| BC-7.3.005 | RESOLVED — auth refresh retains asymmetric {status, auth_method, next_step} shape; documented |
+| NFR-O-F | RESOLVED — all 5 auth subcommands have documented JSON output shapes |
+| NFR-O-J | RESOLVED — json-output-shapes.md registry created as canonical reference |
+| NFR-O-W | RESOLVED — test-naming-convention.md captures naming convention; CLAUDE.md updated |
+
+### Deferred
+
+| ID | Description | Severity |
+|----|-------------|----------|
+| S-2.07-DEFER-01 | src/main.rs: AC-003 (auth subcommand JSON error path) was already satisfied by main.rs's existing --output json error wrapper. Propagated JrError values get {"error","code"} to stderr. Documented in docs/specs/json-output-shapes.md as already-working. No action needed. | LOW |
+| S-2.07-DEFER-02 | src/cli/auth.rs::mod tests: Pre-existing refresh_payload_pins_token_shape and refresh_payload_pins_oauth_shape tests already cover much of AC-002's ground. New tests are intentionally additive (more specific assertions). No action; intentional overlap. | LOW |
+
+### Reviewer Nits (non-blocking, documented in review-findings)
+
+1. Multi-line JSON output style — reviewer suggested collapsing multi-line assert_eq blocks to single-line. Non-blocking; style preference.
+2. Serialization expect message — reviewer suggested more descriptive `.expect("should serialize")` messages. Non-blocking; style preference.
+
+---
+
+## Burst: WAVE 2 CLOSURE (2026-05-08)
+
+**Date:** 2026-05-08
+**Wave:** Wave 2 (S-2.01 through S-2.07)
+**PRs:** #303 (S-2.01) → #304 (S-2.02) → #305 (S-2.03) → #306 (S-2.04) → #307 (S-2.05) → #308 (S-2.06) → #309 (S-2.07)
+**Stories:** 7 stories, 7 merges, all on develop
+**Integration Gate:** PENDING — orchestrator dispatches next
+
+### Wave 2 Summary
+
+Wave 2 ran 2026-05-08. All 7 stories delivered to develop in a single session. Story types:
+
+| Story | Type | PR | SHA | Notable |
+|-------|------|----|-----|---------|
+| S-2.01 | Regression-pin holdout (BC-2 issue-read) | #303 | f6516f8 | 7 tests, 9 BCs, 7 holdouts |
+| S-2.02 | Regression-pin holdout (BC-3 issue-write) | #304 | 7528960 | 4 tests, 4 BCs, 4 holdouts |
+| S-2.03 | Regression-pin holdout (BC-4 assets/CMDB) | #305 | e9c2ba8 | 3 tests, 3 BCs, 3 holdouts |
+| S-2.04 | Regression-pin holdout (BC-5/7 boards/sprints/ADF) | #306 | ada9126 | 9 tests, 7 BCs, 5 holdouts |
+| S-2.05 | Documentation-only (6 NFRs + bonus NFR-O-H) | #307 | 7f004ca | No tests; grep verification |
+| S-2.06 | Production code change (worklog timeSpent passthrough) | #308 | c8f15d8 | TRUE Red Gate; v2.0.0 pivot (DEC-010) |
+| S-2.07 | Production code change (auth --output json + specs) | #309 | ca22be0 | TRUE Red Gate; v2.0.0 pivot (DEC-011) |
+
+Total product commits squashed into the 7 PRs: approximately 24 commits (S-2.01: 2, S-2.02: 2, S-2.03: 2, S-2.04: 2, S-2.05: 1, S-2.06: 5, S-2.07: 7 = 21 tracked; plus a small number of doc/fix micro-commits).
+
+### Design Pivots (Wave 2 Firsts)
+
+Wave 2 is the first wave with **two mid-stream design pivots** driven by Perplexity verification:
+
+- **DEC-010 (S-2.06 pivot):** v1 timetracking spec was wrong on endpoint, field names, types, and auth requirements. User chose Option 1 (timeSpent string passthrough — eliminates admin endpoint and cache). See `.factory/research/S-2.06-jira-timetracking-verification.md`.
+
+- **DEC-011 (S-2.07 pivot):** v1 auth JSON spec had AC-002 wiremock premise structurally untestable, NFR-O-F shape conflicted with pre-shipped refresh shape, and AC-005 field name wrong. User chose Option A (3 corrections). See `.factory/research/S-2.07-json-policy-and-conventions-research.md`.
+
+Both pivots were discovered through Perplexity-backed research rather than during implementation — this is the intended pattern (verify early, correct the spec, deliver to v2.0.0).
+
+### Drift Items Active During Wave 2
+
+Items **resolved** during Wave 2:
+- S-2.02-DEFER: JSON field name reconciliation (`transitioned` vs `changed`) — RESOLVED 2026-05-08 by DEC-011 (verified `changed` at src/cli/issue/json_output.rs:4-10; holdout-scenarios.md corrected)
+- S-1.05-AC-001: GitHub Secret Scanning PENDING_MANUAL — RESOLVED 2026-05-08 (user enabled via gh CLI)
+- S-2.06-DEFER-01 (initial open): parse_duration calculator preserved → RESOLVED as Option 4 follow-up (S-3.10 queued, H-018 replaced in holdout-scenarios.md by technical-writer retroactive sweep)
+
+Items **added** during Wave 2 (from S-2.01 through S-2.07):
+- S-2.03-DOC-01 (LOW): workspace_id.json vs workspace.json spec text
+- S-2.04-DEFER-01 (LOW): kanban literal prefix-only in spec
+- S-2.04-DEFER-02 (LOW): displayName vs name in H-043 spec
+- S-2.04-DOC-01 (LOW): pre-existing non-canonical test cache path
+- S-2.05-DEFER-01 (LOW): list.rs description stale after S-2.05 module split
+- S-2.06-DEFER-02 (LOW): AC-003 OR-chain assertion leniency
+- S-2.06-DEFER-03 (LOW): duration.rs:65 !found_any guard
+- S-2.07-DEFER-01 (LOW): AC-003 already-passed by main.rs wrapper
+- S-2.07-DEFER-02 (LOW): refresh_payload_pins tests intentional overlap
+
+All added items are LOW severity. None are blocking for Wave 3 dispatch.
+
+### Wave 2 Integration Gate — PENDING
+
+Per `per-story-delivery.md` Wave Integration Gate protocol (max 10 cycles):
+1. Full `cargo test --all-targets` on merged develop (Wave 2 regression check)
+2. Adversarial review of combined Wave 2 diff (fresh context, different model) — Phase 3-adv first pass
+3. Holdout re-evaluation (H-020 + H-021 + all Wave 2 holdouts still green on merged develop)
+4. Code-reviewer constructive review (architecture, patterns, completeness)
+5. Security review (auth.rs surface change in S-2.07; duration.rs surface in S-2.06)
+6. Consistency-validator (BC anchors, NFR anchors, holdout registration)
+
+Gate status: PENDING. Orchestrator dispatches Phase 3-adv next.
 

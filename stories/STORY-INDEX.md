@@ -2,8 +2,8 @@
 document_type: story-index
 phase: phase-2-story-decomposition
 producer: story-writer
-version: "1.4.9"
-total_stories: 32
+version: "1.4.10"
+total_stories: 33
 total_waves: 4
 status: complete-pending-adv-review
 last_updated: 2026-05-08
@@ -26,7 +26,7 @@ Phase 1 converged at adversary Pass 28. Gate approved 2026-05-04.
 | 2 | Medium-priority NFRs, BC-2/3/4/5 holdout suites, JSON output policy, documentation | 7 | ~5-6 dev-days | NFR-P-* gate; H-030..H-044 MUST-PASS |
 | 3 | Low priority + deferred (DEFER NFRs, shard splits, process codification, DOCUMENT-AS-IS) | 10 | ~5-7 dev-days | Per-story gates; no v0.5 blocking |
 
-**Final totals: 32 stories across 4 waves.** Wave 0: 7, Wave 1: 8, Wave 2: 7, Wave 3: 10.
+**Final totals: 33 stories across 4 waves.** Wave 0: 7, Wave 1: 8, Wave 2: 7, Wave 3: 10 (+S-3.10 added during Wave 2 as S-2.06 DEFER-01 follow-up). Wave 2: **7/7 COMPLETE** (PRs #303-#309; 2026-05-08).
 
 Story file naming: `stories/wave-W/S-W.NN-short-slug.md`
 Story ID convention: `S-W.NN` (e.g., `S-0.01`, `S-1.03`)
@@ -110,7 +110,7 @@ Note: S-2.03's S-0.03 dependency was demoted to a recommended merge order (no lo
 | S-2.04 | BC-5/7 boards, sprints, ADF holdout suite | BC-5.2.001, BC-5.2.005, BC-5.2.007, BC-5.2.008, BC-5.3.001, BC-5.3.002, BC-7.2.001 | H-040..H-044 | merged (PR #306 / ada9126) | medium |
 | S-2.05 | CLAUDE.md documentation update | NFR-O-L, NFR-O-M, NFR-O-O, NFR-O-V, NFR-O-R, NFR-R-F | — | merged (PR #307 / 7f004ca) | small |
 | S-2.06 | Worklog timeSpent server-side parsing + CMDB cache tuple pin | NFR-R-C, BC-X.5.009, BC-6.2.013 | — | merged (PR #308 / c8f15d8) | small | <!-- v2.0.0 2026-05-08: pivot from admin-only timetracking config fetch to timeSpent string passthrough; see .factory/research/S-2.06-jira-timetracking-verification.md --> |
-| S-2.07 | Auth --output json (4 subcommands) + verb-aligned JSON policy + test naming | NFR-O-F, NFR-O-J, NFR-O-W | H-020 | draft | small | <!-- v2.0.0 2026-05-08; see .factory/research/S-2.07-json-policy-and-conventions-research.md --> |
+| S-2.07 | Auth --output json (4 subcommands) + verb-aligned JSON policy + test naming | NFR-O-F, NFR-O-J, NFR-O-W | H-020 | merged (PR #309 / ca22be0) | small | <!-- v2.0.0 2026-05-08; see .factory/research/S-2.07-json-policy-and-conventions-research.md --> |
 
 Wave 2 story files: `stories/wave-2/S-2.NN-*.md`
 
@@ -229,8 +229,8 @@ gaps that are not blocking for v0.5 but should be tracked.
 
 ## Story Manifest
 
-Complete mapping of every `story_id` to its absolute file path. Generated 2026-05-07.
-Total rows: 31 (matches `total_stories: 31` in frontmatter).
+Complete mapping of every `story_id` to its absolute file path. Generated 2026-05-07; updated 2026-05-08 (S-3.10 added).
+Total rows: 33 (matches `total_stories: 33` in frontmatter).
 
 ### Wave 0
 

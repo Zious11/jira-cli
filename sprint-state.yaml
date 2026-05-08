@@ -1,9 +1,9 @@
 # sprint-state.yaml
 # Phase 3 TDD Implementation — Wave-based story delivery state
 # Initialized: 2026-05-07
-# Updated: 2026-05-08 (S-2.06 MERGED via PR #308 at c8f15d8; S-2.07 active (LAST Wave 2 story); Wave 2 progress 6/7 merged)
+# Updated: 2026-05-08 (S-2.07 MERGED via PR #309 at ca22be0; **Wave 2 COMPLETE 7/7**; ready for integration gate)
 
-active_wave: 2
+active_wave: "2 (closing) | gate pending"
 wave_0_progress: "7/7 — WAVE 0 COMPLETE"  # All stories merged/delivered: S-0.01..S-0.06 via PRs #289-#294; S-0.07 spec-only via factory-artifacts direct
 
 attack_order_wave_0:
@@ -114,7 +114,7 @@ wave_0_exit_gate: "PASSED — All 4 MUST-FIX stories green; SD-002 and SD-003 im
 wave_1_progress: "8/8 — WAVE 1 COMPLETE"
 wave_1_exit_gate: "PASSED — All 8 Wave 1 stories merged via PRs #295-#302. 0 regressions; ~50 new tests; 5 deferred items + 1 PENDING_MANUAL. 2026-05-08."
 
-wave_2_progress: "6/7 — S-2.01..S-2.06 MERGED"
+wave_2_progress: "**7/7 — Wave 2 COMPLETE — S-2.01..S-2.07 MERGED**"
 
 wave_1:
   status: active
@@ -281,8 +281,38 @@ wave_2:
         - "S-2.06-DEFER-03 (LOW): src/duration.rs:65 !found_any guard slightly defensive but logically sound. No action needed."
       notes: "FIRST Wave 2 production-code change (all prior Wave 2 stories were regression-pin or doc-only). True Red Gate at b3d2500 (AC-001/002/003 FAIL; AC-004 COMPILE-ERROR gated with #[cfg(any())]; AC-005/006 PASS — inverted pin). Green Gate at a5b64a2: 6/6 pass, 0 regressions. 5-commit TDD chain: Red Gate (b3d2500) → impl (3d5a6ca) → un-gate AC-004 (15f509c) → fixup (a5b64a2) → demo evidence (1d88d07)."
     - id: S-2.07
-      title: "JSON output policy + test naming convention"
-      status: active
+      title: "Auth --output json (4 subcommands) + verb-aligned JSON policy + test naming"
+      type: production-code-change
+      status: completed
+      pr: 309
+      merge_sha: ca22be0
+      merged_at: 2026-05-08
+      merged_via: "gh pr merge --squash --delete-branch"
+      feature_branch_commits: [6348037, 082169a, 9f456d9, cd69fd6, ae38093, d445b7c, 23227a9]
+      bc_anchors: [BC-7.3.004, BC-7.3.005]
+      nfr_anchors: [NFR-O-F, NFR-O-J, NFR-O-W]
+      holdout_anchors: [H-020]
+      files_modified:
+        - "src/cli/auth.rs (+205, -9)"
+        - "src/main.rs (+12, -4)"
+        - "src/cli/snapshots/auth_login_json.snap (new)"
+        - "src/cli/snapshots/auth_switch_json.snap (new)"
+        - "src/cli/snapshots/auth_logout_json.snap (new)"
+        - "src/cli/snapshots/auth_remove_json.snap (new)"
+        - "tests/auth_output_json.rs (new, 363 lines)"
+        - "docs/specs/json-output-shapes.md (new, 41 lines)"
+        - "docs/specs/test-naming-convention.md (new, 41 lines)"
+        - "CLAUDE.md (+1)"
+        - "docs/demo-evidence/S-2.07/ (8 artifacts)"
+      ci_result: "8/8 SUCCESS"
+      review_result: "APPROVE 1 cycle; 0 blocking; 2 non-blocking nits (documented in review-findings)"
+      spec_pivot: "v1.0.0 BLOCKED 2026-05-08 by Perplexity verification — AC-002 wiremock premise structurally untestable; NFR-O-F shape conflicted with pre-shipped refresh shape; AC-005 'transitioned' vs 'changed' ambiguity. User chose Option A (3 corrections). v2.0.0 spec at factory-artifacts. Verification report at .factory/research/S-2.07-json-policy-and-conventions-research.md."
+      behavioral_delta: "4 auth subcommands (login, switch, logout, remove) now emit {profile, action, ok: true} to stdout under --output json. auth refresh keeps existing asymmetric shape {status, auth_method, next_step} — intentional asymmetry documented in docs/specs/json-output-shapes.md."
+      test_surface: "+6 tests net (4 snapshots + 2 refresh regression-pin); full lib total 620 passed; 0 regressions"
+      deferred:
+        - "S-2.07-DEFER-01 (LOW): AC-003 already satisfied by main.rs global --output json error wrapper. Documented. No action."
+        - "S-2.07-DEFER-02 (LOW): Pre-existing refresh_payload_pins_* tests already cover AC-002's ground. New tests are intentionally additive. No action."
+      notes: "Second Wave 2 production-code change (after S-2.06). Closes S-2.02-DEFER (transitioned→changed field name verified at src/cli/issue/json_output.rs:4-10). New spec docs: json-output-shapes.md (shapes registry) + test-naming-convention.md (naming convention). CLAUDE.md got 1-line bullet. Wave 2: 7/7 COMPLETE."
 
 wave_3:
   status: blocked

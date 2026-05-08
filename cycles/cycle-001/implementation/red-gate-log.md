@@ -511,3 +511,82 @@ test result: ok. 614 passed; 0 failed; 13 ignored; 0 measured; 0 filtered out
 | S-2.06-DEFER-01 | src/duration.rs::parse_duration calculator preserved with SUPERSEDED-BY comment because format_duration round-trip proptest still uses it. Target: future cleanup story. | LOW |
 | S-2.06-DEFER-02 | AC-003 stderr OR-chain assertion is lenient (passes on any one of Nw/Nd/Nh/Nm). Could be tightened to require all four substrings. Reviewer nit. | LOW |
 | S-2.06-DEFER-03 | src/duration.rs:65 !found_any guard reachability is constrained by prior guards — logically sound but slightly defensive. Reviewer nit; no action needed. | LOW |
+
+---
+
+# Red Gate Log — S-2.07 (Auth --output json + verb-aligned JSON policy + test naming)
+
+**Date:** 2026-05-08
+**Story:** S-2.07 (v2.0.0) — Auth --output json for 4 subcommands + verb-aligned JSON policy doc + test naming convention
+**Test file:** `tests/auth_output_json.rs` (363 lines, new) + inline snapshot tests in `src/cli/auth.rs` mod tests
+**Commits:** 6348037 (Red Gate tests), 082169a (impl: auth.rs + main.rs), 9f456d9 (snapshots: cargo insta accept), cd69fd6 (json-output-shapes spec), ae38093 (test-naming-convention spec), d445b7c (CLAUDE.md bullet), 23227a9 (demo evidence)
+**Squash-merge SHA:** ca22be0 (PR #309 squash-merged to develop, 2026-05-08)
+**Branch:** deleted post-merge
+
+## Summary
+
+UNLIKE the pure regression-pin stories (S-2.01..S-2.05), S-2.07 has a TRUE Red Gate — tests were written that fail for behavioral reasons before production code was written. This is the same pattern as S-2.06.
+
+11 tests written total across two files:
+- `tests/auth_output_json.rs`: 4 process-spawn tests + 1 already-green test (AC-003 pre-existing)
+- `src/cli/auth.rs` mod tests: 4 insta snapshot tests + 2 refresh regression-pin unit tests
+
+Red Gate state at 6348037 (BEFORE Step 4 — before any production code change):
+
+| Test | State | Failure Mode | AC |
+|------|-------|-------------|-----|
+| `test_auth_login_outputs_json` (process-spawn) | FAIL | Assertion error — `jr auth login --output json` emitted human text, not JSON; stdout did not contain `"ok"` key | AC-001 |
+| `test_auth_switch_outputs_json` (process-spawn) | FAIL | Assertion error — `jr auth switch --output json` emitted human text, not JSON | AC-001 |
+| `test_auth_logout_outputs_json` (process-spawn) | FAIL | Assertion error — `jr auth logout --output json` emitted human text, not JSON | AC-001 |
+| `test_auth_remove_outputs_json` (process-spawn) | FAIL | Assertion error — `jr auth remove --output json` emitted human text, not JSON | AC-001 |
+| `test_auth_switch_unknown_profile_returns_json_error` (process-spawn) | **PASS** (unexpected) | Already-green — main.rs's global `--output json` error wrapper catches JrError and emits JSON to stderr; test passed because error path was already wired | AC-003 (S-2.07-DEFER-01) |
+| `test_auth_login_snapshot` (insta, inline) | FAIL | Snapshot file `auth_login_json.snap` did not exist; insta wrote `.snap.new` | AC-006 |
+| `test_auth_switch_snapshot` (insta, inline) | FAIL | Snapshot file `auth_switch_json.snap` did not exist; insta wrote `.snap.new` | AC-006 |
+| `test_auth_logout_snapshot` (insta, inline) | FAIL | Snapshot file `auth_logout_json.snap` did not exist; insta wrote `.snap.new` | AC-006 |
+| `test_auth_remove_snapshot` (insta, inline) | FAIL | Snapshot file `auth_remove_json.snap` did not exist; insta wrote `.snap.new` | AC-006 |
+| `test_refresh_success_payload_emits_status_refreshed_for_token_flow` (unit) | PASS | Helper `refresh_success_payload` already shipped correct shape; regression-pin passes vacuously | AC-002 |
+| `test_refresh_success_payload_emits_status_refreshed_for_oauth_flow` (unit) | PASS | Same — regression-pin | AC-002 |
+
+### AC-003 Unexpected Pass — S-2.07-DEFER-01 Confirmed
+
+`test_auth_switch_unknown_profile_returns_json_error` passed at Red Gate time (6348037) before any production code change. Investigation: `main.rs` had a pre-existing `--output json` error interceptor that catches all `JrError` values and serializes them as `{"error": "<msg>", "code": <N>}` to stderr. This meant AC-003 (auth JSON error path) was already satisfied. The v1 spec had specified this as a new AC; in reality it was already working. Documented as S-2.07-DEFER-01.
+
+## Green Gate State (23227a9 — AFTER Step 4)
+
+| Test | State | Notes |
+|------|-------|-------|
+| `test_auth_login_outputs_json` | PASS | Handler now emits `{"profile": "<name>", "action": "login", "ok": true}` under `--output json` |
+| `test_auth_switch_outputs_json` | PASS | Same pattern |
+| `test_auth_logout_outputs_json` | PASS | Same pattern |
+| `test_auth_remove_outputs_json` | PASS | Same pattern |
+| `test_auth_switch_unknown_profile_returns_json_error` | PASS | Unchanged from Red Gate — already-green; holds |
+| `test_auth_login_snapshot` | PASS | Snapshot accepted in separate commit 9f456d9 via `cargo insta accept` |
+| `test_auth_switch_snapshot` | PASS | Snapshot accepted |
+| `test_auth_logout_snapshot` | PASS | Snapshot accepted |
+| `test_auth_remove_snapshot` | PASS | Snapshot accepted |
+| `test_refresh_success_payload_emits_status_refreshed_for_token_flow` | PASS | Regression-pin holds; auth refresh asymmetric shape preserved |
+| `test_refresh_success_payload_emits_status_refreshed_for_oauth_flow` | PASS | Regression-pin holds |
+
+## TDD Discipline Preserved
+
+- Red Gate tests committed BEFORE production code (6348037 precedes 082169a chronologically).
+- Snapshots accepted in a SEPARATE commit (9f456d9) AFTER handlers emit JSON at 082169a. This preserves the commit-level audit trail: snapshot acceptance is a deliberate act, not a side effect of implementation.
+- 4 snapshot files stored under `src/cli/snapshots/`: `auth_login_json.snap`, `auth_switch_json.snap`, `auth_logout_json.snap`, `auth_remove_json.snap`.
+- Spec docs (cd69fd6, ae38093) and CLAUDE.md update (d445b7c) committed as SEPARATE commits after Green Gate — clean separation of test → impl → spec → docs.
+
+## Lib/Integration Baseline
+
+```
+test result: ok. 620 passed; 0 failed; 10 ignored; 0 measured; 0 filtered out
+```
+
+Previous baseline (post-S-2.06): 614 passed / 0 failed / 13 ignored.
+Net change: +6 tests (4 snapshot + 2 refresh regression-pin). 10 ignored = pre-existing keyring-gated tests behind `#[ignore]`.
+Zero regressions.
+
+## Deferred
+
+| ID | Description | Severity |
+|----|-------------|----------|
+| S-2.07-DEFER-01 | AC-003 (auth JSON error path) was already satisfied by main.rs's global --output json error wrapper before any S-2.07 code landed. Confirmed as already-working by the unexpected Green at Red Gate time. Documented in docs/specs/json-output-shapes.md. No action needed. | LOW |
+| S-2.07-DEFER-02 | src/cli/auth.rs::mod tests: Pre-existing refresh_payload_pins_token_shape and refresh_payload_pins_oauth_shape tests cover much of AC-002's ground. New tests test_refresh_success_payload_emits_status_refreshed_for_token_flow and _for_oauth_flow are intentionally additive (more specific assertions). No action; intentional overlap. | LOW |
