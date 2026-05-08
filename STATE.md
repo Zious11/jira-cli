@@ -11,7 +11,7 @@ input-hash: "[live-state]"
 traces_to: ""
 project: jira-cli
 mode: BROWNFIELD
-current_step: "phase-3-wave-2-S-2.04-start"
+current_step: "phase-3-wave-2-S-2.05-start"
 current_cycle: "cycle-001"
 dtu_required: false
 phase_2_status: APPROVED
@@ -36,8 +36,8 @@ activation_version: "v0.5.0-dev.7"
 | **Language** | Rust |
 | **Target Workspace** | develop → main |
 | **Started** | 2026-05-04 |
-| **Last Updated** | 2026-05-08 (S-2.03 MERGED via PR #305 at e9c2ba8; Wave 2: 3/7 merged; S-2.04 active) |
-| **Current Phase** | Phase 3 — TDD Implementation **IN PROGRESS** (Wave 0 COMPLETE 7/7; Wave 1 COMPLETE 8/8 via PRs #295-#302; Wave 2 ACTIVE — 3/7 merged; active: S-2.04) |
+| **Last Updated** | 2026-05-08 (S-2.04 MERGED via PR #306 at ada9126; Wave 2: 4/7 merged; S-2.05 active) |
+| **Current Phase** | Phase 3 — TDD Implementation **IN PROGRESS** (Wave 0 COMPLETE 7/7; Wave 1 COMPLETE 8/8 via PRs #295-#302; Wave 2 ACTIVE — 4/7 merged; active: S-2.05) |
 | **Next Phase** | Phase 3 Wave 2 delivery |
 | **Activation HEAD** | dea166471e22eff55974d7675593469b37048c5f (v0.5.0-dev.7) |
 | **factory-artifacts SHA** | 0b01262 (Phase 1 gate APPROVE; phase-1-converged tag) |
@@ -58,7 +58,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | 2: Story Decomposition | **complete** (story creation phase) | 2026-05-04 | 2026-05-06 | 31 stories created (W0:7 + W1:8 + W2:7 + W3:9); Phase 2-adv pending | |
 | 2-adv: Adversarial Story Review | **CONVERGED** — Pass 13 CLEAN-PASS; Counter 3/3 | 2026-05-06 | 2026-05-07 | 3/3 FULL CONVERGENCE | 14→5→5→5→4→5→4→4→4→1→0→1→0 |
 | Phase 2 gate | **APPROVED** (2026-05-07) — 31 stories locked, ready for TDD | — | 2026-05-07 | APPROVED by human | — |
-| 3: TDD Implementation | **IN_PROGRESS** — Wave 0 COMPLETE (7/7); **WAVE 1 COMPLETE (8/8)** via PRs #295-#302; Wave 2 ACTIVE — 3/7 merged; S-2.04 active | 2026-05-07 | | | Wave 0: COMPLETE — 7/7 via PRs #289-#294 + S-0.07 spec-only. Wave 1: COMPLETE — 8/8 via PRs #295-#302; 0 regressions; ~50 new tests; 5 deferred + 1 PENDING_MANUAL (S-1.05-AC-001 now RESOLVED). Wave 2: 3/7 — S-2.01 MERGED at f6516f8 (PR #303; 7 issue-read regression tests for H-021/H-030-035 across 9 BCs); S-2.02 MERGED at 75289600 (PR #304; 4 issue-write regression tests for H-006/007/008/014 across 4 BCs; 8/8 CI; 1 deferred S-2.02-DEFER: transitioned vs changed field name); S-2.03 MERGED at e9c2ba8 (PR #305; 3 regression-pin tests for H-037/H-038/H-039 across 3 BCs; 8/8 CI; APPROVE 1 cycle; 0 blocking; 0 deferred non-doc; H-038 library-level test placement; 1 LOW deferred S-2.03-DOC-01 cache filename in spec). S-2.04 active. Phase 3 progress: 19/31 (61%). |
+| 3: TDD Implementation | **IN_PROGRESS** — Wave 0 COMPLETE (7/7); **WAVE 1 COMPLETE (8/8)** via PRs #295-#302; Wave 2 ACTIVE — 4/7 merged; S-2.05 active | 2026-05-07 | | | Wave 0: COMPLETE — 7/7 via PRs #289-#294 + S-0.07 spec-only. Wave 1: COMPLETE — 8/8 via PRs #295-#302; 0 regressions; ~50 new tests; 5 deferred + 1 PENDING_MANUAL (S-1.05-AC-001 now RESOLVED). Wave 2: 4/7 — S-2.01 MERGED at f6516f8 (PR #303; 7 issue-read regression tests for H-021/H-030-035 across 9 BCs); S-2.02 MERGED at 75289600 (PR #304; 4 issue-write regression tests for H-006/007/008/014 across 4 BCs; 8/8 CI; 1 deferred S-2.02-DEFER: transitioned vs changed field name); S-2.03 MERGED at e9c2ba8 (PR #305; 3 regression-pin tests for H-037/H-038/H-039 across 3 BCs; 8/8 CI; APPROVE 1 cycle; 0 blocking; 0 deferred non-doc; H-038 library-level test placement; 1 LOW deferred S-2.03-DOC-01 cache filename in spec); S-2.04 MERGED at ada9126 (PR #306; 9 regression-pin tests for H-040..H-044 across 7 BCs; 8/8 CI; APPROVE 1 cycle; 0 blocking; 3 LOW deferred — S-2.04-DEFER-01/-02 spec text divergences and S-2.04-DOC-01 pre-existing team_column_parity.rs cache path bug). Phase 3 progress: 20/31 (65%). |
 | 3-adv: Wave Adversarial Reviews | not-started | | | | |
 | 4: Holdout Evaluation | not-started | | | | |
 | 5: Adversarial Refinement | not-started | | | | |
@@ -71,10 +71,10 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 
 | Step | Agent | Status | Output |
 |------|-------|--------|--------|
-| S-2.01 MERGED — Issue-read holdout suite | devops-engineer | complete | PR #303 squash-merged to develop at f6516f8 (2026-05-08); 7 regression-pin tests for H-021/H-030-035 across 9 BCs; AC-006 deviation: --open/--status clap conflicts_with; 8/8 CI green; APPROVE 1 cycle; 3 non-blocking; S-002 doc fix 4b0b55d; 0 deferred. Wave 2: 1/7. |
 | S-2.02 MERGED — Issue-write holdout suite | devops-engineer | complete | PR #304 merged to develop at 75289600 (2026-05-08); 4 regression-pin tests for H-006/007/008/014 across 4 BCs; 8/8 CI green; review APPROVE 1 cycle (direct gh CLI flow — API hiccup; Lesson 6); 1 deferred (S-2.02-DEFER: transitioned vs changed JSON field). Wave 2: 2/7. S-1.05-AC-001 RESOLVED. |
 | S-2.03 MERGED — BC-4 assets/CMDB holdout suite | devops-engineer | complete | PR #305 squash-merged to develop at e9c2ba8 (2026-05-08); 3 regression-pin tests for H-037/H-038/H-039 across 3 BCs; H-038 library-level placement (`enrich_assets` is `pub`); 8/8 CI green; APPROVE 1 cycle; 0 blocking findings; 1 LOW deferred (S-2.03-DOC-01 cache filename mismatch in story spec). Wave 2: 3/7. Phase 3: 19/31 (61%). |
-| S-2.04 START — Boards/sprints/ADF holdout suite | orchestrator | active | Wave 2 S-2.04 active (BC-5/7; H-040..H-044). Phase 3 progress: 19/31 (61%). |
+| S-2.04 MERGED — Boards/sprints/ADF holdout suite | devops-engineer | complete | PR #306 squash-merged to develop at ada9126 (2026-05-08); 9 regression-pin tests for H-040..H-044 across 7 BCs (BC-5.2.001/005/007/008, BC-5.3.001/002, BC-7.2.001); all-integration placement; 8/8 CI green; APPROVE 1 cycle; 0 blocking; 3 LOW deferred (S-2.04-DEFER-01/-02 spec text + S-2.04-DOC-01 pre-existing team_column_parity.rs path bug). Wave 2: 4/7. Phase 3: 20/31 (65%). |
+| S-2.05 START — CLAUDE.md documentation update | orchestrator | active | Wave 2 S-2.05 active. Phase 3 progress: 20/31 (65%). |
 
 ## Decisions Log
 
@@ -134,6 +134,9 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | S-1.05-AC-001 | Repo-level GitHub Secret Scanning: user enabled secret_scanning + push_protection on Zious11/jira-cli via `gh api PATCH security_and_analysis` (2026-05-08). Verified via `gh api repos/Zious11/jira-cli --jq '.security_and_analysis'` showing both enabled. CI gitleaks job + GitHub native scanner now both active for layered defense. | HIGH | **RESOLVED** — 2026-05-08 |
 | S-2.02-DEFER | JSON field-name reconciliation: BC-3.2.001 spec language uses `"transitioned": false` for move_response output, but actual code emits `"changed"`. Test pinned to actual implementation. Target: update L3 PRD spec text OR rename field via separate PR (consider deprecation cycle if field is documented in user-facing CLAUDE.md or release notes). | LOW | DEFERRED — 2026-05-08 |
 | S-2.03-DOC-01 | Story spec text | Story spec line ~123 names workspace cache file `workspace_id.json` but actual filename per `src/cache.rs` and tests is `workspace.json`. Tests use correct filename. | LOW | DEFERRED — 2026-05-08 |
+| S-2.04-DEFER-01 | Story spec text | Story spec AC-004 quotes kanban literal as prefix only ('Sprint commands are only available for scrum boards'); production code at src/cli/sprint.rs:80-85 emits prefix + suffix '. Board {id} is a {type} board.'. Test uses contains(prefix). Update story spec text in follow-up doc PR. | LOW | DEFERRED — 2026-05-08 |
+| S-2.04-DEFER-02 | Story spec text | Story spec H-043 implementation notes use 'displayName' for team-cache JSON shape; actual jr::cache::CachedTeam struct uses 'name'. Test uses production struct directly. Update story spec text in follow-up doc PR. | LOW | DEFERRED — 2026-05-08 |
+| S-2.04-DOC-01 | tests/team_column_parity.rs (pre-existing) | write_team_cache writes to $XDG_CACHE_HOME/jr/teams.json (missing v1/default/). Canonical path per src/cache.rs:90-92 is $XDG_CACHE_HOME/jr/v1/default/teams.json. Existing tests pass coincidentally. Pre-existing; not introduced by S-2.04. Target: separate fix story. | LOW | DEFERRED — 2026-05-08 |
 
 ## Convergence Trackers
 
@@ -156,7 +159,7 @@ _Not started._
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-08 |
-| **Position** | S-2.03 merged (PR #305 at e9c2ba8). Wave 2 progress: 3/7. Active story: S-2.04 (BC-5/7 boards/sprints/ADF holdout suite). Total Phase 3 progress: 19/31 (61%). Open deferred: R1-001, R1-002, S-0.03-S1, S-0.05-F1, S-0.05-F2 (TO_VERIFY), S-0.05-F3, S-1.02-DEFER, S-1.03-DEFER, S-1.04-DEFER-01/02/03, S-1.05-DEFER-01 (Node.js 24 Jun 2026), S-2.02-DEFER (transitioned vs changed field), S-2.03-DOC-01 (cache filename mismatch in story spec). |
+| **Position** | S-2.04 merged (PR #306 at ada9126). Wave 2 progress: 4/7. Active story: S-2.05 (CLAUDE.md documentation update). Total Phase 3 progress: 20/31 (65%). Open deferred unchanged from prior plus new S-2.04-DEFER-01, S-2.04-DEFER-02, S-2.04-DOC-01. |
 | **Convergence counter** | 3/3 CONVERGED (Phase 2-adv; Pass 13 CLEAN-PASS — final trajectory: 14→5→5→5→4→5→4→4→4→1→0→1→0) |
 
 ## Historical Content

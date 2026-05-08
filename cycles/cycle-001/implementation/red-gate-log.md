@@ -301,3 +301,71 @@ S-2.03-DOC-01 (LOW): Story spec line ~123 names workspace cache file
 `workspace_id.json`. Actual filename per `src/cache.rs` and tests is `workspace.json`.
 Tests use the correct filename. Story spec text needs a follow-up doc PR — not a
 production correctness issue.
+
+---
+
+# Red Gate Log — S-2.04 (BC-5/7 boards, sprints, and ADF rendering holdout suite)
+
+**Date:** 2026-05-08
+**Story:** S-2.04 — BC-5/7 boards, sprints, and ADF rendering regression holdout suite (H-040..H-044)
+**Test file:** `tests/boards_sprints_holdouts.rs` (770 lines)
+**Commits:** e71a61e (tests), 893d45a (demo evidence)
+**Squash-merge SHA:** ada9126 (PR #306 to develop)
+**Branch:** `test/S-2.04-bc-5-boards-sprints-holdout-suite` (deleted post-merge)
+
+## Inverted Red Gate (Regression-Pin Pattern)
+
+S-2.04 is a regression-pin holdout story. The Red Gate discipline is intentionally
+inverted: the 9 tests are written against EXISTING CORRECT behavior at activation
+HEAD e9c2ba8/ada9126. Tests PASS on first run because they pin production behavior
+that is already present and correct — not because the tests are vacuous.
+
+This follows the same inverted-Red-Gate framing as S-2.03. The purpose of the Red
+Gate for regression-pin holdouts is to ensure the test is a behavioral contract pin,
+not a TDD driver. Recording the explicit framing here so future reviewers understand
+the distinction.
+
+Lib baseline at test-write time:
+
+```
+test result: ok. 1091 passed; 0 failed; 13 ignored; 0 measured; 0 filtered out
+```
+
+(13 ignored = pre-existing keyring-gated tests behind `#[ignore]`; 0 regressions)
+
+## Tests Written
+
+| Test Name | Holdout | BC Anchor | Pass/Fail at Write |
+|-----------|---------|-----------|-------------------|
+| `test_h040_board_list_returns_paged_boards` | H-040 (case 1/3) | BC-5.2.001 (board list returns structured paginated results) | PASS (pins existing correct behavior) |
+| `test_h040_board_list_json_output` | H-040 (case 2/3) | BC-5.2.001 | PASS (pins existing correct behavior) |
+| `test_h040_board_list_name_filter` | H-040 (case 3/3) | BC-5.2.005 (board list --name filter narrows results) | PASS (pins existing correct behavior) |
+| `test_h041_board_view_shows_sprint_state` | H-041 | BC-5.2.007 (board view shows active sprint state) | PASS (pins existing correct behavior) |
+| `test_h041_board_view_kanban_no_sprint_field` | H-041 | BC-5.2.008 (kanban board view omits sprint field) | PASS (pins existing correct behavior) |
+| `test_h042_sprint_list_scrum_board` | H-042 | BC-5.3.001 (sprint list returns sprints for scrum board) | PASS (pins existing correct behavior) |
+| `test_h043_sprint_current_shows_team_and_points` | H-043 (case 1/2) | BC-5.3.002 (sprint current shows team + points columns) | PASS (pins existing correct behavior) |
+| `test_h043_kanban_board_sprint_error` | H-043 (case 2/2) | BC-5.3.002 / AC-004 (kanban boards reject sprint commands) | PASS (pins existing correct behavior) |
+| `test_h044_adf_rendering` | H-044 | BC-7.2.001 (ADF→text rendering produces readable output) | PASS (pins existing correct behavior) |
+
+## Production Code Modifications
+
+NONE. S-2.04 is a test-only delivery. No source files under `src/` were touched.
+No dev-deps were added.
+
+## Test Placement Rationale
+
+All 9 tests are integration-level in `tests/boards_sprints_holdouts.rs`. They drive
+the `jr` binary via `assert_cmd` process-spawn rather than calling internal functions
+directly. This is the correct placement because all tested code paths — board list/view,
+sprint list/current, ADF rendering — are reachable through the binary's public CLI
+surface. No inline `#[cfg(test)]` mod was added in `src/` because no library-internal
+function access was required (contrast with S-2.03 H-038 which needed library-level
+access to `enrich_assets`).
+
+## Deferred
+
+| ID | Description | Severity |
+|----|-------------|----------|
+| S-2.04-DEFER-01 | Story spec AC-004 quotes kanban literal prefix only; production code emits prefix + suffix '. Board {id} is a {type} board.'. Test uses contains(prefix) — correct and robust. Update spec text in follow-up doc PR. | LOW |
+| S-2.04-DEFER-02 | Story spec H-043 implementation notes use 'displayName'; CachedTeam struct uses 'name'. Test uses production struct directly. Update spec text in follow-up doc PR. | LOW |
+| S-2.04-DOC-01 | Pre-existing: tests/team_column_parity.rs::write_team_cache writes to non-canonical XDG path (missing v1/default/). Not introduced by S-2.04. Target: separate fix story. | LOW |

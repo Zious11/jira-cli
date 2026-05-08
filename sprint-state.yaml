@@ -1,7 +1,7 @@
 # sprint-state.yaml
 # Phase 3 TDD Implementation — Wave-based story delivery state
 # Initialized: 2026-05-07
-# Updated: 2026-05-08 (S-2.03 MERGED via PR #305 at e9c2ba8; S-2.04 active; Wave 2 progress 3/7 merged)
+# Updated: 2026-05-08 (S-2.04 MERGED via PR #306 at ada9126; S-2.05 active; Wave 2 progress 4/7 merged)
 
 active_wave: 2
 wave_0_progress: "7/7 — WAVE 0 COMPLETE"  # All stories merged/delivered: S-0.01..S-0.06 via PRs #289-#294; S-0.07 spec-only via factory-artifacts direct
@@ -114,7 +114,7 @@ wave_0_exit_gate: "PASSED — All 4 MUST-FIX stories green; SD-002 and SD-003 im
 wave_1_progress: "8/8 — WAVE 1 COMPLETE"
 wave_1_exit_gate: "PASSED — All 8 Wave 1 stories merged via PRs #295-#302. 0 regressions; ~50 new tests; 5 deferred items + 1 PENDING_MANUAL. 2026-05-08."
 
-wave_2_progress: "3/7 — S-2.01, S-2.02, S-2.03 MERGED"
+wave_2_progress: "4/7 — S-2.01, S-2.02, S-2.03, S-2.04 MERGED"
 
 wave_1:
   status: active
@@ -221,8 +221,17 @@ wave_2:
       notes: "3 regression-pin tests for H-037/H-038/H-039 across 3 BCs (BC-4.2.001, BC-4.3.002, BC-4.2.006). All 3 tests pass on current develop (no regressions discovered). H-038 library-level test placement: enrich_assets is pub, re-exported via pub mod api chain in src/lib.rs. 8/8 CI green; review APPROVE 1 cycle; 0 blocking findings; 0 non-doc deferred; 1 LOW deferred (S-2.03-DOC-01: story spec line ~123 names workspace cache file workspace_id.json but actual filename is workspace.json — tests use correct name). Test commits: dd5c41f (tests), 212a237 (demo evidence). Worktree cleanup complete."
     - id: S-2.04
       title: "BC-5/7 boards, sprints, ADF holdout suite"
+      status: completed
+      pr: 306
+      merge_sha: ada9126
+      merged_at: 2026-05-08
+      merged_via: "gh pr merge --squash --delete-branch"
+      bc_anchors: [BC-5.2.001, BC-5.2.005, BC-5.2.007, BC-5.2.008, BC-5.3.001, BC-5.3.002, BC-7.2.001]
+      holdout_anchors: [H-040, H-041, H-042, H-043, H-044]
+      notes: "9 regression-pin tests (770 lines) for H-040..H-044 across 7 BCs. H-040 split into 3 cases; H-043 split into 2 cases. All-integration placement in tests/boards_sprints_holdouts.rs via assert_cmd process-spawn. Production code untouched. Demo evidence: docs/demo-evidence/S-2.04/ (AC-004-kanban-error, AC-007-adf-rendering). Test commits: e71a61e (tests), 893d45a (demo evidence). 8/8 CI green; review APPROVE 1 cycle; 0 blocking findings. 3 LOW deferred: S-2.04-DEFER-01 (AC-004 spec quotes kanban literal prefix only; production emits prefix+suffix — test uses contains(prefix)); S-2.04-DEFER-02 (H-043 spec uses displayName for team-cache shape; CachedTeam struct uses name — test uses production struct); S-2.04-DOC-01 (pre-existing: write_team_cache in tests/team_column_parity.rs writes to non-canonical path missing v1/default/ segment). Code-delivery artifacts: .factory/code-delivery/S-2.04/pr-description.md, .factory/code-delivery/S-2.04/review-findings.md."
+    - id: S-2.05
+      title: "CLAUDE.md documentation update"
       status: active
-    - { id: S-2.05, title: "CLAUDE.md documentation update", status: pending }
     - { id: S-2.06, title: "Worklog duration config + CMDB cache tuple", status: pending }
     - { id: S-2.07, title: "JSON output policy + test naming convention", status: pending }
 

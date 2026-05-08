@@ -722,4 +722,43 @@ H-038 pins `enrich_assets` (BC-4.3.002 — asset enrichment join_all concurrency
 |----|-------------|----------|
 | S-2.03-DOC-01 | Story spec line ~123 names workspace cache file `workspace_id.json` but actual filename per `src/cache.rs` and tests is `workspace.json`. Tests use correct filename. Update story spec in a follow-up doc PR. | LOW |
 
+---
+
+## Burst: S-2.04 DELIVERED — BC-5/7 boards, sprints, and ADF rendering holdout suite (2026-05-08)
+
+**Agents dispatched:** devops-engineer (worktree → test-writer) → demo-recorder → devops-engineer (push + pr-manager) → devops-engineer (worktree cleanup) → state-manager
+**Files touched (develop):** `tests/boards_sprints_holdouts.rs` (770 lines, new), `docs/demo-evidence/S-2.04/` (evidence-report.md, combined-transcript.txt, AC-004-kanban-error.tape/.gif/.webm, AC-007-adf-rendering.tape/.gif/.webm)
+**Commits:** e71a61e (tests/boards_sprints_holdouts.rs — 9 regression-pin tests), 893d45a (demo evidence)
+**Squash-merge SHA:** ada9126 (PR #306 squash-merged to develop, 2026-05-08)
+**Files touched (factory):** STATE.md, sprint-state.yaml, stories/STORY-INDEX.md, cycles/cycle-001/burst-log.md, cycles/cycle-001/implementation/red-gate-log.md
+**Code-delivery artifacts:** `.factory/code-delivery/S-2.04/pr-description.md`, `.factory/code-delivery/S-2.04/review-findings.md`
+
+### Summary
+
+S-2.04 (BC-5/7 boards/sprints/ADF rendering regression holdout suite) delivered and merged via PR #306 to develop at squash SHA ada9126. This is a regression-pin holdout story: 9 tests were written in `tests/boards_sprints_holdouts.rs` against existing correct production behavior at activation HEAD dea1664/ada9126. Tests PASS on first run by design — they pin the existing behavior rather than driving new code (no production code changes, no dev-deps added). 8/8 CI green. Review: APPROVE, 1 cycle, 0 blocking findings. Worktree and local/remote branch fully cleaned up. 3 LOW deferred items recorded.
+
+Holdouts covered: H-040 (board list pagination — split into 3 cases), H-041 (board view sprint state), H-042 (sprint list scrum board), H-043 (sprint current team+points — split into 2 cases), H-044 (ADF→text rendering). Total: 5 holdouts → 9 tests.
+
+BCs pinned: BC-5.2.001, BC-5.2.005, BC-5.2.007, BC-5.2.008, BC-5.3.001, BC-5.3.002, BC-7.2.001 (7 BCs).
+
+Wave 2: 4/7 merged (S-2.01, S-2.02, S-2.03, S-2.04). Phase 3 progress: 20/31 (65%). Active story: S-2.05.
+
+### Delivery Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| test-writer | Write 9 regression-pin tests for H-040..H-044 in `tests/boards_sprints_holdouts.rs` | e71a61e (770 lines); passes green against unmodified production code |
+| demo-recorder | Record demo evidence for S-2.04 ACs | 893d45a; `docs/demo-evidence/S-2.04/` (evidence-report.md, combined-transcript.txt, AC-004-kanban-error.tape/.gif/.webm, AC-007-adf-rendering.tape/.gif/.webm) |
+| devops-engineer | Push branch, create PR #306, merge --squash --delete-branch | ada9126 squash-merge SHA on develop; remote branch deleted |
+| devops-engineer | Worktree cleanup | Worktree removed; local branch deleted |
+| state-manager | Update STATE.md, sprint-state.yaml, STORY-INDEX.md, burst-log.md, red-gate-log.md; commit factory-artifacts | This commit |
+
+### Deferred
+
+| ID | Description | Severity |
+|----|-------------|----------|
+| S-2.04-DEFER-01 | Story spec AC-004 quotes kanban literal as prefix only ('Sprint commands are only available for scrum boards'); production code at src/cli/sprint.rs:80-85 emits prefix + suffix '. Board {id} is a {type} board.'. Test uses contains(prefix) — robust against suffix changes. Update story spec text in follow-up doc PR. | LOW |
+| S-2.04-DEFER-02 | Story spec H-043 implementation notes use 'displayName' for team-cache JSON shape; actual jr::cache::CachedTeam struct uses 'name'. Test uses production struct directly — cannot drift. Update story spec text in follow-up doc PR. | LOW |
+| S-2.04-DOC-01 | Pre-existing: tests/team_column_parity.rs::write_team_cache writes to $XDG_CACHE_HOME/jr/teams.json (missing v1/default/ segment). Canonical path per src/cache.rs:90-92 is $XDG_CACHE_HOME/jr/v1/default/teams.json. Existing tests pass coincidentally. Not introduced by S-2.04. Target: separate fix story. | LOW |
+
 
