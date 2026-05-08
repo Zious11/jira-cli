@@ -15,6 +15,8 @@ src/
 │   │   ├── mod.rs       # dispatch + re-exports
 │   │   ├── format.rs    # row formatting, headers, points display
 │   │   ├── list.rs      # list + view + comments (read operations, unified JQL composition)
+│   │   ├── view.rs      # cli/issue/view.rs — issue view handler, detailed single-issue rendering (~287 LOC)
+│   │   ├── comments.rs  # cli/issue/comments.rs — comment list formatting and display (~61 LOC)
 │   │   ├── create.rs    # create + edit (field-building)
 │   │   ├── workflow.rs  # move + transitions + assign + comment + open
 │   │   ├── links.rs     # link + unlink + link-types
@@ -39,6 +41,7 @@ src/
 │   │   ├── workspace.rs     # workspace ID discovery + cache
 │   │   ├── linked.rs        # CMDB field discovery, asset extraction/enrichment (per-field + JSON)
 │   │   ├── objects.rs       # AQL search, get object, resolve key
+│   │   ├── schemas.rs       # api/assets/schemas.rs — schema discovery + object-type attributes (~44 LOC)
 │   │   └── tickets.rs       # connected tickets
 │   └── jira/            # Jira-specific API call implementations (one file per resource)
 │       ├── issues.rs    # search, get, create, edit, list comments
@@ -62,6 +65,7 @@ src/
 ├── output.rs            # Table (comfy-table) and JSON formatting
 ├── adf.rs               # Atlassian Document Format: text→ADF, markdown→ADF, ADF→text
 ├── duration.rs          # Worklog duration parser (2h, 1h30m, 1d, 1w)
+├── observability.rs     # --verbose / --verbose-bodies flag helpers, eprintln! wrappers (~39 LOC)
 ├── lib.rs               # Crate root (re-exports for integration tests)
 ├── jql.rs               # JQL utilities: escaping, validation, asset clause builder
 ├── partial_match.rs     # Case-insensitive substring matching with disambiguation
@@ -96,6 +100,18 @@ cargo deny check                     # License + vulnerability audit
 - **No unsafe code** without explicit justification in a comment.
 - **No lint suppression without refactoring.** If clippy warns (e.g., `too_many_arguments`), refactor to fix the root cause — don't add `#[allow]`. If refactoring is impractical, ask the user before suppressing and include a justification comment.
 - **Default to fixing code, not tests.** When a test fails, assume the test is correct and fix the implementation using idiomatic Rust. Only modify a test when requirements have changed — not to accommodate non-idiomatic code or lint workarounds.
+
+### Output channels
+
+CLI handlers follow one of five output-channel profiles:
+
+1. **Pure** — stdout only (JSON or table data); no stderr output at all.
+2. **Read-only** — stdout for data, stderr for hints/warnings (e.g., truncation notices, "showing N of M").
+3. **Mixed** — stdout for success data, stderr for errors and hints; applies to most read commands.
+4. **Symmetric** — stdout for `--output json`, stderr for human-readable errors in either mode; state-changing commands that also print a result use this profile.
+5. **No-log facade** — state-changing commands that emit only a JSON result on stdout (e.g., `{"key": "FOO-123"}`); no progress or logging to stderr.
+
+The distinction matters for scripting: pipe stdout for data, redirect stderr for diagnostics. Never write diagnostic text to stdout in profiles 1/2/3/5.
 
 ## Key Decisions
 
@@ -144,6 +160,24 @@ When adding a new feature:
 - **`refresh_oauth_token` resolves credentials internally** (keychain →
   embedded) — callers pass only `profile`. Do not re-introduce
   `client_id`/`client_secret` parameters; they short-circuit the resolver.
+- **`--open` filter uses two mechanisms:** For Jira issues, `statusCategory != Done` is
+  injected into the JQL query (server-side filter). For connected CMDB tickets in
+  `cli/assets.rs` (`filter_tickets` function), filtering is client-side via
+  `status.colorName != "green"`. Both implement the same user intent ("show only open
+  items") but at different layers — CMDB connected tickets do not support JQL
+  `statusCategory` filtering. Status category colors are hardcoded in Jira Cloud:
+  `green` = Done, `yellow` = In Progress, `blue-gray` = To Do.
+- **User pagination advances by `USER_PAGE_SIZE`, not returned count:** In
+  `src/api/jira/users.rs`, both `search_users_all` and `search_assignable_users_by_project_all`
+  increment `start_at` by `USER_PAGE_SIZE` (100) after each page, NOT by the number of
+  users returned. This is a workaround for JRACLOUD-71293: Jira uses fixed-window
+  pagination (selects range [startAt, startAt+maxResults) then applies permission
+  filtering), so a short non-empty page does NOT mean end-of-data. Advancing by returned
+  count would overlap windows and produce duplicates. Do not change this behavior.
+- **`board view` truncation hint emits to stderr:** The truncation hint ("Showing N of M
+  columns — use --all to see everything") is written to stderr, consistent with the
+  convention used by `issue list` and `sprint current`. This is intentional — stderr
+  keeps hints out of `--output json` and pipe-friendly stdout.
 
 ## AI Agent Notes
 
@@ -153,5 +187,6 @@ When adding a new feature:
 - `JiraClient::new_for_test(base_url, auth_header)` constructs a client for integration tests
 - Test fixtures live in `tests/common/fixtures.rs`
 - Keyring round-trip tests are gated behind `JR_RUN_KEYRING_TESTS=1` + `#[ignore]` because Linux CI may lack secret-service
+- OAuth integration tests in `tests/oauth_embedded_login.rs` are gated behind `JR_RUN_OAUTH_INTEGRATION=1` + `#[ignore]`. The test is currently `unimplemented!()` — it requires a wiremock base-URL override in `oauth_login` before a real assertion can be written. CI does not run it; the embedded-creds smoke test in `release.yml` covers the binary-level check instead.
 - All interactive prompts have non-interactive flag equivalents for AI agent usage
 - `--output json` on write operations returns structured data (e.g., `{"key": "FOO-123"}`)

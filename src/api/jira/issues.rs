@@ -56,6 +56,13 @@ impl JiraClient {
 
         let mut more_available = false;
 
+        // KNOWN-GAP: NFR-R-F. get_changelog has an anti-loop guard that returns an
+        // error when the pagination offset does not advance despite has_more=true.
+        // search_issues currently has no analogous guard against a cursor regression
+        // (i.e., the server returning the same nextPageToken twice). In practice,
+        // Jira does not replay identical cursors; this gap is LOW risk. If observed,
+        // add: if next_cursor == cursor { break; }
+        // See nfr-catalog.md NFR-R-F for context.
         loop {
             let mut body = serde_json::json!({
                 "jql": jql,
