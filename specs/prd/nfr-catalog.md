@@ -1,7 +1,7 @@
 ---
 context: nfr-catalog
 title: "NFR Catalog — Pass 4 Convergence"
-total_nfrs: 41  # 42 − NFR-O-K (merged into NFR-S-D at ADV-P7-002)
+total_nfrs: 40  # 42 − NFR-O-K (merged into NFR-S-D at ADV-P7-002) − NFR-R-NEW-2 (removed S-3.07 v2.0.0: Part B dropped; S-3.10 deletes target function)
 last_updated: 2026-05-08
 source_pass: 4
 revision_note: "2026-05-08 — Wave 2 closure swept 10 additional NFRs to RESOLVED (NFR-O-F/J/L/M/O/W/H/R/V via S-2.05/S-2.07; NFR-R-F via S-2.05). Per WV2-ADV-02, the body table and Summary Table required catch-up updates that the per-story state-manager dispatches missed."
@@ -13,9 +13,9 @@ trace: |
 
 # NFR Catalog — jira-cli Pass 4 Convergence
 
-42 individually-enumerated NFR rows. Pass 4 produced: broad (23) + R1 deepening (+18) + NFR-R-E re-promotion (0 net) + R4 NEW-2 (+1) = 42 entries then reconciled to 40 summary rows + NFR-R-NEW-1 added by ADV-P2-003 = 41 total. NFR-S-E severity promoted from LOW to HIGH per ADV-P2-004. NFR-S-F (cargo-deny supply chain) added per ADV-P3-007 = 42 total then NFR-O-K merged into NFR-S-D at ADV-P7-002 = 41 total.
+42 individually-enumerated NFR rows. Pass 4 produced: broad (23) + R1 deepening (+18) + NFR-R-E re-promotion (0 net) + R4 NEW-2 (+1) = 42 entries then reconciled to 40 summary rows + NFR-R-NEW-1 added by ADV-P2-003 = 41 total. NFR-S-E severity promoted from LOW to HIGH per ADV-P2-004. NFR-S-F (cargo-deny supply chain) added per ADV-P3-007 = 42 total then NFR-O-K merged into NFR-S-D at ADV-P7-002 = 41 total. NFR-R-NEW-2 removed at S-3.07 v2.0.0 (2026-05-08) = 40 total.
 
-**Severity totals: 1 CRITICAL / 6 HIGH / 15 MEDIUM / 19 LOW = 41 total** (NFR-O-K merged into NFR-S-D at ADV-P7-002)
+**Severity totals: 1 CRITICAL / 6 HIGH / 15 MEDIUM / 18 LOW = 40 total** (NFR-O-K merged into NFR-S-D at ADV-P7-002; NFR-R-NEW-2 removed at S-3.07 v2.0.0)
 
 All four MUST-FIX items (NFR-R-D, NFR-R-A, NFR-R-B, NFR-R-E) have been crystallized as behavioral contracts in the L3 PRD:
 - NFR-R-D → BC-6.3.001 (multi-profile fields bug)
@@ -46,14 +46,13 @@ All four MUST-FIX items (NFR-R-D, NFR-R-A, NFR-R-B, NFR-R-E) have been crystalli
 | ID | Description | Severity | Site | Phase 3 Routing |
 |---|---|---|---|---|
 | **NFR-R-C** | Worklog duration constants no longer apply. Worklog POST sends `timeSpent` (string) and Jira's server applies its configured `workingHoursPerDay`/`workingDaysPerWeek`. Resolves silent wrong-answer on customized instances. | MEDIUM | `src/cli/worklog.rs` + `src/api/jira/worklogs.rs` | **RESOLVED — 2026-05-08 — S-2.06 v2.0.0 (PR #308 / c8f15d8) via Option 1 (timeSpent string passthrough; matches `ankitpokhrel/jira-cli` pattern). Original FIX-IN-PHASE-3 plan (admin-only `/rest/api/3/configuration/timetracking` endpoint fetch) was BLOCKED by Perplexity verification 2026-05-08; see DEC-010 and `.factory/research/S-2.06-jira-timetracking-verification.md`.** |
-| **NFR-R-F** | `get_changelog` anti-loop guard present (breaks if nextPage URL == current URL). `search_issues` cursor loop has no analogous guard against cursor == cursor regression. | MEDIUM | `src/api/jira/issues.rs:222-230` | **RESOLVED — 2026-05-08 — S-2.05 (PR #307 / 7f004ca) via KNOWN-GAP comment added near `search_issues` cursor loop and CLAUDE.md Gotcha documenting the gap. Original DOCUMENT-AS-IS plan executed.** |
+| **NFR-R-F** | `get_changelog` anti-loop guard present (breaks if nextPage URL == current URL). `search_issues` cursor loop has no analogous guard against cursor == cursor regression. `/rest/api/3/search/jql` returning the same `nextPageToken` twice is a confirmed Jira Cloud bug (JRACLOUD-94632, JRACLOUD-92049, JRACLOUD-85546; also `atlassian/atlassian-mcp-server#118`, `ankitpokhrel/jira-cli#898`). | MEDIUM | `src/api/jira/issues.rs:59-65` (KNOWN-GAP comment; guard pending S-3.07) | **DOCUMENT-AS-IS-FIXED — 2026-05-08 — S-2.05 (PR #307 / 7f004ca) added KNOWN-GAP comment; S-3.07 v2.0.0 (Phase 3) delivers the real defensive guard + stderr warning citing JRACLOUD-94632 (AC-008, AC-NEW-D). Elevated from "defensive gap" to "confirmed bug response" per Perplexity verification 2026-05-08 (DEC-014).** |
 ### LOW
 
 | ID | Description | Severity | Site | Phase 3 Routing |
 |---|---|---|---|---|
 | **NFR-R-G** | Non-atomic cache writes: `cache.rs:36-43` uses direct `std::fs::write` — no temp-file + atomic rename. Crash/SIGKILL between start and end leaves indeterminate file state. Self-healing via deserialization-failure → cache-miss. | LOW | `src/cache.rs:36-43` | **DOCUMENT-AS-IS**: Self-healing already; LOW for single-user CLI. Optional: use temp-file + rename pattern. |
 | **NFR-R-NEW-1** | `Retry-After` header has no upper-bound cap in current code. `Retry-After: 86400` causes the retry loop to sleep for 24 hours with no user escape (other than Ctrl+C). BC-X.4.009 proposes `MAX_RETRY_AFTER_SECS = 60` cap as Phase 3 fix. Current behavior: any valid u64 value is honored as-is. **Severity LOW (ADV-P3-009 reviewed, retained; section corrected ADV-P6-003):** Single-user CLI — user can Ctrl+C at any time; not a service-grade SLA concern. Atlassian does not send multi-hour `Retry-After` values in practice. | LOW | `src/api/rate_limit.rs:14-19` | **FIX-IN-PHASE-3**: Implement `MAX_RETRY_AFTER_SECS = 60` cap per BC-X.4.009. Print warning and abort retry when cap exceeded. H-027 pins current gap (to be updated when fix lands). |
-| **NFR-R-NEW-2** | `parse_duration` silently wraps on multiplicative overflow for pathological inputs (e.g., `99999999999999w`). Release builds have `panic=abort` which disables debug overflow checks — silent wrapped value sent to Jira API. **Severity LOW (section corrected ADV-P6-003).** | LOW | `src/duration.rs:29-32` | **DOCUMENT-AS-IS**: Use `checked_mul`; bail with "duration too large" error. ~5 LOC fix. Acceptable for v1. |
 
 ---
 
@@ -150,7 +149,7 @@ All four MUST-FIX items (NFR-R-D, NFR-R-A, NFR-R-B, NFR-R-E) have been crystalli
 | NFR-R-E | Reliability | HIGH | FIX-IN-PHASE-3 | BC-4.3.001 |
 | NFR-S-B | Security | HIGH | SECURITY-DECIDE | — |
 | NFR-R-C | Reliability | MEDIUM | RESOLVED (2026-05-08, S-2.06 v2.0.0, PR #308 / c8f15d8) | — |
-| NFR-R-F | Reliability | MEDIUM | RESOLVED (2026-05-08, S-2.05, PR #307 / 7f004ca) | — |
+| NFR-R-F | Reliability | MEDIUM | DOCUMENT-AS-IS-FIXED (S-2.05 comment + S-3.07 v2 guard + JRACLOUD-94632 warning) | — |
 | NFR-S-A | Security | MEDIUM | SECURITY-DECIDE | — |
 | NFR-S-C | Security | MEDIUM | SECURITY-DECIDE | — |
 | NFR-O-A | Observability | MEDIUM | DEFER | — |
@@ -166,7 +165,6 @@ All four MUST-FIX items (NFR-R-D, NFR-R-A, NFR-R-B, NFR-R-E) have been crystalli
 | NFR-P-NEW-1 | Performance | MEDIUM | DEFER | — |
 | NFR-R-G | Reliability | LOW | DOCUMENT-AS-IS | — |
 | NFR-R-NEW-1 | Reliability | LOW | FIX-IN-PHASE-3 | BC-X.4.009 (proposed fix) |
-| NFR-R-NEW-2 | Reliability | LOW | DOCUMENT-AS-IS | — |
 | NFR-S-D | Security | LOW | DOCUMENT-AS-IS | — |
 | NFR-S-E | Security | HIGH | FIX-IN-PHASE-3 | — |
 | NFR-S-F | Security | HIGH | FIX-IN-PHASE-3 | — |
@@ -191,9 +189,10 @@ All four MUST-FIX items (NFR-R-D, NFR-R-A, NFR-R-B, NFR-R-E) have been crystalli
 - FIX-IN-PHASE-3: 7 (1 CRITICAL: NFR-R-D; 5 HIGH: NFR-R-A, NFR-R-B, NFR-R-E, NFR-S-E, NFR-S-F; 1 LOW: NFR-R-NEW-1)
 - SECURITY-DECIDE: 3 (1 HIGH: NFR-S-B; 2 MEDIUM: NFR-S-A, NFR-S-C)
 - POLICY-DECISION: 0 (all 3 closed by Wave 2: NFR-O-F, NFR-O-J, NFR-O-W)
-- DOCUMENT-AS-IS: 8 (LOW or MEDIUM; NFR-R-NEW-1 moved to FIX-IN-PHASE-3; NFR-O-K merged into NFR-S-D at Pass 7; 5 items swept to RESOLVED by Wave 2)
+- DOCUMENT-AS-IS: 7 (LOW or MEDIUM; NFR-R-NEW-1 moved to FIX-IN-PHASE-3; NFR-O-K merged into NFR-S-D at Pass 7; 5 items swept to RESOLVED by Wave 2; NFR-R-NEW-2 removed S-3.07 v2.0.0; NFR-R-F reclassified to DOCUMENT-AS-IS-FIXED)
+- DOCUMENT-AS-IS-FIXED: 1 (NFR-R-F — S-2.05 KNOWN-GAP comment + S-3.07 v2 real guard + JRACLOUD-94632 warning)
 - DEFER: 12 (MEDIUM and LOW)
 
-**Total: 41** (42 rows − NFR-O-K merged into NFR-S-D at adversary Pass 7. NFR-S-F added per ADV-P3-007. NFR-S-E severity promoted LOW→HIGH per ADV-P2-004.)
+**Total: 40** (42 rows − NFR-O-K merged into NFR-S-D at adversary Pass 7 − NFR-R-NEW-2 removed at S-3.07 v2.0.0 2026-05-08. NFR-S-F added per ADV-P3-007. NFR-S-E severity promoted LOW→HIGH per ADV-P2-004.)
 
-**Counting clarification** (ADV-P2-005 + ADV-P3-007 + ADV-P7-002 reconciliation): The NFR Summary Table contains 41 individually-enumerated rows. Severity breakdown: 1 CRITICAL / 6 HIGH / 15 MEDIUM / 19 LOW = 41. This is the canonical count. NFR-O-K was a duplicate of NFR-S-D (same site src/config.rs:113-140, same routing DOCUMENT-AS-IS, same fix) and was merged at adversary Pass 7. Prior counting clarifications referencing 39 rows, 41, 42, 44 cumulative, or 45 total were inconsistent; this count supersedes them. Every row in the Summary Table represents a distinct NFR concern in the dimension body tables above. No phantom rows exist.
+**Counting clarification** (ADV-P2-005 + ADV-P3-007 + ADV-P7-002 + S-3.07-v2 reconciliation): The NFR Summary Table contains 40 individually-enumerated rows. Severity breakdown: 1 CRITICAL / 6 HIGH / 15 MEDIUM / 18 LOW = 40. NFR-O-K was a duplicate of NFR-S-D and was merged at adversary Pass 7. NFR-R-NEW-2 was removed at S-3.07 v2.0.0 (2026-05-08) because S-3.10 deletes the target function (`parse_duration` 3-arg calculator) — adding `checked_mul` to dead code is wasted churn. If S-3.10 is descoped, NFR-R-NEW-2 must be re-added. Prior counting clarifications referencing 39, 41, 42, 44, or 45 rows were inconsistent; this count supersedes them.

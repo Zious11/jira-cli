@@ -2,8 +2,8 @@
 
 **traces_to:** README.md
 **Source:** Pass 1 R1 §5 (26 risks) + R2 §7 (1 severity escalation) + Pass 2 ADV-P2-004 (1 new HIGH) + Pass 6 ADV-P6-004 (R-H3 demoted HIGH→MEDIUM) + Pass 8 ADV-P8-003 (R-M3 merged into R-L11 — Retry-After duplicate)
-**Total risks:** 28 (11 R1-NEW + 14 broad-pass + 1 R1-NEW reclassified to CRITICAL + 1 Pass-2 addition; R-M3 merged into R-L11 at Pass 8; R-L12 + R-L13 added at CV-003 gate prep)
-**Severity distribution:** 1 CRITICAL / 6 HIGH / 8 MEDIUM / 13 LOW
+**Total risks:** 34 (11 R1-NEW + 14 broad-pass + 1 R1-NEW reclassified to CRITICAL + 1 Pass-2 addition; R-M3 merged into R-L11 at Pass 8; R-L12 + R-L13 added at CV-003 gate prep; 5 auto-refresh risks added S-3.03 v2; 1 search/jql anti-loop risk added S-3.07 v2)
+**Severity distribution:** 1 CRITICAL / 6 HIGH / 8 MEDIUM / 13 LOW (base) + 2 MEDIUM + 3 LOW (S-3.03) + 1 LOW (S-3.07) = 1 CRITICAL / 6 HIGH / 10 MEDIUM / 17 LOW
 
 > **Numbering note:** R1-NEW-10 (multi-profile fields silent regression, NFR-R-D) was elevated from MEDIUM to CRITICAL during Pass 4 R1 analysis and appears as R-C1 in the CRITICAL block below. The R1-NEW label is not repeated in the numbered sequence; the CRITICAL block carries it. Effective R1-NEW count in the MEDIUM/HIGH rows is 11 (NEW-1 through NEW-9, NEW-11, NEW-12).
 
@@ -83,6 +83,18 @@ to the auto-refresh OAuth implementation (Wave 3, S-3.03).
 
 ---
 
+## SEARCH-JQL ANTI-LOOP RISKS — S-3.07 (1)
+
+Added 2026-05-08 from S-3.07 v2.0.0 design verification
+(`.factory/research/S-3.07-wave3-verification.md`). This risk is specific to the
+`/rest/api/3/search/jql` cursor-loop bug (JRACLOUD-94632) addressed by S-3.07 Part D.
+
+| # | Risk | Severity | Source Story | Phase 3 Action |
+|---|------|----------|-------------|----------------|
+| **R-NEW-S307-1** | **Silent partial results from `/rest/api/3/search/jql` cursor-loop bug:** Jira Cloud intermittently returns the same `nextPageToken` twice (JRACLOUD-94632, JRACLOUD-92049, JRACLOUD-85546). Without a guard, `search_issues` loops indefinitely, producing no results and hanging the CLI. With the S-3.07 Part D guard, the loop terminates after detecting the repeated cursor and emits a stderr warning citing JRACLOUD-94632. Confirmed bug (also reported in `atlassian/atlassian-mcp-server#118` and `ankitpokhrel/jira-cli#898`). Failure mode with the guard: truncated results + visible warning. Failure mode without: infinite hang (silent). | LOW | S-3.07 | FIX-IN-PHASE-3 (S-3.07 AC-008 + AC-NEW-D): anti-loop guard + stderr warning citing JRACLOUD-94632 gives users a copy-pasteable search term to track upstream resolution. Severity LOW because user has actionable diagnostic info and mitigated failure mode is visible, not silent. |
+
+---
+
 ## Risk Summary
 
 | Severity | Count | Top action |
@@ -90,8 +102,8 @@ to the auto-refresh OAuth implementation (Wave 3, S-3.03).
 | CRITICAL | 1 | FIX-IN-PHASE-3 (NFR-R-D multi-profile fields) |
 | HIGH | 6 | 5× FIX-IN-PHASE-3, 1× SECURITY-DECIDE |
 | MEDIUM | 10 | 4× DEFER, 1× DOCUMENT-AS-IS, 1× FIX-IN-PHASE-3, 2× SECURITY-DECIDE, 2× S-3.03 auto-refresh (R-M3 merged into R-L11 at Pass 8) |
-| LOW | 16 | 10× DOCUMENT-AS-IS/FIX-IN-PHASE-3, 2× DEFER, 1× POLICY-DECISION, 3× S-3.03 auto-refresh (R-L12 + R-L13 added at CV-003) |
-| **Total** | **33** | |
+| LOW | 17 | 10× DOCUMENT-AS-IS/FIX-IN-PHASE-3, 2× DEFER, 1× POLICY-DECISION, 3× S-3.03 auto-refresh (R-L12 + R-L13 added at CV-003), 1× S-3.07 anti-loop (R-NEW-S307-1) |
+| **Total** | **34** | |
 
 ---
 
