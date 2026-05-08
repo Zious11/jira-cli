@@ -21,7 +21,7 @@ async fn test_add_worklog() {
 
     let client =
         jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
-    let worklog = client.add_worklog("FOO-1", 7200, None).await.unwrap();
+    let worklog = client.add_worklog("FOO-1", "2h", None).await.unwrap();
     assert_eq!(worklog.time_spent_seconds, Some(7200));
 }
 

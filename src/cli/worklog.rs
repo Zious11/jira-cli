@@ -39,10 +39,7 @@ async fn handle_add(
             println!("{}", output::render_json(&worklog)?);
         }
         OutputFormat::Table => {
-            let time = worklog
-                .time_spent
-                .as_deref()
-                .unwrap_or(dur);
+            let time = worklog.time_spent.as_deref().unwrap_or(dur);
             output::print_success(&format!("Logged {time} on {key}"));
         }
     }
