@@ -113,7 +113,14 @@ pub async fn refresh_credentials(args: RefreshArgs<'_>) -> Result<()> {
     let login_result = match flow {
         AuthFlow::Token => login_token(&target, args.email, args.token, args.no_input).await,
         AuthFlow::OAuth => {
-            login_oauth(&target, args.client_id, args.client_secret, args.no_input).await
+            login_oauth(
+                &target,
+                args.client_id,
+                args.client_secret,
+                None,
+                args.no_input,
+            )
+            .await
         }
     };
 

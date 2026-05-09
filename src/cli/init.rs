@@ -140,7 +140,7 @@ pub async fn handle() -> Result<()> {
     // credential prompt. Flags aren't plumbed through init — users who want
     // a non-interactive setup should run `jr auth login` directly.
     if auth_choice == 0 {
-        crate::cli::auth::login_oauth(&profile_name, None, None, false).await?;
+        crate::cli::auth::login_oauth(&profile_name, None, None, None, false).await?;
     } else {
         // login_token already persists auth_method = "api_token" to
         // [profiles.<name>] internally — no additional load+save needed

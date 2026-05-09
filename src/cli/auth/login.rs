@@ -115,6 +115,7 @@ pub async fn login_oauth(
     profile: &str,
     client_id: Option<String>,
     client_secret: Option<String>,
+    cloud_id_override: Option<&str>,
     no_input: bool,
 ) -> Result<()> {
     if !no_input {
@@ -176,14 +177,26 @@ pub async fn login_oauth(
         crate::api::auth::store_oauth_app_credentials(&client_id, &client_secret)?;
     }
 
-    let result =
-        crate::api::auth::oauth_login(profile, &client_id, &client_secret, &scopes, strategy)
-            .await?;
+    let result = crate::api::auth::oauth_login(
+        profile,
+        &client_id,
+        &client_secret,
+        &scopes,
+        strategy,
+        cloud_id_override,
+        no_input,
+    )
+    .await?;
 
     // Persist site info to the named profile under [profiles.<name>], not
     // the legacy [instance] block. Reload to pick up any mutations made
     // earlier in the login flow (e.g., by `prepare_login_target`). Same
     // lenient-load rationale as the earlier reload above.
+    // Capture fields before moving into config.
+    let site_name = result.site_name.clone();
+    let site_url = result.site_url.clone();
+    let cloud_id_stored = result.cloud_id.clone();
+
     let mut config = Config::load_lenient_with(Some(profile))?;
     let p = config
         .global
@@ -203,7 +216,9 @@ pub async fn login_oauth(
     }
     config.save_global()?;
 
-    output::print_success(&format!("Authenticated with {}", result.site_name));
+    output::print_success(&format!(
+        "Authenticated with {site_name} ({site_url}) [cloudId: {cloud_id_stored}]"
+    ));
     Ok(())
 }
 
@@ -222,6 +237,9 @@ pub struct LoginArgs {
     pub token: Option<String>,
     pub client_id: Option<String>,
     pub client_secret: Option<String>,
+    /// Cloud ID override for multi-org disambiguation (--cloud-id flag).
+    /// Only meaningful when `oauth` is true; passed through to `login_oauth`.
+    pub cloud_id: Option<String>,
     pub no_input: bool,
     pub output: OutputFormat,
 }
@@ -299,7 +317,14 @@ pub async fn handle_login(args: LoginArgs) -> Result<()> {
     config.global = global;
     config.save_global()?;
     if args.oauth {
-        login_oauth(&target, args.client_id, args.client_secret, args.no_input).await?;
+        login_oauth(
+            &target,
+            args.client_id,
+            args.client_secret,
+            args.cloud_id.as_deref(),
+            args.no_input,
+        )
+        .await?;
     } else {
         login_token(&target, args.email, args.token, args.no_input).await?;
     }
