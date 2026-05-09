@@ -323,7 +323,7 @@ wave_3:
     - { id: S-3.02, title: "Shard-split src/cli/assets.rs (1,055 LOC) by command theme", status: blocked }
     - { id: S-3.03, title: "Investigate and wire (or document removal of) refresh_oauth_token", status: blocked }
     - { id: S-3.04, title: "Multi-cloudId disambiguation: --cloud-id flag + prompt for ambiguous orgs", status: blocked }
-    - { id: S-3.05, title: "Cap asset enrichment join_all concurrency with buffer_unordered(8)", status: blocked }
+    - { id: S-3.05, title: "Cap asset enrichment join_all concurrency with buffer_unordered(8)", status: pending }
     - id: S-3.06
       title: "Codify pre-merge numeric claim checker for BC heading/body drift (DRIFT-001)"
       status: completed
