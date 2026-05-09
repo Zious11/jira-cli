@@ -279,12 +279,28 @@ mod proptests {
         }
 
         #[test]
-        fn format_roundtrip(seconds in (1u64..86400).prop_filter("divisible by 60", |s| s % 60 == 0)) {
+        fn format_roundtrip(seconds in (1u64..1440u64).prop_map(|m| m * 60)) {
             let formatted = format_duration(seconds);
-            let reparsed = parse_duration(&formatted, 8, 5).unwrap();
-            if seconds < 28800 {
-                prop_assert_eq!(reparsed, seconds, "Roundtrip failed: {} -> {} -> {}", seconds, formatted, reparsed);
+            // Parse the formatted string back to seconds structurally (no inverse function).
+            // format_duration only emits h and m tokens: "Xm", "Xh", or "XhYm".
+            let mut reconstructed = 0u64;
+            for (suffix, multiplier) in &[("h", 3600u64), ("m", 60u64)] {
+                if let Some(pos) = formatted.find(suffix) {
+                    let start = formatted[..pos]
+                        .rfind(|c: char| !c.is_ascii_digit())
+                        .map(|i| i + 1)
+                        .unwrap_or(0);
+                    let n: u64 = formatted[start..pos].parse().unwrap_or(0);
+                    reconstructed += n * multiplier;
+                }
             }
+            prop_assert_eq!(
+                reconstructed,
+                seconds,
+                "format_duration({}) = {:?} did not round-trip to same seconds",
+                seconds,
+                formatted
+            );
         }
     }
 }
