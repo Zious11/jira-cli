@@ -1,0 +1,69 @@
+S-2.07 Combined Test Transcript
+Generated: 2026-05-07
+Branch: feat/S-2.07-auth-output-json-and-policy
+Working directory: .worktrees/S-2.07-auth-output-json-and-policy/
+
+================================================================================
+RUN 1: cargo test --test auth_output_json
+================================================================================
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/auth_output_json.rs (target/debug/deps/auth_output_json-01f287ebf56fc1c9)
+
+running 5 tests
+test test_auth_switch_unknown_profile_returns_json_error ... ok
+test test_auth_switch_returns_json_ok ... ok
+test test_auth_remove_returns_json_ok ... ok
+test test_auth_logout_returns_json_ok ... ok
+test test_auth_login_emits_json_when_output_json_set ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.78s
+
+
+================================================================================
+RUN 2: cargo test --lib cli::auth::tests::test_auth
+================================================================================
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running unittests src/lib.rs (target/debug/deps/jr-a9cc0346eaccfc58)
+
+running 4 tests
+test cli::auth::tests::test_auth_logout_json_shape ... ok
+test cli::auth::tests::test_auth_remove_json_shape ... ok
+test cli::auth::tests::test_auth_login_json_shape ... ok
+test cli::auth::tests::test_auth_switch_json_shape ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 626 filtered out; finished in 0.01s
+
+
+================================================================================
+RUN 3: cargo test --lib cli::auth::tests::test_refresh
+(regression pin — refresh_success_payload must not regress after S-2.07 implementation)
+================================================================================
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (target/debug/deps/jr-a9cc0346eaccfc58)
+
+running 2 tests
+test cli::auth::tests::test_refresh_success_payload_emits_status_refreshed_for_oauth_flow ... ok
+test cli::auth::tests::test_refresh_success_payload_emits_status_refreshed_for_token_flow ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 628 filtered out; finished in 0.00s
+
+
+================================================================================
+SUMMARY: 11 tests, 11 passed, 0 failed
+================================================================================
+
+  Process-spawn integration (tests/auth_output_json.rs):    5/5 PASS
+  Snapshot unit tests (src/cli/auth.rs):                    4/4 PASS
+  Refresh regression pins (src/cli/auth.rs):                2/2 PASS
+
+AC coverage:
+  AC-001  test_auth_switch_returns_json_ok                            PASS
+  AC-001b test_auth_logout_returns_json_ok                            PASS
+  AC-001c test_auth_remove_returns_json_ok                            PASS
+  AC-002  test_refresh_success_payload_emits_status_refreshed_*       PASS (2 variants)
+  AC-003  test_auth_switch_unknown_profile_returns_json_error         PASS
+  AC-004  test_auth_login_emits_json_when_output_json_set             PASS
+  AC-006  test_auth_{login,switch,logout,remove}_json_shape           PASS (4 snapshots)

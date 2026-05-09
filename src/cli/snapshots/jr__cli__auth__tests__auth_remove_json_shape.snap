@@ -1,0 +1,10 @@
+---
+source: src/cli/auth.rs
+assertion_line: 2188
+expression: value
+---
+{
+  "action": "remove",
+  "ok": true,
+  "profile": "staging"
+}

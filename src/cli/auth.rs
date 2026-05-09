@@ -3,6 +3,7 @@ use dialoguer::{Input, Password};
 
 use crate::api::auth;
 use crate::api::auth_embedded::{OAuthAppSource, embedded_oauth_app};
+use crate::cli::OutputFormat;
 use crate::config::{Config, global_config_path};
 use crate::error::JrError;
 use crate::output;
@@ -256,6 +257,22 @@ fn resolve_oauth_app_credentials_for_test(
 /// Hint for OAuth client_id / client_secret errors so first-time agents
 /// discover they must create an OAuth app before passing credentials.
 const OAUTH_APP_HINT: &str = "Create one at https://developer.atlassian.com/console/myapps/.";
+
+/// Build the verb-aligned `--output json` success payload for the four auth
+/// subcommands that mutate profile state (login, switch, logout, remove).
+///
+/// The shape `{"profile", "action", "ok": true}` is the canonical contract
+/// documented in `docs/specs/json-output-shapes.md`. Kept separate from
+/// `refresh_success_payload` because `auth refresh` is a re-authentication
+/// trigger with its own richer payload — see json-output-shapes.md for
+/// the rationale.
+fn auth_json_response(profile: &str, action: &str) -> serde_json::Value {
+    serde_json::json!({
+        "profile": profile,
+        "action": action,
+        "ok": true,
+    })
+}
 
 /// Which auth flow `jr auth refresh` should dispatch to.
 ///
@@ -529,6 +546,7 @@ pub struct LoginArgs {
     pub client_id: Option<String>,
     pub client_secret: Option<String>,
     pub no_input: bool,
+    pub output: OutputFormat,
 }
 
 /// Orchestrate `jr auth login`: ensure the target profile exists with the
@@ -604,10 +622,18 @@ pub async fn handle_login(args: LoginArgs) -> Result<()> {
     config.global = global;
     config.save_global()?;
     if args.oauth {
-        login_oauth(&target, args.client_id, args.client_secret, args.no_input).await
+        login_oauth(&target, args.client_id, args.client_secret, args.no_input).await?;
     } else {
-        login_token(&target, args.email, args.token, args.no_input).await
+        login_token(&target, args.email, args.token, args.no_input).await?;
     }
+    if matches!(args.output, OutputFormat::Json) {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&auth_json_response(&target, "login"))
+                .expect("auth JSON response serialization cannot fail")
+        );
+    }
+    Ok(())
 }
 
 /// Pure logic for ensuring a target profile exists with the given URL.
@@ -951,7 +977,7 @@ pub(super) fn resolve_logout_target(
 /// metadata. The shared API-token credential is intentionally NOT cleared
 /// (it's keyed by host, not profile, so wiping it would log every profile
 /// out of API-token mode).
-pub async fn handle_logout(profile_arg: Option<&str>) -> anyhow::Result<()> {
+pub async fn handle_logout(profile_arg: Option<&str>, output: &OutputFormat) -> anyhow::Result<()> {
     let config = crate::config::Config::load_with(profile_arg)?;
     let target = resolve_logout_target(&config.global, profile_arg, &config.active_profile_name);
     crate::config::validate_profile_name(&target)?;
@@ -968,7 +994,15 @@ pub async fn handle_logout(profile_arg: Option<&str>) -> anyhow::Result<()> {
         .into());
     }
     crate::api::auth::clear_profile_creds(&target)?;
-    crate::output::print_success(&format!("Logged out of profile {target:?}"));
+    if matches!(output, OutputFormat::Json) {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&auth_json_response(&target, "logout"))
+                .expect("auth JSON response serialization cannot fail")
+        );
+    } else {
+        crate::output::print_success(&format!("Logged out of profile {target:?}"));
+    }
     Ok(())
 }
 
@@ -1036,6 +1070,7 @@ pub async fn handle_remove(
     target: &str,
     no_input: bool,
     cli_profile: Option<&str>,
+    output: &OutputFormat,
 ) -> anyhow::Result<()> {
     let mut config = Config::load_with(cli_profile)?;
     crate::config::validate_profile_name(target)?;
@@ -1083,7 +1118,15 @@ pub async fn handle_remove(
             cache_path.display()
         ));
     }
-    crate::output::print_success(&format!("Removed profile {target:?}"));
+    if matches!(output, OutputFormat::Json) {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&auth_json_response(target, "remove"))
+                .expect("auth JSON response serialization cannot fail")
+        );
+    } else {
+        crate::output::print_success(&format!("Removed profile {target:?}"));
+    }
     Ok(())
 }
 
@@ -1110,11 +1153,23 @@ pub(super) fn handle_switch_in_memory(
 }
 
 /// `jr auth switch <name>` — set the default profile in `config.toml`.
-pub async fn handle_switch(target: &str, cli_profile: Option<&str>) -> Result<()> {
+pub async fn handle_switch(
+    target: &str,
+    cli_profile: Option<&str>,
+    output: &OutputFormat,
+) -> Result<()> {
     let mut config = Config::load_with(cli_profile)?;
     config.global = handle_switch_in_memory(config.global, target)?;
     config.save_global()?;
-    output::print_success(&format!("Active profile set to {target:?}"));
+    if matches!(output, OutputFormat::Json) {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&auth_json_response(target, "switch"))
+                .expect("auth JSON response serialization cannot fail")
+        );
+    } else {
+        output::print_success(&format!("Active profile set to {target:?}"));
+    }
     Ok(())
 }
 
@@ -1994,5 +2049,197 @@ mod tests {
             peek_oauth_app_source_for_test(false, false),
             OAuthAppSource::None
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // S-1.08 holdout tests: credential resolver precedence (BC-1.4.030)
+    // -------------------------------------------------------------------------
+
+    /// AC-005 (BC-1.4.030): When both keychain BYO credentials AND embedded
+    /// app are present, `peek_oauth_app_source_for_test(true, true)` must
+    /// return `OAuthAppSource::Keychain` (keychain wins).
+    ///
+    /// This enforces the contract that a BYO user is never silently flipped
+    /// onto the embedded app mid-session. Their refresh_token was issued by
+    /// their own OAuth app and would be rejected by the embedded app's
+    /// client_id.
+    #[test]
+    fn test_s_1_08_ac005_keychain_wins_over_embedded_when_both_present() {
+        assert_eq!(
+            peek_oauth_app_source_for_test(true, true),
+            OAuthAppSource::Keychain,
+            "keychain must beat embedded when both are present"
+        );
+    }
+
+    /// AC-005 (BC-1.4.030): Keychain-only (no embedded) must also return
+    /// `OAuthAppSource::Keychain`.
+    #[test]
+    fn test_s_1_08_ac005_keychain_wins_when_only_keychain_present() {
+        assert_eq!(
+            peek_oauth_app_source_for_test(true, false),
+            OAuthAppSource::Keychain,
+            "keychain must be returned when keychain is present and embedded is absent"
+        );
+    }
+
+    /// AC-005 (BC-1.4.030): When keychain is absent but embedded is present,
+    /// `peek_oauth_app_source_for_test(false, true)` must return
+    /// `OAuthAppSource::Embedded` (embedded fallback).
+    #[test]
+    fn test_s_1_08_ac005_embedded_fallback_when_no_keychain() {
+        assert_eq!(
+            peek_oauth_app_source_for_test(false, true),
+            OAuthAppSource::Embedded,
+            "embedded must be the fallback when keychain is absent"
+        );
+    }
+
+    /// AC-005 (BC-1.4.030): When neither keychain nor embedded is present,
+    /// `peek_oauth_app_source_for_test(false, false)` must return
+    /// `OAuthAppSource::None` (no credential source resolved).
+    #[test]
+    fn test_s_1_08_ac005_none_when_no_source_resolved() {
+        assert_eq!(
+            peek_oauth_app_source_for_test(false, false),
+            OAuthAppSource::None,
+            "None sentinel must be returned when no credential source is available"
+        );
+    }
+
+    // ── S-2.07 AC-002: refresh_success_payload regression-pin ────────────
+    //
+    // These two tests are REGRESSION-PINS for the already-shipped
+    // `refresh_success_payload(AuthFlow)` helper. They must PASS on develop
+    // before any implementation work begins. If they fail, stop and
+    // investigate — the helper may have been accidentally modified.
+    //
+    // The tests pin:
+    //   - `AuthFlow::Token` → `{"status": "refreshed", "auth_method": "api_token", "next_step": <hint>}`
+    //   - `AuthFlow::OAuth` → `{"status": "refreshed", "auth_method": "oauth", "next_step": <hint>}`
+    //
+    // Per spec: AC-002 (traces to BC-7.3.004 postcondition, revised v2.0.0).
+    // The `auth refresh` shape is ASYMMETRIC from the four new auth subcommands'
+    // `{"profile", "action", "ok"}` shape — this is intentional (documented in
+    // `docs/specs/json-output-shapes.md`).
+
+    /// AC-002a (BC-7.3.004 regression-pin): `refresh_success_payload(AuthFlow::Token)`
+    /// must emit `{"status": "refreshed", "auth_method": "api_token", ...}`.
+    /// Expected Red Gate state: GREEN (helper already shipped on develop).
+    #[test]
+    fn test_refresh_success_payload_emits_status_refreshed_for_token_flow() {
+        let payload = refresh_success_payload(AuthFlow::Token);
+        assert_eq!(
+            payload["status"], "refreshed",
+            "status field must be 'refreshed', got: {}",
+            payload["status"]
+        );
+        assert_eq!(
+            payload["auth_method"], "api_token",
+            "auth_method must be 'api_token' for Token flow, got: {}",
+            payload["auth_method"]
+        );
+        assert!(
+            payload["next_step"].as_str().is_some_and(|s| !s.is_empty()),
+            "next_step must be a non-empty string hint, got: {}",
+            payload["next_step"]
+        );
+        assert!(
+            payload["next_step"]
+                .as_str()
+                .is_some_and(|s| s.contains("Always Allow")),
+            "next_step must mention 'Always Allow' for keychain guidance, got: {}",
+            payload["next_step"]
+        );
+    }
+
+    /// AC-002b (BC-7.3.004 regression-pin): `refresh_success_payload(AuthFlow::OAuth)`
+    /// must emit `{"status": "refreshed", "auth_method": "oauth", ...}`.
+    /// Expected Red Gate state: GREEN (helper already shipped on develop).
+    #[test]
+    fn test_refresh_success_payload_emits_status_refreshed_for_oauth_flow() {
+        let payload = refresh_success_payload(AuthFlow::OAuth);
+        assert_eq!(
+            payload["status"], "refreshed",
+            "status field must be 'refreshed', got: {}",
+            payload["status"]
+        );
+        assert_eq!(
+            payload["auth_method"], "oauth",
+            "auth_method must be 'oauth' for OAuth flow, got: {}",
+            payload["auth_method"]
+        );
+        assert!(
+            payload["next_step"].as_str().is_some_and(|s| !s.is_empty()),
+            "next_step must be a non-empty string hint, got: {}",
+            payload["next_step"]
+        );
+    }
+
+    // ── S-2.07 AC-006: auth subcommand JSON shape snapshot tests ─────────
+    //
+    // These four tests snapshot-pin the `{"profile", "action", "ok": true}`
+    // shape for the four newly-JSON-emitting auth subcommands. The tests
+    // construct the expected JSON value directly (as the implementer's output
+    // helper will) and call `insta::assert_json_snapshot!`.
+    //
+    // Red Gate strategy: On first run (no snapshot file yet), insta writes a
+    // `.snap.new` file and FAILS the test. The tests remain RED until:
+    //   1. The implementer adds the `OutputFormat::Json` branches in the
+    //      four handler functions, AND
+    //   2. `cargo insta review` is run to accept the new snapshot files.
+    //
+    // The snapshot files will land in `src/cli/snapshots/` (insta default
+    // for unit tests in this module).
+    //
+    // Test names follow AC-006: `test_auth_<verb>_json_shape`.
+    // All tests follow AC-009 `test_<verb>_<subject>_<expected_outcome>`.
+
+    /// AC-006 (BC-7.3.004 invariant): snapshot-pin the `login` auth JSON shape.
+    /// Expected Red Gate state: RED (no snapshot file exists yet).
+    #[test]
+    fn test_auth_login_json_shape() {
+        let value = serde_json::json!({
+            "profile": "testprof",
+            "action": "login",
+            "ok": true
+        });
+        insta::assert_json_snapshot!("auth_login_json_shape", value);
+    }
+
+    /// AC-006 (BC-7.3.004 invariant): snapshot-pin the `switch` auth JSON shape.
+    /// Expected Red Gate state: RED (no snapshot file exists yet).
+    #[test]
+    fn test_auth_switch_json_shape() {
+        let value = serde_json::json!({
+            "profile": "default",
+            "action": "switch",
+            "ok": true
+        });
+        insta::assert_json_snapshot!("auth_switch_json_shape", value);
+    }
+
+    /// AC-006 (BC-7.3.004 invariant): snapshot-pin the `logout` auth JSON shape.
+    /// Expected Red Gate state: RED (no snapshot file exists yet).
+    #[test]
+    fn test_auth_logout_json_shape() {
+        let value = serde_json::json!({
+            "profile": "default",
+            "action": "logout",
+            "ok": true
+        });
+        insta::assert_json_snapshot!("auth_logout_json_shape", value);
+    }
+
+    /// AC-006 (BC-7.3.004 invariant): snapshot-pin the `remove` auth JSON shape.
+    /// Expected Red Gate state: RED (no snapshot file exists yet).
+    #[test]
+    fn test_auth_remove_json_shape() {
+        let value = serde_json::json!({
+            "profile": "staging",
+            "action": "remove",
+            "ok": true
+        });
+        insta::assert_json_snapshot!("auth_remove_json_shape", value);
     }
 }

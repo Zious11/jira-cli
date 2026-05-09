@@ -29,18 +29,18 @@ async fn handle_add(
     client: &JiraClient,
     output_format: &OutputFormat,
 ) -> Result<()> {
-    let seconds = duration::parse_duration(dur, 8, 5)?;
+    duration::parse_duration_validate(dur)?;
     let comment = message.map(adf::text_to_adf);
 
-    let worklog = client.add_worklog(key, seconds, comment).await?;
+    let worklog = client.add_worklog(key, dur, comment).await?;
 
     match output_format {
         OutputFormat::Json => {
             println!("{}", output::render_json(&worklog)?);
         }
         OutputFormat::Table => {
-            let formatted = duration::format_duration(seconds);
-            output::print_success(&format!("Logged {formatted} on {key}"));
+            let time = worklog.time_spent.as_deref().unwrap_or(dur);
+            output::print_success(&format!("Logged {time} on {key}"));
         }
     }
 

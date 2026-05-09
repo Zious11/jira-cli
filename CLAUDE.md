@@ -15,6 +15,8 @@ src/
 │   │   ├── mod.rs       # dispatch + re-exports
 │   │   ├── format.rs    # row formatting, headers, points display
 │   │   ├── list.rs      # list + view + comments (read operations, unified JQL composition)
+│   │   ├── view.rs      # cli/issue/view.rs — issue view handler, detailed single-issue rendering (~287 LOC)
+│   │   ├── comments.rs  # cli/issue/comments.rs — comment list formatting and display (~61 LOC)
 │   │   ├── create.rs    # create + edit (field-building)
 │   │   ├── workflow.rs  # move + transitions + assign + comment + open
 │   │   ├── links.rs     # link + unlink + link-types
@@ -39,6 +41,7 @@ src/
 │   │   ├── workspace.rs     # workspace ID discovery + cache
 │   │   ├── linked.rs        # CMDB field discovery, asset extraction/enrichment (per-field + JSON)
 │   │   ├── objects.rs       # AQL search, get object, resolve key
+│   │   ├── schemas.rs       # api/assets/schemas.rs — schema discovery + object-type attributes (~44 LOC)
 │   │   └── tickets.rs       # connected tickets
 │   └── jira/            # Jira-specific API call implementations (one file per resource)
 │       ├── issues.rs    # search, get, create, edit, list comments
@@ -62,6 +65,7 @@ src/
 ├── output.rs            # Table (comfy-table) and JSON formatting
 ├── adf.rs               # Atlassian Document Format: text→ADF, markdown→ADF, ADF→text
 ├── duration.rs          # Worklog duration parser (2h, 1h30m, 1d, 1w)
+├── observability.rs     # --verbose / --verbose-bodies flag helpers, eprintln! wrappers (~39 LOC)
 ├── lib.rs               # Crate root (re-exports for integration tests)
 ├── jql.rs               # JQL utilities: escaping, validation, asset clause builder
 ├── partial_match.rs     # Case-insensitive substring matching with disambiguation
@@ -96,6 +100,19 @@ cargo deny check                     # License + vulnerability audit
 - **No unsafe code** without explicit justification in a comment.
 - **No lint suppression without refactoring.** If clippy warns (e.g., `too_many_arguments`), refactor to fix the root cause — don't add `#[allow]`. If refactoring is impractical, ask the user before suppressing and include a justification comment.
 - **Default to fixing code, not tests.** When a test fails, assume the test is correct and fix the implementation using idiomatic Rust. Only modify a test when requirements have changed — not to accommodate non-idiomatic code or lint workarounds.
+- **Test naming:** New tests use `test_<verb>_<subject>_<expected_outcome>` (e.g., `test_auth_switch_returns_json_ok`). Existing tests with no-prefix names are NOT renamed; this convention applies to new tests only. See `docs/specs/test-naming-convention.md`.
+
+### Output channels
+
+CLI handlers follow one of five output-channel profiles:
+
+1. **Pure** — stdout only (JSON or table data); no stderr output at all.
+2. **Read-only** — stdout for data, stderr for hints/warnings (e.g., truncation notices, "showing N of M").
+3. **Mixed** — stdout for success data, stderr for errors and hints; applies to most read commands.
+4. **Symmetric** — stdout for `--output json`, stderr for human-readable errors in either mode; state-changing commands that also print a result use this profile.
+5. **No-log facade** — state-changing commands that emit only a JSON result on stdout (e.g., `{"key": "FOO-123"}`); no progress or logging to stderr.
+
+The distinction matters for scripting: pipe stdout for data, redirect stderr for diagnostics. Never write diagnostic text to stdout in profiles 1/2/3/5.
 
 ## Key Decisions
 
@@ -144,6 +161,43 @@ When adding a new feature:
 - **`refresh_oauth_token` resolves credentials internally** (keychain →
   embedded) — callers pass only `profile`. Do not re-introduce
   `client_id`/`client_secret` parameters; they short-circuit the resolver.
+- **`--open` filter uses two mechanisms:** For Jira issues, `statusCategory != Done` is
+  injected into the JQL query (server-side filter). For connected CMDB tickets in
+  `cli/assets.rs` (`filter_tickets` function), filtering is client-side via
+  `status.colorName != "green"`. Both implement the same user intent ("show only open
+  items") but at different layers — CMDB connected tickets do not support JQL
+  `statusCategory` filtering. Status category colors are hardcoded in Jira Cloud:
+  `green` = Done, `yellow` = In Progress, `blue-gray` = To Do.
+- **User pagination advances by `USER_PAGE_SIZE`, not returned count:** In
+  `src/api/jira/users.rs`, both `search_users_all` and `search_assignable_users_by_project_all`
+  increment `start_at` by `USER_PAGE_SIZE` (100) after each page, NOT by the number of
+  users returned. This is a workaround for JRACLOUD-71293: Jira uses fixed-window
+  pagination (selects range [startAt, startAt+maxResults) then applies permission
+  filtering), so a short non-empty page does NOT mean end-of-data. Advancing by returned
+  count would overlap windows and produce duplicates. Do not change this behavior.
+- **`board view` truncation hint emits to stderr:** The truncation hint ("Showing N of M
+  columns — use --all to see everything") is written to stderr, consistent with the
+  convention used by `issue list` and `sprint current`. This is intentional — stderr
+  keeps hints out of `--output json` and pipe-friendly stdout.
+- **Atlassian's expired-access-token 401 response shape:** The Jira REST API v3 returns
+  `HTTP 401` with body `{"errorMessages": ["The access token provided is expired, revoked,
+  malformed, or invalid for other reasons."]}` — there is NO machine-readable `code` field
+  and NO RFC-6750-compliant `WWW-Authenticate: Bearer error="invalid_token"` header.
+  Auto-refresh wiring (S-3.03) uses blanket-401 trigger (matches `gh` CLI pattern), not
+  substring-match (locale-fragile) and not RFC-6750 header inspection (Atlassian doesn't
+  follow the spec). Source: `.factory/research/S-3.03-wave3-verification.md` (Claim 2, REFUTED).
+- **Refresh-token rotation is strictly single-use on Atlassian.** The "10-minute reuse
+  window" mentioned in some secondary sources (Nango.dev, etc.) is NOT documented by
+  Atlassian and is known to fail in clusters. Treat each refresh token as one-shot.
+  Concurrent refresh attempts MUST go through `src/api/refresh_coordinator.rs`
+  per-profile single-flight to avoid `invalid_grant` races. Source:
+  `.factory/research/S-3.03-v2-design-verification.md` (Claim 5, REFUTED).
+- **`refresh_coordinator.rs` mutex layering rule:** outer `std::sync::Mutex<HashMap<...>>`
+  is held ONLY BRIEFLY for HashMap lookup/insert; it is released BEFORE any `.await`.
+  Inner `tokio::sync::Mutex<RefreshState>` is held across the refresh `.await`. NEVER
+  use `std::sync::Mutex` for the inner mutex — `tokio::sync::Mutex` is mandatory because
+  it does NOT poison on panic, which is the correct semantic for refresh (a panicked
+  refresh should not permanently break the coordinator). Source: S-3.03 v2 spec.
 
 ## AI Agent Notes
 
@@ -153,5 +207,6 @@ When adding a new feature:
 - `JiraClient::new_for_test(base_url, auth_header)` constructs a client for integration tests
 - Test fixtures live in `tests/common/fixtures.rs`
 - Keyring round-trip tests are gated behind `JR_RUN_KEYRING_TESTS=1` + `#[ignore]` because Linux CI may lack secret-service
+- OAuth integration tests in `tests/oauth_embedded_login.rs` are gated behind `JR_RUN_OAUTH_INTEGRATION=1` + `#[ignore]`. The test is currently `unimplemented!()` — it requires a wiremock base-URL override in `oauth_login` before a real assertion can be written. CI does not run it; the embedded-creds smoke test in `release.yml` covers the binary-level check instead.
 - All interactive prompts have non-interactive flag equivalents for AI agent usage
 - `--output json` on write operations returns structured data (e.g., `{"key": "FOO-123"}`)

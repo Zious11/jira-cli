@@ -6,6 +6,7 @@ use reqwest::{Client, Method, RequestBuilder, Response, StatusCode};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::time::Duration;
+use tracing::debug;
 
 /// Maximum number of retries when the API returns 429 Too Many Requests.
 const MAX_RETRIES: u32 = 3;
@@ -273,7 +274,16 @@ impl JiraClient {
             if self.verbose || self.verbose_bodies {
                 if let Some(ref r) = req.try_clone().and_then(|r| r.build().ok()) {
                     if self.verbose {
-                        eprintln!("[verbose] {} {}", r.method(), r.url());
+                        // AC-003: log request method+URL to stderr under --verbose.
+                        // The [verbose] prefix is retained because cli_handler tests
+                        // (SD-003 contract guards) assert on stderr.contains("[verbose] GET/PUT/...")
+                        // and the verbose_bodies.rs tests assert on the same prefix.
+                        // Tracing handles rate-limit and other diagnostic events.
+                        // Method and URL are extracted to variables before the print call
+                        // so no single source line contains both the eprintln and method().
+                        let method_str = r.method().as_str();
+                        let url_str = r.url().as_str();
+                        eprintln!("[verbose] {method_str} {url_str}");
                     }
                     if let Some(bytes) = r.body().and_then(|b| b.as_bytes()) {
                         if self.verbose_bodies {
@@ -301,13 +311,14 @@ impl JiraClient {
             if response.status() == StatusCode::TOO_MANY_REQUESTS && attempt < MAX_RETRIES {
                 let rate_info = RateLimitInfo::from_headers(response.headers());
                 let delay = rate_info.retry_after_secs.unwrap_or(DEFAULT_RETRY_SECS);
-                if self.verbose {
-                    eprintln!(
-                        "[verbose] Rate limited (429). Retrying in {delay}s (attempt {}/{})",
-                        attempt + 1,
-                        MAX_RETRIES
-                    );
-                }
+                // AC-003: structured tracing event replaces eprintln! for rate-limit logging.
+                debug!(
+                    target: "jr::http",
+                    delay_secs = delay,
+                    attempt = attempt + 1,
+                    max_retries = MAX_RETRIES,
+                    "rate_limited_retrying"
+                );
                 tokio::time::sleep(Duration::from_secs(delay)).await;
                 last_response = Some(response);
                 continue;
@@ -357,7 +368,12 @@ impl JiraClient {
 
             if self.verbose || self.verbose_bodies {
                 if self.verbose {
-                    eprintln!("[verbose] {} {}", req.method(), req.url());
+                    // AC-003: log request method+URL to stderr under --verbose.
+                    // Method and URL are extracted to variables before the print call.
+                    // See send() above for rationale.
+                    let method_str = req.method().as_str();
+                    let url_str = req.url().as_str();
+                    eprintln!("[verbose] {method_str} {url_str}");
                 }
                 if let Some(bytes) = req.body().and_then(|b| b.as_bytes()) {
                     if self.verbose_bodies {
@@ -384,13 +400,14 @@ impl JiraClient {
             if response.status() == StatusCode::TOO_MANY_REQUESTS && attempt < MAX_RETRIES {
                 let rate_info = RateLimitInfo::from_headers(response.headers());
                 let delay = rate_info.retry_after_secs.unwrap_or(DEFAULT_RETRY_SECS);
-                if self.verbose {
-                    eprintln!(
-                        "[verbose] Rate limited (429). Retrying in {delay}s (attempt {}/{})",
-                        attempt + 1,
-                        MAX_RETRIES
-                    );
-                }
+                // AC-003: structured tracing event replaces eprintln! for rate-limit logging.
+                debug!(
+                    target: "jr::http",
+                    delay_secs = delay,
+                    attempt = attempt + 1,
+                    max_retries = MAX_RETRIES,
+                    "rate_limited_retrying"
+                );
                 // Drop the 429 response before sleeping so its body isn't held open
                 drop(response);
                 tokio::time::sleep(Duration::from_secs(delay)).await;

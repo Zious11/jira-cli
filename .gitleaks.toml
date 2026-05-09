@@ -1,0 +1,26 @@
+title = "jr secret scan config"
+version = 8
+
+# Use the default gitleaks rule set; add only project-specific allowlist entries.
+# Global allowlist format for gitleaks v8: paths and regexes are string arrays.
+
+[allowlist]
+description = "Project-specific allowlist for jr"
+
+# Fake credential strings used in unit/integration test fixtures.
+# hello-world-secret, secret-xyz, client-abc, super-secret-must-not-leak:
+#   deliberately fake tokens in auth_embedded.rs round-trip tests.
+# Basic dGVzdDp0ZXN0: base64("test:test") used as mock Basic auth header.
+regexes = [
+  '''(hello-world-secret|secret-xyz|client-abc|super-secret-must-not-leak)''',
+  '''Basic dGVzdDp0ZXN0''',
+]
+
+# build.rs reads JR_BUILD_OAUTH_CLIENT_SECRET from env at compile time;
+# no hardcoded secret is present in the file itself.
+# src/api/auth_embedded.rs: embedded OAuth XOR constants are generated into
+# OUT_DIR at build time, not stored in source.
+paths = [
+  '''build\.rs''',
+  '''src/api/auth_embedded\.rs''',
+]

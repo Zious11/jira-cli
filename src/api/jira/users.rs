@@ -95,6 +95,13 @@ impl JiraClient {
                 break;
             }
             all.extend(page);
+            // JRACLOUD-71293: advance by USER_PAGE_SIZE (the requested window size), NOT
+            // by the number of users returned. Jira uses fixed-window pagination: it
+            // selects raw range [startAt, startAt+maxResults) server-side and *then*
+            // applies permission filtering, so a short non-empty page does NOT mean
+            // end-of-data — more visible users may exist in later windows. Advancing by
+            // returned count would overlap windows and produce duplicates. Only an empty
+            // response reliably signals end-of-results.
             start_at = start_at.saturating_add(USER_PAGE_SIZE);
         }
         if !reached_end {
@@ -214,6 +221,8 @@ impl JiraClient {
                 break;
             }
             all.extend(page);
+            // JRACLOUD-71293: same fixed-window advance as search_users_all — see comment
+            // there for the full rationale. Do not switch to advancing by returned count.
             start_at = start_at.saturating_add(USER_PAGE_SIZE);
         }
         if !reached_end {

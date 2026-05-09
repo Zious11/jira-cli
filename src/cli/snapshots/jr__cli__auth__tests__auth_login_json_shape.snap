@@ -1,0 +1,10 @@
+---
+source: src/cli/auth.rs
+assertion_line: 2203
+expression: value
+---
+{
+  "action": "login",
+  "ok": true,
+  "profile": "testprof"
+}
