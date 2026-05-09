@@ -344,7 +344,19 @@ wave_3:
         AC-004 verified: lessons-codification.md exists with all 6 required sections.
         AC-005 verified: CLAUDE.md AI Agent Notes references the script.
         Phase 3 progress: 24/31 (77%). Wave 3: 2/10."
-    - { id: S-3.07, title: "Consolidated LOW NFR code fixes: Retry-After cap, parse_duration overflow, profile name error, anti-loop guard", status: pending }
+    - id: S-3.07
+      title: "Consolidated LOW NFR code fixes: Retry-After cap, parse_duration overflow, profile name error, anti-loop guard"
+      status: completed
+      pr: 315
+      merge_sha: 6bce18c
+      merged_at: 2026-05-09
+      merged_via: "gh pr merge --squash --admin --delete-branch (admin per session precedent)"
+      depends_on: [S-3.10]
+      bc_anchors: [BC-X.4.009, BC-6.1.004]
+      nfr_anchors: [NFR-R-NEW-1, NFR-S-D, NFR-R-F]
+      holdout_anchors: [H-027]
+      risk_anchors: [R-NEW-S307-1]
+      notes: "v2.0.0 delivery (3 parts: A Retry-After cap reframe, C profile name precision, D JRACLOUD-94632 elevated anti-loop). Part B was conditionally dropped per DEC-014 — confirmed via AC-NEW-B sequencing gate (S-3.10 already deleted 3-arg parse_duration; rg on develop returns only validator). Develop deltas: src/api/rate_limit.rs (+13 lines, MAX_RETRY_AFTER_SECS const), src/api/client.rs (+34/-2, cap guard in send/send_raw), src/config.rs (+9/-2, precise error messages + 2 inline tests +72), src/api/jira/issues.rs (+24/-9, anti-loop guard + JRACLOUD-94632 stderr warning), tests/rate_limit_cap_tests.rs (+186 NEW), tests/rate_limit_cap_ac003.rs (+25 NEW), Cargo.toml (tokio dev-dep gains test-util feature for tokio::test(start_paused=true) — although ac_001 ultimately uses wall-clock timeout per implementer judgment due to tokio+wiremock incompatibility). factory-artifacts companion at d8dcf7a: H-027 KNOWN-GAP→MUST-PASS; NFR-R-NEW-1 routing FIX-IN-PHASE-3→COMPLETE; NFR-R-F description updated. 6 demos in docs/demo-evidence/S-3.07/. Wave 3: 3/10. Phase 3: 25/31 (81%)."
     - { id: S-3.08, title: "Consolidated DOCUMENT-AS-IS LOW NFRs: source comments and CLAUDE.md additions", status: blocked }
     - { id: S-3.09, title: "Formally record PKCE deferral (SD-001 → DEFER; ADR-0013)", status: blocked }
     - id: S-3.10

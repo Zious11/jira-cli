@@ -148,7 +148,7 @@ Note: S-3.08 depends on S-2.05 merging first (CLAUDE.md conflict risk).
 | S-3.04 | Multi-cloudId --cloud-id flag + prompt | NFR-O-S, BC-1.5.038, BC-1.1.007, BC-1.5.031 | H-047 | draft | medium |
 | S-3.05 | Asset enrichment join_all → buffer_unordered(8) | NFR-P-NEW-1, BC-4.3.002, BC-X.1.005 | H-038 | draft | small |
 | S-3.06 | Pre-merge spec numeric claim checker (DRIFT-001) | — | — | completed (PR #314 / 01ba293) | small |
-| S-3.07 | LOW NFR code fixes (Retry-After cap, profile name precision) + /rest/api/3/search/jql anti-loop guard for confirmed JRACLOUD-94632 bug | BC-X.4.009, BC-6.1.004, NFR-R-NEW-1, NFR-S-D, NFR-R-F | H-027 | ready | small |
+| S-3.07 | LOW NFR code fixes (Retry-After cap, profile name precision) + /rest/api/3/search/jql anti-loop guard for confirmed JRACLOUD-94632 bug | BC-X.4.009, BC-6.1.004, NFR-R-NEW-1, NFR-S-D, NFR-R-F | H-027 | completed (PR #315 / 6bce18c) | small |
 | S-3.08 | DOCUMENT-AS-IS LOW NFR closures: source comments + CLAUDE.md additions | NFR-R-G, NFR-O-C/E/G/H/I/N/P/R/T/U/X, NFR-SCA-1/2/3 | — | draft | small |
 | S-3.09 | Formally record PKCE deferral (SD-001 → DEFER; ADR-0013) | NFR-S-A, BC-1.5.036 | — | draft | xsmall |
 | S-3.10 | Rewrite format_roundtrip proptest + delete deprecated 3-arg parse_duration calculator + retire H-018 | BC-X.5.005 | H-018 (to delete) | completed (PR #313 / f492e59) | small | <!-- follows S-2.06 (depends_on); Option 4 follow-up per .factory/research/H-018-holdout-strategy-research.md --> |
