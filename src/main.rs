@@ -47,10 +47,15 @@ async fn main() {
         colored::control::set_override(false);
     }
 
-    // Auto-enable --no-input when stdin is not a TTY (AI agents, pipes, scripts)
+    // Auto-enable --no-input when stdin is not a TTY (AI agents, pipes, scripts).
+    // Exception: when JR_OAUTH_CODE is set the caller is a test harness that
+    // injects an auth code via env var and may also pipe stdin to simulate
+    // interactive selection — do not override the explicit no_input value in
+    // that case. See tests/multi_cloudid_disambiguation.rs.
     if !cli.no_input {
         use std::io::IsTerminal;
-        if !std::io::stdin().is_terminal() {
+        let oauth_code_test_mode = std::env::var("JR_OAUTH_CODE").is_ok();
+        if !std::io::stdin().is_terminal() && !oauth_code_test_mode {
             cli.no_input = true;
         }
     }
@@ -135,6 +140,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                     token,
                     client_id,
                     client_secret,
+                    cloud_id,
                 } => {
                     let effective_profile = profile.or_else(|| cli.profile.clone());
                     cli::auth::handle_login(cli::auth::LoginArgs {
@@ -145,6 +151,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                         token,
                         client_id,
                         client_secret,
+                        cloud_id,
                         no_input: cli.no_input,
                         output: cli.output,
                     })

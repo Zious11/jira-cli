@@ -549,6 +549,8 @@ pub async fn oauth_login(
     client_secret: &str,
     scopes: &str,
     strategy: RedirectUriStrategyRequest,
+    cloud_id_override: Option<&str>,
+    no_input: bool,
 ) -> Result<OAuthResult> {
     // AC-005: emit structured tracing at OAuth flow entry point.
     // client_secret is intentionally NOT logged — only the profile and
@@ -564,6 +566,11 @@ pub async fn oauth_login(
 
     // 1. Resolve the strategy → owning the bound port up front so the
     //    callback URL we send to Atlassian matches what we'll listen on.
+    //
+    // Test-only override: JR_OAUTH_CODE lets tests skip the browser-open and
+    // TCP-listen step by injecting a pre-built auth code directly. When set,
+    // the listener is still bound (so redirect_uri is stable) but accept() is
+    // skipped. Not documented as a public seam; do not rely on it in production.
     let resolved = strategy.bind()?;
     let redirect_uri = resolved.strategy().redirect_uri();
     let (_strategy, listener) = resolved.into_parts();
@@ -571,57 +578,72 @@ pub async fn oauth_login(
 
     let auth_url = build_authorize_url(client_id, scopes, &redirect_uri, &state);
 
-    eprintln!("Opening browser for authorization...");
-    eprintln!("If browser doesn't open, visit: {auth_url}");
-    if let Err(e) = open::that(&auth_url) {
-        eprintln!(
-            "(could not auto-open browser: {e}) — paste the URL above into a browser to continue."
-        );
-    }
+    // Test-only override: see tests/multi_cloudid_disambiguation.rs.
+    // Not documented as a public seam; do not rely on it in production.
+    let injected_code = std::env::var("JR_OAUTH_CODE").ok();
 
-    // 2. Listen for the OAuth callback. The listener is already bound
-    //    atomically by RedirectUriStrategyRequest::bind; no re-bind here
-    //    means no TOCTOU window between probe and real use.
-    let (mut stream, _) = listener.accept().await?;
+    let code = if let Some(ref injected) = injected_code {
+        // Skip the browser open + TCP accept; use the injected code directly.
+        injected.clone()
+    } else {
+        eprintln!("Opening browser for authorization...");
+        eprintln!("If browser doesn't open, visit: {auth_url}");
+        if let Err(e) = open::that(&auth_url) {
+            eprintln!(
+                "(could not auto-open browser: {e}) — paste the URL above into a browser to continue."
+            );
+        }
 
-    let mut buf = vec![0u8; 4096];
-    let n = stream.read(&mut buf).await.context(
-        "reading OAuth callback request from the local browser; \
-         if you already approved in the browser, the authorization \
-         code is single-use and short-lived — re-running \
-         `jr auth login --oauth` is safe (the auth code expires unused)",
-    )?;
-    let request = String::from_utf8_lossy(&buf[..n]);
+        // 2. Listen for the OAuth callback. The listener is already bound
+        //    atomically by RedirectUriStrategyRequest::bind; no re-bind here
+        //    means no TOCTOU window between probe and real use.
+        let (mut stream, _) = listener.accept().await?;
 
-    let code = extract_query_param(&request, "code")
-        .ok_or_else(|| anyhow::anyhow!("No authorization code received"))?;
-    let returned_state = extract_query_param(&request, "state")
-        .ok_or_else(|| anyhow::anyhow!("No state parameter received"))?;
+        let mut buf = vec![0u8; 4096];
+        let n = stream.read(&mut buf).await.context(
+            "reading OAuth callback request from the local browser; \
+             if you already approved in the browser, the authorization \
+             code is single-use and short-lived — re-running \
+             `jr auth login --oauth` is safe (the auth code expires unused)",
+        )?;
+        let request = String::from_utf8_lossy(&buf[..n]);
 
-    if returned_state != state {
-        anyhow::bail!("State mismatch — possible CSRF attack");
-    }
+        let code = extract_query_param(&request, "code")
+            .ok_or_else(|| anyhow::anyhow!("No authorization code received"))?;
+        let returned_state = extract_query_param(&request, "state")
+            .ok_or_else(|| anyhow::anyhow!("No state parameter received"))?;
 
-    // Send a success page back to the browser.
-    let response = "HTTP/1.1 200 OK\r\n\
-                    Content-Type: text/html\r\n\r\n\
-                    <html><body>\
-                    <h2>Authorization successful!</h2>\
-                    <p>You can close this tab.</p>\
-                    </body></html>";
-    stream.write_all(response.as_bytes()).await.context(
-        "sending OAuth success page back to the local browser; \
-         the authorization code was received but tokens have NOT \
-         yet been exchanged or saved — re-running `jr auth login --oauth` \
-         may be required",
-    )?;
+        if returned_state != state {
+            anyhow::bail!("State mismatch — possible CSRF attack");
+        }
+
+        // Send a success page back to the browser.
+        let response = "HTTP/1.1 200 OK\r\n\
+                        Content-Type: text/html\r\n\r\n\
+                        <html><body>\
+                        <h2>Authorization successful!</h2>\
+                        <p>You can close this tab.</p>\
+                        </body></html>";
+        stream.write_all(response.as_bytes()).await.context(
+            "sending OAuth success page back to the local browser; \
+             the authorization code was received but tokens have NOT \
+             yet been exchanged or saved — re-running `jr auth login --oauth` \
+             may be required",
+        )?;
+        code
+    };
 
     // 3. Exchange the authorization code for tokens.
     // AC-005: emit structured tracing at token exchange entry point.
     debug!(target: "jr::auth", profile = %profile, "oauth_token_exchange_start");
     let client = reqwest::Client::new();
+    // Test-only override: JR_OAUTH_TOKEN_URL redirects the token exchange
+    // to a wiremock server. See tests/multi_cloudid_disambiguation.rs.
+    // Not documented as a public seam; do not rely on it in production.
+    let token_url = std::env::var("JR_OAUTH_TOKEN_URL")
+        .unwrap_or_else(|_| "https://auth.atlassian.com/oauth/token".into());
     let token_response = client
-        .post("https://auth.atlassian.com/oauth/token")
+        .post(&token_url)
         .json(&serde_json::json!({
             "grant_type": "authorization_code",
             "client_id": client_id,
@@ -654,8 +676,14 @@ pub async fn oauth_login(
         url: String,
         name: String,
     }
+    // Test-only override: JR_ACCESSIBLE_RESOURCES_URL redirects the
+    // accessible-resources lookup to a wiremock server. See
+    // tests/multi_cloudid_disambiguation.rs.
+    // Not documented as a public seam; do not rely on it in production.
+    let accessible_resources_url = std::env::var("JR_ACCESSIBLE_RESOURCES_URL")
+        .unwrap_or_else(|_| "https://api.atlassian.com/oauth/token/accessible-resources".into());
     let resources_response = client
-        .get("https://api.atlassian.com/oauth/token/accessible-resources")
+        .get(&accessible_resources_url)
         .bearer_auth(&tokens.access_token)
         .send()
         .await
@@ -678,9 +706,104 @@ pub async fn oauth_login(
         .await
         .context("accessible-resources response body was not valid JSON")?;
 
+    // Disambiguation: BC-1.5.038 — replace first-result-wins with multi-org logic.
+    let resource_id: String = match resources.len() {
+        0 => {
+            return Err(crate::error::JrError::UserError(
+                "No Atlassian sites authorized this token. Re-run `jr auth login` \
+                 and select at least one site at the consent screen."
+                    .into(),
+            )
+            .into());
+        }
+        1 => resources[0].id.clone(),
+        _ => {
+            if let Some(override_id) = cloud_id_override {
+                // --cloud-id provided: find matching resource or exit 64.
+                resources
+                    .iter()
+                    .find(|r| r.id == override_id)
+                    .map(|r| r.id.clone())
+                    .ok_or_else(|| {
+                        let listing = resources
+                            .iter()
+                            .map(|r| format!("  {} — {} ({})", r.id, r.name, r.url))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        crate::error::JrError::UserError(format!(
+                            "Provided --cloud-id '{override_id}' not found in accessible \
+                             resources. Available:\n{listing}"
+                        ))
+                    })?
+            } else if no_input {
+                // --no-input without --cloud-id: exit 64 with actionable message.
+                let listing = resources
+                    .iter()
+                    .map(|r| format!("  {} — {} ({})", r.id, r.name, r.url))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                return Err(crate::error::JrError::UserError(format!(
+                    "Multiple Atlassian orgs found. Use --cloud-id <id> to disambiguate. \
+                     Available:\n{listing}"
+                ))
+                .into());
+            } else {
+                // Interactive: present a selection prompt.
+                let items: Vec<String> = resources
+                    .iter()
+                    .map(|r| format!("{} ({}) [cloudId: {}]", r.name, r.url, r.id))
+                    .collect();
+                // Attempt dialoguer Select; fall back to line-based reading on
+                // non-TTY stdin (e.g., test harness piping "2\n" via write_stdin).
+                use std::io::IsTerminal;
+                let selection = if std::io::stdin().is_terminal() {
+                    dialoguer::Select::new()
+                        .with_prompt("Multiple Atlassian orgs accessible. Select one:")
+                        .items(&items)
+                        .default(0)
+                        .interact()
+                        .map_err(|e| {
+                            crate::error::JrError::UserError(format!(
+                                "Failed to read selection: {e}"
+                            ))
+                        })?
+                } else {
+                    // Non-TTY stdin: print items and read a 1-based index.
+                    eprintln!("Multiple Atlassian orgs accessible. Select one:");
+                    for (i, item) in items.iter().enumerate() {
+                        eprintln!("  {}: {}", i + 1, item);
+                    }
+                    let mut line = String::new();
+                    std::io::stdin().read_line(&mut line).map_err(|e| {
+                        crate::error::JrError::UserError(format!(
+                            "Failed to read selection from stdin: {e}"
+                        ))
+                    })?;
+                    let idx: usize = line.trim().parse::<usize>().map_err(|_| {
+                        crate::error::JrError::UserError(format!(
+                            "Invalid selection '{}': expected a number between 1 and {}",
+                            line.trim(),
+                            items.len()
+                        ))
+                    })?;
+                    if idx == 0 || idx > items.len() {
+                        return Err(crate::error::JrError::UserError(format!(
+                            "Selection {} out of range (1..{})",
+                            idx,
+                            items.len()
+                        ))
+                        .into());
+                    }
+                    idx - 1 // convert to 0-based
+                };
+                resources[selection].id.clone()
+            }
+        }
+    };
     let resource = resources
-        .first()
-        .ok_or_else(|| anyhow::anyhow!("No accessible Jira sites found"))?;
+        .iter()
+        .find(|r| r.id == resource_id)
+        .expect("resource_id was derived from resources so it must exist");
 
     // 5. Store tokens in the system keychain. If this fails, the user has
     //    successfully approved the grant in Atlassian — but jr can't see
