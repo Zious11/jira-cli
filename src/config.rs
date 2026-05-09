@@ -116,14 +116,21 @@ pub fn validate_profile_name(name: &str) -> Result<(), JrError> {
         "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
     ];
 
+    // BC-6.1.004 (AC-006): length check first so the error is unambiguous when
+    // both conditions fail. Empty names are treated as a length violation.
     if name.is_empty() || name.len() > 64 {
-        return Err(invalid_profile_name(name));
+        return Err(JrError::ConfigError(
+            "Profile name too long (max 64 characters)".to_string(),
+        ));
     }
+    // BC-6.1.004 (AC-007): distinct message for charset violations.
     if !name
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
     {
-        return Err(invalid_profile_name(name));
+        return Err(JrError::ConfigError(
+            "Profile name contains invalid characters (use a-z, 0-9, -, _)".to_string(),
+        ));
     }
     let upper = name.to_ascii_uppercase();
     if RESERVED_WINDOWS.contains(&upper.as_str()) {
@@ -1219,5 +1226,77 @@ mod tests {
             Some("https://legacy.atlassian.net")
         );
         assert_eq!(cfg.fields.team_field_id.as_deref(), Some("customfield_99"));
+    }
+
+    // -----------------------------------------------------------------------
+    // AC-006: profile name too long → error message contains "too long" or "max 64"
+    //
+    // BC-6.1.004 invariant.
+    //
+    // Pre-implementation Red Gate: ASSERTION ERROR — `validate_profile_name` currently
+    // calls `invalid_profile_name()` which emits the generic message
+    // "invalid profile name ...; allowed: A-Z a-z 0-9 _ - up to 64 chars; reserved ..."
+    // This message does NOT contain "too long" or "max 64" as a distinct substring
+    // in a way that differentiates length from charset violations. The assertion fails
+    // because neither "too long" nor "max 64" appears in the current error message.
+    //
+    // Post-implementation: `validate_profile_name` returns a distinct message for the
+    // length case, e.g. "Profile name too long (max 64 characters)".
+    // -----------------------------------------------------------------------
+
+    /// BC-6.1.004 invariant (AC-006): `validate_profile_name` with a 65-char name
+    /// returns an error whose message contains `"too long"` or `"max 64"`.
+    /// The message must be DISTINCT from the charset-violation message (AC-007).
+    ///
+    /// Pre-implementation Red Gate: ASSERTION ERROR — generic message doesn't
+    /// contain "too long" or "max 64".
+    #[test]
+    fn test_validate_profile_name_too_long_message() {
+        let long_name = "a".repeat(65);
+        let result = validate_profile_name(&long_name);
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("too long") || msg.contains("max 64"),
+            "AC-006 (BC-6.1.004 invariant): error for a 65-char profile name must \
+             contain 'too long' or 'max 64'. Got: {msg:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // AC-007: profile name with space → error message contains "invalid characters"
+    //         or "a-z, 0-9"
+    //
+    // BC-6.1.004 invariant.
+    //
+    // Pre-implementation Red Gate: ASSERTION ERROR — current generic message
+    // "invalid profile name ...; allowed: A-Z a-z 0-9 _ - up to 64 chars; reserved ..."
+    // does NOT contain "invalid characters" as a distinct phrase (it says "allowed:" not
+    // "invalid characters"). The assertion fails.
+    //
+    // Post-implementation: `validate_profile_name` returns a distinct message for the
+    // charset case, e.g. "Profile name contains invalid characters (use a-z, 0-9, -, _)".
+    // -----------------------------------------------------------------------
+
+    /// BC-6.1.004 invariant (AC-007): `validate_profile_name` with a name containing
+    /// a space returns an error whose message contains `"invalid characters"` or
+    /// `"a-z, 0-9"`. The message must be DISTINCT from the length-violation message
+    /// (AC-006). Length is checked first: a 5-char name with a space is NOT too long,
+    /// so the charset branch fires.
+    ///
+    /// Pre-implementation Red Gate: ASSERTION ERROR — generic message doesn't
+    /// contain "invalid characters" or "a-z, 0-9".
+    #[test]
+    fn test_validate_profile_name_with_space_message() {
+        // 7 chars (within 64-char limit) with a space — length check passes,
+        // charset check fires, distinct message expected.
+        let result = validate_profile_name("foo bar");
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("invalid characters") || msg.contains("a-z, 0-9"),
+            "AC-007 (BC-6.1.004 invariant): error for a profile name with a space must \
+             contain 'invalid characters' or 'a-z, 0-9'. Got: {msg:?}"
+        );
     }
 }

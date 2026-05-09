@@ -1,5 +1,16 @@
 use reqwest::header::HeaderMap;
 
+/// Cap on Retry-After header values jr will honor before aborting retry.
+///
+/// Atlassian's typical Retry-After values are 1425-3089s (24-50 minutes) per
+/// Atlassian community forum reports; documented ceiling is 3600s. Foreground
+/// 30-min sleep is poor UX for an interactive CLI. RFC 9110 §10.2.3 confirms
+/// the client MAY abort instead of honoring Retry-After. Users running batch
+/// operations should wrap jr in a shell-level retry/cron job.
+///
+/// Source: .factory/research/S-3.07-wave3-verification.md (Part A claim verified)
+pub const MAX_RETRY_AFTER_SECS: u64 = 60;
+
 /// Rate limit information parsed from Jira API response headers.
 #[derive(Debug, Clone)]
 pub struct RateLimitInfo {
