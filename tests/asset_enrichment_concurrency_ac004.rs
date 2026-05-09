@@ -18,8 +18,7 @@
 fn ac_004_max_concurrent_asset_fetches_constant_defined() {
     use jr::api::assets::linked::MAX_CONCURRENT_ASSET_FETCHES;
     assert_eq!(
-        MAX_CONCURRENT_ASSET_FETCHES,
-        8usize,
+        MAX_CONCURRENT_ASSET_FETCHES, 8usize,
         "AC-004 (BC-4.3.002 postcondition): MAX_CONCURRENT_ASSET_FETCHES must equal 8; \
          cap rationale: conservative good-neighbor default against Atlassian's 100 req/s \
          GET burst limit (verified 2026-05-08)."

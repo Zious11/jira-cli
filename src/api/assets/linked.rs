@@ -1,12 +1,27 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
+use futures::stream::{self, StreamExt};
 use serde_json::Value;
 
 use crate::api::assets::workspace::get_or_fetch_workspace_id;
 use crate::api::client::JiraClient;
 use crate::cache;
 use crate::types::assets::LinkedAsset;
+
+/// Cap on concurrent asset enrichment HTTP calls.
+///
+/// jr issues many concurrent GETs to /jsm/assets/workspace/.../v1/object/{id}
+/// when enriching id-only CMDB assets in issue list views. Without a cap,
+/// the original `join_all` pattern fires K simultaneous requests for K assets.
+/// For typical issue lists (5-10 assets) this is fine; for large project
+/// views (100+ issues with many CMDB assets), it creates a 100+ request
+/// burst that risks 429 rate limiting from Atlassian.
+///
+/// 8 is a "good neighbor" default — conservative against Atlassian's documented
+/// 100 req/s GET burst with no per-app concurrency cap. Verified
+/// .factory/research/S-3.05-wave3-verification.md (claim 5).
+pub const MAX_CONCURRENT_ASSET_FETCHES: usize = 8;
 
 /// Get CMDB fields (id, name pairs), using cache when available.
 pub async fn get_or_fetch_cmdb_fields(client: &JiraClient) -> Result<Vec<(String, String)>> {
@@ -213,7 +228,10 @@ pub async fn enrich_assets(client: &JiraClient, assets: &mut [LinkedAsset]) {
         })
         .collect();
 
-    let results = futures::future::join_all(futures).await;
+    let results: Vec<_> = stream::iter(futures)
+        .buffer_unordered(MAX_CONCURRENT_ASSET_FETCHES)
+        .collect()
+        .await;
 
     for (idx, result) in results {
         if let Ok(obj) = result {

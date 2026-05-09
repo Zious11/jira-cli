@@ -1,7 +1,9 @@
 use anyhow::Result;
+use futures::stream::{self, StreamExt};
 
 use crate::api::assets::linked::{
-    cmdb_field_ids, enrich_json_assets, extract_linked_assets, get_or_fetch_cmdb_fields,
+    MAX_CONCURRENT_ASSET_FETCHES, cmdb_field_ids, enrich_json_assets, extract_linked_assets,
+    get_or_fetch_cmdb_fields,
 };
 use crate::api::client::JiraClient;
 use crate::cli::{IssueCommand, OutputFormat, resolve_effective_limit};
@@ -443,7 +445,10 @@ pub(super) async fn handle_list(
                 })
                 .collect();
 
-            let results = futures::future::join_all(futures).await;
+            let results: Vec<_> = stream::iter(futures)
+                .buffer_unordered(MAX_CONCURRENT_ASSET_FETCHES)
+                .collect()
+                .await;
             let mut resolved: StdHashMap<(String, String), (String, String, String)> =
                 StdHashMap::new();
             for (wid, oid, result) in results {

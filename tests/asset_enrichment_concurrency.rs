@@ -1,3 +1,8 @@
+// BC-tracing test names use uppercase BC identifiers (e.g. test_BC_4_3_002_*)
+// per the project's TDD naming convention. These names are set by the test-writer
+// and must not be renamed by the implementer. Suppression is justified because the
+// naming convention is load-bearing for traceability to behavioral contracts.
+#![allow(non_snake_case)]
 //! S-3.05 TDD Test Suite — asset enrichment concurrency cap.
 //!
 //! Red Gate status (pre-implementation): see `.factory/cycles/cycle-001/S-3.05/implementation/red-gate-log.md`
@@ -258,18 +263,18 @@ async fn test_BC_X_1_005_ac_003_cap_does_not_bypass_retry() {
     // Fallback 200 (serves the retry after the 429 is exhausted)
     Mock::given(method("GET"))
         .and(path(flapping_path.clone()))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(asset_body(flapping_oid, "RETRY-1", "Retried Asset")),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(asset_body(
+            flapping_oid,
+            "RETRY-1",
+            "Retried Asset",
+        )))
         .mount(&server)
         .await;
 
     // First-request 429 with Retry-After: 1 (within cap)
     Mock::given(method("GET"))
         .and(path(flapping_path.clone()))
-        .respond_with(
-            ResponseTemplate::new(429).insert_header("retry-after", "1"),
-        )
+        .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "1"))
         .up_to_n_times(1)
         .mount(&server)
         .await;
