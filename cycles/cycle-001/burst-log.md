@@ -1148,3 +1148,9 @@ Gate status: PENDING. Orchestrator dispatches Phase 3-adv next.
 | Step | Agent | Status | Output |
 |------|-------|--------|--------|
 | S-3.08 MERGED — DOCUMENT-AS-IS LOW NFR closures (5 source + 6 CLAUDE entries) | deliver-story (full chain) | complete | PR #317 squash-merged to develop at fba47ad (2026-05-09). 6 docs commits + 1 demo commit (40c205c → c48bbc8). +36 LOC across 6 files (5 .rs + CLAUDE.md). 5/5 ACs delivered; 8/8 CI green; APPROVE 1 cycle; 0 security findings; 0 new deps. Verified canonical wording for NFR-O-T + NFR-O-I (Atlassian docs retrieved 2026-05-08). Companion factory-artifacts commit @ 79afb49 (catalog routing flips: 7 → DOCUMENT-AS-IS-COMPLETE, 4 → DEFER-DOCUMENTED). Demo evidence at docs/demo-evidence/S-3.08/. Wave 3: 6/10. Phase 3 progress: 28/31 (90%). |
+
+## Archived Step: S-3.02 MERGED (archived from STATE.md Current Phase Steps on 2026-05-09)
+
+| Step | Agent | Status | Output |
+|------|-------|--------|--------|
+| S-3.02 MERGED — cli/assets.rs shard-split (5 module files) | deliver-story (full chain) | complete | PR #318 squash-merged to develop at 68092af (2026-05-09). 6 refactor commits + 1 demo commit (2f20052..c057ffd). Pure refactor: 1,055 LOC single-file split into 5 modules (mod 65 / search 158 / view 91 / tickets 285 / schemas 490 — all <600 LOC cap). 5/5 ACs delivered; 8/8 CI green; APPROVE 1 cycle; 0 security findings; Cargo.lock unchanged. 612/612 unit tests + H-037/H-038/H-039 holdouts intact. --open filter (color_name != "green") survived in tickets.rs. Demo evidence at docs/demo-evidence/S-3.02/. Wave 3: 7/10. Phase 3 progress: 29/31 (94%). |
