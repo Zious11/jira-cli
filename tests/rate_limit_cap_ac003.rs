@@ -17,8 +17,7 @@
 fn ac_003_max_retry_after_secs_constant_defined() {
     use jr::api::rate_limit::MAX_RETRY_AFTER_SECS;
     assert_eq!(
-        MAX_RETRY_AFTER_SECS,
-        60u64,
+        MAX_RETRY_AFTER_SECS, 60u64,
         "AC-003 (BC-X.4.009 invariant): MAX_RETRY_AFTER_SECS must equal 60; \
          cap rationale: interactive-CLI fail-fast trade-off per RFC 9110 §10.2.3"
     );

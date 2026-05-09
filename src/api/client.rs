@@ -1,4 +1,4 @@
-use crate::api::rate_limit::RateLimitInfo;
+use crate::api::rate_limit::{MAX_RETRY_AFTER_SECS, RateLimitInfo};
 use crate::config::Config;
 use crate::error::JrError;
 use base64::Engine;
@@ -311,6 +311,26 @@ impl JiraClient {
             if response.status() == StatusCode::TOO_MANY_REQUESTS && attempt < MAX_RETRIES {
                 let rate_info = RateLimitInfo::from_headers(response.headers());
                 let delay = rate_info.retry_after_secs.unwrap_or(DEFAULT_RETRY_SECS);
+
+                // BC-X.4.009: abort retry if Retry-After exceeds the interactive-CLI cap.
+                // Atlassian's typical values (1425-3089s) far exceed what is acceptable
+                // for a foreground CLI. RFC 9110 §10.2.3 permits client-side abort.
+                if delay > MAX_RETRY_AFTER_SECS {
+                    eprintln!(
+                        "[jr] Atlassian requested {}s wait — exceeds {}s cap for interactive CLI.\n\
+                         Aborting retry; rerun later or wrap in a shell-level retry/cron job.",
+                        delay, MAX_RETRY_AFTER_SECS
+                    );
+                    return Err(JrError::ApiError {
+                        status: 429,
+                        message: format!(
+                            "Rate limited; Retry-After {}s exceeds {}s cap. Rerun later.",
+                            delay, MAX_RETRY_AFTER_SECS
+                        ),
+                    }
+                    .into());
+                }
+
                 // AC-003: structured tracing event replaces eprintln! for rate-limit logging.
                 debug!(
                     target: "jr::http",
@@ -400,6 +420,24 @@ impl JiraClient {
             if response.status() == StatusCode::TOO_MANY_REQUESTS && attempt < MAX_RETRIES {
                 let rate_info = RateLimitInfo::from_headers(response.headers());
                 let delay = rate_info.retry_after_secs.unwrap_or(DEFAULT_RETRY_SECS);
+
+                // BC-X.4.009: abort retry if Retry-After exceeds the interactive-CLI cap.
+                if delay > MAX_RETRY_AFTER_SECS {
+                    eprintln!(
+                        "[jr] Atlassian requested {}s wait — exceeds {}s cap for interactive CLI.\n\
+                         Aborting retry; rerun later or wrap in a shell-level retry/cron job.",
+                        delay, MAX_RETRY_AFTER_SECS
+                    );
+                    return Err(JrError::ApiError {
+                        status: 429,
+                        message: format!(
+                            "Rate limited; Retry-After {}s exceeds {}s cap. Rerun later.",
+                            delay, MAX_RETRY_AFTER_SECS
+                        ),
+                    }
+                    .into());
+                }
+
                 // AC-003: structured tracing event replaces eprintln! for rate-limit logging.
                 debug!(
                     target: "jr::http",

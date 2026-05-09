@@ -67,13 +67,17 @@ fn jr_cmd_with_mock(server_uri: &str, config_dir: &std::path::Path) -> Command {
 /// a typical Atlassian value), `send` must detect 2400 > MAX_RETRY_AFTER_SECS=60,
 /// abort the retry loop immediately (no sleep), and return an error.
 ///
-/// Uses `tokio::time::timeout` as the Red Gate mechanism: pre-implementation the
-/// paused 2400s sleep makes the call hang, timeout fires, test fails. Post-implementation
-/// the cap returns Err in microseconds.
+/// Uses `tokio::time::timeout` as the wall-clock gate: post-implementation the
+/// cap check short-circuits at 2400 > 60 and returns Err in microseconds (no sleep).
+/// Pre-implementation (no cap), the code would sleep for 2400 real seconds; the 10s
+/// timeout catches this and causes the test to fail.
 ///
-/// Time control: `start_paused = true` ensures any `tokio::time::sleep(2400s)` in
-/// the implementation never completes during this test unless advanced explicitly.
-#[tokio::test(start_paused = true)]
+/// Note: `start_paused = true` is intentionally absent. `start_paused + wiremock`
+/// is incompatible: tokio auto-advances the virtual clock before the mock server's
+/// TCP accept task is scheduled, causing `timeout` to fire at T=10s instantly.
+/// This test verifies wall-clock termination (< 10s real time), which is the correct
+/// AC-001 invariant for an interactive CLI.
+#[tokio::test]
 async fn ac_001_retry_after_exceeds_cap_aborts_retry() {
     let server = MockServer::start().await;
 
@@ -84,10 +88,7 @@ async fn ac_001_retry_after_exceeds_cap_aborts_retry() {
     // a second failure mode that obscures the cap-assertion failure.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/myself"))
-        .respond_with(
-            ResponseTemplate::new(429)
-                .insert_header("retry-after", "2400"),
-        )
+        .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "2400"))
         .mount(&server)
         .await;
 
@@ -152,10 +153,7 @@ async fn ac_002_retry_after_within_cap_retries() {
     // First request: 429 with Retry-After: 0 (within 60s cap, no sleep needed).
     Mock::given(method("GET"))
         .and(path("/rest/api/3/myself"))
-        .respond_with(
-            ResponseTemplate::new(429)
-                .insert_header("retry-after", "0"),
-        )
+        .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "0"))
         .up_to_n_times(1)
         .expect(1)
         .mount(&server)
@@ -280,7 +278,14 @@ async fn ac_008_and_ac_new_d_search_jql_cursor_loop_terminates_with_jracloud_war
     // Use a 15-second timeout: pre-implementation the command hangs, 15s elapses,
     // assert_cmd returns Err("timed out"), which panics the unwrap below.
     let output = jr_cmd_with_mock(&server.uri(), config_dir.path())
-        .args(["issue", "list", "--all", "--jql", "project = TEST", "--no-input"])
+        .args([
+            "issue",
+            "list",
+            "--all",
+            "--jql",
+            "project = TEST",
+            "--no-input",
+        ])
         .timeout(std::time::Duration::from_secs(15))
         .output();
 
