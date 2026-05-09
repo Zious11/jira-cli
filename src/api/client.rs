@@ -436,10 +436,47 @@ impl JiraClient {
         // -------------------------------------------------------------------
         // S-3.03 v2: BLANKET 401 AUTO-REFRESH PATH
         //
+        // Before attempting refresh, read the 401 body and check for the
+        // known-unrecoverable scope-mismatch case. If the body contains
+        // "scope does not match" (case-insensitive), return InsufficientScope
+        // immediately — a token refresh will NOT fix a scope error, and
+        // attempting it would waste an HTTP round-trip and confuse the caller.
+        //
+        // For all other 401s (expired token, revoked token, etc.): proceed
+        // with the blanket-401 auto-refresh path below.
+        //
+        // Note: reading the body here consumes the response. The refresh path
+        // below does NOT use the first_response body — it retries the original
+        // request with a new token. So consuming the body here is safe.
+        let first_401_body = first_response.bytes().await.unwrap_or_default();
+        let first_401_message = extract_error_message(&first_401_body);
+        if first_401_message
+            .to_ascii_lowercase()
+            .contains("scope does not match")
+        {
+            return Err(JrError::InsufficientScope {
+                message: first_401_message,
+            }
+            .into());
+        }
+
+        // -------------------------------------------------------------------
+        // S-3.03 v2: BLANKET 401 AUTO-REFRESH PATH (non-scope-mismatch 401)
+        //
         // The first response was 401. Attempt OAuth token refresh via the
         // per-profile single-flight coordinator. At most ONE refresh HTTP call
         // is made per profile per coordinator epoch regardless of concurrency.
-        // -------------------------------------------------------------------
+        //
+        // Guard: only fire auto-refresh for OAuth (Bearer) auth. Basic auth
+        // clients use API tokens, not OAuth refresh tokens — there is nothing
+        // to refresh. Returning NotAuthenticated directly is correct for Basic
+        // auth 401s.
+        if !self.auth_header.starts_with("Bearer ") {
+            return Err(JrError::NotAuthenticated {
+                hint: "Run \"jr auth login\" to connect.".to_string(),
+            }
+            .into());
+        }
 
         let profile = self.profile_name.clone();
 
