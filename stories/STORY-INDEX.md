@@ -147,7 +147,7 @@ Note: S-3.08 depends on S-2.05 merging first (CLAUDE.md conflict risk).
 | S-3.03 | Investigate + wire refresh_oauth_token | NFR-O-B, BC-1.1.002, BC-1.4.027 | — | draft | medium |
 | S-3.04 | Multi-cloudId --cloud-id flag + prompt | NFR-O-S, BC-1.5.038, BC-1.1.007, BC-1.5.031 | H-047 | draft | medium |
 | S-3.05 | Asset enrichment join_all → buffer_unordered(8) | NFR-P-NEW-1, BC-4.3.002, BC-X.1.005 | H-038 | draft | small |
-| S-3.06 | Pre-merge spec numeric claim checker (DRIFT-001) | — | — | ready | small |
+| S-3.06 | Pre-merge spec numeric claim checker (DRIFT-001) | — | — | completed (PR #314 / 01ba293) | small |
 | S-3.07 | LOW NFR code fixes: Retry-After cap, overflow guard, profile name error, anti-loop | NFR-R-NEW-1, NFR-R-NEW-2, NFR-S-D, NFR-R-F, BC-X.4.009, BC-X.9.002, BC-6.1.004 | H-027 | draft | small |
 | S-3.08 | DOCUMENT-AS-IS LOW NFR closures: source comments + CLAUDE.md additions | NFR-R-G, NFR-O-C/E/G/H/I/N/P/R/T/U/X, NFR-SCA-1/2/3 | — | draft | small |
 | S-3.09 | Formally record PKCE deferral (SD-001 → DEFER; ADR-0013) | NFR-S-A, BC-1.5.036 | — | draft | xsmall |

@@ -36,7 +36,7 @@ activation_version: "v0.5.0-dev.7"
 | **Language** | Rust |
 | **Target Workspace** | develop → main |
 | **Started** | 2026-05-04 |
-| **Last Updated** | 2026-05-09 (Wave 3 first story delivered: S-3.10 MERGED at PR #313 / f492e59. Phase 3 progress 23/31 = 74%. Wave 3: 1/10. S-3.07 unblocked. Next candidate per dep-graph: S-3.06 or S-3.07.) |
+| **Last Updated** | 2026-05-09 (Wave 3: 2/10. S-3.06 MERGED at PR #314 / 01ba293 — DRIFT-001 spec count checker codified. Phase 3 progress 24/31 = 77%. Next per dep-graph: S-3.07 (now unblocked since S-3.10 landed) or any of S-3.02/S-3.05/S-3.08/S-3.09 (independent).) |
 | **Current Phase** | Phase 3 — TDD Implementation **IN PROGRESS** — Wave 2 GATE CLOSED. Wave 0 COMPLETE 7/7; Wave 1 COMPLETE 8/8; Wave 2 COMPLETE 7/7 + gate PASSED; Wave 3: 10 stories ready (incl. S-3.10 from S-2.06 follow-up). |
 | **Next Phase** | Wave 3 — 10 stories (S-3.01..S-3.10) |
 | **Activation HEAD** | dea166471e22eff55974d7675593469b37048c5f (v0.5.0-dev.7) |
@@ -71,11 +71,11 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 
 | Step | Agent | Status | Output |
 |------|-------|--------|--------|
-| S-2.07 MERGED — Auth JSON + verb-aligned policy + test naming | devops-engineer | complete | PR #309 squash-merged to develop at ca22be0 (2026-05-08); v2.0.0 pivot after Perplexity verification (DEC-011); 4 auth subcommands now emit JSON; auth refresh asymmetric shape preserved; AC-003 already-passed by main.rs wrapper; 7 commits → squash; +6 tests (4 snapshots + 2 refresh regression-pin); 8/8 CI; APPROVE 1 cycle; 0 blocking; 2 LOW deferred (S-2.07-DEFER-01/02). **Wave 2 COMPLETE 7/7.** Phase 3: 22/31 (71%). |
 | Wave 2 INTEGRATION GATE — CLOSED | orchestrator + reviewers | complete | 5 gate reviewers + 4 fix-PRs landed across 24h. Pass-02 verdict: GATE-PASSES. develop @ 6cb9994; factory-artifacts @ b92ee5d. 2 deferred test-docstring follow-ups; all spec/anchor BLOCKERs RESOLVED. |
 | Wave 3 START — S-3.03 v2 spec authored | story-writer + state-manager + research-agent | complete | DEC-013 logged. Story v2.0.0 at factory-artifacts@85e47ef. Risk register +5 entries (R-NEW-AR-1..5; total 28→33). CLAUDE.md gotchas on PR #312. v1.0.0 file deleted; v2.0.0 file at S-3.03-auto-refresh-oauth-on-401-with-single-flight.md. Pre-flight verification: 2 reports in .factory/research/. Effort MEDIUM→LARGE; ACs 5→11; risks 0→5. |
 | Wave 3 alignment burst CLOSED — S-3.07 v2 spec authored | story-writer + state-manager + research-agent | complete | DEC-014 logged. Story v2.0.0 at factory-artifacts@898937e. Risk register +1 entry (R-NEW-S307-1; total 33→34). NFR catalog: NFR-R-NEW-2 removed (total 41→40); NFR-R-F routing → DOCUMENT-AS-IS-FIXED. depends_on: [S-3.10] enforces sequencing. Wave 3 backlog now fully aligned post-Wave-1/2 (10/10 stories ready: S-3.01 v1.1, S-3.02 v1.0.1, S-3.03 v2.0, S-3.04 v1.1, S-3.05 v1.1, S-3.06 v1.0.1, S-3.07 v2.0, S-3.08 v1.1, S-3.09 v1.1, S-3.10 v1.1). |
 | S-3.10 MERGED — format_roundtrip rewrite + parse_duration calculator deletion | deliver-story (full chain) | complete | PR #313 squash-merged to develop at f492e59 (2026-05-09). 117 LOC removed; 9 ACs delivered; 8/8 CI green; APPROVE 1 cycle; 0 blocking; demo evidence at docs/demo-evidence/S-3.10/. Spec changes at factory-artifacts@4250e2c. Wave 3: 1/10. **Unblocks S-3.07** (AC-NEW-B sequencing gate satisfied on develop). |
+| S-3.06 MERGED — DRIFT-001 spec count checker | deliver-story (full chain) | complete | PR #314 squash-merged to develop at 01ba293 (2026-05-09). Facade-mode story: shell script (61 LOC) + CLAUDE.md addition + lessons-codification.md (factory-artifacts@4194611). 5/5 ACs delivered; 8/8 CI green; APPROVE 1 cycle; 0 blocking; 0 security findings. Demo evidence at docs/demo-evidence/S-3.06/. Wave 3: 2/10. |
 
 ## Decisions Log
 
@@ -183,7 +183,7 @@ _Not started._
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-09 |
-| **Position** | **Wave 3 in progress — S-3.10 MERGED (PR #313 / f492e59)**. First Wave 3 story complete: 117 LOC removed (3-arg parse_duration calculator + 9 inline tests + 3 proptests deleted); format_roundtrip proptest rewritten with prop_map structural assertion (zero rejection rate); H-018 retired (total_holdouts 51→50); Holdout Retirement Policy clause added. Spec changes at factory-artifacts@4250e2c. Phase 3 progress: **23/31 (74%)**. Wave 3: 1/10. **S-3.07 unblocked** (depends_on: [S-3.10] satisfied on develop; rg confirms only parse_duration_validate remains). develop @ f492e59 (PR #313); factory-artifacts @ this commit. **Next candidates: S-3.06 (DRIFT-001 codification) or S-3.07 (LOW NFR code fixes, now unblocked).** |
+| **Position** | **Wave 3 in progress — S-3.06 MERGED (PR #314 / 01ba293)**. Facade-mode story: scripts/check-spec-counts.sh (61 LOC, POSIX bash, DRIFT-001 mitigation) + CLAUDE.md AI Agent Notes addition + .factory/rules/lessons-codification.md (factory-artifacts@4194611). 5/5 ACs delivered; 8/8 CI green; 0 security findings; APPROVE 1 cycle. Phase 3 progress: **24/31 (77%)**. Wave 3: 2/10. develop @ 01ba293 (PR #314); factory-artifacts @ this commit. **Next candidates: S-3.07 (now unblocked — depends_on: [S-3.10] satisfied) or any of S-3.02/S-3.05/S-3.08/S-3.09 (independent).** |
 | **Convergence counter** | 3/3 CONVERGED Phase 2-adv; Phase 3-adv: Wave 2 gate CLOSED (adversary pass-01 `ded2210` + consistency pass-01 `4918e6e` + pass-02 `8ae5511`) |
 
 ## Historical Content

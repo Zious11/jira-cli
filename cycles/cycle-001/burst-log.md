@@ -1106,3 +1106,9 @@ Gate status: PENDING. Orchestrator dispatches Phase 3-adv next.
 | S-2.06 MERGED — Worklog timeSpent passthrough + CMDB cache pin | devops-engineer | complete | PR #308 squash-merged to develop at c8f15d8 (2026-05-08); v2.0.0 pivot after Perplexity verification BLOCKED v1; production code change (NOT holdout-only); `parse_duration_validate` validator + `timeSpent` string passthrough resolves NFR-R-C without admin endpoint or cache; 6/6 ACs; 8/8 CI; APPROVE 1 cycle; 0 blocking; 3 LOW deferred (calculator preservation + 2 reviewer nits). Wave 2: 6/7. Phase 3: 22/31 (71%). |
 
 
+
+## Archived Step: S-2.07 MERGED (archived from STATE.md Current Phase Steps on 2026-05-09)
+
+| Step | Agent | Status | Output |
+|------|-------|--------|--------|
+| S-2.07 MERGED — Auth JSON + verb-aligned policy + test naming | devops-engineer | complete | PR #309 squash-merged to develop at ca22be0 (2026-05-08); v2.0.0 pivot after Perplexity verification (DEC-011); 4 auth subcommands now emit JSON; auth refresh asymmetric shape preserved; AC-003 already-passed by main.rs wrapper; 7 commits → squash; +6 tests (4 snapshots + 2 refresh regression-pin); 8/8 CI; APPROVE 1 cycle; 0 blocking; 2 LOW deferred (S-2.07-DEFER-01/02). **Wave 2 COMPLETE 7/7.** Phase 3: 22/31 (71%). |

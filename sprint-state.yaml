@@ -324,7 +324,26 @@ wave_3:
     - { id: S-3.03, title: "Investigate and wire (or document removal of) refresh_oauth_token", status: blocked }
     - { id: S-3.04, title: "Multi-cloudId disambiguation: --cloud-id flag + prompt for ambiguous orgs", status: blocked }
     - { id: S-3.05, title: "Cap asset enrichment join_all concurrency with buffer_unordered(8)", status: blocked }
-    - { id: S-3.06, title: "Codify pre-merge numeric claim checker for BC heading/body drift (DRIFT-001)", status: pending }
+    - id: S-3.06
+      title: "Codify pre-merge numeric claim checker for BC heading/body drift (DRIFT-001)"
+      status: completed
+      pr: 314
+      merge_sha: 01ba293
+      merged_at: 2026-05-09
+      merged_via: "gh pr merge --squash --admin --delete-branch (admin per session precedent)"
+      depends_on: []
+      bc_anchors: []
+      holdout_anchors: []
+      notes: "Facade-mode story (process tooling + docs). Delivered:
+        - scripts/check-spec-counts.sh (61 lines, POSIX-portable bash) — DRIFT-001 mitigation
+        - CLAUDE.md AI Agent Notes addition — script reference for future agents
+        - .factory/rules/lessons-codification.md (factory-artifacts@4194611) — DRIFT-001 codification (Pattern, Root Cause, Mitigation, When to Run, Escalation, Cross-Reference)
+        AC-001 verified: script exits 0 on current spec corpus (bc-*, nfr-catalog, holdout-scenarios all match).
+        AC-002 verified: corrupted bc-1-auth-identity.md frontmatter → script exits 1 with specific mismatch error → restoration clean.
+        AC-003 verified: NFR + holdout checks bundled with AC-001 invocation.
+        AC-004 verified: lessons-codification.md exists with all 6 required sections.
+        AC-005 verified: CLAUDE.md AI Agent Notes references the script.
+        Phase 3 progress: 24/31 (77%). Wave 3: 2/10."
     - { id: S-3.07, title: "Consolidated LOW NFR code fixes: Retry-After cap, parse_duration overflow, profile name error, anti-loop guard", status: blocked }
     - { id: S-3.08, title: "Consolidated DOCUMENT-AS-IS LOW NFRs: source comments and CLAUDE.md additions", status: blocked }
     - { id: S-3.09, title: "Formally record PKCE deferral (SD-001 → DEFER; ADR-0013)", status: blocked }
