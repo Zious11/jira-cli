@@ -343,7 +343,22 @@ wave_3:
       nfr_anchors: [NFR-O-D]
       holdout_anchors: [H-037, H-038]
       notes: "Pure refactor (small). cli/assets.rs (1,055 LOC) split into cli/assets/{mod.rs (65), search.rs (158), view.rs (91), tickets.rs (285), schemas.rs (490)} — all <600 LOC cap (AC-003 PASS, max 490). Zero behavioral changes; zero new tests; zero new deps; Cargo.lock unchanged. 612/612 unit tests pass; H-037/H-038/H-039 holdouts intact. --open filter (color_name != 'green') survived in tickets.rs:27,169. 6 refactor commits + 1 fmt fix + 1 demo commit (2f20052..c057ffd). PR #318 squash-merged with admin bypass. 8/8 CI green; APPROVE 1 cycle; 0 security findings (security-reviewer: pure structural move, 0 new attack surface). Phase 3 progress: 29/31 (94%). Wave 3: 7/10."
-    - { id: S-3.03, title: "Investigate and wire (or document removal of) refresh_oauth_token", status: blocked }
+    - id: S-3.03
+      title: "Auto-refresh OAuth access tokens on 401 with per-profile single-flight coordination"
+      status: completed
+      pr: 321
+      merge_sha: 597dd23
+      merged_at: 2026-05-09
+      merged_via: "gh pr merge --squash --admin --delete-branch (admin per session precedent)"
+      version: "2.0.0"
+      supersedes: "S-3.03-v1.0.0 (investigation/decision-matrix)"
+      depends_on: []
+      bc_anchors: [BC-1.1.002, BC-1.4.027]
+      nfr_anchors: [NFR-O-B]
+      holdout_anchors: []
+      risk_anchors: [R-NEW-AR-1, R-NEW-AR-2, R-NEW-AR-3, R-NEW-AR-4, R-NEW-AR-5]
+      adr_refs: []
+      notes: "LARGE concurrency feature — closes Wave 3 at 10/10. v2.0.0 implementation of Option A-fixed (auto-refresh + per-profile single-flight); supersedes v1.0.0 investigation story per DEC-013 verification pivot. NEW src/api/refresh_coordinator.rs (~80 LOC): outer std::sync::Mutex<HashMap<profile, Arc<tokio::sync::Mutex<RefreshState>>>>; outer brief (released before await); inner across .await; tokio::sync::Mutex (no poisoning). Wired into JiraClient::send: blanket-401 trigger (matches gh CLI; Atlassian's actual 401 has no machine-readable code or RFC-6750 header — see CLAUDE.md gotcha) → refresh_with_single_flight → retry-once. AC-010 inter-process reconcile (re-read keychain on invalid_grant). AC-011 persist-before-publish (RefreshState only updated AFTER store_oauth_tokens succeeds). 11 ACs delivered: 8 always-run integration tests + 4 keyring-gated #[ignore] (pass on macOS local, run on Linux CI when JR_RUN_KEYRING_TESTS=1 + secret-service available). 612/612 lib tests no regression. 2 in-flight CI fixes by pr-manager: (a) scope-mismatch 401 short-circuits to InsufficientScope before attempting refresh; (b) Bearer-auth guard skips auto-refresh for Basic-auth clients. JrError::NotAuthenticated changed to struct variant {hint: String}. 3 test seams: JR_OAUTH_TOKEN_URL, JR_S303_PERSIST_FAIL, JiraClient::new_for_test_with_profile (test-only). File-local tokio::sync::Mutex<()> serializes env-var-using tests for CI parallel-safety. 4 commits + 1 in-flight fix: fdd2cc7 (test-writer 12 failing) + 1d96a2a (impl) + d80f5cb (parallel-safety) + d691068 (10 demos). PR #321 squash-merged with admin bypass. 8/8 CI green; APPROVE 1 cycle; security review 0/0/0/1-Low (in-memory token, same posture as existing JiraClient.auth_header, NOT a regression). Phase 3 progress: 32/32 (100% v2 scope). Wave 3: 10/10 (CLOSED)."
     - id: S-3.04
       title: "Multi-cloudId disambiguation: --cloud-id flag + prompt for ambiguous orgs"
       status: completed

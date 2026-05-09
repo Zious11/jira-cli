@@ -1142,3 +1142,9 @@ Gate status: PENDING. Orchestrator dispatches Phase 3-adv next.
 | Step | Agent | Status | Output |
 |------|-------|--------|--------|
 | S-3.09 CLOSED — PKCE deferral formally recorded | state-manager | complete | factory-artifacts direct commit (doc-only facade). NFR-S-A routing flip SECURITY-DECIDE → DEFER (per ADR-0013) at 3 occurrences in nfr-catalog.md + DEFER count increment. ADR-0013 + SD-001 verified pre-satisfied (no edits). No develop-branch impact. STORY-INDEX + sprint-state + STATE.md synced atomically. Wave 3: 5/10. Phase 3: 27/31 (87%). |
+
+## Archived Step: S-3.08 MERGED (archived from STATE.md Current Phase Steps on 2026-05-09)
+
+| Step | Agent | Status | Output |
+|------|-------|--------|--------|
+| S-3.08 MERGED — DOCUMENT-AS-IS LOW NFR closures (5 source + 6 CLAUDE entries) | deliver-story (full chain) | complete | PR #317 squash-merged to develop at fba47ad (2026-05-09). 6 docs commits + 1 demo commit (40c205c → c48bbc8). +36 LOC across 6 files (5 .rs + CLAUDE.md). 5/5 ACs delivered; 8/8 CI green; APPROVE 1 cycle; 0 security findings; 0 new deps. Verified canonical wording for NFR-O-T + NFR-O-I (Atlassian docs retrieved 2026-05-08). Companion factory-artifacts commit @ 79afb49 (catalog routing flips: 7 → DOCUMENT-AS-IS-COMPLETE, 4 → DEFER-DOCUMENTED). Demo evidence at docs/demo-evidence/S-3.08/. Wave 3: 6/10. Phase 3 progress: 28/31 (90%). |
