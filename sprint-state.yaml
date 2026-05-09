@@ -328,4 +328,4 @@ wave_3:
     - { id: S-3.07, title: "Consolidated LOW NFR code fixes: Retry-After cap, parse_duration overflow, profile name error, anti-loop guard", status: blocked }
     - { id: S-3.08, title: "Consolidated DOCUMENT-AS-IS LOW NFRs: source comments and CLAUDE.md additions", status: blocked }
     - { id: S-3.09, title: "Formally record PKCE deferral (SD-001 → DEFER; ADR-0013)", status: blocked }
-    - { id: S-3.10, title: "Rewrite format_roundtrip proptest + delete deprecated 3-arg parse_duration calculator + retire H-018", status: blocked } # Added during Wave 2 as S-2.06 DEFER-01 follow-up
+    - { id: S-3.10, title: "Rewrite format_roundtrip proptest + delete deprecated 3-arg parse_duration calculator + retire H-018", status: pending } # Added during Wave 2 as S-2.06 DEFER-01 follow-up

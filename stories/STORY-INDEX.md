@@ -151,7 +151,7 @@ Note: S-3.08 depends on S-2.05 merging first (CLAUDE.md conflict risk).
 | S-3.07 | LOW NFR code fixes: Retry-After cap, overflow guard, profile name error, anti-loop | NFR-R-NEW-1, NFR-R-NEW-2, NFR-S-D, NFR-R-F, BC-X.4.009, BC-X.9.002, BC-6.1.004 | H-027 | draft | small |
 | S-3.08 | DOCUMENT-AS-IS LOW NFR closures: source comments + CLAUDE.md additions | NFR-R-G, NFR-O-C/E/G/H/I/N/P/R/T/U/X, NFR-SCA-1/2/3 | — | draft | small |
 | S-3.09 | Formally record PKCE deferral (SD-001 → DEFER; ADR-0013) | NFR-S-A, BC-1.5.036 | — | draft | xsmall |
-| S-3.10 | Rewrite format_roundtrip proptest + delete deprecated 3-arg parse_duration calculator + retire H-018 | BC-X.5.005 | H-018 (to delete) | draft | small | <!-- follows S-2.06 (depends_on); Option 4 follow-up per .factory/research/H-018-holdout-strategy-research.md --> |
+| S-3.10 | Rewrite format_roundtrip proptest + delete deprecated 3-arg parse_duration calculator + retire H-018 | BC-X.5.005 | H-018 (to delete) | ready | small | <!-- follows S-2.06 (depends_on); Option 4 follow-up per .factory/research/H-018-holdout-strategy-research.md --> |
 
 Wave 3 story files: `stories/wave-3/S-3.NN-*.md`
 
