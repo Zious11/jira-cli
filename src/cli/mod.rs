@@ -219,6 +219,12 @@ pub enum AuthCommand {
         /// this flag — bare CLI args can leak via process lists.
         #[arg(long)]
         client_secret: Option<String>,
+        /// Cloud ID to use when multiple Atlassian orgs are accessible
+        /// (disambiguates which site to target). Use this in scripts to select
+        /// the correct org. Run `jr auth login --oauth` interactively first to
+        /// see available org IDs and names.
+        #[arg(long)]
+        cloud_id: Option<String>,
     },
     /// Show authentication status
     Status {
