@@ -323,7 +323,18 @@ wave_3:
     - { id: S-3.02, title: "Shard-split src/cli/assets.rs (1,055 LOC) by command theme", status: blocked }
     - { id: S-3.03, title: "Investigate and wire (or document removal of) refresh_oauth_token", status: blocked }
     - { id: S-3.04, title: "Multi-cloudId disambiguation: --cloud-id flag + prompt for ambiguous orgs", status: blocked }
-    - { id: S-3.05, title: "Cap asset enrichment join_all concurrency with buffer_unordered(8)", status: pending }
+    - id: S-3.05
+      title: "Cap asset enrichment join_all concurrency with buffer_unordered(8)"
+      status: completed
+      pr: 316
+      merge_sha: 10e1db4
+      merged_at: 2026-05-09
+      merged_via: "gh pr merge --squash --admin --delete-branch (admin per session precedent)"
+      depends_on: []
+      bc_anchors: [BC-4.3.002, BC-X.1.005]
+      nfr_anchors: [NFR-P-NEW-1]
+      holdout_anchors: [H-038]
+      notes: "Concurrency-cap delivery. Replaced futures::future::join_all with stream::iter+buffer_unordered(MAX_CONCURRENT_ASSET_FETCHES=8) at src/api/assets/linked.rs:232 and src/cli/issue/list.rs:449. Constant added at linked.rs:24 with doc comment citing Atlassian's 100 req/s burst. 4 ACs (AC-001 correctness regression-pin; AC-002 concurrency cap verified via timing-based assertion at 90ms threshold — Arc<AtomicUsize>+fetch_max approach was non-viable due to wiremock 0.6.5 RwLock serialization, documented deviation; AC-003 retry-through-cap regression-pin; AC-004 constant defined). H-038 stays MUST-PASS as regression-pin (unchanged). Test naming followed canonical test_<verb>_<subject>_<outcome> after b319557 fix removed initial #![allow(non_snake_case)] suppression. develop deltas: linked.rs (+16 lines), list.rs (+5 lines), tests/asset_enrichment_concurrency.rs (+~270 NEW), tests/asset_enrichment_concurrency_ac004.rs (+~25 NEW). 4 demos in docs/demo-evidence/S-3.05/. Wave 3: 4/10. Phase 3: 26/31 (84%)."
     - id: S-3.06
       title: "Codify pre-merge numeric claim checker for BC heading/body drift (DRIFT-001)"
       status: completed
