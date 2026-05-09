@@ -1,8 +1,3 @@
-// BC-tracing test names use uppercase BC identifiers (e.g. test_BC_4_3_002_*)
-// per the project's TDD naming convention. These names are set by the test-writer
-// and must not be renamed by the implementer. Suppression is justified because the
-// naming convention is load-bearing for traceability to behavioral contracts.
-#![allow(non_snake_case)]
 //! S-3.05 TDD Test Suite — asset enrichment concurrency cap.
 //!
 //! Red Gate status (pre-implementation): see `.factory/cycles/cycle-001/S-3.05/implementation/red-gate-log.md`
@@ -68,7 +63,9 @@ fn asset_body(id: &str, key: &str, label: &str) -> serde_json::Value {
 // Purpose: ensure the cap doesn't accidentally break correctness.
 // ---------------------------------------------------------------------------
 
-/// BC-4.3.002 postcondition: all 10 id-only assets are resolved correctly.
+/// Traces to BC-4.3.002 (enrichment correctness) AC-001 — verifies that
+/// `enrich_assets` resolves all id-only assets via the buffer_unordered
+/// concurrent GETs, matching pre-cap join_all behavior.
 ///
 /// Pre-implementation Red Gate: REGRESSION-PIN — currently passes (existing
 /// join_all behavior). Post-implementation: must still pass (cap is a concurrency
@@ -77,7 +74,7 @@ fn asset_body(id: &str, key: &str, label: &str) -> serde_json::Value {
 /// 10 distinct asset GET endpoints, each returning a unique objectKey + label.
 /// After enrichment all 10 LinkedAssets must have non-None key and name.
 #[tokio::test]
-async fn test_BC_4_3_002_ac_001_enrich_resolves_all_10_assets() {
+async fn test_enrich_assets_resolves_all_id_only_inputs() {
     let server = MockServer::start().await;
     let wid = "ws-ac-001";
 
@@ -153,8 +150,9 @@ async fn test_BC_4_3_002_ac_001_enrich_resolves_all_10_assets() {
 //   delays with a 90ms threshold are stable on loaded CI runners.
 // ---------------------------------------------------------------------------
 
-/// BC-4.3.002 invariant: no more than 8 asset GET requests may be in-flight
-/// simultaneously during enrichment.
+/// Traces to BC-4.3.002 (enrichment invariant) AC-002 — verifies that
+/// no more than 8 asset GET requests are in-flight simultaneously during
+/// enrichment (buffer_unordered cap = MAX_CONCURRENT_ASSET_FETCHES = 8).
 ///
 /// Pre-implementation Red Gate: ASSERTION ERROR — `join_all` fires all 20
 /// futures simultaneously. With `set_delay(50ms)`, all 20 delay phases run
@@ -167,7 +165,7 @@ async fn test_BC_4_3_002_ac_001_enrich_resolves_all_10_assets() {
 ///
 /// The timing-based assertion is the Red Gate mechanism.
 #[tokio::test]
-async fn test_BC_4_3_002_ac_002_concurrent_enrichment_capped_at_8() {
+async fn test_enrich_assets_concurrency_capped_at_eight() {
     let server = MockServer::start().await;
     let wid = "ws-ac-002";
 
@@ -219,7 +217,9 @@ async fn test_BC_4_3_002_ac_002_concurrent_enrichment_capped_at_8() {
 // Purpose: confirm the cap doesn't bypass JiraClient::send retry logic.
 // ---------------------------------------------------------------------------
 
-/// BC-X.1.005 invariant: when one asset endpoint returns 429 + Retry-After: 1
+/// Traces to BC-X.1.005 (rate-limit retry) AC-003 — verifies that the
+/// buffer_unordered concurrency cap does not bypass per-future retry logic
+/// in JiraClient::send. When one asset endpoint returns 429 + Retry-After: 1
 /// followed by 200, all assets are eventually resolved.
 ///
 /// Pre-implementation Red Gate: REGRESSION-PIN — currently passes (retry logic
@@ -232,7 +232,7 @@ async fn test_BC_4_3_002_ac_002_concurrent_enrichment_capped_at_8() {
 ///
 /// Retry-After: 1 (1 second) is within MAX_RETRY_AFTER_SECS (60), so retry proceeds.
 #[tokio::test]
-async fn test_BC_X_1_005_ac_003_cap_does_not_bypass_retry() {
+async fn test_enrich_assets_retry_works_through_cap() {
     let server = MockServer::start().await;
     let wid = "ws-ac-003";
 

@@ -9,13 +9,14 @@
 //!
 //! Post-implementation: compiles and the value assertion holds.
 
-/// BC-4.3.002 postcondition: `MAX_CONCURRENT_ASSET_FETCHES` is defined in
-/// `jr::api::assets::linked` with a value of exactly 8.
+/// Traces to BC-4.3.002 (enrichment invariant) AC-004 — verifies that
+/// `MAX_CONCURRENT_ASSET_FETCHES` is defined in `jr::api::assets::linked`
+/// with a value of exactly 8, making the concurrency cap an auditable constant.
 ///
 /// Pre-implementation Red Gate: COMPILE ERROR — symbol does not exist.
 /// Post-implementation: compiles and assertion holds.
 #[test]
-fn ac_004_max_concurrent_asset_fetches_constant_defined() {
+fn test_max_concurrent_asset_fetches_constant_is_eight() {
     use jr::api::assets::linked::MAX_CONCURRENT_ASSET_FETCHES;
     assert_eq!(
         MAX_CONCURRENT_ASSET_FETCHES, 8usize,
