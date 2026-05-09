@@ -286,11 +286,7 @@ fn test_cloud_id_flag_is_parsed_not_rejected_by_clap() {
     let config_dir = TempDir::new().unwrap();
     let cache_dir = TempDir::new().unwrap();
 
-    write_oauth_profile_config(
-        &config_dir,
-        "default",
-        "https://test.atlassian.net",
-    );
+    write_oauth_profile_config(&config_dir, "default", "https://test.atlassian.net");
 
     let output = jr_isolated(&config_dir, &cache_dir)
         .args([
@@ -309,7 +305,8 @@ fn test_cloud_id_flag_is_parsed_not_rejected_by_clap() {
 
     let exit_code = output.status.code().unwrap_or(1);
     assert_ne!(
-        exit_code, 2,
+        exit_code,
+        2,
         "exit code 2 means clap rejected --cloud-id as unrecognized argument. \
          The flag must be registered in AuthCommand::Login. \
          stderr: {}",
@@ -354,11 +351,7 @@ async fn test_cloud_id_flag_picks_named_resource_not_first() {
     let config_dir = TempDir::new().unwrap();
     let cache_dir = TempDir::new().unwrap();
 
-    write_oauth_profile_config(
-        &config_dir,
-        "default",
-        "https://test.atlassian.net",
-    );
+    write_oauth_profile_config(&config_dir, "default", "https://test.atlassian.net");
 
     let server_url = server.uri();
 
@@ -367,15 +360,24 @@ async fn test_cloud_id_flag_picks_named_resource_not_first() {
     // JR_OAUTH_CODE skips the browser-open / TCP-listen step.
     let output = jr_isolated(&config_dir, &cache_dir)
         .args([
-            "auth", "login", "--oauth",
-            "--cloud-id", "cloud-A",
+            "auth",
+            "login",
+            "--oauth",
+            "--cloud-id",
+            "cloud-A",
             "--no-input",
-            "--url", "https://test.atlassian.net",
-            "--client-id", "test-client-id",
-            "--client-secret", "test-client-secret",
+            "--url",
+            "https://test.atlassian.net",
+            "--client-id",
+            "test-client-id",
+            "--client-secret",
+            "test-client-secret",
         ])
         .env("JR_OAUTH_TOKEN_URL", format!("{server_url}/oauth/token"))
-        .env("JR_ACCESSIBLE_RESOURCES_URL", format!("{server_url}/oauth/token/accessible-resources"))
+        .env(
+            "JR_ACCESSIBLE_RESOURCES_URL",
+            format!("{server_url}/oauth/token/accessible-resources"),
+        )
         // Skip browser + TCP listener: inject a pre-built auth code
         .env("JR_OAUTH_CODE", "test-auth-code-skip-browser")
         .timeout(std::time::Duration::from_secs(10))
@@ -436,25 +438,30 @@ async fn test_cloud_id_flag_value_not_in_response_exits_64() {
     let config_dir = TempDir::new().unwrap();
     let cache_dir = TempDir::new().unwrap();
 
-    write_oauth_profile_config(
-        &config_dir,
-        "default",
-        "https://test.atlassian.net",
-    );
+    write_oauth_profile_config(&config_dir, "default", "https://test.atlassian.net");
 
     let server_url = server.uri();
 
     let output = jr_isolated(&config_dir, &cache_dir)
         .args([
-            "auth", "login", "--oauth",
-            "--cloud-id", "cloud-NONEXISTENT",
+            "auth",
+            "login",
+            "--oauth",
+            "--cloud-id",
+            "cloud-NONEXISTENT",
             "--no-input",
-            "--url", "https://test.atlassian.net",
-            "--client-id", "test-client-id",
-            "--client-secret", "test-client-secret",
+            "--url",
+            "https://test.atlassian.net",
+            "--client-id",
+            "test-client-id",
+            "--client-secret",
+            "test-client-secret",
         ])
         .env("JR_OAUTH_TOKEN_URL", format!("{server_url}/oauth/token"))
-        .env("JR_ACCESSIBLE_RESOURCES_URL", format!("{server_url}/oauth/token/accessible-resources"))
+        .env(
+            "JR_ACCESSIBLE_RESOURCES_URL",
+            format!("{server_url}/oauth/token/accessible-resources"),
+        )
         .env("JR_OAUTH_CODE", "test-auth-code-skip-browser")
         .timeout(std::time::Duration::from_secs(10))
         .output()
@@ -469,7 +476,9 @@ async fn test_cloud_id_flag_value_not_in_response_exits_64() {
          (cloud-id not in accessible-resources list); stderr: {stderr}"
     );
     assert!(
-        stderr.contains("cloud-NONEXISTENT") || stderr.contains("not found") || stderr.contains("cloud-id"),
+        stderr.contains("cloud-NONEXISTENT")
+            || stderr.contains("not found")
+            || stderr.contains("cloud-id"),
         "stderr must explain that cloud-NONEXISTENT was not found. Got: {stderr}"
     );
 }
@@ -502,25 +511,29 @@ async fn test_no_input_multi_org_exits_64_with_actionable_error() {
     let config_dir = TempDir::new().unwrap();
     let cache_dir = TempDir::new().unwrap();
 
-    write_oauth_profile_config(
-        &config_dir,
-        "default",
-        "https://test.atlassian.net",
-    );
+    write_oauth_profile_config(&config_dir, "default", "https://test.atlassian.net");
 
     let server_url = server.uri();
 
     let output = jr_isolated(&config_dir, &cache_dir)
         .args([
             "--no-input",
-            "auth", "login", "--oauth",
-            "--url", "https://test.atlassian.net",
-            "--client-id", "test-client-id",
-            "--client-secret", "test-client-secret",
+            "auth",
+            "login",
+            "--oauth",
+            "--url",
+            "https://test.atlassian.net",
+            "--client-id",
+            "test-client-id",
+            "--client-secret",
+            "test-client-secret",
             // Intentionally NO --cloud-id
         ])
         .env("JR_OAUTH_TOKEN_URL", format!("{server_url}/oauth/token"))
-        .env("JR_ACCESSIBLE_RESOURCES_URL", format!("{server_url}/oauth/token/accessible-resources"))
+        .env(
+            "JR_ACCESSIBLE_RESOURCES_URL",
+            format!("{server_url}/oauth/token/accessible-resources"),
+        )
         .env("JR_OAUTH_CODE", "test-auth-code-skip-browser")
         .timeout(std::time::Duration::from_secs(10))
         .output()
@@ -535,7 +548,9 @@ async fn test_no_input_multi_org_exits_64_with_actionable_error() {
          when multiple orgs are accessible; stderr: {stderr}"
     );
     assert!(
-        stderr.contains("Multiple Atlassian orgs") || stderr.contains("multiple") || stderr.contains("orgs"),
+        stderr.contains("Multiple Atlassian orgs")
+            || stderr.contains("multiple")
+            || stderr.contains("orgs"),
         "stderr must mention 'Multiple Atlassian orgs' (AC-002 contract). Got: {stderr}"
     );
     assert!(
@@ -568,24 +583,28 @@ async fn test_no_input_multi_org_lists_available_cloud_ids_in_error() {
     let config_dir = TempDir::new().unwrap();
     let cache_dir = TempDir::new().unwrap();
 
-    write_oauth_profile_config(
-        &config_dir,
-        "default",
-        "https://test.atlassian.net",
-    );
+    write_oauth_profile_config(&config_dir, "default", "https://test.atlassian.net");
 
     let server_url = server.uri();
 
     let output = jr_isolated(&config_dir, &cache_dir)
         .args([
             "--no-input",
-            "auth", "login", "--oauth",
-            "--url", "https://test.atlassian.net",
-            "--client-id", "test-client-id",
-            "--client-secret", "test-client-secret",
+            "auth",
+            "login",
+            "--oauth",
+            "--url",
+            "https://test.atlassian.net",
+            "--client-id",
+            "test-client-id",
+            "--client-secret",
+            "test-client-secret",
         ])
         .env("JR_OAUTH_TOKEN_URL", format!("{server_url}/oauth/token"))
-        .env("JR_ACCESSIBLE_RESOURCES_URL", format!("{server_url}/oauth/token/accessible-resources"))
+        .env(
+            "JR_ACCESSIBLE_RESOURCES_URL",
+            format!("{server_url}/oauth/token/accessible-resources"),
+        )
         .env("JR_OAUTH_CODE", "test-auth-code-skip-browser")
         .timeout(std::time::Duration::from_secs(10))
         .output()
@@ -648,25 +667,29 @@ async fn test_single_resource_no_regression_single_org_path() {
     let config_dir = TempDir::new().unwrap();
     let cache_dir = TempDir::new().unwrap();
 
-    write_oauth_profile_config(
-        &config_dir,
-        "default",
-        "https://test.atlassian.net",
-    );
+    write_oauth_profile_config(&config_dir, "default", "https://test.atlassian.net");
 
     let server_url = server.uri();
 
     let output = jr_isolated(&config_dir, &cache_dir)
         .args([
-            "auth", "login", "--oauth",
+            "auth",
+            "login",
+            "--oauth",
             "--no-input",
-            "--url", "https://test.atlassian.net",
-            "--client-id", "test-client-id",
-            "--client-secret", "test-client-secret",
+            "--url",
+            "https://test.atlassian.net",
+            "--client-id",
+            "test-client-id",
+            "--client-secret",
+            "test-client-secret",
             // No --cloud-id: single-org should auto-select
         ])
         .env("JR_OAUTH_TOKEN_URL", format!("{server_url}/oauth/token"))
-        .env("JR_ACCESSIBLE_RESOURCES_URL", format!("{server_url}/oauth/token/accessible-resources"))
+        .env(
+            "JR_ACCESSIBLE_RESOURCES_URL",
+            format!("{server_url}/oauth/token/accessible-resources"),
+        )
         .env("JR_OAUTH_CODE", "test-auth-code-skip-browser")
         .timeout(std::time::Duration::from_secs(10))
         .output()
@@ -732,10 +755,7 @@ fn test_callback_url_contains_127_0_0_1_and_port_53682() {
         .output()
         .unwrap();
 
-    assert!(
-        output.status.success(),
-        "auth login --help must exit 0"
-    );
+    assert!(output.status.success(), "auth login --help must exit 0");
 
     // The help text should NOT mention an alternate callback port or URL.
     // If the implementer accidentally wires --cloud-id into the auth URL
@@ -790,25 +810,30 @@ async fn test_cloud_id_flag_does_not_change_redirect_uri_in_authorize_url() {
     let config_dir = TempDir::new().unwrap();
     let cache_dir = TempDir::new().unwrap();
 
-    write_oauth_profile_config(
-        &config_dir,
-        "default",
-        "https://test.atlassian.net",
-    );
+    write_oauth_profile_config(&config_dir, "default", "https://test.atlassian.net");
 
     let server_url = server.uri();
 
     let output = jr_isolated(&config_dir, &cache_dir)
         .args([
-            "auth", "login", "--oauth",
-            "--cloud-id", "cloud-A",
+            "auth",
+            "login",
+            "--oauth",
+            "--cloud-id",
+            "cloud-A",
             "--no-input",
-            "--url", "https://test.atlassian.net",
-            "--client-id", "test-client-id",
-            "--client-secret", "test-client-secret",
+            "--url",
+            "https://test.atlassian.net",
+            "--client-id",
+            "test-client-id",
+            "--client-secret",
+            "test-client-secret",
         ])
         .env("JR_OAUTH_TOKEN_URL", format!("{server_url}/oauth/token"))
-        .env("JR_ACCESSIBLE_RESOURCES_URL", format!("{server_url}/oauth/token/accessible-resources"))
+        .env(
+            "JR_ACCESSIBLE_RESOURCES_URL",
+            format!("{server_url}/oauth/token/accessible-resources"),
+        )
         .env("JR_OAUTH_CODE", "test-auth-code-skip-browser")
         .timeout(std::time::Duration::from_secs(10))
         .output()
@@ -867,11 +892,7 @@ async fn test_interactive_select_via_stdin_picks_second_resource() {
     let config_dir = TempDir::new().unwrap();
     let cache_dir = TempDir::new().unwrap();
 
-    write_oauth_profile_config(
-        &config_dir,
-        "default",
-        "https://test.atlassian.net",
-    );
+    write_oauth_profile_config(&config_dir, "default", "https://test.atlassian.net");
 
     let server_url = server.uri();
 
@@ -884,14 +905,22 @@ async fn test_interactive_select_via_stdin_picks_second_resource() {
     // (since cloud-B is first in the mock response).
     let output = jr_isolated(&config_dir, &cache_dir)
         .args([
-            "auth", "login", "--oauth",
-            "--url", "https://test.atlassian.net",
-            "--client-id", "test-client-id",
-            "--client-secret", "test-client-secret",
+            "auth",
+            "login",
+            "--oauth",
+            "--url",
+            "https://test.atlassian.net",
+            "--client-id",
+            "test-client-id",
+            "--client-secret",
+            "test-client-secret",
             // No --no-input, no --cloud-id → interactive path
         ])
         .env("JR_OAUTH_TOKEN_URL", format!("{server_url}/oauth/token"))
-        .env("JR_ACCESSIBLE_RESOURCES_URL", format!("{server_url}/oauth/token/accessible-resources"))
+        .env(
+            "JR_ACCESSIBLE_RESOURCES_URL",
+            format!("{server_url}/oauth/token/accessible-resources"),
+        )
         .env("JR_OAUTH_CODE", "test-auth-code-skip-browser")
         .write_stdin("2\n")
         .timeout(std::time::Duration::from_secs(10))
@@ -949,25 +978,30 @@ async fn test_interactive_render_shows_name_url_and_id() {
     let config_dir = TempDir::new().unwrap();
     let cache_dir = TempDir::new().unwrap();
 
-    write_oauth_profile_config(
-        &config_dir,
-        "default",
-        "https://test.atlassian.net",
-    );
+    write_oauth_profile_config(&config_dir, "default", "https://test.atlassian.net");
 
     let server_url = server.uri();
 
     let output = jr_isolated(&config_dir, &cache_dir)
         .args([
-            "auth", "login", "--oauth",
-            "--cloud-id", "cloud-A",
+            "auth",
+            "login",
+            "--oauth",
+            "--cloud-id",
+            "cloud-A",
             "--no-input",
-            "--url", "https://test.atlassian.net",
-            "--client-id", "test-client-id",
-            "--client-secret", "test-client-secret",
+            "--url",
+            "https://test.atlassian.net",
+            "--client-id",
+            "test-client-id",
+            "--client-secret",
+            "test-client-secret",
         ])
         .env("JR_OAUTH_TOKEN_URL", format!("{server_url}/oauth/token"))
-        .env("JR_ACCESSIBLE_RESOURCES_URL", format!("{server_url}/oauth/token/accessible-resources"))
+        .env(
+            "JR_ACCESSIBLE_RESOURCES_URL",
+            format!("{server_url}/oauth/token/accessible-resources"),
+        )
         .env("JR_OAUTH_CODE", "test-auth-code-skip-browser")
         .timeout(std::time::Duration::from_secs(10))
         .output()
@@ -1020,10 +1054,7 @@ fn test_cloud_id_help_text_mentions_disambiguation_or_multiple_orgs() {
         .unwrap();
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        output.status.success(),
-        "auth login --help must exit 0"
-    );
+    assert!(output.status.success(), "auth login --help must exit 0");
 
     // The flag must be present.
     assert!(
