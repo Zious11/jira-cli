@@ -319,7 +319,18 @@ wave_3:
   status: blocked
   unblocks_when: wave-2-complete
   stories:
-    - { id: S-3.01, title: "Shard-split src/cli/auth.rs (1,998 LOC) into cli/auth sub-modules", status: blocked }
+    - id: S-3.01
+      title: "Shard-split src/cli/auth.rs (~2,245 LOC at 2026-05-08 develop HEAD) into cli/auth sub-modules"
+      status: completed
+      pr: 319
+      merge_sha: b20cfee
+      merged_at: 2026-05-09
+      merged_via: "gh pr merge --squash --admin --delete-branch (admin per session precedent)"
+      depends_on: []
+      bc_anchors: [BC-1.1.001, BC-1.4.027, BC-7.4.013, BC-7.4.014, BC-7.4.015, BC-7.4.016]
+      nfr_anchors: [NFR-O-D]
+      holdout_anchors: []
+      notes: "Pure refactor (medium). cli/auth.rs (2,245 LOC) split into cli/auth/{mod.rs (121), login.rs (366), keychain.rs (256), refresh.rs (144), status.rs (140), remove.rs (129), list.rs (70), switch.rs (51), logout.rs (50)} + consolidated tests/mod.rs (997, excluded from AC-004 cap). All 9 production shards <800 LOC (AC-004 PASS, max 366 in login.rs). Zero behavioral changes; zero new tests; zero new deps (Cargo.lock empty diff). 612/612 unit tests pass. AC-002 over-satisfied: ZERO direct keyring::Entry uses anywhere in cli/auth/* (even keychain.rs delegates to api/auth.rs). 10 micro-commits + 1 demo commit (857e7e6..f029ba3). Two structural decisions: (a) AuthFlow visibility bumped to pub(crate) for cross-shard dispatch (private-interfaces clippy lint compliance; not a true public-API expansion); (b) tests consolidated to auth/tests/mod.rs subdirectory rather than per-shard inline (different from S-3.02's per-shard approach — both valid Rust patterns; this avoids 'use super::*' duplication across 9 shards). Snapshots moved to auth/tests/snapshots/. PR #319 squash-merged with admin bypass. 8/8 CI green; APPROVE 1 cycle; 0 security findings (security-reviewer: pure structural move, 0 new attack surface). Phase 3 progress: 30/31 (97%). Wave 3: 8/10."
     - id: S-3.02
       title: "Shard-split src/cli/assets.rs (1,055 LOC) by command theme"
       status: completed

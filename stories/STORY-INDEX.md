@@ -142,7 +142,7 @@ Note: S-3.08 depends on S-2.05 merging first (CLAUDE.md conflict risk).
 
 | Story ID | Title | NFR/BC Anchors | Holdout Anchors | Status | Est. Effort |
 |----------|-------|----------------|-----------------|--------|-------------|
-| S-3.01 | Shard-split src/cli/auth.rs (1,998 LOC) | NFR-O-D, BC-1.1.001, BC-1.4.027 | — | draft | medium |
+| S-3.01 | Shard-split src/cli/auth.rs (1,998 LOC) | NFR-O-D, BC-1.1.001, BC-1.4.027, BC-7.4.013, BC-7.4.014, BC-7.4.015, BC-7.4.016 | — | completed (PR #319 / b20cfee) | medium |
 | S-3.02 | Shard-split src/cli/assets.rs (1,055 LOC) | NFR-O-D, BC-4.2.001, BC-4.2.006 | H-037, H-038 | completed (PR #318 / 68092af) | small |
 | S-3.03 | Investigate + wire refresh_oauth_token | NFR-O-B, BC-1.1.002, BC-1.4.027 | — | draft | medium |
 | S-3.04 | Multi-cloudId --cloud-id flag + prompt | NFR-O-S, BC-1.5.038, BC-1.1.007, BC-1.5.031 | H-047 | draft | medium |

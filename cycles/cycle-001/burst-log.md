@@ -1130,3 +1130,9 @@ Gate status: PENDING. Orchestrator dispatches Phase 3-adv next.
 | Step | Agent | Status | Output |
 |------|-------|--------|--------|
 | S-3.07 MERGED — Retry-After cap + profile name precision + JRACLOUD-94632 anti-loop | deliver-story (full chain) | complete | PR #315 squash-merged to develop at 6bce18c (2026-05-09). v2.0.0 (3 parts A/C/D; Part B conditionally dropped). 5 commits + companion factory-artifacts@d8dcf7a (H-027 + NFR routing flips). 8/8 CI green; APPROVE 1 cycle; 0 security findings. 6/7 ACs new behavior + AC-NEW-B sequencing gate satisfied (S-3.10 dependency confirmed on develop). Demo evidence at docs/demo-evidence/S-3.07/. Wave 3: 3/10. Phase 3 progress: 25/31 (81%). |
+
+## Archived Step: S-3.05 MERGED (archived from STATE.md Current Phase Steps on 2026-05-09)
+
+| Step | Agent | Status | Output |
+|------|-------|--------|--------|
+| S-3.05 MERGED — asset enrichment concurrency cap | deliver-story (full chain) | complete | PR #316 squash-merged to develop at 10e1db4 (2026-05-09). buffer_unordered(8) replaces join_all at 2 sites; new MAX_CONCURRENT_ASSET_FETCHES const. 4/4 ACs delivered (AC-002 timing-based per wiremock 0.6.5 constraint). 8/8 CI green; APPROVE 1 cycle; 0 security findings; 0 new deps. Demo evidence at docs/demo-evidence/S-3.05/. Wave 3: 4/10. Phase 3 progress: 26/31 (84%). |
