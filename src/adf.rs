@@ -529,6 +529,15 @@ impl AdfRenderer {
                 self.render_cell_inline(node);
             }
             _ => {
+                // NFR-O-I: ADF inline nodes mention/emoji/inlineCard/media fall through to `_`
+                // here. Canonical render hints (per developer.atlassian.com/cloud/jira/platform/
+                // apis/document/nodes/, retrieved 2026-05):
+                //   mention    -> attrs.text (already includes leading "@"); fallback "@?"
+                //   emoji      -> attrs.text (unicode glyph) or attrs.shortName (e.g. ":smile:")
+                //   inlineCard -> attrs.url (title not guaranteed; either url OR data, not both)
+                //   media      -> "[media]" placeholder; fileName requires Media Services call
+                // Not implemented in v0.5; tracked under issue #202.
+                //
                 // Unknown node: recurse into content if present, otherwise
                 // drop silently. Per the #202 spec, this avoids debug strings
                 // like "[unsupported: type]" reaching user output while still

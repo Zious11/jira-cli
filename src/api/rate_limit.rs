@@ -22,6 +22,11 @@ pub struct RateLimitInfo {
 
 impl RateLimitInfo {
     /// Parse rate limit information from HTTP response headers.
+    // NFR-SCA-1: Retry-After integer-only parsing is deliberate. Atlassian sends
+    // seconds-as-integer in practice; HTTP-date format ("Mon, 04 May 2026 00:00:00 GMT")
+    // is not observed but would silently fall through to DEFAULT_RETRY_SECS=1. If HTTP-date
+    // variants surface in production, add chrono parsing here. Coordinated with
+    // NFR-R-NEW-1 cap delivered in S-3.07.
     pub fn from_headers(headers: &HeaderMap) -> Self {
         let retry_after_secs = headers
             .get("retry-after")

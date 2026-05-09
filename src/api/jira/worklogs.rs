@@ -31,6 +31,12 @@ impl JiraClient {
     ///
     /// BC-X.5.002: iterates with offset-based pagination via `OffsetPage::has_more` /
     /// `OffsetPage::next_start` until all pages are consumed.
+    // NFR-O-T: The worklog endpoint returns a PageBean<Worklog> envelope with
+    // offset-based startAt/maxResults pagination. Atlassian does not contractually
+    // document a default page size (per JRACLOUD-67570: "default and maximum sizes
+    // of paged data are not considered part of the API"). Observed behaviour as of
+    // 2026-05 returns up to ~5000 worklogs per page; treat this as best-effort and
+    // always loop on pagination, never assume a single call returns everything.
     pub async fn list_worklogs(&self, key: &str) -> Result<Vec<Worklog>> {
         let base_path = format!("/rest/api/3/issue/{}/worklog", urlencoding::encode(key));
         let mut all_items: Vec<Worklog> = Vec::new();
