@@ -116,14 +116,21 @@ pub fn validate_profile_name(name: &str) -> Result<(), JrError> {
         "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
     ];
 
+    // BC-6.1.004 (AC-006): length check first so the error is unambiguous when
+    // both conditions fail. Empty names are treated as a length violation.
     if name.is_empty() || name.len() > 64 {
-        return Err(invalid_profile_name(name));
+        return Err(JrError::ConfigError(
+            "Profile name too long (max 64 characters)".to_string(),
+        ));
     }
+    // BC-6.1.004 (AC-007): distinct message for charset violations.
     if !name
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
     {
-        return Err(invalid_profile_name(name));
+        return Err(JrError::ConfigError(
+            "Profile name contains invalid characters (use a-z, 0-9, -, _)".to_string(),
+        ));
     }
     let upper = name.to_ascii_uppercase();
     if RESERVED_WINDOWS.contains(&upper.as_str()) {
