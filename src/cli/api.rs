@@ -164,7 +164,10 @@ pub async fn handle_api(
     if status.is_success() {
         Ok(())
     } else if status.as_u16() == 401 {
-        Err(JrError::NotAuthenticated.into())
+        Err(JrError::NotAuthenticated {
+            hint: "Run \"jr auth login\" to connect.".to_string(),
+        }
+        .into())
     } else {
         let message = extract_error_message(&body_bytes);
         Err(JrError::ApiError {

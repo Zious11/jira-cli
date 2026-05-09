@@ -2,8 +2,8 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum JrError {
-    #[error("Not authenticated. Run \"jr auth login\" to connect.")]
-    NotAuthenticated,
+    #[error("Not authenticated. {hint}")]
+    NotAuthenticated { hint: String },
 
     #[error(
         "Insufficient token scope: {message}\n\n\
@@ -51,7 +51,7 @@ pub enum JrError {
 impl JrError {
     pub fn exit_code(&self) -> i32 {
         match self {
-            JrError::NotAuthenticated => 2,
+            JrError::NotAuthenticated { .. } => 2,
             JrError::InsufficientScope { .. } => 2,
             JrError::ConfigError(_) => 78,
             JrError::UserError(_) => 64,
