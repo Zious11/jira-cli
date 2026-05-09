@@ -36,7 +36,7 @@ activation_version: "v0.5.0-dev.7"
 | **Language** | Rust |
 | **Target Workspace** | develop → main |
 | **Started** | 2026-05-04 |
-| **Last Updated** | 2026-05-09 (Wave 3: 5/10. S-3.09 closed via factory-artifacts direct commit @ PLACEHOLDER_SHA — PKCE deferral formally recorded. Phase 3 progress 27/31 = 87%. Next per dep-graph: S-3.02/S-3.08 (independent) or S-3.01 (medium); save S-3.04 + S-3.03 for last per LARGE classification.) |
+| **Last Updated** | 2026-05-09 (Wave 3: 5/10. S-3.09 closed via factory-artifacts direct commit @ c2231f5 — PKCE deferral formally recorded. Phase 3 progress 27/31 = 87%. Next per dep-graph: S-3.02/S-3.08 (independent) or S-3.01 (medium); save S-3.04 + S-3.03 for last per LARGE classification.) |
 | **Current Phase** | Phase 3 — TDD Implementation **IN PROGRESS** — Wave 2 GATE CLOSED. Wave 0 COMPLETE 7/7; Wave 1 COMPLETE 8/8; Wave 2 COMPLETE 7/7 + gate PASSED; Wave 3: 10 stories ready (incl. S-3.10 from S-2.06 follow-up). |
 | **Next Phase** | Wave 3 — 10 stories (S-3.01..S-3.10) |
 | **Activation HEAD** | dea166471e22eff55974d7675593469b37048c5f (v0.5.0-dev.7) |

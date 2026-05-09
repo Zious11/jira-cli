@@ -373,7 +373,7 @@ wave_3:
       title: "Formally record PKCE deferral (SD-001 → DEFER; ADR-0013)"
       status: completed
       pr: null
-      merge_sha: PLACEHOLDER_SHA
+      merge_sha: c2231f5
       merged_at: 2026-05-09
       merged_via: "factory-artifacts direct commit (doc-only facade story; no source code; no PR to develop)"
       depends_on: []
