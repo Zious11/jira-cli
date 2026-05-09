@@ -210,3 +210,6 @@ When adding a new feature:
 - OAuth integration tests in `tests/oauth_embedded_login.rs` are gated behind `JR_RUN_OAUTH_INTEGRATION=1` + `#[ignore]`. The test is currently `unimplemented!()` — it requires a wiremock base-URL override in `oauth_login` before a real assertion can be written. CI does not run it; the embedded-creds smoke test in `release.yml` covers the binary-level check instead.
 - All interactive prompts have non-interactive flag equivalents for AI agent usage
 - `--output json` on write operations returns structured data (e.g., `{"key": "FOO-123"}`)
+- Run `scripts/check-spec-counts.sh` after any edit to .factory/specs/prd/ BC files,
+  nfr-catalog.md, or holdout-scenarios.md. Exits 0 if frontmatter counts match body counts.
+  Exits 1 with specific mismatch details if drift is detected (DRIFT-001 mitigation).
