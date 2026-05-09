@@ -7,8 +7,8 @@ use crate::config::{Config, global_config_path};
 use crate::error::JrError;
 use crate::output;
 
-use super::{auth_json_response, resolve_credential, resolve_oauth_app_credentials};
 use super::keychain::{ENV_API_TOKEN, ENV_EMAIL};
+use super::{auth_json_response, resolve_credential, resolve_oauth_app_credentials};
 
 /// Pick the OAuth scope string: user override from the *target* profile's
 /// `oauth_scopes` if set, else the compiled-in default. Trims and collapses
