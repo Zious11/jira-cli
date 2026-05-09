@@ -56,13 +56,15 @@ impl JiraClient {
 
         let mut more_available = false;
 
-        // KNOWN-GAP: NFR-R-F. get_changelog has an anti-loop guard that returns an
-        // error when the pagination offset does not advance despite has_more=true.
-        // search_issues currently has no analogous guard against a cursor regression
-        // (i.e., the server returning the same nextPageToken twice). In practice,
-        // Jira does not replay identical cursors; this gap is LOW risk. If observed,
-        // add: if next_cursor == cursor { break; }
-        // See nfr-catalog.md NFR-R-F for context.
+        // Anti-loop guard: Jira Cloud /rest/api/3/search/jql intermittently returns
+        // the same nextPageToken twice, causing infinite pagination loops. This is a
+        // confirmed upstream bug — JRACLOUD-94632, JRACLOUD-92049, JRACLOUD-85546
+        // (also reported in atlassian/atlassian-mcp-server#118 and
+        // ankitpokhrel/jira-cli#898). Mirrors anti-loop pattern from get_changelog
+        // (lines 222-230). When the guard fires, we emit a stderr warning citing
+        // JRACLOUD-94632 so users have a search term.
+        let mut prev_cursor: Option<String> = None;
+
         loop {
             let mut body = serde_json::json!({
                 "jql": jql,
@@ -77,7 +79,7 @@ impl JiraClient {
             let page: CursorPage<Issue> = self.post("/rest/api/3/search/jql", &body).await?;
 
             let page_has_more = page.has_more();
-            let token = page.next_page_token.clone();
+            let next_cursor = page.next_page_token.clone();
             all_issues.extend(page.issues);
 
             if let Some(max) = limit {
@@ -92,7 +94,20 @@ impl JiraClient {
                 break;
             }
 
-            next_page_token = token;
+            // GUARD: detect repeated cursor token (next == prev) → abort + warn.
+            // NFR-R-F: prevents infinite loop when server returns the same
+            // nextPageToken twice (confirmed upstream bug JRACLOUD-94632).
+            if next_cursor.is_some() && next_cursor == prev_cursor {
+                eprintln!(
+                    "[jr] WARNING: Atlassian /rest/api/3/search/jql returned the same \
+                     nextPageToken twice — aborting pagination loop. Some results may \
+                     be missing. Upstream bug: JRACLOUD-94632."
+                );
+                break;
+            }
+
+            prev_cursor = next_cursor.clone();
+            next_page_token = next_cursor;
         }
 
         Ok(SearchResult {
