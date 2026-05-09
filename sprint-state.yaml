@@ -324,7 +324,7 @@ wave_3:
     - { id: S-3.03, title: "Investigate and wire (or document removal of) refresh_oauth_token", status: blocked }
     - { id: S-3.04, title: "Multi-cloudId disambiguation: --cloud-id flag + prompt for ambiguous orgs", status: blocked }
     - { id: S-3.05, title: "Cap asset enrichment join_all concurrency with buffer_unordered(8)", status: blocked }
-    - { id: S-3.06, title: "Codify pre-merge numeric claim checker for BC heading/body drift (DRIFT-001)", status: blocked }
+    - { id: S-3.06, title: "Codify pre-merge numeric claim checker for BC heading/body drift (DRIFT-001)", status: pending }
     - { id: S-3.07, title: "Consolidated LOW NFR code fixes: Retry-After cap, parse_duration overflow, profile name error, anti-loop guard", status: blocked }
     - { id: S-3.08, title: "Consolidated DOCUMENT-AS-IS LOW NFRs: source comments and CLAUDE.md additions", status: blocked }
     - { id: S-3.09, title: "Formally record PKCE deferral (SD-001 → DEFER; ADR-0013)", status: blocked }
