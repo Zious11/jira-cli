@@ -366,10 +366,7 @@ mod tests {
                 name: "Service".into(),
             }),
         );
-        assert_eq!(
-            format_attribute_type(&attr),
-            "Reference \u{2192} Service"
-        );
+        assert_eq!(format_attribute_type(&attr), "Reference \u{2192} Service");
     }
 
     #[test]
