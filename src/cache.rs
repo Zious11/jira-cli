@@ -34,6 +34,9 @@ fn read_cache<T: DeserializeOwned + Expiring>(profile: &str, filename: &str) -> 
 }
 
 /// Write a whole-file cache. Creates the cache directory if needed.
+// NFR-R-G: Non-atomic cache write — direct std::fs::write means a crash mid-write leaves
+// indeterminate file state. Self-healing via deserialization-failure → cache-miss path;
+// LOW severity for single-user CLI. Optional improvement: temp-file + atomic rename pattern.
 fn write_cache<T: Serialize>(profile: &str, filename: &str, data: &T) -> Result<()> {
     let dir = cache_dir(profile);
     std::fs::create_dir_all(&dir)?;
