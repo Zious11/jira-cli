@@ -137,6 +137,28 @@ fn set_env(key: &str, val: &str) {
 mod harness {
     //! Test infrastructure shared across S-3.03 tests.
 
+    use std::sync::OnceLock;
+    use tokio::sync::Mutex;
+
+    /// Serializes tests that set process-global env vars (`JR_OAUTH_TOKEN_URL`,
+    /// `JR_S303_PERSIST_FAIL`). Default parallel test execution would otherwise
+    /// race the env var writes/reads. Each test acquires this lock for its
+    /// duration; tests within this binary become effectively sequential, but
+    /// other test binaries (e.g., `multi_cloudid_disambiguation.rs`) run in
+    /// parallel as normal.
+    ///
+    /// `tokio::sync::Mutex` is used (not `std::sync::Mutex`) because the guard
+    /// must be held across `.await` points inside async test bodies.
+    /// `tokio::sync::Mutex` does NOT poison on panic, so a panicking test
+    /// releases the lock cleanly for the next test.
+    ///
+    /// Initialized lazily via `OnceLock` because `tokio::sync::Mutex::new()` is
+    /// a `const fn` and static initialization is straightforward.
+    pub(super) fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
     /// Standard fake access token returned by the mock refresh endpoint.
     pub const FAKE_ACCESS_TOKEN: &str = "new-access-token-s303";
     /// Standard fake refresh token returned by the mock refresh endpoint.
@@ -217,6 +239,8 @@ mod harness {
 /// the keyring-gated green-gate variant).
 #[tokio::test]
 async fn test_send_retries_once_after_refresh_on_401() {
+    let _env_guard = harness::env_lock().lock().await;
+
     use jr::api::client::JiraClient;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -402,6 +426,8 @@ async fn test_refresh_persists_rotated_tokens_via_store_oauth_tokens() {
 /// - `Mock::expect(1)` on refresh → fails with 0 calls on MockServer drop.
 #[tokio::test]
 async fn test_invalid_grant_surfaces_not_authenticated_with_refresh_hint() {
+    let _env_guard = harness::env_lock().lock().await;
+
     use jr::api::client::JiraClient;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -476,6 +502,8 @@ async fn test_invalid_grant_surfaces_not_authenticated_with_refresh_hint() {
 /// - `Mock::expect(1)` on the refresh endpoint → 0 calls → MockServer drop fails.
 #[tokio::test]
 async fn test_send_caps_refresh_at_one_attempt_when_retry_also_401() {
+    let _env_guard = harness::env_lock().lock().await;
+
     use jr::api::client::JiraClient;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -532,6 +560,8 @@ async fn test_send_caps_refresh_at_one_attempt_when_retry_also_401() {
 /// - `Mock::expect(1)` on refresh → 0 calls → MockServer drop fails.
 #[tokio::test]
 async fn test_send_caps_refresh_at_one_attempt_when_refresh_fails() {
+    let _env_guard = harness::env_lock().lock().await;
+
     use jr::api::client::JiraClient;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -595,6 +625,8 @@ async fn test_send_caps_refresh_at_one_attempt_when_refresh_fails() {
 /// - `Mock::expect(1)` on refresh → 0 calls → MockServer drop fails.
 #[tokio::test]
 async fn test_concurrent_sends_single_refresh_via_coordinator() {
+    let _env_guard = harness::env_lock().lock().await;
+
     use futures::future::join_all;
     use jr::api::client::JiraClient;
     use wiremock::matchers::{method, path};
@@ -686,6 +718,8 @@ async fn test_concurrent_sends_single_refresh_via_coordinator() {
 /// - `Mock::expect(1)` on refresh → 0 calls → MockServer drop fails.
 #[tokio::test]
 async fn test_concurrent_invalid_grant_no_thundering_herd() {
+    let _env_guard = harness::env_lock().lock().await;
+
     use futures::future::join_all;
     use jr::api::client::JiraClient;
     use wiremock::matchers::{method, path};
@@ -824,6 +858,8 @@ fn test_manual_jr_auth_refresh_unchanged() {
 /// This test is split into two logical sections (success path and failure path).
 #[tokio::test]
 async fn test_refresh_contract_pins_url_grant_type_rotation_invalid_grant() {
+    let _env_guard = harness::env_lock().lock().await;
+
     use jr::api::client::JiraClient;
     use wiremock::matchers::{body_string_contains, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
