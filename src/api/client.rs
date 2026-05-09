@@ -146,6 +146,29 @@ impl JiraClient {
         }
     }
 
+    /// Create a client for integration testing with an explicit profile name.
+    ///
+    /// Mirrors `new_for_test` but parameterises the profile name so tests can
+    /// bind to a per-test isolated keychain profile. Required for keyring-gated
+    /// S-3.03 tests that must avoid cross-test keychain collisions when running
+    /// with parallel test threads.
+    ///
+    /// This is **not** gated behind `#[cfg(test)]` so that integration tests in
+    /// `tests/` can use it (mirrors the gating pattern of `new_for_test`).
+    pub fn new_for_test_with_profile(base_url: String, auth_header: String, profile: &str) -> Self {
+        let assets_base_url = Some(format!("{}/jsm/assets", &base_url));
+        Self {
+            client: Client::new(),
+            instance_url: base_url.clone(),
+            base_url,
+            auth_header,
+            verbose: false,
+            verbose_bodies: false,
+            assets_base_url,
+            profile_name: profile.to_string(),
+        }
+    }
+
     /// Create a client for integration testing with distinct base_url and instance_url.
     ///
     /// Mirrors `new_for_test` but allows `base_url` (the OAuth API gateway, e.g.
@@ -258,113 +281,327 @@ impl JiraClient {
     }
 
     /// Send a request with auth headers, retrying on 429 up to MAX_RETRIES times.
+    ///
+    /// # Auto-refresh on 401 (S-3.03 v2)
+    ///
+    /// On the first 401, attempts to refresh the OAuth access token via
+    /// `refresh_coordinator::refresh_with_single_flight`. If the refresh
+    /// succeeds, retries the original request ONCE with the new token.
+    /// If the retry also returns 401 → `NotAuthenticated` (no second refresh).
+    ///
+    /// Trigger: BLANKET 401 (matches `gh` CLI pattern). Atlassian returns
+    /// `{"errorMessages":[...]}` with NO `code` field and NO RFC-6750
+    /// `WWW-Authenticate` header. Source: CLAUDE.md gotcha + S-3.03 research.
+    ///
+    /// If refresh fails with `invalid_grant`, the AC-010 post-hoc reconcile
+    /// check re-reads the keychain. If another process already refreshed
+    /// (keychain access token differs from our initial bearer), we retry
+    /// the original request with the keychain's new token.
     async fn send(&self, request: RequestBuilder) -> anyhow::Result<Response> {
         // We need to be able to retry, so we clone the request builder.
         // reqwest::RequestBuilder::try_clone() returns None for streaming bodies,
         // but we only send JSON (or no body), so it will always succeed.
         let mut last_response: Option<Response> = None;
 
-        for attempt in 0..=MAX_RETRIES {
-            let req = request
-                .try_clone()
-                .expect("request should be cloneable (JSON body)");
+        // Snapshot JR_OAUTH_TOKEN_URL HERE — before any .await — so that
+        // concurrent integration tests that set unique JR_OAUTH_TOKEN_URL
+        // values cannot race with each other between this snapshot and the
+        // actual refresh POST. In tokio, tasks can only interleave at .await
+        // points; reading the env var here (before the first .await in the
+        // rate-limit loop) is safe for the current task's execution context.
+        //
+        // Production code never sets JR_OAUTH_TOKEN_URL, so this reads the
+        // real Atlassian endpoint and is stable for the process lifetime.
+        let token_url_snapshot = std::env::var("JR_OAUTH_TOKEN_URL")
+            .unwrap_or_else(|_| "https://auth.atlassian.com/oauth/token".to_string());
 
-            let req = req.header("Authorization", &self.auth_header);
+        // Send the initial request (with 429 retries).
+        let first_response = 'rate_limit: {
+            for attempt in 0..=MAX_RETRIES {
+                let req = request
+                    .try_clone()
+                    .expect("request should be cloneable (JSON body)");
 
-            if self.verbose || self.verbose_bodies {
-                if let Some(ref r) = req.try_clone().and_then(|r| r.build().ok()) {
-                    if self.verbose {
-                        // AC-003: log request method+URL to stderr under --verbose.
-                        // The [verbose] prefix is retained because cli_handler tests
-                        // (SD-003 contract guards) assert on stderr.contains("[verbose] GET/PUT/...")
-                        // and the verbose_bodies.rs tests assert on the same prefix.
-                        // Tracing handles rate-limit and other diagnostic events.
-                        // Method and URL are extracted to variables before the print call
-                        // so no single source line contains both the eprintln and method().
-                        let method_str = r.method().as_str();
-                        let url_str = r.url().as_str();
-                        eprintln!("[verbose] {method_str} {url_str}");
-                    }
-                    if let Some(bytes) = r.body().and_then(|b| b.as_bytes()) {
-                        if self.verbose_bodies {
-                            eprintln!("[verbose] body: {}", String::from_utf8_lossy(bytes));
-                        } else {
-                            eprintln!(
-                                "[verbose] body suppressed (use --verbose-bodies to inspect, will print PII)"
-                            );
+                let req = req.header("Authorization", &self.auth_header);
+
+                if self.verbose || self.verbose_bodies {
+                    if let Some(ref r) = req.try_clone().and_then(|r| r.build().ok()) {
+                        if self.verbose {
+                            // AC-003: log request method+URL to stderr under --verbose.
+                            // The [verbose] prefix is retained because cli_handler tests
+                            // (SD-003 contract guards) assert on stderr.contains("[verbose] GET/PUT/...")
+                            // and the verbose_bodies.rs tests assert on the same prefix.
+                            // Tracing handles rate-limit and other diagnostic events.
+                            // Method and URL are extracted to variables before the print call
+                            // so no single source line contains both the eprintln and method().
+                            let method_str = r.method().as_str();
+                            let url_str = r.url().as_str();
+                            eprintln!("[verbose] {method_str} {url_str}");
+                        }
+                        if let Some(bytes) = r.body().and_then(|b| b.as_bytes()) {
+                            if self.verbose_bodies {
+                                eprintln!("[verbose] body: {}", String::from_utf8_lossy(bytes));
+                            } else {
+                                eprintln!(
+                                    "[verbose] body suppressed (use --verbose-bodies to inspect, will print PII)"
+                                );
+                            }
                         }
                     }
                 }
-            }
 
-            let response = match req.send().await {
-                Ok(r) => r,
-                Err(e) => {
-                    let url = e
-                        .url()
-                        .map(|u| u.host_str().unwrap_or("unknown").to_string())
-                        .unwrap_or_else(|| "unknown".to_string());
-                    return Err(JrError::NetworkError(url).into());
-                }
-            };
-
-            if response.status() == StatusCode::TOO_MANY_REQUESTS && attempt < MAX_RETRIES {
-                let rate_info = RateLimitInfo::from_headers(response.headers());
-                let delay = rate_info.retry_after_secs.unwrap_or(DEFAULT_RETRY_SECS);
-
-                // BC-X.4.009: abort retry if Retry-After exceeds the interactive-CLI cap.
-                // Atlassian's typical values (1425-3089s) far exceed what is acceptable
-                // for a foreground CLI. RFC 9110 §10.2.3 permits client-side abort.
-                if delay > MAX_RETRY_AFTER_SECS {
-                    eprintln!(
-                        "[jr] Atlassian requested {}s wait — exceeds {}s cap for interactive CLI.\n\
-                         Aborting retry; rerun later or wrap in a shell-level retry/cron job.",
-                        delay, MAX_RETRY_AFTER_SECS
-                    );
-                    return Err(JrError::ApiError {
-                        status: 429,
-                        message: format!(
-                            "Rate limited; Retry-After {}s exceeds {}s cap. Rerun later.",
-                            delay, MAX_RETRY_AFTER_SECS
-                        ),
+                let response = match req.send().await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let url = e
+                            .url()
+                            .map(|u| u.host_str().unwrap_or("unknown").to_string())
+                            .unwrap_or_else(|| "unknown".to_string());
+                        return Err(JrError::NetworkError(url).into());
                     }
-                    .into());
+                };
+
+                if response.status() == StatusCode::TOO_MANY_REQUESTS && attempt < MAX_RETRIES {
+                    let rate_info = RateLimitInfo::from_headers(response.headers());
+                    let delay = rate_info.retry_after_secs.unwrap_or(DEFAULT_RETRY_SECS);
+
+                    // BC-X.4.009: abort retry if Retry-After exceeds the interactive-CLI cap.
+                    // Atlassian's typical values (1425-3089s) far exceed what is acceptable
+                    // for a foreground CLI. RFC 9110 §10.2.3 permits client-side abort.
+                    if delay > MAX_RETRY_AFTER_SECS {
+                        eprintln!(
+                            "[jr] Atlassian requested {}s wait — exceeds {}s cap for interactive CLI.\n\
+                             Aborting retry; rerun later or wrap in a shell-level retry/cron job.",
+                            delay, MAX_RETRY_AFTER_SECS
+                        );
+                        return Err(JrError::ApiError {
+                            status: 429,
+                            message: format!(
+                                "Rate limited; Retry-After {}s exceeds {}s cap. Rerun later.",
+                                delay, MAX_RETRY_AFTER_SECS
+                            ),
+                        }
+                        .into());
+                    }
+
+                    // AC-003: structured tracing event replaces eprintln! for rate-limit logging.
+                    debug!(
+                        target: "jr::http",
+                        delay_secs = delay,
+                        attempt = attempt + 1,
+                        max_retries = MAX_RETRIES,
+                        "rate_limited_retrying"
+                    );
+                    tokio::time::sleep(Duration::from_secs(delay)).await;
+                    last_response = Some(response);
+                    continue;
                 }
 
-                // AC-003: structured tracing event replaces eprintln! for rate-limit logging.
-                debug!(
-                    target: "jr::http",
-                    delay_secs = delay,
-                    attempt = attempt + 1,
-                    max_retries = MAX_RETRIES,
-                    "rate_limited_retrying"
-                );
-                tokio::time::sleep(Duration::from_secs(delay)).await;
-                last_response = Some(response);
-                continue;
+                // Warn the user if we exhausted retries on a 429
+                if response.status() == StatusCode::TOO_MANY_REQUESTS {
+                    eprintln!(
+                        "warning: rate limited by Jira — gave up after {MAX_RETRIES} retries. Wait a moment and try again."
+                    );
+                    break 'rate_limit if let Some(resp) = last_response {
+                        resp
+                    } else {
+                        response
+                    };
+                }
+
+                break 'rate_limit response;
             }
 
-            // Warn the user if we exhausted retries on a 429
-            if response.status() == StatusCode::TOO_MANY_REQUESTS {
-                eprintln!(
-                    "warning: rate limited by Jira — gave up after {MAX_RETRIES} retries. Wait a moment and try again."
-                );
+            // If we exhausted retries, parse the last 429 response as an error
+            if let Some(resp) = last_response {
+                return Err(Self::parse_error(resp).await);
             }
+            unreachable!("rate_limit loop should always return or set last_response");
+        };
 
-            // Parse and return any error response (including 429 after exhausting retries)
-            if response.status().is_client_error() || response.status().is_server_error() {
-                return Err(Self::parse_error(response).await);
-            }
-
-            return Ok(response);
+        // Non-401 error → return immediately (existing behavior)
+        if first_response.status().is_client_error()
+            && first_response.status() != StatusCode::UNAUTHORIZED
+        {
+            return Err(Self::parse_error(first_response).await);
+        }
+        if first_response.status().is_server_error() {
+            return Err(Self::parse_error(first_response).await);
+        }
+        if first_response.status() != StatusCode::UNAUTHORIZED {
+            // Success (2xx)
+            return Ok(first_response);
         }
 
-        // If we exhausted retries, parse the last 429 response as an error
-        if let Some(resp) = last_response {
-            return Err(Self::parse_error(resp).await);
+        // -------------------------------------------------------------------
+        // S-3.03 v2: BLANKET 401 AUTO-REFRESH PATH
+        //
+        // Before attempting refresh, read the 401 body and check for the
+        // known-unrecoverable scope-mismatch case. If the body contains
+        // "scope does not match" (case-insensitive), return InsufficientScope
+        // immediately — a token refresh will NOT fix a scope error, and
+        // attempting it would waste an HTTP round-trip and confuse the caller.
+        //
+        // For all other 401s (expired token, revoked token, etc.): proceed
+        // with the blanket-401 auto-refresh path below.
+        //
+        // Note: reading the body here consumes the response. The refresh path
+        // below does NOT use the first_response body — it retries the original
+        // request with a new token. So consuming the body here is safe.
+        let first_401_body = first_response.bytes().await.unwrap_or_default();
+        let first_401_message = extract_error_message(&first_401_body);
+        if first_401_message
+            .to_ascii_lowercase()
+            .contains("scope does not match")
+        {
+            return Err(JrError::InsufficientScope {
+                message: first_401_message,
+            }
+            .into());
         }
 
-        unreachable!("retry loop should always return or set last_response");
+        // -------------------------------------------------------------------
+        // S-3.03 v2: BLANKET 401 AUTO-REFRESH PATH (non-scope-mismatch 401)
+        //
+        // The first response was 401. Attempt OAuth token refresh via the
+        // per-profile single-flight coordinator. At most ONE refresh HTTP call
+        // is made per profile per coordinator epoch regardless of concurrency.
+        //
+        // Guard: only fire auto-refresh for OAuth (Bearer) auth. Basic auth
+        // clients use API tokens, not OAuth refresh tokens — there is nothing
+        // to refresh. Returning NotAuthenticated directly is correct for Basic
+        // auth 401s.
+        if !self.auth_header.starts_with("Bearer ") {
+            return Err(JrError::NotAuthenticated {
+                hint: "Run \"jr auth login\" to connect.".to_string(),
+            }
+            .into());
+        }
+
+        let profile = self.profile_name.clone();
+
+        let refresh_result = crate::api::refresh_coordinator::refresh_with_single_flight(
+            &profile,
+            &token_url_snapshot,
+            || {
+                let profile = profile.clone();
+                let token_url = token_url_snapshot.clone();
+                async move {
+                    let new_access =
+                        crate::api::auth::refresh_oauth_token_with_url(&profile, &token_url)
+                            .await?;
+                    // refresh_oauth_token_with_url stores tokens in keychain (persist-before-publish).
+                    // We return (access, refresh) — refresh is re-read from keychain to provide
+                    // the coordinator with the new refresh token for AC-010 reconcile.
+                    // If load_oauth_tokens fails here, we treat it as non-fatal for the
+                    // coordinator (it already persisted) and pass an empty refresh token.
+                    let refresh = crate::api::auth::load_oauth_tokens(&profile)
+                        .map(|(_, r)| r)
+                        .unwrap_or_default();
+                    Ok::<(String, String), anyhow::Error>((new_access, refresh))
+                }
+            },
+        )
+        .await;
+
+        match refresh_result {
+            Ok(new_access_token) => {
+                // Refresh succeeded. Retry the original request ONCE with the new token.
+                // One-attempt cap: if this retry returns 401, surface NotAuthenticated
+                // WITHOUT a second refresh (no recursion).
+                let retry_req = request
+                    .try_clone()
+                    .expect("request should be cloneable for refresh retry (JSON body)");
+                let retry_req =
+                    retry_req.header("Authorization", format!("Bearer {new_access_token}"));
+
+                let retry_response = match retry_req.send().await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let url = e
+                            .url()
+                            .map(|u| u.host_str().unwrap_or("unknown").to_string())
+                            .unwrap_or_else(|| "unknown".to_string());
+                        return Err(JrError::NetworkError(url).into());
+                    }
+                };
+
+                if retry_response.status().is_client_error()
+                    || retry_response.status().is_server_error()
+                {
+                    if retry_response.status() == StatusCode::UNAUTHORIZED {
+                        // Retry also returned 401 — no second refresh (one-attempt cap).
+                        return Err(JrError::NotAuthenticated {
+                            hint: "run 'jr auth refresh' to re-authenticate".to_string(),
+                        }
+                        .into());
+                    }
+                    return Err(Self::parse_error(retry_response).await);
+                }
+
+                Ok(retry_response)
+            }
+
+            Err(e) => {
+                // Refresh failed (invalid_grant or other error).
+                //
+                // AC-010 POST-HOC RECONCILE: if another process (or coordinator epoch)
+                // refreshed first and rotated the keychain, the keychain access token
+                // now differs from our initial bearer. Re-read keychain and retry the
+                // original request with the new access token.
+                //
+                // Detection: compare keychain access token vs. our initial auth_header.
+                // If they differ, another process already refreshed → use keychain token.
+                let reconcile_result = crate::api::auth::load_oauth_tokens(&profile).ok().and_then(
+                    |(kc_access, _)| {
+                        let initial_bearer = format!("Bearer {kc_access}");
+                        if initial_bearer != self.auth_header {
+                            // Keychain token differs from what we started with →
+                            // another process refreshed. Use the new token for retry.
+                            Some(kc_access)
+                        } else {
+                            None
+                        }
+                    },
+                );
+
+                if let Some(reconciled_access) = reconcile_result {
+                    // Retry the original request with the reconciled token (once only).
+                    let retry_req = request
+                        .try_clone()
+                        .expect("request should be cloneable for reconcile retry (JSON body)");
+                    let retry_req =
+                        retry_req.header("Authorization", format!("Bearer {reconciled_access}"));
+
+                    let retry_response = match retry_req.send().await {
+                        Ok(r) => r,
+                        Err(err) => {
+                            let url = err
+                                .url()
+                                .map(|u| u.host_str().unwrap_or("unknown").to_string())
+                                .unwrap_or_else(|| "unknown".to_string());
+                            return Err(JrError::NetworkError(url).into());
+                        }
+                    };
+
+                    if retry_response.status().is_client_error()
+                        || retry_response.status().is_server_error()
+                    {
+                        if retry_response.status() == StatusCode::UNAUTHORIZED {
+                            return Err(JrError::NotAuthenticated {
+                                hint: "run 'jr auth refresh' to re-authenticate".to_string(),
+                            }
+                            .into());
+                        }
+                        return Err(Self::parse_error(retry_response).await);
+                    }
+                    return Ok(retry_response);
+                }
+
+                // No reconcile opportunity — propagate the refresh error.
+                Err(e.into())
+            }
+        }
     }
 
     /// Send a pre-built request without parsing non-2xx responses into errors.
@@ -488,7 +725,10 @@ impl JiraClient {
             {
                 return JrError::InsufficientScope { message }.into();
             }
-            return JrError::NotAuthenticated.into();
+            return JrError::NotAuthenticated {
+                hint: "Run \"jr auth login\" to connect.".to_string(),
+            }
+            .into();
         }
 
         JrError::ApiError { status, message }.into()
