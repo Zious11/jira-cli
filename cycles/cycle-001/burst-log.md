@@ -1099,4 +1099,10 @@ Gate status: PENDING. Orchestrator dispatches Phase 3-adv next.
 |------|-------|--------|--------|
 | S-2.05 MERGED — CLAUDE.md doc update | devops-engineer | complete | PR #307 squash-merged to develop at 7f004ca (2026-05-08); doc-only — 6 NFRs DOCUMENT-AS-IS + bonus NFR-O-H; 51/0 insertions; 8/8 CI green; APPROVE 1 cycle; 0 blocking; 1 LOW deferred (S-2.05-DEFER-01). Wave 2: 5/7. Phase 3: 21/31 (68%). |
 
+## Archived Step: S-2.06 MERGED (archived from STATE.md Current Phase Steps on 2026-05-09)
+
+| Step | Agent | Status | Output |
+|------|-------|--------|--------|
+| S-2.06 MERGED — Worklog timeSpent passthrough + CMDB cache pin | devops-engineer | complete | PR #308 squash-merged to develop at c8f15d8 (2026-05-08); v2.0.0 pivot after Perplexity verification BLOCKED v1; production code change (NOT holdout-only); `parse_duration_validate` validator + `timeSpent` string passthrough resolves NFR-R-C without admin endpoint or cache; 6/6 ACs; 8/8 CI; APPROVE 1 cycle; 0 blocking; 3 LOW deferred (calculator preservation + 2 reviewer nits). Wave 2: 6/7. Phase 3: 22/31 (71%). |
+
 

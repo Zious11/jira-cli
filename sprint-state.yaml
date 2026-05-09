@@ -328,4 +328,14 @@ wave_3:
     - { id: S-3.07, title: "Consolidated LOW NFR code fixes: Retry-After cap, parse_duration overflow, profile name error, anti-loop guard", status: blocked }
     - { id: S-3.08, title: "Consolidated DOCUMENT-AS-IS LOW NFRs: source comments and CLAUDE.md additions", status: blocked }
     - { id: S-3.09, title: "Formally record PKCE deferral (SD-001 → DEFER; ADR-0013)", status: blocked }
-    - { id: S-3.10, title: "Rewrite format_roundtrip proptest + delete deprecated 3-arg parse_duration calculator + retire H-018", status: pending } # Added during Wave 2 as S-2.06 DEFER-01 follow-up
+    - id: S-3.10
+      title: "Rewrite format_roundtrip proptest + delete deprecated 3-arg parse_duration calculator + retire H-018"
+      status: completed
+      pr: 313
+      merge_sha: f492e59
+      merged_at: 2026-05-09
+      merged_via: "gh pr merge --squash --admin --delete-branch (admin per session precedent)"
+      depends_on: [S-2.06]
+      bc_anchors: [BC-X.5.005]
+      holdout_anchors: [H-018]
+      notes: "Refactor + cleanup: deleted 3-arg parse_duration calculator (117 LOC) + 9 inline tests + 3 proptests; rewrote format_roundtrip with structural assertion (prop_map approach, zero rejection rate). H-018 retired (total_holdouts 51→50). Holdout Retirement Policy clause added to preamble. Spec changes on factory-artifacts@4250e2c. Phase 3 progress: 23/31 (74%) original scope. Unblocks S-3.07 (depends_on: [S-3.10] now satisfied; rg on develop confirms only parse_duration_validate remains). Wave 3: 1/10."
