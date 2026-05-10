@@ -1126,6 +1126,81 @@ async fn test_dry_run_output_json_emits_valid_json_with_dry_run_field() {
 }
 
 // ---------------------------------------------------------------------------
+// Audit follow-up: await_bulk_task must surface failureReason from FAILED response
+// ---------------------------------------------------------------------------
+
+/// When the bulk task poll returns `status: "FAILED"` WITH a `failureReason` field,
+/// the command must exit non-zero AND stderr must contain the literal failureReason
+/// string — not just the generic fallback hint.
+///
+/// Perplexity verification (2026-05-10, PR2 audit follow-up):
+///   Atlassian docs confirm FAILED responses include `failureReason: String`.
+///   Previous C-2 fix (56d754d) errored correctly but discarded the message.
+///
+/// Before this fix: stderr contains "Run `jr api /rest/api/3/bulk/queue/..." fallback.
+/// After this fix:  stderr contains "Insufficient permissions on project XYZ".
+#[tokio::test]
+async fn test_bulk_task_failed_with_failure_reason_surfaces_reason_in_stderr() {
+    let server = MockServer::start().await;
+
+    let task_id = "task-fail-reason-001";
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "taskId": task_id,
+            "status": "ENQUEUED",
+            "progressPercent": 0,
+            "totalIssueCount": 2,
+            "processedAccessibleIssues": [],
+            "failedAccessibleIssues": {},
+            "invalidOrInaccessibleIssueCount": 0
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Poll returns FAILED with a failureReason message.
+    Mock::given(method("GET"))
+        .and(path(format!("/rest/api/3/bulk/queue/{task_id}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "taskId": task_id,
+            "status": "FAILED",
+            "processedAccessibleIssues": [],
+            "failedAccessibleIssues": {},
+            "failureReason": "Insufficient permissions on project XYZ"
+        })))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--label",
+            "add:test",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        !output.status.success(),
+        "Expected non-zero exit when bulk task FAILED; stderr={stderr} stdout={stdout}"
+    );
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains("Insufficient permissions on project XYZ"),
+        "Expected failureReason text in output; combined={combined}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Audit I-2: JQL matching 0 issues must error, not proceed silently
 // ---------------------------------------------------------------------------
 

@@ -125,7 +125,13 @@ impl JiraClient {
                 // successful terminals — everything else is a task-level failure.
                 let status = &progress.status;
                 if matches!(status.as_str(), "FAILED" | "CANCELLED" | "DEAD") {
-                    let hint = if !progress.failed_accessible_issues.is_empty() {
+                    // Surface failureReason first if the API provided one (Perplexity-verified
+                    // 2026-05-10: Atlassian FAILED responses include `failureReason: String`).
+                    // Fall back to per-issue detail or the raw-API hint for older API versions
+                    // or alternate failure shapes where failureReason is absent.
+                    let hint = if let Some(reason) = progress.failure_reason.as_deref() {
+                        reason.to_string()
+                    } else if !progress.failed_accessible_issues.is_empty() {
                         let keys: Vec<&str> = progress
                             .failed_accessible_issues
                             .keys()

@@ -54,6 +54,11 @@ pub struct BulkSubmitResponse {
 /// CONFIRMED terminal status values from OpenAPI JSON:
 ///   ENQUEUED | RUNNING | COMPLETE | FAILED | CANCEL_REQUESTED | CANCELLED | DEAD
 ///   NOTE: "COMPLETE" not "COMPLETED" per OpenAPI; empirical verify pending.
+///
+/// `failure_reason`: present on FAILED responses per Atlassian docs (Perplexity
+///   verification 2026-05-10, PR2 audit follow-up). Treated as `Option<String>` because
+///   the OpenAPI spec is partially undocumented on this field — older API versions or
+///   alternate failure shapes may omit it.
 #[derive(serde::Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct BulkOperationProgress {
@@ -64,6 +69,10 @@ pub struct BulkOperationProgress {
     pub processed_accessible_issues: Vec<String>,
     #[serde(default)]
     pub failed_accessible_issues: HashMap<String, BulkActionError>,
+    /// Human-readable failure reason from Atlassian when status is FAILED.
+    /// `#[serde(default)]` so absence doesn't break deserialization on older API versions.
+    #[serde(default)]
+    pub failure_reason: Option<String>,
     #[serde(default)]
     pub progress_percent: Option<i64>,
     #[serde(default)]
