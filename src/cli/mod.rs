@@ -524,6 +524,13 @@ pub enum IssueCommand {
         url_only: bool,
     },
     /// Link two issues
+    ///
+    /// Creates a directional link (e.g., "blocks", "is blocked by") between
+    /// `<KEY1>` and `<KEY2>`. The link type defaults to "Relates"; pass
+    /// `--type <NAME>` to use any other type from your Jira instance.
+    ///
+    /// See also: `jr issue unlink` to remove a link, `jr issue link-types` to
+    /// list available link type names.
     Link {
         /// First issue key (outward — e.g., the issue that "blocks")
         key1: String,
@@ -534,6 +541,13 @@ pub enum IssueCommand {
         r#type: String,
     },
     /// Remove link(s) between two issues
+    ///
+    /// Removes one or more links between `<KEY1>` and `<KEY2>`. If `--type` is
+    /// omitted, ALL links between the pair are removed. Pass `--type <NAME>` to
+    /// scope deletion to a specific link type.
+    ///
+    /// See also: `jr issue link` to create a link, `jr issue link-types` to
+    /// list available link type names.
     Unlink {
         /// First issue key
         key1: String,
