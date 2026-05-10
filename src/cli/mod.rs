@@ -410,8 +410,11 @@ pub enum IssueCommand {
         #[arg(long, conflicts_with = "points")]
         no_points: bool,
         /// Parent issue key
-        #[arg(long)]
+        #[arg(long, conflicts_with = "no_parent")]
         parent: Option<String>,
+        /// Clear the issue's parent
+        #[arg(long, conflicts_with = "parent")]
+        no_parent: bool,
         /// Description
         #[arg(short, long, conflicts_with = "description_stdin")]
         description: Option<String>,

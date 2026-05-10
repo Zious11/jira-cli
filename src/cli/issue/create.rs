@@ -217,6 +217,7 @@ pub(super) async fn handle_edit(
         points,
         no_points,
         parent,
+        no_parent,
         description,
         description_stdin,
         markdown,
@@ -290,6 +291,11 @@ pub(super) async fn handle_edit(
         has_updates = true;
     }
 
+    if no_parent {
+        fields["parent"] = serde_json::Value::Null;
+        has_updates = true;
+    }
+
     // Handle label add:/remove: syntax
     if !labels.is_empty() {
         let mut label_update: Vec<serde_json::Value> = Vec::new();
@@ -332,11 +338,24 @@ pub(super) async fn handle_edit(
 
     if !has_updates {
         bail!(
-            "No fields specified to update. Use --summary, --type, --priority, --label, --team, --points, --no-points, --parent, --description, or --description-stdin."
+            "No fields specified to update. Use --summary, --type, --priority, --label, --team, --points, --no-points, --parent, --no-parent, --description, or --description-stdin."
         );
     }
 
-    client.edit_issue(&key, fields).await?;
+    let edit_result = client.edit_issue(&key, fields).await;
+    if let Err(ref e) = edit_result {
+        if no_parent && is_subtask_parent_error(e) {
+            let hint = format!(
+                "{e}\n\n\
+                 Tip: subtasks are structurally bound to a parent. \
+                 To clear the parent, first convert the subtask to a standard issue:\n  \
+                 jr api /rest/api/3/issue/{key}/convert -X put -d '{{\"type\":{{\"name\":\"Task\"}}}}'\n\
+                 (then re-run with --no-parent if needed.)"
+            );
+            bail!("{hint}");
+        }
+    }
+    edit_result?;
 
     match output_format {
         OutputFormat::Json => {
@@ -351,6 +370,19 @@ pub(super) async fn handle_edit(
     }
 
     Ok(())
+}
+
+/// Returns `true` when the error message indicates Jira rejected a parent-clear
+/// operation because the issue is a subtask (subtasks are structurally bound to
+/// a parent and cannot be un-parented without first converting to a regular issue).
+///
+/// Matches both common Atlassian error shapes (case-insensitive):
+/// - `errors: { "parent": "<message containing 'subtask'>" }`
+///   → extract_error_message yields "parent: Subtasks must have a parent."
+/// - `errorMessages: ["... subtask ... parent ..."]`
+fn is_subtask_parent_error(err: &anyhow::Error) -> bool {
+    let msg = err.to_string().to_ascii_lowercase();
+    msg.contains("subtask") || (msg.contains("parent") && msg.contains("400"))
 }
 
 #[cfg(test)]
