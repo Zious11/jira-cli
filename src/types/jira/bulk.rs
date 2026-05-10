@@ -13,14 +13,16 @@ use std::collections::HashMap;
 ///   - editedFieldsInput: object, required (schema partially truncated in HTML docs).
 ///     Per Perplexity verification, the canonical 2025 production shape uses:
 ///     summary → plain string OR `{"value": "..."}` (sources differ).
-///     priority → `{"priorityId": <int>}` (NOT `{"name": "High"}` — name rejected).
-///     issueType → `{"issueTypeId": "..."}` (camelCase key, ID required).
+///     priority → `{"priorityId": <int>}` per docs; we currently ship `{"name": "..."}`
+///     as a best-guess and may receive 400 from real Jira tenants.
+///     issueType → `{"issueTypeId": "..."}` per docs (camelCase key); we currently
+///     ship `{"issuetype": {"name": "..."}}` (lowercase, name) as a best-guess.
 ///     labels → `{"labelsFields": [{"fieldId":"labels","labels":[...],
-///     "bulkEditMultiSelectFieldOption":"ADD|REMOVE"}]}`.
-///     The current best-guess nesting in `cli/issue/create.rs` differs from this
-///     and ships behind loose `body_string_contains` test matchers — empirical
-///     verification against a live sandbox is tracked in a follow-up issue
-///     (see PR2 description).
+///     "bulkEditMultiSelectFieldOption":"ADD|REMOVE"}]}` per docs; we currently ship
+///     the simpler `{"labels": ...}` shapes (single object for ADD-only/REMOVE-only,
+///     array for ADD+REMOVE coalesced) as a best-guess.
+///     Empirical verification against a live Jira sandbox + name→ID resolution
+///     (priorities + issue types per project) is tracked at issue #331.
 #[derive(serde::Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct BulkEditRequest {
