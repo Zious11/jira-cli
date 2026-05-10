@@ -251,11 +251,28 @@ pub(super) async fn handle_edit(
         );
     }
 
+    // Validate: --markdown is a modifier on --description/--description-stdin, NOT a
+    // standalone field change.  Reject it early (before any HTTP calls) so the user
+    // gets a clear error instead of a wasted JQL search followed by "No fields specified".
+    if markdown && description.is_none() && !description_stdin {
+        return Err(JrError::UserError(
+            "--markdown requires --description or --description-stdin to take effect. \
+             Pass a description alongside --markdown, or omit --markdown."
+                .into(),
+        )
+        .into());
+    }
+
     // Validate: at least one field change must be specified — checked BEFORE any HTTP
     // calls so that `--dry-run --jql "..."` (no field flags) doesn't waste a search
     // call before failing with "No fields specified".  The same check runs again
     // inside the dry-run block for the non-JQL path; keeping it here ensures the
     // JQL path is also short-circuited without duplicating the full dry-run logic.
+    //
+    // NOTE: `markdown` is intentionally NOT included here — it is a modifier on
+    // --description, not an independent field change. The validation above already
+    // rejects `--markdown` without a description, so if we reach this point with
+    // `markdown == true`, a description must also be set.
     {
         let has_any_field_change = summary.is_some()
             || priority.is_some()
@@ -267,8 +284,7 @@ pub(super) async fn handle_edit(
             || parent.is_some()
             || no_parent
             || description.is_some()
-            || description_stdin
-            || markdown;
+            || description_stdin;
         if !has_any_field_change {
             bail!(
                 "No fields specified to update. Use --summary, --type, --priority, --label, --team, \
