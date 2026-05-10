@@ -1620,3 +1620,268 @@ async fn test_jql_single_match_routes_to_single_key_put_not_bulk() {
     );
     // wiremock .expect(0/1) assertions verify routing on drop.
 }
+
+// ---------------------------------------------------------------------------
+// Copilot review Fix 1: --max 0 must be rejected at clap parse layer
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit FOO-1 --label add:foo --max 0 --no-input`
+/// clap must reject --max 0 before any HTTP calls are made.
+/// Before fix: exits 1 (HTTP failure) — clap accepted 0 and fell through.
+/// After fix:  exits 2 (clap error) before any HTTP call.
+#[tokio::test]
+async fn test_max_zero_rejected_at_clap_layer() {
+    let server = MockServer::start().await;
+
+    // No HTTP calls should be made — clap rejects before HTTP.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected: bulk called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--label",
+            "add:foo",
+            "--max",
+            "0",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        !output.status.success(),
+        "Expected non-zero exit for --max 0; stderr={stderr} stdout={stdout}"
+    );
+
+    // clap error message should reference "0" and/or "max".
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains("0") || combined.contains("max"),
+        "Expected '0' or 'max' in clap error output; combined={combined}"
+    );
+
+    // Zero HTTP calls — clap rejects before networking.
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        0,
+        "Expected zero HTTP calls when clap rejects --max 0"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Copilot review Fix 2: over-cap error must NOT say "(default 50)" when user
+// supplied an explicit --max value.
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit --jql '...' --label add:foo --max 100 --no-input`
+/// when 150 issues match, the error message should reference "--max 100"
+/// but must NOT contain the literal "(default 50)" substring.
+///
+/// Before fix: message hardcodes "(default 50)" regardless of user-supplied value.
+/// After fix:  message uses the effective_max value only.
+#[tokio::test]
+async fn test_jql_max_explicit_value_in_error_not_default() {
+    let server = MockServer::start().await;
+
+    // 150 matches > --max 100.
+    let keys: Vec<String> = (1..=150).map(|i| format!("PROJ-{i}")).collect();
+    let key_refs: Vec<&str> = keys.iter().map(String::as_str).collect();
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(jql_search_response(&key_refs)),
+        )
+        .mount(&server)
+        .await;
+
+    // No bulk POST should be made — command must error before mutating.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected bulk call"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "--jql",
+            "project = PROJ",
+            "--label",
+            "add:foo",
+            "--max",
+            "100",
+            "--yes",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(
+        !output.status.success(),
+        "Expected non-zero exit when 150 issues exceed --max 100; combined={combined}"
+    );
+
+    // Error must mention the effective --max (100).
+    assert!(
+        combined.contains("100"),
+        "Expected '100' (the explicit --max value) in error output; combined={combined}"
+    );
+
+    // Error must NOT contain the misleading "(default 50)" parenthetical.
+    assert!(
+        !combined.contains("(default 50)"),
+        "Error message must not contain '(default 50)' when user passed --max 100; combined={combined}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Copilot review Fix 3: --dry-run must include --team and --description
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit FOO-1 --dry-run --team "Platform Team" --description "Test desc" --no-input`
+/// Single-key dry-run: stdout must include "team", "Platform Team", "description", "Test desc".
+/// Before fix: team and description are silently omitted from the dry-run preview.
+/// After fix:  both appear in the planned-changes section.
+#[tokio::test]
+async fn test_dry_run_includes_team_and_description_in_output() {
+    let server = MockServer::start().await;
+
+    // No HTTP calls for single-key positional dry-run.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected: bulk called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--dry-run",
+            "--team",
+            "Platform Team",
+            "--description",
+            "Test desc",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for single-key --dry-run with --team + --description; combined={combined}"
+    );
+
+    assert!(
+        combined.contains("team") || combined.contains("Team"),
+        "Expected 'team' in dry-run output; combined={combined}"
+    );
+    assert!(
+        combined.contains("Platform Team"),
+        "Expected 'Platform Team' in dry-run output; combined={combined}"
+    );
+    assert!(
+        combined.contains("description") || combined.contains("desc"),
+        "Expected 'description' in dry-run output; combined={combined}"
+    );
+    assert!(
+        combined.contains("Test desc"),
+        "Expected 'Test desc' in dry-run output; combined={combined}"
+    );
+
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        0,
+        "Expected zero HTTP calls for single-key positional dry-run"
+    );
+}
+
+/// `jr issue edit FOO-1 --dry-run --team "Platform Team" --description "Test desc"
+///   --output json --no-input`
+/// JSON mode must include "team" and "description" keys in plannedChanges.
+#[tokio::test]
+async fn test_dry_run_json_includes_team_and_description() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected: bulk called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "--output",
+            "json",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--dry-run",
+            "--team",
+            "Platform Team",
+            "--description",
+            "Test desc",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for --dry-run --output json; stderr={stderr} stdout={stdout}"
+    );
+
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout not valid JSON: {e}; stdout={stdout}"));
+
+    let planned = parsed
+        .get("plannedChanges")
+        .expect("Expected 'plannedChanges' in JSON output");
+
+    assert!(
+        planned.get("team").is_some(),
+        "Expected 'team' key in plannedChanges; got: {planned}"
+    );
+    assert_eq!(
+        planned.get("team").and_then(|v| v.as_str()),
+        Some("Platform Team"),
+        "Expected team='Platform Team'; got: {planned}"
+    );
+
+    assert!(
+        planned.get("description").is_some(),
+        "Expected 'description' key in plannedChanges; got: {planned}"
+    );
+    assert_eq!(
+        planned.get("description").and_then(|v| v.as_str()),
+        Some("Test desc"),
+        "Expected description='Test desc'; got: {planned}"
+    );
+}
