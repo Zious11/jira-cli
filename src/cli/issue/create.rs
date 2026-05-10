@@ -298,6 +298,47 @@ pub(super) async fn handle_edit(
         keys.clone()
     };
 
+    // --- C-1: Reject multi-key edits that include flags unsupported in bulk context. ---
+    // These flags (parent, team, points, description, markdown) are only implemented
+    // on the single-key path. Passing them with multiple keys previously caused silent
+    // data loss: the flag was forwarded to handle_edit_bulk_fields which ignored it,
+    // then returned Ok(). We now reject early with a clear error so users aren't surprised.
+    //
+    // This check runs BEFORE the dry-run block so that `--dry-run --no-parent` also
+    // reports the unsupported-flag error consistently with the live path.
+    if effective_keys.len() > 1 {
+        let mut unsupported: Vec<&str> = Vec::new();
+        if parent.is_some() {
+            unsupported.push("--parent");
+        }
+        if no_parent {
+            unsupported.push("--no-parent");
+        }
+        if team.is_some() {
+            unsupported.push("--team");
+        }
+        if points.is_some() {
+            unsupported.push("--points");
+        }
+        if no_points {
+            unsupported.push("--no-points");
+        }
+        if description.is_some() || description_stdin {
+            unsupported.push("--description / --description-stdin");
+        }
+        if markdown {
+            unsupported.push("--markdown");
+        }
+        if !unsupported.is_empty() {
+            return Err(JrError::UserError(format!(
+                "Multi-key bulk edit doesn't yet support: {}. \
+                 Use a single key, or open an issue if this matters for your workflow.",
+                unsupported.join(", ")
+            ))
+            .into());
+        }
+    }
+
     // --- Dry-run short-circuit: render diff, no HTTP mutations. ---
     if dry_run {
         // Build a human-readable summary of what WOULD happen.
