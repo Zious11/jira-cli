@@ -538,9 +538,17 @@ pub(super) async fn handle_edit(
                     .with_prompt(prompt)
                     .default(false)
                     .interact()
-                    .unwrap_or(false);
+                    .map_err(|e| {
+                        JrError::UserError(format!(
+                            "Confirmation prompt failed: {e}. Use --yes to skip the prompt or \
+                             --no-input to disable interactive confirmation."
+                        ))
+                    })?;
             if !confirmed {
-                return Ok(());
+                return Err(JrError::UserError(
+                    "Bulk edit declined at confirmation prompt. No changes made.".into(),
+                )
+                .into());
             }
         } else if !yes && no_input {
             // Safety-net hint for --no-input without --yes on a large set.
