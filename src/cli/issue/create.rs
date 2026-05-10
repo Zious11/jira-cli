@@ -264,6 +264,14 @@ pub(super) async fn handle_edit(
             .await?;
         let matched = search_result.issues;
 
+        if matched.is_empty() {
+            return Err(JrError::UserError(format!(
+                "JQL '{}' matched 0 issues. Refine your query or pass keys directly.",
+                jql_str,
+            ))
+            .into());
+        }
+
         if matched.len() > effective_max as usize {
             return Err(JrError::UserError(format!(
                 "JQL matched {} issues, which exceeds --max {} (default 50). \
