@@ -251,6 +251,20 @@ pub(super) async fn handle_edit(
         );
     }
 
+    // Validate: --max is only meaningful with --jql.  clap's `requires` attribute cannot
+    // enforce this when positional keys are also present (because `keys` and `jql` have
+    // `conflicts_with` between them, which causes clap to skip the `requires` check).
+    // We enforce it here instead, before any HTTP calls.
+    if max.is_some() && jql.is_none() {
+        return Err(JrError::UserError(
+            "--max requires --jql. It cannot be used with positional keys because \
+             it only limits the number of issues matched by a JQL query. \
+             Remove --max or switch to --jql <query>."
+                .into(),
+        )
+        .into());
+    }
+
     // Validate: --markdown is a modifier on --description/--description-stdin, NOT a
     // standalone field change.  Reject it early (before any HTTP calls) so the user
     // gets a clear error instead of a wasted JQL search followed by "No fields specified".
@@ -325,8 +339,10 @@ pub(super) async fn handle_edit(
         }
     }
 
-    // Clamp --max to the Atlassian hard ceiling.
-    let effective_max = max.min(BULK_MAX_KEYS as u32);
+    // Apply the default of 50 when --jql is present; clap's `requires = "jql"` already
+    // rejects `--max` without `--jql` at parse time, so by the time we reach this point
+    // `max` is only Some(_) when jql is also Some(_).
+    let effective_max = max.unwrap_or(50).min(BULK_MAX_KEYS as u32);
 
     // Resolve the working set of keys.
     // For --jql: execute the search (read-only), then enforce --max cap.

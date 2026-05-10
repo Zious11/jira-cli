@@ -393,9 +393,10 @@ pub enum IssueCommand {
         #[arg(long, conflicts_with = "keys")]
         jql: Option<String>,
         /// Maximum number of issues to match via --jql (default 50, hard ceiling 1000).
-        /// If the JQL match count exceeds this value, the command errors without mutating.
-        #[arg(long, default_value_t = 50, value_parser = clap::value_parser!(u32).range(1..=1000))]
-        max: u32,
+        /// Requires --jql; cannot be used with positional keys. If the JQL match count
+        /// exceeds this value, the command errors without mutating.
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=1000))]
+        max: Option<u32>,
         /// Skip the interactive confirmation prompt for large JQL match sets.
         #[arg(long)]
         yes: bool,

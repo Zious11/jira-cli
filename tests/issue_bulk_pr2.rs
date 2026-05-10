@@ -2241,3 +2241,85 @@ async fn test_label_with_summary_rejected_before_jql_search() {
         "Expected zero HTTP calls (including JQL search) when --label + --summary rejected"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Copilot round 8 (#3215445205): --max requires --jql
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit FOO-1 FOO-2 --max 100 --label add:foo --no-input`
+/// (positional keys + --max, no --jql)
+/// MUST be rejected with exit 64 (JrError::UserError) before any HTTP calls.
+/// stderr must mention "--max" and "--jql".
+/// ZERO HTTP requests must be received (handler guard fires before search/bulk).
+///
+/// Note: clap's `requires = "jql"` cannot enforce this when positional keys are
+/// present, because `keys` and `jql` have `conflicts_with` between them (which
+/// causes clap to skip the `requires` check on `max`). Handler-level validation
+/// is the correct enforcement point — this matches how other mutual-exclusion
+/// guards (e.g., --label + --summary) are implemented in this handler.
+#[tokio::test]
+async fn test_max_without_jql_rejected_before_any_http_call() {
+    let server = MockServer::start().await;
+
+    // Neither search nor bulk should ever fire.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected: search called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected: bulk called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--max",
+            "100",
+            "--label",
+            "add:foo",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(
+        !output.status.success(),
+        "Expected non-zero exit when --max is passed without --jql; combined={combined}"
+    );
+
+    // Handler-level UserError exits with code 64.
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 (UserError) for --max without --jql; combined={combined}"
+    );
+
+    // Error message must reference both --max and --jql.
+    assert!(
+        combined.to_lowercase().contains("max"),
+        "Error must mention 'max'; combined={combined}"
+    );
+    assert!(
+        combined.to_lowercase().contains("jql"),
+        "Error must mention 'jql'; combined={combined}"
+    );
+
+    // Zero HTTP calls — handler guard fires before any HTTP request.
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        0,
+        "Expected zero HTTP calls when --max without --jql is rejected by handler guard"
+    );
+}
