@@ -1910,8 +1910,7 @@ async fn test_dry_run_table_handles_unicode_description_without_panicking() {
         .await;
 
     // 70 Cyrillic chars → 140 bytes. Slicing at byte 60 lands mid-codepoint.
-    let cyrillic_desc =
-        "русский текст превышает шестьдесят символов и должен быть обрезан красиво";
+    let cyrillic_desc = "русский текст превышает шестьдесят символов и должен быть обрезан красиво";
 
     let output = jr_cmd(&server.uri())
         .args([
