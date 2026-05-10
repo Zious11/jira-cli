@@ -439,6 +439,24 @@ pub(super) async fn handle_edit(
                 if no_points {
                     planned.insert("points".into(), serde_json::Value::Null);
                 }
+                // Single-key-only fields: team, description, description_stdin, markdown.
+                // Multi-key bulk rejects these flags upstream (C-1 guard), so reaching
+                // here with effective_keys.len() > 1 and these flags set is impossible.
+                if let Some(ref t) = team {
+                    planned.insert("team".into(), json!(t));
+                }
+                if let Some(ref d) = description {
+                    planned.insert("description".into(), json!(d));
+                } else if description_stdin {
+                    // --dry-run does NOT read stdin; document this as a known limitation.
+                    planned.insert(
+                        "description".into(),
+                        json!("<from stdin — not yet read in dry-run>"),
+                    );
+                }
+                if markdown {
+                    planned.insert("markdown".into(), json!(true));
+                }
                 let payload = json!({
                     "dryRun": true,
                     "issues": effective_keys,
@@ -477,6 +495,26 @@ pub(super) async fn handle_edit(
                 }
                 if no_points {
                     println!("  points → (clear)");
+                }
+                // Single-key-only fields: team, description, description_stdin, markdown.
+                // Multi-key bulk rejects these flags upstream (C-1 guard), so reaching
+                // here with effective_keys.len() > 1 and these flags set is impossible.
+                if let Some(ref t) = team {
+                    println!("  team → {t}");
+                }
+                if let Some(ref d) = description {
+                    // Truncate long descriptions to 60 chars for readability.
+                    if d.len() > 60 {
+                        println!("  description → {}...", &d[..60]);
+                    } else {
+                        println!("  description → {d}");
+                    }
+                } else if description_stdin {
+                    // --dry-run does NOT read stdin; document this as a known limitation.
+                    println!("  description → (read from stdin — not yet read in dry-run)");
+                }
+                if markdown {
+                    println!("  markdown rendering: enabled");
                 }
             }
         }
