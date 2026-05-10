@@ -263,11 +263,10 @@ pub(super) async fn handle_edit(
         .into());
     }
 
-    // Validate: at least one field change must be specified — checked BEFORE any HTTP
-    // calls so that `--dry-run --jql "..."` (no field flags) doesn't waste a search
-    // call before failing with "No fields specified".  The same check runs again
-    // inside the dry-run block for the non-JQL path; keeping it here ensures the
-    // JQL path is also short-circuited without duplicating the full dry-run logic.
+    // Pre-HTTP guard: if no field-change flags are specified, error here BEFORE running
+    // any JQL search or making any HTTP calls.  This is the single source of truth for
+    // the "no fields" check — both the JQL path and the dry-run path rely on this guard;
+    // there is no duplicate check inside the dry-run block.
     //
     // NOTE: `markdown` is intentionally NOT included here — it is a modifier on
     // --description, not an independent field change. The validation above already
