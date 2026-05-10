@@ -1329,3 +1329,91 @@ async fn test_multi_key_type_update_uses_consistent_issuetype_casing() {
         "Expected selectedActions NOT to contain camelCase \"issueType\"; body={body_str}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Audit F3: --dry-run with no field changes must error like the live path
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit FOO-1 --dry-run --no-input` (no field flags)
+/// Before F3 fix: dry-run short-circuits before the "no fields specified" guard,
+///   producing a meaningless "DRY RUN — no changes will be made" output for a
+///   no-op, which may mislead the user into thinking a planned edit was shown.
+/// After F3 fix:  exits non-zero with "No fields specified" (same as live path).
+#[tokio::test]
+async fn test_dry_run_with_no_field_changes_errors_like_live_path() {
+    let server = MockServer::start().await;
+
+    // No HTTP calls should be made at all (key is positional, no field flags).
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected: bulk called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    // Table mode: no field flags → must error.
+    let output = jr_cmd(&server.uri())
+        .args(["--no-input", "issue", "edit", "FOO-1", "--dry-run"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        !output.status.success(),
+        "Expected non-zero exit for --dry-run with no field flags; stderr={stderr} stdout={stdout}"
+    );
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains("No fields specified"),
+        "Expected 'No fields specified' in error output; combined={combined}"
+    );
+
+    // Zero HTTP calls should have been made.
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        0,
+        "Expected zero HTTP calls for --dry-run with no field flags"
+    );
+}
+
+/// Same as above but with `--output json` — JSON mode must also error (not emit empty JSON).
+#[tokio::test]
+async fn test_dry_run_with_no_field_changes_errors_in_json_mode() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected: bulk called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "--output",
+            "json",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        !output.status.success(),
+        "Expected non-zero exit for --dry-run --output json with no field flags; \
+         stderr={stderr} stdout={stdout}"
+    );
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains("No fields specified"),
+        "Expected 'No fields specified' in JSON-mode error output; combined={combined}"
+    );
+}
