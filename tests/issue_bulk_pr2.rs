@@ -1421,3 +1421,66 @@ async fn test_dry_run_with_no_field_changes_errors_in_json_mode() {
         "Expected 'No fields specified' in JSON-mode error output; combined={combined}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Audit F1: empty --jql must error before search, not silently match 0 issues
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit --jql "" --label add:foo --no-input`
+/// Before F1 fix: the empty JQL is passed to search_issues, which either
+///   returns 0 results (triggering the I-2 "matched 0 issues" error) or
+///   makes an API call with an empty query.
+/// After F1 fix: the command errors immediately with a user-friendly message
+///   before making any HTTP call.
+#[tokio::test]
+async fn test_empty_jql_errors_before_search() {
+    let server = MockServer::start().await;
+
+    // No HTTP calls should be made — the error must happen before search.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected: search called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected: bulk called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "--jql",
+            "",
+            "--label",
+            "add:foo",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        !output.status.success(),
+        "Expected non-zero exit for empty --jql; stderr={stderr} stdout={stdout}"
+    );
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains("cannot be empty"),
+        "Expected 'cannot be empty' in error output; combined={combined}"
+    );
+
+    // Zero HTTP calls must have been made.
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        0,
+        "Expected zero HTTP calls for empty --jql"
+    );
+}

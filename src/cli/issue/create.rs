@@ -258,6 +258,15 @@ pub(super) async fn handle_edit(
     // For --jql: execute the search (read-only), then enforce --max cap.
     // For positional keys: use them directly (no HTTP read needed).
     let effective_keys: Vec<String> = if let Some(ref jql_str) = jql {
+        if jql_str.trim().is_empty() {
+            return Err(JrError::UserError(
+                "--jql query cannot be empty. Provide a JQL expression like \
+                 'project = FOO AND status = \"To Do\"', or pass keys positionally."
+                    .into(),
+            )
+            .into());
+        }
+
         // --dry-run with --jql: search is read-only, allowed.
         let search_result = client
             .search_issues(jql_str, Some(effective_max + 1), &[])
