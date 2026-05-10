@@ -386,8 +386,9 @@ pub enum IssueCommand {
     },
     /// Edit issue fields
     Edit {
-        /// Issue key
-        key: String,
+        /// One or more issue keys (e.g., FOO-1 FOO-2 FOO-3)
+        #[arg(required = true, num_args = 1..=1001)]
+        keys: Vec<String>,
         /// New summary
         #[arg(long)]
         summary: Option<String>,
@@ -425,15 +426,23 @@ pub enum IssueCommand {
         #[arg(long)]
         markdown: bool,
     },
-    /// Transition issue to a new status
+    /// Transition one or more issues to a new status
+    ///
+    /// Single-key legacy form:  jr issue move FOO-100 Done
+    /// Multi-key form:          jr issue move FOO-100 FOO-101 FOO-102 --to Done
+    ///
+    /// For multi-key (2+ keys), `--to` is required. For single-key, the
+    /// trailing positional is the target status (backward compatible).
     Move {
-        /// Issue key
-        key: String,
-        /// Target status (partial match supported)
-        status: Option<String>,
+        /// Issue keys (legacy single-key: KEY STATUS; multi-key: KEY1 KEY2 ... --to STATUS)
+        #[arg(required = true, num_args = 1..=1001)]
+        keys: Vec<String>,
+        /// Target status for multi-key form (required when 2+ keys are given)
+        #[arg(long)]
+        to: Option<String>,
         /// Set resolution atomically with the transition (e.g. "Fixed"). Many
         /// JSM workflows require this; run `jr issue resolutions` to discover
-        /// valid values.
+        /// valid values. (Single-key only; ignored in multi-key bulk form.)
         #[arg(long)]
         resolution: Option<String>,
     },

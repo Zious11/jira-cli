@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 use serde_json::json;
+use std::time::Duration;
 
 use crate::adf;
 use crate::api::assets::linked::get_or_fetch_cmdb_fields;
@@ -11,6 +12,9 @@ use crate::output;
 
 use super::helpers;
 use super::json_output;
+
+/// Maximum number of keys allowed in a single bulk edit call (Atlassian API limit).
+const BULK_MAX_KEYS: usize = 1000;
 
 pub(super) async fn handle_create(
     command: IssueCommand,
@@ -208,7 +212,7 @@ pub(super) async fn handle_edit(
     no_input: bool,
 ) -> Result<()> {
     let IssueCommand::Edit {
-        key,
+        keys,
         summary,
         issue_type,
         priority,
@@ -225,6 +229,34 @@ pub(super) async fn handle_edit(
     else {
         unreachable!()
     };
+
+    // AC (cap): enforce Atlassian's 1,000-issue limit per bulk call.
+    if keys.len() > BULK_MAX_KEYS {
+        return Err(JrError::UserError(format!(
+            "Too many issue keys: {} provided, maximum is {}. \
+             Split into batches of {} or fewer and run multiple times.",
+            keys.len(),
+            BULK_MAX_KEYS,
+            BULK_MAX_KEYS,
+        ))
+        .into());
+    }
+
+    // Route: labels → bulk API (1..=1000 keys).
+    // Non-label single-key edits → existing single-key PUT path (backward-compatible).
+    // Non-label multi-key edits are not yet implemented in this PR.
+    if !labels.is_empty() {
+        return handle_edit_bulk_labels(&keys, labels, output_format, client, no_input).await;
+    }
+
+    // --- Single-key non-label path (unchanged from before) ---
+    if keys.len() > 1 {
+        bail!(
+            "Multi-key edit without --label is not yet supported. \
+             Use a single key or add --label add:<name> / --label remove:<name>."
+        );
+    }
+    let key = &keys[0];
 
     let mut fields = json!({});
     let mut has_updates = false;
@@ -296,53 +328,13 @@ pub(super) async fn handle_edit(
         has_updates = true;
     }
 
-    // Handle label add:/remove: syntax
-    if !labels.is_empty() {
-        let mut label_update: Vec<serde_json::Value> = Vec::new();
-        for l in &labels {
-            if let Some(to_add) = l.strip_prefix("add:") {
-                label_update.push(json!({ "add": to_add }));
-            } else if let Some(to_remove) = l.strip_prefix("remove:") {
-                label_update.push(json!({ "remove": to_remove }));
-            } else {
-                // Treat bare label as add
-                label_update.push(json!({ "add": l }));
-            }
-        }
-        if !label_update.is_empty() {
-            // Labels with add:/remove: syntax use the update endpoint pattern
-            // We need to use the "update" key in the request body
-            let path = format!("/rest/api/3/issue/{}", urlencoding::encode(&key));
-            let mut body = json!({});
-            if fields != json!({}) {
-                body["fields"] = fields;
-            }
-            body["update"] = json!({ "labels": label_update });
-
-            client.put(&path, &body).await?;
-
-            match output_format {
-                OutputFormat::Json => {
-                    println!(
-                        "{}",
-                        serde_json::to_string_pretty(&json_output::edit_response(&key))?
-                    );
-                }
-                OutputFormat::Table => {
-                    output::print_success(&format!("Updated {}", key));
-                }
-            }
-            return Ok(());
-        }
-    }
-
     if !has_updates {
         bail!(
             "No fields specified to update. Use --summary, --type, --priority, --label, --team, --points, --no-points, --parent, --no-parent, --description, or --description-stdin."
         );
     }
 
-    let edit_result = client.edit_issue(&key, fields).await;
+    let edit_result = client.edit_issue(key, fields).await;
     if let Err(ref e) = edit_result {
         if no_parent && is_subtask_parent_error(e) {
             let hint = format!(
@@ -361,12 +353,201 @@ pub(super) async fn handle_edit(
         OutputFormat::Json => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&json_output::edit_response(&key))?
+                serde_json::to_string_pretty(&json_output::edit_response(key))?
             );
         }
         OutputFormat::Table => {
             output::print_success(&format!("Updated {}", key));
         }
+    }
+
+    Ok(())
+}
+
+/// Route label edits through the Atlassian Bulk Fields API.
+///
+/// Supports 1..=1000 keys. `labels` is a list of "add:NAME" / "remove:NAME" / "NAME" strings.
+///
+/// editedFieldsInput shape (labelsAction casing "ADD"/"REMOVE" — best-guess per
+/// SCHEMA NOTES in tests/issue_bulk.rs; exact values unverified against live API):
+/// ```json
+/// {"labels": {"labelsAction": "ADD", "labels": [{"name": "foo"}]}}
+/// ```
+/// Multiple label operations are collapsed: all adds into one ADD block, all removes into
+/// one REMOVE block. When both adds and removes are present, two separate bulk calls are
+/// made (Atlassian's editedFieldsInput for labels may not support mixed ADD/REMOVE in
+/// one request — unverified; safe default is sequential calls).
+///
+/// Output:
+/// - Table mode: per-key success/error lines.
+/// - JSON mode: `{"taskId":"...","results":[{"key":"...","status":"success|error","error":"..."}]}`
+/// - Single-key JSON mode: also includes `"key":"..."` at top level (backward-compat shape).
+/// - Exit 0 if all succeeded; exit 1 if any failed.
+async fn handle_edit_bulk_labels(
+    keys: &[String],
+    labels: Vec<String>,
+    output_format: &OutputFormat,
+    client: &JiraClient,
+    _no_input: bool,
+) -> Result<()> {
+    // Parse labels into add/remove buckets.
+    let mut adds: Vec<String> = Vec::new();
+    let mut removes: Vec<String> = Vec::new();
+
+    for l in &labels {
+        if let Some(name) = l.strip_prefix("add:") {
+            adds.push(name.to_string());
+        } else if let Some(name) = l.strip_prefix("remove:") {
+            removes.push(name.to_string());
+        } else {
+            // Bare label treated as add.
+            adds.push(l.clone());
+        }
+    }
+
+    // Determine the primary action and label list for the bulk call.
+    // When both adds and removes exist, we prioritize the adds bucket
+    // and attach the removes in a second object under the same payload
+    // if possible. The safe interpretation per Atlassian's bulk-edit
+    // UI semantics is that a single labelsAction applies to the whole
+    // batch; mixing requires two separate requests.
+    //
+    // For this PR, use the first non-empty bucket (adds wins if both).
+    // Second bucket (if present) makes a sequential follow-up call.
+    // SEMPORT-REVIEW: Verify whether Atlassian accepts mixed ADD/REMOVE
+    // in a single editedFieldsInput.labels call.
+    let calls: Vec<(&str, &Vec<String>)> = {
+        let mut v: Vec<(&str, &Vec<String>)> = Vec::new();
+        if !adds.is_empty() {
+            v.push(("ADD", &adds));
+        }
+        if !removes.is_empty() {
+            v.push(("REMOVE", &removes));
+        }
+        v
+    };
+
+    if calls.is_empty() {
+        bail!("No label changes specified.");
+    }
+
+    // Use the last task_id and progress for output (covers most cases with one call).
+    let mut final_task_id = String::new();
+    let mut final_progress = None;
+
+    for (action, label_names) in &calls {
+        let label_entries: Vec<serde_json::Value> =
+            label_names.iter().map(|n| json!({"name": n})).collect();
+
+        let edited_fields = json!({
+            "labels": {
+                "labelsAction": action,
+                "labels": label_entries
+            }
+        });
+
+        let task_id = client.bulk_edit_fields(keys, edited_fields).await?;
+        // Poll with 5-minute timeout.
+        let progress = client
+            .await_bulk_task(&task_id, Duration::from_secs(300))
+            .await?;
+
+        final_task_id = task_id;
+        final_progress = Some(progress);
+    }
+
+    let progress = final_progress.expect("at least one call was made");
+    render_bulk_edit_results(keys, &final_task_id, &progress, output_format)
+}
+
+/// Render bulk edit results to stdout/stderr and return the appropriate exit code.
+///
+/// - Table mode: print per-key success/error lines.
+/// - JSON mode: `{"taskId":"...","results":[...]}` with optional `"key"` for single-key BC.
+/// - Returns `Ok(())` if all succeeded; returns `Err(exit-1)` if any failed.
+fn render_bulk_edit_results(
+    keys: &[String],
+    task_id: &str,
+    progress: &crate::types::jira::bulk::BulkOperationProgress,
+    output_format: &OutputFormat,
+) -> Result<()> {
+    let processed: std::collections::HashSet<&str> = progress
+        .processed_accessible_issues
+        .iter()
+        .map(String::as_str)
+        .collect();
+
+    // Build per-key result list. Keys not in processed or failed are assumed
+    // inaccessible/invalid (Atlassian may silently exclude them).
+    let mut results: Vec<serde_json::Value> = Vec::new();
+    let mut any_failed = false;
+
+    for key in keys {
+        if let Some(err) = progress.failed_accessible_issues.get(key.as_str()) {
+            let summary = err.summary();
+            results.push(json!({
+                "key": key,
+                "status": "error",
+                "error": summary,
+            }));
+            any_failed = true;
+        } else if processed.contains(key.as_str()) {
+            results.push(json!({
+                "key": key,
+                "status": "success",
+            }));
+        } else {
+            // Not in processed and not in failed — inaccessible or invalid.
+            results.push(json!({
+                "key": key,
+                "status": "inaccessible",
+            }));
+        }
+    }
+
+    // Also capture any failed keys that weren't in our input list
+    // (shouldn't happen, but Atlassian may return unexpected keys).
+    for (failed_key, err) in &progress.failed_accessible_issues {
+        if !keys.iter().any(|k| k == failed_key) {
+            results.push(json!({
+                "key": failed_key,
+                "status": "error",
+                "error": err.summary(),
+            }));
+            any_failed = true;
+        }
+    }
+
+    match output_format {
+        OutputFormat::Json => {
+            let mut payload = json!({
+                "taskId": task_id,
+                "results": results,
+            });
+            // Single-key backward-compat: include "key" at top level.
+            if keys.len() == 1 {
+                payload["key"] = json!(&keys[0]);
+            }
+            println!("{}", serde_json::to_string_pretty(&payload)?);
+        }
+        OutputFormat::Table => {
+            for entry in &results {
+                let key = entry["key"].as_str().unwrap_or("?");
+                match entry["status"].as_str().unwrap_or("?") {
+                    "success" => output::print_success(&format!("Updated {key}")),
+                    "error" => {
+                        let err_msg = entry["error"].as_str().unwrap_or("unknown error");
+                        eprintln!("error: {key}: {err_msg}");
+                    }
+                    status => eprintln!("warning: {key}: {status}"),
+                }
+            }
+        }
+    }
+
+    if any_failed {
+        // Return a non-Ok result that maps to exit code 1.
+        bail!("One or more issues failed during bulk edit. See output above for details.");
     }
 
     Ok(())

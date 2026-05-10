@@ -1,5 +1,6 @@
 use super::json_output;
 use anyhow::{Result, bail};
+use std::time::Duration;
 
 use crate::adf;
 use crate::api::client::JiraClient;
@@ -10,6 +11,9 @@ use crate::partial_match::{self, MatchResult};
 use crate::types::jira::Resolution;
 
 use super::helpers;
+
+/// Maximum number of keys allowed in a single bulk transition call.
+const BULK_MOVE_MAX_KEYS: usize = 1000;
 
 // ── Resolution resolver ───────────────────────────────────────────────
 
@@ -144,16 +148,73 @@ pub(super) async fn handle_move(
     no_input: bool,
 ) -> Result<()> {
     let IssueCommand::Move {
-        key,
-        status,
+        keys,
+        to,
         resolution,
     } = command
     else {
         unreachable!()
     };
 
+    // --- Resolve (key, status) from the new Vec<String> + --to design ---
+    //
+    // Single-key legacy form: jr issue move KEY STATUS  → keys=[KEY,STATUS], to=None
+    // Multi-key form:         jr issue move K1 K2 K3 --to STATUS → keys=[K1,K2,K3], to=Some("STATUS")
+    // Error: jr issue move KEY --no-status (keys.len()==1, to=None) → prompt or error
+    let (move_keys, target_status_input) = if let Some(ref t) = to {
+        // --to flag provided: all positionals are keys.
+        (keys.clone(), t.clone())
+    } else if keys.len() >= 2 {
+        // Legacy form: last positional is the status.
+        let mut ks = keys.clone();
+        let status = ks.pop().expect("checked len >= 2");
+        (ks, status)
+    } else {
+        // Single key, no --to, no status positional.
+        if no_input {
+            bail!("Target status is required in non-interactive mode.");
+        }
+        // keys.len() == 1 here (clap requires at least 1).
+        let key = &keys[0];
+        let transitions_resp = client.get_transitions(key).await?;
+        let transitions = &transitions_resp.transitions;
+        if transitions.is_empty() {
+            bail!("No transitions available for {key}.");
+        }
+        eprintln!("Available transitions for {}:", key);
+        for (i, t) in transitions.iter().enumerate() {
+            let to_name =
+                t.to.as_ref()
+                    .map(|s| s.name.as_str())
+                    .unwrap_or("(unknown)");
+            eprintln!("  {}. {} -> {}", i + 1, t.name, to_name);
+        }
+        let status = helpers::prompt_input("Select transition (name or number)")?;
+        (keys.clone(), status)
+    };
+
+    // --- Validate key count ---
+    if move_keys.len() > BULK_MOVE_MAX_KEYS {
+        return Err(JrError::UserError(format!(
+            "Too many issue keys: {} provided, maximum is {}. \
+             Split into batches of {} or fewer and run multiple times.",
+            move_keys.len(),
+            BULK_MOVE_MAX_KEYS,
+            BULK_MOVE_MAX_KEYS,
+        ))
+        .into());
+    }
+
+    // --- Route: multi-key → bulk transition; single-key → existing per-issue path ---
+    if move_keys.len() > 1 {
+        return handle_move_bulk(&move_keys, &target_status_input, output_format, client).await;
+    }
+
+    // --- Single-key path (unchanged behavior) ---
+    let key = &move_keys[0];
+
     // Get available transitions
-    let transitions_resp = client.get_transitions(&key).await?;
+    let transitions_resp = client.get_transitions(key).await?;
     let transitions = &transitions_resp.transitions;
 
     if transitions.is_empty() {
@@ -161,7 +222,7 @@ pub(super) async fn handle_move(
     }
 
     // Check current status first
-    let issue = client.get_issue(&key, &[]).await?;
+    let issue = client.get_issue(key, &[]).await?;
     let current_status = issue
         .fields
         .status
@@ -169,29 +230,9 @@ pub(super) async fn handle_move(
         .map(|s| s.name.clone())
         .unwrap_or_default();
 
-    let target_status = match status {
-        Some(s) => s,
-        None => {
-            if no_input {
-                bail!("Target status is required in non-interactive mode.");
-            }
-            // Show transitions and prompt
-            eprintln!("Available transitions for {}:", key);
-            for (i, t) in transitions.iter().enumerate() {
-                let to_name =
-                    t.to.as_ref()
-                        .map(|s| s.name.as_str())
-                        .unwrap_or("(unknown)");
-                eprintln!("  {}. {} -> {}", i + 1, t.name, to_name);
-            }
-
-            helpers::prompt_input("Select transition (name or number)")?
-        }
-    };
+    let target_status = target_status_input;
 
     // Idempotent: if already in target status, exit 0.
-    // Check both direct match and whether the input is a transition name whose
-    // target status matches the current status.
     let current_lower = current_status.to_lowercase();
     let target_lower = target_status.to_lowercase();
     let already_in_target = current_lower == target_lower
@@ -207,7 +248,7 @@ pub(super) async fn handle_move(
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&json_output::move_response(
-                        &key,
+                        key,
                         &current_status,
                         false,
                     ))?
@@ -238,7 +279,6 @@ pub(super) async fn handle_move(
         t
     } else {
         // Build unified candidate pool: transition names + target status names.
-        // Each candidate maps to its transition index.
         let mut candidates: Vec<(String, usize)> = Vec::new();
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         for (i, t) in transitions.iter().enumerate() {
@@ -270,7 +310,6 @@ pub(super) async fn handle_move(
                     })?;
                 &transitions[idx]
             }
-            // Case-insensitive dedup upstream; treat like Exact if case-variant duplicates slip through
             MatchResult::ExactMultiple(name) => {
                 let idx = candidates
                     .iter()
@@ -293,7 +332,6 @@ pub(super) async fn handle_move(
                     ))
                     .into());
                 }
-                // Interactive disambiguation
                 eprintln!(
                     "Ambiguous match for \"{}\". Did you mean one of:",
                     target_status
@@ -338,7 +376,7 @@ pub(super) async fn handle_move(
         }
     };
 
-    // Resolve --resolution against the cached resolutions list if provided.
+    // Resolve --resolution if provided.
     let resolution_fields: Option<serde_json::Value> = match resolution.as_deref() {
         None => None,
         Some(query) => {
@@ -350,12 +388,8 @@ pub(super) async fn handle_move(
         }
     };
 
-    // Transform Atlassian's "Field 'resolution' is required" 400 into an
-    // actionable hint pointing at `--resolution` and `jr issue resolutions`.
-    // Heuristic: lowercased error body contains both "resolution" and
-    // "required". Other 400s pass through unchanged.
     let transition_result = client
-        .transition_issue(&key, &selected_transition.id, resolution_fields.as_ref())
+        .transition_issue(key, &selected_transition.id, resolution_fields.as_ref())
         .await;
 
     if let Err(err) = transition_result {
@@ -386,12 +420,170 @@ pub(super) async fn handle_move(
         OutputFormat::Json => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&json_output::move_response(&key, new_status, true,))?
+                serde_json::to_string_pretty(&json_output::move_response(key, new_status, true))?
             );
         }
         OutputFormat::Table => {
             output::print_success(&format!("Moved {} to \"{}\"", key, new_status));
         }
+    }
+
+    Ok(())
+}
+
+/// Multi-key bulk transition handler.
+///
+/// Looks up transitions for the first key to resolve the status name → transitionId,
+/// then fires a single POST /rest/api/3/bulk/issues/transition call.
+/// Polls until terminal status, renders per-key results.
+async fn handle_move_bulk(
+    keys: &[String],
+    target_status: &str,
+    output_format: &OutputFormat,
+    client: &JiraClient,
+) -> Result<()> {
+    // Discover transition ID from first key.
+    let first_key = &keys[0];
+    let transitions_resp = client.get_transitions(first_key).await?;
+    let transitions = &transitions_resp.transitions;
+
+    if transitions.is_empty() {
+        bail!("No transitions available for {first_key} (used to discover transition ID).");
+    }
+
+    // Match target_status by number or name (same logic as single-key path).
+    let selected_id: String = if let Ok(num) = target_status.parse::<usize>() {
+        if num >= 1 && num <= transitions.len() {
+            transitions[num - 1].id.clone()
+        } else {
+            bail!(
+                "Transition number {num} out of range (1..={}).",
+                transitions.len()
+            );
+        }
+    } else {
+        // Name-based match using same candidate pool strategy.
+        let mut candidates: Vec<(String, usize)> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for (i, t) in transitions.iter().enumerate() {
+            let t_lower = t.name.to_lowercase();
+            if seen.insert(t_lower) {
+                candidates.push((t.name.clone(), i));
+            }
+            if let Some(ref status) = t.to {
+                let s_lower = status.name.to_lowercase();
+                if seen.insert(s_lower) {
+                    candidates.push((status.name.clone(), i));
+                }
+            }
+        }
+        let candidate_names: Vec<String> =
+            candidates.iter().map(|(name, _)| name.clone()).collect();
+        match partial_match::partial_match(target_status, &candidate_names) {
+            MatchResult::Exact(name) | MatchResult::ExactMultiple(name) => {
+                let idx = candidates
+                    .iter()
+                    .find(|(n, _)| n == &name)
+                    .map(|(_, i)| *i)
+                    .ok_or_else(|| {
+                        JrError::Internal(format!(
+                            "Internal error: matched transition \"{}\" not found.",
+                            name
+                        ))
+                    })?;
+                transitions[idx].id.clone()
+            }
+            MatchResult::Ambiguous(matches) => {
+                return Err(JrError::UserError(format!(
+                    "Ambiguous transition \"{target_status}\". Matches: {}. \
+                     Use --to with an exact name.",
+                    matches.join(", ")
+                ))
+                .into());
+            }
+            MatchResult::None(_) => {
+                let labels: Vec<String> = transitions
+                    .iter()
+                    .map(|t| match t.to.as_ref() {
+                        Some(s) => format!("{} (→ {})", t.name, s.name),
+                        None => t.name.clone(),
+                    })
+                    .collect();
+                bail!(
+                    "No transition matching \"{target_status}\". Available: {}",
+                    labels.join(", ")
+                );
+            }
+        }
+    };
+
+    // Fire the bulk transition.
+    let task_id = client.bulk_transition(keys, &selected_id).await?;
+
+    // Poll with 5-minute timeout.
+    let progress = client
+        .await_bulk_task(&task_id, Duration::from_secs(300))
+        .await?;
+
+    // Render results (similar to bulk edit).
+    let processed: std::collections::HashSet<&str> = progress
+        .processed_accessible_issues
+        .iter()
+        .map(String::as_str)
+        .collect();
+
+    let mut any_failed = false;
+    let mut results: Vec<serde_json::Value> = Vec::new();
+
+    for key in keys {
+        if let Some(err) = progress.failed_accessible_issues.get(key.as_str()) {
+            let summary = err.summary();
+            results.push(serde_json::json!({
+                "key": key,
+                "status": "error",
+                "error": summary,
+            }));
+            any_failed = true;
+        } else if processed.contains(key.as_str()) {
+            results.push(serde_json::json!({
+                "key": key,
+                "status": "success",
+            }));
+        } else {
+            results.push(serde_json::json!({
+                "key": key,
+                "status": "inaccessible",
+            }));
+        }
+    }
+
+    match output_format {
+        OutputFormat::Json => {
+            let payload = serde_json::json!({
+                "taskId": task_id,
+                "results": results,
+            });
+            println!("{}", serde_json::to_string_pretty(&payload)?);
+        }
+        OutputFormat::Table => {
+            for entry in &results {
+                let key = entry["key"].as_str().unwrap_or("?");
+                match entry["status"].as_str().unwrap_or("?") {
+                    "success" => {
+                        output::print_success(&format!("Moved {key} to \"{target_status}\""))
+                    }
+                    "error" => {
+                        let err_msg = entry["error"].as_str().unwrap_or("unknown error");
+                        eprintln!("error: {key}: {err_msg}");
+                    }
+                    status => eprintln!("warning: {key}: {status}"),
+                }
+            }
+        }
+    }
+
+    if any_failed {
+        bail!("One or more issues failed during bulk transition. See output above for details.");
     }
 
     Ok(())

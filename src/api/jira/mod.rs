@@ -1,4 +1,5 @@
 pub mod boards;
+pub mod bulk;
 pub mod fields;
 pub mod issues;
 pub mod links;
