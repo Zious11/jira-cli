@@ -386,9 +386,23 @@ pub enum IssueCommand {
     },
     /// Edit issue fields
     Edit {
-        /// One or more issue keys (e.g., FOO-1 FOO-2 FOO-3)
-        #[arg(required = true, num_args = 1..=1001)]
+        /// One or more issue keys (e.g., FOO-1 FOO-2 FOO-3). Mutually exclusive with --jql.
+        #[arg(num_args = 0..=1001, conflicts_with = "jql")]
         keys: Vec<String>,
+        /// JQL query to select issues for bulk edit. Mutually exclusive with positional keys.
+        #[arg(long, conflicts_with = "keys")]
+        jql: Option<String>,
+        /// Maximum number of issues to match via --jql (default 50, hard ceiling 1000).
+        /// If the JQL match count exceeds this value, the command errors without mutating.
+        #[arg(long, default_value_t = 50)]
+        max: u32,
+        /// Skip the interactive confirmation prompt for large JQL match sets.
+        #[arg(long)]
+        yes: bool,
+        /// Preview the planned changes without making any HTTP mutations.
+        /// For --jql, the search IS executed (read-only); for positional keys, no HTTP calls.
+        #[arg(long)]
+        dry_run: bool,
         /// New summary
         #[arg(long)]
         summary: Option<String>,

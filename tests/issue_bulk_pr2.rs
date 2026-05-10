@@ -139,10 +139,7 @@ async fn test_jql_expansion_calls_search_then_bulk_with_matched_keys() {
     let matched_keys = ["PROJ-1", "PROJ-2", "PROJ-3"];
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(jql_search_response(&matched_keys)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_search_response(&matched_keys)))
         .expect(1)
         .mount(&server)
         .await;
@@ -153,9 +150,7 @@ async fn test_jql_expansion_calls_search_then_bulk_with_matched_keys() {
         .and(body_partial_json(serde_json::json!({
             "selectedIssueIdsOrKeys": ["PROJ-1", "PROJ-2", "PROJ-3"]
         })))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-jql-001")),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-jql-001")))
         .expect(1)
         .mount(&server)
         .await;
@@ -202,8 +197,7 @@ async fn test_jql_default_max_50_caps_matched_issues() {
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(jql_search_response(&realistic_refs)),
+            ResponseTemplate::new(200).set_body_json(jql_search_response(&realistic_refs)),
         )
         .mount(&server)
         .await;
@@ -265,10 +259,7 @@ async fn test_jql_with_max_75_allows_75_matched() {
 
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(jql_search_response(&key_refs)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_search_response(&key_refs)))
         .mount(&server)
         .await;
 
@@ -276,9 +267,7 @@ async fn test_jql_with_max_75_allows_75_matched() {
     // Use body_string_contains to avoid asserting exact key order in JSON array.
     Mock::given(method("POST"))
         .and(path("/rest/api/3/bulk/issues/fields"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-max75-001")),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-max75-001")))
         .expect(1)
         .mount(&server)
         .await;
@@ -336,19 +325,14 @@ async fn test_jql_max_above_1000_clamps_or_errors() {
 
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(jql_search_response(&key_refs)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_search_response(&key_refs)))
         .mount(&server)
         .await;
 
     // Bulk POST mock (for clamp path).
     Mock::given(method("POST"))
         .and(path("/rest/api/3/bulk/issues/fields"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-clamp-001")),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-clamp-001")))
         .mount(&server)
         .await;
 
@@ -423,10 +407,7 @@ async fn test_dry_run_skips_bulk_post_and_renders_diff() {
     // Search: expect exactly 1 call.
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(jql_search_response(&matched_keys)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_search_response(&matched_keys)))
         .expect(1)
         .mount(&server)
         .await;
@@ -434,7 +415,9 @@ async fn test_dry_run_skips_bulk_post_and_renders_diff() {
     // Bulk POST: must NOT be called. .expect(0) causes a panic on drop if called.
     Mock::given(method("POST"))
         .and(path("/rest/api/3/bulk/issues/fields"))
-        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected: bulk called in dry-run"))
+        .respond_with(
+            ResponseTemplate::new(500).set_body_string("unexpected: bulk called in dry-run"),
+        )
         .expect(0)
         .mount(&server)
         .await;
@@ -560,19 +543,14 @@ async fn test_yes_flag_skips_confirmation_prompt() {
 
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(jql_search_response(&matched_keys)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_search_response(&matched_keys)))
         .mount(&server)
         .await;
 
     // Bulk POST must be made (--yes bypasses the prompt).
     Mock::given(method("POST"))
         .and(path("/rest/api/3/bulk/issues/fields"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-yes-001")),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-yes-001")))
         .expect(1)
         .mount(&server)
         .await;
@@ -616,18 +594,13 @@ async fn test_no_input_implicitly_skips_confirmation() {
 
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(jql_search_response(&matched_keys)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_search_response(&matched_keys)))
         .mount(&server)
         .await;
 
     Mock::given(method("POST"))
         .and(path("/rest/api/3/bulk/issues/fields"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-ni-001")),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-ni-001")))
         .expect(1)
         .mount(&server)
         .await;
@@ -681,10 +654,7 @@ async fn test_no_input_without_yes_or_dry_run_errors_when_jql_matches_above_thre
     // Search will be called (to materialise the match set).
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(jql_search_response(&key_refs)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_search_response(&key_refs)))
         .mount(&server)
         .await;
 
@@ -698,7 +668,9 @@ async fn test_no_input_without_yes_or_dry_run_errors_when_jql_matches_above_thre
         .await;
     Mock::given(method("GET"))
         .and(path("/rest/api/3/bulk/queue/task-safety-001"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(bulk_complete("task-safety-001", &key_refs)))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(bulk_complete("task-safety-001", &key_refs)),
+        )
         .mount(&server)
         .await;
 
@@ -768,9 +740,7 @@ async fn test_multi_key_summary_update_uses_bulk_fields_endpoint() {
         // Loose matcher: just check that "summary" appears in the POST body
         // (exact nesting of editedFieldsInput is unverified).
         .and(body_string_contains("summary"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-summary-001")),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-summary-001")))
         .expect(1)
         .mount(&server)
         .await;
@@ -816,9 +786,7 @@ async fn test_multi_key_priority_update_uses_bulk_fields_endpoint() {
     Mock::given(method("POST"))
         .and(path("/rest/api/3/bulk/issues/fields"))
         .and(body_string_contains("priority"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-prio-001")),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-prio-001")))
         .expect(1)
         .mount(&server)
         .await;
@@ -873,9 +841,7 @@ async fn test_label_add_remove_coalesce_emits_one_bulk_call() {
     // Expect EXACTLY 1 POST to the bulk fields endpoint.
     Mock::given(method("POST"))
         .and(path("/rest/api/3/bulk/issues/fields"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-coalesce-001")),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-coalesce-001")))
         .expect(1)
         .mount(&server)
         .await;
@@ -904,4 +870,315 @@ async fn test_label_add_remove_coalesce_emits_one_bulk_call() {
         "Expected exit 0 for coalesced add+remove; stderr={stderr} stdout={stdout}"
     );
     // wiremock .expect(1) fires on drop if != 1 POST was made.
+}
+
+// ---------------------------------------------------------------------------
+// Audit C-1: multi-key bulk silently drops unsupported flags → reject with error
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit FOO-1 FOO-2 --no-parent --no-input`
+/// Multi-key edits with --no-parent must exit non-zero with a message naming
+/// "--no-parent" (or similar) — the flag must NOT be silently dropped.
+///
+/// Before C-1 fix: exits 0 with no error (flag silently ignored).
+/// After C-1 fix:  exits 64 (UserError) with stderr containing "--no-parent".
+#[tokio::test]
+async fn test_multi_key_with_no_parent_rejects_with_unsupported_flag_error() {
+    let server = MockServer::start().await;
+
+    // No bulk POST should be made — the command must error before mutating.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected: bulk called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--no-parent",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        !output.status.success(),
+        "Expected non-zero exit for multi-key --no-parent; stderr={stderr} stdout={stdout}"
+    );
+    assert!(
+        stderr.contains("--no-parent") || stdout.contains("--no-parent"),
+        "Expected '--no-parent' in error output; stderr={stderr} stdout={stdout}"
+    );
+    // wiremock .expect(0) fires on drop if bulk POST was made.
+}
+
+/// `jr issue edit --jql 'project = FOO' --team "Engineering" --no-input`
+/// Multi-key edits with --team must exit non-zero — --team is unsupported for bulk.
+///
+/// Before C-1 fix: exits 0 with --team silently dropped.
+/// After C-1 fix:  exits 64 (UserError) with stderr naming the flag.
+#[tokio::test]
+async fn test_multi_key_jql_with_team_rejects_with_unsupported_flag_error() {
+    let server = MockServer::start().await;
+
+    // Search returns 2 issues (crosses no threshold so --yes not needed).
+    let matched_keys = ["PROJ-1", "PROJ-2"];
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_search_response(&matched_keys)))
+        .mount(&server)
+        .await;
+
+    // No bulk POST should be made.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected: bulk called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "--jql",
+            "project = PROJ",
+            "--team",
+            "Engineering",
+            "--yes",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        !output.status.success(),
+        "Expected non-zero exit for multi-key --jql --team; stderr={stderr} stdout={stdout}"
+    );
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains("--team") || combined.contains("team"),
+        "Expected '--team' in error output; combined={combined}"
+    );
+    // wiremock .expect(0) fires on drop if bulk POST was made.
+}
+
+// ---------------------------------------------------------------------------
+// Audit C-2: await_bulk_task swallows FAILED/CANCELLED/DEAD
+// ---------------------------------------------------------------------------
+
+/// When the bulk task poll returns status "FAILED", the command must exit non-zero
+/// with stderr containing "FAILED" and the task ID.
+///
+/// Before C-2 fix: await_bulk_task returns Ok(progress) for FAILED, caller sees
+///   exit 0 (the render function sees empty processed list and no failed_issues, so
+///   reports nothing — silent success).
+/// After C-2 fix:  await_bulk_task returns Err for FAILED, command exits 1 with
+///   stderr naming the task ID and "FAILED".
+///
+/// This fixes inherited PR1 behavior (C-2 per cross-PR audit).
+#[tokio::test]
+async fn test_bulk_task_failed_status_exits_nonzero_with_failed_in_stderr() {
+    let server = MockServer::start().await;
+
+    let task_id = "task-failed-001";
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "taskId": task_id,
+            "status": "ENQUEUED",
+            "progressPercent": 0,
+            "totalIssueCount": 2,
+            "processedAccessibleIssues": [],
+            "failedAccessibleIssues": {},
+            "invalidOrInaccessibleIssueCount": 0
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Poll returns FAILED terminal state.
+    Mock::given(method("GET"))
+        .and(path(format!("/rest/api/3/bulk/queue/{task_id}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "taskId": task_id,
+            "status": "FAILED",
+            "progressPercent": 0,
+            "totalIssueCount": 2,
+            "processedAccessibleIssues": [],
+            "failedAccessibleIssues": {},
+            "invalidOrInaccessibleIssueCount": 0
+        })))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--label",
+            "add:test",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        !output.status.success(),
+        "Expected non-zero exit when bulk task FAILED; stderr={stderr} stdout={stdout}"
+    );
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains("FAILED"),
+        "Expected 'FAILED' in output; combined={combined}"
+    );
+    assert!(
+        combined.contains(task_id),
+        "Expected task ID '{task_id}' in output; combined={combined}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Audit C-3: --dry-run --output json must emit JSON on stdout
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit FOO-1 FOO-2 --label add:foo --dry-run --output json --no-input`
+/// When --dry-run is combined with --output json, stdout must be valid JSON
+/// with "dryRun": true and "issues": [...].
+///
+/// Before C-3 fix: stdout contains prose text ("DRY RUN — no changes..."), not JSON.
+/// After C-3 fix:  stdout is a single JSON object with dryRun + issues fields.
+#[tokio::test]
+async fn test_dry_run_output_json_emits_valid_json_with_dry_run_field() {
+    let server = MockServer::start().await;
+
+    // No HTTP calls expected in dry-run mode.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected bulk in dry-run"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "--output",
+            "json",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--label",
+            "add:foo",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for --dry-run --output json; stderr={stderr} stdout={stdout}"
+    );
+
+    // stdout must be valid JSON.
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout not valid JSON for dry-run+json: {e}; stdout={stdout}"));
+
+    assert_eq!(
+        parsed.get("dryRun").and_then(|v| v.as_bool()),
+        Some(true),
+        "Expected {{\"dryRun\": true}} in JSON output; got: {stdout}"
+    );
+
+    let issues = parsed
+        .get("issues")
+        .and_then(|v| v.as_array())
+        .unwrap_or_else(|| panic!("Expected 'issues' array in JSON output; got: {stdout}"));
+    assert!(
+        issues.iter().any(|v| v.as_str() == Some("FOO-1")),
+        "Expected FOO-1 in issues array; got: {stdout}"
+    );
+    assert!(
+        issues.iter().any(|v| v.as_str() == Some("FOO-2")),
+        "Expected FOO-2 in issues array; got: {stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Audit I-2: JQL matching 0 issues must error, not proceed silently
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit --jql 'project = NONE' --label add:foo --no-input`
+/// When the JQL query returns 0 issues, the command must exit non-zero with
+/// a message indicating 0 matches.
+///
+/// Before I-2 fix: empty match set routes to bulk POST with empty keys array,
+///   or falls through with silent success.
+/// After I-2 fix:  exits 64 (UserError) with stderr containing "0" or "matched 0".
+#[tokio::test]
+async fn test_jql_zero_matches_exits_nonzero_with_hint() {
+    let server = MockServer::start().await;
+
+    // Search returns empty issues list.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_search_response(&[])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // No bulk POST should be made.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected: bulk called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "--jql",
+            "project = NONE",
+            "--label",
+            "add:foo",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        !output.status.success(),
+        "Expected non-zero exit for JQL matching 0 issues; stderr={stderr} stdout={stdout}"
+    );
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains("0") || combined.contains("matched"),
+        "Expected '0' or 'matched' in error output; combined={combined}"
+    );
 }

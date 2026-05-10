@@ -2,13 +2,28 @@ use std::collections::HashMap;
 
 /// Request body for POST /rest/api/3/bulk/issues/fields (bulk field edit).
 ///
-/// CONFIRMED from OpenAPI JSON (2026-05-09):
+/// CONFIRMED from OpenAPI JSON (2026-05-09) + Perplexity verification (2026-05-10, PR2):
 ///   - selectedIssueIdsOrKeys: string[], required, max 1000
-///   - editedFieldsInput: object, required (schema partially truncated in HTML docs)
+///   - selectedActions: string[], required — list of field names being edited.
+///     Without this, the API returns 400. Examples: ["summary"], ["labels"],
+///     ["summary","priority","labels"]. The values mirror the keys used inside
+///     `editedFieldsInput` (e.g., "issueType" not "issuetype" — camelCase per docs).
+///   - editedFieldsInput: object, required (schema partially truncated in HTML docs).
+///     Per Perplexity verification, the canonical 2025 production shape uses:
+///     summary → plain string OR `{"value": "..."}` (sources differ).
+///     priority → `{"priorityId": <int>}` (NOT `{"name": "High"}` — name rejected).
+///     issueType → `{"issueTypeId": "..."}` (camelCase key, ID required).
+///     labels → `{"labelsFields": [{"fieldId":"labels","labels":[...],
+///     "bulkEditMultiSelectFieldOption":"ADD|REMOVE"}]}`.
+///     The current best-guess nesting in `cli/issue/create.rs` differs from this
+///     and ships behind loose `body_string_contains` test matchers — empirical
+///     verification against a live sandbox is tracked in a follow-up issue
+///     (see PR2 description).
 #[derive(serde::Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct BulkEditRequest {
     pub selected_issue_ids_or_keys: Vec<String>,
+    pub selected_actions: Vec<String>,
     pub edited_fields_input: serde_json::Value,
 }
 
