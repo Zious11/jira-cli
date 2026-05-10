@@ -53,9 +53,14 @@ pub struct BulkSubmitResponse {
 
 /// Response from GET /rest/api/3/bulk/queue/{taskId} (poll task status).
 ///
-/// CONFIRMED terminal status values from OpenAPI JSON:
-///   ENQUEUED | RUNNING | COMPLETE | FAILED | CANCEL_REQUESTED | CANCELLED | DEAD
-///   NOTE: "COMPLETE" not "COMPLETED" per OpenAPI; empirical verify pending.
+/// Status values from OpenAPI JSON (verified Perplexity 2026-05-10):
+///
+/// - **Non-terminal** (continue polling): ENQUEUED, RUNNING, CANCEL_REQUESTED.
+///   CANCEL_REQUESTED transitions to CANCELLED once cancellation completes.
+/// - **Terminal** (polling stops): COMPLETE, FAILED, CANCELLED, DEAD.
+///
+/// NOTE: "COMPLETE" not "COMPLETED" per OpenAPI; `is_terminal()` accepts both
+/// for empirical safety. Live API verification deferred to #331.
 ///
 /// `failure_reason`: present on FAILED responses per Atlassian docs (Perplexity
 ///   verification 2026-05-10, PR2 audit follow-up). Treated as `Option<String>` because
