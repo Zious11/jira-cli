@@ -246,14 +246,7 @@ pub(super) async fn handle_edit(
     // Non-label single-key edits → existing single-key PUT path (backward-compatible).
     // Non-label multi-key edits are not yet implemented in this PR.
     if !labels.is_empty() {
-        return handle_edit_bulk_labels(
-            &keys,
-            labels,
-            output_format,
-            client,
-            no_input,
-        )
-        .await;
+        return handle_edit_bulk_labels(&keys, labels, output_format, client, no_input).await;
     }
 
     // --- Single-key non-label path (unchanged from before) ---
@@ -443,10 +436,8 @@ async fn handle_edit_bulk_labels(
     let mut final_progress = None;
 
     for (action, label_names) in &calls {
-        let label_entries: Vec<serde_json::Value> = label_names
-            .iter()
-            .map(|n| json!({"name": n}))
-            .collect();
+        let label_entries: Vec<serde_json::Value> =
+            label_names.iter().map(|n| json!({"name": n})).collect();
 
         let edited_fields = json!({
             "labels": {

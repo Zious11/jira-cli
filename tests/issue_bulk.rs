@@ -190,8 +190,7 @@ async fn test_edit_multi_key_issues_one_bulk_post_then_polls_to_complete() {
             "selectedIssueIdsOrKeys": ["FOO-1", "FOO-2", "FOO-3"]
         })))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(bulk_task_enqueued_response("task-abc-001")),
+            ResponseTemplate::new(200).set_body_json(bulk_task_enqueued_response("task-abc-001")),
         )
         .expect(1)
         .mount(&server)
@@ -211,11 +210,10 @@ async fn test_edit_multi_key_issues_one_bulk_post_then_polls_to_complete() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/bulk/queue/task-abc-001"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(bulk_task_complete_response(
-                    "task-abc-001",
-                    vec!["FOO-1", "FOO-2", "FOO-3"],
-                )),
+            ResponseTemplate::new(200).set_body_json(bulk_task_complete_response(
+                "task-abc-001",
+                vec!["FOO-1", "FOO-2", "FOO-3"],
+            )),
         )
         .mount(&server)
         .await;
@@ -279,8 +277,7 @@ async fn test_move_multi_key_issues_one_bulk_transition_post_then_polls() {
             "transitionId": "31"
         })))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(bulk_task_enqueued_response("task-trans-001")),
+            ResponseTemplate::new(200).set_body_json(bulk_task_enqueued_response("task-trans-001")),
         )
         .expect(1)
         .mount(&server)
@@ -300,11 +297,10 @@ async fn test_move_multi_key_issues_one_bulk_transition_post_then_polls() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/bulk/queue/task-trans-001"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(bulk_task_complete_response(
-                    "task-trans-001",
-                    vec!["BAR-10", "BAR-11", "BAR-12"],
-                )),
+            ResponseTemplate::new(200).set_body_json(bulk_task_complete_response(
+                "task-trans-001",
+                vec!["BAR-10", "BAR-11", "BAR-12"],
+            )),
         )
         .mount(&server)
         .await;
@@ -353,8 +349,8 @@ async fn test_edit_partial_failure_exits_one_with_per_key_breakdown() {
     // Poll response: COMPLETE but FOO-3 failed.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/bulk/queue/task-partial-001"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(bulk_task_complete_with_failures_response(
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            bulk_task_complete_with_failures_response(
                 "task-partial-001",
                 vec!["FOO-1", "FOO-2"],
                 serde_json::json!({
@@ -363,8 +359,8 @@ async fn test_edit_partial_failure_exits_one_with_per_key_breakdown() {
                         "errors": {}
                     }
                 }),
-            )),
-        )
+            ),
+        ))
         .mount(&server)
         .await;
 
@@ -399,7 +395,9 @@ async fn test_edit_partial_failure_exits_one_with_per_key_breakdown() {
         "Expected FOO-3 key in output for partial failure; combined={combined}"
     );
     assert!(
-        combined.contains("permission") || combined.contains("failed") || combined.contains("error"),
+        combined.contains("permission")
+            || combined.contains("failed")
+            || combined.contains("error"),
         "Expected error description in output; combined={combined}"
     );
 }
@@ -417,8 +415,7 @@ async fn test_polling_respects_retry_after_on_429() {
     Mock::given(method("POST"))
         .and(path("/rest/api/3/bulk/issues/fields"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(bulk_task_enqueued_response("task-429-001")),
+            ResponseTemplate::new(200).set_body_json(bulk_task_enqueued_response("task-429-001")),
         )
         .expect(1)
         .mount(&server)
@@ -442,11 +439,10 @@ async fn test_polling_respects_retry_after_on_429() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/bulk/queue/task-429-001"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(bulk_task_complete_response(
-                    "task-429-001",
-                    vec!["FOO-1", "FOO-2"],
-                )),
+            ResponseTemplate::new(200).set_body_json(bulk_task_complete_response(
+                "task-429-001",
+                vec!["FOO-1", "FOO-2"],
+            )),
         )
         .mount(&server)
         .await;
@@ -491,8 +487,7 @@ async fn test_edit_single_key_routes_via_bulk_api_backward_compatible() {
             "selectedIssueIdsOrKeys": ["SOLO-1"]
         })))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(bulk_task_enqueued_response("task-solo-001")),
+            ResponseTemplate::new(200).set_body_json(bulk_task_enqueued_response("task-solo-001")),
         )
         .expect(1)
         .mount(&server)
@@ -580,7 +575,10 @@ async fn test_edit_more_than_1000_keys_exits_64_without_http_call() {
 
     // Hint must mention the cap or splitting.
     assert!(
-        stderr.contains("1000") || stderr.contains("1,000") || stderr.contains("split") || stderr.contains("batch"),
+        stderr.contains("1000")
+            || stderr.contains("1,000")
+            || stderr.contains("split")
+            || stderr.contains("batch"),
         "Expected cap hint in stderr; stderr={stderr}"
     );
 
@@ -614,11 +612,10 @@ async fn test_edit_multi_key_with_no_input_skips_confirmation_prompt() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/bulk/queue/task-noinput-001"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(bulk_task_complete_response(
-                    "task-noinput-001",
-                    vec!["X-1", "X-2", "X-3"],
-                )),
+            ResponseTemplate::new(200).set_body_json(bulk_task_complete_response(
+                "task-noinput-001",
+                vec!["X-1", "X-2", "X-3"],
+            )),
         )
         .mount(&server)
         .await;
@@ -675,11 +672,10 @@ async fn test_edit_label_remove_sends_remove_action_in_bulk_payload() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/bulk/queue/task-remove-001"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(bulk_task_complete_response(
-                    "task-remove-001",
-                    vec!["FOO-1", "FOO-2"],
-                )),
+            ResponseTemplate::new(200).set_body_json(bulk_task_complete_response(
+                "task-remove-001",
+                vec!["FOO-1", "FOO-2"],
+            )),
         )
         .mount(&server)
         .await;
@@ -717,8 +713,7 @@ async fn test_edit_multi_key_output_json_returns_results_array() {
     Mock::given(method("POST"))
         .and(path("/rest/api/3/bulk/issues/fields"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(bulk_task_enqueued_response("task-json-001")),
+            ResponseTemplate::new(200).set_body_json(bulk_task_enqueued_response("task-json-001")),
         )
         .mount(&server)
         .await;
@@ -726,11 +721,10 @@ async fn test_edit_multi_key_output_json_returns_results_array() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/bulk/queue/task-json-001"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(bulk_task_complete_response(
-                    "task-json-001",
-                    vec!["FOO-1", "FOO-2"],
-                )),
+            ResponseTemplate::new(200).set_body_json(bulk_task_complete_response(
+                "task-json-001",
+                vec!["FOO-1", "FOO-2"],
+            )),
         )
         .mount(&server)
         .await;

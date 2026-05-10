@@ -183,7 +183,10 @@ pub(super) async fn handle_move(
         }
         eprintln!("Available transitions for {}:", key);
         for (i, t) in transitions.iter().enumerate() {
-            let to_name = t.to.as_ref().map(|s| s.name.as_str()).unwrap_or("(unknown)");
+            let to_name =
+                t.to.as_ref()
+                    .map(|s| s.name.as_str())
+                    .unwrap_or("(unknown)");
             eprintln!("  {}. {} -> {}", i + 1, t.name, to_name);
         }
         let status = helpers::prompt_input("Select transition (name or number)")?;
@@ -453,7 +456,10 @@ async fn handle_move_bulk(
         if num >= 1 && num <= transitions.len() {
             transitions[num - 1].id.clone()
         } else {
-            bail!("Transition number {num} out of range (1..={}).", transitions.len());
+            bail!(
+                "Transition number {num} out of range (1..={}).",
+                transitions.len()
+            );
         }
     } else {
         // Name-based match using same candidate pool strategy.
@@ -563,7 +569,9 @@ async fn handle_move_bulk(
             for entry in &results {
                 let key = entry["key"].as_str().unwrap_or("?");
                 match entry["status"].as_str().unwrap_or("?") {
-                    "success" => output::print_success(&format!("Moved {key} to \"{target_status}\"")),
+                    "success" => {
+                        output::print_success(&format!("Moved {key} to \"{target_status}\""))
+                    }
                     "error" => {
                         let err_msg = entry["error"].as_str().unwrap_or("unknown error");
                         eprintln!("error: {key}: {err_msg}");

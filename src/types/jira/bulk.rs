@@ -92,10 +92,7 @@ impl BulkActionError {
         }
         if let Some(obj) = self.errors.as_object() {
             if !obj.is_empty() {
-                let pairs: Vec<String> = obj
-                    .iter()
-                    .map(|(k, v)| format!("{k}: {v}"))
-                    .collect();
+                let pairs: Vec<String> = obj.iter().map(|(k, v)| format!("{k}: {v}")).collect();
                 return pairs.join("; ");
             }
         }

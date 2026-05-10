@@ -62,8 +62,9 @@ impl JiraClient {
             selected_issue_ids_or_keys: keys.to_vec(),
             transition_id: transition_id.to_string(),
         };
-        let resp: BulkSubmitResponse =
-            self.post("/rest/api/3/bulk/issues/transition", &body).await?;
+        let resp: BulkSubmitResponse = self
+            .post("/rest/api/3/bulk/issues/transition", &body)
+            .await?;
         Ok(resp.task_id)
     }
 
