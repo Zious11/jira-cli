@@ -459,7 +459,7 @@ pub(super) async fn handle_edit(
                 }
                 let payload = json!({
                     "dryRun": true,
-                    "issues": effective_keys,
+                    "issues": &effective_keys,
                     "plannedChanges": planned,
                 });
                 println!("{}", serde_json::to_string_pretty(&payload)?);
