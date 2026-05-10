@@ -2042,3 +2042,130 @@ async fn test_markdown_alone_errors_before_search() {
         "Expected zero HTTP calls when --markdown used without --description"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Copilot round-5 fix: --label + non-label field flags → rejected before search
+// (#3215393741)
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit FOO-1 FOO-2 --label add:foo --summary "X" --no-input`
+/// MUST exit non-zero (exit 64 — UserError) before making any HTTP call.
+/// stderr must mention both "--label" and "--summary" and hint at running
+/// separate commands.
+#[tokio::test]
+async fn test_label_with_summary_rejected_before_search() {
+    let server = MockServer::start().await;
+
+    // JQL search MUST NOT fire (no --jql here, but we still guard the bulk endpoint).
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected: bulk called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--label",
+            "add:foo",
+            "--summary",
+            "X",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(
+        !output.status.success(),
+        "Expected non-zero exit when --label combined with --summary; combined={combined}"
+    );
+
+    // Must specifically be exit 64 (UserError / usage error).
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 (UserError) for --label + --summary; combined={combined}"
+    );
+
+    assert!(
+        combined.contains("--label"),
+        "Error must mention '--label'; combined={combined}"
+    );
+    assert!(
+        combined.contains("--summary"),
+        "Error must mention '--summary'; combined={combined}"
+    );
+    assert!(
+        combined.contains("separate") || combined.contains("Run separate"),
+        "Error must hint at running separate commands; combined={combined}"
+    );
+
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        0,
+        "Expected zero HTTP calls when --label combined with --summary"
+    );
+}
+
+/// `jr issue edit FOO-1 FOO-2 --label add:foo --priority High --no-input`
+/// MUST exit 64 before any HTTP call. stderr must mention "--priority".
+#[tokio::test]
+async fn test_label_with_priority_rejected_before_search() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected: bulk called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--label",
+            "add:foo",
+            "--priority",
+            "High",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(
+        !output.status.success(),
+        "Expected non-zero exit when --label combined with --priority; combined={combined}"
+    );
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 (UserError) for --label + --priority; combined={combined}"
+    );
+
+    assert!(
+        combined.contains("--priority"),
+        "Error must mention '--priority'; combined={combined}"
+    );
+
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        0,
+        "Expected zero HTTP calls when --label combined with --priority"
+    );
+}

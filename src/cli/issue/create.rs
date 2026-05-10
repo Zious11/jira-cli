@@ -572,6 +572,35 @@ pub(super) async fn handle_edit(
         // --yes: skip prompt entirely.
     }
 
+    // --- Reject --label combined with non-label field flags. ---
+    // --label is routed through a labels-only bulk path (handle_edit_bulk_labels) that
+    // does not honour concurrent --summary/--priority/--type flags.  Combining them
+    // would silently drop the non-label fields (exit 0, data loss).  Reject the
+    // combination here, before any HTTP call, rather than silently discard the fields.
+    // Mixed label + field bulk edits require the schema-correct combined payload tracked
+    // at #331; until that lands, keep --label and field flags mutually exclusive.
+    if !labels.is_empty() {
+        let mut conflicting: Vec<&str> = Vec::new();
+        if summary.is_some() {
+            conflicting.push("--summary");
+        }
+        if priority.is_some() {
+            conflicting.push("--priority");
+        }
+        if issue_type.is_some() {
+            conflicting.push("--type");
+        }
+        if !conflicting.is_empty() {
+            return Err(JrError::UserError(format!(
+                "--label cannot be combined with {} in the same call. \
+                 Run separate `jr issue edit` commands, or open an issue to track \
+                 combined label + field bulk edits (see #331).",
+                conflicting.join(", ")
+            ))
+            .into());
+        }
+    }
+
     // --- Route: labels → bulk API. ---
     if !labels.is_empty() {
         return handle_edit_bulk_labels(&effective_keys, labels, output_format, client, no_input)
