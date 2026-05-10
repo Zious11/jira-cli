@@ -341,36 +341,88 @@ pub(super) async fn handle_edit(
 
     // --- Dry-run short-circuit: render diff, no HTTP mutations. ---
     if dry_run {
-        // Build a human-readable summary of what WOULD happen.
-        println!("DRY RUN — no changes will be made.");
-        println!("Issues affected ({}):", effective_keys.len());
-        for k in &effective_keys {
-            println!("  {k}");
-        }
-        println!("Planned changes:");
-        if let Some(ref s) = summary {
-            println!("  summary → {s}");
-        }
-        if let Some(ref p) = priority {
-            println!("  priority → {p}");
-        }
-        if !labels.is_empty() {
-            println!("  labels → {}", labels.join(", "));
-        }
-        if let Some(ref t) = issue_type {
-            println!("  type → {t}");
-        }
-        if let Some(ref par) = parent {
-            println!("  parent → {par}");
-        }
-        if no_parent {
-            println!("  parent → (clear)");
-        }
-        if let Some(pts) = points {
-            println!("  points → {pts}");
-        }
-        if no_points {
-            println!("  points → (clear)");
+        match output_format {
+            OutputFormat::Json => {
+                // C-3: --output json must produce machine-readable JSON on stdout,
+                // not prose. Build a planned-changes object containing only the
+                // fields the user actually requested.
+                let mut planned = serde_json::Map::new();
+                if let Some(ref s) = summary {
+                    planned.insert("summary".into(), json!(s));
+                }
+                if let Some(ref p) = priority {
+                    planned.insert("priority".into(), json!(p));
+                }
+                if !labels.is_empty() {
+                    let label_entries: Vec<serde_json::Value> = labels
+                        .iter()
+                        .map(|l| {
+                            if let Some(name) = l.strip_prefix("add:") {
+                                json!({"action": "ADD", "name": name})
+                            } else if let Some(name) = l.strip_prefix("remove:") {
+                                json!({"action": "REMOVE", "name": name})
+                            } else {
+                                json!({"action": "ADD", "name": l})
+                            }
+                        })
+                        .collect();
+                    planned.insert("labels".into(), json!(label_entries));
+                }
+                if let Some(ref t) = issue_type {
+                    planned.insert("issueType".into(), json!(t));
+                }
+                if let Some(ref par) = parent {
+                    planned.insert("parent".into(), json!(par));
+                }
+                if no_parent {
+                    planned.insert("parent".into(), serde_json::Value::Null);
+                }
+                if let Some(pts) = points {
+                    planned.insert("points".into(), json!(pts));
+                }
+                if no_points {
+                    planned.insert("points".into(), serde_json::Value::Null);
+                }
+                let payload = json!({
+                    "dryRun": true,
+                    "issues": effective_keys,
+                    "plannedChanges": planned,
+                });
+                println!("{}", serde_json::to_string_pretty(&payload)?);
+            }
+            OutputFormat::Table => {
+                // Human-readable prose on stdout (profile-1 for dry-run: data on stdout is fine).
+                println!("DRY RUN — no changes will be made.");
+                println!("Issues affected ({}):", effective_keys.len());
+                for k in &effective_keys {
+                    println!("  {k}");
+                }
+                println!("Planned changes:");
+                if let Some(ref s) = summary {
+                    println!("  summary → {s}");
+                }
+                if let Some(ref p) = priority {
+                    println!("  priority → {p}");
+                }
+                if !labels.is_empty() {
+                    println!("  labels → {}", labels.join(", "));
+                }
+                if let Some(ref t) = issue_type {
+                    println!("  type → {t}");
+                }
+                if let Some(ref par) = parent {
+                    println!("  parent → {par}");
+                }
+                if no_parent {
+                    println!("  parent → (clear)");
+                }
+                if let Some(pts) = points {
+                    println!("  points → {pts}");
+                }
+                if no_points {
+                    println!("  points → (clear)");
+                }
+            }
         }
         return Ok(());
     }
