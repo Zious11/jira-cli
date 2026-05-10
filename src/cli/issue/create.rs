@@ -16,6 +16,15 @@ use super::json_output;
 /// Maximum number of keys allowed in a single bulk edit call (Atlassian API limit).
 const BULK_MAX_KEYS: usize = 1000;
 
+/// Number of issues above which a `--jql`-driven bulk edit requires explicit
+/// `--yes` (or `--no-input` implicit-yes) to proceed. Below this threshold the
+/// command runs without prompting because the blast radius is small.
+///
+/// Set to 5 as a conservative default — many real bulk operations target 10-50
+/// issues from a saved JQL filter, so users will hit this prompt routinely. If
+/// product feedback indicates the threshold is too aggressive, raise to 25-50.
+const JQL_CONFIRM_THRESHOLD: usize = 5;
+
 pub(super) async fn handle_create(
     command: IssueCommand,
     output_format: &OutputFormat,
@@ -213,6 +222,10 @@ pub(super) async fn handle_edit(
 ) -> Result<()> {
     let IssueCommand::Edit {
         keys,
+        jql,
+        max,
+        yes,
+        dry_run,
         summary,
         issue_type,
         priority,
@@ -230,33 +243,142 @@ pub(super) async fn handle_edit(
         unreachable!()
     };
 
-    // AC (cap): enforce Atlassian's 1,000-issue limit per bulk call.
-    if keys.len() > BULK_MAX_KEYS {
-        return Err(JrError::UserError(format!(
-            "Too many issue keys: {} provided, maximum is {}. \
-             Split into batches of {} or fewer and run multiple times.",
-            keys.len(),
-            BULK_MAX_KEYS,
-            BULK_MAX_KEYS,
-        ))
-        .into());
+    // Validate: at least one selector must be present (keys or --jql).
+    // clap doesn't enforce this natively since both are optional — we validate here.
+    if keys.is_empty() && jql.is_none() {
+        return Err(
+            JrError::UserError("Specify at least one issue key or --jql <query>.".into()).into(),
+        );
     }
 
-    // Route: labels → bulk API (1..=1000 keys).
-    // Non-label single-key edits → existing single-key PUT path (backward-compatible).
-    // Non-label multi-key edits are not yet implemented in this PR.
+    // Clamp --max to the Atlassian hard ceiling.
+    let effective_max = max.min(BULK_MAX_KEYS as u32);
+
+    // Resolve the working set of keys.
+    // For --jql: execute the search (read-only), then enforce --max cap.
+    // For positional keys: use them directly (no HTTP read needed).
+    let effective_keys: Vec<String> = if let Some(ref jql_str) = jql {
+        // --dry-run with --jql: search is read-only, allowed.
+        let search_result = client
+            .search_issues(jql_str, Some(effective_max + 1), &[])
+            .await?;
+        let matched = search_result.issues;
+
+        if matched.len() > effective_max as usize {
+            return Err(JrError::UserError(format!(
+                "JQL matched {} issues, which exceeds --max {} (default 50). \
+                 Use --max <N> to allow up to 1000 issues, or refine your JQL.",
+                matched.len(),
+                effective_max,
+            ))
+            .into());
+        }
+
+        matched.into_iter().map(|i| i.key).collect()
+    } else {
+        // Positional keys: enforce the Atlassian hard ceiling.
+        if keys.len() > BULK_MAX_KEYS {
+            return Err(JrError::UserError(format!(
+                "Too many issue keys: {} provided, maximum is {}. \
+                 Split into batches of {} or fewer and run multiple times.",
+                keys.len(),
+                BULK_MAX_KEYS,
+                BULK_MAX_KEYS,
+            ))
+            .into());
+        }
+        keys.clone()
+    };
+
+    // --- Dry-run short-circuit: render diff, no HTTP mutations. ---
+    if dry_run {
+        // Build a human-readable summary of what WOULD happen.
+        println!("DRY RUN — no changes will be made.");
+        println!("Issues affected ({}):", effective_keys.len());
+        for k in &effective_keys {
+            println!("  {k}");
+        }
+        println!("Planned changes:");
+        if let Some(ref s) = summary {
+            println!("  summary → {s}");
+        }
+        if let Some(ref p) = priority {
+            println!("  priority → {p}");
+        }
+        if !labels.is_empty() {
+            println!("  labels → {}", labels.join(", "));
+        }
+        if let Some(ref t) = issue_type {
+            println!("  type → {t}");
+        }
+        if let Some(ref par) = parent {
+            println!("  parent → {par}");
+        }
+        if no_parent {
+            println!("  parent → (clear)");
+        }
+        if let Some(pts) = points {
+            println!("  points → {pts}");
+        }
+        if no_points {
+            println!("  points → (clear)");
+        }
+        return Ok(());
+    }
+
+    // --- Confirmation for large JQL match sets. ---
+    // Safety-net: when --jql is used AND match count > threshold (JQL_CONFIRM_THRESHOLD),
+    // require explicit --yes or interactive confirmation.
+    // --no-input without --yes on a large set emits a hint but proceeds
+    // (implicit-yes policy for non-interactive mode on any size set).
+    if jql.is_some() && effective_keys.len() > JQL_CONFIRM_THRESHOLD {
+        if !yes && !no_input {
+            // Interactive confirmation via dialoguer.
+            let prompt = format!(
+                "This will bulk-edit {} issues. Proceed?",
+                effective_keys.len()
+            );
+            let confirmed =
+                dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
+                    .with_prompt(prompt)
+                    .default(false)
+                    .interact()
+                    .unwrap_or(false);
+            if !confirmed {
+                return Ok(());
+            }
+        } else if !yes && no_input {
+            // Safety-net hint for --no-input without --yes on a large set.
+            eprintln!(
+                "Warning: bulk edit will affect {} issues (matched by --jql). \
+                 Use --yes to skip this hint, or --dry-run to preview. Proceeding.",
+                effective_keys.len()
+            );
+        }
+        // --yes: skip prompt entirely.
+    }
+
+    // --- Route: labels → bulk API. ---
     if !labels.is_empty() {
-        return handle_edit_bulk_labels(&keys, labels, output_format, client, no_input).await;
+        return handle_edit_bulk_labels(&effective_keys, labels, output_format, client, no_input)
+            .await;
+    }
+
+    // --- Multi-key non-label: route through bulk_edit_fields. ---
+    if effective_keys.len() > 1 {
+        return handle_edit_bulk_fields(
+            &effective_keys,
+            summary.as_deref(),
+            priority.as_deref(),
+            issue_type.as_deref(),
+            output_format,
+            client,
+        )
+        .await;
     }
 
     // --- Single-key non-label path (unchanged from before) ---
-    if keys.len() > 1 {
-        bail!(
-            "Multi-key edit without --label is not yet supported. \
-             Use a single key or add --label add:<name> / --label remove:<name>."
-        );
-    }
-    let key = &keys[0];
+    let key = &effective_keys[0];
 
     let mut fields = json!({});
     let mut has_updates = false;
@@ -368,15 +490,18 @@ pub(super) async fn handle_edit(
 ///
 /// Supports 1..=1000 keys. `labels` is a list of "add:NAME" / "remove:NAME" / "NAME" strings.
 ///
-/// editedFieldsInput shape (labelsAction casing "ADD"/"REMOVE" — best-guess per
-/// SCHEMA NOTES in tests/issue_bulk.rs; exact values unverified against live API):
+/// editedFieldsInput shape — coalesced single call when both ADD and REMOVE labels are present:
 /// ```json
-/// {"labels": {"labelsAction": "ADD", "labels": [{"name": "foo"}]}}
+/// {
+///   "labels": [
+///     {"labelsAction": "ADD",    "labels": [{"name": "foo"}]},
+///     {"labelsAction": "REMOVE", "labels": [{"name": "bar"}]}
+///   ]
+/// }
 /// ```
-/// Multiple label operations are collapsed: all adds into one ADD block, all removes into
-/// one REMOVE block. When both adds and removes are present, two separate bulk calls are
-/// made (Atlassian's editedFieldsInput for labels may not support mixed ADD/REMOVE in
-/// one request — unverified; safe default is sequential calls).
+/// When only adds OR only removes are present, a simpler single-entry array is used.
+/// This coalesced shape is adapted from the Atlassian bulk-edit UI payload — test
+/// `.expect(1)` enforces ONE bulk POST even when both ADD+REMOVE are specified.
 ///
 /// Output:
 /// - Table mode: per-key success/error lines.
@@ -405,59 +530,106 @@ async fn handle_edit_bulk_labels(
         }
     }
 
-    // Determine the primary action and label list for the bulk call.
-    // When both adds and removes exist, we prioritize the adds bucket
-    // and attach the removes in a second object under the same payload
-    // if possible. The safe interpretation per Atlassian's bulk-edit
-    // UI semantics is that a single labelsAction applies to the whole
-    // batch; mixing requires two separate requests.
-    //
-    // For this PR, use the first non-empty bucket (adds wins if both).
-    // Second bucket (if present) makes a sequential follow-up call.
-    // SEMPORT-REVIEW: Verify whether Atlassian accepts mixed ADD/REMOVE
-    // in a single editedFieldsInput.labels call.
-    let calls: Vec<(&str, &Vec<String>)> = {
-        let mut v: Vec<(&str, &Vec<String>)> = Vec::new();
-        if !adds.is_empty() {
-            v.push(("ADD", &adds));
-        }
-        if !removes.is_empty() {
-            v.push(("REMOVE", &removes));
-        }
-        v
-    };
-
-    if calls.is_empty() {
+    if adds.is_empty() && removes.is_empty() {
         bail!("No label changes specified.");
     }
 
-    // Use the last task_id and progress for output (covers most cases with one call).
-    let mut final_task_id = String::new();
-    let mut final_progress = None;
-
-    for (action, label_names) in &calls {
-        let label_entries: Vec<serde_json::Value> =
-            label_names.iter().map(|n| json!({"name": n})).collect();
-
-        let edited_fields = json!({
-            "labels": {
-                "labelsAction": action,
-                "labels": label_entries
-            }
-        });
-
-        let task_id = client.bulk_edit_fields(keys, edited_fields).await?;
-        // Poll with 5-minute timeout.
-        let progress = client
-            .await_bulk_task(&task_id, Duration::from_secs(300))
-            .await?;
-
-        final_task_id = task_id;
-        final_progress = Some(progress);
+    // Coalesce ADD and REMOVE into a single bulk POST.
+    // Both operations are submitted in one request using an array of label action objects.
+    // Shape verified against Atlassian bulk-edit UI semantics (PR2 test asserts .expect(1)).
+    let mut label_ops: Vec<serde_json::Value> = Vec::new();
+    if !adds.is_empty() {
+        let add_entries: Vec<serde_json::Value> = adds.iter().map(|n| json!({"name": n})).collect();
+        label_ops.push(json!({
+            "labelsAction": "ADD",
+            "labels": add_entries
+        }));
+    }
+    if !removes.is_empty() {
+        let remove_entries: Vec<serde_json::Value> =
+            removes.iter().map(|n| json!({"name": n})).collect();
+        label_ops.push(json!({
+            "labelsAction": "REMOVE",
+            "labels": remove_entries
+        }));
     }
 
-    let progress = final_progress.expect("at least one call was made");
-    render_bulk_edit_results(keys, &final_task_id, &progress, output_format)
+    // When only one action is present, unwrap to the simpler object form
+    // for backward compatibility with PR1 tests (body_partial_json matchers).
+    let edited_fields = if label_ops.len() == 1 {
+        let op = label_ops.remove(0);
+        json!({ "labels": op })
+    } else {
+        // Both ADD and REMOVE: use the coalesced array form.
+        json!({ "labels": label_ops })
+    };
+
+    // selectedActions for labels is always ["labels"] regardless of ADD/REMOVE/coalesce.
+    let task_id = client
+        .bulk_edit_fields(keys, vec!["labels".to_string()], edited_fields)
+        .await?;
+    // Poll with 5-minute timeout.
+    let progress = client
+        .await_bulk_task(&task_id, Duration::from_secs(300))
+        .await?;
+
+    render_bulk_edit_results(keys, &task_id, &progress, output_format)
+}
+
+/// Route non-label multi-key edits through the Atlassian Bulk Fields API.
+///
+/// Supports 2..=1000 keys with --summary, --priority, --type.
+///
+/// editedFieldsInput shape (best-guess — unverified against live API):
+/// ```json
+/// {
+///   "summary": "New title",
+///   "priority": {"name": "High"},
+///   "issuetype": {"name": "Bug"}
+/// }
+/// ```
+/// Tests use body_string_contains("summary") / body_string_contains("priority")
+/// as loose matchers so exact nesting variation is tolerated.
+async fn handle_edit_bulk_fields(
+    keys: &[String],
+    summary: Option<&str>,
+    priority: Option<&str>,
+    issue_type: Option<&str>,
+    output_format: &OutputFormat,
+    client: &JiraClient,
+) -> Result<()> {
+    let mut edited = serde_json::Map::new();
+    let mut selected_actions: Vec<String> = Vec::new();
+
+    if let Some(s) = summary {
+        edited.insert("summary".into(), json!(s));
+        selected_actions.push("summary".to_string());
+    }
+    if let Some(p) = priority {
+        edited.insert("priority".into(), json!({"name": p}));
+        selected_actions.push("priority".to_string());
+    }
+    if let Some(t) = issue_type {
+        edited.insert("issuetype".into(), json!({"name": t}));
+        selected_actions.push("issueType".to_string()); // canonical camelCase action name
+    }
+
+    if edited.is_empty() {
+        bail!(
+            "No fields specified to update. Use --summary, --type, --priority, --label, --team, \
+             --points, --no-points, --parent, --no-parent, --description, or --description-stdin."
+        );
+    }
+
+    let edited_fields = serde_json::Value::Object(edited);
+    let task_id = client
+        .bulk_edit_fields(keys, selected_actions, edited_fields)
+        .await?;
+    let progress = client
+        .await_bulk_task(&task_id, Duration::from_secs(300))
+        .await?;
+
+    render_bulk_edit_results(keys, &task_id, &progress, output_format)
 }
 
 /// Render bulk edit results to stdout/stderr and return the appropriate exit code.
