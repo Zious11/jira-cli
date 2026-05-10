@@ -1484,3 +1484,71 @@ async fn test_empty_jql_errors_before_search() {
         "Expected zero HTTP calls for empty --jql"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Audit F3-incomplete: --dry-run --jql with no field flags must error BEFORE search
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit --jql "project = FOO" --dry-run --no-input` (no field flags)
+///
+/// Before fix: the JQL search fires first (ENQUEUED 1 HTTP call), then the
+/// "No fields specified" error is returned after the wasted API call.
+/// After fix:  the field-change check runs BEFORE `effective_keys` is built,
+/// so the search endpoint is never called.
+///
+/// This test asserts `.expect(0)` on the search mock AND verifies that
+/// zero HTTP calls were made, so a regression is caught immediately.
+#[tokio::test]
+async fn test_dry_run_jql_with_no_field_changes_errors_before_search() {
+    let server = MockServer::start().await;
+
+    // The JQL search endpoint must NOT be called.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected: search called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    // Bulk POST also must not be called.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected: bulk called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "--jql",
+            "project = FOO",
+            "--dry-run",
+            // Intentionally no --summary, --priority, --label, etc.
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        !output.status.success(),
+        "Expected non-zero exit for --dry-run --jql with no field flags; \
+         stderr={stderr} stdout={stdout}"
+    );
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains("No fields specified"),
+        "Expected 'No fields specified' in error output; combined={combined}"
+    );
+
+    // The critical assertion: zero HTTP calls (search must not have fired).
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        0,
+        "Expected zero HTTP calls — field-change check must precede JQL search"
+    );
+}

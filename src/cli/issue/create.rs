@@ -251,6 +251,32 @@ pub(super) async fn handle_edit(
         );
     }
 
+    // Validate: at least one field change must be specified — checked BEFORE any HTTP
+    // calls so that `--dry-run --jql "..."` (no field flags) doesn't waste a search
+    // call before failing with "No fields specified".  The same check runs again
+    // inside the dry-run block for the non-JQL path; keeping it here ensures the
+    // JQL path is also short-circuited without duplicating the full dry-run logic.
+    {
+        let has_any_field_change = summary.is_some()
+            || priority.is_some()
+            || issue_type.is_some()
+            || !labels.is_empty()
+            || team.is_some()
+            || points.is_some()
+            || no_points
+            || parent.is_some()
+            || no_parent
+            || description.is_some()
+            || description_stdin
+            || markdown;
+        if !has_any_field_change {
+            bail!(
+                "No fields specified to update. Use --summary, --type, --priority, --label, --team, \
+                 --points, --no-points, --parent, --no-parent, --description, or --description-stdin."
+            );
+        }
+    }
+
     // Clamp --max to the Atlassian hard ceiling.
     let effective_max = max.min(BULK_MAX_KEYS as u32);
 
