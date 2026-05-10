@@ -1699,9 +1699,7 @@ async fn test_jql_max_explicit_value_in_error_not_default() {
 
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(jql_search_response(&key_refs)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_search_response(&key_refs)))
         .mount(&server)
         .await;
 
