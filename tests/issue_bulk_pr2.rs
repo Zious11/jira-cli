@@ -1578,9 +1578,7 @@ async fn test_jql_single_match_routes_to_single_key_put_not_bulk() {
     // JQL search returns exactly 1 issue.
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(jql_search_response(&["FOO-1"])),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_search_response(&["FOO-1"])))
         .expect(1)
         .mount(&server)
         .await;
