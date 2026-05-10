@@ -740,6 +740,8 @@ async fn test_multi_key_summary_update_uses_bulk_fields_endpoint() {
         // Loose matcher: just check that "summary" appears in the POST body
         // (exact nesting of editedFieldsInput is unverified).
         .and(body_string_contains("summary"))
+        // Regression pin (audit F5): selectedActions field must always be present.
+        .and(body_string_contains("selectedActions"))
         .respond_with(ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-summary-001")))
         .expect(1)
         .mount(&server)
@@ -786,6 +788,8 @@ async fn test_multi_key_priority_update_uses_bulk_fields_endpoint() {
     Mock::given(method("POST"))
         .and(path("/rest/api/3/bulk/issues/fields"))
         .and(body_string_contains("priority"))
+        // Regression pin (audit F5): selectedActions field must always be present.
+        .and(body_string_contains("selectedActions"))
         .respond_with(ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-prio-001")))
         .expect(1)
         .mount(&server)
