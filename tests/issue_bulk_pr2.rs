@@ -84,7 +84,7 @@ fn jql_search_response(keys: &[&str]) -> serde_json::Value {
                 "key": k,
                 "fields": {
                     "summary": format!("Issue {}", k),
-                    "status": {"name": "To Do", "statusCategory": {"key": "new"}},
+                    "status": {"name": "To Do", "statusCategory": {"key": "new", "name": "To Do"}},
                     "issuetype": {"name": "Task"},
                     "priority": {"name": "Medium"},
                     "assignee": null,

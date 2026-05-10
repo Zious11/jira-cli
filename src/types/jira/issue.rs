@@ -151,7 +151,6 @@ pub struct Status {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct StatusCategory {
-    #[serde(default)]
     pub name: String,
     pub key: String,
 }
