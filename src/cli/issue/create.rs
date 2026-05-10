@@ -274,10 +274,11 @@ pub(super) async fn handle_edit(
 
         if matched.len() > effective_max as usize {
             return Err(JrError::UserError(format!(
-                "JQL matched {} issues, which exceeds --max {} (default 50). \
-                 Use --max <N> to allow up to 1000 issues, or refine your JQL.",
+                "JQL matched at least {} issues, which exceeds --max {} (default 50). \
+                 Use --max <N> to allow up to {} issues, or refine your JQL.",
                 matched.len(),
                 effective_max,
+                BULK_MAX_KEYS,
             ))
             .into());
         }
