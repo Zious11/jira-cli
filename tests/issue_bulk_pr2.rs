@@ -126,7 +126,7 @@ async fn mount_poll_complete(server: &MockServer, task_id: &str, processed_keys:
 
 /// `jr issue edit --jql 'project = PROJ' --label add:foo --yes --no-input`
 /// with 3 matched issues:
-///   1. GET /rest/api/3/search/jql called once (search).
+///   1. POST /rest/api/3/search/jql called once (search).
 ///   2. POST /rest/api/3/bulk/issues/fields called once (bulk edit).
 ///   3. GET /rest/api/3/bulk/queue/{taskId} until COMPLETE.
 ///   4. Exit 0.
