@@ -797,7 +797,10 @@ async fn handle_edit_bulk_labels(
 
     // Coalesce ADD and REMOVE into a single bulk POST.
     // Both operations are submitted in one request using an array of label action objects.
-    // Shape verified against Atlassian bulk-edit UI semantics (PR2 test asserts .expect(1)).
+    // Shape is best-guess (unverified against live Atlassian API; tracked at #331).
+    // PR2 test asserts .expect(1) on bulk POST to ensure ADD+REMOVE coalesce into ONE call,
+    // but the exact JSON nesting matches a loose `body_string_contains` matcher — schema
+    // accuracy is the work being deferred to #331.
     let mut label_ops: Vec<serde_json::Value> = Vec::new();
     if !adds.is_empty() {
         let add_entries: Vec<serde_json::Value> = adds.iter().map(|n| json!({"name": n})).collect();
