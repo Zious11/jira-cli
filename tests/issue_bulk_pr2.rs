@@ -1257,3 +1257,75 @@ async fn test_jql_zero_matches_exits_nonzero_with_hint() {
         "Expected '0' or 'matched' in error output; combined={combined}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Audit F2: selectedActions key for issueType must match editedFieldsInput key
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit FOO-1 FOO-2 --type Bug --no-input`
+/// The bulk POST body must contain "issuetype" (lowercase) in BOTH
+/// selectedActions AND editedFieldsInput. Using camelCase "issueType" in
+/// selectedActions while the body key is lowercase "issuetype" is a
+/// self-inconsistency that may cause 400 errors from the Atlassian API.
+///
+/// This test asserts the body contains "issuetype" (lowercase) and does NOT
+/// contain the camelCase variant "issueType" as a selectedActions value.
+#[tokio::test]
+async fn test_multi_key_type_update_uses_consistent_issuetype_casing() {
+    let server = MockServer::start().await;
+
+    // Capture the raw POST body with a permissive mock, then assert on it.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .and(body_string_contains("issuetype"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-type-001")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    mount_poll_complete(&server, "task-type-001", &["FOO-1", "FOO-2"]).await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--type",
+            "Bug",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for multi-key --type bulk edit; stderr={stderr} stdout={stdout}"
+    );
+
+    // Verify the recorded request body uses lowercase "issuetype" consistently.
+    let requests = server.received_requests().await.unwrap();
+    let bulk_req = requests
+        .iter()
+        .find(|r| r.url.path() == "/rest/api/3/bulk/issues/fields")
+        .expect("Expected exactly one POST to /rest/api/3/bulk/issues/fields");
+    let body_str = std::str::from_utf8(&bulk_req.body).unwrap_or("");
+
+    // "issuetype" (lowercase) must appear in the body (editedFieldsInput key).
+    assert!(
+        body_str.contains("issuetype"),
+        "Expected lowercase 'issuetype' in bulk request body; body={body_str}"
+    );
+
+    // The selectedActions array must NOT contain camelCase "issueType" as a standalone
+    // value — it must use lowercase "issuetype" to match editedFieldsInput.
+    // We check: the string "\"issueType\"" (quoted, camelCase) should not appear
+    // as a JSON string value inside selectedActions.
+    assert!(
+        !body_str.contains("\"issueType\""),
+        "Expected selectedActions NOT to contain camelCase \"issueType\"; body={body_str}"
+    );
+}

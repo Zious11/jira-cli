@@ -712,7 +712,10 @@ async fn handle_edit_bulk_fields(
     }
     if let Some(t) = issue_type {
         edited.insert("issuetype".into(), json!({"name": t}));
-        selected_actions.push("issueType".to_string()); // canonical camelCase action name
+        // Match editedFieldsInput key (lowercase). Atlassian docs are ambiguous on
+        // canonical casing for the bulk endpoint specifically; the lowercase form
+        // matches the legacy single-key path. Empirical schema verification deferred to #331.
+        selected_actions.push("issuetype".to_string());
     }
 
     if edited.is_empty() {

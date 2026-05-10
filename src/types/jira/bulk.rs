@@ -7,7 +7,9 @@ use std::collections::HashMap;
 ///   - selectedActions: string[], required — list of field names being edited.
 ///     Without this, the API returns 400. Examples: ["summary"], ["labels"],
 ///     ["summary","priority","labels"]. The values mirror the keys used inside
-///     `editedFieldsInput` (e.g., "issueType" not "issuetype" — camelCase per docs).
+///     `editedFieldsInput`. The bulk endpoint's canonical casing for the issuetype key
+///     is unverified — the legacy single-key path uses lowercase "issuetype", which is
+///     preserved here for consistency. See #331.
 ///   - editedFieldsInput: object, required (schema partially truncated in HTML docs).
 ///     Per Perplexity verification, the canonical 2025 production shape uses:
 ///     summary → plain string OR `{"value": "..."}` (sources differ).
