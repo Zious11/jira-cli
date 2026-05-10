@@ -2169,3 +2169,75 @@ async fn test_label_with_priority_rejected_before_search() {
         "Expected zero HTTP calls when --label combined with --priority"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Copilot round-6 fix 1: --label + field rejection must fire BEFORE JQL search
+// (#3215407131)
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit --jql "project = FOO" --label add:foo --summary "X" --no-input`
+/// MUST exit 64 (UserError) before making ANY HTTP call — including the JQL search.
+/// The round-5 guard ran after `effective_keys` was resolved (which fires the JQL
+/// search).  Moving the guard before the JQL HTTP call avoids the wasted request.
+#[tokio::test]
+async fn test_label_with_summary_rejected_before_jql_search() {
+    let server = MockServer::start().await;
+
+    // The JQL search endpoint MUST NOT fire (expect(0)).
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected: jql search called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "--jql",
+            "project = FOO",
+            "--label",
+            "add:foo",
+            "--summary",
+            "X",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(
+        !output.status.success(),
+        "Expected non-zero exit when --jql + --label combined with --summary; combined={combined}"
+    );
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 (UserError) for --jql + --label + --summary; combined={combined}"
+    );
+
+    assert!(
+        combined.contains("--label"),
+        "Error must mention '--label'; combined={combined}"
+    );
+    assert!(
+        combined.contains("--summary"),
+        "Error must mention '--summary'; combined={combined}"
+    );
+    assert!(
+        combined.contains("separate") || combined.contains("Run separate"),
+        "Error must hint at running separate commands; combined={combined}"
+    );
+
+    // The critical assertion: ZERO HTTP calls — the guard fires before the JQL search.
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        0,
+        "Expected zero HTTP calls (including JQL search) when --label + --summary rejected"
+    );
+}
