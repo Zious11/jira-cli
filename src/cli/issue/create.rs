@@ -521,6 +521,15 @@ pub(super) async fn handle_edit(
             .await;
     }
 
+    // Routing for non-label edits:
+    // - 2+ keys (positional or --jql-resolved) → POST /rest/api/3/bulk/issues/fields (bulk API)
+    // - 1 key (positional or single-match --jql) → PUT /rest/api/3/issue/{key} (legacy single-key)
+    //
+    // The single-match --jql case intentionally uses the legacy path because it's
+    // per-issue more efficient (no taskId polling) and the bulk API has no advantage
+    // for a single issue. Users mental-modeling "JQL → always bulk" should be aware
+    // of this asymmetry; it's documented rather than enforced.
+
     // --- Multi-key non-label: route through bulk_edit_fields. ---
     if effective_keys.len() > 1 {
         return handle_edit_bulk_fields(

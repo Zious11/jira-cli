@@ -1558,3 +1558,67 @@ async fn test_dry_run_jql_with_no_field_changes_errors_before_search() {
         "Expected zero HTTP calls — field-change check must precede JQL search"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Audit pass-2: single-match --jql routes to legacy single-key PUT, not bulk
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit --jql "key = FOO-1" --priority High --no-input`
+/// with exactly 1 JQL match should route to the legacy single-key PUT path,
+/// NOT the bulk POST path.
+///
+/// This documents and pins the intentional routing asymmetry: 2+ keys → bulk
+/// API (efficient for multiple issues); 1 key → PUT (no taskId polling needed,
+/// more efficient for a single issue regardless of whether a JQL or positional
+/// selector was used). See doc-comment at the dispatch site in create.rs.
+#[tokio::test]
+async fn test_jql_single_match_routes_to_single_key_put_not_bulk() {
+    let server = MockServer::start().await;
+
+    // JQL search returns exactly 1 issue.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(jql_search_response(&["FOO-1"])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Bulk POST must NOT be called for a single-match.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected: bulk called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    // Single-key PUT MUST be called exactly once.
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "--jql",
+            "key = FOO-1",
+            "--priority",
+            "High",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for single-match JQL routed to PUT; stderr={stderr} stdout={stdout}"
+    );
+    // wiremock .expect(0/1) assertions verify routing on drop.
+}
