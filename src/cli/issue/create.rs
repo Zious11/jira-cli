@@ -396,26 +396,10 @@ pub(super) async fn handle_edit(
 
     // --- Dry-run short-circuit: render diff, no HTTP mutations. ---
     if dry_run {
-        // Mirror the live path: refuse to proceed if no field changes were specified.
-        let has_any_field_change = summary.is_some()
-            || priority.is_some()
-            || issue_type.is_some()
-            || !labels.is_empty()
-            || team.is_some()
-            || points.is_some()
-            || no_points
-            || parent.is_some()
-            || no_parent
-            || description.is_some()
-            || description_stdin
-            || markdown;
-        if !has_any_field_change {
-            bail!(
-                "No fields specified to update. Use --summary, --type, --priority, --label, --team, \
-                 --points, --no-points, --parent, --no-parent, --description, or --description-stdin."
-            );
-        }
-
+        // NOTE: The "no fields specified" guard already fired unconditionally above
+        // (pre-HTTP guard, lines ~276-294) before execution reaches here.  No
+        // duplicate check needed — any invocation with zero field flags exits before
+        // this block is entered.
         match output_format {
             OutputFormat::Json => {
                 // C-3: --output json must produce machine-readable JSON on stdout,
