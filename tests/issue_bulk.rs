@@ -184,11 +184,15 @@ async fn test_edit_multi_key_issues_one_bulk_post_then_polls_to_complete() {
     // The bulk edit POST: expect exactly 1 call.
     // Body must include selectedIssueIdsOrKeys with all three keys.
     // SCHEMA NOTE: labelsAction casing is best-guess "ADD"; see SCHEMA NOTES block.
+    // selectedActions pin: label paths pass vec!["labels"] as selected_actions, so the
+    // request body must contain "selectedActions". This matcher catches regressions
+    // where the field is accidentally dropped from the label edit path.
     Mock::given(method("POST"))
         .and(path("/rest/api/3/bulk/issues/fields"))
         .and(body_partial_json(serde_json::json!({
             "selectedIssueIdsOrKeys": ["FOO-1", "FOO-2", "FOO-3"]
         })))
+        .and(body_string_contains("selectedActions"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(bulk_task_enqueued_response("task-abc-001")),
         )

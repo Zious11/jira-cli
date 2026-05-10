@@ -843,8 +843,14 @@ async fn test_label_add_remove_coalesce_emits_one_bulk_call() {
     let server = MockServer::start().await;
 
     // Expect EXACTLY 1 POST to the bulk fields endpoint.
+    // selectedActions pin: the label path passes vec!["labels"] as selected_actions, so the
+    // request body must contain "selectedActions". This matcher catches regressions where
+    // the field is accidentally dropped from the label edit path. If the pin fires here
+    // but the body structure changes legitimately, update with a comment explaining the
+    // new structure.
     Mock::given(method("POST"))
         .and(path("/rest/api/3/bulk/issues/fields"))
+        .and(body_string_contains("selectedActions"))
         .respond_with(ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-coalesce-001")))
         .expect(1)
         .mount(&server)
