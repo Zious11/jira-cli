@@ -29,17 +29,27 @@ impl JiraClient {
     /// POST /rest/api/3/bulk/issues/fields
     /// Returns taskId for polling via `await_bulk_task`.
     ///
-    /// `edited_fields` shape (labels example, labelsAction casing best-guess "ADD"/"REMOVE"):
+    /// Required fields per Atlassian docs (verified Perplexity 2026-05-10, PR2):
+    ///   - `selected_issue_ids_or_keys` — issue keys (already taken via `keys`)
+    ///   - `selected_actions` — list of field names being edited; without this
+    ///     the API returns 400. Mirrors keys used inside `edited_fields`.
+    ///   - `edited_fields` — per-field edit payload (shape varies by field type).
+    ///
+    /// `edited_fields` shape (labels example, labelsAction casing best-guess "ADD"/"REMOVE";
+    /// see SCHEMA NOTES in `types/jira/bulk.rs::BulkEditRequest` for the canonical
+    /// production shape and the schema-empirical-verification follow-up issue):
     /// ```json
     /// {"labels": {"labelsAction": "ADD", "labels": [{"name": "foo"}]}}
     /// ```
     pub async fn bulk_edit_fields(
         &self,
         keys: &[String],
+        selected_actions: Vec<String>,
         edited_fields: serde_json::Value,
     ) -> anyhow::Result<String> {
         let body = BulkEditRequest {
             selected_issue_ids_or_keys: keys.to_vec(),
+            selected_actions,
             edited_fields_input: edited_fields,
         };
         let resp: BulkSubmitResponse = self.post("/rest/api/3/bulk/issues/fields", &body).await?;
@@ -109,6 +119,28 @@ impl JiraClient {
             let progress = self.poll_bulk_task(task_id).await?;
 
             if progress.is_terminal() {
+                // C-2: FAILED/CANCELLED/DEAD are terminal but unsuccessful.
+                // Return an Err so callers surface this as a non-zero exit.
+                // COMPLETE and COMPLETED (empirical safety alias) are the only
+                // successful terminals — everything else is a task-level failure.
+                let status = &progress.status;
+                if matches!(status.as_str(), "FAILED" | "CANCELLED" | "DEAD") {
+                    let hint = if !progress.failed_accessible_issues.is_empty() {
+                        let keys: Vec<&str> = progress
+                            .failed_accessible_issues
+                            .keys()
+                            .map(String::as_str)
+                            .collect();
+                        format!("Failed issues: {}.", keys.join(", "))
+                    } else {
+                        format!(
+                            "Run `jr api /rest/api/3/bulk/queue/{task_id}` to inspect the raw task state."
+                        )
+                    };
+                    return Err(anyhow::anyhow!(
+                        "Bulk task {task_id} ended with status {status}. {hint}"
+                    ));
+                }
                 return Ok(progress);
             }
 
