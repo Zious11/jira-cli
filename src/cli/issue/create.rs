@@ -503,12 +503,20 @@ pub(super) async fn handle_edit(
                     println!("  team → {t}");
                 }
                 if let Some(ref d) = description {
-                    // Truncate long descriptions to 60 chars for readability.
-                    if d.len() > 60 {
-                        println!("  description → {}...", &d[..60]);
+                    // Truncate long descriptions to 60 codepoints for readability.
+                    // Use chars().count() / chars().take(60) — NOT byte slicing —
+                    // to avoid panics on multi-byte UTF-8 codepoints (Cyrillic,
+                    // CJK, emoji, accented chars). Codepoint-aware is the correct
+                    // Rust-stdlib idiom; grapheme clusters (unicode_segmentation)
+                    // would be overkill for a display truncation.
+                    let char_count = d.chars().count();
+                    let preview = if char_count > 60 {
+                        let truncated: String = d.chars().take(60).collect();
+                        format!("{truncated}...")
                     } else {
-                        println!("  description → {d}");
-                    }
+                        d.clone()
+                    };
+                    println!("  description → {preview}");
                 } else if description_stdin {
                     // --dry-run does NOT read stdin; document this as a known limitation.
                     println!("  description → (read from stdin — not yet read in dry-run)");

@@ -1883,3 +1883,131 @@ async fn test_dry_run_json_includes_team_and_description() {
         "Expected description='Test desc'; got: {planned}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Copilot round-3 Fix 1: dry-run description preview must not panic on UTF-8
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit FOO-1 --dry-run --description <cyrillic-70-chars> --no-input`
+///
+/// Before fix: `&d[..60]` slices by byte index → panics when byte 60 falls
+/// inside a multi-byte UTF-8 codepoint (Cyrillic chars are 2 bytes each).
+/// After fix:  `d.chars().take(60)` truncates by codepoint → no panic.
+///
+/// The test string is 70 Cyrillic chars (~140 bytes). Without the fix the
+/// binary panics and exits with a non-zero status; with the fix it exits 0
+/// and the truncated preview appears in output.
+#[tokio::test]
+async fn test_dry_run_table_handles_unicode_description_without_panicking() {
+    let server = MockServer::start().await;
+
+    // Bulk must NOT be called; this is a dry-run.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected: bulk called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    // 70 Cyrillic chars → 140 bytes. Slicing at byte 60 lands mid-codepoint.
+    let cyrillic_desc =
+        "русский текст превышает шестьдесят символов и должен быть обрезан красиво";
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--dry-run",
+            "--description",
+            cyrillic_desc,
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 (no panic) for Cyrillic description in dry-run; combined={combined}"
+    );
+
+    // The description should appear somewhere in the output (possibly truncated).
+    assert!(
+        combined.contains("description") || combined.contains("русский"),
+        "Expected description preview in dry-run output; combined={combined}"
+    );
+
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        0,
+        "Expected zero HTTP calls for dry-run"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Copilot round-3 Fix 2: --markdown alone must error before any JQL search
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit --jql "project = FOO" --markdown --no-input`
+///
+/// Before fix: `|| markdown` in `has_any_field_change` causes the JQL search
+/// to fire even though --markdown provides no description to encode.
+/// After fix:  validation rejects --markdown-without-description before the
+/// search, so zero HTTP calls are made and exit is non-zero with a hint
+/// containing "markdown".
+#[tokio::test]
+async fn test_markdown_alone_errors_before_search() {
+    let server = MockServer::start().await;
+
+    // The JQL search MUST NOT fire — expect(0) asserts this.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("unexpected: search called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    // Bulk POST must also not fire.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected: bulk called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "--jql",
+            "project = FOO",
+            "--markdown",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(
+        !output.status.success(),
+        "Expected non-zero exit when --markdown used without --description; combined={combined}"
+    );
+
+    assert!(
+        combined.contains("markdown") || combined.contains("--markdown"),
+        "Expected error message to mention 'markdown'; combined={combined}"
+    );
+
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        0,
+        "Expected zero HTTP calls when --markdown used without --description"
+    );
+}
