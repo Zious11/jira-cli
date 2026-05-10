@@ -286,10 +286,13 @@ pub(super) async fn handle_edit(
             || description.is_some()
             || description_stdin;
         if !has_any_field_change {
-            bail!(
-                "No fields specified to update. Use --summary, --type, --priority, --label, --team, \
-                 --points, --no-points, --parent, --no-parent, --description, or --description-stdin."
-            );
+            return Err(JrError::UserError(
+                "No fields specified to update. Use --summary, --type, --priority, --label, \
+                 --team, --points, --no-points, --parent, --no-parent, --description, or \
+                 --description-stdin."
+                    .into(),
+            )
+            .into());
         }
     }
 

@@ -1388,6 +1388,38 @@ async fn test_dry_run_with_no_field_changes_errors_like_live_path() {
     );
 }
 
+/// "No fields specified" must exit with the canonical UserError code (64), not the
+/// generic failure code (1) that `bail!()` produces.  Copilot review comment
+/// #3215377375 flagged that the pre-HTTP guard was using `bail!()` which bypasses
+/// `JrError::UserError` and therefore produces exit code 1 instead of 64.
+#[tokio::test]
+async fn test_no_fields_specified_exits_64() {
+    let server = MockServer::start().await;
+
+    // No HTTP calls should be made — the guard fires before any network call.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args(["--no-input", "issue", "edit", "FOO-1"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit code 64 (UserError) for 'no fields specified'; \
+         stderr={stderr} stdout={stdout}"
+    );
+}
+
 /// Same as above but with `--output json` — JSON mode must also error (not emit empty JSON).
 #[tokio::test]
 async fn test_dry_run_with_no_field_changes_errors_in_json_mode() {
