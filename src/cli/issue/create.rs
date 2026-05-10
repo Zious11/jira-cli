@@ -742,17 +742,25 @@ pub(super) async fn handle_edit(
 ///
 /// Supports 1..=1000 keys. `labels` is a list of "add:NAME" / "remove:NAME" / "NAME" strings.
 ///
-/// editedFieldsInput shape — coalesced single call when both ADD and REMOVE labels are present:
-/// ```json
-/// {
-///   "labels": [
-///     {"labelsAction": "ADD",    "labels": [{"name": "foo"}]},
-///     {"labelsAction": "REMOVE", "labels": [{"name": "bar"}]}
-///   ]
-/// }
-/// ```
-/// When only adds OR only removes are present, a simpler single-entry array is used.
-/// This coalesced shape is adapted from the Atlassian bulk-edit UI payload — test
+/// editedFieldsInput shape (best-guess pending #331 empirical verification):
+/// - When BOTH ADD and REMOVE labels are present, coalesced into ONE bulk POST
+///   with an array of operations:
+///   ```json
+///   {
+///     "labels": [
+///       {"labelsAction": "ADD",    "labels": [{"name": "foo"}]},
+///       {"labelsAction": "REMOVE", "labels": [{"name": "bar"}]}
+///     ]
+///   }
+///   ```
+/// - When only ADD or only REMOVE labels are present, an object form (NOT a
+///   single-entry array) is sent for backward compatibility with PR1 tests:
+///   ```json
+///   {"labels": {"labelsAction": "ADD", "labels": [{"name": "foo"}]}}
+///   ```
+/// Tests use `body_string_contains` matchers to tolerate the shape difference;
+/// canonical Atlassian schema (per #331) requires top-level `labelsFields`
+/// array always — that's the long-term target for both code paths.
 /// `.expect(1)` enforces ONE bulk POST even when both ADD+REMOVE are specified.
 ///
 /// Output:
