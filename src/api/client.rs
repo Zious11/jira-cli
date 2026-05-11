@@ -922,20 +922,31 @@ fn cap_entry(s: &str) -> std::borrow::Cow<'_, str> {
 /// The partial prefix is returned for the standard `cap_entry` pipeline; UTF-8
 /// is repaired lossily because the cutoff may land mid-codepoint.
 ///
+/// When overflow is detected, the function appends a visible
+/// `[...truncated]` marker so callers/operators see that the JSON is a
+/// truncated prefix rather than a malformed-but-silently-incomplete fragment.
+/// Marker bytes are reserved upfront from the byte budget so the function
+/// strictly satisfies `out.len() <= limit` even with the marker appended.
+///
 /// `limit` is chosen as `MAX_ERROR_ENTRY_LEN` — `cap_entry` will then pass the
 /// (already-bounded) prefix through with zero further allocation. Tighter than
 /// the typical 1 MB serialization cap recommended by general guidance, but
 /// appropriate for this domain (stderr error messages, not data interchange).
 fn serialize_value_bounded(v: &serde_json::Value, limit: usize) -> String {
     /// Writer that accepts up to `limit` bytes then refuses further writes.
+    /// Sets `overflowed` so the caller can append a truncation marker —
+    /// without this flag, a hostile response would silently produce a partial
+    /// JSON prefix with no indication to operators that data was cut off.
     struct Bounded {
         buf: Vec<u8>,
         limit: usize,
+        overflowed: bool,
     }
     impl std::io::Write for Bounded {
         fn write(&mut self, src: &[u8]) -> std::io::Result<usize> {
             let remaining = self.limit.saturating_sub(self.buf.len());
             if remaining == 0 {
+                self.overflowed = true;
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::WriteZero,
                     "bounded JSON writer reached byte limit",
@@ -945,6 +956,7 @@ fn serialize_value_bounded(v: &serde_json::Value, limit: usize) -> String {
             self.buf.extend_from_slice(&src[..take]);
             if take < src.len() {
                 // Partial write — propagate to serde_json so it stops.
+                self.overflowed = true;
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::WriteZero,
                     "bounded JSON writer reached byte limit mid-write",
@@ -957,14 +969,28 @@ fn serialize_value_bounded(v: &serde_json::Value, limit: usize) -> String {
         }
     }
 
+    // Reserve marker bytes upfront so the final output (prefix + marker)
+    // strictly fits within `limit`. If `limit` is too small to even hold the
+    // marker (degenerate case — limit < ~16 bytes), serialize without a marker
+    // and rely on the post-hoc trim below to enforce the byte cap.
+    const TRUNCATION_MARKER: &str = " [...truncated]";
+    let writer_limit = limit.saturating_sub(TRUNCATION_MARKER.len());
+    // If reserving the marker would leave no room for content, fall back to
+    // raw-bounded mode (no marker). This degenerate path applies only when
+    // `limit` is smaller than the marker itself.
+    let reserve_marker = writer_limit > 0;
+    let effective_limit = if reserve_marker { writer_limit } else { limit };
+
     let mut w = Bounded {
-        buf: Vec::with_capacity(limit.min(256)),
-        limit,
+        buf: Vec::with_capacity(effective_limit.min(256)),
+        limit: effective_limit,
+        overflowed: false,
     };
     // Result intentionally ignored: WriteZero on overflow is the expected
     // bounded-truncation signal. The (possibly partial) prefix in `w.buf` is
     // what we want for the downstream cap_entry pipeline.
     let _ = serde_json::to_writer(&mut w, v);
+    let overflowed = w.overflowed;
     // Lossy because serde_json may have written a partial multi-byte UTF-8
     // codepoint when the writer cut off mid-string.
     let mut s = String::from_utf8_lossy(&w.buf).into_owned();
@@ -972,13 +998,20 @@ fn serialize_value_bounded(v: &serde_json::Value, limit: usize) -> String {
     // bytes replacing 1-2 trailing invalid bytes when a multibyte char was
     // cut mid-codepoint). Re-cap at a UTF-8 char boundary so the function
     // strictly satisfies `out.len() <= limit` — callers (and the cap_entry
-    // pipeline) rely on this invariant.
-    if s.len() > limit {
-        let mut end = limit;
+    // pipeline) rely on this invariant. Use `effective_limit` so the marker
+    // (if appended below) still fits within `limit`.
+    if s.len() > effective_limit {
+        let mut end = effective_limit;
         while end > 0 && !s.is_char_boundary(end) {
             end -= 1;
         }
         s.truncate(end);
+    }
+    // Append the truncation marker so consumers see that JSON is incomplete
+    // rather than a malformed-but-silently-truncated fragment (R10 finding).
+    // Only when we actually overflowed AND we reserved budget for the marker.
+    if overflowed && reserve_marker {
+        s.push_str(TRUNCATION_MARKER);
     }
     s
 }
@@ -1603,6 +1636,12 @@ mod sanitize_tests {
         );
         // Output should be a valid prefix of the full serialization.
         assert!(out.starts_with("{\"oversized\":\""));
+        // R10 pin: truncated output MUST end with a visible marker so
+        // operators see the JSON is incomplete rather than malformed.
+        assert!(
+            out.ends_with(" [...truncated]"),
+            "expected truncation marker on overflow; got: {out:?}"
+        );
     }
 
     #[test]
@@ -1648,5 +1687,49 @@ mod sanitize_tests {
         let v = serde_json::json!({"a": 1});
         let out = serialize_value_bounded(&v, 0);
         assert_eq!(out, "");
+    }
+
+    #[test]
+    fn test_serialize_value_bounded_no_marker_when_no_overflow() {
+        // R10 pin: when the value fits comfortably within the limit, the
+        // truncation marker must NOT be appended (otherwise legitimate
+        // small responses would look truncated).
+        let v = serde_json::json!({"code": 42, "msg": "hello"});
+        let out = serialize_value_bounded(&v, 1024);
+        assert!(
+            !out.ends_with(" [...truncated]"),
+            "marker should not appear for non-overflowing values: {out:?}"
+        );
+        assert!(!out.contains("[...truncated]"));
+    }
+
+    #[test]
+    fn test_serialize_value_bounded_marker_fits_within_limit_for_oversized() {
+        // R10 pin: even WITH the marker appended, the function strictly
+        // satisfies `out.len() <= limit` — marker bytes are reserved upfront
+        // from the byte budget so the prefix-plus-marker total fits.
+        let big = "x".repeat(10_000);
+        let v = serde_json::json!({"k": big});
+        let out = serialize_value_bounded(&v, MAX_ERROR_ENTRY_LEN);
+        assert!(
+            out.len() <= MAX_ERROR_ENTRY_LEN,
+            "marker pushed output past limit: {} > {}",
+            out.len(),
+            MAX_ERROR_ENTRY_LEN
+        );
+        assert!(out.ends_with(" [...truncated]"));
+    }
+
+    #[test]
+    fn test_serialize_value_bounded_no_marker_for_tiny_limit_below_marker_len() {
+        // R10 degenerate case: if `limit` is smaller than the marker itself
+        // (~15 bytes), the function falls back to raw-bounded mode without
+        // a marker rather than producing a marker-only output. Useful pin
+        // for future callers who might pass a tiny limit.
+        let v = serde_json::json!({"a": 1});
+        let out = serialize_value_bounded(&v, 5);
+        assert!(out.len() <= 5);
+        // No room for the marker; must not be present.
+        assert!(!out.contains("[...truncated]"));
     }
 }
