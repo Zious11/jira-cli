@@ -146,11 +146,16 @@ mod tests {
             progress_percent: None,
             total_issue_count: None,
             invalid_or_inaccessible_issue_count: None,
+            failure_reason: None,
         }
     }
 
     #[test]
-    fn is_terminal_recognizes_all_documented_statuses() {
+    fn is_terminal_recognizes_documented_and_empirical_aliases() {
+        // Documented terminal statuses per OpenAPI: COMPLETE, FAILED, CANCELLED, DEAD.
+        // COMPLETED is included as an empirical-safety alias (some live API responses
+        // observed it; tracked at #331 pending sandbox verification). Do not remove
+        // COMPLETED without confirming the live API never emits it.
         let terminal = ["COMPLETE", "COMPLETED", "FAILED", "CANCELLED", "DEAD"];
         let non_terminal = [
             "RUNNING",
