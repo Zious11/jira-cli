@@ -363,9 +363,12 @@ pub(super) async fn handle_edit(
         }
     }
 
-    // Apply the default of 50 when --jql is present; clap's `requires = "jql"` already
-    // rejects `--max` without `--jql` at parse time, so by the time we reach this point
-    // `max` is only Some(_) when jql is also Some(_).
+    // --max is meaningless without --jql (positional keys use the existing 1001-key
+    // hard cap, not --max). The handler-level guard earlier in this function already
+    // rejects `--max` without `--jql` with JrError::UserError (exit 64) because
+    // clap's `requires` attribute interacts poorly with the keys/jql `conflicts_with`
+    // relationship. By the time we reach this branch we know jql.is_some() so the
+    // unwrap_or(50) default is the right behavior.
     let effective_max = max.unwrap_or(50).min(BULK_MAX_KEYS as u32);
 
     // Resolve the working set of keys.
