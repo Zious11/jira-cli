@@ -321,8 +321,18 @@ fn test_auth_switch_unknown_profile_returns_json_error() {
 #[test]
 #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
 fn test_auth_login_emits_json_when_output_json_set() {
-    if std::env::var("JR_RUN_KEYRING_TESTS").is_err() {
-        return;
+    match std::env::var("JR_RUN_KEYRING_TESTS").as_deref() {
+        Ok("1") => {} // run
+        Ok(other) => panic!(
+            "JR_RUN_KEYRING_TESTS must be \"1\" to run this test; got {other:?}. \
+             This test writes to the macOS keychain and produces stale state if run \
+             without the explicit opt-in."
+        ),
+        Err(_) => panic!(
+            "JR_RUN_KEYRING_TESTS=1 is required to run this test (it writes to the \
+             macOS keychain). The test is gated behind #[ignore] for default runs; \
+             setting --include-ignored without the env opt-in is a misuse."
+        ),
     }
     let config_dir = TempDir::new().unwrap();
     let cache_dir = TempDir::new().unwrap();
