@@ -367,3 +367,51 @@ verification when Perplexity's claim is about observable behavior — is the cor
 _Discovered: PR #355 Round 2, 2026-05-11_
 _Tagged: [codified] — third documented instance of the Perplexity-vs-empirical pattern_
 _Tiered-validation rule reinforced: Perplexity for external API/CWE/RFC; local empirical verification for Rust stdlib behavior_
+
+---
+
+## 2026-05-11 — PR #356 R1–R4 Process Gaps
+
+### [codified] Inconsistent Perplexity-validation undermines DEC-018
+
+Across 4 Copilot rounds on PR #356, Perplexity-validation was applied to R1 (cited CWE-117
+and OWASP length-capping guidance) and R4 (cited `Cow<str>` idiom per Rust API Guidelines
+C-COST) but SKIPPED on R2 and R3. The rationalization was that R2 and R3 findings were
+"empirically verifiable from the code" (arithmetic: 1025 > 1024 + 30; 1 byte → 4 bytes).
+
+This is exactly the failure mode DEC-018 was designed to prevent. The standing rule is
+"always validate Copilot reviews with Perplexity" — it applies regardless of how obvious
+the claim looks at first glance. The R1 and R4 validations both added context (OWASP
+defense-in-depth citation, Cow<str> idiom naming) that improved the fix justification.
+The R2 and R3 skips simply incurred process-gap debt without any time saving — the code
+analysis was still done; only the external citation was omitted.
+
+**Calibration rule added:** Per Copilot review round, run Perplexity validation on at
+least one external-claim aspect of EACH finding, even if the finding looks code-internal.
+Common external-claim aspects that are easy to miss: CWE/OWASP confirmation, stdlib/crate
+behavior, RFC or spec reference, idiomatic Rust pattern name.
+
+_Discovered: PR #356 post-round-4 audit remediation, 2026-05-11_
+_Tagged: [codified] — refines DEC-018 calibration; confirms standing rule applies to all rounds_
+_Process gap: Perplexity skipped on R2 + R3 for PR #356_
+
+### [codified] Skipping state-manager between Copilot rounds creates audit-trail debt
+
+After PR #356 opened, state-manager was dispatched once (Burst N+2, initial open). For all
+4 subsequent Copilot rounds (R1 fix commit 51e2807, R2 fix commit d061b14, R3 fix commit
+274961c, R4 fix commit fe25e22), state-manager dispatch was skipped entirely. Documentation
+was deferred to "the next merge event." This produced an out-of-band remediation pass
+(this commit) costing more than 4 incremental dispatch calls would have cost.
+
+This is the same pattern that earlier in the cycle prompted "are all the changes running
+through the vsdd factory or at least getting documented in the process correctly" — and the
+same answer (no) applies here.
+
+**Calibration rule added:** Dispatch state-manager AFTER EACH Copilot-round fix commit,
+not just after PR open and convergence. The marginal cost is one Agent tool call per round;
+the marginal benefit is a real-time audit trail that lets the user introspect the cycle at
+any point without a retroactive remediation pass.
+
+_Discovered: PR #356 post-round-4 remediation dispatch, 2026-05-11_
+_Tagged: [codified] — refines orchestrator dispatch discipline for Copilot-round bursts_
+_Process gap: state-manager skipped after R1, R2, R3, R4 fix commits for PR #356_

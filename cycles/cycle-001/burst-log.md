@@ -1674,3 +1674,144 @@ PR #356 opened implementing issue #334: CWE-117 defense at the `extract_error_me
 | implementer | Integration tests for public extract_error_message API | tests/api_client.rs +43 lines; 4 integration tests; fixture JSON escape quirk identified and fixed |
 | orchestrator | Commit d1b9fe7, push chore/sanitize-errors-334, open PR #356 | PR #356 at https://github.com/Zious11/jira-cli/pull/356; base develop @ 448c568 |
 | pr-manager | Request Copilot review | Copilot R1 poller b9vv6n65e; CI poller bkulwe03a |
+
+---
+
+## Burst N+3 (2026-05-11): PR #356 Copilot Round 1 — 4 findings, fix commit 51e2807
+
+**Agents dispatched:** orchestrator, implementer
+**Files touched:** src/api/client.rs (sanitize_for_stderr rewrite: std::fmt::Write::write!, fast-path signature change, MAX_ERROR_ENTRY_LEN=1024, cap_entry helper, 5 new tests)
+**Versions bumped:** (none)
+
+### Summary
+
+PR #356 Copilot Round 1 (2026-05-11T17:49:49Z) returned 4 inline findings. All 4 were valid.
+Perplexity-validation was run for R1 per DEC-018 — confirmed CWE-117 + OWASP length-capping
+guidance (https://cwe.mitre.org/data/definitions/117.html). Finding 4 was a requirements gap:
+issue #334 explicitly required a per-entry length cap (1 KiB), which was absent from the
+initial implementation.
+
+**Findings:**
+1. Doc comment "single allocation" claim mismatched `format!()` per escaped char implementation.
+2. `format!()` inside the escape loop allocated per char — replaced with `std::fmt::Write::write!`.
+3. Clean-input fast path unnecessarily allocated a new String — changed signature to `fn(String) -> String` with zero-copy passthrough (pointer-equality test added).
+4. **REQUIREMENTS GAP:** Missing per-entry length cap (issue #334 explicitly requires 1 KiB truncation).
+
+**Fix:** Added `MAX_ERROR_ENTRY_LEN = 1024`, `cap_entry` helper, `std::fmt::Write::write!` rewrite,
+5 new tests including pointer-equality fast-path assertion. All 4 threads resolved.
+
+**Perplexity validation:** R1 — CONFIRMED CWE-117 + OWASP length-cap as defense-in-depth.
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| orchestrator | Triage 4 Copilot R1 findings; run Perplexity DEC-018 | All 4 confirmed valid; OWASP length-cap confirmed |
+| implementer | Fix doc accuracy + loop allocation + fast-path + cap requirement | src/api/client.rs rewrite; 5 new tests |
+| orchestrator | Commit 51e2807; push; request R2 | 4/4 threads resolved; R2 requested |
+
+---
+
+## Burst N+4 (2026-05-11): PR #356 Copilot Round 2 — 1 finding, fix commit d061b14
+
+**Agents dispatched:** orchestrator, implementer
+**Files touched:** src/api/client.rs (cap_entry marker budget reservation; test_cap_entry_size_invariant_at_boundary_oversize added)
+**Versions bumped:** (none)
+
+### Summary
+
+PR #356 Copilot Round 2 (2026-05-11T18:10:07Z) returned 1 inline finding. Valid — invariant
+violation in cap_entry for slightly-oversized inputs (1025-byte input → 1054-byte output via
+1024-byte prefix + ~30-byte marker, defeating the flood-prevention cap).
+
+**Perplexity-validation: SKIPPED [process-gap]** — the claim was judged "empirically verifiable
+from arithmetic" and DEC-018 was not applied. This is the failure mode DEC-018 was designed to
+prevent. (Codified as Lesson: see lessons.md — "Inconsistent Perplexity-validation undermines DEC-018".)
+
+**Fix:** Reserve marker budget upfront: compute marker length first, set
+`target_prefix_len = MAX_ERROR_ENTRY_LEN - marker.len()`. Added defensive branch for oversized
+markers. Added `test_cap_entry_size_invariant_at_boundary_oversize` iterating [MAX+1..MAX+10000]
+asserting output_len <= MAX_ERROR_ENTRY_LEN. 5/5 threads resolved (cumulative).
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| orchestrator | Triage Copilot R2 finding; Perplexity SKIPPED [process-gap] | Finding confirmed valid via code analysis only |
+| implementer | Fix cap_entry marker budget; add boundary invariant test | src/api/client.rs; test_cap_entry_size_invariant_at_boundary_oversize |
+| orchestrator | Commit d061b14; push; request R3 | 5/5 threads resolved; R3 requested |
+
+---
+
+## Burst N+5 (2026-05-11): PR #356 Copilot Round 3 — 2 findings (1 critical), fix commit 274961c
+
+**Agents dispatched:** orchestrator, implementer
+**Files touched:** src/api/client.rs (MAX_SANITIZED_OUTPUT_LEN=4096, byte-budget-aware char loop, cap_entry marker fallback fix, 3 new tests)
+**Versions bumped:** (none)
+
+### Summary
+
+PR #356 Copilot Round 3 (2026-05-11T18:18:03Z) returned 2 inline findings. Both valid.
+Finding 1 was critical: the per-entry pre-sanitization cap allowed 4x byte expansion (1 control
+char → 4-byte `\xNN` escape), making the 1024-byte pre-cap meaningless as an output bound.
+
+**Perplexity-validation: SKIPPED [process-gap]** — again judged "verifiable from code analysis
+(1→4 byte expansion is arithmetic)." Per DEC-018, should have validated. Second skipped round.
+(Same codified lesson applies.)
+
+**Fix:**
+1. Added `MAX_SANITIZED_OUTPUT_LEN = 4096`. Restructured `sanitize_for_stderr` with a
+   byte-budget-aware char loop that accounts for escape expansion. Output is guaranteed
+   `<= MAX_SANITIZED_OUTPUT_LEN` regardless of input composition.
+2. Fixed `cap_entry` marker fallback: defensive branch previously returned marker un-truncated,
+   violating own size invariant. Now truncates marker at UTF-8 boundary.
+3. Added 3 new tests: post-sanitization expansion, oversized clean input, under-cap no marker.
+All 7/7 threads resolved (cumulative).
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| orchestrator | Triage 2 Copilot R3 findings; Perplexity SKIPPED [process-gap] | Both confirmed valid via code analysis only |
+| implementer | Byte-budget-aware sanitize loop; cap_entry marker fallback fix; 3 tests | src/api/client.rs; MAX_SANITIZED_OUTPUT_LEN=4096 |
+| orchestrator | Commit 274961c; push; request R4 | 7/7 threads resolved; R4 requested |
+
+---
+
+## Burst N+6 (2026-05-11): PR #356 Copilot Round 4 — 2 findings (efficiency), fix commit fe25e22
+
+**Agents dispatched:** orchestrator, implementer
+**Files touched:** src/api/client.rs (Cow<str> cap_entry, single-allocation errorMessages join, retroactive-trim sanitize restructure)
+**Versions bumped:** (none)
+
+### Summary
+
+PR #356 Copilot Round 4 (2026-05-11T18:29:07Z) returned 2 inline findings. Both valid (efficiency).
+
+**Perplexity-validation: CONFIRMED** — Validated `Cow<str>` idiomatic Rust pattern per Rust API
+Guidelines C-COST. `Cow::Borrowed` is zero-cost (zero allocation for unchanged entries);
+`Cow::Owned` matches a single String allocation for over-cap entries. Citation:
+https://doc.rust-lang.org/std/borrow/enum.Cow.html
+
+**Findings:**
+1. Premature truncation: sanitize_for_stderr reserved 64-byte marker space unconditionally,
+   truncating messages that fit cleanly within the full cap.
+2. cap_entry allocated String per entry unconditionally — zero-alloc path missing for under-cap
+   inputs (the common case).
+
+**Fix:**
+1. Restructured sanitize_for_stderr to allow full cap, then retroactively trim at UTF-8 boundary
+   only when cap is breached. Marker appended only on actual truncation.
+2. Changed cap_entry signature to `fn cap_entry(s: &str) -> Cow<'_, str>` — unchanged entries
+   return `Cow::Borrowed` (zero alloc), over-cap entries return `Cow::Owned`.
+3. Rewrote errorMessages join with single `String::with_capacity` allocation instead of N+1.
+All 9/9 threads resolved (cumulative). CI in-flight on fe25e22 (poller b08xrozoq). R5 pending.
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| orchestrator | Triage 2 Copilot R4 findings; Perplexity CONFIRMED Cow<str> C-COST pattern | Both confirmed valid; Cow<str> idiom validated |
+| implementer | Cow<str> cap_entry; single-alloc join; retroactive-trim sanitize | src/api/client.rs fe25e22 |
+| orchestrator | Commit fe25e22; push; request R5 | 9/9 threads resolved; CI in-flight; R5 requested |
+| state-manager | [REMEDIATION] Backfill audit trail — R1-R4 burst entries, PR #356 progress file, lessons | burst-log.md, pr-356-copilot-progress.md, lessons.md, STATE.md all updated |
