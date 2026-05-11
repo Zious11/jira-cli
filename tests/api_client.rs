@@ -341,6 +341,49 @@ fn test_extract_error_message_empty_body() {
     assert_eq!(result, "<empty response body>");
 }
 
+// CWE-117 sanitization is wired into extract_error_message — these integration tests
+// exercise the public API to confirm hostile/proxy-injected control chars in any of
+// the precedence paths get rendered as `\xNN` literals before reaching stderr.
+
+#[test]
+fn test_extract_error_message_sanitizes_crlf_in_error_messages_array() {
+    // CWE-117 attack: hostile errorMessages payload tries to inject a fake log line.
+    let body = br#"{"errorMessages":["Issue not found\r\n[jr] CRITICAL: fake log"]}"#;
+    let result = extract_error_message(body);
+    assert_eq!(result, "Issue not found\\x0d\\x0a[jr] CRITICAL: fake log");
+    assert!(!result.contains('\r'));
+    assert!(!result.contains('\n'));
+}
+
+#[test]
+fn test_extract_error_message_sanitizes_ansi_escape_in_message_field() {
+    // CWE-117 attack: ANSI escape sequence in the `message` field would change
+    // terminal color / cursor / title if rendered literally.
+    let body = br#"{"message":"Error\u001b[31mRED\u001b[0m"}"#;
+    let result = extract_error_message(body);
+    assert_eq!(result, "Error\\x1b[31mRED\\x1b[0m");
+    assert!(!result.contains('\x1b'));
+}
+
+#[test]
+fn test_extract_error_message_sanitizes_null_byte_in_errors_object_value() {
+    // CWE-117 attack: NUL byte in a field-level error value could truncate
+    // C-string-based loggers or break some terminals.
+    let body = br#"{"errorMessages":[],"errors":{"summary":"bad\u0000value"}}"#;
+    let result = extract_error_message(body);
+    assert_eq!(result, "summary: bad\\x00value");
+    assert!(!result.contains('\0'));
+}
+
+#[test]
+fn test_extract_error_message_preserves_utf8_in_sanitized_path() {
+    // Localized error messages (non-English Jira tenants) must survive the
+    // sanitization layer intact — only ASCII control bytes are escaped.
+    let body = r#"{"errorMessages":["問題が見つかりません"]}"#;
+    let result = extract_error_message(body.as_bytes());
+    assert_eq!(result, "問題が見つかりません");
+}
+
 #[tokio::test]
 async fn test_send_raw_returns_response_for_2xx() {
     let server = MockServer::start().await;

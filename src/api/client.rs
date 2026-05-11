@@ -825,7 +825,44 @@ impl JiraClient {
     }
 }
 
+/// Sanitize a server-supplied string for safe display on stderr.
+///
+/// Defense against CWE-117 (Improper Output Neutralization for Logs): a hostile
+/// Atlassian response or proxy-controlled `errorMessages` array could otherwise
+/// inject CR/LF fake log lines, ANSI escape sequences (cursor movement, color
+/// codes, terminal title changes), or NUL bytes into operator-facing stderr
+/// output.
+///
+/// Strategy: pass through every printable character (including UTF-8 to preserve
+/// localized error messages from non-English Jira tenants) and replace every
+/// ASCII control character (0x00-0x1F + 0x7F) with its `\xNN` literal escape so
+/// the operator can see what was sent but the terminal cannot interpret it.
+/// This is more conservative than `str::escape_debug` (which also escapes
+/// non-ASCII as `\u{XXXX}` and would garble legitimate Unicode error text).
+///
+/// Performance: O(n) single pass, allocates the output buffer once via
+/// `String::with_capacity`. Idempotent on already-sanitized strings.
+fn sanitize_for_stderr(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for c in input.chars() {
+        if c.is_ascii_control() {
+            // ASCII control chars (0x00-0x1F + 0x7F) are guaranteed to fit in u8.
+            // Render as visible \xNN literal so operators can debug what was sent
+            // without the terminal interpreting CR/LF/ANSI/etc.
+            out.push_str(&format!("\\x{:02x}", c as u8));
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Extract a human-readable error message from a Jira error response body.
+///
+/// All return paths run through `sanitize_for_stderr` (CWE-117 defense:
+/// strips ASCII control chars from server-supplied content before it reaches
+/// stderr, preventing CR/LF/ANSI injection from a hostile or proxy-controlled
+/// response). UTF-8 in legitimate localized error messages is preserved.
 ///
 /// Precedence:
 /// 1. Non-empty `errorMessages` array → joined with "; "
@@ -835,6 +872,15 @@ impl JiraClient {
 /// 5. Empty body → "<empty response body>"
 /// 6. Raw body as a string (fallback)
 pub fn extract_error_message(body: &[u8]) -> String {
+    sanitize_for_stderr(&extract_error_message_raw(body))
+}
+
+/// Internal: extract the error message WITHOUT stderr sanitization.
+///
+/// Separated from the public API so the extraction precedence logic and the
+/// sanitization layer can be tested independently. Callers OUTSIDE tests should
+/// always go through `extract_error_message`.
+fn extract_error_message_raw(body: &[u8]) -> String {
     if body.is_empty() {
         return "<empty response body>".to_string();
     }
@@ -876,4 +922,97 @@ pub fn extract_error_message(body: &[u8]) -> String {
     }
 
     body_str.to_string()
+}
+
+#[cfg(test)]
+mod sanitize_tests {
+    use super::sanitize_for_stderr;
+
+    #[test]
+    fn test_sanitize_for_stderr_passes_through_clean_ascii() {
+        assert_eq!(sanitize_for_stderr("Hello, World!"), "Hello, World!");
+    }
+
+    #[test]
+    fn test_sanitize_for_stderr_passes_through_utf8() {
+        // Localized error messages (non-English Jira tenants) must survive.
+        assert_eq!(sanitize_for_stderr("résumé"), "résumé");
+        assert_eq!(sanitize_for_stderr("日本語のエラー"), "日本語のエラー");
+        assert_eq!(sanitize_for_stderr("Привет"), "Привет");
+    }
+
+    #[test]
+    fn test_sanitize_for_stderr_escapes_carriage_return() {
+        assert_eq!(sanitize_for_stderr("line1\rline2"), "line1\\x0dline2");
+    }
+
+    #[test]
+    fn test_sanitize_for_stderr_escapes_line_feed() {
+        assert_eq!(sanitize_for_stderr("line1\nline2"), "line1\\x0aline2");
+    }
+
+    #[test]
+    fn test_sanitize_for_stderr_escapes_crlf_fake_log_injection() {
+        // CWE-117 attack pattern: hostile message tries to inject a fake log line
+        // by ending one line and starting another with what looks like a logger prefix.
+        let attack = "Issue not found\r\n[jr] CRITICAL: token leaked";
+        let sanitized = sanitize_for_stderr(attack);
+        assert_eq!(
+            sanitized,
+            "Issue not found\\x0d\\x0a[jr] CRITICAL: token leaked"
+        );
+        // Critically, the literal "\r\n" sequence is gone — the terminal can't break
+        // the line, so the operator sees the whole attack on one line.
+        assert!(!sanitized.contains('\r'));
+        assert!(!sanitized.contains('\n'));
+    }
+
+    #[test]
+    fn test_sanitize_for_stderr_escapes_ansi_escape_sequence() {
+        // \x1b is ESC, the prefix for ANSI escape sequences (color, cursor, etc.).
+        let attack = "Error\x1b[31m red text \x1b[0m";
+        let sanitized = sanitize_for_stderr(attack);
+        assert_eq!(sanitized, "Error\\x1b[31m red text \\x1b[0m");
+        assert!(!sanitized.contains('\x1b'));
+    }
+
+    #[test]
+    fn test_sanitize_for_stderr_escapes_null_byte() {
+        assert_eq!(sanitize_for_stderr("a\0b"), "a\\x00b");
+    }
+
+    #[test]
+    fn test_sanitize_for_stderr_escapes_tab() {
+        // Tab is ASCII control (0x09). Conservatively escape — a sequence of tabs
+        // can hide text behind column boundaries in some loggers / tab-aware UIs.
+        assert_eq!(sanitize_for_stderr("a\tb"), "a\\x09b");
+    }
+
+    #[test]
+    fn test_sanitize_for_stderr_escapes_del_character() {
+        // 0x7F (DEL) is the last ASCII control char.
+        assert_eq!(sanitize_for_stderr("a\x7fb"), "a\\x7fb");
+    }
+
+    #[test]
+    fn test_sanitize_for_stderr_preserves_space_and_punctuation() {
+        // Space (0x20) is NOT a control char. Punctuation is fine.
+        assert_eq!(
+            sanitize_for_stderr("Hello, World! (with punctuation)"),
+            "Hello, World! (with punctuation)"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_for_stderr_is_idempotent() {
+        // Sanitizing an already-sanitized string is a no-op (no double-escaping).
+        let once = sanitize_for_stderr("a\r\nb");
+        let twice = sanitize_for_stderr(&once);
+        assert_eq!(once, twice);
+    }
+
+    #[test]
+    fn test_sanitize_for_stderr_empty_string() {
+        assert_eq!(sanitize_for_stderr(""), "");
+    }
 }
