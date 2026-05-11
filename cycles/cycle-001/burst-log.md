@@ -1815,3 +1815,34 @@ All 9/9 threads resolved (cumulative). CI in-flight on fe25e22 (poller b08xrozoq
 | implementer | Cow<str> cap_entry; single-alloc join; retroactive-trim sanitize | src/api/client.rs fe25e22 |
 | orchestrator | Commit fe25e22; push; request R5 | 9/9 threads resolved; CI in-flight; R5 requested |
 | state-manager | [REMEDIATION] Backfill audit trail — R1-R4 burst entries, PR #356 progress file, lessons | burst-log.md, pr-356-copilot-progress.md, lessons.md, STATE.md all updated |
+
+---
+
+## Burst N+7 (2026-05-11): PR #356 Copilot Round 5 — Memory-Amplification Defense, fix commit c9be4de
+
+**Agents dispatched:** orchestrator, implementer, state-manager
+**Files touched:** src/api/client.rs (pre-cap body slice before from_utf8_lossy; streaming errorMessages join with running budget check); PR #356 description updated via gh pr edit --body-file
+**Versions bumped:** (none)
+
+### Summary
+
+PR #356 Copilot Round 5 (2026-05-11T18:45:11Z, review id 4266436155) returned 3 inline findings. All 3 valid. 2 findings were memory-amplification security issues (OWASP A06/AP11), 1 was PR description drift.
+
+**Perplexity-validation: CONFIRMED for R5 #1 and #2** (per codified Lesson 1 / DEC-018 standing rule). Both findings confirmed as OWASP A06:2021 Resource Exhaustion / AP11 Resource Exhaustion. Production codebases (kubernetes/client-go, docker/cli, tokio/hyper) all use `take(MAX_SIZE)` or pre-cap before parsing. `String::from_utf8_lossy` confirmed to allocate the FULL byte slice regardless of downstream truncation. R5 #3 (PR description drift) did not require Perplexity — purely doc-internal claim with no external library/API behavior.
+
+**Process improvement:** This is the first state-manager dispatch made AFTER a Copilot round fix commit IN REAL TIME (not retroactively in batch). Per codified Lesson 2 ("Skipping state-manager between Copilot rounds creates audit-trail debt"), the audit trail is now being maintained continuously starting this round.
+
+**Findings:**
+1. Non-UTF8 fallback memory amplification: `String::from_utf8_lossy(body)` allocates owned String for ENTIRE byte slice before cap_entry truncation to 1 KiB. Hostile server returning 1 GB non-UTF8 body forces ~1 GB allocation. Fix: pre-cap byte slice to `MAX_ERROR_ENTRY_LEN * 4 = 4096 bytes` BEFORE `from_utf8_lossy`. 4x multiplier accommodates worst-case U+FFFD replacement expansion (3 bytes each). Total memory: O(MAX_ERROR_ENTRY_LEN) regardless of body size.
+2. errorMessages join entry-count amplification: NUMBER of entries is server-controlled. Hostile response with 1M entries × 1024 bytes forces ~1 GB allocation in join before sanitize_for_stderr truncates. Fix: streaming build with running budget check — pre-sized to MAX_SANITIZED_OUTPUT_LEN (4 KiB), iterate lazily, check budget before each push, set truncated flag and break when exceeded, append " [...truncated]". Total memory: O(MAX_SANITIZED_OUTPUT_LEN) regardless of entry count.
+3. PR description drift: PR body still described old `&str -> String` signature; implementation now takes `String` by value. Fix: updated PR description via `gh pr edit --body-file` to reflect final 5-round design.
+All 3/3 threads resolved. Cumulative 12/12 resolved. Fix commit c9be4de (+48 -20 lines). CI in-flight on c9be4de. R6 pending.
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| orchestrator | Triage 3 Copilot R5 findings; Perplexity CONFIRMED OWASP A06/AP11 for #1 + #2 | R5 #1 + #2: memory-amplification confirmed valid; R5 #3: PR description drift confirmed valid (no Perplexity needed) |
+| implementer | Pre-cap body slice (4096 bytes) before from_utf8_lossy; streaming errorMessages join with budget; PR description sync | src/api/client.rs c9be4de; PR #356 description updated |
+| orchestrator | Commit c9be4de; push; request R6 | 12/12 threads resolved; CI in-flight; R6 requested |
+| state-manager | In-cycle state update (first real-time dispatch per codified Lesson 2) | STATE.md, burst-log.md, pr-356-copilot-progress.md updated |

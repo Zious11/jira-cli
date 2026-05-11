@@ -2,28 +2,30 @@
 document_type: copilot-convergence-record
 pr: 356
 branch: chore/sanitize-errors-334
-head_sha: fe25e22
+head_sha: c9be4de
 closes_issues: ["#334"]
-rounds: 4
+rounds: 5
 status: in-progress
 review_round_1_id: ""
 review_round_1_submitted: 2026-05-11T17:49:49Z
 review_round_2_submitted: 2026-05-11T18:10:07Z
 review_round_3_submitted: 2026-05-11T18:18:03Z
 review_round_4_submitted: 2026-05-11T18:29:07Z
+review_round_5_id: "4266436155"
+review_round_5_submitted: 2026-05-11T18:45:11Z
 pr_state: OPEN
-threads_total: 9
-threads_resolved: 9
-trajectory: "4→1→2→2→?"
+threads_total: 12
+threads_resolved: 12
+trajectory: "4→1→2→2→3→?"
 ---
 
 # PR #356 Copilot Convergence Record — IN PROGRESS
 
 **PR:** https://github.com/Zious11/jira-cli/pull/356
 **Branch:** chore/sanitize-errors-334
-**Current tip SHA:** fe25e22
+**Current tip SHA:** c9be4de
 **Closes:** #334 on merge
-**Trajectory so far:** 4→1→2→2→? (Round 5 pending)
+**Trajectory so far:** 4→1→2→2→3→? (Round 6 pending)
 
 ## Summary
 
@@ -32,13 +34,19 @@ PR #356 implements CWE-117 defense at the `extract_error_message` public boundar
 from Atlassian error message strings before stderr emission, preventing terminal injection
 (log forging, ANSI escape injection) via hostile or proxy-injected error payloads.
 
-Four Copilot rounds have been completed with a total of 9/9 threads resolved. CI is in-flight
-on fe25e22 (poller b08xrozoq). Round 5 is pending.
+Five Copilot rounds have been completed with a total of 12/12 threads resolved. CI is in-flight
+on c9be4de. Round 6 is pending.
 
 **Process gaps noted:** R2 and R3 Perplexity-validation were SKIPPED on the rationalization
 that the claims were "empirically verifiable from code." Per DEC-018, this was incorrect — all
 Copilot review findings require Perplexity validation regardless of how obvious the claim looks.
-See Lesson codification below.
+R5 restored correct DEC-018 compliance: both security findings (#1 + #2) validated with
+Perplexity before fixing. See Lesson codification below.
+
+**Process improvement (R5):** This is the first round where the state-manager was dispatched
+IN REAL TIME after the fix commit, rather than retroactively in batch. Per codified Lesson 2
+("Skipping state-manager between Copilot rounds creates audit-trail debt"), this is the
+correct pattern going forward.
 
 ## Round 1 (2026-05-11T17:49:49Z)
 
@@ -185,9 +193,63 @@ Rewrote `errorMessages` join with a single `String::with_capacity` allocation in
 **Fix commit:** fe25e22 (current head)
 **Threads:** 9/9 resolved after fe25e22 push (cumulative 9/9)
 
+## Round 5 (2026-05-11T18:45:11Z)
+
+**Review ID:** 4266436155
+**Inline comments:** 3
+**All valid (2 security / memory-amplification + 1 doc drift)**
+
+### Finding 1 — Memory amplification: non-UTF8 fallback body pre-cap missing
+
+`String::from_utf8_lossy(body)` allocates an owned `String` for the ENTIRE byte slice even
+though `cap_entry` will truncate to 1 KiB downstream. A hostile server returning a 1 GB
+non-UTF8 body forces ~1 GB allocation before the cap kicks in.
+
+**Validation (Perplexity per DEC-018):** CONFIRMED — OWASP A06:2021 Resource Exhaustion
+/ AP11 Resource Exhaustion. Production codebases (kubernetes/client-go, docker/cli,
+tokio/hyper) all use `take(MAX_SIZE)` or pre-cap before parsing.
+`String::from_utf8_lossy` confirmed to allocate the FULL byte slice regardless of
+downstream truncation.
+
+**Fix:** Pre-cap byte slice to `MAX_ERROR_ENTRY_LEN * 4 = 4096 bytes` BEFORE
+`from_utf8_lossy`. 4x multiplier accommodates worst-case U+FFFD replacement expansion
+(3 bytes each). Total memory: O(MAX_ERROR_ENTRY_LEN) regardless of body size.
+
+### Finding 2 — Memory amplification: errorMessages join entry-count unbounded
+
+Even with per-entry `cap_entry` + `Cow<str>` zero-copy, the NUMBER of entries is
+server-controlled. A hostile response with 1M entries × 1024 bytes forces ~1 GB allocation
+in the join before `sanitize_for_stderr` truncates.
+
+**Validation (Perplexity per DEC-018):** CONFIRMED — same OWASP A06/AP11 as Finding 1.
+Streaming parse / bounded build is the standard mitigation (same pattern used in
+kubernetes/client-go, docker/cli, tokio/hyper).
+
+**Fix:** Rewrote the `errorMessages` join as a streaming build with running budget check:
+- Pre-sized output to `MAX_SANITIZED_OUTPUT_LEN` (4 KiB hard ceiling)
+- Iterate lazily over `msgs.iter()`, calling `cap_entry` per entry
+- Before each push: check `joined.len() + separator + capped.len() > MAX_SANITIZED_OUTPUT_LEN`;
+  if yes, set truncated flag and break
+- Append `" [...truncated]"` on truncation
+- Total memory: O(MAX_SANITIZED_OUTPUT_LEN) regardless of entry count
+
+### Finding 3 — PR description drift
+
+PR body still described old `&str -> String` signature; implementation now takes `String`
+by value after R1 fast-path refactor.
+
+**Validation:** None required — purely doc-internal claim with no external library/API
+behavior.
+
+**Fix:** Updated PR description via `gh pr edit --body-file` to reflect the final 5-round
+design: sanitization layer + per-entry cap layer + memory-amplification defense.
+
+**Fix commit:** c9be4de (+48 -20 lines)
+**Threads:** 12/12 resolved (cumulative) after c9be4de push
+
 ## Trajectory Analysis
 
-**Pattern so far:** 4→1→2→2 — all non-zero rounds addressed real findings.
+**Pattern so far:** 4→1→2→2→3 — all non-zero rounds addressed real findings.
 
 - R1: 4 findings (doc accuracy, loop allocation, clean-path allocation, missing length cap).
   Perplexity confirmed CWE-117 + OWASP length-capping guidance.
@@ -197,22 +259,24 @@ Rewrote `errorMessages` join with a single `String::with_capacity` allocation in
   un-truncated). Perplexity validation SKIPPED [process-gap].
 - R4: 2 findings (premature truncation; per-entry allocation). Perplexity confirmed Cow<str>
   idiomatic pattern.
-- R5: PENDING (CI in-flight on fe25e22, poller b08xrozoq)
+- R5: 3 findings (2 memory-amplification: non-UTF8 body pre-cap + entry-count join bound;
+  1 doc: PR description drift). Perplexity CONFIRMED OWASP A06/AP11 for #1 + #2.
 
-**Assessment:** Given that R4 addressed allocation efficiency patterns (Cow<str>) which are
-well-understood idioms, expect R5 to produce 0 findings and declare convergence.
+**Assessment:** R5 surfaced 2 genuine OWASP A06/AP11 resource exhaustion issues at the body
+parsing and join layers. R6 may find 0 or residual allocation edge cases. Memory budget is
+now O(MAX_SANITIZED_OUTPUT_LEN) end-to-end across all paths.
 
 ## CI Status
 
-**Head SHA:** fe25e22
-**CI result:** in-flight (poller b08xrozoq)
+**Head SHA:** c9be4de
+**CI result:** in-flight
 
 ## Current PR State
 
 | Field | Value |
 |-------|-------|
 | **State** | OPEN |
-| **Threads** | 9 created; 9/9 resolved |
-| **R5** | Pending |
-| **CI on fe25e22** | in-flight |
+| **Threads** | 12 created; 12/12 resolved |
+| **R6** | Pending |
+| **CI on c9be4de** | in-flight |
 | **Closes** | #334 on merge |
