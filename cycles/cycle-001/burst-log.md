@@ -1491,3 +1491,74 @@ CI on 0644b1d: 8/8 green (settled 16:10:18Z). All 2 threads resolved (2/2).
 | Factory state update | state-manager | STATE.md + burst-log + convergence record + lessons |
 
 **Outcome:** PR #354 CONVERGED Round 3 (1→1→0). CI 8/8 green (0644b1d). 2/2 threads resolved. Awaiting human merge (closes #342). 11 audit-followups remain after #342 merges: #331, #332, #333, #334, #335, #336, #340, #343, #345, #346, #350.
+
+---
+
+## Burst N+1 (2026-05-11) — PR #354 Merged + Cleanup
+
+**Agents dispatched:** orchestrator, state-manager
+**Files touched:** .factory/STATE.md, .factory/cycles/cycle-001/burst-log.md
+**Versions bumped:** (none)
+
+### Summary
+
+PR #354 merged by human at 2026-05-11T16:13:59Z (merge commit 4e148490e98b0f516258908f75de4ec8d0367ea4). Issue #342 automatically closed at 2026-05-11T16:14:00Z (verified). Post-merge cleanup completed: develop fast-forwarded locally from 7fbf14d to 4e14849, worktree `.worktrees/issue-342-labels-doc` removed, local branch `docs/labels-shape-divergence-342` deleted. Final convergence trajectory for PR #354: 1→1→0 over 3 Copilot rounds.
+
+| Step | Agent | Output |
+|------|-------|--------|
+| Human merges PR #354 @ 4e14849 | human | Merge commit 4e148490e98b0f516258908f75de4ec8d0367ea4; #342 closed |
+| Verify #342 closed | orchestrator | #342 CLOSED at 2026-05-11T16:14:00Z — confirmed |
+| Develop fast-forward 7fbf14d..4e14849 | orchestrator | Local develop HEAD at 4e14849 |
+| Remove worktree `.worktrees/issue-342-labels-doc` | orchestrator | Worktree removed |
+| Delete local branch `docs/labels-shape-divergence-342` | orchestrator | Branch deleted |
+| Factory state update | state-manager | STATE.md + burst-log updated |
+
+**Outcome:** PR #354 MERGED (closes #342). Develop at 4e14849. Cleanup complete. 11 audit-followups now active: #331, #332, #333, #334, #335, #336, #340, #343, #345, #346, #350.
+
+---
+
+## Burst N+2 (2026-05-11) — PR #355 (#332 task_id validation) Open + Implementation
+
+**Agents dispatched:** orchestrator (implementer), research-agent (Perplexity), state-manager
+**Files touched:** src/api/jira/bulk.rs (+168 lines), .factory/STATE.md, .factory/cycles/cycle-001/burst-log.md
+**Versions bumped:** (none)
+
+### Summary
+
+Implemented defense-in-depth security validation for `BulkSubmitResponse.task_id` (issue #332). The `task_id` field is subsequently used in URL paths and terminal output; CWE-117-adjacent CR/LF injection from a hostile/spoofed Atlassian response (or `JR_BASE_URL`-controlled MitM proxy) is the primary threat vector.
+
+**Perplexity pre-design validation (per DEC-018):** Two queries run before designing the allowlist:
+
+- Query 1 ("Atlassian Jira Cloud REST API v3 bulk operations taskId format"): Perplexity returned no specific docs on taskId format; recommended consulting official Atlassian docs and empirical testing. Inconclusive.
+- Query 2 ("OpenAPI specification BulkOperationProgress schema property taskId definition"): No OpenAPI schema pinned for taskId in v3 bulk-operations group. Inferred pattern from Atlassian cloud-identifier conventions: `{numericPrefix}:{uuid}` (e.g., `"123456:4ac97bc8-ab12-ab12-8d38-eda562abc123"`), ~40-50 chars typical. Citations: community.atlassian.com/forums/Confluence-questions/API-accountId-..., jira.atlassian.com/browse/JIRAALIGN-7538. Inconclusive but constrains design.
+
+**Allowlist design** (conservative, given format uncertainty):
+- Charset: `[A-Za-z0-9._:-]+` (covers UUIDs, `domainId:uuid` pattern, numeric tokens, opaque ASCII)
+- Length: 1..=256 bytes (generous ceiling; observed pattern ~40-50 chars)
+- Rejects: empty string, oversized (>256 bytes), `/`, `\`, NUL, CR, LF, space, non-ASCII, control bytes
+
+**Implementation:** `validate_task_id` function + `MAX_TASK_ID_LEN: 256` constant added in `src/api/jira/bulk.rs`. Wired into 3 call sites: `bulk_edit_fields`, `bulk_transition`, `poll_bulk_task`. 15 new unit tests covering valid/invalid classes (valid UUIDs, domainId:uuid, alphanumeric tokens; invalid: empty, oversized, path-traversal chars `/`/`\`, CR/LF injection, NUL byte, non-ASCII, leading/trailing space, control bytes). Clippy octal-escape warning caught and fixed during local CI (`"task\0123"` → `"task\x00123"`).
+
+**Local CI-equivalent results:**
+- cargo fmt --check: PASS
+- cargo clippy --all-targets -- -D warnings: PASS (after octal-escape fix)
+- cargo test: PASS — 628 unit + 38 bulk integration + all other suites green
+
+**PR and remote status:** Commit 64e9c97 pushed to `chore/task-id-validation-332`. PR #355 opened against develop @ 4e14849. Remote CI in-flight (poller bc312fqxe). Copilot review requested (poller becpc7kbf).
+
+| Step | Agent | Output |
+|------|-------|--------|
+| Perplexity Query 1: Atlassian taskId format in bulk ops | research-agent | Inconclusive — no specific docs; recommended empirical testing |
+| Perplexity Query 2: OpenAPI BulkOperationProgress taskId schema | research-agent | Inconclusive — inferred `{numericPrefix}:{uuid}` ~40-50 chars from community sources |
+| Design allowlist: `[A-Za-z0-9._:-]+` 1..=256 | orchestrator | Conservative charset + generous ceiling; rejects CR/LF/NUL/non-ASCII |
+| Implement `validate_task_id` + `MAX_TASK_ID_LEN: 256` in src/api/jira/bulk.rs | orchestrator | +168 lines |
+| Wire into 3 call sites (bulk_edit_fields, bulk_transition, poll_bulk_task) | orchestrator | 3 call sites updated |
+| Write 15 unit tests (valid + invalid classes) | orchestrator | 15 tests covering threat-model classes |
+| Fix clippy octal-escape warning (`"task\0123"` → `"task\x00123"`) | orchestrator | Clippy clean |
+| cargo fmt + clippy + test (local CI-equivalent) | orchestrator | All green — 628 unit + 38 bulk integration |
+| Commit 64e9c97, push chore/task-id-validation-332 | orchestrator | 64e9c97 on remote |
+| Open PR #355 (closes #332) | orchestrator | https://github.com/Zious11/jira-cli/pull/355 |
+| Request Copilot review | orchestrator | Poller becpc7kbf in-flight |
+| Factory state update | state-manager | STATE.md + burst-log updated |
+
+**Outcome:** PR #355 OPEN (chore/task-id-validation-332 @ 64e9c97; closes #332). Defense-in-depth task_id validation shipped. Behavioral change: none for well-formed Atlassian responses; rejects malformed/hostile input. Remote CI in-flight; awaiting Copilot Round 1. 10 audit-followups remain after #332 closes: #331, #333, #334, #335, #336, #340, #343, #345, #346, #350.
