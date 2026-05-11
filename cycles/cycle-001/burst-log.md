@@ -1622,3 +1622,55 @@ lessons.md.
 **PR #355:** OPEN, MERGEABLE, mergeStateStatus CLEAN, CI 8/8 green on 62766f4, 4/4 threads resolved.
 Convergence trajectory: 3→1→0 (3 rounds). Awaiting human merge. Closes #332 on merge.
 10 audit-followups remain after merge: #331, #333, #334, #335, #336, #340, #343, #345, #346, #350.
+
+---
+
+## Burst N+1 (2026-05-11): PR #355 Merged + Cleanup
+
+**Agents dispatched:** pr-manager, devops-engineer
+**Files touched:** (source repo) develop branch fast-forwarded to 448c568; worktree + branch deleted
+**Versions bumped:** (none)
+
+### Summary
+
+PR #355 (chore/task-id-validation-332) was merged by the human at 2026-05-11T17:32:05Z via merge commit 448c568. GitHub automatically closed issue #332 at 2026-05-11T17:32:06Z. Develop was fast-forwarded from 4e14849 to 448c568 (4 new commits since PR #354). Post-merge cleanup: worktree `.worktrees/issue-332-task-id-validation` removed, local branch `chore/task-id-validation-332` deleted. Final convergence trajectory for PR #355 was 3→1→0 over 3 Copilot rounds.
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| pr-manager | Observe PR #355 merge | Merge commit 448c568; issue #332 closed |
+| devops-engineer | Post-merge cleanup | Worktree `.worktrees/issue-332-task-id-validation` removed; branch `chore/task-id-validation-332` deleted (local + remote); develop fast-forwarded 4e14849→448c568 |
+| state-manager | STATE.md update | Phase Progress row updated to MERGED; Current Phase Steps updated; Session Resume Checkpoint replaced |
+
+---
+
+## Burst N+2 (2026-05-11): PR #356 Opened — #334 Sanitize errorMessages (CWE-117)
+
+**Agents dispatched:** orchestrator, implementer, pr-manager
+**Files touched:** src/api/client.rs (+139 lines: sanitize_for_stderr fn + extract_error_message_raw refactor + 11 unit tests), tests/api_client.rs (+43 lines: 4 new integration tests)
+**Versions bumped:** (none)
+
+### Summary
+
+PR #356 opened implementing issue #334: CWE-117 defense at the `extract_error_message` public boundary in `src/api/client.rs`. The fix adds `sanitize_for_stderr(s: &str) -> String` which strips ASCII control characters (bytes 0x00–0x1F, 0x7F) from Atlassian error message strings before they are emitted to stderr, preventing terminal injection (log forging, ANSI escape injection) via hostile or proxy-injected error payloads.
+
+**Design decision — custom sanitizer over `str::escape_debug`:** The Rust standard library's `escape_debug` would escape all control characters correctly, but it also escapes non-ASCII bytes to `\u{XXXX}` sequences. This would garble localized error messages from non-English Jira tenants (e.g., Japanese, Arabic, Chinese). The custom sanitizer replaces only control characters with U+FFFD (replacement character) while passing through all non-ASCII Unicode unchanged.
+
+**Test fixture quirk encountered and fixed:** Initial test fixtures used Rust raw byte strings with embedded NUL (`\x00`) and ESC (`\x1b`) bytes directly. The `serde_json` parser failed to parse these because the JSON spec requires control characters to be escaped as `\uXXXX` in string values; raw control bytes are invalid JSON. Fixed by writing fixture strings with literal ` ` and `` JSON Unicode escapes (e.g., `"some error injected[31mRED"`), which parse correctly and deliver the real control bytes to the sanitizer.
+
+**Test coverage:** 11 unit tests in `src/api/client.rs` (NUL, CR, LF, ESC ANSI, tab-preserved, non-ASCII Unicode preserved, all-clean passthrough, multi-source error concatenation, empty input, all-control stripped, boundary bytes). 4 integration tests in `tests/api_client.rs` covering the public `extract_error_message` API across the 4 precedence paths (x-reason header, statusCode body field, errorMessages array, empty body fallback).
+
+**Validation strategy:** No Perplexity research needed. CWE-117 pattern and Rust `escape_debug` behavior were already empirically established during PR #355 Round 2 analysis. The design choice (custom vs escape_debug) was made based on that prior empirical work plus the non-ASCII preservation requirement.
+
+**Local CI state at commit d1b9fe7:** cargo fmt clean, cargo clippy --all-targets -- -D warnings clean, cargo test passing (641 unit + 26 api_client integration + all other suites). Remote CI in-flight. Copilot review requested.
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| orchestrator | Scope and design CWE-117 fix | sanitize_for_stderr design; custom sanitizer rationale documented |
+| implementer | Implement sanitize_for_stderr + refactor extract_error_message_raw | src/api/client.rs +139 lines; 11 unit tests |
+| implementer | Integration tests for public extract_error_message API | tests/api_client.rs +43 lines; 4 integration tests; fixture JSON escape quirk identified and fixed |
+| orchestrator | Commit d1b9fe7, push chore/sanitize-errors-334, open PR #356 | PR #356 at https://github.com/Zious11/jira-cli/pull/356; base develop @ 448c568 |
+| pr-manager | Request Copilot review | Copilot R1 poller b9vv6n65e; CI poller bkulwe03a |
