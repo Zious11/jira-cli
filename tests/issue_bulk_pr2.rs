@@ -2323,3 +2323,196 @@ async fn test_max_without_jql_rejected_before_any_http_call() {
         "Expected zero HTTP calls when --max without --jql is rejected by handler guard"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Copilot round 9 (#3215464657): extend --label conflict guard to ALL non-label
+// field flags (--team, --points, --no-points, --parent, --no-parent,
+// --description, --description-stdin, --markdown).
+// Three representative tests (single positional key + varied flag combos).
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit FOO-1 --label add:foo --team SomeTeam --no-input`
+/// MUST exit 64 (UserError) before ANY HTTP call.
+/// stderr must mention both "--label" and "--team".
+#[tokio::test]
+async fn test_label_with_team_rejected_before_search() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected: bulk called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected: search called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--label",
+            "add:foo",
+            "--team",
+            "SomeTeam",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(
+        !output.status.success(),
+        "Expected non-zero exit when --label combined with --team; combined={combined}"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 (UserError) for --label + --team; combined={combined}"
+    );
+    assert!(
+        combined.contains("--label"),
+        "Error must mention '--label'; combined={combined}"
+    );
+    assert!(
+        combined.contains("--team"),
+        "Error must mention '--team'; combined={combined}"
+    );
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        0,
+        "Expected zero HTTP calls when --label combined with --team"
+    );
+}
+
+/// `jr issue edit FOO-1 --label add:foo --parent FOO-1 --no-input`
+/// MUST exit 64 (UserError) before ANY HTTP call.
+/// stderr must mention both "--label" and "--parent".
+#[tokio::test]
+async fn test_label_with_parent_rejected_before_search() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected: bulk called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected: search called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--label",
+            "add:foo",
+            "--parent",
+            "FOO-1",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(
+        !output.status.success(),
+        "Expected non-zero exit when --label combined with --parent; combined={combined}"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 (UserError) for --label + --parent; combined={combined}"
+    );
+    assert!(
+        combined.contains("--label"),
+        "Error must mention '--label'; combined={combined}"
+    );
+    assert!(
+        combined.contains("--parent"),
+        "Error must mention '--parent'; combined={combined}"
+    );
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        0,
+        "Expected zero HTTP calls when --label combined with --parent"
+    );
+}
+
+/// `jr issue edit FOO-1 --label add:foo --description "x" --no-input`
+/// MUST exit 64 (UserError) before ANY HTTP call.
+/// stderr must mention both "--label" and "--description".
+#[tokio::test]
+async fn test_label_with_description_rejected_before_search() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected: bulk called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected: search called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--label",
+            "add:foo",
+            "--description",
+            "x",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(
+        !output.status.success(),
+        "Expected non-zero exit when --label combined with --description; combined={combined}"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 (UserError) for --label + --description; combined={combined}"
+    );
+    assert!(
+        combined.contains("--label"),
+        "Error must mention '--label'; combined={combined}"
+    );
+    assert!(
+        combined.contains("--description"),
+        "Error must mention '--description'; combined={combined}"
+    );
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        0,
+        "Expected zero HTTP calls when --label combined with --description"
+    );
+}

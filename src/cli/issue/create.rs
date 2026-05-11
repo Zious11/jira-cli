@@ -328,6 +328,30 @@ pub(super) async fn handle_edit(
         if issue_type.is_some() {
             conflicting.push("--type");
         }
+        if team.is_some() {
+            conflicting.push("--team");
+        }
+        if points.is_some() {
+            conflicting.push("--points");
+        }
+        if no_points {
+            conflicting.push("--no-points");
+        }
+        if parent.is_some() {
+            conflicting.push("--parent");
+        }
+        if no_parent {
+            conflicting.push("--no-parent");
+        }
+        if description.is_some() {
+            conflicting.push("--description");
+        }
+        if description_stdin {
+            conflicting.push("--description-stdin");
+        }
+        if markdown {
+            conflicting.push("--markdown");
+        }
         if !conflicting.is_empty() {
             return Err(JrError::UserError(format!(
                 "--label cannot be combined with {} in the same call. \
