@@ -907,6 +907,82 @@ fn cap_entry(s: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(format!("{}{}", &s[..end], marker))
 }
 
+/// Bounded JSON serialization of a `serde_json::Value`.
+///
+/// Defense-in-depth against memory-amplification DoS (OWASP A06 / AP11) for the
+/// non-string-value branch of `extract_error_message_raw`. `Value::to_string()`
+/// (or `serde_json::to_string`) fully serializes the input into a `String`
+/// BEFORE `cap_entry` can truncate it — a hostile response with a deeply
+/// nested or large server-controlled value would force an unbounded allocation
+/// even though the final stderr output is capped.
+///
+/// We serialize into a byte-bounded writer that returns `WriteZero` once
+/// `limit` is reached. `serde_json::to_writer` propagates the error and stops,
+/// so total memory is bounded to `limit` bytes regardless of input size/depth.
+/// The partial prefix is returned for the standard `cap_entry` pipeline; UTF-8
+/// is repaired lossily because the cutoff may land mid-codepoint.
+///
+/// `limit` is chosen as `MAX_ERROR_ENTRY_LEN` — `cap_entry` will then pass the
+/// (already-bounded) prefix through with zero further allocation. Tighter than
+/// the typical 1 MB serialization cap recommended by general guidance, but
+/// appropriate for this domain (stderr error messages, not data interchange).
+fn serialize_value_bounded(v: &serde_json::Value, limit: usize) -> String {
+    /// Writer that accepts up to `limit` bytes then refuses further writes.
+    struct Bounded {
+        buf: Vec<u8>,
+        limit: usize,
+    }
+    impl std::io::Write for Bounded {
+        fn write(&mut self, src: &[u8]) -> std::io::Result<usize> {
+            let remaining = self.limit.saturating_sub(self.buf.len());
+            if remaining == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    "bounded JSON writer reached byte limit",
+                ));
+            }
+            let take = src.len().min(remaining);
+            self.buf.extend_from_slice(&src[..take]);
+            if take < src.len() {
+                // Partial write — propagate to serde_json so it stops.
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    "bounded JSON writer reached byte limit mid-write",
+                ));
+            }
+            Ok(take)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let mut w = Bounded {
+        buf: Vec::with_capacity(limit.min(256)),
+        limit,
+    };
+    // Result intentionally ignored: WriteZero on overflow is the expected
+    // bounded-truncation signal. The (possibly partial) prefix in `w.buf` is
+    // what we want for the downstream cap_entry pipeline.
+    let _ = serde_json::to_writer(&mut w, v);
+    // Lossy because serde_json may have written a partial multi-byte UTF-8
+    // codepoint when the writer cut off mid-string.
+    let mut s = String::from_utf8_lossy(&w.buf).into_owned();
+    // Lossy replacement can expand the string by a few bytes (one U+FFFD = 3
+    // bytes replacing 1-2 trailing invalid bytes when a multibyte char was
+    // cut mid-codepoint). Re-cap at a UTF-8 char boundary so the function
+    // strictly satisfies `out.len() <= limit` — callers (and the cap_entry
+    // pipeline) rely on this invariant.
+    if s.len() > limit {
+        let mut end = limit;
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        s.truncate(end);
+    }
+    s
+}
+
 /// Sanitize a server-supplied string for safe display on stderr.
 ///
 /// Defense against CWE-117 (Improper Output Neutralization for Logs): a hostile
@@ -1126,32 +1202,50 @@ fn extract_error_message_raw(body: &[u8]) -> String {
         if let Some(errors) = json.get("errors").and_then(|v| v.as_object()) {
             if !errors.is_empty() {
                 // Memory-amplification defense (OWASP A06 / AP11, same threat
-                // class as the errorMessages streaming join earlier): the
-                // errors map's key count is server-controlled. A hostile
-                // response with 1M keys × 100-byte values would force ~100 MB
-                // allocation in the `pairs` Vec before sanitize_for_stderr
-                // truncates. Bound the entry count BEFORE collect/sort:
+                // class as the errorMessages streaming join earlier). Three
+                // server-controlled vectors are bounded here:
+                //
+                // 1. Entry count — `take(MAX_ERROR_PAIRS)` before collect/sort
+                //    so a hostile response with 1M keys cannot force a 1M-entry
+                //    intermediate Vec.
+                //
+                // 2. Key length — each key passes through `cap_entry` BEFORE
+                //    format!. Without this cap, a hostile response with a
+                //    small number of pathologically large keys (e.g., 1 MB
+                //    key name) would amplify intermediate allocations in the
+                //    formatted pair string even with the entry-count cap.
+                //
+                // 3. Non-string value size/depth — `serialize_value_bounded`
+                //    serializes via a byte-limited writer instead of
+                //    `Value::to_string()`. A hostile response with deeply
+                //    nested or huge non-string values cannot force a full
+                //    serialization allocation before cap_entry truncates.
                 //
                 // MAX_ERROR_PAIRS = 256 is generous (legitimate Jira responses
-                // have 1-10 field-level errors) yet bounds memory at
-                // 256 × MAX_ERROR_ENTRY_LEN = 256 KiB worst case for the
-                // intermediate Vec. The downstream streaming join further
-                // bounds the OUTPUT to MAX_SANITIZED_OUTPUT_LEN.
+                // have 1-10 field-level errors). Per-pair memory is bounded
+                // by 2 × MAX_ERROR_ENTRY_LEN (capped key + capped value) plus
+                // ~4 bytes of format overhead, so the intermediate Vec is
+                // bounded at roughly 256 × 2 × 1024 ≈ 512 KiB worst case.
+                // The downstream streaming join further bounds OUTPUT to
+                // MAX_SANITIZED_OUTPUT_LEN.
                 const MAX_ERROR_PAIRS: usize = 256;
                 let total_keys = errors.len();
                 let mut pairs: Vec<String> = errors
                     .iter()
                     .take(MAX_ERROR_PAIRS)
                     .map(|(k, v)| {
+                        // Cap server-controlled key length BEFORE format!
+                        // (R9 defense — see comment block above).
+                        let k_capped = cap_entry(k);
                         if let Some(s) = v.as_str() {
                             // String value: borrow via Cow when no truncation.
-                            format!("{k}: {}", cap_entry(s))
+                            format!("{}: {}", k_capped, cap_entry(s))
                         } else {
-                            // Non-string value: must materialize once to apply
-                            // the cap, then format. v.to_string() is a temp
-                            // that doesn't outlive the Cow, so own immediately.
-                            let serialized = v.to_string();
-                            format!("{k}: {}", cap_entry(&serialized))
+                            // Non-string value: bounded serialization avoids
+                            // full Value::to_string() allocation against
+                            // hostile deeply-nested / huge values (R9 defense).
+                            let serialized = serialize_value_bounded(v, MAX_ERROR_ENTRY_LEN);
+                            format!("{}: {}", k_capped, cap_entry(&serialized))
                         }
                     })
                     .collect();
@@ -1198,7 +1292,10 @@ fn extract_error_message_raw(body: &[u8]) -> String {
 
 #[cfg(test)]
 mod sanitize_tests {
-    use super::{MAX_ERROR_ENTRY_LEN, MAX_SANITIZED_OUTPUT_LEN, cap_entry, sanitize_for_stderr};
+    use super::{
+        MAX_ERROR_ENTRY_LEN, MAX_SANITIZED_OUTPUT_LEN, cap_entry, sanitize_for_stderr,
+        serialize_value_bounded,
+    };
 
     // Tiny helper to avoid repeating `.to_string()` in every call — keeps test
     // lines compact now that `sanitize_for_stderr` takes `String` by value.
@@ -1476,5 +1573,80 @@ mod sanitize_tests {
             "size invariant violated for UTF-8 input: output len = {}",
             capped.len()
         );
+    }
+
+    // serialize_value_bounded tests — memory-amplification defense for
+    // non-string `errors`-map values (R9 finding).
+
+    #[test]
+    fn test_serialize_value_bounded_small_value_fits_under_limit() {
+        // Small values should serialize fully and identically to Value::to_string().
+        let v = serde_json::json!({"code": 42, "msg": "hello"});
+        let out = serialize_value_bounded(&v, 1024);
+        assert_eq!(out, v.to_string());
+    }
+
+    #[test]
+    fn test_serialize_value_bounded_caps_oversized_value() {
+        // Pin: a value that serializes to ~10 KiB MUST NOT exceed the byte
+        // limit. This is the core memory-amplification defense — without
+        // bounded serialization, Value::to_string() would allocate 10 KiB
+        // before cap_entry could truncate.
+        let big_string = "x".repeat(10_000);
+        let v = serde_json::json!({"oversized": big_string});
+        let out = serialize_value_bounded(&v, MAX_ERROR_ENTRY_LEN);
+        assert!(
+            out.len() <= MAX_ERROR_ENTRY_LEN,
+            "bounded output exceeded limit: {} > {}",
+            out.len(),
+            MAX_ERROR_ENTRY_LEN
+        );
+        // Output should be a valid prefix of the full serialization.
+        assert!(out.starts_with("{\"oversized\":\""));
+    }
+
+    #[test]
+    fn test_serialize_value_bounded_caps_deeply_nested_value() {
+        // Pin: a deeply nested value MUST also be bounded — the prior
+        // Value::to_string() path would have allocated full serialization
+        // proportional to depth before cap_entry could truncate.
+        let mut v = serde_json::Value::Null;
+        for _ in 0..1000 {
+            v = serde_json::json!([v]);
+        }
+        let out = serialize_value_bounded(&v, MAX_ERROR_ENTRY_LEN);
+        assert!(
+            out.len() <= MAX_ERROR_ENTRY_LEN,
+            "bounded output exceeded limit for deeply nested value: {} > {}",
+            out.len(),
+            MAX_ERROR_ENTRY_LEN
+        );
+    }
+
+    #[test]
+    fn test_serialize_value_bounded_produces_valid_utf8() {
+        // Pin: even when the underlying writer cuts off mid-codepoint,
+        // String::from_utf8_lossy must produce valid UTF-8 (no panics from
+        // downstream str ops). This is critical because `cap_entry` indexes
+        // via `is_char_boundary` on the bounded output.
+        // A long string with multibyte chars maximizes the chance of a
+        // mid-codepoint cutoff.
+        let big_utf8 = "日本語のエラー".repeat(500);
+        let v = serde_json::json!({"k": big_utf8});
+        let out = serialize_value_bounded(&v, MAX_ERROR_ENTRY_LEN);
+        // Must be valid UTF-8 (would panic on assert otherwise).
+        assert!(out.is_char_boundary(out.len()));
+        // And bounded.
+        assert!(out.len() <= MAX_ERROR_ENTRY_LEN);
+    }
+
+    #[test]
+    fn test_serialize_value_bounded_handles_zero_limit_safely() {
+        // Edge case: a zero limit returns empty without panicking. Not used
+        // in production (limit is always MAX_ERROR_ENTRY_LEN > 0), but pins
+        // the contract for future callers.
+        let v = serde_json::json!({"a": 1});
+        let out = serialize_value_bounded(&v, 0);
+        assert_eq!(out, "");
     }
 }
