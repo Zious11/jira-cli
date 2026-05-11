@@ -48,32 +48,51 @@ const MAX_TASK_ID_LEN: usize = 256;
 /// poll caller) is safe to embed in the bulk-queue URL path.
 ///
 /// This is defense-in-depth against a hostile or spoofed Atlassian response:
-/// the URL is constructed via `urlencoding::encode(task_id)` which already
-/// defangs path separators, but the allowlist below also rejects oversized
-/// responses, embedded NUL/control bytes, and identifiers containing
-/// path-traversal tokens (`..`, `/`, `\`) at the source. Cross-relevant
-/// threat model: a `JR_BASE_URL`-controlled MitM proxy in a test scenario.
+/// the URL is constructed via `urlencoding::encode(task_id)` which defangs
+/// path separators, but the allowlist below also rejects oversized responses,
+/// embedded NUL/control bytes, identifiers containing path-traversal segment
+/// separators (`/`, `\`), and the specific dot-segment values (`.`, `..`)
+/// that RFC 3986 §5.2.4 URL normalizers resolve away BEFORE transmission
+/// (verified Perplexity 2026-05-11: reqwest/hyper/curl all apply §5.2.4
+/// before send, so `/bulk/queue/..` becomes `/bulk/` at the client — a
+/// path-confusion vulnerability if `.` or `..` reaches this function).
+/// Cross-relevant threat model: a `JR_BASE_URL`-controlled MitM proxy in a
+/// test scenario.
 ///
 /// Allowlist: ASCII alphanumeric + `-`, `_`, `:`, `.`. Covers UUIDs, the
 /// `domainId:uuid` cloud-identifier pattern, numeric IDs, and other opaque
-/// printable-ASCII tokens. Path-traversal (`..`) is rejected by virtue of
-/// the `/` character being outside the allowlist; the standalone `.`
-/// character is permitted (UUIDs and numeric prefixes don't use `.`, but
-/// this leaves the door open for future tokens like `v1.0` without forcing
-/// a second migration).
+/// printable-ASCII tokens. The `.` character is permitted within longer
+/// tokens (e.g., `v1.0`) but the standalone values `.` and `..` are
+/// explicitly rejected as dot-segments.
 fn validate_task_id(task_id: &str) -> anyhow::Result<()> {
     if task_id.is_empty() {
         anyhow::bail!(
             "Bulk operation response taskId is empty; cannot poll task status. \
-             This indicates an unexpected Atlassian response — re-run the command, \
-             or run `jr api /rest/api/3/bulk/issues/fields` to inspect the raw response."
+             Re-run the bulk command — if the same error recurs, the Atlassian \
+             endpoint may be misbehaving or a proxy may be intercepting responses."
+        );
+    }
+    // Reject dot-segments BEFORE the length and charset checks. Per RFC 3986
+    // §5.2.4 (Remove Dot Segments), HTTP clients including reqwest/hyper/curl
+    // normalize `.` and `..` path segments BEFORE transmission, rewriting
+    // `/rest/api/3/bulk/queue/..` to `/rest/api/3/bulk/` — a path-confusion
+    // attack vector if a hostile/spoofed response returned `..` as taskId.
+    // urlencoding::encode does NOT encode `.` so the value reaches the
+    // normalizer intact. Reject as a single special case.
+    if task_id == "." || task_id == ".." {
+        anyhow::bail!(
+            "Bulk operation response taskId is a dot-segment ({task_id:?}); URL \
+             normalizers (RFC 3986 §5.2.4) resolve dot-segments before transmission, \
+             which would rewrite the bulk-queue URL path to a different endpoint. \
+             Rejecting as hostile/malformed."
         );
     }
     if task_id.len() > MAX_TASK_ID_LEN {
         anyhow::bail!(
             "Bulk operation response taskId is {} bytes (max allowed: {}); rejecting \
-             as potentially hostile/malformed response. Re-run the command or inspect \
-             the raw response with `jr api ...`.",
+             as potentially hostile/malformed response. Re-run the bulk command — if \
+             the same error recurs, the Atlassian endpoint may be misbehaving or a \
+             proxy may be intercepting responses.",
             task_id.len(),
             MAX_TASK_ID_LEN
         );
@@ -293,11 +312,39 @@ mod tests {
 
     #[test]
     fn test_validate_task_id_rejects_path_traversal_attempt() {
-        // ".." alone is permitted (it's two dots), but with a "/" between
-        // segments it gets caught by the "/" rejection. Standalone ".." is
-        // harmless as a single path segment after urlencoding::encode.
+        // "../etc/passwd" contains "/" which is outside the allowlist, so the
+        // charset rejection fires first.
         let err = validate_task_id("../etc/passwd").expect_err("path traversal accepted");
         assert!(err.to_string().contains("disallowed characters"));
+    }
+
+    #[test]
+    fn test_validate_task_id_rejects_single_dot_segment() {
+        // Standalone "." is a dot-segment per RFC 3986 §5.2.4: HTTP client
+        // libraries (reqwest, hyper, curl) normalize "/path/." to "/path/"
+        // BEFORE transmission. Reject explicitly so a hostile/spoofed response
+        // can't rewrite the bulk-queue URL path.
+        let err = validate_task_id(".").expect_err("dot-segment accepted");
+        assert!(err.to_string().contains("dot-segment"));
+    }
+
+    #[test]
+    fn test_validate_task_id_rejects_double_dot_segment() {
+        // Standalone ".." is a dot-segment per RFC 3986 §5.2.4: HTTP client
+        // libraries normalize "/path/.." to its parent BEFORE transmission.
+        // urlencoding::encode does NOT escape ".", so the dot-segment reaches
+        // the normalizer intact. Reject explicitly to prevent path-confusion
+        // attacks (verified Perplexity 2026-05-11 against RFC 3986 §5.2.4).
+        let err = validate_task_id("..").expect_err("double-dot segment accepted");
+        assert!(err.to_string().contains("dot-segment"));
+    }
+
+    #[test]
+    fn test_validate_task_id_accepts_dot_within_longer_token() {
+        // Dots are permitted WITHIN longer tokens (e.g., a hypothetical
+        // version-prefixed taskId like "v1.0:abcd-..."). Only the standalone
+        // values "." and ".." are dot-segments per RFC 3986.
+        validate_task_id("v1.0:abc123").expect("dotted token rejected");
     }
 
     #[test]
