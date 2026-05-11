@@ -483,6 +483,23 @@ pub(super) async fn handle_edit(
                     planned.insert("priority".into(), json!(p));
                 }
                 if !labels.is_empty() {
+                    // NOTE: This dry-run preview shape `[{"action": "ADD", "name": "foo"}]`
+                    // is INTENTIONALLY simpler than the actual POST body shape sent by
+                    // `handle_edit_bulk_labels` to Atlassian, which uses
+                    // `{"labelsAction": "ADD", "labels": [{"name": "foo"}]}` (or an array
+                    // of those objects when ADD+REMOVE coalesce). The dry-run JSON is a
+                    // human-and-tool-friendly preview, NOT a byte-for-byte snapshot of
+                    // the wire request. Two specific divergences:
+                    //   - key: `action` (dry-run) vs `labelsAction` (POST)
+                    //   - nesting: flat `[{action, name}]` (dry-run) vs nested
+                    //     `{labelsAction, labels: [{name}]}` (POST)
+                    // Rationale: the POST shape is itself a best-guess pending #331
+                    // empirical verification. Locking dry-run consumers to an
+                    // unverified canonical Atlassian shape now would force a second
+                    // breaking change once #331 confirms the true shape. Once #331
+                    // verifies and #345 extracts the label-coalesce builder into a
+                    // pure function, this dry-run builder can be unified with
+                    // `handle_edit_bulk_labels`'s builder to emit byte-identical JSON.
                     let label_entries: Vec<serde_json::Value> = labels
                         .iter()
                         .map(|l| {
@@ -782,6 +799,13 @@ pub(super) async fn handle_edit(
 /// Route label edits through the Atlassian Bulk Fields API.
 ///
 /// Supports 1..=1000 keys. `labels` is a list of "add:NAME" / "remove:NAME" / "NAME" strings.
+///
+/// NOTE: The `--dry-run --output json` `plannedChanges.labels` shape (built in the
+/// dry-run block of `handle_edit` above) is a SIMPLIFIED preview using `{action, name}`
+/// pairs in a flat array, NOT a byte-for-byte snapshot of the POST body built here.
+/// Dry-run is a human-and-tool-friendly diff; the POST body below is the canonical
+/// (still-unverified, pending #331) Atlassian shape. Once #331 confirms the shape and
+/// #345 extracts a pure builder, the two paths can converge.
 ///
 /// editedFieldsInput shape (best-guess pending #331 empirical verification):
 /// - When BOTH ADD and REMOVE labels are present, coalesced into ONE bulk POST
