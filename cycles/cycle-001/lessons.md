@@ -313,3 +313,57 @@ completeness that the next review round surfaces.
 _Discovered: PR #354 Copilot Round 2, 2026-05-11_
 _Tagged: [process-gap] — refines pre-push review for docs-only PRs that document patterns_
 _Status: [candidate] — flagged for human review before promotion to codified rule_
+
+---
+
+## 2026-05-11 — PR #355 R2 Perplexity Calibration
+
+### [codified] Perplexity hallucinated about Rust `{:?}` Debug formatter escape behavior — local empirical verification is authoritative for observable Rust stdlib behavior
+
+**Context:** During PR #355 Round 2 triage, Copilot raised a CWE-117 finding asserting that
+`await_bulk_task` interpolated an unvalidated `task_id` into a timeout error message before
+`poll_bulk_task`'s call-site validation ran. Per DEC-018, ran Perplexity validation before
+acting: queried whether Rust's `{:?}` Debug formatter for `&str` escapes ASCII control
+characters (`\r`, `\n`, `\0`, `\t`, ANSI escape sequences), and whether `{:?}` constitutes a
+defense against CWE-117.
+
+**Perplexity result (INCORRECT):** Perplexity responded with high confidence that `{:?}` does
+NOT escape control characters for `&str`, claiming "control chars render literally" and that
+`{:?}` "fails CWE-117." Citations pointed to `https://doc.rust-lang.org/std/fmt/trait.Debug.html`
+and similar correct documentation, but the behavioral claim was factually wrong.
+
+**Local empirical verification (CONTRADICTED Perplexity):** Ran a 5-line Rust program:
+```rust
+fn main() {
+    let s = "abc\r\ndef\0\t\x1b[31mred\x1b[0m";
+    println!("Display: {}", s);  // renders literal control chars
+    println!("Debug:   {:?}", s); // outputs: "abc\r\ndef\0\t\u{1b}[31mred\u{1b}[0m"
+}
+```
+Output via `| cat -v` confirmed Rust's Debug formatter for `&str` DOES escape:
+`\r` → `\r`, `\n` → `\n`, `\0` → `\0`, `\t` → `\t`, `\x1b` → `\u{1b}`
+via `str::escape_debug`. Perplexity's claim was a hallucination.
+
+**Fix decision:** Rather than debate Display vs Debug, the correct defense was to call
+`validate_task_id(task_id)?` at the VERY START of `await_bulk_task`, before the deadline
+computation. This guarantees ALL interpolation sites inside the function see only
+ASCII-allowlisted input — making the Display vs Debug formatter choice moot. Fix commit:
+62766f4 (+10 lines). This is a cleaner defense-in-depth posture than relying on formatter
+escape behavior.
+
+**Calibration rule:** For any Rust language/stdlib behavior question answerable by a 5-line
+program, run the program. Perplexity is reliable for external API semantics, CWE class
+definitions, and RFC specifications, but has demonstrated a pattern of hallucinating about
+observable Rust language/stdlib behavior while citing correct documentation URLs. This is the
+third documented instance of this pattern in this codebase (prior: Rust module visibility,
+insta snapshot naming, environment variable syntax).
+
+**Standing rule unchanged:** DEC-018 (Perplexity-validate Copilot reviews) is still correct;
+it produced the right answer in R1 (confirmed RFC 3986 §5.2.4 path-confusion) and the right
+final outcome in R2 (empirical local verification caught the hallucination before the wrong
+diagnosis was acted on). The tiered-validation strategy — Perplexity first, empirical
+verification when Perplexity's claim is about observable behavior — is the correct procedure.
+
+_Discovered: PR #355 Round 2, 2026-05-11_
+_Tagged: [codified] — third documented instance of the Perplexity-vs-empirical pattern_
+_Tiered-validation rule reinforced: Perplexity for external API/CWE/RFC; local empirical verification for Rust stdlib behavior_

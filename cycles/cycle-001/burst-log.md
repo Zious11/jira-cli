@@ -1562,3 +1562,63 @@ Implemented defense-in-depth security validation for `BulkSubmitResponse.task_id
 | Factory state update | state-manager | STATE.md + burst-log updated |
 
 **Outcome:** PR #355 OPEN (chore/task-id-validation-332 @ 64e9c97; closes #332). Defense-in-depth task_id validation shipped. Behavioral change: none for well-formed Atlassian responses; rejects malformed/hostile input. Remote CI in-flight; awaiting Copilot Round 1. 10 audit-followups remain after #332 closes: #331, #333, #334, #335, #336, #340, #343, #345, #346, #350.
+
+---
+
+## Burst N+3 (2026-05-11) — PR #355 R1+R2+R3 Convergence
+
+**Agents dispatched:** orchestrator (fixer), research-agent (Perplexity), state-manager
+**Files touched:** src/api/jira/bulk.rs (b120032: +64 -17; 62766f4: +10), .factory/STATE.md, .factory/cycles/cycle-001/burst-log.md, .factory/cycles/cycle-001/lessons.md, .factory/cycles/cycle-001/adversarial-reviews/pr-355-task-id-validation/pr-355-copilot-convergence.md
+**Versions bumped:** (none)
+
+### Summary
+
+PR #355 (chore/task-id-validation-332) converged at Round 3 (3→1→0). Two real security findings
+were caught and fixed across Rounds 1 and 2. Round 3 returned 0 inline comments — Phase 8 stop
+condition met. A notable Perplexity calibration event occurred in R2.
+
+### Round 1 Steps
+
+| Step | Agent | Output |
+|------|-------|--------|
+| Receive Copilot R1 (review id 4265474208) — 3 inline comments | orchestrator | 3 findings: dot-segment path-confusion, UX actionability, test comment accuracy |
+| Perplexity query: RFC 3986 §5.2.4 dot-segment removal in reqwest/curl/hyper | research-agent | **CONFIRMED** — reqwest/hyper/curl apply §5.2.4 before send; urlencoding does NOT escape `.`; path-confusion confirmed |
+| Fix: add `if task_id == "." || task_id == ".."` rejection before length/charset checks | orchestrator | RFC 3986 §5.2.4 rejection added with dedicated error message |
+| Fix: add 2 dot-segment tests + 1 accepts-dot-within-longer-token boundary test | orchestrator | 3 new tests |
+| Fix: reword oversized-taskId and empty-taskId error messages to actionable pattern | orchestrator | Error messages now match "re-run the bulk command" convention |
+| Fix: correct misleading test comment about `..` + urlencoding::encode | orchestrator | Test comment corrected |
+| Commit b120032 (+64 -17), push chore/task-id-validation-332 | orchestrator | b120032 on remote; 3 R1 threads resolved |
+| Request Copilot R2 | orchestrator | R2 dispatched |
+
+### Round 2 Steps
+
+| Step | Agent | Output |
+|------|-------|--------|
+| Receive Copilot R2 (review id 4265541072) — 1 inline comment | orchestrator | CWE-117: `await_bulk_task` interpolates unvalidated task_id before poll_bulk_task (timeout=0 path) |
+| Perplexity query: does Rust `{:?}` Debug formatter for `&str` escape CR/LF/NUL/ANSI? | research-agent | **INCORRECT** — Perplexity claimed `{:?}` does NOT escape control chars; hallucination detected |
+| Local empirical verification: 5-line Rust program + cat -v | orchestrator | **CONTRADICTS Perplexity** — `{:?}` DOES escape \r/\n/\0/\t/\x1b via str::escape_debug |
+| Fix decision: add `validate_task_id(task_id)?` at very start of `await_bulk_task` | orchestrator | Entry-validation at function boundary; formatter semantics moot |
+| Update docstring: credit CWE-117 defense-in-depth rationale | orchestrator | Docstring updated |
+| Commit 62766f4 (+10 lines), push chore/task-id-validation-332 | orchestrator | 62766f4 on remote; R2 thread resolved |
+| Request Copilot R3 | orchestrator | R3 dispatched |
+
+### Round 3 Steps
+
+| Step | Agent | Output |
+|------|-------|--------|
+| Receive Copilot R3 (review id 4265717871) — 0 inline comments | orchestrator | "generated no new comments" |
+| Phase 8 stop condition met | orchestrator | Convergence declared — no R4 dispatched |
+
+### Perplexity Calibration Note
+
+R2 produced the third documented instance of Perplexity hallucinating about observable Rust
+stdlib behavior while citing correct documentation URLs. The tiered-validation backstop (local
+empirical verification for Rust behavior) caught the hallucination before the wrong diagnosis
+was acted on. DEC-018 standing rule unchanged; tiered-validation rule reinforced. Codified in
+lessons.md.
+
+### Final State
+
+**PR #355:** OPEN, MERGEABLE, mergeStateStatus CLEAN, CI 8/8 green on 62766f4, 4/4 threads resolved.
+Convergence trajectory: 3→1→0 (3 rounds). Awaiting human merge. Closes #332 on merge.
+10 audit-followups remain after merge: #331, #333, #334, #335, #336, #340, #343, #345, #346, #350.
