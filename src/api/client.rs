@@ -825,6 +825,35 @@ impl JiraClient {
     }
 }
 
+/// Maximum byte length allowed for a single server-supplied error entry
+/// before it reaches `sanitize_for_stderr` / stderr.
+///
+/// Per issue #334 acceptance criteria: "Truncate each entry to a sane limit
+/// (e.g., 1 KiB) to prevent terminal-flooding attacks". Applied per-entry by
+/// `cap_entry` at the extraction call sites (each `errorMessages` element,
+/// each `errors` map value, the `message` field, the `errorMessage` field,
+/// and the raw-body fallback). 1024 bytes leaves ample room for legitimate
+/// long error messages while cutting off pathological flood attempts.
+const MAX_ERROR_ENTRY_LEN: usize = 1024;
+
+/// Truncate a server-supplied string at a UTF-8 char boundary if it exceeds
+/// `MAX_ERROR_ENTRY_LEN`, appending a `[...truncated, N bytes total]` marker
+/// so the operator sees that truncation happened.
+///
+/// Used by `extract_error_message_raw` as defense-in-depth against
+/// terminal/log flooding attacks (companion to `sanitize_for_stderr`'s
+/// control-byte escaping per CWE-117).
+fn cap_entry(s: &str) -> String {
+    if s.len() <= MAX_ERROR_ENTRY_LEN {
+        return s.to_string();
+    }
+    let mut end = MAX_ERROR_ENTRY_LEN;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{} [...truncated, {} bytes total]", &s[..end], s.len())
+}
+
 /// Sanitize a server-supplied string for safe display on stderr.
 ///
 /// Defense against CWE-117 (Improper Output Neutralization for Logs): a hostile
@@ -840,16 +869,41 @@ impl JiraClient {
 /// This is more conservative than `str::escape_debug` (which also escapes
 /// non-ASCII as `\u{XXXX}` and would garble legitimate Unicode error text).
 ///
-/// Performance: O(n) single pass, allocates the output buffer once via
-/// `String::with_capacity`. Idempotent on already-sanitized strings.
-fn sanitize_for_stderr(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
+/// Performance:
+/// - Takes `String` by value so the clean-input fast path returns it unchanged
+///   with zero additional allocation (most legitimate Atlassian errors hit this
+///   path — control chars are vanishingly rare in real responses).
+/// - When sanitization is required, escape bytes are written directly into the
+///   output via `std::fmt::Write::write!` rather than the per-char
+///   `format!()`-then-`push_str` pattern (which allocates a new String per
+///   escaped char).
+/// - The output buffer is pre-sized to `input.len()` plus a small headroom
+///   constant (`HEADROOM`); reallocations only occur when many control bytes
+///   expand (each one grows the buffer by 3 bytes: `\x` + 2 hex digits = 4
+///   bytes for 1 source byte).
+/// - Idempotent on already-sanitized strings.
+fn sanitize_for_stderr(input: String) -> String {
+    use std::fmt::Write;
+
+    // Fast path: no control bytes → return the input String unchanged.
+    // No new allocation. Optimizes the common case (legitimate Atlassian errors).
+    if !input.bytes().any(|b| b.is_ascii_control()) {
+        return input;
+    }
+
+    // Sanitization path: control bytes present. Pre-size output buffer with
+    // some headroom (one short attack escape line worth) to keep the common
+    // small-attack case allocation-free.
+    const HEADROOM: usize = 32;
+    let mut out = String::with_capacity(input.len() + HEADROOM);
     for c in input.chars() {
         if c.is_ascii_control() {
-            // ASCII control chars (0x00-0x1F + 0x7F) are guaranteed to fit in u8.
-            // Render as visible \xNN literal so operators can debug what was sent
-            // without the terminal interpreting CR/LF/ANSI/etc.
-            out.push_str(&format!("\\x{:02x}", c as u8));
+            // Write directly into `out` via fmt::Write — avoids the per-escape
+            // String allocation that `format!()` would introduce.
+            // ASCII control chars (0x00-0x1F + 0x7F) fit in u8.
+            // write! on String is infallible; ignore the Result to avoid a
+            // distracting `expect()` in a hot loop.
+            let _ = write!(out, "\\x{:02x}", c as u8);
         } else {
             out.push(c);
         }
@@ -872,10 +926,14 @@ fn sanitize_for_stderr(input: &str) -> String {
 /// 5. Empty body → "<empty response body>"
 /// 6. Raw body as a string (fallback)
 pub fn extract_error_message(body: &[u8]) -> String {
-    sanitize_for_stderr(&extract_error_message_raw(body))
+    sanitize_for_stderr(extract_error_message_raw(body))
 }
 
 /// Internal: extract the error message WITHOUT stderr sanitization.
+///
+/// Each server-supplied entry is passed through `cap_entry` so a single
+/// pathological field can't flood the terminal/log — the per-entry 1 KiB cap
+/// is part of the CWE-117 defense-in-depth alongside `sanitize_for_stderr`.
 ///
 /// Separated from the public API so the extraction precedence logic and the
 /// sanitization layer can be tested independently. Callers OUTSIDE tests should
@@ -887,12 +945,16 @@ fn extract_error_message_raw(body: &[u8]) -> String {
 
     let body_str = match std::str::from_utf8(body) {
         Ok(s) => s,
-        Err(_) => return String::from_utf8_lossy(body).into_owned(),
+        Err(_) => return cap_entry(&String::from_utf8_lossy(body)),
     };
 
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(body_str) {
         if let Some(msgs) = json.get("errorMessages").and_then(|v| v.as_array()) {
-            let messages: Vec<&str> = msgs.iter().filter_map(|m| m.as_str()).collect();
+            let messages: Vec<String> = msgs
+                .iter()
+                .filter_map(|m| m.as_str())
+                .map(cap_entry)
+                .collect();
             if !messages.is_empty() {
                 return messages.join("; ");
             }
@@ -902,11 +964,12 @@ fn extract_error_message_raw(body: &[u8]) -> String {
                 let mut pairs: Vec<String> = errors
                     .iter()
                     .map(|(k, v)| {
-                        if let Some(s) = v.as_str() {
-                            format!("{k}: {s}")
+                        let value_str = if let Some(s) = v.as_str() {
+                            cap_entry(s)
                         } else {
-                            format!("{k}: {v}")
-                        }
+                            cap_entry(&v.to_string())
+                        };
+                        format!("{k}: {value_str}")
                     })
                     .collect();
                 pairs.sort();
@@ -914,41 +977,47 @@ fn extract_error_message_raw(body: &[u8]) -> String {
             }
         }
         if let Some(msg) = json.get("message").and_then(|v| v.as_str()) {
-            return msg.to_string();
+            return cap_entry(msg);
         }
         if let Some(msg) = json.get("errorMessage").and_then(|v| v.as_str()) {
-            return msg.to_string();
+            return cap_entry(msg);
         }
     }
 
-    body_str.to_string()
+    cap_entry(body_str)
 }
 
 #[cfg(test)]
 mod sanitize_tests {
-    use super::sanitize_for_stderr;
+    use super::{MAX_ERROR_ENTRY_LEN, cap_entry, sanitize_for_stderr};
+
+    // Tiny helper to avoid repeating `.to_string()` in every call — keeps test
+    // lines compact now that `sanitize_for_stderr` takes `String` by value.
+    fn sanitize(s: &str) -> String {
+        sanitize_for_stderr(s.to_string())
+    }
 
     #[test]
     fn test_sanitize_for_stderr_passes_through_clean_ascii() {
-        assert_eq!(sanitize_for_stderr("Hello, World!"), "Hello, World!");
+        assert_eq!(sanitize("Hello, World!"), "Hello, World!");
     }
 
     #[test]
     fn test_sanitize_for_stderr_passes_through_utf8() {
         // Localized error messages (non-English Jira tenants) must survive.
-        assert_eq!(sanitize_for_stderr("résumé"), "résumé");
-        assert_eq!(sanitize_for_stderr("日本語のエラー"), "日本語のエラー");
-        assert_eq!(sanitize_for_stderr("Привет"), "Привет");
+        assert_eq!(sanitize("résumé"), "résumé");
+        assert_eq!(sanitize("日本語のエラー"), "日本語のエラー");
+        assert_eq!(sanitize("Привет"), "Привет");
     }
 
     #[test]
     fn test_sanitize_for_stderr_escapes_carriage_return() {
-        assert_eq!(sanitize_for_stderr("line1\rline2"), "line1\\x0dline2");
+        assert_eq!(sanitize("line1\rline2"), "line1\\x0dline2");
     }
 
     #[test]
     fn test_sanitize_for_stderr_escapes_line_feed() {
-        assert_eq!(sanitize_for_stderr("line1\nline2"), "line1\\x0aline2");
+        assert_eq!(sanitize("line1\nline2"), "line1\\x0aline2");
     }
 
     #[test]
@@ -956,7 +1025,7 @@ mod sanitize_tests {
         // CWE-117 attack pattern: hostile message tries to inject a fake log line
         // by ending one line and starting another with what looks like a logger prefix.
         let attack = "Issue not found\r\n[jr] CRITICAL: token leaked";
-        let sanitized = sanitize_for_stderr(attack);
+        let sanitized = sanitize(attack);
         assert_eq!(
             sanitized,
             "Issue not found\\x0d\\x0a[jr] CRITICAL: token leaked"
@@ -971,34 +1040,34 @@ mod sanitize_tests {
     fn test_sanitize_for_stderr_escapes_ansi_escape_sequence() {
         // \x1b is ESC, the prefix for ANSI escape sequences (color, cursor, etc.).
         let attack = "Error\x1b[31m red text \x1b[0m";
-        let sanitized = sanitize_for_stderr(attack);
+        let sanitized = sanitize(attack);
         assert_eq!(sanitized, "Error\\x1b[31m red text \\x1b[0m");
         assert!(!sanitized.contains('\x1b'));
     }
 
     #[test]
     fn test_sanitize_for_stderr_escapes_null_byte() {
-        assert_eq!(sanitize_for_stderr("a\0b"), "a\\x00b");
+        assert_eq!(sanitize("a\0b"), "a\\x00b");
     }
 
     #[test]
     fn test_sanitize_for_stderr_escapes_tab() {
         // Tab is ASCII control (0x09). Conservatively escape — a sequence of tabs
         // can hide text behind column boundaries in some loggers / tab-aware UIs.
-        assert_eq!(sanitize_for_stderr("a\tb"), "a\\x09b");
+        assert_eq!(sanitize("a\tb"), "a\\x09b");
     }
 
     #[test]
     fn test_sanitize_for_stderr_escapes_del_character() {
         // 0x7F (DEL) is the last ASCII control char.
-        assert_eq!(sanitize_for_stderr("a\x7fb"), "a\\x7fb");
+        assert_eq!(sanitize("a\x7fb"), "a\\x7fb");
     }
 
     #[test]
     fn test_sanitize_for_stderr_preserves_space_and_punctuation() {
         // Space (0x20) is NOT a control char. Punctuation is fine.
         assert_eq!(
-            sanitize_for_stderr("Hello, World! (with punctuation)"),
+            sanitize("Hello, World! (with punctuation)"),
             "Hello, World! (with punctuation)"
         );
     }
@@ -1006,13 +1075,71 @@ mod sanitize_tests {
     #[test]
     fn test_sanitize_for_stderr_is_idempotent() {
         // Sanitizing an already-sanitized string is a no-op (no double-escaping).
-        let once = sanitize_for_stderr("a\r\nb");
-        let twice = sanitize_for_stderr(&once);
+        let once = sanitize("a\r\nb");
+        let twice = sanitize_for_stderr(once.clone());
         assert_eq!(once, twice);
     }
 
     #[test]
     fn test_sanitize_for_stderr_empty_string() {
-        assert_eq!(sanitize_for_stderr(""), "");
+        assert_eq!(sanitize(""), "");
+    }
+
+    #[test]
+    fn test_sanitize_for_stderr_clean_input_returns_same_string() {
+        // Performance pin: the fast path returns the input String unchanged,
+        // so the legitimate-error common case avoids the sanitization allocation.
+        let input = String::from("legitimate error message with UTF-8: 日本語");
+        let original_ptr = input.as_ptr();
+        let result = sanitize_for_stderr(input);
+        assert_eq!(
+            result.as_ptr(),
+            original_ptr,
+            "fast path should reuse the same buffer"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // cap_entry tests — per-entry length cap per issue #334 acceptance criteria
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_cap_entry_passes_through_short_input() {
+        let s = "short message";
+        assert_eq!(cap_entry(s), s);
+    }
+
+    #[test]
+    fn test_cap_entry_passes_through_at_max_length() {
+        let s = "a".repeat(MAX_ERROR_ENTRY_LEN);
+        assert_eq!(cap_entry(&s), s);
+    }
+
+    #[test]
+    fn test_cap_entry_truncates_oversized_with_marker() {
+        let s = "a".repeat(MAX_ERROR_ENTRY_LEN + 100);
+        let capped = cap_entry(&s);
+        assert!(capped.len() < s.len(), "expected truncation");
+        assert!(
+            capped.contains("[...truncated"),
+            "expected truncation marker in '{capped}'"
+        );
+        assert!(
+            capped.contains(&(MAX_ERROR_ENTRY_LEN + 100).to_string()),
+            "expected original byte count in marker: '{capped}'"
+        );
+    }
+
+    #[test]
+    fn test_cap_entry_respects_utf8_char_boundary() {
+        // Build a string whose byte length exceeds the cap with a multibyte
+        // char straddling the cap boundary. The truncation must NOT split
+        // a UTF-8 char (would panic via &str[..end]).
+        let padding = "a".repeat(MAX_ERROR_ENTRY_LEN - 2);
+        let with_multibyte = format!("{padding}日本語のエラーです");
+        // Should not panic, should produce valid UTF-8.
+        let capped = cap_entry(&with_multibyte);
+        // Verify it's still valid UTF-8 by re-parsing.
+        let _ = capped.as_str();
     }
 }
