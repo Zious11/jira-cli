@@ -863,6 +863,25 @@ const MAX_ERROR_ENTRY_LEN: usize = 1024;
 /// the immutable `original_len` so its length doesn't shift under the trim.
 const MAX_SANITIZED_OUTPUT_LEN: usize = 4096;
 
+/// Maximum byte length of an error response body that will be parsed as JSON.
+///
+/// Defense against memory-amplification at the JSON parse step (OWASP A06 /
+/// AP11, Perplexity-validated 2026-05-11). `serde_json::from_str::<Value>`
+/// builds a full DOM that costs roughly 2-3x the body size in memory; a
+/// hostile server returning a valid 100 MB JSON body would force 200-300 MB
+/// of DOM allocation even though every downstream cap (`cap_entry`,
+/// `serialize_value_bounded`, `sanitize_for_stderr`) is in place. The
+/// downstream caps bound the OUTPUT — they cannot prevent the INPUT DOM
+/// from being materialized.
+///
+/// Bodies larger than this cap skip JSON parsing entirely and fall back to
+/// the raw-body path (which is itself byte-bounded via `cap_entry`). Per
+/// Perplexity-validated industry guidance the recommended pattern is a
+/// byte-level size gate at ~16 KiB for error-response paths; legitimate
+/// Atlassian/Jira error responses are <1 KiB, so 16 KiB is generous yet
+/// blocks the amplification vector.
+const MAX_PARSE_BODY_LEN: usize = 16 * 1024;
+
 /// Truncate a server-supplied string at a UTF-8 char boundary if it exceeds
 /// `MAX_ERROR_ENTRY_LEN`, appending a `[...truncated, N bytes total]` marker
 /// so the operator sees that truncation happened.
@@ -1183,6 +1202,26 @@ fn extract_error_message_raw(body: &[u8]) -> String {
         }
     };
 
+    // Memory-amplification defense at the JSON parse step (OWASP A06 / AP11,
+    // Perplexity-validated 2026-05-11, R11 finding). `serde_json::from_str::<Value>`
+    // materializes a full DOM that costs roughly 2-3x the body size in memory.
+    // Even though every downstream cap (cap_entry, serialize_value_bounded,
+    // sanitize_for_stderr) bounds OUTPUT, none of them prevent the INPUT DOM
+    // from being allocated. A hostile valid 100 MB JSON body would force
+    // 200-300 MB of DOM allocation before any cap kicks in.
+    //
+    // Size-gate at the byte level: bodies larger than MAX_PARSE_BODY_LEN
+    // (16 KiB) skip JSON parsing and fall back to the byte-bounded raw-body
+    // path. Legitimate Jira error responses are <1 KiB, so 16 KiB is a
+    // generous threshold that blocks the amplification vector without
+    // affecting real responses. The byte-level gate is preferred over a
+    // streaming/partial parse because it has zero allocation attack surface —
+    // we reject before serde_json::Value DOM materialization rather than
+    // hoping the streaming parse stops at the right point.
+    if body_str.len() > MAX_PARSE_BODY_LEN {
+        return cap_entry(body_str).into_owned();
+    }
+
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(body_str) {
         if let Some(msgs) = json.get("errorMessages").and_then(|v| v.as_array()) {
             // Memory-amplification defense (OWASP A06 / AP11, Perplexity-validated
@@ -1326,8 +1365,8 @@ fn extract_error_message_raw(body: &[u8]) -> String {
 #[cfg(test)]
 mod sanitize_tests {
     use super::{
-        MAX_ERROR_ENTRY_LEN, MAX_SANITIZED_OUTPUT_LEN, cap_entry, sanitize_for_stderr,
-        serialize_value_bounded,
+        MAX_ERROR_ENTRY_LEN, MAX_PARSE_BODY_LEN, MAX_SANITIZED_OUTPUT_LEN, cap_entry,
+        extract_error_message, sanitize_for_stderr, serialize_value_bounded,
     };
 
     // Tiny helper to avoid repeating `.to_string()` in every call — keeps test
@@ -1731,5 +1770,61 @@ mod sanitize_tests {
         assert!(out.len() <= 5);
         // No room for the marker; must not be present.
         assert!(!out.contains("[...truncated]"));
+    }
+
+    // MAX_PARSE_BODY_LEN gate tests — memory-amplification defense at the
+    // JSON parse step (R11 finding). serde_json::from_str::<Value> builds a
+    // full DOM that costs ~2-3x body size; the gate falls back to the
+    // byte-bounded raw-body path for oversized bodies.
+
+    #[test]
+    fn test_extract_error_message_size_gate_skips_parse_for_huge_body() {
+        // Pin: a body larger than MAX_PARSE_BODY_LEN must NOT enter the
+        // JSON-parse path even if it's syntactically valid JSON. The output
+        // is the byte-bounded raw-body fallback (cap_entry applied to
+        // body_str) so a hostile 100 MB JSON body cannot force DOM
+        // allocation.
+        let huge_valid_json = format!(
+            "{{\"errorMessages\":[\"{}\"]}}",
+            "x".repeat(MAX_PARSE_BODY_LEN)
+        );
+        assert!(huge_valid_json.len() > MAX_PARSE_BODY_LEN);
+        let out = extract_error_message(huge_valid_json.as_bytes());
+        // sanitize_for_stderr caps total output at MAX_SANITIZED_OUTPUT_LEN.
+        assert!(
+            out.len() <= MAX_SANITIZED_OUTPUT_LEN,
+            "output exceeded sanitization cap: {} > {}",
+            out.len(),
+            MAX_SANITIZED_OUTPUT_LEN
+        );
+        // The fallback path uses the raw body, NOT the extracted
+        // errorMessages array. So the output should look like the
+        // serialized JSON string itself (or a capped prefix), not
+        // the de-quoted errorMessages content.
+        assert!(out.starts_with("{"));
+    }
+
+    #[test]
+    fn test_extract_error_message_size_gate_allows_normal_body() {
+        // Pin: legitimate small JSON error responses (well under
+        // MAX_PARSE_BODY_LEN) still take the JSON-parse path and produce
+        // the friendly extracted message — no regression from the gate.
+        let normal_body = r#"{"errorMessages":["Field 'summary' is required"]}"#;
+        assert!(normal_body.len() < MAX_PARSE_BODY_LEN);
+        let out = extract_error_message(normal_body.as_bytes());
+        // The errorMessages array element should be the visible output,
+        // not the raw JSON envelope.
+        assert!(out.contains("Field 'summary' is required"));
+        // And no leading "{" — the parse succeeded.
+        assert!(!out.starts_with("{"));
+    }
+
+    #[test]
+    fn test_extract_error_message_size_gate_threshold_is_documented_value() {
+        // Pin: the 16 KiB threshold is intentional — generous for legitimate
+        // Jira errors (<1 KiB typical) yet tight enough to block the
+        // amplification vector. Future tweaks should update the doc comment
+        // and Perplexity-revalidate.
+        assert_eq!(MAX_PARSE_BODY_LEN, 16 * 1024);
     }
 }
