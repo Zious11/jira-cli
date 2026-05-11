@@ -1048,30 +1048,58 @@ fn extract_error_message_raw(body: &[u8]) -> String {
 
     let body_str = match std::str::from_utf8(body) {
         Ok(s) => s,
-        Err(_) => return cap_entry(&String::from_utf8_lossy(body)).into_owned(),
+        Err(_) => {
+            // Memory-amplification defense (OWASP A06 / AP11, Perplexity-validated
+            // 2026-05-11): `String::from_utf8_lossy` allocates an owned String for
+            // the ENTIRE byte slice even though `cap_entry` will truncate the result
+            // to MAX_ERROR_ENTRY_LEN. A hostile server returning a massive non-UTF8
+            // body would otherwise force O(body.len()) memory allocation before the
+            // cap kicks in. Pre-cap the byte slice to a small multiple of the entry
+            // cap (allows worst-case lossy expansion via U+FFFD replacement chars
+            // at 3 bytes each) before conversion.
+            const PRE_CAP_BYTES: usize = MAX_ERROR_ENTRY_LEN * 4;
+            let bounded = &body[..body.len().min(PRE_CAP_BYTES)];
+            return cap_entry(&String::from_utf8_lossy(bounded)).into_owned();
+        }
     };
 
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(body_str) {
         if let Some(msgs) = json.get("errorMessages").and_then(|v| v.as_array()) {
-            // Collect as Cow<str> so unchanged entries borrow rather than
-            // allocate. Only over-cap entries pay the allocation cost.
-            let messages: Vec<std::borrow::Cow<'_, str>> = msgs
-                .iter()
-                .filter_map(|m| m.as_str())
-                .map(cap_entry)
-                .collect();
-            if !messages.is_empty() {
-                // Build the joined string with a single allocation
-                // pre-sized to the total content length. Avoids the
-                // intermediate `Vec<&str>` + `[].join()` allocation chain.
-                let total: usize =
-                    messages.iter().map(|c| c.len()).sum::<usize>() + 2 * (messages.len() - 1);
-                let mut joined = String::with_capacity(total);
-                for (i, m) in messages.iter().enumerate() {
-                    if i > 0 {
-                        joined.push_str("; ");
-                    }
-                    joined.push_str(m.as_ref());
+            // Memory-amplification defense (OWASP A06 / AP11, Perplexity-validated
+            // 2026-05-11): even though each entry is per-entry-capped via
+            // cap_entry, the NUMBER of entries is server-controlled. A hostile
+            // response with a million entries × 1024 bytes each would force a
+            // ~1 GB allocation in the join here before `sanitize_for_stderr` later
+            // truncates to MAX_SANITIZED_OUTPUT_LEN. Stream-process instead:
+            // iterate lazily, append to a single output String pre-sized to
+            // MAX_SANITIZED_OUTPUT_LEN, and stop as soon as the budget is hit.
+            // Total memory is O(MAX_SANITIZED_OUTPUT_LEN) regardless of entry
+            // count. The downstream sanitize_for_stderr cap is retained as
+            // defense-in-depth for control-byte expansion.
+            let mut joined = String::with_capacity(MAX_SANITIZED_OUTPUT_LEN);
+            let mut first = true;
+            let mut truncated = false;
+            let mut emitted_any = false;
+
+            for m_value in msgs.iter() {
+                let Some(m) = m_value.as_str() else { continue };
+                let capped = cap_entry(m);
+                let separator_len = if first { 0 } else { 2 };
+                if joined.len() + separator_len + capped.len() > MAX_SANITIZED_OUTPUT_LEN {
+                    truncated = true;
+                    break;
+                }
+                if !first {
+                    joined.push_str("; ");
+                }
+                joined.push_str(capped.as_ref());
+                first = false;
+                emitted_any = true;
+            }
+
+            if emitted_any {
+                if truncated {
+                    joined.push_str(" [...truncated]");
                 }
                 return joined;
             }
