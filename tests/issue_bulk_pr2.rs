@@ -530,13 +530,17 @@ async fn test_dry_run_with_multi_key_positional_skips_bulk_post() {
 }
 
 // ---------------------------------------------------------------------------
-// AC-004 / --yes: explicit --yes flag skips confirmation prompt.
+// AC-004 / --yes: explicit --yes flag passes through below threshold without effect.
 // ---------------------------------------------------------------------------
 
 /// `jr issue edit --jql '...' --label add:foo --yes --no-input`
-/// The bulk POST is made without reading stdin (no prompt hang).
+/// Below JQL_CONFIRM_THRESHOLD (5) the confirmation gate is never entered,
+/// so --yes has no behavioral effect. This test pins that providing --yes
+/// alongside a small JQL match set does not error or hang — it's a no-op
+/// backward-compatibility guard. For the > threshold case where --yes
+/// actually bypasses the prompt, see a future dedicated test.
 #[tokio::test]
-async fn test_yes_flag_skips_confirmation_prompt() {
+async fn test_yes_flag_passes_through_below_threshold_without_effect() {
     let server = MockServer::start().await;
 
     let matched_keys = ["YES-1", "YES-2", "YES-3"];
