@@ -963,6 +963,23 @@ fn serialize_value_bounded(v: &serde_json::Value, limit: usize) -> String {
     }
     impl std::io::Write for Bounded {
         fn write(&mut self, src: &[u8]) -> std::io::Result<usize> {
+            // Per std::io::Write::write contract (Perplexity-validated
+            // 2026-05-11): "If an error is returned then no bytes in the
+            // buffer were written to this writer." We honor this strictly:
+            //
+            // - `remaining == 0`: write nothing, return Err(WriteZero) to
+            //   signal stop. This is the ONLY path that returns Err.
+            // - `take == src.len()` (full write fits): write all, return
+            //   Ok(take).
+            // - `take < src.len()` (partial write fits): write the prefix,
+            //   return Ok(take), set `overflowed`. The NEXT call will hit
+            //   `remaining == 0` and return Err to stop serialization while
+            //   preserving the buffered prefix.
+            //
+            // Violating "no bytes on Err" would break write_all and similar
+            // retry-aware callers that rely on the invariant. The serde_json
+            // caller uses write_all-style loops, so the partial-write path
+            // now correctly accepts bytes and lets the next call error out.
             let remaining = self.limit.saturating_sub(self.buf.len());
             if remaining == 0 {
                 self.overflowed = true;
@@ -974,12 +991,9 @@ fn serialize_value_bounded(v: &serde_json::Value, limit: usize) -> String {
             let take = src.len().min(remaining);
             self.buf.extend_from_slice(&src[..take]);
             if take < src.len() {
-                // Partial write — propagate to serde_json so it stops.
+                // Partial write case: bytes accepted, but next call errors.
+                // Mark overflowed for the caller's marker logic.
                 self.overflowed = true;
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::WriteZero,
-                    "bounded JSON writer reached byte limit mid-write",
-                ));
             }
             Ok(take)
         }
@@ -1196,9 +1210,42 @@ fn extract_error_message_raw(body: &[u8]) -> String {
             // cap kicks in. Pre-cap the byte slice to a small multiple of the entry
             // cap (allows worst-case lossy expansion via U+FFFD replacement chars
             // at 3 bytes each) before conversion.
+            //
+            // Use a custom marker that records the ORIGINAL body.len() rather than
+            // relying on `cap_entry`'s default marker (R12 finding): cap_entry's
+            // marker reports the *post-pre-cap* string length, which can never
+            // exceed PRE_CAP_BYTES (~4096 bytes). When operators are diagnosing a
+            // resource-exhaustion / flood attempt, they need to see that the
+            // response was, e.g., 100 MB — not "4096 bytes total".
             const PRE_CAP_BYTES: usize = MAX_ERROR_ENTRY_LEN * 4;
-            let bounded = &body[..body.len().min(PRE_CAP_BYTES)];
-            return cap_entry(&String::from_utf8_lossy(bounded)).into_owned();
+            let original_len = body.len();
+            let bounded = &body[..original_len.min(PRE_CAP_BYTES)];
+            let lossy = String::from_utf8_lossy(bounded);
+            // Fast path: body already fits in MAX_ERROR_ENTRY_LEN, no marker needed.
+            if lossy.len() <= MAX_ERROR_ENTRY_LEN && original_len <= MAX_ERROR_ENTRY_LEN {
+                return lossy.into_owned();
+            }
+            // Custom marker reports the true original byte length and flags the
+            // non-UTF8 source so operators can distinguish this fallback from
+            // the normal cap_entry truncation path.
+            let marker = format!(" [...truncated, {original_len} bytes total, non-UTF8 body]");
+            let target_prefix_len = MAX_ERROR_ENTRY_LEN.saturating_sub(marker.len());
+            // Degenerate-case fallback: if marker is larger than the entry cap
+            // (would only fire if MAX_ERROR_ENTRY_LEN is shrunk drastically),
+            // return only the marker (or its truncated form) so we still emit
+            // SOME signal rather than nothing.
+            if target_prefix_len == 0 {
+                let mut end = MAX_ERROR_ENTRY_LEN.min(marker.len());
+                while end > 0 && !marker.is_char_boundary(end) {
+                    end -= 1;
+                }
+                return marker[..end].to_string();
+            }
+            let mut end = target_prefix_len.min(lossy.len());
+            while end > 0 && !lossy.is_char_boundary(end) {
+                end -= 1;
+            }
+            return format!("{}{}", &lossy[..end], marker);
         }
     };
 
@@ -1826,5 +1873,59 @@ mod sanitize_tests {
         // amplification vector. Future tweaks should update the doc comment
         // and Perplexity-revalidate.
         assert_eq!(MAX_PARSE_BODY_LEN, 16 * 1024);
+    }
+
+    // R12 pins — std::io::Write contract compliance + non-UTF8 marker accuracy.
+
+    #[test]
+    fn test_serialize_value_bounded_returns_marker_with_correct_data_on_partial_write() {
+        // R12 contract pin: previously the Bounded::write violated the
+        // std::io::Write contract by returning Err alongside a partial
+        // write. The fix returns Ok(take) on partial writes and lets the
+        // NEXT call hit remaining==0 and return Err. Verify that this
+        // does not break serialization correctness: oversized values
+        // still produce a bounded prefix + truncation marker.
+        let big_string = "y".repeat(5000);
+        let v = serde_json::json!({"key": big_string});
+        let out = serialize_value_bounded(&v, MAX_ERROR_ENTRY_LEN);
+        assert!(out.len() <= MAX_ERROR_ENTRY_LEN);
+        assert!(out.starts_with("{\"key\":\"y"));
+        assert!(
+            out.ends_with(" [...truncated]"),
+            "marker missing on partial-write contract-compliant path: {out:?}"
+        );
+    }
+
+    #[test]
+    fn test_extract_error_message_non_utf8_marker_reports_true_body_size() {
+        // R12 pin: the non-UTF8 fallback marker MUST report the actual
+        // body.len(), not the pre-capped lossy-string length. Operators
+        // diagnosing a flood attempt need to see "5000000 bytes total",
+        // not "4096 bytes total" which would silently under-report.
+        // Build a 5 MB non-UTF8 body (lots of 0xff bytes).
+        let body = vec![0xffu8; 5_000_000];
+        let out = extract_error_message(&body);
+        // The marker should reference the true 5_000_000-byte length.
+        assert!(
+            out.contains("5000000 bytes total"),
+            "marker missing or wrong-size for non-UTF8 5MB body: {out:?}"
+        );
+        // And flag the non-UTF8 source for disambiguation.
+        assert!(out.contains("non-UTF8 body"));
+        // And still respect the post-sanitization output cap.
+        assert!(out.len() <= MAX_SANITIZED_OUTPUT_LEN);
+    }
+
+    #[test]
+    fn test_extract_error_message_non_utf8_small_body_no_marker() {
+        // R12 pin: a small non-UTF8 body that fits in MAX_ERROR_ENTRY_LEN
+        // skips the marker (the fast path). No regression for legitimate
+        // tiny non-UTF8 responses.
+        let body = vec![0xffu8; 16];
+        let out = extract_error_message(&body);
+        // No marker present.
+        assert!(!out.contains("[...truncated"));
+        // No "non-UTF8 body" string (custom marker not used).
+        assert!(!out.contains("non-UTF8 body"));
     }
 }
