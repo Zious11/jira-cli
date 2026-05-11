@@ -857,8 +857,10 @@ const MAX_ERROR_ENTRY_LEN: usize = 1024;
 /// and avoids over-reporting retained bytes.
 ///
 /// 4 KiB chosen to absorb worst-case 4x expansion of a single `MAX_ERROR_ENTRY_LEN`
-/// entry (1024 × 4 = 4096) while still leaving room for the marker via
-/// reserved headroom inside `sanitize_for_stderr`.
+/// entry (1024 × 4 = 4096). When truncation occurs and the marker would push
+/// the output past this cap, `sanitize_for_stderr` retroactively trims `out`
+/// at a UTF-8 char boundary to make room — the marker text references only
+/// the immutable `original_len` so its length doesn't shift under the trim.
 const MAX_SANITIZED_OUTPUT_LEN: usize = 4096;
 
 /// Truncate a server-supplied string at a UTF-8 char boundary if it exceeds
@@ -1123,12 +1125,23 @@ fn extract_error_message_raw(body: &[u8]) -> String {
         }
         if let Some(errors) = json.get("errors").and_then(|v| v.as_object()) {
             if !errors.is_empty() {
-                // Per-entry formatting always allocates the "{k}: {v}" pair
-                // string, so the per-entry cap_entry being Cow doesn't avoid
-                // that — but it does avoid the prior to_string() copy for
-                // unchanged values (which are the common case).
+                // Memory-amplification defense (OWASP A06 / AP11, same threat
+                // class as the errorMessages streaming join earlier): the
+                // errors map's key count is server-controlled. A hostile
+                // response with 1M keys × 100-byte values would force ~100 MB
+                // allocation in the `pairs` Vec before sanitize_for_stderr
+                // truncates. Bound the entry count BEFORE collect/sort:
+                //
+                // MAX_ERROR_PAIRS = 256 is generous (legitimate Jira responses
+                // have 1-10 field-level errors) yet bounds memory at
+                // 256 × MAX_ERROR_ENTRY_LEN = 256 KiB worst case for the
+                // intermediate Vec. The downstream streaming join further
+                // bounds the OUTPUT to MAX_SANITIZED_OUTPUT_LEN.
+                const MAX_ERROR_PAIRS: usize = 256;
+                let total_keys = errors.len();
                 let mut pairs: Vec<String> = errors
                     .iter()
+                    .take(MAX_ERROR_PAIRS)
                     .map(|(k, v)| {
                         if let Some(s) = v.as_str() {
                             // String value: borrow via Cow when no truncation.
@@ -1143,7 +1156,33 @@ fn extract_error_message_raw(body: &[u8]) -> String {
                     })
                     .collect();
                 pairs.sort();
-                return pairs.join("; ");
+                let pairs_truncated = total_keys > MAX_ERROR_PAIRS;
+
+                // Streaming join with upfront marker reservation (same pattern
+                // as the errorMessages path above).
+                const JOIN_MARKER: &str = " [...truncated]";
+                let content_budget_join =
+                    MAX_SANITIZED_OUTPUT_LEN.saturating_sub(JOIN_MARKER.len());
+                let mut joined = String::with_capacity(MAX_SANITIZED_OUTPUT_LEN);
+                let mut first = true;
+                let mut join_truncated = false;
+                for p in &pairs {
+                    let separator_len = if first { 0 } else { 2 };
+                    if joined.len() + separator_len + p.len() > content_budget_join {
+                        join_truncated = true;
+                        break;
+                    }
+                    if !first {
+                        joined.push_str("; ");
+                    }
+                    joined.push_str(p);
+                    first = false;
+                }
+                if join_truncated || pairs_truncated {
+                    joined.push_str(JOIN_MARKER);
+                }
+                debug_assert!(joined.len() <= MAX_SANITIZED_OUTPUT_LEN);
+                return joined;
             }
         }
         if let Some(msg) = json.get("message").and_then(|v| v.as_str()) {
