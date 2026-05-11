@@ -1358,4 +1358,84 @@ underlying constraint is actually shared — even on the trivial-changes path.
 | Append process-gap lesson to lessons.md | state-manager | cycles/cycle-001/lessons.md — lesson [candidate] added |
 | Update STATE.md | state-manager | Phase progress CONVERGED; session checkpoint replaced; convergence tracker updated |
 
+---
+
+## Burst N+2 (2026-05-11) — PR #353 Merged + Post-merge Cleanup
+
+**Agents dispatched:** pr-manager, state-manager
+**Files touched:** .factory/STATE.md, .factory/cycles/cycle-001/burst-log.md
+**Versions bumped:** (none)
+
+### Summary
+
+PR #353 (refactor/bulk-max-keys-338; closes #338) was merged by the human at
+2026-05-11T15:50:22Z (merge commit 7fbf14d7d748c37d6948104da4109591fbe5ac0c).
+GitHub auto-deleted the remote branch refactor/bulk-max-keys-338 on merge.
+Issue #338 was automatically closed at 2026-05-11T15:50:23Z.
+
+Post-merge cleanup performed: worktree `.worktrees/issue-338-consolidate-bulk-max`
+removed, local branch `refactor/bulk-max-keys-338` deleted, develop locally
+fast-forwarded from 57cc0ae to 7fbf14d.
+
+| Step | Agent | Output |
+|------|-------|--------|
+| Human merges PR #353 | human | Merge commit 7fbf14d; issue #338 auto-closed |
+| Remove worktree `.worktrees/issue-338-consolidate-bulk-max` | pr-manager | Removed |
+| Delete local branch refactor/bulk-max-keys-338 | pr-manager | Branch deleted (remote already gone) |
+| Fast-forward develop to 7fbf14d | pr-manager | develop: 57cc0ae..7fbf14d |
+| Update STATE.md | state-manager | Phase progress row MERGED; convergence tracker + session checkpoint updated |
+
+**Outcome:** #338 CLOSED. Develop at 7fbf14d (post-#353 tip). 11 audit-followups remain.
+
+---
+
+## Burst N+3 (2026-05-11) — PR #354 (#342 plannedChanges.labels shape doc) Open + Implementation
+
+**Agents dispatched:** orchestrator, state-manager
+**Files touched:** src/cli/issue/create.rs (+24 lines), .factory/STATE.md, .factory/cycles/cycle-001/burst-log.md
+**Versions bumped:** (none)
+
+### Summary
+
+Implemented issue #342: document the plannedChanges.labels shape divergence between
+dry-run preview JSON and the live POST body. Documentation-only change (+24 lines) at
+two sites in src/cli/issue/create.rs:
+
+1. Dry-run JSON builder (~line 485): cross-referenced comment explaining why
+   `plannedChanges.labels` uses simplified `[{action, name}]` shape instead of the
+   nested Atlassian shape, with forward reference to #331 + #345 for eventual convergence.
+2. `handle_edit_bulk_labels` docstring: note that the dry-run preview path uses a
+   different shape, documenting the divergence:
+   - Dry-run: `"labels": [{"action": "ADD", "name": "foo"}]`
+   - POST body: `"labels": {"labelsAction": "ADD", "labels": [{"name": "foo"}]}`
+
+Rationale for documenting vs normalizing: the POST shape is itself a best-guess pending
+#331 empirical sandbox verification. Locking dry-run consumers to that shape now would
+force a second breaking change once #331 confirms the canonical shape. Documented in
+PR description. Once #331 + #345 land, the two paths can converge to byte-identical JSON.
+
+Validation path: trivial-changes / docs-only per validated-feature-lifecycle skill.
+Divergence claim empirically verifiable by reading both builders — local verification
+authoritative. No adversarial review needed.
+
+Local CI-equivalent: cargo fmt --check green, cargo clippy --all-targets -- -D warnings
+green, cargo test green (613 unit + 38 bulk integration + all other suites).
+Commit 0eb77f3 pushed to docs/labels-shape-divergence-342 (base develop @ 7fbf14d).
+PR #354 created: https://github.com/Zious11/jira-cli/pull/354
+Copilot review requested (poller bb3qub9yc). Remote CI in-flight (poller beij5gw3i).
+
+| Step | Agent | Output |
+|------|-------|--------|
+| Create worktree off develop @ 7fbf14d | orchestrator | `.worktrees/issue-342-labels-doc` |
+| Read both builders in src/cli/issue/create.rs | orchestrator | Confirmed 2 divergence sites |
+| Add doc comment at dry-run JSON builder (~line 485) | orchestrator | +12 lines explaining simplified shape + forward refs |
+| Add docstring to handle_edit_bulk_labels | orchestrator | +12 lines noting dry-run vs POST shape divergence |
+| Local cargo fmt + clippy + test | orchestrator | All green; 613 unit + 38 bulk integration |
+| Commit 0eb77f3 + push docs/labels-shape-divergence-342 | orchestrator | 0eb77f3 on docs/labels-shape-divergence-342 |
+| Create PR #354 (closes #342) | orchestrator | https://github.com/Zious11/jira-cli/pull/354 |
+| Request Copilot review | orchestrator | Review requested; poller bb3qub9yc watching |
+| Factory state update | state-manager | STATE.md phase progress + convergence tracker + session checkpoint; burst-log.md two new entries |
+
+**Outcome:** PR #354 OPEN. Awaiting CI green + Copilot Round 1. Docs-only — no adversarial review needed.
+
 **Outcome:** PR #353 CONVERGED Round 1 (0 inline comments). Perplexity-validated. Awaiting human merge (closes #338).

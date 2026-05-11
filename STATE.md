@@ -36,8 +36,8 @@ activation_version: "v0.5.0-dev.7"
 | **Language** | Rust |
 | **Target Workspace** | develop → main |
 | **Started** | 2026-05-04 |
-| **Last Updated** | 2026-05-11 — PR #353 CONVERGED Round 1 (0 inline comments; Perplexity post-hoc confirms Atlassian bulk cap-equivalence at 1000). Awaiting human merge. 12 audit-followups after #338 closes: #331, #332, #333, #334, #335, #336, #340, #342, #343, #345, #346, #350. |
-| **Current Phase** | Phase 3 — TDD Implementation **IN PROGRESS** — Wave 3 CLOSED (10/10). Feature Mode #110-pr2 COMPLETE. PR #353 CONVERGED (refactor/bulk-max-keys-338 @ 3b98a3d; closes #338; awaiting human merge). |
+| **Last Updated** | 2026-05-11 — PR #353 MERGED @ 7fbf14d (closes #338). Develop fast-forwarded 57cc0ae..7fbf14d. PR #354 OPENED (docs/labels-shape-divergence-342 @ 0eb77f3; closes #342; docs-only). CI in-flight; Copilot review requested. 11 audit-followups remain after #342 closes: #331, #332, #333, #334, #335, #336, #340, #343, #345, #346, #350. |
+| **Current Phase** | Phase 3 — TDD Implementation **IN PROGRESS** — Wave 3 CLOSED (10/10). Feature Mode #110-pr2 COMPLETE. PR #353 MERGED @ 7fbf14d (closes #338). PR #354 OPEN (docs/labels-shape-divergence-342 @ 0eb77f3; closes #342; docs-only; awaiting CI + Copilot Round 1). |
 | **Next Phase** | Wave 3 — 10 stories (S-3.01..S-3.10) |
 | **Activation HEAD** | dea166471e22eff55974d7675593469b37048c5f (v0.5.0-dev.7) |
 | **factory-artifacts SHA** | 0b01262 (Phase 1 gate APPROVE; phase-1-converged tag) |
@@ -63,7 +63,8 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | 3-feature-#110-pr2 | **COMPLETE** — PR #348 MERGED 2026-05-11 @ e480ff2; closes #110 | 2026-05-10 | 2026-05-11 | F5 CONVERGED + F6 PASS + F7 PASS-WITH-FOLLOWUPS | 12→5→0→0→0 |
 | 3-feature-test-hygiene | **MERGED** — PR #351 squash-merged @ 3216ec2 (2026-05-11T15:15:10Z); closes #339+#344; issue #347 deferred to PR #352 | 2026-05-11 | 2026-05-11 | MERGED | 2→1→0 / rebase / 0 |
 | 3-feature-docs-cleanup | **MERGED** — PR #352 squash-merged @ 57cc0ae (2026-05-11); closes #337+#341+#347 | 2026-05-11 | 2026-05-11 | MERGED | 3→0 |
-| 3-feature-bulk-max-keys-338 | **CONVERGED, awaiting human merge** — PR #353 OPEN (refactor/bulk-max-keys-338 @ 3b98a3d; closes #338); Round 1: 0 inline comments (overview only); Perplexity post-hoc confirms both Atlassian bulk endpoints share 1000 per-call cap | 2026-05-11 | | CONVERGED Round 1 | 0 (1-round clean) |
+| 3-feature-bulk-max-keys-338 | **MERGED** — PR #353 squash-merged @ 7fbf14d (2026-05-11T15:50:22Z); closes #338; Perplexity post-hoc confirmed Atlassian bulk cap-equivalence at 1000 | 2026-05-11 | 2026-05-11 | MERGED | 0 (1-round clean) |
+| 3-feature-labels-doc-342 | **IN PROGRESS** — PR #354 OPEN (docs/labels-shape-divergence-342 @ 0eb77f3; closes #342; docs-only; trivial-changes path); awaiting CI + Copilot Round 1 | 2026-05-11 | | IN PROGRESS | — |
 | 4: Holdout Evaluation | not-started | | | | |
 | 5: Adversarial Refinement | not-started | | | | |
 | 6: Formal Hardening | not-started | | | | |
@@ -78,7 +79,8 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | v0.5.0-dev.9 bump — Wave 3 closure dev-release marker | state-manager | complete | PR #322 squash-merged to develop at 811fbc7 (2026-05-09). 2-line bump only. 8/8 CI green. |
 | PR #351 MERGED — test hygiene (gate test + BulkOperationProgress unit table) | pr-manager | complete | PR #351 squash-merged to develop at 3216ec2 (2026-05-11T15:15:10Z). Closes #339 + #344. Issue #347 deferred to PR #352. Develop: e480ff2→3216ec2. Worktree `.worktrees/test-hygiene` removed; branch deleted. |
 | PR #352 MERGED — docs cleanup (CLAUDE.md + mod.rs + bulk test comment) | pr-manager | complete | PR #352 squash-merged to develop at 57cc0ae (2026-05-11T15:36:10Z). Closes #337+#341+#347. Convergence: 3→0 (R1 fix f42bfa5; R2 clean). |
-| PR #353 OPENED — consolidate BULK_MAX_KEYS (#338) | orchestrator | complete | PR #353 opened (refactor/bulk-max-keys-338 @ 3b98a3d). Trivial-changes path. pub const BULK_MAX_KEYS canonical in src/api/jira/bulk.rs; create.rs + workflow.rs import it. +14/-9 lines. CI 8/8 green (3b98a3d). Copilot Round 1: 0 inline comments. Perplexity post-hoc: both Atlassian bulk endpoints share 1000 per-call cap (confirmed). PR CONVERGED, awaiting human merge. |
+| PR #353 MERGED — consolidate BULK_MAX_KEYS (#338) | pr-manager | complete | PR #353 squash-merged @ 7fbf14d (2026-05-11T15:50:22Z). Closes #338. Develop fast-forwarded 57cc0ae..7fbf14d. Worktree `.worktrees/issue-338-consolidate-bulk-max` removed; branch refactor/bulk-max-keys-338 deleted (local + remote). |
+| PR #354 OPENED — docs: plannedChanges.labels shape divergence (#342) | orchestrator | complete | PR #354 opened (docs/labels-shape-divergence-342 @ 0eb77f3; base develop @ 7fbf14d). Docs-only: +24 lines to src/cli/issue/create.rs at 2 divergence sites. Local CI green (fmt + clippy + 613 unit + 38 bulk integration). Remote CI in-flight; Copilot review requested. Closes #342. |
 
 ## Decisions Log
 
@@ -178,7 +180,7 @@ _**3/3 FULLY CONVERGED** at Pass 28 (2026-05-04). 28 passes total: 25 SUBSTANTIV
 _**3/3 FULLY CONVERGED** at Pass 13 (2026-05-07). 13 passes: 10 SUBSTANTIVE + 3 consecutive CLEAN-PASS (P11-P12-P13). Trajectory: 14→5→5→5→4→5→4→4→4→1→0→1→0. Full per-pass details: `cycles/cycle-001/convergence-trajectory.md`._
 
 ### Phase 3-adv — Wave Adversarial Reviews (per-story + wave)
-_Wave gate: not started. Feature Mode #110-pr2: **F5 CONVERGED** 12→5→0→0→0 (Pass 5, 2026-05-10). F6: SECURITY PASS (→#334). F7: PASS-WITH-FOLLOWUPS (5/5; →#347). 10 Copilot rounds: 27/27 resolved. PR #348 MERGED 2026-05-11 @ e480ff2 (closes #110). **PR #351 MERGED 2026-05-11 @ 3216ec2** (closes #339+#344). **PR #352 MERGED 2026-05-11 @ 57cc0ae** (closes #337+#341+#347; R2 clean 3→0). **PR #353 CONVERGED Round 1** (refactor/bulk-max-keys-338 @ 3b98a3d; closes #338; 0 inline comments; Perplexity post-hoc confirms cap-equivalence; awaiting human merge). 12 audit-followups remain after #338 closes: #331, #332, #333, #334, #335, #336, #340, #342, #343, #345, #346, #350. Full records: `cycles/cycle-001/adversarial-reviews/issue-110-pr2/` + `cycles/cycle-001/adversarial-reviews/pr-352-docs-cleanup/` + `cycles/cycle-001/adversarial-reviews/pr-353-bulk-max-keys/`._
+_Wave gate: not started. Feature Mode #110-pr2: **F5 CONVERGED** 12→5→0→0→0 (Pass 5, 2026-05-10). F6: SECURITY PASS (→#334). F7: PASS-WITH-FOLLOWUPS (5/5; →#347). 10 Copilot rounds: 27/27 resolved. PR #348 MERGED 2026-05-11 @ e480ff2 (closes #110). **PR #351 MERGED 2026-05-11 @ 3216ec2** (closes #339+#344). **PR #352 MERGED 2026-05-11 @ 57cc0ae** (closes #337+#341+#347; R2 clean 3→0). **PR #353 MERGED 2026-05-11 @ 7fbf14d** (closes #338; 0 inline Round 1; Perplexity confirmed bulk cap-equivalence). **PR #354 OPENED 2026-05-11** (docs/labels-shape-divergence-342 @ 0eb77f3; closes #342; docs-only trivial-changes path; awaiting Copilot Round 1). 11 audit-followups remain after #342 closes: #331, #332, #333, #334, #335, #336, #340, #343, #345, #346, #350. Full records: `cycles/cycle-001/adversarial-reviews/issue-110-pr2/` + `cycles/cycle-001/adversarial-reviews/pr-352-docs-cleanup/` + `cycles/cycle-001/adversarial-reviews/pr-353-bulk-max-keys/`._
 
 ### Phase 5-adv — Adversarial Refinement
 _Not started._
@@ -189,8 +191,8 @@ _Not started._
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-11 |
-| **Position** | **PR #353 CONVERGED Round 1** (refactor/bulk-max-keys-338 @ 3b98a3d; closes #338; mechanical DRY refactor). CI 8/8 green on 3b98a3d. Copilot Round 1: 0 inline comments (overview only; stop condition met). Premise post-hoc Perplexity-validated: Atlassian docs confirm both bulk endpoints share 1000 per-call cap (cited: developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-bulk-operations/ + bulk-operation-additional-examples-and-faqs/). Consolidation is correct; no regression. **Next action: await human merge of PR #353 (closes #338). Then: 12 audit-followups — #331, #332, #333, #334, #335, #336, #340, #342, #343, #345, #346, #350.** |
-| **Convergence counter** | 3/3 CONVERGED Phase 2-adv; Phase 3-adv: Wave 2 gate CLOSED; Feature Mode #110-pr2 F5 CONVERGED (12→5→0→0→0); PR #351 MERGED (2→1→0 / rebase / 0); PR #352 MERGED (3→0); PR #353 CONVERGED Round 1 (0 inline comments; Perplexity-validated) |
+| **Position** | **PR #353 MERGED** @ 7fbf14d (2026-05-11T15:50:22Z); closes #338. Develop fast-forwarded 57cc0ae..7fbf14d. Worktree + branch cleaned up. **PR #354 OPEN** (docs/labels-shape-divergence-342 @ 0eb77f3; closes #342; docs-only: +24 lines in src/cli/issue/create.rs documenting plannedChanges.labels shape divergence at 2 sites). Local CI green; remote CI in-flight; Copilot review requested. **Next action: await CI green + Copilot Round 1 on PR #354. Then: 11 audit-followups — #331, #332, #333, #334, #335, #336, #340, #343, #345, #346, #350.** |
+| **Convergence counter** | 3/3 CONVERGED Phase 2-adv; Phase 3-adv: Wave 2 gate CLOSED; Feature Mode #110-pr2 F5 CONVERGED (12→5→0→0→0); PR #351 MERGED (2→1→0 / rebase / 0); PR #352 MERGED (3→0); PR #353 MERGED @ 7fbf14d (0 inline Round 1; Perplexity-validated); PR #354 OPEN (trivial-changes / docs-only; awaiting Copilot Round 1) |
 
 ## Historical Content
 
