@@ -803,9 +803,10 @@ pub(super) async fn handle_edit(
 /// NOTE: The `--dry-run --output json` `plannedChanges.labels` shape (built in the
 /// dry-run block of `handle_edit` above) is a SIMPLIFIED preview using `{action, name}`
 /// pairs in a flat array, NOT a byte-for-byte snapshot of the POST body built here.
-/// Dry-run is a human-and-tool-friendly diff; the POST body below is the canonical
-/// (still-unverified, pending #331) Atlassian shape. Once #331 confirms the shape and
-/// #345 extracts a pure builder, the two paths can converge.
+/// Dry-run is a human-and-tool-friendly diff; the POST body below is the current
+/// best-guess Atlassian shape (still unverified, pending #331). Once #331 confirms
+/// the canonical wire shape and #345 extracts a pure builder, the two paths can
+/// converge.
 ///
 /// editedFieldsInput shape (best-guess pending #331 empirical verification):
 /// - When BOTH ADD and REMOVE labels are present, coalesced into ONE bulk POST
