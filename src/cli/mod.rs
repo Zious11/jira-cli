@@ -396,6 +396,10 @@ pub enum IssueCommand {
         /// Maximum number of issues to match via --jql (default 50, hard ceiling 1000).
         /// Requires --jql; cannot be used with positional keys. If the JQL match count
         /// exceeds this value, the command errors without mutating.
+        ///
+        /// Values above 100 trigger cursor pagination on /rest/api/3/search/jql (Jira
+        /// caps maxResults at 100 per page), so --max 1000 issues up to ~10 search
+        /// requests before the bulk call. Use the smallest --max that fits your workflow.
         #[arg(long, value_parser = clap::value_parser!(u32).range(1..=1000))]
         max: Option<u32>,
         /// Skip the interactive confirmation prompt for large JQL match sets.
