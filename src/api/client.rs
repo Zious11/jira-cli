@@ -840,6 +840,12 @@ const MAX_ERROR_ENTRY_LEN: usize = 1024;
 /// `MAX_ERROR_ENTRY_LEN`, appending a `[...truncated, N bytes total]` marker
 /// so the operator sees that truncation happened.
 ///
+/// The marker length is reserved from the prefix budget, so the FINAL output
+/// length is guaranteed to be `<= MAX_ERROR_ENTRY_LEN` — important because
+/// the marker would otherwise push slightly-oversized inputs (e.g., 1025
+/// bytes) to an output longer than the original, defeating the cap's
+/// flood-prevention purpose.
+///
 /// Used by `extract_error_message_raw` as defense-in-depth against
 /// terminal/log flooding attacks (companion to `sanitize_for_stderr`'s
 /// control-byte escaping per CWE-117).
@@ -847,11 +853,23 @@ fn cap_entry(s: &str) -> String {
     if s.len() <= MAX_ERROR_ENTRY_LEN {
         return s.to_string();
     }
-    let mut end = MAX_ERROR_ENTRY_LEN;
+    let marker = format!(" [...truncated, {} bytes total]", s.len());
+    // Defensive: with MAX_ERROR_ENTRY_LEN = 1024 and any plausible byte
+    // count, the marker is roughly 30-50 chars and well under the cap. This
+    // branch only fires if someone shrinks MAX_ERROR_ENTRY_LEN below the
+    // marker length in the future — in that case, returning just the marker
+    // preserves the size invariant (output_len <= MAX_ERROR_ENTRY_LEN +
+    // small overhead from the marker's own len which is < 64 bytes), which
+    // is still vastly smaller than the unbounded input.
+    if marker.len() >= MAX_ERROR_ENTRY_LEN {
+        return marker;
+    }
+    let target_prefix_len = MAX_ERROR_ENTRY_LEN - marker.len();
+    let mut end = target_prefix_len;
     while !s.is_char_boundary(end) {
         end -= 1;
     }
-    format!("{} [...truncated, {} bytes total]", &s[..end], s.len())
+    format!("{}{}", &s[..end], marker)
 }
 
 /// Sanitize a server-supplied string for safe display on stderr.
@@ -1128,6 +1146,44 @@ mod sanitize_tests {
             capped.contains(&(MAX_ERROR_ENTRY_LEN + 100).to_string()),
             "expected original byte count in marker: '{capped}'"
         );
+        // Size invariant: final output (prefix + marker) MUST stay within
+        // the cap, otherwise the marker overhead defeats the flood-prevention
+        // purpose of the cap.
+        assert!(
+            capped.len() <= MAX_ERROR_ENTRY_LEN,
+            "cap_entry output {} bytes exceeds MAX_ERROR_ENTRY_LEN {} bytes",
+            capped.len(),
+            MAX_ERROR_ENTRY_LEN
+        );
+    }
+
+    #[test]
+    fn test_cap_entry_size_invariant_at_boundary_oversize() {
+        // Regression pin for the Copilot R2 finding on PR #356: inputs only
+        // slightly larger than MAX_ERROR_ENTRY_LEN (e.g., 1025 bytes) used to
+        // produce an output LONGER than the input because the truncation
+        // marker overhead exceeded what was removed. The cap now reserves
+        // marker budget from the prefix, so output_len <= MAX_ERROR_ENTRY_LEN
+        // regardless of how close the input is to the boundary.
+        for over in [1, 2, 5, 50, 100, 1000, 10000] {
+            let s = "a".repeat(MAX_ERROR_ENTRY_LEN + over);
+            let capped = cap_entry(&s);
+            assert!(
+                capped.len() <= MAX_ERROR_ENTRY_LEN,
+                "size invariant violated for input len {} (over={}): output len = {}",
+                s.len(),
+                over,
+                capped.len()
+            );
+            // And the marker must still be present so the operator sees that
+            // truncation happened.
+            assert!(
+                capped.contains("[...truncated"),
+                "marker missing for input len {} (over={})",
+                s.len(),
+                over
+            );
+        }
     }
 
     #[test]
@@ -1141,5 +1197,11 @@ mod sanitize_tests {
         let capped = cap_entry(&with_multibyte);
         // Verify it's still valid UTF-8 by re-parsing.
         let _ = capped.as_str();
+        // Size invariant must also hold for UTF-8-bordering inputs.
+        assert!(
+            capped.len() <= MAX_ERROR_ENTRY_LEN,
+            "size invariant violated for UTF-8 input: output len = {}",
+            capped.len()
+        );
     }
 }
