@@ -197,6 +197,16 @@ impl JiraClient {
         task_id: &str,
         timeout: Duration,
     ) -> anyhow::Result<BulkOperationProgress> {
+        // Validate task_id at function entry — BEFORE the deadline is computed.
+        // The timeout-exceeded error message below interpolates task_id via
+        // `Display` ({task_id}), which renders ASCII control characters literally
+        // (CR/LF/ANSI escapes would be terminal-interpreted in stderr/logs).
+        // If timeout is very small (or 0), the deadline check fires before any
+        // call to poll_bulk_task — without this guard, a hostile/spoofed task_id
+        // (e.g., `"abc\r\n[jr] FAKE LOG"`) would reach the error sink unsanitized.
+        // CWE-117 defense-in-depth.
+        validate_task_id(task_id)?;
+
         let deadline = Instant::now() + timeout;
         let mut backoff = POLL_BASE_SECS;
 
