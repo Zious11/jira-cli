@@ -132,3 +132,46 @@ impl BulkActionError {
         "unknown error".to_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn progress_with_status(status: &str) -> BulkOperationProgress {
+        BulkOperationProgress {
+            task_id: None,
+            status: status.to_string(),
+            processed_accessible_issues: Vec::new(),
+            failed_accessible_issues: std::collections::HashMap::new(),
+            progress_percent: None,
+            total_issue_count: None,
+            invalid_or_inaccessible_issue_count: None,
+        }
+    }
+
+    #[test]
+    fn is_terminal_recognizes_all_documented_statuses() {
+        let terminal = ["COMPLETE", "COMPLETED", "FAILED", "CANCELLED", "DEAD"];
+        let non_terminal = [
+            "RUNNING",
+            "ENQUEUED",
+            "PENDING",
+            "IN_PROGRESS",
+            "CANCEL_REQUESTED",
+            "",
+            "unknown",
+        ];
+        for s in terminal {
+            assert!(
+                progress_with_status(s).is_terminal(),
+                "expected {s} terminal"
+            );
+        }
+        for s in non_terminal {
+            assert!(
+                !progress_with_status(s).is_terminal(),
+                "expected {s} non-terminal"
+            );
+        }
+    }
+}
