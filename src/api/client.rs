@@ -850,8 +850,10 @@ const MAX_ERROR_ENTRY_LEN: usize = 1024;
 /// byte becomes a 4-byte `\xNN` literal) — can still flood the terminal
 /// or log file. This cap is enforced inside `sanitize_for_stderr` itself
 /// using a byte-budget-aware char loop that stops emitting when the next
-/// char would exceed the budget, then appends a `[...truncated at N
-/// sanitized bytes; original M bytes]` marker.
+/// char would exceed the budget, then appends a `[...truncated; original
+/// M bytes]` marker (R6: marker text references only the immutable
+/// `original_len`, not `out.len()`, to avoid over-reporting after any
+/// retroactive trim).
 ///
 /// 4 KiB chosen to absorb worst-case 4x expansion of a single `MAX_ERROR_ENTRY_LEN`
 /// entry (1024 × 4 = 4096) while still leaving room for the marker via
@@ -986,22 +988,27 @@ fn sanitize_for_stderr(input: String) -> String {
     }
 
     if truncated {
-        // Build the marker with the actual sanitized-bytes value at the time
-        // of truncation (out.len() before the marker is appended) and the
-        // original input length.
-        let marker = format!(
-            " [...truncated at {} sanitized bytes; original {} bytes]",
-            out.len(),
-            original_len
-        );
+        // CWE-117 / PR #356 R6 fix: marker text intentionally does NOT
+        // reference `out.len()` — only the (immutable) `original_len`. This
+        // makes the marker's length depend solely on original_len's digit
+        // count (so the retroactive trim doesn't change the marker length)
+        // and prevents the over-reporting issue where the marker would
+        // claim a byte count that no longer matches the trimmed output.
+        // The operator gets accurate info: "original M bytes" — the actual
+        // size that was thrown away, with the final output size being
+        // exactly out.len() bytes (which they can observe directly).
+        let marker = format!(" [...truncated; original {} bytes]", original_len);
         if out.len() + marker.len() <= MAX_SANITIZED_OUTPUT_LEN {
-            // Marker fits without trimming.
+            // Marker fits without trimming — append directly.
             out.push_str(&marker);
         } else {
             // Marker would push us over: retroactively trim `out` at a UTF-8
-            // char boundary so `out + marker` fits within the cap. The trim
-            // is bounded by marker.len() (< 80 bytes for any plausible
-            // original_len) — bounded work, no quadratic blow-up.
+            // char boundary so `out + marker` fits within the cap. Bounded
+            // by marker.len() (~50 bytes for any plausible original_len), so
+            // no quadratic blow-up. The marker text is unchanged by the
+            // trim (it only references original_len), so this preserves the
+            // size invariant `out.len() + marker.len() <= cap` AFTER the
+            // trim — verified empirically by the new size-invariant tests.
             let target = MAX_SANITIZED_OUTPUT_LEN - marker.len();
             let mut end = target;
             while !out.is_char_boundary(end) {
@@ -1076,6 +1083,12 @@ fn extract_error_message_raw(body: &[u8]) -> String {
             // Total memory is O(MAX_SANITIZED_OUTPUT_LEN) regardless of entry
             // count. The downstream sanitize_for_stderr cap is retained as
             // defense-in-depth for control-byte expansion.
+            // R6 fix: reserve marker budget upfront in the budget check (the
+            // standard pattern per Perplexity 2026-05-11 — retroactive trim
+            // risks marker overflow). Marker is fixed-length so the
+            // reservation is a 15-byte constant; no recalculation needed.
+            const JOIN_MARKER: &str = " [...truncated]";
+            let content_budget_join = MAX_SANITIZED_OUTPUT_LEN.saturating_sub(JOIN_MARKER.len());
             let mut joined = String::with_capacity(MAX_SANITIZED_OUTPUT_LEN);
             let mut first = true;
             let mut truncated = false;
@@ -1085,7 +1098,7 @@ fn extract_error_message_raw(body: &[u8]) -> String {
                 let Some(m) = m_value.as_str() else { continue };
                 let capped = cap_entry(m);
                 let separator_len = if first { 0 } else { 2 };
-                if joined.len() + separator_len + capped.len() > MAX_SANITIZED_OUTPUT_LEN {
+                if joined.len() + separator_len + capped.len() > content_budget_join {
                     truncated = true;
                     break;
                 }
@@ -1099,8 +1112,9 @@ fn extract_error_message_raw(body: &[u8]) -> String {
 
             if emitted_any {
                 if truncated {
-                    joined.push_str(" [...truncated]");
+                    joined.push_str(JOIN_MARKER);
                 }
+                debug_assert!(joined.len() <= MAX_SANITIZED_OUTPUT_LEN);
                 return joined;
             }
         }
@@ -1362,6 +1376,36 @@ mod sanitize_tests {
             MAX_SANITIZED_OUTPUT_LEN
         );
         assert!(result.contains("[...truncated"));
+    }
+
+    #[test]
+    fn test_sanitize_for_stderr_truncation_marker_excludes_out_len() {
+        // R6 fix: the truncation marker must NOT reference out.len() — only
+        // `original_len`. This makes the marker length independent of any
+        // retroactive trim and prevents the over-reporting bug where the
+        // marker claimed a byte count that didn't match the trimmed output.
+        let input = "a".repeat(MAX_SANITIZED_OUTPUT_LEN + 100);
+        let original_len = input.len();
+        let result = sanitize_for_stderr(input);
+        // Marker should mention original_len (input bytes), not anything
+        // resembling out.len() (post-trim bytes).
+        assert!(
+            result.contains(&format!("original {} bytes", original_len)),
+            "marker should reference original_len; got: {result}"
+        );
+        // Negative pin: marker should NOT contain "sanitized bytes" or "at N"
+        // phrasing that would over-report after trim.
+        assert!(
+            !result.contains("sanitized bytes"),
+            "marker should not over-report sanitized byte count; got: {result}"
+        );
+        // Size invariant: final output stays within cap.
+        assert!(
+            result.len() <= MAX_SANITIZED_OUTPUT_LEN,
+            "output {} bytes exceeds cap {}",
+            result.len(),
+            MAX_SANITIZED_OUTPUT_LEN
+        );
     }
 
     #[test]
