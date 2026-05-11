@@ -86,4 +86,11 @@ New acceptance criteria covered by this demo set:
 - All demos except D-006/D-007 require no live Jira backend — they error or exit clean before any HTTP call.
 - D-002/D-003 use `JR_BASE_URL=http://127.0.0.1:9` + `JR_AUTH_HEADER` to satisfy config loading, but `--dry-run` with positional keys makes zero HTTP calls by design.
 - D-004/D-005 fail at argument validation, also before any HTTP.
-- `JR_AUTH_HEADER` is a debug-build-only env seam (`#[cfg(debug_assertions)]`). Demos use `./target/release/jr` which is the release binary — the env var has no effect there, but the flags being demonstrated (dry-run, help, validation) do not reach any auth code path.
+- **Prerequisites for reproduction:** `JR_AUTH_HEADER` is a debug-build-only env seam
+  (`#[cfg(debug_assertions)]`). Release builds (`./target/release/jr`) ignore
+  `JR_AUTH_HEADER` entirely — `JiraClient::from_config` will consult the macOS keychain
+  and fail with a credential-not-found error if `jr auth login` has not been run first.
+  For demos that exercise pre-HTTP validation (e.g., `--max 0` rejection, empty `--jql`
+  rejection, multi-key flag conflicts), use the **debug build** (`cargo run -- ...`) to
+  avoid the keychain prerequisite. D-002/D-003 and D-006/D-007 require either a prior
+  `jr auth login` (release) or the debug build with `JR_AUTH_HEADER` set.
