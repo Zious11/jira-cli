@@ -233,3 +233,42 @@ Never use `-f body="..."` with backticks in the value, even escaped — bash's
 command-substitution evaluation happens before gh sees the argument.
 
 _Discovered: PR #352 Round 1 Copilot reply, 2026-05-11_
+
+---
+
+## 2026-05-11 — PR #353 Post-hoc Perplexity Validation
+
+### [candidate] Trivial-refactor PRs that consolidate same-typed-but-distinct-named constants MUST run Perplexity to confirm the underlying constraint is shared
+
+The trivial-changes path (no adversarial review, Perplexity in the skip column) is correct
+for mechanical refactors with no design decisions. However, when two constants of the same
+type have **distinct names** suggesting they might differ (e.g., `BULK_MAX_KEYS` vs
+`BULK_MOVE_MAX_KEYS`), the distinct naming is itself an implicit external-knowledge claim:
+the author who originally wrote two names may have believed the underlying constraints
+differ, or may have used distinct names defensively for future-proofing.
+
+If both constants happen to have identical values at the time of consolidation, that
+coincidence does NOT prove the constraint is shared. The consolidation is a semantic claim
+("these two constants represent the same limit") that requires external validation.
+
+**Rule for future trivial-refactor PRs that consolidate constants:**
+Even on the trivial-changes path, run Perplexity when consolidating two same-typed
+constants with distinct names that imply potentially different external constraints.
+The query cost is low; the regression risk of shipping a wrong consolidation is high.
+
+**Validated instance (PR #353, 2026-05-11):**
+`BULK_MAX_KEYS` (bulk edit) and `BULK_MOVE_MAX_KEYS` (bulk transition) were both 1000.
+Perplexity confirmed both Atlassian endpoints share the 1000 per-call cap:
+- https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-bulk-operations/
+  "A single request can accommodate a maximum of 1000 issues (including subtasks)" (bulk edit)
+  "You can transition up to 1,000 issues in a single operation" (bulk transition)
+- https://developer.atlassian.com/cloud/jira/platform/bulk-operation-additional-examples-and-faqs/
+  "The maximum number of issues, including subtasks, that you can update at once is capped at 1000."
+
+Consolidation confirmed correct. No regression. Lesson: the validation step that was
+skipped (it was on the trivial path) should be added as a conditional: "trivial path
+EXCEPT when consolidating distinct-named constants of the same type — run Perplexity."
+
+_Discovered: PR #353 post-hoc Perplexity validation, 2026-05-11_
+_Tagged: [process-gap] — refines the trivial-changes path in validated-feature-lifecycle_
+_Status: [candidate] — flagged for human review before promotion to codified rule_

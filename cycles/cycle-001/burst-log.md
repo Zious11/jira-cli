@@ -1316,3 +1316,46 @@ PR #353 created. Copilot review requested.
 | Factory state update | state-manager | STATE.md session checkpoint + phase progress + convergence tracker; burst-log.md new entries |
 
 **Outcome:** PR #353 OPEN. Awaiting CI green + Copilot Round 1. Trivial-changes path — no adversarial review needed.
+
+---
+
+## Burst N+1 (2026-05-11) — PR #353 Round 1 Convergence + Post-hoc Perplexity Validation
+
+**Agents dispatched:** orchestrator, state-manager
+**Files touched:** .factory/STATE.md, .factory/cycles/cycle-001/burst-log.md, .factory/cycles/cycle-001/lessons.md, .factory/cycles/cycle-001/adversarial-reviews/pr-353-bulk-max-keys/pr-353-copilot-convergence.md
+**Versions bumped:** (none)
+
+### Summary
+
+CI on 3b98a3d settled 8/8 green (2026-05-11T15:43:21Z). Copilot Round 1 submitted
+2026-05-11T15:43:07Z (review id 4265141297, state COMMENTED) with 0 inline comments —
+only an overview praising the consolidation. Phase 8 stop condition met immediately:
+overview alone with no file-level findings. No Round 2 needed.
+
+User raised post-hoc question: "did we validate with perplexity?" The trivial-changes
+path explicitly lists Perplexity in the skip column for refactors with no design
+decisions. However, the distinct constant names (`BULK_MAX_KEYS` vs `BULK_MOVE_MAX_KEYS`)
+represented an implicit external-knowledge claim: that the two Atlassian endpoints share
+the same per-call cap. Perplexity query run to validate.
+
+Perplexity result CONFIRMED: both POST /rest/api/3/bulk/issues/fields (bulk edit) and
+POST /rest/api/3/bulk/issues/transition (bulk transition) share a 1000-issue per-call
+cap. Citations: developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-bulk-operations/
+and bulk-operation-additional-examples-and-faqs/. Consolidation is correct; no regression.
+
+A process-gap lesson was codified in lessons.md: when two same-typed constants exist with
+distinct names suggesting they might differ, Perplexity should be run to confirm the
+underlying constraint is actually shared — even on the trivial-changes path.
+
+| Step | Agent | Output |
+|------|-------|--------|
+| Await CI on 3b98a3d | orchestrator | 8/8 SUCCESS (settled 2026-05-11T15:43:21Z) |
+| Await Copilot Round 1 | orchestrator | Review id 4265141297 — 0 inline comments; overview only |
+| Evaluate Phase 8 stop condition | orchestrator | Met — 0 inline findings; no Round 2 needed |
+| User prompt: "did we validate with perplexity?" | orchestrator | Ran post-hoc Perplexity validation |
+| Perplexity query — Atlassian bulk cap-equivalence | orchestrator | CONFIRMED: both endpoints cap at 1000 (2 citations) |
+| Create pr-353-copilot-convergence.md | state-manager | cycles/cycle-001/adversarial-reviews/pr-353-bulk-max-keys/pr-353-copilot-convergence.md |
+| Append process-gap lesson to lessons.md | state-manager | cycles/cycle-001/lessons.md — lesson [candidate] added |
+| Update STATE.md | state-manager | Phase progress CONVERGED; session checkpoint replaced; convergence tracker updated |
+
+**Outcome:** PR #353 CONVERGED Round 1 (0 inline comments). Perplexity-validated. Awaiting human merge (closes #338).
