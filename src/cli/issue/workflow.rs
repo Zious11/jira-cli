@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use crate::adf;
 use crate::api::client::JiraClient;
+use crate::api::jira::bulk::BULK_MAX_KEYS;
 use crate::cli::{IssueCommand, OutputFormat};
 use crate::error::JrError;
 use crate::output;
@@ -11,9 +12,6 @@ use crate::partial_match::{self, MatchResult};
 use crate::types::jira::Resolution;
 
 use super::helpers;
-
-/// Maximum number of keys allowed in a single bulk transition call.
-const BULK_MOVE_MAX_KEYS: usize = 1000;
 
 // ── Resolution resolver ───────────────────────────────────────────────
 
@@ -194,13 +192,13 @@ pub(super) async fn handle_move(
     };
 
     // --- Validate key count ---
-    if move_keys.len() > BULK_MOVE_MAX_KEYS {
+    if move_keys.len() > BULK_MAX_KEYS {
         return Err(JrError::UserError(format!(
             "Too many issue keys: {} provided, maximum is {}. \
              Split into batches of {} or fewer and run multiple times.",
             move_keys.len(),
-            BULK_MOVE_MAX_KEYS,
-            BULK_MOVE_MAX_KEYS,
+            BULK_MAX_KEYS,
+            BULK_MAX_KEYS,
         ))
         .into());
     }

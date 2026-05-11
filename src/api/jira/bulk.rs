@@ -18,6 +18,15 @@ use crate::types::jira::bulk::{
     BulkEditRequest, BulkOperationProgress, BulkSubmitResponse, BulkTransitionRequest,
 };
 
+/// Maximum number of issue keys allowed in a single bulk operation call.
+///
+/// Sourced from the Atlassian per-call cap documented on both
+/// POST /rest/api/3/bulk/issues/fields and POST /rest/api/3/bulk/issues/transition
+/// (Issue Bulk Operations API). Reused by all bulk CLI handlers
+/// (`issue edit` multi-key + `--jql`, `issue move` multi-key) so that a future
+/// Atlassian cap change only requires editing this single constant.
+pub const BULK_MAX_KEYS: usize = 1000;
+
 /// Exponential backoff base interval for poll retries (used when task is not yet terminal).
 const POLL_BASE_SECS: u64 = 1;
 /// Maximum backoff interval (caps exponential growth).

@@ -5,6 +5,7 @@ use std::time::Duration;
 use crate::adf;
 use crate::api::assets::linked::get_or_fetch_cmdb_fields;
 use crate::api::client::JiraClient;
+use crate::api::jira::bulk::BULK_MAX_KEYS;
 use crate::cli::{IssueCommand, OutputFormat};
 use crate::config::Config;
 use crate::error::JrError;
@@ -12,9 +13,6 @@ use crate::output;
 
 use super::helpers;
 use super::json_output;
-
-/// Maximum number of keys allowed in a single bulk edit call (Atlassian API limit).
-const BULK_MAX_KEYS: usize = 1000;
 
 /// Number of issues above which a `--jql`-driven bulk edit requires explicit
 /// `--yes` (or `--no-input` implicit-yes) to proceed. Below this threshold the
