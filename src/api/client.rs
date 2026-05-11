@@ -851,9 +851,10 @@ const MAX_ERROR_ENTRY_LEN: usize = 1024;
 /// or log file. This cap is enforced inside `sanitize_for_stderr` itself
 /// using a byte-budget-aware char loop that stops emitting when the next
 /// char would exceed the budget, then appends a `[...truncated; original
-/// M bytes]` marker (R6: marker text references only the immutable
-/// `original_len`, not `out.len()`, to avoid over-reporting after any
-/// retroactive trim).
+/// M bytes]` marker. The marker text references only the immutable
+/// `original_len`, not `out.len()`, so the retroactive trim path doesn't
+/// change the marker length — preserves the size invariant after trim
+/// and avoids over-reporting retained bytes.
 ///
 /// 4 KiB chosen to absorb worst-case 4x expansion of a single `MAX_ERROR_ENTRY_LEN`
 /// entry (1024 × 4 = 4096) while still leaving room for the marker via
@@ -988,15 +989,14 @@ fn sanitize_for_stderr(input: String) -> String {
     }
 
     if truncated {
-        // CWE-117 / PR #356 R6 fix: marker text intentionally does NOT
-        // reference `out.len()` — only the (immutable) `original_len`. This
-        // makes the marker's length depend solely on original_len's digit
-        // count (so the retroactive trim doesn't change the marker length)
-        // and prevents the over-reporting issue where the marker would
-        // claim a byte count that no longer matches the trimmed output.
-        // The operator gets accurate info: "original M bytes" — the actual
-        // size that was thrown away, with the final output size being
-        // exactly out.len() bytes (which they can observe directly).
+        // CWE-117 defense: marker text intentionally references only the
+        // (immutable) `original_len`, NOT `out.len()`. This makes the
+        // marker's length depend solely on original_len's digit count, so
+        // the retroactive trim below doesn't change the marker length —
+        // preserving the size invariant `out + marker <= cap` AFTER any
+        // trim. Operator gets accurate info: "original M bytes" reflects
+        // the actual source size; the final retained size is exactly
+        // out.len() bytes (directly observable).
         let marker = format!(" [...truncated; original {} bytes]", original_len);
         if out.len() + marker.len() <= MAX_SANITIZED_OUTPUT_LEN {
             // Marker fits without trimming — append directly.
@@ -1024,9 +1024,11 @@ fn sanitize_for_stderr(input: String) -> String {
 /// Extract a human-readable error message from a Jira error response body.
 ///
 /// All return paths run through `sanitize_for_stderr` (CWE-117 defense:
-/// strips ASCII control chars from server-supplied content before it reaches
-/// stderr, preventing CR/LF/ANSI injection from a hostile or proxy-controlled
-/// response). UTF-8 in legitimate localized error messages is preserved.
+/// escapes ASCII control chars from server-supplied content as visible
+/// `\xNN` literals before they reach stderr, preventing CR/LF/ANSI
+/// injection from a hostile or proxy-controlled response while keeping
+/// the byte information visible to the operator). UTF-8 in legitimate
+/// localized error messages is preserved.
 ///
 /// Precedence:
 /// 1. Non-empty `errorMessages` array → joined with "; "
@@ -1083,9 +1085,10 @@ fn extract_error_message_raw(body: &[u8]) -> String {
             // Total memory is O(MAX_SANITIZED_OUTPUT_LEN) regardless of entry
             // count. The downstream sanitize_for_stderr cap is retained as
             // defense-in-depth for control-byte expansion.
-            // R6 fix: reserve marker budget upfront in the budget check (the
-            // standard pattern per Perplexity 2026-05-11 — retroactive trim
-            // risks marker overflow). Marker is fixed-length so the
+            // Reserve marker budget upfront in the budget check (the standard
+            // pattern for fixed-output sanitization — matches Rust std::fmt
+            // buffer sizing and log-crate truncation conventions; retroactive
+            // trim risks marker overflow). Marker is fixed-length so the
             // reservation is a 15-byte constant; no recalculation needed.
             const JOIN_MARKER: &str = " [...truncated]";
             let content_budget_join = MAX_SANITIZED_OUTPUT_LEN.saturating_sub(JOIN_MARKER.len());
@@ -1308,11 +1311,10 @@ mod sanitize_tests {
 
     #[test]
     fn test_cap_entry_size_invariant_at_boundary_oversize() {
-        // Regression pin for the Copilot R2 finding on PR #356: inputs only
-        // slightly larger than MAX_ERROR_ENTRY_LEN (e.g., 1025 bytes) used to
-        // produce an output LONGER than the input because the truncation
-        // marker overhead exceeded what was removed. The cap now reserves
-        // marker budget from the prefix, so output_len <= MAX_ERROR_ENTRY_LEN
+        // Regression pin: inputs only slightly larger than MAX_ERROR_ENTRY_LEN
+        // (e.g., 1025 bytes) must NOT produce output longer than the input
+        // due to the truncation marker overhead. cap_entry reserves marker
+        // budget from the prefix so output_len <= MAX_ERROR_ENTRY_LEN
         // regardless of how close the input is to the boundary.
         for over in [1, 2, 5, 50, 100, 1000, 10000] {
             let s = "a".repeat(MAX_ERROR_ENTRY_LEN + over);
@@ -1336,15 +1338,15 @@ mod sanitize_tests {
     }
 
     // -----------------------------------------------------------------------
-    // sanitize_for_stderr post-sanitization output cap tests (PR #356 R3)
+    // sanitize_for_stderr post-sanitization output cap tests
     // -----------------------------------------------------------------------
 
     #[test]
     fn test_sanitize_for_stderr_caps_post_sanitization_expansion() {
-        // Pin for PR #356 R3 finding: a long run of control bytes that expand
-        // 4x via the `\xNN` escape (1024 input bytes → ~4096 sanitized bytes)
-        // could still flood the terminal even with the per-entry pre-cap.
-        // sanitize_for_stderr now caps the FINAL output at MAX_SANITIZED_OUTPUT_LEN.
+        // Pin: a long run of control bytes that expand 4x via the `\xNN`
+        // escape (1024 input bytes → ~4096 sanitized bytes) must NOT flood
+        // the terminal even with the per-entry pre-cap.
+        // sanitize_for_stderr caps the FINAL output at MAX_SANITIZED_OUTPUT_LEN.
         // Build an input with enough control bytes to blow past the post-cap
         // if no cap were enforced.
         let input = "\n".repeat(MAX_SANITIZED_OUTPUT_LEN); // 4096 control bytes → 16 KiB sanitized
@@ -1380,10 +1382,10 @@ mod sanitize_tests {
 
     #[test]
     fn test_sanitize_for_stderr_truncation_marker_excludes_out_len() {
-        // R6 fix: the truncation marker must NOT reference out.len() — only
+        // Pin: the truncation marker must NOT reference out.len() — only
         // `original_len`. This makes the marker length independent of any
-        // retroactive trim and prevents the over-reporting bug where the
-        // marker claimed a byte count that didn't match the trimmed output.
+        // retroactive trim and prevents over-reporting (a marker that
+        // claims a byte count not matching the trimmed output).
         let input = "a".repeat(MAX_SANITIZED_OUTPUT_LEN + 100);
         let original_len = input.len();
         let result = sanitize_for_stderr(input);
