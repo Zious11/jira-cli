@@ -2,9 +2,9 @@
 document_type: copilot-convergence-record
 pr: 356
 branch: chore/sanitize-errors-334
-head_sha: c9be4de
+head_sha: 59a0a12
 closes_issues: ["#334"]
-rounds: 5
+rounds: 6
 status: in-progress
 review_round_1_id: ""
 review_round_1_submitted: 2026-05-11T17:49:49Z
@@ -13,19 +13,21 @@ review_round_3_submitted: 2026-05-11T18:18:03Z
 review_round_4_submitted: 2026-05-11T18:29:07Z
 review_round_5_id: "4266436155"
 review_round_5_submitted: 2026-05-11T18:45:11Z
+review_round_6_id: "4266560193"
+review_round_6_submitted: 2026-05-11T19:00:25Z
 pr_state: OPEN
-threads_total: 12
-threads_resolved: 12
-trajectory: "4→1→2→2→3→?"
+threads_total: 14
+threads_resolved: 14
+trajectory: "4→1→2→2→3→2→?"
 ---
 
 # PR #356 Copilot Convergence Record — IN PROGRESS
 
 **PR:** https://github.com/Zious11/jira-cli/pull/356
 **Branch:** chore/sanitize-errors-334
-**Current tip SHA:** c9be4de
+**Current tip SHA:** 59a0a12
 **Closes:** #334 on merge
-**Trajectory so far:** 4→1→2→2→3→? (Round 6 pending)
+**Trajectory so far:** 4→1→2→2→3→2→? (Round 7 pending)
 
 ## Summary
 
@@ -34,19 +36,19 @@ PR #356 implements CWE-117 defense at the `extract_error_message` public boundar
 from Atlassian error message strings before stderr emission, preventing terminal injection
 (log forging, ANSI escape injection) via hostile or proxy-injected error payloads.
 
-Five Copilot rounds have been completed with a total of 12/12 threads resolved. CI is in-flight
-on c9be4de. Round 6 is pending.
+Six Copilot rounds have been completed with a total of 14/14 threads resolved. CI is in-flight
+on 59a0a12. Round 7 is pending.
 
 **Process gaps noted:** R2 and R3 Perplexity-validation were SKIPPED on the rationalization
 that the claims were "empirically verifiable from code." Per DEC-018, this was incorrect — all
 Copilot review findings require Perplexity validation regardless of how obvious the claim looks.
-R5 restored correct DEC-018 compliance: both security findings (#1 + #2) validated with
+R5 and R6 restored and maintained correct DEC-018 compliance: all findings validated with
 Perplexity before fixing. See Lesson codification below.
 
-**Process improvement (R5):** This is the first round where the state-manager was dispatched
-IN REAL TIME after the fix commit, rather than retroactively in batch. Per codified Lesson 2
-("Skipping state-manager between Copilot rounds creates audit-trail debt"), this is the
-correct pattern going forward.
+**Process improvement (R5+):** Starting from R5, the state-manager is dispatched IN REAL TIME
+after each fix commit, rather than retroactively in batch. Per codified Lesson 2 ("Skipping
+state-manager between Copilot rounds creates audit-trail debt"), R6 is the SECOND consecutive
+in-cycle dispatch — the audit-trail discipline is now consistent.
 
 ## Round 1 (2026-05-11T17:49:49Z)
 
@@ -247,9 +249,71 @@ design: sanitization layer + per-entry cap layer + memory-amplification defense.
 **Fix commit:** c9be4de (+48 -20 lines)
 **Threads:** 12/12 resolved (cumulative) after c9be4de push
 
+## Round 6 (2026-05-11T19:00:25Z)
+
+**Review ID:** 4266560193
+**Inline comments:** 2
+**Both valid**
+
+### Finding 1 — Streaming join marker overflow
+
+The streaming errorMessages join appended `" [...truncated]"` (15 bytes) unconditionally after
+breaking out of the build loop. If `joined.len()` was close to `MAX_SANITIZED_OUTPUT_LEN` when
+the break fired, the final output after appending the marker could exceed the cap.
+
+**Validation (Perplexity per DEC-018):** CONFIRMED — "reserve marker.len() upfront in the build
+loop" is the standard pattern. Cited Rust `std::fmt` buffer sizing + log-crate truncation
+conventions. Retroactive trim "fails correctness" per Perplexity guidance. Standard precedents:
+log-crate, tracing-subscriber all compute final-marker budget before starting the fill loop.
+
+**Fix:** Reserve marker budget upfront via `content_budget_join = MAX_SANITIZED_OUTPUT_LEN - JOIN_MARKER.len()`.
+Budget check uses the reduced budget; final `joined + marker` is guaranteed `<= MAX_SANITIZED_OUTPUT_LEN`.
+Added `debug_assert!` to verify invariant. 15-byte reservation preserves the R4 no-premature-truncation
+property (messages that fit in the reduced budget are not truncated at all).
+
+### Finding 2 — Sanitize over-reporting retained byte count
+
+The truncation marker text `[...truncated at N sanitized bytes; original M bytes]` referenced
+`out.len()` BEFORE the retroactive trim, over-reporting the actual number of bytes retained in
+the final output.
+
+**Validation (Perplexity per DEC-018):** CONFIRMED (same Perplexity query covered both findings).
+Byte-count reporting must reflect FINAL emitted content length, not pre-trim values. Accurate
+reporting is required for operator diagnostics.
+
+**Fix:** Marker text now references only `original_len` (the immutable input byte count),
+NOT `out.len()`. New marker format: `[...truncated; original M bytes]`. This:
+- Removes over-reporting entirely (no claim about retained byte count)
+- Keeps marker length constant under retroactive trim (depends only on `original_len` digit count)
+- Preserves R4 no-premature-truncation property (retroactive-trim path retained, but
+  marker-length constancy makes it correctness-safe)
+- Operator still gets accurate "original M bytes" info; final output length is directly observable
+
+### New regression test
+
+`test_sanitize_for_stderr_truncation_marker_excludes_out_len`:
+- Positive assertion: `"original N bytes"` present in output
+- Negative assertion: `"sanitized bytes"` and `"at N"` absent from output
+- Size invariant: `output.len() <= MAX_SANITIZED_OUTPUT_LEN`
+
+**Fix commit:** 59a0a12 (+60 -16 lines)
+**Threads:** 14/14 resolved (cumulative) after 59a0a12 push
+
+**Test results at 59a0a12:**
+- 22 sanitize unit tests pass (1 new R6 marker-correctness test added)
+- 26 api_client integration tests pass
+- Full cargo test: 60 suites, 0 failures
+- cargo fmt --check + cargo clippy --all-targets -- -D warnings clean
+- CI in-flight on 59a0a12
+
+**Process note:** Second consecutive in-cycle state-manager dispatch per codified Lesson 2.
+Audit-trail discipline now consistent.
+
+---
+
 ## Trajectory Analysis
 
-**Pattern so far:** 4→1→2→2→3 — all non-zero rounds addressed real findings.
+**Pattern so far:** 4→1→2→2→3→2 — all non-zero rounds addressed real findings.
 
 - R1: 4 findings (doc accuracy, loop allocation, clean-path allocation, missing length cap).
   Perplexity confirmed CWE-117 + OWASP length-capping guidance.
@@ -261,22 +325,26 @@ design: sanitization layer + per-entry cap layer + memory-amplification defense.
   idiomatic pattern.
 - R5: 3 findings (2 memory-amplification: non-UTF8 body pre-cap + entry-count join bound;
   1 doc: PR description drift). Perplexity CONFIRMED OWASP A06/AP11 for #1 + #2.
+- R6: 2 findings (streaming join marker overflow + sanitize over-reporting retained bytes).
+  Perplexity CONFIRMED upfront marker reservation as standard pattern; byte-count reporting
+  must reflect final emitted length, not pre-trim value.
 
-**Assessment:** R5 surfaced 2 genuine OWASP A06/AP11 resource exhaustion issues at the body
-parsing and join layers. R6 may find 0 or residual allocation edge cases. Memory budget is
-now O(MAX_SANITIZED_OUTPUT_LEN) end-to-end across all paths.
+**Assessment:** R6 surfaced 2 correctness/invariant issues in the streaming join and truncation
+marker. All output-size guarantees are now mathematically tight. R7 may find 0 findings or minor
+edge cases. Memory budget is O(MAX_SANITIZED_OUTPUT_LEN) end-to-end; all size invariants have
+debug_assert! guards. Perplexity-validation consistent through R5 + R6 per DEC-018/Lesson 1.
 
 ## CI Status
 
-**Head SHA:** c9be4de
-**CI result:** in-flight
+**Head SHA:** 59a0a12
+**CI result:** in-flight (poller b9qh1hpfc watching)
 
 ## Current PR State
 
 | Field | Value |
 |-------|-------|
 | **State** | OPEN |
-| **Threads** | 12 created; 12/12 resolved |
-| **R6** | Pending |
-| **CI on c9be4de** | in-flight |
+| **Threads** | 14 created; 14/14 resolved |
+| **R7** | Pending |
+| **CI on 59a0a12** | in-flight |
 | **Closes** | #334 on merge |

@@ -1846,3 +1846,40 @@ All 3/3 threads resolved. Cumulative 12/12 resolved. Fix commit c9be4de (+48 -20
 | implementer | Pre-cap body slice (4096 bytes) before from_utf8_lossy; streaming errorMessages join with budget; PR description sync | src/api/client.rs c9be4de; PR #356 description updated |
 | orchestrator | Commit c9be4de; push; request R6 | 12/12 threads resolved; CI in-flight; R6 requested |
 | state-manager | In-cycle state update (first real-time dispatch per codified Lesson 2) | STATE.md, burst-log.md, pr-356-copilot-progress.md updated |
+
+---
+
+## Burst N+8 (2026-05-11): PR #356 Copilot Round 6 — Marker Correctness, fix commit 59a0a12
+
+**Agents dispatched:** orchestrator, implementer, state-manager
+**Files touched:** src/api/client.rs (upfront JOIN_MARKER budget reservation in streaming join; truncation marker text excludes out.len() — references only original_len; 1 new regression test)
+**Versions bumped:** (none)
+
+### Summary
+
+PR #356 Copilot Round 6 (2026-05-11T19:00:25Z, review id 4266560193) returned 2 inline findings. Both valid. Both are correctness/invariant issues in the streaming join marker and the sanitize truncation marker text.
+
+**Perplexity-validation: CONFIRMED for both R6 findings** (per codified Lesson 1 / DEC-018 standing rule). Single Perplexity query covered both findings: upfront marker reservation is the standard pattern (cited Rust `std::fmt` buffer sizing + log-crate truncation conventions; retroactive trim "fails correctness"). Byte-count reporting must reflect FINAL emitted content length, not pre-trim value.
+
+**Process note: SECOND consecutive in-cycle state-manager dispatch per codified Lesson 2.** Audit-trail discipline is now consistent. First dispatch was R5 (Burst N+7); this is R6 (Burst N+8).
+
+**Findings:**
+
+1. Streaming join marker overflow: `" [...truncated]"` (15 bytes) was appended unconditionally after the build loop broke. If `joined.len()` was close to `MAX_SANITIZED_OUTPUT_LEN` when break fired, final output exceeded the cap.
+   - Fix: Reserve `JOIN_MARKER.len()` budget upfront. `content_budget_join = MAX_SANITIZED_OUTPUT_LEN - JOIN_MARKER.len()`. Budget check uses reduced budget; final output guaranteed `<= MAX_SANITIZED_OUTPUT_LEN`. Added `debug_assert!`. 15-byte reservation preserves R4 no-premature-truncation property.
+
+2. Sanitize over-reporting retained byte count: Marker text `[...truncated at N sanitized bytes; original M bytes]` referenced `out.len()` BEFORE retroactive trim, over-reporting actual retained bytes.
+   - Fix: Marker now references only `original_len` (immutable input byte count), NOT `out.len()`. New format: `[...truncated; original M bytes]`. Eliminates over-reporting; marker length is constant under retroactive trim (depends only on original_len digit count); R4 no-premature-truncation property preserved; operator still gets accurate "original M bytes" info.
+
+**New regression test:** `test_sanitize_for_stderr_truncation_marker_excludes_out_len` — positive ("original N bytes" present), negative ("sanitized bytes" / "at N" absent), size invariant (output_len <= cap).
+
+**Test results at 59a0a12:** 22 sanitize unit tests pass (1 new); 26 api_client integration tests pass; 60 test suites, 0 failures; cargo fmt --check + cargo clippy --all-targets -- -D warnings clean. CI in-flight on 59a0a12.
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| orchestrator | Triage 2 Copilot R6 findings; Perplexity CONFIRMED upfront marker reservation + byte-count accuracy | Both confirmed valid via single Perplexity query covering both findings |
+| implementer | Upfront JOIN_MARKER budget reservation; marker text references only original_len; debug_assert!; regression test | src/api/client.rs 59a0a12 |
+| orchestrator | Commit 59a0a12; push; request R7 | 14/14 threads resolved; CI in-flight; R7 requested |
+| state-manager | Second consecutive in-cycle dispatch (Lesson 2 compliance now consistent) | STATE.md, burst-log.md, pr-356-copilot-progress.md updated |
