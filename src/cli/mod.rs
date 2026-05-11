@@ -386,7 +386,8 @@ pub enum IssueCommand {
     },
     /// Edit issue fields
     Edit {
-        /// One or more issue keys (e.g., FOO-1 FOO-2 FOO-3). Mutually exclusive with --jql.
+        /// Issue keys (positional; omit when using --jql). Mutually exclusive with --jql.
+        /// Up to 1000 keys per call (Atlassian Bulk API limit).
         #[arg(num_args = 0..=1001, conflicts_with = "jql")]
         keys: Vec<String>,
         /// JQL query to select issues for bulk edit. Mutually exclusive with positional keys.
