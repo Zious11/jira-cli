@@ -398,7 +398,7 @@ pub enum IssueCommand {
         /// exceeds this value, the command errors without mutating.
         ///
         /// Values above 100 trigger cursor pagination on /rest/api/3/search/jql (Jira
-        /// caps maxResults at 100 per page), so --max 1000 issues up to ~10 search
+        /// caps maxResults at 100 per page), so --max 1000 triggers up to ~10 search
         /// requests before the bulk call. Use the smallest --max that fits your workflow.
         #[arg(long, value_parser = clap::value_parser!(u32).range(1..=1000))]
         max: Option<u32>,

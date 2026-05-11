@@ -551,7 +551,8 @@ async fn test_yes_flag_passes_through_below_threshold_without_effect() {
         .mount(&server)
         .await;
 
-    // Bulk POST must be made (--yes bypasses the prompt).
+    // Bulk POST is made because 3 keys is below JQL_CONFIRM_THRESHOLD (5), so the
+    // confirmation prompt is never entered; --yes is a no-op for this match size.
     Mock::given(method("POST"))
         .and(path("/rest/api/3/bulk/issues/fields"))
         .respond_with(ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-yes-001")))
