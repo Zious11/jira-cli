@@ -834,7 +834,29 @@ impl JiraClient {
 /// each `errors` map value, the `message` field, the `errorMessage` field,
 /// and the raw-body fallback). 1024 bytes leaves ample room for legitimate
 /// long error messages while cutting off pathological flood attempts.
+///
+/// Companion cap: `MAX_SANITIZED_OUTPUT_LEN` below, which bounds the FINAL
+/// stderr-bound output AFTER sanitization expansion (each ASCII control
+/// byte becomes 4 bytes via the `\xNN` escape). The per-entry cap alone
+/// is insufficient because a hostile array of `\n`-filled entries could
+/// expand 4x during sanitization.
 const MAX_ERROR_ENTRY_LEN: usize = 1024;
+
+/// Maximum byte length of the FINAL sanitized output written to stderr.
+///
+/// Even with `MAX_ERROR_ENTRY_LEN` capping each pre-sanitization entry,
+/// a hostile response containing many entries — or entries full of control
+/// bytes that expand 1→4 bytes during sanitization (each ASCII control
+/// byte becomes a 4-byte `\xNN` literal) — can still flood the terminal
+/// or log file. This cap is enforced inside `sanitize_for_stderr` itself
+/// using a byte-budget-aware char loop that stops emitting when the next
+/// char would exceed the budget, then appends a `[...truncated at N
+/// sanitized bytes; original M bytes]` marker.
+///
+/// 4 KiB chosen to absorb worst-case 4x expansion of a single `MAX_ERROR_ENTRY_LEN`
+/// entry (1024 × 4 = 4096) while still leaving room for the marker via
+/// reserved headroom inside `sanitize_for_stderr`.
+const MAX_SANITIZED_OUTPUT_LEN: usize = 4096;
 
 /// Truncate a server-supplied string at a UTF-8 char boundary if it exceeds
 /// `MAX_ERROR_ENTRY_LEN`, appending a `[...truncated, N bytes total]` marker
@@ -857,12 +879,15 @@ fn cap_entry(s: &str) -> String {
     // Defensive: with MAX_ERROR_ENTRY_LEN = 1024 and any plausible byte
     // count, the marker is roughly 30-50 chars and well under the cap. This
     // branch only fires if someone shrinks MAX_ERROR_ENTRY_LEN below the
-    // marker length in the future — in that case, returning just the marker
-    // preserves the size invariant (output_len <= MAX_ERROR_ENTRY_LEN +
-    // small overhead from the marker's own len which is < 64 bytes), which
-    // is still vastly smaller than the unbounded input.
+    // marker length in the future. To preserve the `output.len() <=
+    // MAX_ERROR_ENTRY_LEN` invariant even in that case, truncate the marker
+    // itself at a UTF-8 char boundary instead of returning it whole.
     if marker.len() >= MAX_ERROR_ENTRY_LEN {
-        return marker;
+        let mut end = MAX_ERROR_ENTRY_LEN;
+        while !marker.is_char_boundary(end) {
+            end -= 1;
+        }
+        return marker[..end].to_string();
     }
     let target_prefix_len = MAX_ERROR_ENTRY_LEN - marker.len();
     let mut end = target_prefix_len;
@@ -880,41 +905,70 @@ fn cap_entry(s: &str) -> String {
 /// codes, terminal title changes), or NUL bytes into operator-facing stderr
 /// output.
 ///
-/// Strategy: pass through every printable character (including UTF-8 to preserve
-/// localized error messages from non-English Jira tenants) and replace every
-/// ASCII control character (0x00-0x1F + 0x7F) with its `\xNN` literal escape so
-/// the operator can see what was sent but the terminal cannot interpret it.
-/// This is more conservative than `str::escape_debug` (which also escapes
-/// non-ASCII as `\u{XXXX}` and would garble legitimate Unicode error text).
+/// Strategy:
+/// - Pass through every printable character (including UTF-8 to preserve
+///   localized error messages from non-English Jira tenants).
+/// - Replace every ASCII control character (0x00-0x1F + 0x7F) with its
+///   `\xNN` literal escape so the operator can see what was sent but the
+///   terminal cannot interpret it.
+/// - Enforce a `MAX_SANITIZED_OUTPUT_LEN` cap on the FINAL output bytes via
+///   a byte-budget-aware char loop. Closes the gap where pre-sanitization
+///   per-entry caps (via `cap_entry`) couldn't bound the post-sanitization
+///   output: 1024 control bytes expand to ~4096 bytes after `\xNN`
+///   escaping, so a per-entry pre-cap alone left the terminal vulnerable
+///   to floods.
+///
+/// More conservative than `str::escape_debug` (which also escapes non-ASCII
+/// as `\u{XXXX}` and would garble legitimate Unicode error text).
 ///
 /// Performance:
-/// - Takes `String` by value so the clean-input fast path returns it unchanged
-///   with zero additional allocation (most legitimate Atlassian errors hit this
-///   path — control chars are vanishingly rare in real responses).
-/// - When sanitization is required, escape bytes are written directly into the
-///   output via `std::fmt::Write::write!` rather than the per-char
-///   `format!()`-then-`push_str` pattern (which allocates a new String per
-///   escaped char).
-/// - The output buffer is pre-sized to `input.len()` plus a small headroom
-///   constant (`HEADROOM`); reallocations only occur when many control bytes
-///   expand (each one grows the buffer by 3 bytes: `\x` + 2 hex digits = 4
-///   bytes for 1 source byte).
-/// - Idempotent on already-sanitized strings.
+/// - Takes `String` by value so the clean+small-input fast path returns it
+///   unchanged with zero additional allocation. The common case (legitimate
+///   Atlassian errors: ASCII + UTF-8, no control bytes, < 4 KiB) hits this
+///   path.
+/// - When sanitization OR truncation is required, escape bytes are written
+///   directly into the output via `std::fmt::Write::write!` rather than the
+///   per-char `format!()`-then-`push_str` pattern (which allocates a new
+///   String per escaped char).
+/// - Output buffer is pre-sized to the smaller of `input.len() + HEADROOM`
+///   and `MAX_SANITIZED_OUTPUT_LEN`, so the allocation is bounded.
+/// - Idempotent on already-sanitized strings within the size cap.
 fn sanitize_for_stderr(input: String) -> String {
     use std::fmt::Write;
 
-    // Fast path: no control bytes → return the input String unchanged.
-    // No new allocation. Optimizes the common case (legitimate Atlassian errors).
-    if !input.bytes().any(|b| b.is_ascii_control()) {
+    let needs_sanitization = input.bytes().any(|b| b.is_ascii_control());
+    let needs_truncation = input.len() > MAX_SANITIZED_OUTPUT_LEN;
+
+    // Fast path: no control bytes AND under the output cap → return the
+    // input String unchanged. No new allocation. Optimizes the common case.
+    if !needs_sanitization && !needs_truncation {
         return input;
     }
 
-    // Sanitization path: control bytes present. Pre-size output buffer with
-    // some headroom (one short attack escape line worth) to keep the common
-    // small-attack case allocation-free.
+    // Slow path: sanitize AND/OR truncate. Reserve headroom for the
+    // truncation marker so we can append it without exceeding the cap.
+    const MAX_MARKER_LEN: usize = 64;
+    let prefix_budget = MAX_SANITIZED_OUTPUT_LEN.saturating_sub(MAX_MARKER_LEN);
+    let original_len = input.len();
+
     const HEADROOM: usize = 32;
-    let mut out = String::with_capacity(input.len() + HEADROOM);
+    let mut out = String::with_capacity((input.len() + HEADROOM).min(MAX_SANITIZED_OUTPUT_LEN));
+    let mut truncated = false;
+
     for c in input.chars() {
+        // Compute the byte cost of emitting `c` BEFORE pushing it, so we can
+        // bail out cleanly if it would push us past the prefix budget.
+        // Control chars expand 1→4 bytes (`\xNN`); other chars take
+        // `c.len_utf8()` bytes (1-4 bytes for any valid Unicode scalar).
+        let needed = if c.is_ascii_control() {
+            4
+        } else {
+            c.len_utf8()
+        };
+        if out.len() + needed > prefix_budget {
+            truncated = true;
+            break;
+        }
         if c.is_ascii_control() {
             // Write directly into `out` via fmt::Write — avoids the per-escape
             // String allocation that `format!()` would introduce.
@@ -925,6 +979,19 @@ fn sanitize_for_stderr(input: String) -> String {
         } else {
             out.push(c);
         }
+    }
+
+    if truncated {
+        // The marker is bounded by MAX_MARKER_LEN (decimal byte count digits
+        // grow linearly with input.len() but stay well under 64 bytes for any
+        // plausible input — usize::MAX has 20 digits, marker template is ~50
+        // bytes total).
+        let _ = write!(
+            out,
+            " [...truncated at {} sanitized bytes; original {} bytes]",
+            out.len(),
+            original_len
+        );
     }
     out
 }
@@ -1007,7 +1074,7 @@ fn extract_error_message_raw(body: &[u8]) -> String {
 
 #[cfg(test)]
 mod sanitize_tests {
-    use super::{MAX_ERROR_ENTRY_LEN, cap_entry, sanitize_for_stderr};
+    use super::{MAX_ERROR_ENTRY_LEN, MAX_SANITIZED_OUTPUT_LEN, cap_entry, sanitize_for_stderr};
 
     // Tiny helper to avoid repeating `.to_string()` in every call — keeps test
     // lines compact now that `sanitize_for_stderr` takes `String` by value.
@@ -1184,6 +1251,59 @@ mod sanitize_tests {
                 over
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // sanitize_for_stderr post-sanitization output cap tests (PR #356 R3)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_sanitize_for_stderr_caps_post_sanitization_expansion() {
+        // Pin for PR #356 R3 finding: a long run of control bytes that expand
+        // 4x via the `\xNN` escape (1024 input bytes → ~4096 sanitized bytes)
+        // could still flood the terminal even with the per-entry pre-cap.
+        // sanitize_for_stderr now caps the FINAL output at MAX_SANITIZED_OUTPUT_LEN.
+        // Build an input with enough control bytes to blow past the post-cap
+        // if no cap were enforced.
+        let input = "\n".repeat(MAX_SANITIZED_OUTPUT_LEN); // 4096 control bytes → 16 KiB sanitized
+        let result = sanitize_for_stderr(input);
+        assert!(
+            result.len() <= MAX_SANITIZED_OUTPUT_LEN,
+            "sanitize_for_stderr output {} bytes exceeds cap {}",
+            result.len(),
+            MAX_SANITIZED_OUTPUT_LEN
+        );
+        // Truncation marker should be visible so operator can see it happened.
+        assert!(
+            result.contains("[...truncated"),
+            "expected truncation marker in output of length {}",
+            result.len()
+        );
+    }
+
+    #[test]
+    fn test_sanitize_for_stderr_caps_oversized_clean_input() {
+        // Even purely-clean inputs over the cap get truncated. UTF-8 char
+        // boundaries are respected by `c.len_utf8()` accounting.
+        let input = "a".repeat(MAX_SANITIZED_OUTPUT_LEN + 1000);
+        let result = sanitize_for_stderr(input);
+        assert!(
+            result.len() <= MAX_SANITIZED_OUTPUT_LEN,
+            "output {} bytes exceeds cap {}",
+            result.len(),
+            MAX_SANITIZED_OUTPUT_LEN
+        );
+        assert!(result.contains("[...truncated"));
+    }
+
+    #[test]
+    fn test_sanitize_for_stderr_under_cap_no_truncation() {
+        // Inputs that sanitize to a string within the cap pass through without
+        // truncation markers.
+        let input = "Error\r\nmessage".to_string();
+        let result = sanitize_for_stderr(input);
+        assert_eq!(result, "Error\\x0d\\x0amessage");
+        assert!(!result.contains("[...truncated"));
     }
 
     #[test]
