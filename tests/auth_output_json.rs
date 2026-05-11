@@ -325,13 +325,14 @@ fn test_auth_login_emits_json_when_output_json_set() {
         Ok("1") => {} // run
         Ok(other) => panic!(
             "JR_RUN_KEYRING_TESTS must be \"1\" to run this test; got {other:?}. \
-             This test writes to the macOS keychain and produces stale state if run \
-             without the explicit opt-in."
+             This test writes to the system keyring (macOS Keychain / Linux Secret \
+             Service / Windows Credential Manager)."
         ),
         Err(_) => panic!(
-            "JR_RUN_KEYRING_TESTS=1 is required to run this test (it writes to the \
-             macOS keychain). The test is gated behind #[ignore] for default runs; \
-             setting --include-ignored without the env opt-in is a misuse."
+            "JR_RUN_KEYRING_TESTS=1 is required to run this test (writes to the system \
+             keyring — macOS Keychain / Linux Secret Service / Windows Credential \
+             Manager). The test is gated behind #[ignore]; running --include-ignored \
+             without the env opt-in is a misuse."
         ),
     }
     let config_dir = TempDir::new().unwrap();
