@@ -2,9 +2,9 @@
 document_type: copilot-convergence-record
 pr: 356
 branch: chore/sanitize-errors-334
-head_sha: f328a2f
+head_sha: 2ecc18c
 closes_issues: ["#334"]
-rounds: 10
+rounds: 11
 status: in-progress
 review_round_1_id: ""
 review_round_1_submitted: 2026-05-11T17:49:49Z
@@ -27,18 +27,20 @@ review_round_9c_submitted: 2026-05-11T20:08:56Z
 review_round_10_id: "4268026428"
 review_round_10_submitted: 2026-05-11T23:07:46Z
 pr_state: OPEN
-threads_total: 24
-threads_resolved: 24
-trajectory: "4→1→2→2→3→2→3→2→2→1"
+review_round_11_id: "4268102135"
+review_round_11_submitted: 2026-05-11T23:27:03Z
+threads_total: 25
+threads_resolved: 25
+trajectory: "4→1→2→2→3→2→3→2→2→1→1"
 ---
 
 # PR #356 Copilot Convergence Record — IN PROGRESS
 
 **PR:** https://github.com/Zious11/jira-cli/pull/356
 **Branch:** chore/sanitize-errors-334
-**Current tip SHA:** f328a2f
+**Current tip SHA:** 2ecc18c
 **Closes:** #334 on merge
-**Trajectory so far:** 4→1→2→2→3→2→3→2→2→1 (Round 11 pending)
+**Trajectory so far:** 4→1→2→2→3→2→3→2→2→1→1 (Round 12 pending)
 
 ## Summary
 
@@ -47,8 +49,11 @@ PR #356 implements CWE-117 defense at the `extract_error_message` public boundar
 from Atlassian error message strings before stderr emission, preventing terminal injection
 (log forging, ANSI escape injection) via hostile or proxy-injected error payloads.
 
-Ten Copilot rounds have been completed with a total of 24/24 threads resolved. CI is in-flight
-on f328a2f (Format + Secret Scan green; 8/8 expected based on prior pattern). Round 11 is pending.
+Eleven Copilot rounds have been completed with a total of 25/25 threads resolved. CI is 8/8
+green on 2ecc18c. Round 12 is pending.
+
+**Convergence plateau:** Finding count has been 1 for two consecutive rounds (R10, R11). If R12
+returns 0 new findings, this triggers the Phase 8 stop condition and PR #356 is ready for merge.
 
 **Process gaps noted:** R2 and R3 Perplexity-validation were SKIPPED on the rationalization
 that the claims were "empirically verifiable from code." Per DEC-018, this was incorrect — all
@@ -557,9 +562,72 @@ stop condition (0-new-comment round). R11 pending.
 
 ---
 
+## Round 11 (2026-05-11T23:27:03Z)
+
+**Review ID:** 4268102135
+**Comment ID:** 3222756019
+**Inline comments:** 1
+**Valid (memory-amplification at JSON parse step — INPUT DOM)**
+
+### Finding 1 — INPUT DOM allocation: serde_json::from_str materializes full Value before truncation
+
+`extract_error_message_raw` called `serde_json::from_str(body_str)` to parse the JSON response
+body into a `serde_json::Value` before extracting `errorMessages` / `errors` fields. This DOM
+materialization allocates roughly 2-3x the body size in memory regardless of what the caller
+intends to extract. All prior R5-R10 caps bounded OUTPUT only (per-entry caps, streaming joins,
+bounded serializers) — none prevented the INPUT DOM from being allocated.
+
+A hostile server returning a valid 100 MB JSON body (well under any TCP/HTTP transport limit)
+would force 200-300 MB of serde_json::Value DOM allocation before any extraction or truncation
+occurred. This is a distinct attack surface from the OUTPUT amplification vectors addressed
+in R5-R10: it operates entirely on the INPUT side and is invisible to all downstream caps.
+
+**Validation (Perplexity per DEC-018):** CONFIRMED — `serde_json::from_str` always materializes
+a complete DOM. Byte-level gate before parse is Perplexity-validated as superior to streaming/
+partial-parse approaches for this use case: zero allocation attack surface (the serde_json call
+is never reached for over-threshold bodies), whereas streaming parsers still allocate proportional
+to the tokens encountered before the abort point. 16 KiB threshold is generous for Jira errors
+(<1 KiB typical) while closing the attack surface entirely.
+
+**Fix:** New constant `MAX_PARSE_BODY_LEN = 16 * 1024`. In `extract_error_message_raw`, before
+calling `serde_json::from_str`, check `body.len() > MAX_PARSE_BODY_LEN`. If true, skip JSON parse
+and fall back to the existing byte-bounded raw-body path (which already applies `MAX_ERROR_ENTRY_LEN`
+cap). For over-threshold bodies, no `serde_json::Value` DOM is created.
+
+**Thread resolved:** id 3222756019 → PRRT_kwDORs-xfc6BQA9s
+**Reply posted:** 3222775607
+
+**New tests (3):**
+1. `test_extract_skips_parse_for_huge_body` — body at `MAX_PARSE_BODY_LEN + 1`; verifies
+   fallback path is taken (no JSON parse; output is byte-bounded raw snippet).
+2. `test_extract_allows_normal_body` — body under threshold; verifies JSON parse path still
+   active and `errorMessages` extraction works normally.
+3. `test_parse_body_threshold_pinned` — asserts `MAX_PARSE_BODY_LEN == 16 * 1024` (pin
+   prevents accidental constant drift).
+
+**Fix commit:** 2ecc18c ("chore(security): byte-level size gate before JSON DOM parse (PR #356 R11)")
+**Threads:** 25/25 resolved (1 new R11 thread resolved; cumulative)
+
+**Test results at 2ecc18c:**
+- 33 sanitize unit tests total (3 new from R11)
+- 664 cargo test total: 664 passed, 0 failed, 10 ignored
+- cargo fmt --check + cargo clippy --all-targets -- -D warnings clean
+- CI: 8/8 green
+
+**Process note:** Seventh consecutive in-cycle state-manager dispatch per codified Lesson 2.
+R5 → R6 → R7 → R8 → R9 → R10 → R11 all dispatched state-manager in real time. The discipline
+is fully embedded.
+
+**Convergence signal:** R11 returned 1 new finding — same as R10 (trajectory segment ...→1→1).
+Finding count has now plateaued at 1 for two consecutive rounds. This is a positive convergence
+signal: Copilot is finding smaller and more marginal issues. R12 = 0 would trigger the Phase 8
+stop condition (zero-new-comment round). R12 pending.
+
+---
+
 ## Trajectory Analysis
 
-**Pattern so far:** 4→1→2→2→3→2→3→2→2→1 — all non-zero rounds addressed real findings.
+**Pattern so far:** 4→1→2→2→3→2→3→2→2→1→1 — all non-zero rounds addressed real findings.
 
 - R1: 4 findings (doc accuracy, loop allocation, clean-path allocation, missing length cap).
   Perplexity confirmed CWE-117 + OWASP length-capping guidance.
@@ -593,26 +661,34 @@ stop condition (0-new-comment round). R11 pending.
   flag; serialize_value_bounded reserves marker bytes upfront; appends " [...truncated]" on
   overflow; degenerate fallback pinned via test. 3 new tests + 1 updated; 30 sanitize tests total;
   661 cargo test green. 1 thread resolved (3222691664 → PRRT_kwDORs-xfc6BP1Oa); reply 3222725048.
-  24/24 threads resolved. CI in-flight on f328a2f (8/8 expected). R11 pending.
+  24/24 threads resolved. CI 8/8 green on f328a2f.
+- R11 (4268102135 @ 23:27:03Z, comment 3222756019): 1 finding (INPUT DOM allocation attack surface
+  — extract_error_message_raw called serde_json::from_str on the full body before any extraction,
+  materializing 2-3x body size in memory; prior R5-R10 caps bounded OUTPUT only). Perplexity CONFIRMED
+  byte-level size gate as superior zero-allocation fix. Fix: MAX_PARSE_BODY_LEN = 16 * 1024 constant;
+  bodies >16 KiB skip JSON parse entirely and fall back to byte-bounded raw-body path. 3 new tests
+  (skips-parse-for-huge-body, allows-normal-body, threshold-pinned); 33 sanitize tests total;
+  664 cargo test green. 1 thread resolved (3222756019 → PRRT_kwDORs-xfc6BQA9s); reply 3222775607.
+  25/25 threads resolved. CI 8/8 green on 2ecc18c. R12 pending.
 
-**Assessment:** R10 surfaced 1 UX-correctness gap: serialize_value_bounded's Bounded writer did
-not track overflow state, so truncated output was emitted silently with no marker — indistinguishable
-from a valid (but short) JSON value. This is distinct from the memory-amplification class addressed
-in R5–R9; it is an operator-visibility gap. The fix closes the silent-truncation anti-pattern.
-Trajectory now 4→1→2→2→3→2→3→2→2→1 — first decline since R5. Healthy converging signal toward
-the Phase 8 stop condition (0-new-comment round). R11 pending.
+**Assessment:** R11 surfaced 1 INPUT-side memory-amplification gap: serde_json::from_str materializes
+a full Value DOM before any extraction or truncation, creating a 2-3x allocation attack surface entirely
+invisible to the OUTPUT caps delivered in R5-R10. The fix closes this with a byte-level gate (zero
+allocation attack surface). Trajectory now 4→1→2→2→3→2→3→2→2→1→1 — plateaued at 1 finding for
+2 consecutive rounds (R10, R11). Strong converging signal toward the Phase 8 stop condition
+(0-new-comment round). R12 pending — if R12 = 0 new findings, PR #356 is ready for merge.
 
 ## CI Status
 
-**Head SHA:** f328a2f
-**CI result:** in-flight (Format + Secret Scan green; 8/8 expected based on prior pattern)
+**Head SHA:** 2ecc18c
+**CI result:** 8/8 green
 
 ## Current PR State
 
 | Field | Value |
 |-------|-------|
 | **State** | OPEN |
-| **Threads** | 24 created; 24/24 resolved |
-| **R11** | Pending |
-| **CI on f328a2f** | in-flight (8/8 expected) |
+| **Threads** | 25 created; 25/25 resolved |
+| **R12** | Pending — trajectory plateaued at 1 for 2 rounds (R10, R11); R12=0 triggers stop condition |
+| **CI on 2ecc18c** | 8/8 green |
 | **Closes** | #334 on merge |

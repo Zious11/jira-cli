@@ -2047,3 +2047,37 @@ This is the FIRST round where the finding count declined two consecutive times (
 | implementer | Add overflowed flag to Bounded writer; reserve marker bytes upfront in serialize_value_bounded; append " [...truncated]" on overflow; degenerate fallback pinned via test; 3 new tests + 1 updated | src/api/client.rs f328a2f |
 | orchestrator | Resolve thread PRRT_kwDORs-xfc6BP1Oa; post reply 3222725048; commit f328a2f; push; request CI; verify Format+Secret Scan green | 24/24 threads resolved; CI in-flight; R11 pending |
 | state-manager | Fourth consecutive in-cycle dispatch per Lesson 2 — consistent habit | STATE.md, burst-log.md, pr-356-copilot-progress.md updated |
+
+---
+
+## Burst: PR #356 Copilot R11 (2026-05-11T23:31Z)
+
+**Agents dispatched:** orchestrator, implementer, state-manager
+**Files touched:** src/api/client.rs
+**Versions bumped:** (none — chore/sanitize-errors-334 branch)
+**Commit:** 2ecc18c ("chore(security): byte-level size gate before JSON DOM parse (PR #356 R11)")
+**CI result:** 8/8 green on 2ecc18c
+
+### Summary
+
+One new Copilot finding from R11 (review 4268102135 @ 23:27:03Z, comment id 3222756019): `extract_error_message_raw` deserialized the entire response body into `serde_json::Value` via `serde_json::from_str`, materializing a full DOM costing roughly 2-3x body size in memory. All prior R5-R10 caps bounded OUTPUT only; none prevented the INPUT DOM from being allocated. A hostile valid 100 MB JSON body would force 200-300 MB DOM allocation before any truncation occurred.
+
+Fix: byte-level size gate via new constant `MAX_PARSE_BODY_LEN = 16 * 1024`. Bodies exceeding 16 KiB skip JSON parse and fall back to the existing byte-bounded raw-body path. Zero allocation attack surface — no serde_json::Value DOM is created for over-threshold bodies. Perplexity-validated as superior to streaming/partial parse approaches.
+
+1 R11 thread resolved (id 3222756019 → PRRT_kwDORs-xfc6BQA9s); reply 3222775607 posted. All 25/25 threads now resolved (0 unresolved).
+
+3 new unit tests: `test_extract_skips_parse_for_huge_body`, `test_extract_allows_normal_body`, `test_parse_body_threshold_pinned`. Total sanitize tests now 33; full cargo test: 664 passed, 0 failed, 10 ignored.
+
+**Convergence signal:** Trajectory now 4→1→2→2→3→2→3→2→2→1→1. Finding count plateaued at 1 for two consecutive rounds (R10, R11). Healthy converging signal — R12=0 would trigger Phase 8 stop condition.
+
+**Perplexity-validation per DEC-018:**
+- Finding 1 (INPUT DOM allocation attack surface): CONFIRMED — `serde_json::from_str` allocates a full `serde_json::Value` DOM regardless of downstream truncation. Byte-level gate before parse is superior to streaming/partial parse (zero allocation attack surface vs. partial materialization). Prior R5-R10 caps bounded output only; this closes the input-side amplification vector.
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| orchestrator | Triage 1 Copilot R11 finding (comment 3222756019 @ 23:27:03Z); Perplexity CONFIRMED as legitimate INPUT DOM allocation attack surface (serde_json::from_str materializes full Value regardless of downstream truncation) | Confirmed valid; fix plan approved |
+| implementer | Add MAX_PARSE_BODY_LEN = 16 * 1024 constant; gate `serde_json::from_str` call behind byte-length check in `extract_error_message_raw`; bodies >16 KiB fall back to byte-bounded raw-body path; 3 new unit tests | src/api/client.rs 2ecc18c |
+| orchestrator | Resolve thread PRRT_kwDORs-xfc6BQA9s; post reply 3222775607; commit 2ecc18c; push; verify CI 8/8 green | 25/25 threads resolved; CI green; R12 pending |
+| state-manager | Seventh consecutive in-cycle dispatch per Lesson 2 — discipline is consistent habit | STATE.md, burst-log.md, pr-356-copilot-progress.md updated |
