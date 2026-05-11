@@ -862,6 +862,11 @@ const MAX_SANITIZED_OUTPUT_LEN: usize = 4096;
 /// `MAX_ERROR_ENTRY_LEN`, appending a `[...truncated, N bytes total]` marker
 /// so the operator sees that truncation happened.
 ///
+/// Returns `Cow::Borrowed(s)` when no truncation is needed (the common case
+/// for legitimate Atlassian error entries — most are <<1 KiB) so the caller
+/// can join without per-entry allocation. Only allocates a new `String` when
+/// the input actually exceeds the cap.
+///
 /// The marker length is reserved from the prefix budget, so the FINAL output
 /// length is guaranteed to be `<= MAX_ERROR_ENTRY_LEN` — important because
 /// the marker would otherwise push slightly-oversized inputs (e.g., 1025
@@ -871,9 +876,9 @@ const MAX_SANITIZED_OUTPUT_LEN: usize = 4096;
 /// Used by `extract_error_message_raw` as defense-in-depth against
 /// terminal/log flooding attacks (companion to `sanitize_for_stderr`'s
 /// control-byte escaping per CWE-117).
-fn cap_entry(s: &str) -> String {
+fn cap_entry(s: &str) -> std::borrow::Cow<'_, str> {
     if s.len() <= MAX_ERROR_ENTRY_LEN {
-        return s.to_string();
+        return std::borrow::Cow::Borrowed(s);
     }
     let marker = format!(" [...truncated, {} bytes total]", s.len());
     // Defensive: with MAX_ERROR_ENTRY_LEN = 1024 and any plausible byte
@@ -887,14 +892,14 @@ fn cap_entry(s: &str) -> String {
         while !marker.is_char_boundary(end) {
             end -= 1;
         }
-        return marker[..end].to_string();
+        return std::borrow::Cow::Owned(marker[..end].to_string());
     }
     let target_prefix_len = MAX_ERROR_ENTRY_LEN - marker.len();
     let mut end = target_prefix_len;
     while !s.is_char_boundary(end) {
         end -= 1;
     }
-    format!("{}{}", &s[..end], marker)
+    std::borrow::Cow::Owned(format!("{}{}", &s[..end], marker))
 }
 
 /// Sanitize a server-supplied string for safe display on stderr.
@@ -945,34 +950,33 @@ fn sanitize_for_stderr(input: String) -> String {
         return input;
     }
 
-    // Slow path: sanitize AND/OR truncate. Reserve headroom for the
-    // truncation marker so we can append it without exceeding the cap.
-    const MAX_MARKER_LEN: usize = 64;
-    let prefix_budget = MAX_SANITIZED_OUTPUT_LEN.saturating_sub(MAX_MARKER_LEN);
+    // Slow path: sanitize AND/OR truncate. Allow output to grow up to the
+    // FULL `MAX_SANITIZED_OUTPUT_LEN` — only when the cap is actually
+    // breached do we retroactively trim back to make room for the truncation
+    // marker. This avoids premature truncation of messages that would
+    // otherwise fit in the cap (e.g., a clean 4090-byte input shouldn't
+    // lose 64 bytes to a marker that never gets appended).
     let original_len = input.len();
-
     const HEADROOM: usize = 32;
     let mut out = String::with_capacity((input.len() + HEADROOM).min(MAX_SANITIZED_OUTPUT_LEN));
     let mut truncated = false;
 
     for c in input.chars() {
-        // Compute the byte cost of emitting `c` BEFORE pushing it, so we can
-        // bail out cleanly if it would push us past the prefix budget.
-        // Control chars expand 1→4 bytes (`\xNN`); other chars take
-        // `c.len_utf8()` bytes (1-4 bytes for any valid Unicode scalar).
+        // Compute the byte cost of emitting `c` BEFORE pushing it. Control
+        // chars expand 1→4 bytes (`\xNN`); other chars take `c.len_utf8()`
+        // bytes (1-4 bytes for any valid Unicode scalar).
         let needed = if c.is_ascii_control() {
             4
         } else {
             c.len_utf8()
         };
-        if out.len() + needed > prefix_budget {
+        if out.len() + needed > MAX_SANITIZED_OUTPUT_LEN {
             truncated = true;
             break;
         }
         if c.is_ascii_control() {
             // Write directly into `out` via fmt::Write — avoids the per-escape
             // String allocation that `format!()` would introduce.
-            // ASCII control chars (0x00-0x1F + 0x7F) fit in u8.
             // write! on String is infallible; ignore the Result to avoid a
             // distracting `expect()` in a hot loop.
             let _ = write!(out, "\\x{:02x}", c as u8);
@@ -982,16 +986,30 @@ fn sanitize_for_stderr(input: String) -> String {
     }
 
     if truncated {
-        // The marker is bounded by MAX_MARKER_LEN (decimal byte count digits
-        // grow linearly with input.len() but stay well under 64 bytes for any
-        // plausible input — usize::MAX has 20 digits, marker template is ~50
-        // bytes total).
-        let _ = write!(
-            out,
+        // Build the marker with the actual sanitized-bytes value at the time
+        // of truncation (out.len() before the marker is appended) and the
+        // original input length.
+        let marker = format!(
             " [...truncated at {} sanitized bytes; original {} bytes]",
             out.len(),
             original_len
         );
+        if out.len() + marker.len() <= MAX_SANITIZED_OUTPUT_LEN {
+            // Marker fits without trimming.
+            out.push_str(&marker);
+        } else {
+            // Marker would push us over: retroactively trim `out` at a UTF-8
+            // char boundary so `out + marker` fits within the cap. The trim
+            // is bounded by marker.len() (< 80 bytes for any plausible
+            // original_len) — bounded work, no quadratic blow-up.
+            let target = MAX_SANITIZED_OUTPUT_LEN - marker.len();
+            let mut end = target;
+            while !out.is_char_boundary(end) {
+                end -= 1;
+            }
+            out.truncate(end);
+            out.push_str(&marker);
+        }
     }
     out
 }
@@ -1030,31 +1048,53 @@ fn extract_error_message_raw(body: &[u8]) -> String {
 
     let body_str = match std::str::from_utf8(body) {
         Ok(s) => s,
-        Err(_) => return cap_entry(&String::from_utf8_lossy(body)),
+        Err(_) => return cap_entry(&String::from_utf8_lossy(body)).into_owned(),
     };
 
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(body_str) {
         if let Some(msgs) = json.get("errorMessages").and_then(|v| v.as_array()) {
-            let messages: Vec<String> = msgs
+            // Collect as Cow<str> so unchanged entries borrow rather than
+            // allocate. Only over-cap entries pay the allocation cost.
+            let messages: Vec<std::borrow::Cow<'_, str>> = msgs
                 .iter()
                 .filter_map(|m| m.as_str())
                 .map(cap_entry)
                 .collect();
             if !messages.is_empty() {
-                return messages.join("; ");
+                // Build the joined string with a single allocation
+                // pre-sized to the total content length. Avoids the
+                // intermediate `Vec<&str>` + `[].join()` allocation chain.
+                let total: usize =
+                    messages.iter().map(|c| c.len()).sum::<usize>() + 2 * (messages.len() - 1);
+                let mut joined = String::with_capacity(total);
+                for (i, m) in messages.iter().enumerate() {
+                    if i > 0 {
+                        joined.push_str("; ");
+                    }
+                    joined.push_str(m.as_ref());
+                }
+                return joined;
             }
         }
         if let Some(errors) = json.get("errors").and_then(|v| v.as_object()) {
             if !errors.is_empty() {
+                // Per-entry formatting always allocates the "{k}: {v}" pair
+                // string, so the per-entry cap_entry being Cow doesn't avoid
+                // that — but it does avoid the prior to_string() copy for
+                // unchanged values (which are the common case).
                 let mut pairs: Vec<String> = errors
                     .iter()
                     .map(|(k, v)| {
-                        let value_str = if let Some(s) = v.as_str() {
-                            cap_entry(s)
+                        if let Some(s) = v.as_str() {
+                            // String value: borrow via Cow when no truncation.
+                            format!("{k}: {}", cap_entry(s))
                         } else {
-                            cap_entry(&v.to_string())
-                        };
-                        format!("{k}: {value_str}")
+                            // Non-string value: must materialize once to apply
+                            // the cap, then format. v.to_string() is a temp
+                            // that doesn't outlive the Cow, so own immediately.
+                            let serialized = v.to_string();
+                            format!("{k}: {}", cap_entry(&serialized))
+                        }
                     })
                     .collect();
                 pairs.sort();
@@ -1062,14 +1102,14 @@ fn extract_error_message_raw(body: &[u8]) -> String {
             }
         }
         if let Some(msg) = json.get("message").and_then(|v| v.as_str()) {
-            return cap_entry(msg);
+            return cap_entry(msg).into_owned();
         }
         if let Some(msg) = json.get("errorMessage").and_then(|v| v.as_str()) {
-            return cap_entry(msg);
+            return cap_entry(msg).into_owned();
         }
     }
 
-    cap_entry(body_str)
+    cap_entry(body_str).into_owned()
 }
 
 #[cfg(test)]
@@ -1315,8 +1355,8 @@ mod sanitize_tests {
         let with_multibyte = format!("{padding}日本語のエラーです");
         // Should not panic, should produce valid UTF-8.
         let capped = cap_entry(&with_multibyte);
-        // Verify it's still valid UTF-8 by re-parsing.
-        let _ = capped.as_str();
+        // Verify it's still valid UTF-8 by re-parsing through Cow's str view.
+        let _ = capped.as_ref();
         // Size invariant must also hold for UTF-8-bordering inputs.
         assert!(
             capped.len() <= MAX_ERROR_ENTRY_LEN,
