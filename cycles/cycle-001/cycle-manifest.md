@@ -48,6 +48,7 @@ Brownfield activation of jira-cli at v0.5.0-dev.7. Goals:
 | #355 | chore/task-id-validation-332 | #332 | 448c568 | 2026-05-11 | Task ID validation (CWE-117 pre-validation) |
 | #356 | chore/sanitize-errors-334 | #334 | 9acf01d | 2026-05-12 | CWE-117 sanitize_for_stderr (19 rounds) |
 | #357 | chore/release-gate-jr-base-url-335 | #335 | d208a6d | 2026-05-12 | Release-gate JR_BASE_URL (2 rounds; fastest) |
+| #358 | chore/edit-field-categorization-test-343 | #343 | 561217b | 2026-05-12 | Edit-field categorization test (5 rounds; trajectory 1→1→2→1-FP→0; first false-positive in session) |
 
 ## Activation Context
 

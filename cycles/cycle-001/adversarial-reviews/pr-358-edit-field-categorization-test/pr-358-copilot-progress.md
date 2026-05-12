@@ -2,12 +2,13 @@
 document_type: copilot-review-progress
 level: ops
 version: "1.0"
-status: converged
+status: merged
 producer: state-manager
 pr: 358
 issue: 343
 branch: chore/edit-field-categorization-test-343
 head_sha: 925da89  # UNCHANGED after R4 (false-positive — no fix commit)
+merge_sha: 561217b  # squash merge to develop 2026-05-12
 created: 2026-05-12
 ---
 
@@ -266,9 +267,9 @@ Phase 8 stop condition met. PR #358 is CONVERGED. Awaiting human merge.
 
 | Status | Value |
 |--------|-------|
-| Overall | CONVERGED |
+| Overall | MERGED |
 | Converged | yes — R5 Phase 8 stop condition |
 | Converged at | R5 / 2026-05-12 |
-| Merged | no — awaiting human merge |
-| Merge SHA | — |
-| Closes issue | #343 |
+| Merged | yes — 2026-05-12 |
+| Merge SHA | 561217b |
+| Closes issue | #343 (closed 2026-05-12T12:55:58Z) |

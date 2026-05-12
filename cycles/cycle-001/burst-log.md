@@ -2909,3 +2909,37 @@ PR #358 Round 5 complete. Phase 8 stop condition met. PR #358 is CONVERGED.
 | state-manager | Append this burst entry | burst-log.md |
 
 **Outcome:** PR #358 cycle COMPLETE. Converged at R5. Awaiting human merge. Audit-followup count remains 7 until #343 closes on merge.
+
+---
+
+## Burst 63 (2026-05-12) — PR #358 MERGED: #343 CLOSED; audit-followup count 7→6
+
+**Agents dispatched:** state-manager
+**Files touched:** .factory/STATE.md, .factory/cycles/cycle-001/burst-log.md, .factory/cycles/cycle-001/adversarial-reviews/pr-358-edit-field-categorization-test/pr-358-copilot-progress.md, .factory/cycles/cycle-001/cycle-manifest.md
+**Versions bumped:** (none)
+**Merge SHA:** 561217b
+
+### Summary
+
+PR #358 merged to develop by human. Issue #343 closed at 2026-05-12T12:55:58Z. Worktree `.worktrees/issue-343-edit-field-categorization-test` removed.
+
+**Merge details:**
+- Squash commit: "chore(test): assert every IssueCommand::Edit field is categorized (#343) (#358)"
+- Merge SHA: 561217b
+- Merged to: develop
+- Closes: #343
+
+**Audit-followup count:** 7 → 6. Remaining: #333, #336, #340, #345, #346, #350. #331 sandbox-blocked deferred.
+
+**PR #358 final record:** 5 rounds; trajectory 1→1→2→1-FP→0; 3 fix commits (9ca690e BTreeSet, c708211 tolerant matcher +3 tests, 925da89 doc+dead-code); first false-positive in session (R4) caught by DEC-018 empirical-first discipline; second fastest convergence in cycle-001.
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| state-manager | Update STATE.md: Last Updated (MERGED), Current Phase (PR #358 MERGED, count 7→6), Phase Progress row (MERGED + date), Phase 3-adv convergence tracker (MERGED), Session Resume Checkpoint (all PRs MERGED, 6 followups) | STATE.md |
+| state-manager | Update pr-358-copilot-progress.md: frontmatter status converged→merged, merge SHA 561217b, Resolution Status table Merged row | pr-358-edit-field-categorization-test/pr-358-copilot-progress.md |
+| state-manager | Update cycle-manifest.md: add PR #358 row | cycle-manifest.md |
+| state-manager | Append this burst entry | burst-log.md |
+
+**Outcome:** PR #358 MERGED. #343 CLOSED. All of PRs #351–#358 now merged. 6 audit-followups remain in queue.
