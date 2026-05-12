@@ -51,6 +51,44 @@ const POLL_MAX_SECS: u64 = 10;
 /// Closes audit-followup #336.
 const DEFAULT_UNKNOWN_STATUS_GRACE_SECS: u64 = 30;
 
+/// Default total wall-clock timeout for `await_bulk_task` polling. 5 minutes
+/// is the historical hard-coded value used by all CLI bulk handlers
+/// (`src/cli/issue/{create,workflow}.rs`). Centralized here so the
+/// `JR_BULK_AWAIT_TIMEOUT_SECS` test seam has a single source of truth.
+///
+/// Anchor: S-333 / BC-bulk.poll.deadline-bounded.
+const DEFAULT_BULK_AWAIT_TIMEOUT_SECS: u64 = 300;
+
+/// Resolve the total wall-clock timeout for `await_bulk_task`.
+///
+/// Release builds always return `DEFAULT_BULK_AWAIT_TIMEOUT_SECS` (300s / 5min).
+/// Debug builds also honor `JR_BULK_AWAIT_TIMEOUT_SECS` (whole seconds — parsed
+/// as `u64`, so `"5"`, `"30"`, `"300"` etc. but NOT `"0.5"`) so CLI-level
+/// integration tests can drive the 429-storm clamp through the binary quickly
+/// — typically `"30"` so a 429-storm test completes in ~30s wall-clock instead
+/// of the 5-minute default. Unparseable / non-numeric values are silently
+/// ignored (fall back to default) — the env var is a test seam, not a
+/// user-configurable surface, and a typo shouldn't break the bulk loop.
+///
+/// Gated `#[cfg(debug_assertions)]` mirrors the existing `JR_BASE_URL`,
+/// `JR_AUTH_HEADER`, and `JR_BULK_UNKNOWN_GRACE_SECS` debug-only patterns.
+/// Like `JR_BULK_UNKNOWN_GRACE_SECS`, there is no token-leak vector here
+/// (the value only affects how long the bulk-poll waits before timing out),
+/// so a single-site gate is sufficient.
+///
+/// Closes audit-followup #333.
+pub fn resolve_bulk_await_timeout() -> Duration {
+    #[cfg(debug_assertions)]
+    {
+        if let Ok(s) = std::env::var("JR_BULK_AWAIT_TIMEOUT_SECS") {
+            if let Ok(secs) = s.parse::<u64>() {
+                return Duration::from_secs(secs);
+            }
+        }
+    }
+    Duration::from_secs(DEFAULT_BULK_AWAIT_TIMEOUT_SECS)
+}
+
 /// Format a `Duration` for inclusion in an operator-facing error or warning
 /// message. Targets the **millisecond-to-seconds range** which covers every
 /// grace value the #336 code paths can produce:
@@ -269,6 +307,21 @@ impl JiraClient {
         self.get(&path).await
     }
 
+    /// Deadline-aware variant of `poll_bulk_task` for use inside
+    /// `await_bulk_task_inner`. Routes through `JiraClient::get_bounded` so
+    /// a 429-storm during this poll cannot push elapsed time past `deadline`.
+    ///
+    /// Anchor: BC-bulk.poll.deadline-bounded (S-333).
+    pub async fn poll_bulk_task_with_deadline(
+        &self,
+        task_id: &str,
+        deadline: Instant,
+    ) -> anyhow::Result<BulkOperationProgress> {
+        validate_task_id(task_id)?;
+        let path = format!("/rest/api/3/bulk/queue/{}", urlencoding::encode(task_id));
+        self.get_bounded(&path, deadline).await
+    }
+
     /// Poll a bulk task with exponential backoff until terminal state or timeout.
     ///
     /// Uses `JiraClient::get` → `send` for each poll, which already handles:
@@ -349,8 +402,13 @@ impl JiraClient {
                 ));
             }
 
-            // poll_bulk_task → self.get → self.send (handles 429 + 401 auto-refresh).
-            let progress = self.poll_bulk_task(task_id).await?;
+            // S-333: route polls through `poll_bulk_task_with_deadline` so that
+            // 429 retry sleeps inside `JiraClient::send` are clamped to the
+            // remaining deadline. Without this, a single poll could sleep up
+            // to MAX_RETRIES * MAX_RETRY_AFTER_SECS = 180s past the deadline
+            // before the top-of-loop check above re-fires.
+            // BC-bulk.poll.deadline-bounded / NFR-R-NEW-3.
+            let progress = self.poll_bulk_task_with_deadline(task_id, deadline).await?;
 
             // Unknown-status escalation path (#336). Three cases:
             //  1. Known status — reset the unknown tracker and continue normally.
