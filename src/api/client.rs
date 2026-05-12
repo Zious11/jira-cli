@@ -1201,11 +1201,12 @@ fn sanitize_for_stderr(input: String) -> String {
 /// Extract a human-readable error message from a Jira error response body.
 ///
 /// All return paths run through `sanitize_for_stderr` (CWE-117 defense:
-/// escapes ASCII control chars from server-supplied content as visible
-/// `\xNN` literals before they reach stderr, preventing CR/LF/ANSI
-/// injection from a hostile or proxy-controlled response while keeping
-/// the byte information visible to the operator). UTF-8 in legitimate
-/// localized error messages is preserved.
+/// escapes Unicode control characters from server-supplied content as
+/// visible escape sequences — ASCII controls (C0 + DEL) as `\xNN` and
+/// C1 controls (U+0080..U+009F) as `\u{NNNN}` — before they reach stderr,
+/// preventing CR/LF/ANSI/CSI injection from a hostile or proxy-controlled
+/// response while keeping the byte information visible to the operator).
+/// UTF-8 in legitimate localized error messages is preserved.
 ///
 /// Precedence:
 /// 1. Non-empty `errorMessages` array → joined with "; "
