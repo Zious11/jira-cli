@@ -1206,17 +1206,109 @@ C0+C1 escape coverage) have not been touched since R14. The quality of findings 
 degraded from memory-safety (R5–R11) to defense-in-depth (R12–R14) to pure documentation
 cleanup (R13, R15) and label correctness (R13). R16 is the expected Phase 8 stop condition.
 
+## Round 19 — PHASE 8 STOP CONDITION (2026-05-12T01:18:43Z)
+
+**Review ID:** 4268474794
+**Inline comments:** 0
+**Stop condition:** PHASE 8 STOP CONDITION MET
+
+### Stop Condition Verification
+
+Review body (verbatim): "Copilot reviewed 2 out of 2 changed files in this pull request and
+generated no new comments."
+
+0 inline comments. 0 findings. The overview comment alone is not a reason to continue per
+validated-feature-lifecycle Phase 8 stop condition: "a freshly-requested Copilot review posts
+zero new inline comments. The overview comment alone (no file-level findings) is not a reason
+to continue."
+
+**Perplexity-validation:** Not applicable — no findings to validate.
+
+**Fix commit:** none (stop-condition round; no changes needed)
+**Threads:** 36/36 resolved (unchanged)
+**Next action:** AWAITING HUMAN MERGE APPROVAL
+
+**Process note:** Fifteenth consecutive in-cycle state-manager dispatch per Lesson 2.
+The discipline held through 19 rounds across 15 state-manager dispatches without a single
+skip after R4.
+
+---
+
+## Trajectory Analysis (final)
+
+**Final trajectory:** 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3→1→1→0
+
+- R1: 4 findings (doc accuracy, loop allocation, clean-path allocation, missing length cap).
+  Perplexity confirmed CWE-117 + OWASP length-capping guidance.
+- R2: 1 finding (marker overhead exceeds cap for slightly-oversized inputs).
+- R3: 2 findings (1 critical: 4x expansion from pre-cap; 1 invariant: marker fallback un-truncated).
+- R4: 2 findings (premature truncation; per-entry allocation). Perplexity confirmed Cow<str> idiom.
+- R5: 3 findings (2 memory-amplification; 1 doc). Perplexity CONFIRMED OWASP API4:2023/CWE-770.
+- R6: 2 findings (streaming join marker overflow; sanitize over-reporting retained bytes). Perplexity CONFIRMED.
+- R7: 3 findings (terminology; stale round annotations ×2). Perplexity CONFIRMED OWASP terminology.
+- R8: 2 findings (errors-map memory amplification; doc inaccuracy on retroactive-trim). Perplexity CONFIRMED.
+- R9: 2 findings (key-amplification; non-string value materialization). Both Perplexity CONFIRMED.
+- R10: 1 finding (truncated JSON with no marker — "looks valid but malformed" anti-pattern). Perplexity CONFIRMED.
+- R11: 1 finding (INPUT DOM allocation attack surface). Perplexity CONFIRMED byte-level size gate.
+- R12: 2 findings (Write contract violation; non-UTF8 fallback marker under-reporting). Both Perplexity CONFIRMED.
+- R13: 1 finding (OWASP label inaccuracy at 6 locations). Perplexity CONFIRMED.
+- R14: 1 finding (Unicode C1 controls not escaped). Perplexity CONFIRMED defense-in-depth. Major behavioral change.
+- R15: 2 findings (fast-path comment stale post-R14; stale R-number annotations). Doc-only.
+- R16: 3 findings (3 doc-accuracy consequences of R14 C1 expansion). Doc-only.
+- R17: 1 finding (integration test header comment stale post-R14). Doc-only.
+- R18: 1 finding (extract_error_message public-API doc missing C1 branch). Doc-only.
+- R19: 0 findings. PHASE 8 STOP CONDITION MET.
+
+**Assessment:** Full convergence. R14 introduced a major behavioral expansion (C1 controls);
+R15-R18 cleaned up the resulting documentation fallout across 4 rounds. R19 confirms
+all fallout resolved and no remaining gaps. Substantive defenses (memory-amplification bounds,
+Write contract, DOM parse gate, C0+C1 escape coverage) fully converged at R14 and untouched
+through R15-R19.
+
+---
+
 ## CI Status
 
 **Head SHA:** 9acf01d
 **CI result:** 8/8 green
 
-## Current PR State
+---
+
+## CYCLE SUMMARY — PR #356 CONVERGED
 
 | Field | Value |
 |-------|-------|
-| **State** | OPEN |
+| **State** | CONVERGED — awaiting human merge approval |
+| **Rounds** | 19 (R0 initial PR + R1-R18 fix rounds + R19 stop) |
+| **Fix commits** | 18 (51e2807 through 9acf01d) |
+| **Final head** | 9acf01d |
 | **Threads** | 36 created; 36/36 resolved |
-| **R19** | Pending — R18 returned 1 doc-accuracy finding (extract_error_message public-API doc missing C1 escape branch + threat-model phrase missing CSI); all known R14 doc-fallout now corrected; substantive defenses unchanged since R14; 14 rounds Perplexity+Lesson-2 discipline; Phase 8 stop condition (0-new-comment round) very likely R19 |
 | **CI on 9acf01d** | 8/8 green |
+| **Tests** | 670 passed, 0 failed, 10 ignored (39 sanitize + 26 api_client) |
+| **Mergeable** | CLEAN |
+| **Final trajectory** | 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3→1→1→0 |
 | **Closes** | #334 on merge |
+
+### Defense Profile (post-convergence)
+
+| Defense Layer | Detail |
+|---------------|--------|
+| CWE-117 ASCII | C0/DEL (0x00-0x1F, 0x7F) → `\xNN` (4 bytes) via `is_ascii()` branch |
+| CWE-117 Unicode | C1 (U+0080..U+009F) → `\u{NNNN}` (8 bytes) via `char::is_control()` |
+| CWE-770 / OWASP API4:2023 UTF-8 conversion | ≤4 KiB cap before String::from_utf8_lossy |
+| CWE-770 JSON parse gate | MAX_PARSE_BODY_LEN = 16 KiB; skip JSON parse for larger bodies |
+| CWE-770 DOM worst case | ≤~48 KiB (16 KiB × 3 serde allocation factor) |
+| CWE-770 per-entry cap | cap_entry() ≤1 KiB per key or value |
+| CWE-770 streaming joins | ≤4 KiB including upfront marker reservation |
+| CWE-770 final output | MAX_SANITIZED_OUTPUT_LEN = 4 KiB retroactive trim |
+| std::io::Write | Bounded::write returns Ok(buf.len()) on partial writes; Err only when remaining==0 at entry |
+| Truncation markers | Accurate original byte counts in all truncation paths including non-UTF8 |
+
+### Process Metrics
+
+| Metric | Value |
+|--------|-------|
+| State-manager dispatches (Lesson 2) | 15 consecutive (RECORD for this project) |
+| Perplexity validations (Lesson 1 / DEC-018) | 12 |
+| R14 doc-fallout cluster | R15:2 → R16:3 → R17:1 → R18:1 → R19:0 (fully resolved) |
+| Rounds since last behavioral change (R14) | 5 (R15-R19 doc-only + stop) |

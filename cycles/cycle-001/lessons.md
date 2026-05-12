@@ -415,3 +415,53 @@ any point without a retroactive remediation pass.
 _Discovered: PR #356 post-round-4 remediation dispatch, 2026-05-11_
 _Tagged: [codified] — refines orchestrator dispatch discipline for Copilot-round bursts_
 _Process gap: state-manager skipped after R1, R2, R3, R4 fix commits for PR #356_
+
+---
+
+## 2026-05-12 — PR #356 R14 Doc-Fallout Cluster
+
+### [codified] When a major behavioral change expands escape/encoding coverage, audit ALL doc comments in the same commit
+
+PR #356 R14 switched `sanitize_for_stderr` from `is_ascii_control()` to `char::is_control()`,
+adding Unicode C1 control escaping (U+0080..U+009F → `\u{NNNN}` format). This was a legitimate
+defense-in-depth improvement (Perplexity CONFIRMED). However, the R14 fix commit updated only
+the implementation and the immediately adjacent inline comments — it did not audit all other
+documentation sites that described the escape behavior.
+
+**Result:** 4 subsequent rounds (R15, R16, R17, R18) were consumed exclusively by documentation
+cleanup caused by this single omission:
+- R15 (2 findings): fast-path comment still described byte-level scan; stale R-number annotation
+- R16 (3 findings): strategy bullets described only ASCII path; C1 description technically wrong
+  ("rejected as invalid UTF-8" — actually valid Unicode, terminals ignore semantics); integration
+  test comment said "only ASCII control bytes are escaped"
+- R17 (1 finding): integration-test header comment said chars render "as \xNN literals"
+- R18 (1 finding): extract_error_message public-API doc comment described only ASCII branch
+
+All 7 of these findings were purely from the R14 behavioral change. All were valid. None required
+Perplexity validation (internal comment accuracy only). Each was individually small, but together
+they consumed 4 rounds that could have been avoided.
+
+**Rule:** When a commit changes the behavior of an escape, encoding, validation, or classification
+function — particularly when it EXPANDS the set of values that are handled differently — the
+implementer MUST perform a project-wide grep for all documentation sites that describe the old
+behavior and update them in the SAME commit.
+
+**Minimum sweep for escape-set expansions:**
+```bash
+grep -rn "escape\|sanitize\|control\|ASCII\|unicode\|C1\|C0\|DEL\|\\\\x" \
+  src/ tests/ --include="*.rs" | grep -i "comment\|//\|doc"
+```
+
+Or more specifically: search for any comment, doc-string, or test header that references the
+function name or the old escape format (e.g., "\\xNN", "ASCII control", "is_ascii_control").
+
+**Anti-pattern name:** doc-fallout cluster — when a behavioral change produces a cascade of
+documentation-only findings in subsequent review rounds.
+
+**Prediction value:** If you see R15+ findings that are ALL documentation accuracy (no
+behavioral gaps), you are in a doc-fallout cluster from an earlier behavioral change. Identify
+the root-cause commit and do a complete doc sweep rather than patching sites one at a time.
+
+_Discovered: PR #356 R14-R18 pattern analysis at R19 convergence, 2026-05-12_
+_Tagged: [codified] — new lesson; R14 behavioral change produced 4-round doc-fallout cluster (R15:2+R16:3+R17:1+R18:1=7 findings)_
+_Scope: any commit that changes the behavior of escape, encoding, validation, or classification functions_
