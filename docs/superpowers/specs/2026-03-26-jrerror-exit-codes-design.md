@@ -16,7 +16,7 @@ Replace `anyhow::anyhow!(...)` with the appropriate `JrError` variant at 13 loca
 
 The current `ConfigError` variant has `#[error("Configuration error: {0}")]`, which prepends "Configuration error: " to the message. To preserve existing error message text exactly, change the format to `#[error("{0}")]` — matching `UserError`'s format. The error is already semantically identified by its variant and exit code; the prefix is redundant.
 
-### Exit Code Mapping (existing, unchanged)
+### Exit Code Mapping
 
 | Variant | Exit Code | sysexits.h | Meaning |
 |---------|-----------|------------|---------|
