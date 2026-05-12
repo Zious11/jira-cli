@@ -32,7 +32,13 @@ unrecognized status. The fix is the same regardless of root cause.
 
 ## Acceptance criteria (from issue #336)
 
-- Test mounts a poll response with `status: "PARTIAL_FAILURE"` (made-up).
+- Test mounts a poll response with an unrecognized status string and verifies
+  the warn+escalate path. The original issue example was `PARTIAL_FAILURE`,
+  which the issue author treated as "made-up" — Perplexity validation
+  2026-05-12 has since confirmed `PARTIAL_FAILURE` is actually a documented
+  Atlassian enum addition, so this PR places it in the known/terminal set
+  and uses `MYSTERY_STATUS_FAKE` (a deliberately-novel placeholder that
+  won't collide with future enum additions) as the test driver instead.
 - Stderr emits a warning identifying the unrecognized status.
 - Either: (a) loop continues until deadline with warning visible, OR (b)
   caller gets `Err` with the status string after a grace period.
@@ -186,11 +192,12 @@ please report at <repo-issues-url> so we can update the known-status list.
 2. **In-lib wiremock tests** in `mod unknown_status_grace_tests` of
    `src/api/jira/bulk.rs` — drive `await_bulk_task_with_grace_for_test` end-
    to-end against `wiremock::MockServer`:
-   - `test_336_unknown_status_warns_then_escalates_after_grace` —
+   - `test_336_persistent_unknown_status_escalates_to_err_after_grace` —
      server returns `MYSTERY_STATUS_FAKE` (a deliberately-novel string that
      won't collide with future enum additions) indefinitely; with
      `timeout=10s, grace=200ms` the call returns `Err` containing the status
-     string. Asserts the escalation contract.
+     string. Asserts the escalation contract via return value only — stderr
+     emission is verified at the CLI-level integration test below, not here.
    - `test_336_known_status_sequence_returns_ok_without_escalation` — server
      returns `ENQUEUED → COMPLETE`; call returns `Ok(progress)`.
    - `test_336_transient_unknown_then_known_resets_tracker` — server returns
