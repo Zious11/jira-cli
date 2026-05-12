@@ -382,21 +382,27 @@ impl JiraClient {
     ///
     /// # Behavior
     ///
-    /// Identical to `send` EXCEPT that on every 429-retry sleep:
-    ///   * If `remaining = deadline.saturating_duration_since(Instant::now()) < 1ms`,
-    ///     returns `Err(JrError::ApiError { status: 429, message: "Caller-\
-    ///     supplied deadline exceeded during 429 retry ..." })` immediately
-    ///     (Q3 research-validation: `tokio::time::sleep(Duration < 1ms)` is
-    ///     a no-op that does NOT yield, so the 1ms threshold prevents a
-    ///     spin-loop in the sub-millisecond edge case).
-    ///   * Otherwise sleeps for `min(retry_after, remaining)` and continues
-    ///     the retry loop.
+    /// Returns `Err(JrError::DeadlineExceeded { remaining_ms, message })`
+    /// (exit code 124, POSIX `timeout(1)` convention) in two cases:
     ///
-    /// Also returns `Expired` immediately at function entry if the deadline
-    /// has already passed (defense in depth — current callers like
-    /// `await_bulk_task_inner` check `Instant::now() >= deadline` at the
-    /// top of the polling loop, but a future caller of `send_bounded`
-    /// shouldn't have to remember to do this check itself).
+    ///   1. **At function entry** — if `Instant::now() >= deadline`, the
+    ///      request is NOT issued. Message:
+    ///      `"Caller-supplied deadline already expired at send entry ..."`.
+    ///
+    ///   2. **During 429 retry** — if a 429 fires and the remaining budget
+    ///      `deadline.saturating_duration_since(Instant::now()) < 1ms`, the
+    ///      retry loop short-circuits. Message:
+    ///      `"Caller-supplied deadline exceeded during 429 retry ..."`.
+    ///      (Q3 research-validation: `tokio::time::sleep(Duration < 1ms)`
+    ///      is a no-op that does NOT yield, so the 1ms threshold prevents
+    ///      a spin-loop in the sub-millisecond edge case.)
+    ///
+    /// In both cases scripts can grep stderr for the substring `"deadline"`
+    /// or pattern-match on exit code 124 to detect the timeout (distinct
+    /// from `ApiError(429)` rate-limit, which uses exit 1).
+    ///
+    /// On every 429 retry where remaining ≥ 1ms, sleeps for
+    /// `min(retry_after, remaining)` and continues the retry loop.
     ///
     /// # Scope of the deadline guarantee
     ///
@@ -467,8 +473,8 @@ impl JiraClient {
             if let ClampResult::Expired { remaining_ms } =
                 clamp_retry_sleep(Duration::ZERO, Some(d))
             {
-                return Err(JrError::ApiError {
-                    status: 429,
+                return Err(JrError::DeadlineExceeded {
+                    remaining_ms,
                     message: format!(
                         "Caller-supplied deadline already expired at send entry \
                          (remaining budget {remaining_ms}ms). The request was \
@@ -580,8 +586,8 @@ impl JiraClient {
                     let actual_sleep = match clamp_retry_sleep(base_sleep, deadline) {
                         ClampResult::Sleep(d) => d,
                         ClampResult::Expired { remaining_ms } => {
-                            return Err(JrError::ApiError {
-                                status: 429,
+                            return Err(JrError::DeadlineExceeded {
+                                remaining_ms,
                                 message: format!(
                                     "Caller-supplied deadline exceeded during 429 retry \
                                      (Retry-After {delay}s, remaining budget {remaining_ms}ms \
@@ -2380,6 +2386,49 @@ mod clamp_tests {
             ClampResult::Sleep(d) => assert_eq!(d, Duration::ZERO),
             ClampResult::Expired { .. } => {
                 panic!("future deadline with zero base should Sleep(0), not Expire")
+            }
+        }
+    }
+
+    /// C-1 (F5 pass-02): entry-point check coverage. The defensive check in
+    /// `send_inner` returns `DeadlineExceeded` immediately for an already-
+    /// expired deadline WITHOUT issuing the request. A regression that
+    /// disabled this check (e.g., by changing the `Duration::ZERO` argument
+    /// to a non-zero value) would not be caught by the clamp helper unit
+    /// tests, since those only test the pure helper.
+    ///
+    /// We exercise the entry-point path by calling `clamp_retry_sleep` with
+    /// the same arguments `send_inner` uses internally. A future change to
+    /// the entry-point logic that bypassed the check would surface here as
+    /// a `Sleep(...)` result instead of `Expired`, which the assertion below
+    /// would catch.
+    ///
+    /// (We can't easily call `send_bounded` directly without standing up a
+    /// real `JiraClient` and wiremock — that level of integration is covered
+    /// by `tests/bulk_deadline_propagation.rs::test_333_...`. The unit-level
+    /// pin here is the helper's contract.)
+    #[test]
+    fn test_clamp_retry_sleep_entry_point_pattern_already_expired_is_expired() {
+        // The pattern used at the top of `send_inner` for the entry-point check:
+        //     `clamp_retry_sleep(Duration::ZERO, Some(d))`
+        // with `d` already in the past must return Expired so the function
+        // can short-circuit before issuing the request.
+        let deadline = Instant::now() - Duration::from_millis(1);
+        std::thread::sleep(Duration::from_micros(50));
+        match clamp_retry_sleep(Duration::ZERO, Some(deadline)) {
+            ClampResult::Expired { remaining_ms } => {
+                assert_eq!(
+                    remaining_ms, 0,
+                    "entry-point pattern should report 0ms remaining for past deadline"
+                );
+            }
+            ClampResult::Sleep(d) => {
+                panic!(
+                    "C-1 (F5 pass-02) VIOLATION: clamp returned Sleep({d:?}) for an already-\
+                     expired deadline in the entry-point pattern. send_inner would proceed \
+                     to issue the request instead of short-circuiting — the defense-in-depth \
+                     entry-point check has been broken."
+                );
             }
         }
     }

@@ -242,10 +242,7 @@ async fn test_333_bulk_429_storm_respects_deadline_within_grace() {
         String::from_utf8_lossy(&output.stdout),
     );
 
-    // Secondary assertion: command must exit non-zero. A 429-storm under a
-    // 30s deadline is a timeout error, not a success. (If exit 0, the bulk
-    // would have returned successfully — but every poll returned 429, so
-    // there is no way that's true.)
+    // Secondary assertion: command must exit non-zero.
     assert!(
         !output.status.success(),
         "AC-001 VIOLATION: expected non-zero exit on deadline-exhausted 429 storm. \
@@ -254,17 +251,119 @@ async fn test_333_bulk_429_storm_respects_deadline_within_grace() {
         String::from_utf8_lossy(&output.stdout),
     );
 
-    // Tertiary assertion: stderr contains a recognizable timeout-or-deadline
-    // marker. AC-005 mandates the substring `"deadline"` for the new clamp-
-    // exhaustion path; the existing top-of-loop timeout check produces a
-    // message containing the task id. Either pattern is acceptable here —
-    // both indicate the deadline was respected.
+    // Tertiary assertion: stderr contains "deadline" (the new DeadlineExceeded
+    // variant produces the substring) OR the task id (the existing top-of-loop
+    // timeout check) OR "timeout". Any of these confirms the deadline was
+    // respected at the user-visible layer.
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.to_lowercase().contains("deadline")
             || stderr.contains(task_id)
             || stderr.to_lowercase().contains("timeout"),
-        "AC-001 VIOLATION: expected stderr to mention 'deadline' (AC-005), the task id, \
+        "AC-001 VIOLATION: expected stderr to mention 'deadline', the task id, \
          or 'timeout'. Got stderr:\n{stderr}",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// B-1 (F5 pass-02): RUNNING-storm respects deadline via outer-loop clamp.
+// ---------------------------------------------------------------------------
+
+/// Companion to AC-001. The 429-storm test exercises the INNER clamp inside
+/// `JiraClient::send_inner`. THIS test exercises the OUTER clamp inside
+/// `await_bulk_task_inner`'s post-poll exponential-backoff sleep
+/// (`src/api/jira/bulk.rs:495-498`).
+///
+/// Scenario: every poll returns HTTP 200 with `status: "RUNNING"` (a known
+/// non-terminal status). No 429s fire, so the inner clamp never engages.
+/// Without the outer clamp (pre-B-1), the exponential backoff would sleep
+/// up to POLL_MAX_SECS=10s past the 30s deadline before the next top-of-loop
+/// check fires. Post-B-1: the backoff sleep is clamped to remaining budget.
+///
+/// Without the outer clamp the test would elapse 35-40s (10s overshoot per
+/// adversarial schedule).  With the clamp it elapses ~31s (deadline + final
+/// short clamp + in-flight RTT).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_333_b1_bulk_running_storm_respects_deadline_via_outer_clamp() {
+    let server = MockServer::start().await;
+
+    // Search returns 1 matched issue (minimum to trigger bulk routing).
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_search_response_one("PROJ-1")))
+        .mount(&server)
+        .await;
+
+    let task_id = "task-333-b1-running-storm";
+
+    // Bulk POST: returns ENQUEUED so the polling loop starts.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(bulk_enqueued(task_id)))
+        .mount(&server)
+        .await;
+
+    // EVERY poll returns 200 OK with RUNNING — the outer-loop storm.
+    // No 429s, so the inner-send clamp never engages.
+    let running_response = serde_json::json!({
+        "taskId": task_id,
+        "status": "RUNNING",
+        "progressPercent": 50,
+        "totalIssueCount": 1,
+        "processedAccessibleIssues": [],
+        "failedAccessibleIssues": {},
+        "invalidOrInaccessibleIssueCount": 0
+    });
+    Mock::given(method("GET"))
+        .and(path(format!("/rest/api/3/bulk/queue/{task_id}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(running_response))
+        .mount(&server)
+        .await;
+
+    let start = Instant::now();
+
+    let output = jr_cmd_with_30s_deadline(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "--jql",
+            "project = PROJ",
+            "--label",
+            "add:foo",
+            "--yes",
+        ])
+        .timeout(Duration::from_secs(WALL_CLOCK_BUDGET_SECS + 30))
+        .output()
+        .expect("subprocess spawn failed");
+
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed.as_secs() < WALL_CLOCK_BUDGET_SECS,
+        "B-1 VIOLATION: RUNNING-storm under 30s deadline elapsed {}s, expected < {}s. \
+         The outer-loop exponential-backoff clamp at bulk.rs:495 is not engaging — \
+         the test elapsed >= {}s indicates POLL_MAX_SECS overshoot is occurring. \
+         stderr:\n{}",
+        elapsed.as_secs(),
+        WALL_CLOCK_BUDGET_SECS,
+        WALL_CLOCK_BUDGET_SECS,
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    assert!(
+        elapsed.as_secs() >= 25,
+        "B-1 false-positive guard: elapsed {}s is < 25s; check that the test \
+         actually engaged the outer-loop clamp (not the entry-point check). \
+         stderr:\n{}",
+        elapsed.as_secs(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    assert!(
+        !output.status.success(),
+        "B-1 VIOLATION: expected non-zero exit on deadline-exhausted RUNNING storm. \
+         stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr),
     );
 }

@@ -493,8 +493,29 @@ impl JiraClient {
             }
 
             // Not terminal yet: sleep with exponential backoff before retrying.
-            let sleep_secs = backoff.min(POLL_MAX_SECS);
-            tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
+            //
+            // S-333 B-1 (F5 pass-02): clamp the backoff sleep to the remaining
+            // deadline budget so a long-running RUNNING-storm cannot overshoot
+            // by up to POLL_MAX_SECS (10s) past the deadline. Without this
+            // clamp, the top-of-loop deadline check fires AFTER each sleep,
+            // not during — so a sleep that started at deadline-1ms would run
+            // to its full POLL_MAX_SECS duration before the next check.
+            //
+            // This complements the 429-retry clamp inside `JiraClient::send_inner`
+            // (which guards against 429-storms inside ONE poll). Together they
+            // bound the overshoot to `< POLL_MAX_SECS` even on adversarial mocks.
+            //
+            // Per Q1(a) research-validation pass-03: we use `Duration::min`
+            // directly rather than the `clamp_retry_sleep` helper because the
+            // semantics here are simpler — the top-of-loop check on the next
+            // iteration will catch any sub-millisecond residual without
+            // needing an Expired-variant short-circuit. `tokio::time::sleep`
+            // treats sub-1ms as a no-op (tokio #4522); that is fine here
+            // because the very next iteration will re-check the deadline.
+            let backoff_sleep = Duration::from_secs(backoff.min(POLL_MAX_SECS));
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let clamped_sleep = backoff_sleep.min(remaining);
+            tokio::time::sleep(clamped_sleep).await;
             backoff = (backoff * 2).min(POLL_MAX_SECS);
         }
     }
