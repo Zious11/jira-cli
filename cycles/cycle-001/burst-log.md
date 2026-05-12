@@ -2124,3 +2124,44 @@ Fix: bypass `cap_entry` and build a custom marker: `[...truncated, {original_len
 | implementer | Fix Bounded::write to return Err(WriteZero) only on remaining==0; on partial write: append prefix, set overflowed, return Ok(buf.len()); build custom non-UTF8 marker using body.len(); 3 new unit tests | src/api/client.rs 6832967 |
 | orchestrator | Resolve threads PRRT_kwDORs-xfc6BQI52 + PRRT_kwDORs-xfc6BQI6M; post replies 3222826557 + 3222826602; commit 6832967; push; verify CI 8/8 green | 27/27 threads resolved; CI green; R13 pending |
 | state-manager | Eighth consecutive in-cycle dispatch per Lesson 2 — discipline is consistent habit | STATE.md, burst-log.md, pr-356-copilot-progress.md updated |
+
+---
+
+## Burst: PR #356 Copilot R13 (2026-05-11T23:55Z)
+
+**Agents dispatched:** orchestrator, implementer, state-manager
+**Files touched:** src/api/client.rs
+**Versions bumped:** (none — chore/sanitize-errors-334 branch)
+**Commit:** bcc2db4 ("chore(security): correct OWASP/CWE labels for memory-amplification defenses (PR #356 R13)")
+**CI result:** 8/8 green on bcc2db4
+
+### Summary
+
+One new Copilot finding from R13 (review 4268206656 @ 2026-05-11T23:52:40Z, comment 3222841940). Perplexity-validated as a real labeling error.
+
+**Finding — OWASP/CWE label inaccuracy in doc comments (comment 3222841940):**
+Doc comments throughout `src/api/client.rs` labeled the memory-amplification mitigation as "OWASP A06 / AP11" — both incorrect. OWASP A06:2021 is "Vulnerable and Outdated Components" (dependency vulnerabilities, not resource exhaustion). "AP11" does not correspond to any recognized standard categorization scheme (not OWASP API Security Top 10, not OWASP Top 10, not CWE, not CVE).
+
+The correct labels for this threat class (unbounded resource allocation from server-controlled input): **OWASP API4:2023 (Unrestricted Resource Consumption) / CWE-770 (Allocation of Resources Without Limits or Throttling)**.
+
+**Validation (Perplexity per DEC-018):** CONFIRMED — OWASP API4:2023 is unambiguously the correct category for unrestricted resource consumption. CWE-770 maps to allocation-without-limits. Both are authoritative and widely cited for this threat class. Perplexity confirmed the original labels (A06/AP11) were incorrect.
+
+Fix: mechanical search-and-replace across 6 comment locations in `src/api/client.rs`. No behavior change. Historical commit messages and prior reply comments retain old labels (immutable history); correction lives in current source code comments where future maintainers will read.
+
+1 R13 thread resolved (PRRT_kwDORs-xfc6BQQan). All 28/28 threads now resolved (0 unresolved). Reply 3222883003 posted.
+
+No new tests (comment-only change); 36 sanitize tests still pass; full cargo test: 667 passed, 0 failed.
+
+**Convergence signal:** R13 returned 1 finding — down from R12's 2 (trajectory segment ...→1→1→2→1). Crucially, the finding is documentation-quality (OWASP label correctness) rather than a security-defense gap. This shift in finding category is a strong convergence indicator: the security defenses themselves are converged; Copilot is now exploring incidental quality issues. Phase 8 stop condition (0-new-comment round) is likely 1-2 rounds away.
+
+**Perplexity-validation per DEC-018:**
+- Finding (OWASP A06 / AP11 mislabeling): CONFIRMED — OWASP A06:2021 is "Vulnerable and Outdated Components"; correct label for resource exhaustion defense is OWASP API4:2023 / CWE-770. Authoritative references cited in commit message.
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| orchestrator | Triage 1 Copilot R13 finding (comment 3222841940 @ 23:52:40Z); Perplexity CONFIRMED OWASP A06 / AP11 are incorrect labels for resource exhaustion defense; correct labels are OWASP API4:2023 / CWE-770 | Confirmed valid; fix plan approved |
+| implementer | Search-and-replace across 6 comment locations in src/api/client.rs; no behavior change | src/api/client.rs bcc2db4 |
+| orchestrator | Resolve thread PRRT_kwDORs-xfc6BQQan; post reply 3222883003; commit bcc2db4; push; verify CI 8/8 green | 28/28 threads resolved; CI green; R14 pending |
+| state-manager | Ninth consecutive in-cycle dispatch per Lesson 2 — discipline is consistent habit | STATE.md, burst-log.md, pr-356-copilot-progress.md updated |

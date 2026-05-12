@@ -2,9 +2,9 @@
 document_type: copilot-convergence-record
 pr: 356
 branch: chore/sanitize-errors-334
-head_sha: 6832967
+head_sha: bcc2db4
 closes_issues: ["#334"]
-rounds: 12
+rounds: 13
 status: in-progress
 review_round_1_id: ""
 review_round_1_submitted: 2026-05-11T17:49:49Z
@@ -31,18 +31,20 @@ review_round_11_id: "4268102135"
 review_round_11_submitted: 2026-05-11T23:27:03Z
 review_round_12_id: "4268158285"
 review_round_12_submitted: 2026-05-11T23:39:52Z
-threads_total: 27
-threads_resolved: 27
-trajectory: "4→1→2→2→3→2→3→2→2→1→1→2"
+review_round_13_id: "4268206656"
+review_round_13_submitted: 2026-05-11T23:52:40Z
+threads_total: 28
+threads_resolved: 28
+trajectory: "4→1→2→2→3→2→3→2→2→1→1→2→1"
 ---
 
 # PR #356 Copilot Convergence Record — IN PROGRESS
 
 **PR:** https://github.com/Zious11/jira-cli/pull/356
 **Branch:** chore/sanitize-errors-334
-**Current tip SHA:** 6832967
+**Current tip SHA:** bcc2db4
 **Closes:** #334 on merge
-**Trajectory so far:** 4→1→2→2→3→2→3→2→2→1→1→2 (Round 13 pending)
+**Trajectory so far:** 4→1→2→2→3→2→3→2→2→1→1→2→1 (Round 14 pending)
 
 ## Summary
 
@@ -51,14 +53,14 @@ PR #356 implements CWE-117 defense at the `extract_error_message` public boundar
 from Atlassian error message strings before stderr emission, preventing terminal injection
 (log forging, ANSI escape injection) via hostile or proxy-injected error payloads.
 
-Twelve Copilot rounds have been completed with a total of 27/27 threads resolved. CI is 8/8
-green on 6832967. Round 13 is pending.
+Thirteen Copilot rounds have been completed with a total of 28/28 threads resolved. CI is 8/8
+green on bcc2db4. Round 14 is pending.
 
-**Trajectory note:** R12 ticked back to 2 (trajectory now 4→1→2→2→3→2→3→2→2→1→1→2). Both R12
-findings are non-overlapping with R11's INPUT-DOM class: contract-level (std::io::Write violation)
-and UX-level (non-UTF8 marker under-reporting). Not a regression — Copilot is exploring different
-correctness categories. R13 will be the telltale: 0-1 findings would confirm convergence is on
-track. Expect 2-4 more rounds before stop condition.
+**Trajectory note:** R13 back down to 1 (trajectory now 4→1→2→2→3→2→3→2→2→1→1→2→1). The R13
+finding is documentation-quality (OWASP label inaccuracy), not a security-defense gap. This
+category shift is a strong convergence signal: the security defenses themselves are converged;
+Copilot is now exploring incidental quality issues. Phase 8 stop condition (0-new-comment round)
+is likely 1-2 rounds away.
 
 **Process gaps noted:** R2 and R3 Perplexity-validation were SKIPPED on the rationalization
 that the claims were "empirically verifiable from code." Per DEC-018, this was incorrect — all
@@ -696,9 +698,71 @@ returns 0-1, convergence is on track. Expect 2-4 more rounds before stop conditi
 
 ---
 
+## Round 13 (2026-05-11T23:52:40Z)
+
+**Review ID:** 4268206656
+**Comment ID:** 3222841940
+**Inline comments:** 1
+**Valid (documentation labeling error)**
+
+### Finding 1 — OWASP/CWE labels incorrect for memory-amplification mitigation
+
+Doc comments throughout `src/api/client.rs` labeled the memory-amplification mitigation as
+"OWASP A06 / AP11" in multiple locations. Both labels are incorrect:
+
+- **OWASP A06:2021** is "Vulnerable and Outdated Components" — covers dependency vulnerabilities
+  and outdated software, NOT resource exhaustion or unbounded allocation.
+- **"AP11"** does not correspond to any recognized standard categorization scheme (not OWASP API
+  Security Top 10, not OWASP Top 10, not any CWE category notation).
+
+The correct labels for this threat class (unbounded resource allocation from server-controlled
+input — which is exactly what R5–R11 defended against):
+- **OWASP API4:2023 (Unrestricted Resource Consumption)** — the specific OWASP API Security Top 10
+  category for server responses that exhaust client-side memory/CPU
+- **CWE-770 (Allocation of Resources Without Limits or Throttling)** — the authoritative CWE
+  mapping for this defect class
+
+**Validation (Perplexity per DEC-018):** CONFIRMED — OWASP API4:2023 is unambiguously the correct
+category for unrestricted resource consumption; CWE-770 is the standard mapping. Both authoritative
+references cited in commit message bcc2db4. Historical note: R5's original Perplexity validation
+cited "OWASP A06/AP11" — those labels were accepted then but were incorrect. R13 correction
+supersedes them in current source; historical commit messages and reply comments retain old labels
+(immutable history).
+
+**Fix:** Mechanical search-and-replace across 6 comment locations in `src/api/client.rs`:
+- Old: `OWASP A06 / AP11`
+- New: `OWASP API4:2023 (Unrestricted Resource Consumption) / CWE-770 (Allocation of Resources Without Limits or Throttling)`
+
+No behavior change; comment-only. No new tests needed (no production logic changed).
+
+**Thread resolved:** PRRT_kwDORs-xfc6BQQan
+**Reply posted:** 3222883003
+
+**Fix commit:** bcc2db4 ("chore(security): correct OWASP/CWE labels for memory-amplification defenses (PR #356 R13)")
+**Threads:** 28/28 resolved (1 new R13 thread resolved; cumulative)
+
+**Test results at bcc2db4:**
+- 36 sanitize unit tests total (no new tests — comment-only change)
+- 667 cargo test total: 667 passed, 0 failed, 10 ignored
+- cargo fmt --check + cargo clippy --all-targets -- -D warnings clean
+- CI: 8/8 green
+
+**Process note:** Ninth consecutive in-cycle state-manager dispatch per codified Lesson 2.
+R5 → R6 → R7 → R8 → R9 → R10 → R11 → R12 → R13 all dispatched state-manager in real time.
+The discipline is fully embedded — 9 rounds in.
+
+**Convergence signal:** R13 returned 1 finding — down from R12's 2 (trajectory ...→1→1→2→1).
+More significantly: the finding category has shifted from security-defense gaps (R5–R12: memory
+amplification, Write contract violations, DOM allocation) to documentation quality (OWASP label
+correctness). This is a qualitative convergence signal — Copilot has exhausted the security-defense
+defect space and is now exploring incidental quality issues. Phase 8 stop condition (0-new-comment
+round) is likely 1-2 rounds away.
+
+---
+
 ## Trajectory Analysis
 
-**Pattern so far:** 4→1→2→2→3→2→3→2→2→1→1→2 — all non-zero rounds addressed real findings.
+**Pattern so far:** 4→1→2→2→3→2→3→2→2→1→1→2→1 — all non-zero rounds addressed real findings.
 
 - R1: 4 findings (doc accuracy, loop allocation, clean-path allocation, missing length cap).
   Perplexity confirmed CWE-117 + OWASP length-capping guidance.
@@ -751,17 +815,24 @@ returns 0-1, convergence is on track. Expect 2-4 more rounds before stop conditi
   `[...truncated, {body.len()} bytes total, non-UTF8 body]`. 3 new tests (partial-write marker,
   5MB body true size, small non-UTF8 skips marker); 36 sanitize tests total; 667 cargo test green.
   2 threads resolved (PRRT_kwDORs-xfc6BQI52 + PRRT_kwDORs-xfc6BQI6M); replies 3222826557 +
-  3222826602. 27/27 threads resolved. CI 8/8 green on 6832967. R13 pending.
+  3222826602. 27/27 threads resolved. CI 8/8 green on 6832967.
+- R13 (4268206656 @ 23:52:40Z, comment 3222841940): 1 finding (doc comments mislabeled
+  memory-amplification mitigation as "OWASP A06 / AP11" at 6 locations — OWASP A06:2021 is
+  "Vulnerable and Outdated Components"; "AP11" is not a recognized standard category; correct
+  labels are OWASP API4:2023 (Unrestricted Resource Consumption) / CWE-770 (Allocation of
+  Resources Without Limits or Throttling)). Perplexity CONFIRMED. Fix: mechanical search-and-replace
+  at 6 comment locations; no behavior change; no new tests. 1 thread resolved (PRRT_kwDORs-xfc6BQQan);
+  reply 3222883003. 28/28 threads resolved. CI 8/8 green on bcc2db4. R14 pending.
 
-**Assessment:** R12 ticked back to 2 findings. Both are non-overlapping with R11's INPUT-DOM class:
-contract-level (std::io::Write violation in Bounded::write) and UX-level (non-UTF8 marker
-under-reporting body size). This is not a regression — Copilot is exploring different correctness
-categories. Trajectory now 4→1→2→2→3→2→3→2→2→1→1→2. R13 is the telltale: if R13 returns 0-1,
-convergence is on track. Expect 2-4 more rounds before stop condition. R13 pending.
+**Assessment:** R13 back down to 1 finding (trajectory now 4→1→2→2→3→2→3→2→2→1→1→2→1). More
+importantly, the finding category shifted from security-defense gaps (R5–R12) to documentation
+quality (R13 OWASP label correctness). This qualitative shift is a strong convergence signal:
+the security defenses are converged; Copilot is now exploring incidental quality issues. Phase 8
+stop condition (0-new-comment round) is likely 1-2 rounds away. R14 pending.
 
 ## CI Status
 
-**Head SHA:** 6832967
+**Head SHA:** bcc2db4
 **CI result:** 8/8 green
 
 ## Current PR State
@@ -769,7 +840,7 @@ convergence is on track. Expect 2-4 more rounds before stop condition. R13 pendi
 | Field | Value |
 |-------|-------|
 | **State** | OPEN |
-| **Threads** | 27 created; 27/27 resolved |
-| **R13** | Pending — R12 ticked to 2 (non-overlapping categories from R11); R13=0 would trigger stop condition |
-| **CI on 6832967** | 8/8 green |
+| **Threads** | 28 created; 28/28 resolved |
+| **R14** | Pending — R13 returned 1 doc-quality finding (OWASP label correction); convergence signal: security defenses converged, Copilot exploring incidental quality; Phase 8 stop condition likely 1-2 rounds away |
+| **CI on bcc2db4** | 8/8 green |
 | **Closes** | #334 on merge |
