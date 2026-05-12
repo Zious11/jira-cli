@@ -275,8 +275,13 @@ impl JiraClient {
     }
 
     /// Test-only variant of `await_bulk_task` that exposes the unknown-status
-    /// grace-period parameter so tests can verify the warn+escalate path in
-    /// sub-second wall-clock time. NOT part of the release API surface.
+    /// grace-period parameter so tests can verify the warn+escalate path
+    /// quickly — typically in ~1 second of wall-clock time rather than the
+    /// 30-second production default. The polling loop's `POLL_BASE_SECS` (1s)
+    /// minimum sleep between polls means escalation cannot complete in
+    /// strictly sub-second time, but a sub-second `unknown_status_grace`
+    /// (e.g., `Duration::from_millis(200)`) guarantees the grace expiry check
+    /// fires on the second poll. NOT part of the release API surface.
     #[cfg(test)]
     pub async fn await_bulk_task_with_grace_for_test(
         &self,
