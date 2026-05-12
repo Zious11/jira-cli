@@ -78,7 +78,9 @@ fn test_336_debug_assertions_active_in_test_binary() {
             "debug_assertions must be true when compiling this test binary — \
              issue #336 requires the #[cfg(debug_assertions)] guard on \
              JR_BULK_UNKNOWN_GRACE_SECS to be active in test builds so CLI \
-             integration tests can drive the warn+grace path in sub-second time."
+             integration tests can drive the warn+grace path quickly \
+             (typically by setting the env var to \"0\" so escalation fires \
+             on the second poll, ~1s wall-clock)."
         )
     }
 }

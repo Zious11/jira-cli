@@ -73,13 +73,15 @@ fn format_grace_duration(d: Duration) -> String {
 /// Resolve the unknown-status grace period for `await_bulk_task`.
 ///
 /// Release builds always return `DEFAULT_UNKNOWN_STATUS_GRACE_SECS` (30s).
-/// Debug builds also honor `JR_BULK_UNKNOWN_GRACE_SECS` (decimal seconds —
-/// integer values only) so CLI-level integration tests can drive the warn+
-/// escalate path through the binary in sub-second wall-clock time without
-/// shipping the knob to production. Unparseable / non-numeric values are
-/// silently ignored (fall back to default) — the env var is a test seam,
-/// not user-configurable surface, and a typo shouldn't break the polling
-/// loop in a dev shell.
+/// Debug builds also honor `JR_BULK_UNKNOWN_GRACE_SECS` (whole seconds —
+/// parsed as `u64`, so `"0"`, `"1"`, `"30"` etc. but NOT `"0.5"`) so CLI-
+/// level integration tests can drive the warn+escalate path through the
+/// binary quickly — typically by setting it to `"0"` so escalation fires
+/// on the second poll (one ~1s sleep cycle after the first sighting) —
+/// without shipping the knob to production. Unparseable / non-numeric
+/// values are silently ignored (fall back to default) — the env var is a
+/// test seam, not user-configurable surface, and a typo shouldn't break
+/// the polling loop in a dev shell.
 ///
 /// Gated `#[cfg(debug_assertions)]` mirrors the existing `JR_BASE_URL` and
 /// `JR_AUTH_HEADER` debug-only patterns (CLAUDE.md "AI Agent Notes"). Unlike

@@ -2593,9 +2593,12 @@ async fn test_336_cli_unknown_status_emits_warning_and_escalates() {
         .await;
 
     let output = jr_cmd(&server.uri())
-        // Sub-second grace turns the 30s production wait into ~1s test wait
-        // (one poll cycle covers the first-sighting warning AND the second
-        // poll where the grace expiry check fires).
+        // Zero-second grace (the env var parses as whole seconds via u64)
+        // turns the 30s production wait into ~1s test wait: the first poll
+        // emits the first-sighting warning and seeds the unknown-state
+        // tracker; after the ~1s exponential-backoff sleep the second poll
+        // sees the same unknown status, and `now - first_seen >= 0s` fires
+        // the escalation Err immediately.
         .env("JR_BULK_UNKNOWN_GRACE_SECS", "0")
         .arg("--no-input")
         .arg("issue")
