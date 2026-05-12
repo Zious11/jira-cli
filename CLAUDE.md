@@ -69,7 +69,7 @@ src/
 ├── lib.rs               # Crate root (re-exports for integration tests)
 ├── jql.rs               # JQL utilities: escaping, validation, asset clause builder
 ├── partial_match.rs     # Case-insensitive substring matching with disambiguation
-└── error.rs             # JrError enum with exit codes (0/1/2/64/78/130)
+└── error.rs             # JrError enum with exit codes (0/1/2/64/78/124/130)
 ```
 
 Product-namespaced `api/jira/` and `types/jira/` so future Confluence/JSM/Assets support adds sibling directories.

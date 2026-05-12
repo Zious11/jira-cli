@@ -394,12 +394,27 @@ impl JiraClient {
 
         loop {
             // Check timeout before each poll attempt.
+            //
+            // S-333 C-1 (F5 pass-03): this OUTER deadline-exceeded site MUST
+            // surface as JrError::DeadlineExceeded (exit code 124, POSIX
+            // timeout convention) — same variant + exit code as the INNER
+            // sites in src/api/client.rs::send_inner. Otherwise the outer-
+            // loop case (most common: bulk task stuck in RUNNING / ENQUEUED
+            // until the deadline) exits 1 while the inner cases exit 124,
+            // breaking scripts that key on exit 124 for "my deadline expired".
+            // Message includes a `[deadline:bulk-outer]` site tag for operator
+            // forensics (research-validation pass-04 Q1: prefer site tags in
+            // the message string over schema-extending the variant).
             if Instant::now() >= deadline {
-                return Err(anyhow::anyhow!(
-                    "Bulk task {task_id} did not complete within {}s timeout. \
-                     Check Jira for task status.",
-                    timeout.as_secs()
-                ));
+                return Err(crate::error::JrError::DeadlineExceeded {
+                    remaining_ms: 0,
+                    message: format!(
+                        "[deadline:bulk-outer] Bulk task {task_id} did not \
+                         complete within {}s timeout. Check Jira for task status.",
+                        timeout.as_secs()
+                    ),
+                }
+                .into());
             }
 
             // S-333: route polls through `poll_bulk_task_with_deadline` so that

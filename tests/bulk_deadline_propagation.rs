@@ -242,26 +242,28 @@ async fn test_333_bulk_429_storm_respects_deadline_within_grace() {
         String::from_utf8_lossy(&output.stdout),
     );
 
-    // Secondary assertion: command must exit non-zero.
-    assert!(
-        !output.status.success(),
-        "AC-001 VIOLATION: expected non-zero exit on deadline-exhausted 429 storm. \
-         stderr:\n{}\nstdout:\n{}",
+    // Secondary assertion: command must exit with code 124 (POSIX timeout
+    // convention; JrError::DeadlineExceeded). C-3 (F5 pass-03): WITHOUT this
+    // exit-code pin a regression from JrError::DeadlineExceeded back to
+    // JrError::ApiError(429) (exit 1) would still pass the loose
+    // `!output.status.success()` check.
+    assert_eq!(
+        output.status.code(),
+        Some(124),
+        "AC-001 VIOLATION: expected exit code 124 (JrError::DeadlineExceeded, \
+         POSIX timeout convention). Got code={:?}. stderr:\n{}\nstdout:\n{}",
+        output.status.code(),
         String::from_utf8_lossy(&output.stderr),
         String::from_utf8_lossy(&output.stdout),
     );
 
-    // Tertiary assertion: stderr contains "deadline" (the new DeadlineExceeded
-    // variant produces the substring) OR the task id (the existing top-of-loop
-    // timeout check) OR "timeout". Any of these confirms the deadline was
-    // respected at the user-visible layer.
+    // Tertiary assertion: stderr contains "deadline" (the DeadlineExceeded
+    // variant Display produces "Deadline exceeded:" + message with site tag).
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.to_lowercase().contains("deadline")
-            || stderr.contains(task_id)
-            || stderr.to_lowercase().contains("timeout"),
-        "AC-001 VIOLATION: expected stderr to mention 'deadline', the task id, \
-         or 'timeout'. Got stderr:\n{stderr}",
+        stderr.to_lowercase().contains("deadline"),
+        "AC-001 VIOLATION: expected stderr to contain 'deadline'. \
+         Got stderr:\n{stderr}",
     );
 }
 
@@ -360,10 +362,24 @@ async fn test_333_b1_bulk_running_storm_respects_deadline_via_outer_clamp() {
         String::from_utf8_lossy(&output.stderr),
     );
 
-    assert!(
-        !output.status.success(),
-        "B-1 VIOLATION: expected non-zero exit on deadline-exhausted RUNNING storm. \
-         stderr:\n{}",
+    // C-3 (F5 pass-03) — the outer-loop deadline-exceeded site now also
+    // returns JrError::DeadlineExceeded (exit 124), matching the inner sites.
+    // A regression that reverted bulk.rs:397 back to `anyhow::anyhow!` would
+    // exit 1 and break the same-cause-same-exit-code contract.
+    assert_eq!(
+        output.status.code(),
+        Some(124),
+        "B-1 VIOLATION: expected exit code 124 (JrError::DeadlineExceeded) \
+         from the outer-loop deadline-exceeded site at bulk.rs:397. \
+         Got code={:?}. stderr:\n{}",
+        output.status.code(),
         String::from_utf8_lossy(&output.stderr),
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.to_lowercase().contains("deadline"),
+        "B-1 VIOLATION: expected stderr to contain 'deadline'. \
+         Got stderr:\n{stderr}",
     );
 }

@@ -331,9 +331,14 @@ enum ClampResult {
     /// Caller should sleep for this duration before retrying.
     Sleep(Duration),
     /// Deadline expired (or within 1ms of expiring) — caller MUST return
-    /// `JrError::ApiError { status: 429, message: "...deadline..." }`. The
-    /// remaining-millisecond figure is included in the error message so
-    /// operators can correlate the failure against their `--timeout` budget.
+    /// `JrError::DeadlineExceeded { remaining_ms, message }` (exit code 124,
+    /// POSIX `timeout(1)` convention). The remaining-millisecond figure is
+    /// included in the error message so operators can correlate the failure
+    /// against their `--timeout` budget.
+    ///
+    /// (Pre-F5-pass-02 history: this used to map to `JrError::ApiError{status:429,
+    /// ...}`. The reversal is documented in
+    /// `.factory/code-delivery/issue-333/research-validation-pass-03.md` Q2.)
     Expired { remaining_ms: u64 },
 }
 
@@ -385,17 +390,25 @@ impl JiraClient {
     /// Returns `Err(JrError::DeadlineExceeded { remaining_ms, message })`
     /// (exit code 124, POSIX `timeout(1)` convention) in two cases:
     ///
-    ///   1. **At function entry** — if `Instant::now() >= deadline`, the
-    ///      request is NOT issued. Message:
-    ///      `"Caller-supplied deadline already expired at send entry ..."`.
+    ///   1. **At function entry** — if the remaining budget
+    ///      `deadline.saturating_duration_since(Instant::now()) < 1ms`
+    ///      (i.e., the deadline has already passed OR is within the tokio
+    ///      timer-wheel 1ms floor of passing), the request is NOT issued.
+    ///      Message has the `[deadline:send-entry]` site tag.
     ///
     ///   2. **During 429 retry** — if a 429 fires and the remaining budget
     ///      `deadline.saturating_duration_since(Instant::now()) < 1ms`, the
-    ///      retry loop short-circuits. Message:
-    ///      `"Caller-supplied deadline exceeded during 429 retry ..."`.
-    ///      (Q3 research-validation: `tokio::time::sleep(Duration < 1ms)`
-    ///      is a no-op that does NOT yield, so the 1ms threshold prevents
-    ///      a spin-loop in the sub-millisecond edge case.)
+    ///      retry loop short-circuits. Message has the `[deadline:429-retry]`
+    ///      site tag. (Q3 research-validation: `tokio::time::sleep(Duration
+    ///      < 1ms)` is a no-op that does NOT yield, so the 1ms threshold
+    ///      prevents a spin-loop in the sub-millisecond edge case.)
+    ///
+    /// A third site exists OUTSIDE `send_inner` in
+    /// `src/api/jira/bulk.rs::await_bulk_task_inner` — the polling-loop
+    /// top-of-loop check — which surfaces as
+    /// `JrError::DeadlineExceeded` with the `[deadline:bulk-outer]` tag.
+    /// All three sites share exit code 124 so scripting consumers can
+    /// detect "caller deadline expired" uniformly.
     ///
     /// In both cases scripts can grep stderr for the substring `"deadline"`
     /// or pattern-match on exit code 124 to detect the timeout (distinct
@@ -476,9 +489,9 @@ impl JiraClient {
                 return Err(JrError::DeadlineExceeded {
                     remaining_ms,
                     message: format!(
-                        "Caller-supplied deadline already expired at send entry \
-                         (remaining budget {remaining_ms}ms). The request was \
-                         not issued. Rerun with a larger timeout."
+                        "[deadline:send-entry] Caller-supplied deadline already \
+                         expired at send entry (remaining budget {remaining_ms}ms). \
+                         The request was not issued. Rerun with a larger timeout."
                     ),
                 }
                 .into());
@@ -552,15 +565,50 @@ impl JiraClient {
                     let rate_info = RateLimitInfo::from_headers(response.headers());
                     let delay = rate_info.retry_after_secs.unwrap_or(DEFAULT_RETRY_SECS);
 
+                    // S-333 C-2 (F5 pass-03): deadline-clamp fires BEFORE the cap-abort.
+                    //
+                    // Earlier pass-01 NIT-2 noted "user-impact is equivalent" between the
+                    // cap-abort and the deadline-clamp — that was true when both returned
+                    // JrError::ApiError(429) with exit code 1. Pass-02 introduced
+                    // JrError::DeadlineExceeded (exit code 124, POSIX timeout convention),
+                    // so the variants AND exit codes now diverge: cap → 1, deadline → 124.
+                    //
+                    // Industry precedent (research-validation pass-04 Q2): aws-smithy-rs,
+                    // tokio::time::timeout, kubectl client-go, and RFC 9110 §10.2.3 all
+                    // treat the client-side deadline as a hard contract that supersedes a
+                    // server-advisory Retry-After. Reordering ensures a 429 with
+                    // Retry-After > 60s AND an expired caller-supplied deadline surfaces
+                    // as DeadlineExceeded (exit 124), not as the cap message (exit 1).
+                    //
+                    // The cap-abort still applies when no deadline is set OR when the
+                    // deadline remains positive — that case retains the historical
+                    // BC-X.4.009 behavior unchanged.
+                    let base_sleep = Duration::from_secs(delay);
+                    let actual_sleep = match clamp_retry_sleep(base_sleep, deadline) {
+                        ClampResult::Sleep(d) => d,
+                        ClampResult::Expired { remaining_ms } => {
+                            return Err(JrError::DeadlineExceeded {
+                                remaining_ms,
+                                message: format!(
+                                    "[deadline:429-retry] Caller-supplied deadline \
+                                     exceeded during 429 retry (Retry-After {delay}s, \
+                                     remaining budget {remaining_ms}ms before clamp). \
+                                     Atlassian rate-limit pressure consumed the caller-\
+                                     supplied timeout. Rerun with a larger timeout, or \
+                                     wait for rate-limit pressure to subside."
+                                ),
+                            }
+                            .into());
+                        }
+                    };
+
                     // BC-X.4.009: abort retry if Retry-After exceeds the interactive-CLI cap.
                     // Atlassian's typical values (1425-3089s) far exceed what is acceptable
                     // for a foreground CLI. RFC 9110 §10.2.3 permits client-side abort.
                     //
-                    // Precedence note (S-333 NIT-2): this cap-exceeded abort fires BEFORE
-                    // the S-333 deadline clamp below. A 429 with Retry-After > 60s AND an
-                    // expired caller-supplied deadline will surface the cap message, not
-                    // the deadline message. Both are correct abort signals; the differing
-                    // messages are not orthogonal but the user-impact is equivalent.
+                    // Note (S-333 C-2): this check now fires AFTER the deadline-clamp above.
+                    // If both fire on the same response, deadline-clamp wins (exit 124, the
+                    // higher-priority signal per industry precedent).
                     if delay > MAX_RETRY_AFTER_SECS {
                         eprintln!(
                             "[jr] Atlassian requested {}s wait — exceeds {}s cap for interactive CLI.\n\
@@ -576,29 +624,6 @@ impl JiraClient {
                         }
                         .into());
                     }
-
-                    // S-333: clamp the 429 sleep to the caller's remaining deadline.
-                    // Message wording is intentionally generic ("caller-supplied deadline")
-                    // rather than bulk-specific — `send_inner` is a generic HTTP helper
-                    // and future non-bulk callers of `send_bounded` (e.g., hypothetical
-                    // `await_search_export`) should surface the same error shape.
-                    let base_sleep = Duration::from_secs(delay);
-                    let actual_sleep = match clamp_retry_sleep(base_sleep, deadline) {
-                        ClampResult::Sleep(d) => d,
-                        ClampResult::Expired { remaining_ms } => {
-                            return Err(JrError::DeadlineExceeded {
-                                remaining_ms,
-                                message: format!(
-                                    "Caller-supplied deadline exceeded during 429 retry \
-                                     (Retry-After {delay}s, remaining budget {remaining_ms}ms \
-                                     before clamp). Atlassian rate-limit pressure consumed \
-                                     the caller-supplied timeout. Rerun with a larger \
-                                     timeout, or wait for rate-limit pressure to subside."
-                                ),
-                            }
-                            .into());
-                        }
-                    };
 
                     // AC-003: structured tracing event replaces eprintln! for rate-limit logging.
                     debug!(
