@@ -1086,6 +1086,7 @@ fn is_subtask_parent_error(err: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use crate::error::JrError;
+    use std::collections::HashSet;
 
     #[test]
     fn missing_project_returns_user_error() {
@@ -1101,5 +1102,259 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.exit_code(), 64);
         assert!(err.to_string().contains("Project key is required"));
+    }
+
+    /// Categorization meta-test for `IssueCommand::Edit` fields (issue #343).
+    ///
+    /// # Why this test exists
+    ///
+    /// The C-1 fix in issue #110 part 2 added a hand-rolled rejection list at
+    /// `handle_edit` (`if effective_keys.len() > 1 { ... }`) that returns an
+    /// error when multi-key bulk edit is invoked with flags that only the
+    /// single-key path implements. The original silent-drop bug was: a user
+    /// passes `--parent X` with multiple keys, the flag is silently ignored,
+    /// no error fires, and the user thinks the edit succeeded.
+    ///
+    /// The C-1 list is hand-rolled and depends on the developer remembering
+    /// to update it whenever they add a new field to `IssueCommand::Edit`. If
+    /// they don't, the silent-drop bug returns. This test catches that drift
+    /// at compile-and-test time.
+    ///
+    /// # Strategy
+    ///
+    /// Source-text inspection: read `src/cli/mod.rs` at compile time via
+    /// `include_str!`, locate the `IssueCommand::Edit {` block, and extract
+    /// every field name declared inside it. Compare the extracted set against
+    /// three hand-maintained categorization sets:
+    ///
+    /// - **SELECTORS** — flags that select which issues to edit, not what
+    ///   to change: `keys`, `jql`, `max`, `yes`, `dry_run`.
+    /// - **BULK_SUPPORTED** — field flags that work on multi-key bulk path:
+    ///   `summary`, `issue_type`, `priority`, `label`.
+    /// - **REJECTED_IN_BULK** — field flags that only work on single-key
+    ///   path; multi-key invocation must error: `parent`, `no_parent`,
+    ///   `team`, `points`, `no_points`, `description`, `description_stdin`,
+    ///   `markdown`.
+    ///
+    /// The test asserts:
+    /// 1. The union of the three sets equals the extracted field set.
+    /// 2. The three sets are pairwise disjoint (no field in two categories).
+    /// 3. Every category contains at least one field (sanity check).
+    ///
+    /// # Failure modes this catches
+    ///
+    /// - A new flag is added to `Edit` but not categorized: union mismatch.
+    /// - A flag is moved between categories without updating both lists:
+    ///   intersection violation OR union mismatch.
+    /// - A flag is renamed in `Edit` but not in the routing code: extracted
+    ///   set differs from category sets.
+    ///
+    /// # Maintenance protocol
+    ///
+    /// When a future PR adds a flag to `IssueCommand::Edit`:
+    /// 1. This test fails with a diff between expected and actual sets.
+    /// 2. The PR author decides which category the new flag belongs in:
+    ///    - Selector? Add to `SELECTORS` here.
+    ///    - Bulk-safe field? Add to `BULK_SUPPORTED` AND wire the bulk path
+    ///      in `handle_edit_bulk_fields` (or similar) to honor it.
+    ///    - Single-key-only field? Add to `REJECTED_IN_BULK` AND extend the
+    ///      C-1 rejection block in `handle_edit` to surface a clear error.
+    /// 3. The test passes only when both the test list and the routing code
+    ///    agree on the new flag's category.
+    ///
+    /// Closes audit-followup #343.
+    #[test]
+    fn test_343_every_edit_field_is_categorized() {
+        let cli_source = include_str!("../mod.rs");
+
+        let edit_fields = extract_edit_field_names(cli_source);
+
+        // SELECTORS — flags that pick which issues to edit, not what changes.
+        let selectors: HashSet<&str> = [
+            "keys",    // positional issue keys (single or multi-key)
+            "jql",     // JQL match set for bulk edit
+            "max",     // upper bound on JQL match count
+            "yes",     // skip interactive confirmation for large match sets
+            "dry_run", // preview only, no HTTP mutations
+        ]
+        .into_iter()
+        .collect();
+
+        // BULK_SUPPORTED — field flags that work in multi-key bulk context.
+        // These must be honored by both the single-key path AND the bulk path
+        // (handle_edit_bulk_fields / handle_edit_bulk_labels).
+        let bulk_supported: HashSet<&str> = [
+            "summary",    // text summary update
+            "issue_type", // issue type change (clap flag: --type)
+            "priority",   // priority change
+            "label",      // add/remove labels via labels coalesce
+        ]
+        .into_iter()
+        .collect();
+
+        // REJECTED_IN_BULK — field flags that ONLY the single-key path implements.
+        // Multi-key invocation with any of these MUST return an error from the
+        // C-1 rejection block in handle_edit (see lines ~426-465 of this file).
+        // Adding to this set without extending the rejection block reintroduces
+        // the silent-drop bug C-1 was meant to fix.
+        let rejected_in_bulk: HashSet<&str> = [
+            "parent",
+            "no_parent",
+            "team",
+            "points",
+            "no_points",
+            "description",
+            "description_stdin",
+            "markdown",
+        ]
+        .into_iter()
+        .collect();
+
+        // --- ASSERTIONS ---
+
+        // 1. Each category has at least one field (sanity check; protects
+        //    against an empty hardcoded list slipping through unnoticed).
+        assert!(!selectors.is_empty(), "SELECTORS must not be empty");
+        assert!(
+            !bulk_supported.is_empty(),
+            "BULK_SUPPORTED must not be empty"
+        );
+        assert!(
+            !rejected_in_bulk.is_empty(),
+            "REJECTED_IN_BULK must not be empty"
+        );
+
+        // 2. Pairwise disjoint — no field categorized in more than one set.
+        let s_b: HashSet<&&str> = selectors.intersection(&bulk_supported).collect();
+        assert!(
+            s_b.is_empty(),
+            "SELECTORS and BULK_SUPPORTED overlap: {s_b:?} — every field belongs to exactly one category"
+        );
+        let s_r: HashSet<&&str> = selectors.intersection(&rejected_in_bulk).collect();
+        assert!(
+            s_r.is_empty(),
+            "SELECTORS and REJECTED_IN_BULK overlap: {s_r:?} — every field belongs to exactly one category"
+        );
+        let b_r: HashSet<&&str> = bulk_supported.intersection(&rejected_in_bulk).collect();
+        assert!(
+            b_r.is_empty(),
+            "BULK_SUPPORTED and REJECTED_IN_BULK overlap: {b_r:?} — every field belongs to exactly one category"
+        );
+
+        // 3. Union equals the extracted set — every Edit field is categorized
+        //    AND no category lists a field that doesn't exist in Edit.
+        let categorized: HashSet<String> = selectors
+            .iter()
+            .chain(bulk_supported.iter())
+            .chain(rejected_in_bulk.iter())
+            .map(|s| (*s).to_string())
+            .collect();
+
+        let missing_from_categories: Vec<&String> = edit_fields
+            .iter()
+            .filter(|f| !categorized.contains(*f))
+            .collect();
+        let missing_from_edit: Vec<&String> = categorized
+            .iter()
+            .filter(|c| !edit_fields.contains(*c))
+            .collect();
+
+        assert!(
+            missing_from_categories.is_empty(),
+            "Issue #343 VIOLATION: `IssueCommand::Edit` fields not categorized: {missing_from_categories:?}.\n\
+             A new flag was added to src/cli/mod.rs::IssueCommand::Edit without being placed in one of\n\
+             SELECTORS, BULK_SUPPORTED, or REJECTED_IN_BULK in this test.\n\
+             Decide which category applies and update both this test AND the matching routing code\n\
+             in handle_edit (see the maintenance protocol in this test's doc comment).\n\
+             Extracted Edit fields: {edit_fields:?}\n\
+             Currently categorized: {categorized:?}"
+        );
+        assert!(
+            missing_from_edit.is_empty(),
+            "Issue #343 VIOLATION: category sets reference fields that no longer exist on `IssueCommand::Edit`: {missing_from_edit:?}.\n\
+             A field was renamed or removed in src/cli/mod.rs without updating this test.\n\
+             Extracted Edit fields: {edit_fields:?}\n\
+             Currently categorized: {categorized:?}"
+        );
+    }
+
+    /// Helper: extract all field names declared inside the `IssueCommand::Edit {`
+    /// variant in `src/cli/mod.rs`. Operates on the source text so it does not
+    /// require any compile-time reflection or third-party derive macro.
+    ///
+    /// Strategy:
+    /// 1. Locate the `Edit {` line.
+    /// 2. Walk forward until the matching closing brace (`},` at the same
+    ///    indent level as the opening `Edit {`).
+    /// 3. Inside that range, treat any line of the form
+    ///    `        <name>: <type>,` (8-space indent matches clap variant fields)
+    ///    as a field declaration. Skip lines that start with `#[` (attributes)
+    ///    or `///` (doc comments).
+    ///
+    /// Returns the extracted field names as an alphabetically-stable
+    /// `HashSet<String>`.
+    fn extract_edit_field_names(source: &str) -> HashSet<String> {
+        let lines: Vec<&str> = source.lines().collect();
+
+        let edit_start = lines
+            .iter()
+            .position(|l| l.trim_start().starts_with("Edit {"))
+            .expect(
+                "Could not locate `Edit {` in src/cli/mod.rs — has the variant been renamed?\n\
+                 Update the extractor to match the new variant name.",
+            );
+
+        // The opening line is `    Edit {` (4-space indent for a clap subcommand
+        // variant). The closing line is `    },` at the same indent. Find it by
+        // matching `},` with the SAME leading indent as the opening line.
+        let opening_indent_width = lines[edit_start].len() - lines[edit_start].trim_start().len();
+        let closing_indent: String = " ".repeat(opening_indent_width);
+        let expected_closing = format!("{closing_indent}}},");
+
+        let edit_end = lines
+            .iter()
+            .enumerate()
+            .skip(edit_start + 1)
+            .find(|(_, l)| **l == expected_closing)
+            .map(|(i, _)| i)
+            .expect(
+                "Could not locate matching `}},` for `Edit {{` block in src/cli/mod.rs.\n\
+                 The variant's closing brace may have been reformatted; update the extractor.",
+            );
+
+        let mut fields = HashSet::new();
+
+        for line in &lines[edit_start + 1..edit_end] {
+            let trimmed = line.trim_start();
+            // Skip attributes, doc comments, blank lines, and inline comments.
+            if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with("#[") {
+                continue;
+            }
+            // Match patterns like `name: Type,` or `name: Type<...>,`.
+            // A field declaration line starts with an identifier followed by `:`.
+            // We extract everything up to the first `:` and validate it as an
+            // identifier.
+            if let Some((ident, _rest)) = trimmed.split_once(':') {
+                let ident = ident.trim();
+                let is_valid_ident = !ident.is_empty()
+                    && ident
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c == '_' || c.is_ascii_alphabetic())
+                    && ident.chars().all(|c| c == '_' || c.is_ascii_alphanumeric());
+                if is_valid_ident {
+                    fields.insert(ident.to_string());
+                }
+            }
+        }
+
+        assert!(
+            !fields.is_empty(),
+            "Field extraction returned an empty set for `IssueCommand::Edit` — \
+             the extractor regex/parser likely no longer matches the variant's \
+             formatting. Update extract_edit_field_names() to match the current source."
+        );
+
+        fields
     }
 }
