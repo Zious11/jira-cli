@@ -1278,6 +1278,58 @@ mod tests {
         );
     }
 
+    // R2 pins for the formatting-tolerant closing-brace matcher
+    // (extract_edit_field_names). These feed synthetic source text through the
+    // extractor and confirm it copes with rustfmt-produced variants of the
+    // closing `}` line.
+
+    #[test]
+    fn test_343_extractor_tolerates_no_trailing_comma() {
+        // If `Edit` is the LAST variant in the enum, rustfmt may emit `}`
+        // with no trailing comma. The matcher must still find it.
+        let synthetic = "\
+pub enum IssueCommand {
+    Edit {
+        keys: Vec<String>,
+        summary: Option<String>,
+    }
+}
+";
+        let fields = extract_edit_field_names(synthetic);
+        assert_eq!(
+            fields,
+            BTreeSet::from(["keys".to_string(), "summary".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_343_extractor_tolerates_trailing_comment_on_closing() {
+        // `},  // last variant` should still match.
+        let synthetic = "\
+pub enum IssueCommand {
+    Edit {
+        keys: Vec<String>,
+        jql: Option<String>,
+    },  // closing comment
+}
+";
+        let fields = extract_edit_field_names(synthetic);
+        assert_eq!(
+            fields,
+            BTreeSet::from(["keys".to_string(), "jql".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_343_extractor_tolerates_trailing_whitespace_on_closing() {
+        // `},   ` (closing with stray trailing spaces) — rustfmt usually strips
+        // these but some editors may produce them; matcher must still cope.
+        let synthetic =
+            "pub enum IssueCommand {\n    Edit {\n        keys: Vec<String>,\n    },   \n}\n";
+        let fields = extract_edit_field_names(synthetic);
+        assert_eq!(fields, BTreeSet::from(["keys".to_string()]));
+    }
+
     /// Helper: extract all field names declared inside the `IssueCommand::Edit {`
     /// variant in `src/cli/mod.rs`. Operates on the source text so it does not
     /// require any compile-time reflection or third-party derive macro.
@@ -1308,21 +1360,59 @@ mod tests {
             );
 
         // The opening line is `    Edit {` (4-space indent for a clap subcommand
-        // variant). The closing line is `    },` at the same indent. Find it by
-        // matching `},` with the SAME leading indent as the opening line.
+        // variant). The closing line begins with `}` at the SAME indent as the
+        // opening line. Match tolerantly so the meta-test fails only on
+        // semantic drift (the variant being renamed/removed/restructured), not
+        // on benign rustfmt-produced formatting changes such as:
+        //   - `}` followed by `,` and a comment: `    }, // comment`
+        //   - last-variant `}` with no trailing comma (Rust allows this when
+        //     `Edit` is the final variant in the enum)
+        //   - trailing whitespace after the brace/comma
+        //
+        // Logic:
+        //   1. Line must start with exactly `opening_indent_width` spaces
+        //      followed by `}`. This pins the indent and excludes nested
+        //      field-internal braces (clap variant fields use 8-space indent).
+        //   2. After the `}`, only allow: end-of-line, `,`, whitespace, or a
+        //      line-comment (`//...`). Anything else means we hit a different
+        //      construct and must keep scanning.
         let opening_indent_width = lines[edit_start].len() - lines[edit_start].trim_start().len();
         let closing_indent: String = " ".repeat(opening_indent_width);
-        let expected_closing = format!("{closing_indent}}},");
+
+        let is_matching_closing_brace = |line: &str| -> bool {
+            // 1. Same indent prefix?
+            if !line.starts_with(&closing_indent) {
+                return false;
+            }
+            let rest = &line[closing_indent.len()..];
+            // 2. First non-indent char must be `}` (and not `}}`-double, which
+            //    would indicate a nested-block closer at the wrong level).
+            let Some(after_brace) = rest.strip_prefix('}') else {
+                return false;
+            };
+            // Reject deeper indents: if after the indent there are MORE spaces,
+            // this `}` is at a deeper level than `Edit`'s opener.
+            if rest.starts_with(' ') {
+                return false;
+            }
+            // 3. After `}`, accept `,` optionally, then whitespace/comment/EOL.
+            let after_optional_comma = after_brace.strip_prefix(',').unwrap_or(after_brace);
+            let trailing = after_optional_comma.trim_start();
+            trailing.is_empty() || trailing.starts_with("//")
+        };
 
         let edit_end = lines
             .iter()
             .enumerate()
             .skip(edit_start + 1)
-            .find(|(_, l)| **l == expected_closing)
+            .find(|(_, l)| is_matching_closing_brace(l))
             .map(|(i, _)| i)
             .expect(
-                "Could not locate matching `}},` for `Edit {{` block in src/cli/mod.rs.\n\
-                 The variant's closing brace may have been reformatted; update the extractor.",
+                "Could not locate matching closing brace for `Edit {{` block in src/cli/mod.rs.\n\
+                 Expected a line starting with the same indent as `Edit {{`, containing `}}` \
+                 optionally followed by `,` and optional whitespace/comment.\n\
+                 The variant may have been renamed, removed, or significantly restructured \
+                 — update the extractor to match the new shape.",
             );
 
         let mut fields = BTreeSet::new();
