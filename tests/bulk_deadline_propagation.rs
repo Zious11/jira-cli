@@ -25,8 +25,11 @@
 //!
 //! The clamp must produce a NON-ZERO `actual_sleep` for the first 429 (to
 //! exercise the clamp path). With `Retry-After: 60` and a 30s deadline, the
-//! first sleep is `min(60, 30) = 30s`. After that sleep, `remaining = 0` and
-//! the clamp returns `Err`. Total wall-clock: ~30s.
+//! first sleep is `min(60, ~30) = ~30s` (slightly less than 30s in practice
+//! because the in-flight poll RTT and submit-request RTT have already
+//! consumed a few milliseconds from the deadline by the time the clamp
+//! computes `remaining`). After that sleep, `remaining < 1ms` and the clamp
+//! returns `Expired`. Total wall-clock: ~30s.
 //!
 //! A shorter deadline (e.g., 5s) would also work but would not exercise the
 //! "first sleep is clamped from 60s down to N seconds" code path as clearly.
@@ -57,6 +60,15 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 /// CI variance and the in-flight poll RTT that exists in addition to the
 /// declared deadline.
 const WALL_CLOCK_BUDGET_SECS: u64 = 40;
+
+/// Positive lower bound — closes the false-positive risk that the adversary
+/// flagged (CONCERN-3 pass-01): if `deadline` were ever computed in the past
+/// by a regression, the top-of-loop check fires immediately, the test passes
+/// in <1s, and the clamp is NOT exercised. A 25s floor confirms the clamp
+/// engaged on AT LEAST the first 429 with a non-trivial sleep (the first
+/// `min(60, ~30) = ~30s` sleep), without being so tight that legitimate
+/// in-flight RTT shaves the elapsed below the floor.
+const WALL_CLOCK_FLOOR_SECS: u64 = 25;
 
 /// Pre-fix runtime worst case (3 retries × 60s sleep = 180s of overshoot
 /// inside `send`, plus the 30s deadline = ~210s). If the test ever runs this
@@ -206,6 +218,26 @@ async fn test_333_bulk_429_storm_respects_deadline_within_grace() {
         elapsed.as_secs(),
         WALL_CLOCK_BUDGET_SECS,
         PRE_FIX_LOWER_BOUND_SECS,
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout),
+    );
+
+    // Lower-bound assertion (CONCERN-3 pass-01): elapsed must be NEAR the
+    // 30s deadline, not <1s. If the clamp short-circuits to Err on entry
+    // (e.g., due to a deadline-computed-in-the-past regression), the test
+    // would otherwise pass in <1s with the clamp un-exercised — false-
+    // positive. Floor confirms the clamp engaged on at least the first 429.
+    assert!(
+        elapsed.as_secs() >= WALL_CLOCK_FLOOR_SECS,
+        "AC-001 VIOLATION: bulk poll exited too quickly ({}s, expected ≥ {}s). \
+         The clamp should engage on the FIRST 429 with a min(60, ~30) = ~30s \
+         sleep before returning Err. Sub-{}s elapsed indicates the deadline \
+         short-circuited to Err on function entry instead of after a real \
+         clamped sleep — the headline scenario was NOT exercised. \
+         stderr:\n{}\nstdout:\n{}",
+        elapsed.as_secs(),
+        WALL_CLOCK_FLOOR_SECS,
+        WALL_CLOCK_FLOOR_SECS,
         String::from_utf8_lossy(&output.stderr),
         String::from_utf8_lossy(&output.stdout),
     );
