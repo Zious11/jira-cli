@@ -378,7 +378,9 @@ fn test_extract_error_message_sanitizes_null_byte_in_errors_object_value() {
 #[test]
 fn test_extract_error_message_preserves_utf8_in_sanitized_path() {
     // Localized error messages (non-English Jira tenants) must survive the
-    // sanitization layer intact — only ASCII control bytes are escaped.
+    // sanitization layer intact — only control characters (ASCII C0/DEL and
+    // Unicode C1) are escaped; printable Unicode (CJK, Latin extended, etc.)
+    // passes through unchanged.
     let body = r#"{"errorMessages":["問題が見つかりません"]}"#;
     let result = extract_error_message(body.as_bytes());
     assert_eq!(result, "問題が見つかりません");

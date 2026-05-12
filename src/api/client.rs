@@ -1062,15 +1062,19 @@ fn serialize_value_bounded(v: &serde_json::Value, limit: usize) -> String {
 /// Strategy:
 /// - Pass through every printable character (including UTF-8 to preserve
 ///   localized error messages from non-English Jira tenants).
-/// - Replace every ASCII control character (0x00-0x1F + 0x7F) with its
-///   `\xNN` literal escape so the operator can see what was sent but the
-///   terminal cannot interpret it.
+/// - Replace every Unicode control character (per `char::is_control()`) with
+///   a visible escape so the operator can see what was sent but the terminal
+///   cannot interpret it:
+///   - ASCII controls (C0 = 0x00-0x1F, plus DEL = 0x7F) → `\xNN` (4 bytes)
+///   - C1 controls (U+0080..U+009F, including CSI U+009B and NEL U+0085) →
+///     `\u{NNNN}` (8 bytes); preserved as visible escapes for defense-in-depth
+///     against legacy/non-UTF8 terminals.
 /// - Enforce a `MAX_SANITIZED_OUTPUT_LEN` cap on the FINAL output bytes via
 ///   a byte-budget-aware char loop. Closes the gap where pre-sanitization
 ///   per-entry caps (via `cap_entry`) couldn't bound the post-sanitization
-///   output: 1024 control bytes expand to ~4096 bytes after `\xNN`
-///   escaping, so a per-entry pre-cap alone left the terminal vulnerable
-///   to floods.
+///   output: 1024 ASCII control bytes expand to ~4096 bytes after `\xNN`
+///   escaping (C1 controls have the same 4x expansion factor: 2 → 8 bytes),
+///   so a per-entry pre-cap alone left the terminal vulnerable to floods.
 ///
 /// More conservative than `str::escape_debug` (which also escapes non-ASCII
 /// as `\u{XXXX}` and would garble legitimate Unicode error text).
@@ -1125,12 +1129,16 @@ fn sanitize_for_stderr(input: String) -> String {
         //   (still 4x, preserving the 4 KiB cap's worst-case budget)
         // - Other chars: `c.len_utf8()` (1-4 bytes for any Unicode scalar)
         //
-        // C1 controls (U+0080..U+009F) are inert in modern UTF-8 terminals
-        // (rejected as invalid UTF-8 continuation bytes), so they are not
-        // a current vector — but legacy/embedded/non-UTF8 terminals could
-        // still interpret U+009B (CSI) and friends as control sequences.
-        // `char::is_control()` catches both C0 and C1 for comprehensive
-        // defense-in-depth.
+        // C1 controls (U+0080..U+009F) are valid Unicode codepoints with
+        // valid 2-byte UTF-8 encodings (e.g., U+009B = 0xC2 0x9B), but
+        // modern UTF-8 terminals generally do NOT act on them as control
+        // sequences — a single raw byte in 0x80-0x9F is treated as an
+        // invalid leading byte and dropped, and a properly-encoded
+        // codepoint is decoded but most terminals ignore the C1 semantics
+        // entirely in UTF-8 mode. Legacy/embedded/non-UTF8 terminals can
+        // still interpret U+009B (CSI) and friends as control sequences,
+        // so we escape them here for comprehensive defense-in-depth.
+        // `char::is_control()` catches both C0 and C1.
         let needed = if c.is_control() {
             if c.is_ascii() { 4 } else { 8 }
         } else {
