@@ -590,3 +590,105 @@ Zero regressions.
 |----|-------------|----------|
 | S-2.07-DEFER-01 | AC-003 (auth JSON error path) was already satisfied by main.rs's global --output json error wrapper before any S-2.07 code landed. Confirmed as already-working by the unexpected Green at Red Gate time. Documented in docs/specs/json-output-shapes.md. No action needed. | LOW |
 | S-2.07-DEFER-02 | src/cli/auth.rs::mod tests: Pre-existing refresh_payload_pins_token_shape and refresh_payload_pins_oauth_shape tests cover much of AC-002's ground. New tests test_refresh_success_payload_emits_status_refreshed_for_token_flow and _for_oauth_flow are intentionally additive (more specific assertions). No action; intentional overlap. | LOW |
+
+---
+
+# Red Gate Log — S-3.04 (Multi-cloudId Disambiguation)
+
+**Date:** 2026-05-09
+**Story:** S-3.04 — Multi-cloudId disambiguation: `--cloud-id` flag + interactive prompt + exit-64 on `--no-input`
+**Test file:** `tests/multi_cloudid_disambiguation.rs` (new, ~450 LOC)
+**Branch:** `feat/S-3.04-multi-cloudid-disambiguation`
+
+## Summary
+
+12 tests written. 11 FAIL (behavioral / structural Red Gate). 1 PASSES (regression pin for AC-004 callback URL). Red Gate verified.
+
+## Approach
+
+Process-spawn via `assert_cmd::Command` — no source file inspection, no direct function calls. Tests drive the `jr` binary with a wiremock harness that mocks the Atlassian `accessible-resources` endpoint.
+
+Two env-var overrides are required from the implementer (not yet present):
+- `JR_OAUTH_TOKEN_URL` — redirects `https://auth.atlassian.com/oauth/token` to wiremock
+- `JR_ACCESSIBLE_RESOURCES_URL` — redirects `https://api.atlassian.com/oauth/token/accessible-resources` to wiremock
+- `JR_OAUTH_CODE` — injects a pre-built auth code to skip the browser-open + TCP-listen step
+
+Until these env-var overrides are added by the implementer, tests that mock the accessible-resources endpoint fail because the real Atlassian servers are contacted (connection timeout → exit 255) or because the browser-open + TCP-accept hangs (timeout → exit 255).
+
+## Mock Harness
+
+Inline `mock_harness` module in the test file. Each test uses its own `MockServer::start().await` for parallel isolation. Fixtures:
+- `two_resources_b_first()` — cloud-B at index [0], cloud-A at index [1] (first-wins bug is detectable since tests ask for cloud-A)
+- `one_resource()` — single-org case for AC-003
+- `mount_token_exchange()` — mocks `POST /oauth/token`
+- `mount_accessible_resources()` — mocks `GET /oauth/token/accessible-resources`
+
+Keychain isolation: each test generates a unique `JR_SERVICE_NAME` via `unique_test_service_name()` (pid + thread-id hash + nanos). This prevents "item already exists" keychain errors when parallel tests all attempt to write BYO OAuth app credentials.
+
+## Test Results (pre-implementation)
+
+```
+running 12 tests
+test test_callback_url_contains_127_0_0_1_and_port_53682 ... ok
+test test_cloud_id_flag_recognized_in_help ... FAILED
+test test_cloud_id_flag_is_parsed_not_rejected_by_clap ... FAILED
+test test_cloud_id_flag_picks_named_resource_not_first ... FAILED
+test test_cloud_id_flag_value_not_in_response_exits_64 ... FAILED
+test test_cloud_id_flag_does_not_change_redirect_uri_in_authorize_url ... FAILED
+test test_cloud_id_help_text_mentions_disambiguation_or_multiple_orgs ... FAILED
+test test_no_input_multi_org_exits_64_with_actionable_error ... FAILED
+test test_no_input_multi_org_lists_available_cloud_ids_in_error ... FAILED
+test test_single_resource_no_regression_single_org_path ... FAILED
+test test_interactive_select_via_stdin_picks_second_resource ... FAILED
+test test_interactive_render_shows_name_url_and_id ... FAILED
+
+test result: FAILED. 1 passed; 11 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.01s
+```
+
+## Failure Analysis
+
+| Test | Failure Mode | AC |
+|------|-----------|----|
+| `test_cloud_id_flag_recognized_in_help` | Assertion error: `--cloud-id` absent from `jr auth login --help` output | AC-001 |
+| `test_cloud_id_help_text_mentions_disambiguation_or_multiple_orgs` | Assertion error: `--cloud-id` absent from help; substring check for "multiple/org/site/disambig" cannot run | AC-001 |
+| `test_cloud_id_flag_is_parsed_not_rejected_by_clap` | `assert_ne!(exit_code, 2)` fails: clap exits 2 with "unrecognized argument: '--cloud-id'" | AC-001 |
+| `test_cloud_id_flag_picks_named_resource_not_first` | `assert_eq!(exit_code, 0)` fails: clap exits 2 (--cloud-id unrecognized); never reaches accessible-resources | AC-001 |
+| `test_cloud_id_flag_value_not_in_response_exits_64` | `assert_eq!(exit_code, 64)` fails: clap exits 2 | AC-001 negative path |
+| `test_cloud_id_flag_does_not_change_redirect_uri_in_authorize_url` | `assert_ne!(exit_code, 2)` fails: clap exits 2 (--cloud-id unrecognized) | AC-004 |
+| `test_no_input_multi_org_exits_64_with_actionable_error` | `assert_eq!(exit_code, 64)` fails: process tries browser-open + TCP-accept, times out (exit 255); `JR_OAUTH_TOKEN_URL` not honored | AC-002 / AC-006 |
+| `test_no_input_multi_org_lists_available_cloud_ids_in_error` | Same: exit 255 (timeout). Error listing logic not yet implemented | AC-002 refinement |
+| `test_single_resource_no_regression_single_org_path` | `assert_eq!(exit_code, 0)` fails: process tries browser-open + TCP-accept, times out (exit 255); `JR_OAUTH_TOKEN_URL` / `JR_ACCESSIBLE_RESOURCES_URL` not honored | AC-003 |
+| `test_interactive_select_via_stdin_picks_second_resource` | `assert_eq!(exit_code, 0)` fails: process tries browser-open + TCP-accept, times out; interactive prompt does not yet exist | AC-005 |
+| `test_interactive_render_shows_name_url_and_id` | `assert_eq!(exit_code, 0)` fails: clap exits 2 (--cloud-id unrecognized) | AC-001 display refinement |
+
+## Passing Test Analysis
+
+| Test | Why it passes pre-fix | AC |
+|------|-----------------------|----|
+| `test_callback_url_contains_127_0_0_1_and_port_53682` | Checks absence of wrong port strings in help output; no wrong ports exist pre-fix. Correct regression pin — `--cloud-id` addition must not introduce wrong port strings. | AC-004 |
+
+## Implementation Checklist for Implementer
+
+To make all 11 failing tests pass:
+
+1. **Add `--cloud-id <id>` to `AuthCommand::Login`** in `src/cli/mod.rs`. Thread it through `LoginArgs` → `login_oauth`.
+2. **Add `JR_OAUTH_TOKEN_URL` env-var override** in `oauth_login` at `src/api/auth.rs` so `POST https://auth.atlassian.com/oauth/token` uses `JR_OAUTH_TOKEN_URL` when set.
+3. **Add `JR_ACCESSIBLE_RESOURCES_URL` env-var override** so `GET https://api.atlassian.com/oauth/token/accessible-resources` uses the override when set.
+4. **Add `JR_OAUTH_CODE` env-var override** to skip browser-open + TCP-listen in `oauth_login` (use the env var value as the auth code, bypass `listener.accept()`).
+5. **Replace `resources.first()`** at `src/api/auth.rs:681` with:
+   - `len == 0` → error (existing)
+   - `len == 1` → auto-select (no change)
+   - `len > 1, --cloud-id set` → find by id or exit 64 (ConfigError / UsageError)
+   - `len > 1, --no-input, no --cloud-id` → exit 64 with message containing "Multiple Atlassian orgs" and "--cloud-id"; list all available org names, urls, ids
+   - `len > 1, interactive, no --cloud-id` → dialoguer `Select` prompt; user picks via stdin
+6. **Confirm the callback URL remains `http://127.0.0.1:53682/callback`** for embedded builds (unchanged by the above).
+
+## AC-004 Special Note
+
+The `test_callback_url_contains_127_0_0_1_and_port_53682` test currently passes as a regression pin. After adding `--cloud-id`, the implementer must verify it still passes. The callback URL in `oauth_login` is determined by `RedirectUriStrategy::redirect_uri()` and is NOT affected by cloud-id selection (AC-004 invariant). Do not introduce any code path that changes the callback URL based on `--cloud-id`.
+
+## Deferred
+
+| ID | Description | Severity |
+|----|-------------|----------|
+| S-3.04-DEFER-01 | Scope-gap test (AC-005 edge case): accessible-resources returns non-empty array with scopes lacking `read:jira-work`. Story spec says error explaining scope gap. No test written — error message text not specified in AC, making an exact assertion impossible without over-specifying. Deferred to follow-up story or spec clarification. | LOW |

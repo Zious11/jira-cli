@@ -1,1 +1,1 @@
-{"status":"pass","timestamp":"2026-05-08T02:17:10Z","command":"cd /Users/zious/Documents/GITHUB/jira-cli/.worktrees/S-2.01-bc-2-issue-read-holdout-suite && cargo test --test '*' 2>&1 | grep \"^test result\" | awk '{sum += $4} END {print \"Integration test total:\", sum, \"passed\"}'"}
+{"status":"pass","timestamp":"2026-05-12T00:35:08Z","command":"cargo fmt --all 2>&1 | tail -3; cargo clippy --all-targets -- -D warnings 2>&1 | tail -5; echo \"---TESTS---\"; cargo test 2>&1 | grep -E \"FAILED|^test result.*failed\" | head -3"}

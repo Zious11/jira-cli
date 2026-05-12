@@ -2203,3 +2203,58 @@ Modern UTF-8 terminals silently drop C1 bytes as invalid continuation bytes (not
 | implementer | Switch `is_ascii_control()` to `char::is_control()`; branch on `c.is_ascii()` for `\xNN` vs `\u{NNNN}` format; fix fast-path scan to char-level; add 3 new unit tests | src/api/client.rs d4a07c8 |
 | orchestrator | Resolve thread PRRT_kwDORs-xfc6BQamK; post reply 3222921647; commit d4a07c8; push; verify CI 8/8 green | 29/29 threads resolved; CI green; R15 pending |
 | state-manager | Tenth consecutive in-cycle dispatch per Lesson 2 — discipline is consistent habit | STATE.md, burst-log.md, pr-356-copilot-progress.md updated |
+
+---
+
+## Burst (2026-05-12): PR #356 Copilot Round 15 — 2 doc-quality findings, fix commit 7f0177d
+
+**Agents dispatched:** orchestrator, implementer, state-manager
+**Files touched:** src/api/client.rs (comment-only: fast-path comment rewritten; all R-number annotations stripped)
+**Versions bumped:** (none)
+
+### Summary
+
+PR #356 Copilot Round 15 (review 4268312988 @ 2026-05-12T00:23:00Z) returned 2 inline findings.
+Both were documentation/annotation quality issues. No security or behavioral gaps identified;
+substantive defenses are unchanged since R14.
+
+**Finding C1 (comment 3222937344):** The fast-path comment in `sanitize_for_stderr` still
+described byte-level scanning (`bytes().any(...)`) even though R14 had switched the implementation
+to char-level `chars().any(|c| c.is_control())`. Rewritten to accurately describe the current
+char-level fast path and explain why byte-level scanning cannot be used: C1 control code points
+(U+0080..U+009F) are encoded as 2-byte UTF-8 sequences (0xC2 0x80..0x9F) that are
+indistinguishable from valid 2-byte UTF-8 continuation bytes at the byte level.
+
+**Finding C2 (comment 3222937368):** Stale internal "(R10 finding)" annotation on the
+`serialize_value_bounded` marker comment. This is the same annotation-hygiene class as R7
+(where R2/R3/R6 round annotations were cleaned from production comments and test files).
+Fix was broader than the single flagged instance: systematic strip of ALL R-number annotations
+across the file — "(R10 finding)", "(R11 finding)", "(R12 finding)", "(R9 finding)",
+"(R9 defense — see comment block above)", "R10 pin: ", "R14 anti-regression: ",
+"R10 degenerate case: ", "R12 pins — ", etc.
+
+**No new tests.** Both changes are comment-only; the 39 sanitize tests and 670 cargo test suite
+remain unchanged and green.
+
+**Threads resolved:** PRRT_kwDORs-xfc6BQhi- and PRRT_kwDORs-xfc6BQhjV (2 R15 threads).
+All 31 threads resolved (0 unresolved).
+**Replies posted:** 3222972524 and 3222972567.
+
+**Trajectory:** 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2 — R15 was 2 findings but both documentation
+cleanup. Substantive defenses have been converged since R14. Recent 5-round window: 1, 2, 1, 1, 2
+(averaging 1.4 findings/round), all in the defense-in-depth / documentation category.
+R16 is likely the Phase 8 stop condition (0-new-comment round).
+
+**Perplexity-validation per DEC-018:** Both findings are purely internal-consistency /
+annotation-accuracy questions with no external library or API behavior claims. No external
+Perplexity validation required per Lesson 1 wording ("at least one external-claim aspect").
+Skip is per-spec, not a rationalization.
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| orchestrator | Triage 2 Copilot R15 findings (comments 3222937344 + 3222937368 @ 00:23:00Z); both documentation-only; Perplexity not required (no external claims per Lesson 1) | Confirmed valid documentation gaps |
+| implementer | Rewrite fast-path comment in `sanitize_for_stderr` to describe char-level scan and explain C1 2-byte UTF-8 encoding constraint; systematically strip all R-number annotations from src/api/client.rs | src/api/client.rs 7f0177d |
+| orchestrator | Resolve threads PRRT_kwDORs-xfc6BQhi- + PRRT_kwDORs-xfc6BQhjV; post replies 3222972524 + 3222972567; commit 7f0177d; push; verify CI 8/8 green | 31/31 threads resolved; CI green; R16 pending |
+| state-manager | Eleventh consecutive in-cycle dispatch per Lesson 2 | STATE.md, burst-log.md, pr-356-copilot-progress.md updated |

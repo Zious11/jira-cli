@@ -2,9 +2,9 @@
 document_type: copilot-convergence-record
 pr: 356
 branch: chore/sanitize-errors-334
-head_sha: d4a07c8
+head_sha: 7f0177d
 closes_issues: ["#334"]
-rounds: 14
+rounds: 15
 status: in-progress
 review_round_1_id: ""
 review_round_1_submitted: 2026-05-11T17:49:49Z
@@ -35,18 +35,20 @@ review_round_13_id: "4268206656"
 review_round_13_submitted: 2026-05-11T23:52:40Z
 review_round_14_id: "4268270089"
 review_round_14_submitted: 2026-05-12T00:10:42Z
-threads_total: 29
-threads_resolved: 29
-trajectory: "4→1→2→2→3→2→3→2→2→1→1→2→1→1"
+review_round_15_id: "4268312988"
+review_round_15_submitted: 2026-05-12T00:23:00Z
+threads_total: 31
+threads_resolved: 31
+trajectory: "4→1→2→2→3→2→3→2→2→1→1→2→1→1→2"
 ---
 
 # PR #356 Copilot Convergence Record — IN PROGRESS
 
 **PR:** https://github.com/Zious11/jira-cli/pull/356
 **Branch:** chore/sanitize-errors-334
-**Current tip SHA:** d4a07c8
+**Current tip SHA:** 7f0177d
 **Closes:** #334 on merge
-**Trajectory so far:** 4→1→2→2→3→2→3→2→2→1→1→2→1→1 (Round 15 pending)
+**Trajectory so far:** 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2 (Round 16 pending)
 
 ## Summary
 
@@ -55,15 +57,15 @@ PR #356 implements CWE-117 defense at the `extract_error_message` public boundar
 from Atlassian error message strings before stderr emission, preventing terminal injection
 (log forging, ANSI escape injection) via hostile or proxy-injected error payloads.
 
-Fourteen Copilot rounds have been completed with a total of 29/29 threads resolved. CI is 8/8
-green on d4a07c8. Round 15 is pending.
+Fifteen Copilot rounds have been completed with a total of 31/31 threads resolved. CI is 8/8
+green on 7f0177d. Round 16 is pending.
 
-**Trajectory note:** Two consecutive 1-finding rounds (R13, R14) — trajectory now 4→1→2→2→3→2→3→2→2→1→1→2→1→1.
-R14's finding (Unicode C1 control escape gap) is defense-in-depth hardening for legacy/embedded
-terminals, not a security-defense gap against current mainstream threats. This continues the
-qualitative convergence signal from R13: the core security defenses are converged; Copilot is
-exploring edge-case hardening. Phase 8 stop condition (0-new-comment round) is likely with R15
-or R16. Findings have shifted from memory-safety to defense-in-depth hardening category.
+**Trajectory note:** R15 returned 2 findings but both were documentation cleanup — fast-path
+comment accuracy (char-level vs byte-level scan description) and systematic removal of stale
+R-number annotations across the file. Trajectory is now 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2.
+Substantive defenses are unchanged since R14. Recent 5-round window: 1, 2, 1, 1, 2 (averaging
+1.4 findings/round), all in the documentation-quality category. R16 is the likely Phase 8 stop
+condition (0-new-comment round).
 
 **Process gaps noted:** R2 and R3 Perplexity-validation were SKIPPED on the rationalization
 that the claims were "empirically verifiable from code." Per DEC-018, this was incorrect — all
@@ -900,7 +902,16 @@ round) is the likely outcome for R15 or R16.
   for `\xNN` vs `\u{NNNN}` format; fast-path scan changed to char-level. 3 new tests (CSI escape,
   NEL escape, anti-regression non-control Unicode above ASCII); 39 sanitize tests total;
   670 cargo test green. 1 thread resolved (PRRT_kwDORs-xfc6BQamK); reply 3222921647.
-  29/29 threads resolved. CI 8/8 green on d4a07c8. R15 pending.
+  29/29 threads resolved. CI 8/8 green on d4a07c8.
+- R15 (4268312988 @ 00:23:00Z, comments 3222937344 + 3222937368): 2 findings, both documentation
+  cleanup. C1: fast-path comment in `sanitize_for_stderr` described byte-level scan after R14
+  switched to char-level `chars().any(|c| c.is_control())` — rewritten to describe current
+  char-level scan and explain why byte-level cannot be used (C1 2-byte UTF-8 sequences
+  indistinguishable from valid multi-byte continuation bytes). C2: stale "(R10 finding)" annotation
+  on `serialize_value_bounded` — systematic strip of ALL R-number annotations across the file
+  (same class as R7 cleanup). No new tests; comment-only change; 39 sanitize tests + 670 cargo
+  test unchanged and green. 2 threads resolved (PRRT_kwDORs-xfc6BQhi- + PRRT_kwDORs-xfc6BQhjV);
+  replies 3222972524 + 3222972567. 31/31 threads resolved. CI 8/8 green on 7f0177d. R16 pending.
 
 **Assessment:** R14 returned 1 finding — same as R13 (trajectory now 4→1→2→2→3→2→3→2→2→1→1→2→1→1).
 Two consecutive 1-finding rounds with findings in the defense-in-depth / documentation category
@@ -909,9 +920,74 @@ allocation, C0 escaping) are converged; Copilot is now exploring edge-case harde
 and label correctness. Phase 8 stop condition (0-new-comment round) is the likely outcome for
 R15 or R16. Finding category has shifted from memory-safety to defense-in-depth hardening.
 
+---
+
+## Round 15 (2026-05-12T00:23:00Z)
+
+**Review ID:** 4268312988
+**Comment IDs:** 3222937344, 3222937368
+**Inline comments:** 2
+**Both documentation quality (no security or behavioral gaps)**
+
+### Finding C1 — Fast-path comment described byte-level scan after R14 switched to char-level
+
+The fast-path short-circuit comment in `sanitize_for_stderr` still described
+`bytes().any(|b| b.is_ascii_control())` semantics even though R14 had changed the
+implementation to `chars().any(|c| c.is_control())`. A future reader could be confused
+about why char-level iteration is used, or might "simplify" it back to byte-level without
+understanding the constraint.
+
+**Validation per DEC-018:** No external claims — the finding is entirely about internal
+comment accuracy. Per Lesson 1 wording, Perplexity is not required when there is no
+external-claim aspect. Skip is per-spec.
+
+**Fix:** Rewrote the fast-path comment to describe the current char-level scan and explain
+the constraint: C1 control code points (U+0080..U+009F) are encoded as 2-byte UTF-8
+sequences (0xC2 0x80..0x9F) that byte-level scanning cannot distinguish from valid
+2-byte UTF-8 continuation bytes. The comment now accurately represents the implementation
+and prevents future "simplification" regression.
+
+### Finding C2 — Stale R-number annotation in serialize_value_bounded marker comment
+
+The `serialize_value_bounded` function contained a marker comment with a stale "(R10 finding)"
+annotation. This is the same annotation-hygiene class as R7 (which cleaned R2/R3/R6 annotations
+from production comments and test files), and the stale annotation makes the comment harder to
+read without cycle history.
+
+**Validation per DEC-018:** No external claims — same rationale as Finding C1. Perplexity skipped per Lesson 1.
+
+**Fix:** Broader than the single flagged instance — systematic strip of ALL R-number annotations
+across `src/api/client.rs`: "(R10 finding)", "(R11 finding)", "(R12 finding)", "(R9 finding)",
+"(R9 defense — see comment block above)", "R10 pin: ", "R14 anti-regression: ",
+"R10 degenerate case: ", "R12 pins — ", etc. Consistent with the R7 lesson that partial cleanup
+invites re-flagging in subsequent rounds.
+
+**Thread resolved:** PRRT_kwDORs-xfc6BQhi- (C1), PRRT_kwDORs-xfc6BQhjV (C2)
+**Replies posted:** 3222972524 (C1), 3222972567 (C2)
+
+**Fix commit:** 7f0177d ("chore(security): correct fast-path comment + strip stale R-number annotations (PR #356 R15)")
+**Threads:** 31/31 resolved (2 new R15 threads resolved; cumulative)
+
+**Test results at 7f0177d:**
+- 39 sanitize unit tests total (no new tests — comment-only change)
+- 670 cargo test total: 670 passed, 0 failed, 10 ignored
+- cargo fmt --check + cargo clippy --all-targets -- -D warnings clean
+- CI: 8/8 green
+
+**Process note:** Eleventh consecutive in-cycle state-manager dispatch per Lesson 2.
+R5 → R6 → R7 → R8 → R9 → R10 → R11 → R12 → R13 → R14 → R15 all dispatched state-manager
+in real time. The discipline is fully embedded — 11 rounds in.
+
+**Convergence signal:** R15 returned 2 findings but both are documentation cleanup (comment
+accuracy and annotation hygiene). Trajectory is now 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2.
+Substantive defenses (memory-amplification bounds, Write contract compliance, DOM parse gate,
+C0+C1 escape coverage) have not been touched since R14. The quality of findings has clearly
+degraded from memory-safety (R5–R11) to defense-in-depth (R12–R14) to pure documentation
+cleanup (R13, R15) and label correctness (R13). R16 is the expected Phase 8 stop condition.
+
 ## CI Status
 
-**Head SHA:** d4a07c8
+**Head SHA:** 7f0177d
 **CI result:** 8/8 green
 
 ## Current PR State
@@ -919,7 +995,7 @@ R15 or R16. Finding category has shifted from memory-safety to defense-in-depth 
 | Field | Value |
 |-------|-------|
 | **State** | OPEN |
-| **Threads** | 29 created; 29/29 resolved |
-| **R15** | Pending — R14 returned 1 defense-in-depth finding (C1 control escape); 2 consecutive 1-finding rounds (R13, R14); convergence signal: security defenses converged, findings now defense-in-depth / label quality; Phase 8 stop condition (0-new-comment round) likely R15 or R16 |
-| **CI on d4a07c8** | 8/8 green |
+| **Threads** | 31 created; 31/31 resolved |
+| **R16** | Pending — R15 returned 2 doc-quality findings (fast-path comment accuracy + stale R-number annotations); substantive defenses unchanged since R14; recent 5-round average 1.4 findings/round; Phase 8 stop condition (0-new-comment round) likely R16 |
+| **CI on 7f0177d** | 8/8 green |
 | **Closes** | #334 on merge |
