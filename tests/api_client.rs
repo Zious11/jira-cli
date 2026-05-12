@@ -343,7 +343,8 @@ fn test_extract_error_message_empty_body() {
 
 // CWE-117 sanitization is wired into extract_error_message — these integration tests
 // exercise the public API to confirm hostile/proxy-injected control chars in any of
-// the precedence paths get rendered as `\xNN` literals before reaching stderr.
+// the precedence paths get rendered as visible escape sequences (ASCII controls as
+// `\xNN`, Unicode C1 controls U+0080..U+009F as `\u{NNNN}`) before reaching stderr.
 
 #[test]
 fn test_extract_error_message_sanitizes_crlf_in_error_messages_array() {
