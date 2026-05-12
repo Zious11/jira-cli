@@ -2731,4 +2731,32 @@ State-manager dispatched at PR open per Lesson 2 (state-manager at PR open / eac
 | state-manager | Create pr-358-copilot-progress.md: initial entry, R1 requested status | pr-358-edit-field-categorization-test/pr-358-copilot-progress.md |
 | state-manager | Append this burst entry | burst-log.md |
 
+---
+
+## Burst 58 (2026-05-12) — PR #358 R1 COMPLETE: BTreeSet fix for deterministic diffs
+
+**Agents dispatched:** state-manager
+**Files touched:** .factory/STATE.md, .factory/cycles/cycle-001/burst-log.md, .factory/cycles/cycle-001/adversarial-reviews/pr-358-edit-field-categorization-test/pr-358-copilot-progress.md
+**Versions bumped:** (none)
+
+### Summary
+
+PR #358 Round 1 complete. Copilot review 4268914353 returned 1 finding (comment 3223512008): the doc comment on `extract_edit_field_names` claimed it returned an "alphabetically-stable HashSet," but HashSet iteration order in Rust is hash-seed-dependent — making both the doc claim inaccurate and assertion failure messages nondeterministic in field ordering.
+
+Fix commit 9ca690e (`chore(test): use BTreeSet for deterministic test failure diffs`): all set types in the test switched to BTreeSet — selectors, bulk_supported, rejected_in_bulk, the three pairwise intersections (s_b, s_r, b_r), the categorized union, and `extract_edit_field_names`'s return type plus internal accumulator. Doc comment updated to explain why BTreeSet was chosen over HashSet (deterministic iteration order for stable failure messages).
+
+1/1 threads resolved (thread PRRT_kwDORs-xfc6BSISi). Reply posted (comment 3223525042). CI 8/8 green on 9ca690e. cargo test 1249 passed, 0 failed. R2 pending.
+
+Trajectory: 1 finding → R2 pending.
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| state-manager | Update STATE.md: Last Updated, Phase Progress row (R1 complete, head 9ca690e), Current Phase Steps (R1 row), Phase 3-adv convergence tracker, Session Resume Checkpoint | STATE.md |
+| state-manager | Update pr-358-copilot-progress.md: fill R1 round entry (review ID, 1 finding, fix commit, thread resolution, trajectory) | pr-358-edit-field-categorization-test/pr-358-copilot-progress.md |
+| state-manager | Append this burst entry | burst-log.md |
+
+**Outcome:** PR #358 R1 recorded in all factory artifacts. R2 pending.
+
 **Outcome:** PR #358 OPEN state recorded. 7 audit-followups remain: #333, #336, #340, #343, #345, #346, #350. Copilot R1 requested; next dispatch at R1 results.

@@ -7,7 +7,7 @@ producer: state-manager
 pr: 358
 issue: 343
 branch: chore/edit-field-categorization-test-343
-head_sha: 29608b8
+head_sha: 9ca690e
 created: 2026-05-12
 ---
 
@@ -45,19 +45,38 @@ or Atlassian API contract to validate per Lesson 1 boundary.
 
 ## Copilot Review Rounds
 
-### Round 1 — R1 REQUESTED 2026-05-12
+### Round 1 — R1 COMPLETE 2026-05-12
 
 | Field | Value |
 |-------|-------|
-| Status | REQUESTED |
+| Status | COMPLETE |
 | Requested at | 2026-05-12 |
-| Review ID | pending |
-| Findings | pending |
-| Perplexity validations | pending |
-| Fix commits | pending |
-| Trajectory | pending |
+| Review ID | 4268914353 |
+| Findings | 1 |
+| Perplexity validations | n/a (test mechanics only; Lesson 1 boundary — no external behavior to validate) |
+| Fix commits | 9ca690e (chore(test): use BTreeSet for deterministic test failure diffs) |
+| Threads resolved | 1/1 — PRRT_kwDORs-xfc6BSISi |
+| Reply comment ID | 3223525042 |
+| CI on fix commit | 8/8 green |
+| Trajectory | 1→R2 |
 
-_R1 results will be recorded here when the review completes._
+**Finding C1** (comment 3223512008): Doc comment on `extract_edit_field_names` claimed it
+returned an "alphabetically-stable HashSet." HashSet iteration order in Rust is
+hash-seed-dependent, so the claim was inaccurate AND assertion failure messages would
+produce nondeterministic field orderings in CI output.
+
+**Fix:** Switched all set types in the test to BTreeSet:
+- Function return type: `HashSet<String>` → `BTreeSet<String>`
+- Internal accumulator: `HashSet::new()` → `BTreeSet::new()`
+- Caller-side sets: `selectors`, `bulk_supported`, `rejected_in_bulk`
+- Pairwise intersection temporaries: `s_b`, `s_r`, `b_r`
+- `categorized` union set
+- Doc comment updated to explain the BTreeSet choice (deterministic iteration order
+  ensures stable failure messages when sets diverge).
+
+**Perplexity validation:** skipped per Lesson 1 boundary — finding concerns Rust
+`std::collections` semantics (HashSet vs BTreeSet ordering), a well-established language
+fact not requiring external API or library validation.
 
 ---
 
@@ -65,7 +84,8 @@ _R1 results will be recorded here when the review completes._
 
 | Round | Findings | Delta | Notes |
 |-------|----------|-------|-------|
-| R1 | pending | — | Requested 2026-05-12 |
+| R1 | 1 | — | Review 4268914353; BTreeSet fix 9ca690e; 1/1 threads resolved; CI 8/8 green |
+| R2 | pending | — | Pending |
 
 ---
 
