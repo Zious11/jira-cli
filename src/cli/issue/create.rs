@@ -1335,13 +1335,17 @@ pub enum IssueCommand {
     /// require any compile-time reflection or third-party derive macro.
     ///
     /// Strategy:
-    /// 1. Locate the `Edit {` line.
-    /// 2. Walk forward until the matching closing brace (`},` at the same
-    ///    indent level as the opening `Edit {`).
-    /// 3. Inside that range, treat any line of the form
-    ///    `        <name>: <type>,` (8-space indent matches clap variant fields)
-    ///    as a field declaration. Skip lines that start with `#[` (attributes)
-    ///    or `///` (doc comments).
+    /// 1. Locate the `Edit {` line (matched by `trim_start().starts_with("Edit {")`,
+    ///    so the variant's own indent is irrelevant).
+    /// 2. Walk forward until the matching closing brace via
+    ///    `is_matching_closing_brace` — tolerant of rustfmt-equivalent shapes:
+    ///    `}` followed by optional `,`, optional whitespace, and optional
+    ///    line-comment, all at the same indent prefix as the opening line.
+    ///    See the closure's inline comment for the exact rules.
+    /// 3. Inside that range, treat any trimmed line of the form `<name>: <type>...`
+    ///    (any indent — fields are detected by the `name:` shape, not by
+    ///    column position) as a field declaration. Skip lines that start with
+    ///    `#[` (attributes), `//` (line/doc comments), or are blank.
     ///
     /// Returns the extracted field names as a `BTreeSet<String>` so the
     /// iteration/`Debug` output order is deterministic — assertion failure
@@ -1371,8 +1375,11 @@ pub enum IssueCommand {
         //
         // Logic:
         //   1. Line must start with exactly `opening_indent_width` spaces
-        //      followed by `}`. This pins the indent and excludes nested
-        //      field-internal braces (clap variant fields use 8-space indent).
+        //      followed by `}`. Field-internal braces sit at a deeper indent
+        //      (more spaces than `opening_indent_width`), so the `}` is no
+        //      longer at byte `closing_indent.len()` and `strip_prefix('}')`
+        //      below rejects them. The opener's own indent isn't hard-coded
+        //      — `opening_indent_width` is captured from the actual line.
         //   2. After the `}`, only allow: end-of-line, `,`, whitespace, or a
         //      line-comment (`//...`). Anything else means we hit a different
         //      construct and must keep scanning.
@@ -1380,22 +1387,19 @@ pub enum IssueCommand {
         let closing_indent: String = " ".repeat(opening_indent_width);
 
         let is_matching_closing_brace = |line: &str| -> bool {
-            // 1. Same indent prefix?
+            // 1. Line must start with EXACTLY `closing_indent` spaces, and the
+            //    next char must be `}`. A deeper-indented `}` (e.g., the closer
+            //    of a nested struct inside a field) has more spaces after the
+            //    prefix, so `strip_prefix('}')` fails and we reject below.
             if !line.starts_with(&closing_indent) {
                 return false;
             }
             let rest = &line[closing_indent.len()..];
-            // 2. First non-indent char must be `}` (and not `}}`-double, which
-            //    would indicate a nested-block closer at the wrong level).
             let Some(after_brace) = rest.strip_prefix('}') else {
                 return false;
             };
-            // Reject deeper indents: if after the indent there are MORE spaces,
-            // this `}` is at a deeper level than `Edit`'s opener.
-            if rest.starts_with(' ') {
-                return false;
-            }
-            // 3. After `}`, accept `,` optionally, then whitespace/comment/EOL.
+            // 2. After `}`, accept (in order): optional `,`, optional
+            //    whitespace, optional `//`-comment, or end-of-line.
             let after_optional_comma = after_brace.strip_prefix(',').unwrap_or(after_brace);
             let trailing = after_optional_comma.trim_start();
             trailing.is_empty() || trailing.starts_with("//")
