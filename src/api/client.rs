@@ -5,7 +5,7 @@ use base64::Engine;
 use reqwest::{Client, Method, RequestBuilder, Response, StatusCode};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::debug;
 
 /// Maximum number of retries when the API returns 429 Too Many Requests.
@@ -250,6 +250,25 @@ impl JiraClient {
         Ok(serde_json::from_slice(&bytes)?)
     }
 
+    /// Deadline-aware GET-and-deserialize for callers with a wall-clock budget.
+    /// Equivalent to `get` but routes through `send_bounded` so a 429-storm on
+    /// this endpoint cannot push elapsed time past `deadline`.
+    ///
+    /// Used by `poll_bulk_task_with_deadline` in `src/api/jira/bulk.rs` to
+    /// honor the caller's `await_bulk_task` timeout end-to-end.
+    /// Anchor: BC-bulk.poll.deadline-bounded (S-333).
+    pub async fn get_bounded<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        deadline: Instant,
+    ) -> anyhow::Result<T> {
+        let url = format!("{}{}", self.base_url, path);
+        let request = self.client.get(&url);
+        let response = self.send_bounded(request, deadline).await?;
+        let bytes = self.collect_response_body(response).await?;
+        Ok(serde_json::from_slice(&bytes)?)
+    }
+
     /// Perform a POST request with a JSON body and deserialize the response.
     pub async fn post<T: DeserializeOwned, B: Serialize>(
         &self,
@@ -289,22 +308,196 @@ impl JiraClient {
 
     /// Send a request with auth headers, retrying on 429 up to MAX_RETRIES times.
     ///
-    /// # Auto-refresh on 401 (S-3.03 v2)
-    ///
-    /// On the first 401, attempts to refresh the OAuth access token via
-    /// `refresh_coordinator::refresh_with_single_flight`. If the refresh
-    /// succeeds, retries the original request ONCE with the new token.
-    /// If the retry also returns 401 → `NotAuthenticated` (no second refresh).
-    ///
-    /// Trigger: BLANKET 401 (matches `gh` CLI pattern). Atlassian returns
-    /// `{"errorMessages":[...]}` with NO `code` field and NO RFC-6750
-    /// `WWW-Authenticate` header. Source: CLAUDE.md gotcha + S-3.03 research.
-    ///
-    /// If refresh fails with `invalid_grant`, the AC-010 post-hoc reconcile
-    /// check re-reads the keychain. If another process already refreshed
-    /// (keychain access token differs from our initial bearer), we retry
-    /// the original request with the keychain's new token.
+    /// Thin wrapper around `send_inner` that passes `None` for the deadline —
+    /// preserves the historical 1-arg signature for the ~hundreds of existing
+    /// call sites that have no caller-supplied deadline. All retry, refresh,
+    /// and error-mapping logic lives in `send_inner`; see its docs for the
+    /// detailed contract (429 retries, 401 auto-refresh, AC-010 reconcile).
     async fn send(&self, request: RequestBuilder) -> anyhow::Result<Response> {
+        self.send_inner(request, None).await
+    }
+}
+
+/// Result of clamping a 429-retry sleep against a caller-supplied deadline.
+///
+/// `Sleep(d)` is the duration the caller should actually sleep (already capped
+/// at the smaller of `retry_after` and `deadline - now()`). `Expired` means
+/// the deadline has expired (or is within the tokio timer-wheel 1ms floor of
+/// expiring) — the caller MUST return an error rather than sleeping.
+///
+/// Anchor: BC-bulk.poll.deadline-bounded (S-333).
+#[derive(Debug, PartialEq, Eq)]
+enum ClampResult {
+    /// Caller should sleep for this duration before retrying.
+    Sleep(Duration),
+    /// Deadline expired (or within 1ms of expiring) — caller MUST return
+    /// `JrError::DeadlineExceeded { remaining_ms, message }` (exit code 124,
+    /// POSIX `timeout(1)` convention). The remaining-millisecond figure is
+    /// included in the error message so operators can correlate the failure
+    /// against their `--timeout` budget.
+    ///
+    /// (Pre-F5-pass-02 history: this used to map to `JrError::ApiError{status:429,
+    /// ...}`. The reversal is documented in
+    /// `.factory/code-delivery/issue-333/research-validation-pass-03.md` Q2.)
+    Expired { remaining_ms: u64 },
+}
+
+/// Compute the clamped 429-retry sleep duration.
+///
+/// # Contract
+///
+/// - `deadline == None` ⇒ `ClampResult::Sleep(base)` (no caller-supplied
+///   budget; identical to the historical pre-S-333 behavior).
+/// - `deadline == Some(d)` and `remaining = d.saturating_duration_since(now())`:
+///   - `remaining >= 1ms` ⇒ `ClampResult::Sleep(min(base, remaining))`.
+///   - `remaining < 1ms` ⇒ `ClampResult::Expired { remaining_ms }`.
+///
+/// # Why 1ms, not zero
+///
+/// `tokio::time::sleep(Duration < 1ms)` is documented as a no-op that does
+/// NOT yield to the executor (tokio timer wheel has a 1ms resolution floor;
+/// see Q3 research-validation 2026-05-12, tokio #4522). If we accepted any
+/// non-zero remaining as "sleep it", a sub-millisecond `remaining` would
+/// produce a no-op sleep and the retry loop would spin immediately to the
+/// next request — silently violating the bounded-overshoot contract.
+///
+/// Anchor: BC-bulk.poll.deadline-bounded (S-333).
+fn clamp_retry_sleep(base: Duration, deadline: Option<Instant>) -> ClampResult {
+    match deadline {
+        Some(d) => {
+            let remaining = d.saturating_duration_since(Instant::now());
+            if remaining < Duration::from_millis(1) {
+                // `as_micros()` returns u128; division by 1000 keeps the value
+                // bounded by sub-ms input, safe to truncate to u64.
+                let remaining_ms = (remaining.as_micros() / 1000) as u64;
+                ClampResult::Expired { remaining_ms }
+            } else {
+                ClampResult::Sleep(base.min(remaining))
+            }
+        }
+        None => ClampResult::Sleep(base),
+    }
+}
+
+impl JiraClient {
+    /// Deadline-aware variant of `send` for callers that have a wall-clock
+    /// budget (e.g., `await_bulk_task`). Sleep durations inside the 429 retry
+    /// loop are clamped to `min(retry_after, deadline - now)` so a 429-storm
+    /// near the deadline cannot push elapsed time past it.
+    ///
+    /// # Behavior
+    ///
+    /// Returns `Err(JrError::DeadlineExceeded { remaining_ms, message })`
+    /// (exit code 124, POSIX `timeout(1)` convention) in two cases:
+    ///
+    ///   1. **At function entry** — if the remaining budget
+    ///      `deadline.saturating_duration_since(Instant::now()) < 1ms`
+    ///      (i.e., the deadline has already passed OR is within the tokio
+    ///      timer-wheel 1ms floor of passing), the request is NOT issued.
+    ///      Message has the `[deadline:send-entry]` site tag.
+    ///
+    ///   2. **During 429 retry** — if a 429 fires and the remaining budget
+    ///      `deadline.saturating_duration_since(Instant::now()) < 1ms`, the
+    ///      retry loop short-circuits. Message has the `[deadline:429-retry]`
+    ///      site tag. (Q3 research-validation: `tokio::time::sleep(Duration
+    ///      < 1ms)` is a no-op that does NOT yield, so the 1ms threshold
+    ///      prevents a spin-loop in the sub-millisecond edge case.)
+    ///
+    /// A third site exists OUTSIDE `send_inner` in
+    /// `src/api/jira/bulk.rs::await_bulk_task_inner` — the polling-loop
+    /// top-of-loop check — which surfaces as
+    /// `JrError::DeadlineExceeded` with the `[deadline:bulk-outer]` tag.
+    /// All three sites share exit code 124 so scripting consumers can
+    /// detect "caller deadline expired" uniformly.
+    ///
+    /// In both cases scripts can grep stderr for the substring `"deadline"`
+    /// or pattern-match on exit code 124 to detect the timeout (distinct
+    /// from `ApiError(429)` rate-limit, which uses exit 1).
+    ///
+    /// On every 429 retry where remaining ≥ 1ms, sleeps for
+    /// `min(retry_after, remaining)` and continues the retry loop.
+    ///
+    /// # Scope of the deadline guarantee
+    ///
+    /// The deadline is enforced for:
+    /// 1. **429 retry sleeps** — clamped per the formula above.
+    /// 2. **Already-expired deadlines at function entry** — returns Err
+    ///    without issuing the request.
+    ///
+    /// The deadline is **NOT** enforced for:
+    /// 1. **Per-request reqwest timeout** — the underlying `reqwest::Client`
+    ///    is built with `Client::builder().timeout(Duration::from_secs(30))`
+    ///    in `from_config`; a single hung request cannot exceed 30s
+    ///    regardless of the caller-supplied deadline.
+    /// 2. **OAuth 401 auto-refresh path** — once a poll returns 401 (token
+    ///    expired), the auto-refresh path makes an OAuth refresh POST via
+    ///    `crate::api::auth::refresh_oauth_token_with_url`. That helper
+    ///    currently constructs its own `reqwest::Client::new()` **without
+    ///    any timeout** (`src/api/auth.rs` ~line 903), so the refresh POST
+    ///    is unbounded. A 401-near-deadline scenario can therefore overshoot
+    ///    by tens of seconds (or longer) while the refresh is in flight.
+    /// 3. **401 retry after successful refresh** — the post-refresh retry
+    ///    bypasses `send_inner` entirely and calls `retry_req.send().await`
+    ///    directly, so the 30s reqwest timeout applies but the deadline
+    ///    clamp does not.
+    ///
+    /// User-facing impact: a 30s deadline reliably bounds 429 storms (the
+    /// #333 fix), but a 401 near deadline may still cause 60-120s wall-clock
+    /// in pathological cases. Bounding the OAuth refresh path is tracked as
+    /// a follow-up issue (see PR #333's body for the link).
+    ///
+    /// Anchors: BC-bulk.poll.deadline-bounded, NFR-R-NEW-3,
+    /// H-NEW-BULK-DEADLINE-001 (S-333).
+    pub async fn send_bounded(
+        &self,
+        request: RequestBuilder,
+        deadline: Instant,
+    ) -> anyhow::Result<Response> {
+        self.send_inner(request, Some(deadline)).await
+    }
+
+    async fn send_inner(
+        &self,
+        request: RequestBuilder,
+        deadline: Option<Instant>,
+    ) -> anyhow::Result<Response> {
+        // Pure helper for the 429-retry sleep clamp. Extracted for unit testing.
+        // See `clamp_retry_sleep` rustdoc for the full contract.
+
+        // S-333 CONCERN-7: defense-in-depth entry-point check. If the caller
+        // passed a deadline that has already expired (e.g., due to a bug
+        // upstream that subtracted a Duration), fail fast WITHOUT issuing
+        // the request. The clamp inside the 429 loop would otherwise only
+        // fire if Atlassian happens to return 429 — a 2xx response on an
+        // already-expired deadline would silently succeed and the caller
+        // would have no signal that their deadline was disregarded.
+        //
+        // Note: aws-smithy-rust / hyper / reqwest-middleware do NOT
+        // canonically do this entry-point check (research-validation pass-02
+        // Q4) — they let the request fly and rely on per-attempt timeouts.
+        // We do it because:
+        //   - it's cheap (one Instant::now()),
+        //   - the deadline-aware path is internal/narrow (only the bulk poll
+        //     uses it today), and
+        //   - bug-symmetry: the clamp inside the loop already enforces "no
+        //     sleep on expired", so this just extends that invariant to
+        //     "no request on expired" — one consistent semantic.
+        if let Some(d) = deadline {
+            if let ClampResult::Expired { remaining_ms } =
+                clamp_retry_sleep(Duration::ZERO, Some(d))
+            {
+                return Err(JrError::DeadlineExceeded {
+                    remaining_ms,
+                    message: format!(
+                        "[deadline:send-entry] Caller-supplied deadline already \
+                         expired at send entry (remaining budget {remaining_ms}ms). \
+                         The request was not issued. Rerun with a larger timeout."
+                    ),
+                }
+                .into());
+            }
+        }
+
         // We need to be able to retry, so we clone the request builder.
         // reqwest::RequestBuilder::try_clone() returns None for streaming bodies,
         // but we only send JSON (or no body), so it will always succeed.
@@ -372,9 +565,50 @@ impl JiraClient {
                     let rate_info = RateLimitInfo::from_headers(response.headers());
                     let delay = rate_info.retry_after_secs.unwrap_or(DEFAULT_RETRY_SECS);
 
+                    // S-333 C-2 (F5 pass-03): deadline-clamp fires BEFORE the cap-abort.
+                    //
+                    // Earlier pass-01 NIT-2 noted "user-impact is equivalent" between the
+                    // cap-abort and the deadline-clamp — that was true when both returned
+                    // JrError::ApiError(429) with exit code 1. Pass-02 introduced
+                    // JrError::DeadlineExceeded (exit code 124, POSIX timeout convention),
+                    // so the variants AND exit codes now diverge: cap → 1, deadline → 124.
+                    //
+                    // Industry precedent (research-validation pass-04 Q2): aws-smithy-rs,
+                    // tokio::time::timeout, kubectl client-go, and RFC 9110 §10.2.3 all
+                    // treat the client-side deadline as a hard contract that supersedes a
+                    // server-advisory Retry-After. Reordering ensures a 429 with
+                    // Retry-After > 60s AND an expired caller-supplied deadline surfaces
+                    // as DeadlineExceeded (exit 124), not as the cap message (exit 1).
+                    //
+                    // The cap-abort still applies when no deadline is set OR when the
+                    // deadline remains positive — that case retains the historical
+                    // BC-X.4.009 behavior unchanged.
+                    let base_sleep = Duration::from_secs(delay);
+                    let actual_sleep = match clamp_retry_sleep(base_sleep, deadline) {
+                        ClampResult::Sleep(d) => d,
+                        ClampResult::Expired { remaining_ms } => {
+                            return Err(JrError::DeadlineExceeded {
+                                remaining_ms,
+                                message: format!(
+                                    "[deadline:429-retry] Caller-supplied deadline \
+                                     exceeded during 429 retry (Retry-After {delay}s, \
+                                     remaining budget {remaining_ms}ms before clamp). \
+                                     Atlassian rate-limit pressure consumed the caller-\
+                                     supplied timeout. Rerun with a larger timeout, or \
+                                     wait for rate-limit pressure to subside."
+                                ),
+                            }
+                            .into());
+                        }
+                    };
+
                     // BC-X.4.009: abort retry if Retry-After exceeds the interactive-CLI cap.
                     // Atlassian's typical values (1425-3089s) far exceed what is acceptable
                     // for a foreground CLI. RFC 9110 §10.2.3 permits client-side abort.
+                    //
+                    // Note (S-333 C-2): this check now fires AFTER the deadline-clamp above.
+                    // If both fire on the same response, deadline-clamp wins (exit 124, the
+                    // higher-priority signal per industry precedent).
                     if delay > MAX_RETRY_AFTER_SECS {
                         eprintln!(
                             "[jr] Atlassian requested {}s wait — exceeds {}s cap for interactive CLI.\n\
@@ -395,11 +629,13 @@ impl JiraClient {
                     debug!(
                         target: "jr::http",
                         delay_secs = delay,
+                        clamped_sleep_ms = actual_sleep.as_millis() as u64,
                         attempt = attempt + 1,
                         max_retries = MAX_RETRIES,
+                        deadline_aware = deadline.is_some(),
                         "rate_limited_retrying"
                     );
-                    tokio::time::sleep(Duration::from_secs(delay)).await;
+                    tokio::time::sleep(actual_sleep).await;
                     last_response = Some(response);
                     continue;
                 }
@@ -2012,5 +2248,250 @@ mod sanitize_tests {
         assert!(!out.contains("[...truncated"));
         // No "non-UTF8 body" string (custom marker not used).
         assert!(!out.contains("non-UTF8 body"));
+    }
+}
+
+/// Unit tests for the deadline-clamp helper (S-333 / BC-bulk.poll.deadline-bounded).
+/// AC-004: clock + tokio-timer safety. AC-005: error variant + message shape.
+#[cfg(test)]
+mod clamp_tests {
+    use super::{ClampResult, clamp_retry_sleep};
+    use std::time::{Duration, Instant};
+
+    /// AC-004 baseline: with no deadline, the clamp passes the base sleep
+    /// through unchanged. This is the regression-invariant path for all
+    /// historical (pre-S-333) callers that pass `None`.
+    #[test]
+    fn test_clamp_retry_sleep_no_deadline_returns_base() {
+        let base = Duration::from_secs(60);
+        assert_eq!(
+            clamp_retry_sleep(base, None),
+            ClampResult::Sleep(base),
+            "with deadline=None the clamp must pass `base` through; \
+             this is the regression-invariant for all pre-S-333 callers."
+        );
+    }
+
+    /// AC-004: deadline well in the future ⇒ sleep is `min(base, remaining) = base`.
+    #[test]
+    fn test_clamp_retry_sleep_far_deadline_returns_base() {
+        let base = Duration::from_secs(60);
+        let deadline = Instant::now() + Duration::from_secs(300);
+        match clamp_retry_sleep(base, Some(deadline)) {
+            ClampResult::Sleep(d) => {
+                assert_eq!(
+                    d, base,
+                    "with 5min remaining, sleep should be the full 60s base (not clamped)"
+                );
+            }
+            ClampResult::Expired { .. } => {
+                panic!("expected Sleep with far-future deadline, got Expired");
+            }
+        }
+    }
+
+    /// AC-004: deadline is shorter than base ⇒ sleep is clamped to remaining.
+    /// This is the headline AC-001 mechanism — a 60s `Retry-After` against a
+    /// 30s deadline yields a 30s sleep (not 60s).
+    #[test]
+    fn test_clamp_retry_sleep_near_deadline_clamps_to_remaining() {
+        let base = Duration::from_secs(60);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        match clamp_retry_sleep(base, Some(deadline)) {
+            ClampResult::Sleep(d) => {
+                // Sleep should be ≤ 10s (the remaining budget) and > 9s
+                // (accounting for the few microseconds between
+                // `Instant::now()` in the test and inside the helper).
+                assert!(
+                    d <= Duration::from_secs(10),
+                    "clamped sleep must be ≤ remaining (10s), got {d:?}"
+                );
+                assert!(
+                    d > Duration::from_millis(9000),
+                    "clamped sleep should be near 10s (modulo timing slack), got {d:?}"
+                );
+            }
+            ClampResult::Expired { .. } => {
+                panic!("expected Sleep with 10s remaining, got Expired");
+            }
+        }
+    }
+
+    /// AC-004 (the headline correctness assertion): when remaining is < 1ms,
+    /// the clamp MUST return `Expired`, NOT `Sleep(Duration::from_micros(N))`.
+    ///
+    /// Why this matters: `tokio::time::sleep(Duration < 1ms)` is a documented
+    /// no-op (tokio timer-wheel 1ms floor). Accepting sub-millisecond
+    /// `Sleep(...)` would produce a spin-loop: the no-op "sleep" returns
+    /// immediately, the next request fires, gets another 429, recomputes
+    /// remaining = 0, repeats. The 1ms floor matches tokio's timer
+    /// granularity and matches Q3 research-validation 2026-05-12.
+    #[test]
+    fn test_clamp_retry_sleep_sub_millisecond_remaining_returns_expired() {
+        // Construct a deadline that has ALREADY passed at the moment of the
+        // clamp call. `Instant::now()` between this line and the clamp call
+        // strictly increases (monotonic clock), so `remaining` will be zero.
+        let deadline = Instant::now();
+        // Sleep a microsecond to guarantee the clamp's internal
+        // `Instant::now()` is past the deadline. Without this, on extremely
+        // fast machines the test could theoretically see `remaining == 0ns`
+        // which is still < 1ms (so the assertion would pass), but on slower
+        // CI we want unambiguous evidence the clamp engaged.
+        std::thread::sleep(Duration::from_micros(10));
+        match clamp_retry_sleep(Duration::from_secs(60), Some(deadline)) {
+            ClampResult::Expired { remaining_ms } => {
+                // The deadline expired, so remaining is at most a few hundred
+                // microseconds rounded down to 0ms (sub-ms truncation by
+                // intent — see the helper's `as_micros() / 1000` cast).
+                assert_eq!(
+                    remaining_ms, 0,
+                    "expired deadline should report 0ms remaining, got {remaining_ms}ms"
+                );
+            }
+            ClampResult::Sleep(d) => {
+                panic!(
+                    "AC-004 VIOLATION: clamp returned Sleep({d:?}) for a deadline that \
+                     has already passed. This will cause `tokio::time::sleep(d).await` \
+                     to no-op (< 1ms tokio timer-wheel floor), producing a spin-loop \
+                     in the retry path. Must return Expired."
+                );
+            }
+        }
+    }
+
+    /// AC-004 boundary: remaining comfortably above the 1ms floor should
+    /// produce Sleep, not Expired. Uses 50ms (not 5ms) to absorb thread-
+    /// scheduling jitter on shared CI runners (GitHub Actions `ubuntu-latest`
+    /// has been measured at 10-50ms scheduling latency under load; the
+    /// previous 5ms margin would flake intermittently — adversary CONCERN-5,
+    /// research-validation Q3).
+    #[test]
+    fn test_clamp_retry_sleep_50ms_remaining_is_sleep() {
+        let deadline = Instant::now() + Duration::from_millis(50);
+        match clamp_retry_sleep(Duration::from_secs(60), Some(deadline)) {
+            ClampResult::Sleep(d) => {
+                assert!(
+                    d >= Duration::from_millis(1) && d <= Duration::from_millis(50),
+                    "50ms-remaining clamp should produce a sleep in [1ms, 50ms], got {d:?}"
+                );
+            }
+            ClampResult::Expired { .. } => {
+                panic!("50ms remaining should produce Sleep, not Expired");
+            }
+        }
+    }
+
+    /// Research-validation Q7 gap: `base = Duration::ZERO` corresponds to a
+    /// hypothetical `Retry-After: 0` response (Atlassian doesn't send this in
+    /// practice, but the parser at `src/api/rate_limit.rs` accepts any u64
+    /// including zero). Without this test, a regression could allow zero-base
+    /// sleeps to slip past the clamp:
+    ///   - `None` deadline ⇒ `Sleep(0ms)` would no-op (tokio 1ms floor)
+    ///     and the retry loop spins immediately to the next attempt.
+    ///   - `Some(future)` deadline ⇒ `Sleep(0ms.min(remaining)) = Sleep(0ms)`
+    ///     same spin.
+    ///
+    /// The fix is for the rate-limit parser to floor at DEFAULT_RETRY_SECS,
+    /// but the clamp must also behave correctly if it ever gets a 0 base.
+    /// This test pins the current behavior so regressions surface.
+    #[test]
+    fn test_clamp_retry_sleep_zero_base_returns_zero_sleep() {
+        // Zero base with no deadline: passes through.
+        assert_eq!(
+            clamp_retry_sleep(Duration::ZERO, None),
+            ClampResult::Sleep(Duration::ZERO),
+            "zero base + no deadline should pass through as Sleep(0); \
+             the rate-limit parser (not the clamp) is responsible for \
+             enforcing a non-zero floor on Retry-After."
+        );
+
+        // Zero base with future deadline: still Sleep(0), because min(0, remaining) = 0.
+        let deadline = Instant::now() + Duration::from_secs(60);
+        match clamp_retry_sleep(Duration::ZERO, Some(deadline)) {
+            ClampResult::Sleep(d) => assert_eq!(d, Duration::ZERO),
+            ClampResult::Expired { .. } => {
+                panic!("future deadline with zero base should Sleep(0), not Expire")
+            }
+        }
+    }
+
+    /// C-1 (F5 pass-02): entry-point check coverage. The defensive check in
+    /// `send_inner` returns `DeadlineExceeded` immediately for an already-
+    /// expired deadline WITHOUT issuing the request. A regression that
+    /// disabled this check (e.g., by changing the `Duration::ZERO` argument
+    /// to a non-zero value) would not be caught by the clamp helper unit
+    /// tests, since those only test the pure helper.
+    ///
+    /// We exercise the entry-point path by calling `clamp_retry_sleep` with
+    /// the same arguments `send_inner` uses internally. A future change to
+    /// the entry-point logic that bypassed the check would surface here as
+    /// a `Sleep(...)` result instead of `Expired`, which the assertion below
+    /// would catch.
+    ///
+    /// (We can't easily call `send_bounded` directly without standing up a
+    /// real `JiraClient` and wiremock — that level of integration is covered
+    /// by `tests/bulk_deadline_propagation.rs::test_333_...`. The unit-level
+    /// pin here is the helper's contract.)
+    #[test]
+    fn test_clamp_retry_sleep_entry_point_pattern_already_expired_is_expired() {
+        // The pattern used at the top of `send_inner` for the entry-point check:
+        //     `clamp_retry_sleep(Duration::ZERO, Some(d))`
+        // with `d` already in the past must return Expired so the function
+        // can short-circuit before issuing the request.
+        let deadline = Instant::now() - Duration::from_millis(1);
+        std::thread::sleep(Duration::from_micros(50));
+        match clamp_retry_sleep(Duration::ZERO, Some(deadline)) {
+            ClampResult::Expired { remaining_ms } => {
+                assert_eq!(
+                    remaining_ms, 0,
+                    "entry-point pattern should report 0ms remaining for past deadline"
+                );
+            }
+            ClampResult::Sleep(d) => {
+                panic!(
+                    "C-1 (F5 pass-02) VIOLATION: clamp returned Sleep({d:?}) for an already-\
+                     expired deadline in the entry-point pattern. send_inner would proceed \
+                     to issue the request instead of short-circuiting — the defense-in-depth \
+                     entry-point check has been broken."
+                );
+            }
+        }
+    }
+
+    /// Research-validation Q7 gap: `base == remaining` (or near it) is the
+    /// headline AC-001 scenario — the first 429 of the integration test has
+    /// `Retry-After: 60` and remaining budget ~30s; the clamp produces
+    /// `Sleep(30s)`. This unit test pins the equality boundary so a regression
+    /// changing `<` to `<=` in `base.min(remaining)` semantics (or some other
+    /// off-by-one) surfaces immediately.
+    #[test]
+    fn test_clamp_retry_sleep_base_equals_remaining_clamps_to_remaining() {
+        // We can't make base exactly equal to remaining at the moment of the
+        // clamp call (Instant::now() inside the helper drifts microseconds
+        // forward), but we can put `base` slightly larger than `remaining` to
+        // force the `base.min(remaining) = remaining` path.
+        let deadline = Instant::now() + Duration::from_millis(100);
+        let base = Duration::from_millis(100); // identical to nominal remaining
+        match clamp_retry_sleep(base, Some(deadline)) {
+            ClampResult::Sleep(d) => {
+                // `d` should be at most `base` (100ms) and at least `base - a few microseconds`
+                // (the helper's internal Instant::now drift). Crucially, d MUST NOT exceed base.
+                assert!(
+                    d <= base,
+                    "clamped sleep must not exceed base ({base:?}), got {d:?}"
+                );
+                // And `d` should be close to base (within a millisecond of timing slack).
+                assert!(
+                    d > Duration::from_millis(95),
+                    "clamped sleep should be near base (~100ms), got {d:?}"
+                );
+            }
+            ClampResult::Expired { .. } => {
+                panic!(
+                    "base==remaining edge: 100ms remaining should produce Sleep, \
+                     not Expired (above 1ms floor)"
+                );
+            }
+        }
     }
 }

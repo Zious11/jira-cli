@@ -1,10 +1,9 @@
 use super::json_output;
 use anyhow::{Result, bail};
-use std::time::Duration;
 
 use crate::adf;
 use crate::api::client::JiraClient;
-use crate::api::jira::bulk::BULK_MAX_KEYS;
+use crate::api::jira::bulk::{BULK_MAX_KEYS, resolve_bulk_await_timeout};
 use crate::cli::{IssueCommand, OutputFormat};
 use crate::error::JrError;
 use crate::output;
@@ -520,7 +519,7 @@ async fn handle_move_bulk(
 
     // Poll with 5-minute timeout.
     let progress = client
-        .await_bulk_task(&task_id, Duration::from_secs(300))
+        .await_bulk_task(&task_id, resolve_bulk_await_timeout())
         .await?;
 
     // Render results (similar to bulk edit).

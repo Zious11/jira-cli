@@ -21,6 +21,26 @@ pub enum JrError {
     #[error("API error ({status}): {message}")]
     ApiError { status: u16, message: String },
 
+    /// Caller-supplied deadline exceeded. Distinct from `ApiError(status=429)`
+    /// because a deadline-exceeded error is NOT an Atlassian-server response —
+    /// it is a client-side timeout signal. Mixing it with `ApiError(429)` was
+    /// misleading: scripts grepping for "429" to detect rate-limit pressure
+    /// would false-positive on deadline-exceeded, and the entry-point check
+    /// produces this error without any HTTP request being issued at all.
+    ///
+    /// Exit code 124 (POSIX `timeout(1)` convention). External CLI precedent:
+    /// kubectl, gh, aws-cli, doctl, fly — all use a dedicated variant for
+    /// client-side deadlines rather than overloading a 4xx HTTP code.
+    ///
+    /// `remaining_ms` is the budget remaining when the error was produced
+    /// (always 0ms at the threshold by construction; included for parity with
+    /// the in-loop error message format).
+    ///
+    /// Closes audit-followup #333 (introduced in commit fix(bulk): clamp
+    /// 429-retry sleep by caller's deadline).
+    #[error("Deadline exceeded: {message}")]
+    DeadlineExceeded { remaining_ms: u64, message: String },
+
     #[error("{0}")]
     ConfigError(String),
 
@@ -56,6 +76,7 @@ impl JrError {
             JrError::ConfigError(_) => 78,
             JrError::UserError(_) => 64,
             JrError::Interrupted => 130,
+            JrError::DeadlineExceeded { .. } => 124,
             _ => 1,
         }
     }
@@ -112,6 +133,36 @@ mod tests {
             }
             .exit_code(),
             2
+        );
+    }
+
+    #[test]
+    fn deadline_exceeded_exit_code_is_124() {
+        // POSIX timeout(1) convention. Distinct from rate-limit (1) so scripts
+        // can react differently to "your deadline ran out" vs "server is
+        // rate-limiting you". Closes #333 C-2.
+        assert_eq!(
+            JrError::DeadlineExceeded {
+                remaining_ms: 0,
+                message: "test".into()
+            }
+            .exit_code(),
+            124
+        );
+    }
+
+    #[test]
+    fn deadline_exceeded_display_format() {
+        // Display uses the "Deadline exceeded:" prefix so operators grepping
+        // stderr for the word "deadline" find both this variant's text and
+        // the in-loop message string (which also contains the word).
+        assert_eq!(
+            JrError::DeadlineExceeded {
+                remaining_ms: 0,
+                message: "Caller-supplied deadline already expired at send entry".into()
+            }
+            .to_string(),
+            "Deadline exceeded: Caller-supplied deadline already expired at send entry"
         );
     }
 

@@ -51,6 +51,44 @@ const POLL_MAX_SECS: u64 = 10;
 /// Closes audit-followup #336.
 const DEFAULT_UNKNOWN_STATUS_GRACE_SECS: u64 = 30;
 
+/// Default total wall-clock timeout for `await_bulk_task` polling. 5 minutes
+/// is the historical hard-coded value used by all CLI bulk handlers
+/// (`src/cli/issue/{create,workflow}.rs`). Centralized here so the
+/// `JR_BULK_AWAIT_TIMEOUT_SECS` test seam has a single source of truth.
+///
+/// Anchor: S-333 / BC-bulk.poll.deadline-bounded.
+const DEFAULT_BULK_AWAIT_TIMEOUT_SECS: u64 = 300;
+
+/// Resolve the total wall-clock timeout for `await_bulk_task`.
+///
+/// Release builds always return `DEFAULT_BULK_AWAIT_TIMEOUT_SECS` (300s / 5min).
+/// Debug builds also honor `JR_BULK_AWAIT_TIMEOUT_SECS` (whole seconds — parsed
+/// as `u64`, so `"5"`, `"30"`, `"300"` etc. but NOT `"0.5"`) so CLI-level
+/// integration tests can drive the 429-storm clamp through the binary quickly
+/// — typically `"30"` so a 429-storm test completes in ~30s wall-clock instead
+/// of the 5-minute default. Unparseable / non-numeric values are silently
+/// ignored (fall back to default) — the env var is a test seam, not a
+/// user-configurable surface, and a typo shouldn't break the bulk loop.
+///
+/// Gated `#[cfg(debug_assertions)]` mirrors the existing `JR_BASE_URL`,
+/// `JR_AUTH_HEADER`, and `JR_BULK_UNKNOWN_GRACE_SECS` debug-only patterns.
+/// Like `JR_BULK_UNKNOWN_GRACE_SECS`, there is no token-leak vector here
+/// (the value only affects how long the bulk-poll waits before timing out),
+/// so a single-site gate is sufficient.
+///
+/// Closes audit-followup #333.
+pub fn resolve_bulk_await_timeout() -> Duration {
+    #[cfg(debug_assertions)]
+    {
+        if let Ok(s) = std::env::var("JR_BULK_AWAIT_TIMEOUT_SECS") {
+            if let Ok(secs) = s.parse::<u64>() {
+                return Duration::from_secs(secs);
+            }
+        }
+    }
+    Duration::from_secs(DEFAULT_BULK_AWAIT_TIMEOUT_SECS)
+}
+
 /// Format a `Duration` for inclusion in an operator-facing error or warning
 /// message. Targets the **millisecond-to-seconds range** which covers every
 /// grace value the #336 code paths can produce:
@@ -269,6 +307,21 @@ impl JiraClient {
         self.get(&path).await
     }
 
+    /// Deadline-aware variant of `poll_bulk_task` for use inside
+    /// `await_bulk_task_inner`. Routes through `JiraClient::get_bounded` so
+    /// a 429-storm during this poll cannot push elapsed time past `deadline`.
+    ///
+    /// Anchor: BC-bulk.poll.deadline-bounded (S-333).
+    pub async fn poll_bulk_task_with_deadline(
+        &self,
+        task_id: &str,
+        deadline: Instant,
+    ) -> anyhow::Result<BulkOperationProgress> {
+        validate_task_id(task_id)?;
+        let path = format!("/rest/api/3/bulk/queue/{}", urlencoding::encode(task_id));
+        self.get_bounded(&path, deadline).await
+    }
+
     /// Poll a bulk task with exponential backoff until terminal state or timeout.
     ///
     /// Uses `JiraClient::get` → `send` for each poll, which already handles:
@@ -341,16 +394,36 @@ impl JiraClient {
 
         loop {
             // Check timeout before each poll attempt.
+            //
+            // S-333 C-1 (F5 pass-03): this OUTER deadline-exceeded site MUST
+            // surface as JrError::DeadlineExceeded (exit code 124, POSIX
+            // timeout convention) — same variant + exit code as the INNER
+            // sites in src/api/client.rs::send_inner. Otherwise the outer-
+            // loop case (most common: bulk task stuck in RUNNING / ENQUEUED
+            // until the deadline) exits 1 while the inner cases exit 124,
+            // breaking scripts that key on exit 124 for "my deadline expired".
+            // Message includes a `[deadline:bulk-outer]` site tag for operator
+            // forensics (research-validation pass-04 Q1: prefer site tags in
+            // the message string over schema-extending the variant).
             if Instant::now() >= deadline {
-                return Err(anyhow::anyhow!(
-                    "Bulk task {task_id} did not complete within {}s timeout. \
-                     Check Jira for task status.",
-                    timeout.as_secs()
-                ));
+                return Err(crate::error::JrError::DeadlineExceeded {
+                    remaining_ms: 0,
+                    message: format!(
+                        "[deadline:bulk-outer] Bulk task {task_id} did not \
+                         complete within {}s timeout. Check Jira for task status.",
+                        timeout.as_secs()
+                    ),
+                }
+                .into());
             }
 
-            // poll_bulk_task → self.get → self.send (handles 429 + 401 auto-refresh).
-            let progress = self.poll_bulk_task(task_id).await?;
+            // S-333: route polls through `poll_bulk_task_with_deadline` so that
+            // 429 retry sleeps inside `JiraClient::send` are clamped to the
+            // remaining deadline. Without this, a single poll could sleep up
+            // to MAX_RETRIES * MAX_RETRY_AFTER_SECS = 180s past the deadline
+            // before the top-of-loop check above re-fires.
+            // BC-bulk.poll.deadline-bounded / NFR-R-NEW-3.
+            let progress = self.poll_bulk_task_with_deadline(task_id, deadline).await?;
 
             // Unknown-status escalation path (#336). Three cases:
             //  1. Known status — reset the unknown tracker and continue normally.
@@ -435,8 +508,29 @@ impl JiraClient {
             }
 
             // Not terminal yet: sleep with exponential backoff before retrying.
-            let sleep_secs = backoff.min(POLL_MAX_SECS);
-            tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
+            //
+            // S-333 B-1 (F5 pass-02): clamp the backoff sleep to the remaining
+            // deadline budget so a long-running RUNNING-storm cannot overshoot
+            // by up to POLL_MAX_SECS (10s) past the deadline. Without this
+            // clamp, the top-of-loop deadline check fires AFTER each sleep,
+            // not during — so a sleep that started at deadline-1ms would run
+            // to its full POLL_MAX_SECS duration before the next check.
+            //
+            // This complements the 429-retry clamp inside `JiraClient::send_inner`
+            // (which guards against 429-storms inside ONE poll). Together they
+            // bound the overshoot to `< POLL_MAX_SECS` even on adversarial mocks.
+            //
+            // Per Q1(a) research-validation pass-03: we use `Duration::min`
+            // directly rather than the `clamp_retry_sleep` helper because the
+            // semantics here are simpler — the top-of-loop check on the next
+            // iteration will catch any sub-millisecond residual without
+            // needing an Expired-variant short-circuit. `tokio::time::sleep`
+            // treats sub-1ms as a no-op (tokio #4522); that is fine here
+            // because the very next iteration will re-check the deadline.
+            let backoff_sleep = Duration::from_secs(backoff.min(POLL_MAX_SECS));
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let clamped_sleep = backoff_sleep.min(remaining);
+            tokio::time::sleep(clamped_sleep).await;
             backoff = (backoff * 2).min(POLL_MAX_SECS);
         }
     }

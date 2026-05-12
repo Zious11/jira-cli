@@ -1,11 +1,10 @@
 use anyhow::{Result, bail};
 use serde_json::json;
-use std::time::Duration;
 
 use crate::adf;
 use crate::api::assets::linked::get_or_fetch_cmdb_fields;
 use crate::api::client::JiraClient;
-use crate::api::jira::bulk::BULK_MAX_KEYS;
+use crate::api::jira::bulk::{BULK_MAX_KEYS, resolve_bulk_await_timeout};
 use crate::cli::{IssueCommand, OutputFormat};
 use crate::config::Config;
 use crate::error::JrError;
@@ -904,7 +903,7 @@ async fn handle_edit_bulk_labels(
         .await?;
     // Poll with 5-minute timeout.
     let progress = client
-        .await_bulk_task(&task_id, Duration::from_secs(300))
+        .await_bulk_task(&task_id, resolve_bulk_await_timeout())
         .await?;
 
     render_bulk_edit_results(keys, &task_id, &progress, output_format)
@@ -971,7 +970,7 @@ async fn handle_edit_bulk_fields(
         .bulk_edit_fields(keys, selected_actions, edited_fields)
         .await?;
     let progress = client
-        .await_bulk_task(&task_id, Duration::from_secs(300))
+        .await_bulk_task(&task_id, resolve_bulk_await_timeout())
         .await?;
 
     render_bulk_edit_results(keys, &task_id, &progress, output_format)

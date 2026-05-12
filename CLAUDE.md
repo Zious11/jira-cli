@@ -69,7 +69,7 @@ src/
 ├── lib.rs               # Crate root (re-exports for integration tests)
 ├── jql.rs               # JQL utilities: escaping, validation, asset clause builder
 ├── partial_match.rs     # Case-insensitive substring matching with disambiguation
-└── error.rs             # JrError enum with exit codes (0/1/2/64/78/130)
+└── error.rs             # JrError enum with exit codes (0/1/2/64/78/124/130)
 ```
 
 Product-namespaced `api/jira/` and `types/jira/` so future Confluence/JSM/Assets support adds sibling directories.
@@ -219,6 +219,9 @@ When adding a new feature:
 ## AI Agent Notes
 
 - `JR_BASE_URL` env var overrides the configured Jira instance URL (used by tests to inject wiremock). **Debug builds only** — release binaries ignore this env var. The override is gated via `#[cfg(debug_assertions)]` at BOTH read sites — `Config::base_url()` in `src/config.rs` and `JiraClient::from_config()` in `src/api/client.rs` — because either site alone leaves a token-leak vector where `JR_BASE_URL=http://attacker/` would redirect authenticated requests to a non-Atlassian host. Regression-pinned by `tests/base_url_release_gate.rs`. Mirrors the existing `JR_AUTH_HEADER` gate (SD-002).
+- `JR_BULK_UNKNOWN_GRACE_SECS` env var overrides the unknown-bulk-task-status grace period (default 30s). **Debug builds only** — gated via `#[cfg(debug_assertions)]` in `src/api/jira/bulk.rs::resolve_unknown_status_grace`. Used by CLI integration tests to drive the warn+escalate path in ~1s. Not security-critical (no token-leak vector); single-site gate. Regression-pinned by `tests/bulk_unknown_grace_release_gate.rs`. Closes audit-followup #336.
+- `JR_BULK_AWAIT_TIMEOUT_SECS` env var overrides the bulk-poll wall-clock timeout (default 300s / 5min). **Debug builds only** — gated via `#[cfg(debug_assertions)]` in `src/api/jira/bulk.rs::resolve_bulk_await_timeout`. Used by `tests/bulk_deadline_propagation.rs` to drive the 429-storm clamp through the binary in ~30s instead of ~300s. Not security-critical (no token-leak vector); single-site gate. Regression-pinned by `tests/bulk_await_timeout_release_gate.rs`. Closes audit-followup #333.
+- **When adding a new `JR_*` test-seam env var:** grep `CLAUDE.md` for existing `JR_*` entries and add a parallel line in the SAME commit as the code change. This is the codified doc-fallout pattern from #335/#357; first applied retroactively when `JR_BULK_UNKNOWN_GRACE_SECS` and `JR_BULK_AWAIT_TIMEOUT_SECS` shipped without documentation.
 - `JR_PROFILE` env var overrides the active profile per-call (combine with direnv to scope a repo to a sandbox site)
 - `--profile NAME` flag overrides `JR_PROFILE` for one invocation; precedence is flag > env > config > "default"
 - `JiraClient::new_for_test(base_url, auth_header)` constructs a client for integration tests
