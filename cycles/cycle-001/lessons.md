@@ -465,3 +465,58 @@ the root-cause commit and do a complete doc sweep rather than patching sites one
 _Discovered: PR #356 R14-R18 pattern analysis at R19 convergence, 2026-05-12_
 _Tagged: [codified] — new lesson; R14 behavioral change produced 4-round doc-fallout cluster (R15:2+R16:3+R17:1+R18:1=7 findings)_
 _Scope: any commit that changes the behavior of escape, encoding, validation, or classification functions_
+
+---
+
+## 2026-05-12 — PR #357 Retroactive Dispatch (Lessons 1+2 Recurrence)
+
+### [codified] Lesson 1 addendum: "pattern already in same file" is a rationalization, not an exemption
+
+PR #357 implemented issue #335 (release-gate `JR_BASE_URL` behind `#[cfg(debug_assertions)]`).
+The fix is a direct mirror of the existing `JR_AUTH_HEADER` gate in the same file (~line 72),
+established under SD-002. The rationalization for skipping Perplexity pre-validation was:
+"pattern already established in same file — behavior is known."
+
+This is the same class of reasoning DEC-018 was designed to prevent: the standing rule is
+"always validate Copilot reviews with Perplexity" — DEC-018's spirit extends to any external
+claim made in the design of a fix, not only to Copilot review triage. In this case the
+external claim is: "`#[cfg(debug_assertions)]` is the correct compile-time gate and cannot be
+accidentally enabled in a release build."
+
+Perplexity validation (run retroactively after user course-correction) surfaced a non-obvious
+caveat: `debug-assertions = true` CAN be set in `[profile.release]` in Cargo.toml. The fix
+is sound ONLY because the project's Cargo.toml has no such override. Skipping the validation
+step meant this caveat was verified after the fact rather than before. The fix happened to be
+correct, but the audit trail was incomplete.
+
+**Rule clarified:** Even for "mirror this existing pattern" fixes, run Perplexity on at least
+one external-claim aspect before opening the PR. The cost is one search query. The benefit is
+an explicit caveat check (e.g., Cargo.toml override) that makes the fix verifiably sound
+rather than coincidentally sound.
+
+_Discovered: PR #357 retroactive validation, 2026-05-12_
+_Tagged: [codified] — addendum to Lesson 1 / DEC-018; same rationalization pattern ("obvious from file context") as R2/R3 skips on PR #356_
+
+---
+
+### [codified] Lesson 2 addendum: state-manager dispatch is required at PR creation, not only per-Copilot-round
+
+The prior codification of Lesson 2 (PR #356 post-round-4 remediation) established: dispatch
+state-manager AFTER EACH Copilot-round fix commit, not just at PR open and convergence.
+
+PR #357 adds a second failure mode: state-manager dispatch was skipped at PR creation
+entirely, deferring the first audit-trail entry until a user course-correction prompted
+this retroactive dispatch. The rationalization was "this is a small 8-line fix; state
+updates are for bigger PRs."
+
+There is no size threshold for state-manager dispatch. The rule is:
+1. Dispatch state-manager when the PR is opened (record: branch, head SHA, issue, scope, test results).
+2. Dispatch state-manager after each Copilot-round fix commit (record: round N, findings, fix SHA).
+3. Dispatch state-manager when the PR is merged (record: merge SHA, issue closed).
+
+"Small fix" is not an exemption. The audit trail purpose is to capture ALL in-cycle work so
+that any session resume can reconstruct full context from STATE.md + burst-log without
+visiting GitHub. A missing PR-creation entry leaves a gap regardless of diff size.
+
+_Discovered: PR #357 retroactive dispatch, 2026-05-12_
+_Tagged: [codified] — addendum to Lesson 2; extends the per-Copilot-round rule to include the PR creation event itself_

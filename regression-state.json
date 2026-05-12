@@ -1,1 +1,1 @@
-{"status":"pass","timestamp":"2026-05-12T00:35:08Z","command":"cargo fmt --all 2>&1 | tail -3; cargo clippy --all-targets -- -D warnings 2>&1 | tail -5; echo \"---TESTS---\"; cargo test 2>&1 | grep -E \"FAILED|^test result.*failed\" | head -3"}
+{"status":"pass","timestamp":"2026-05-12T02:22:55Z","command":"cargo test 2>&1 | grep \"test result\" | awk '{passed += $4; failed += $6} END {print \"Test groups:\", NR, \"| Total passed:\", passed, \"| Total failed:\", failed}'"}
