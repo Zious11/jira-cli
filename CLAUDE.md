@@ -218,7 +218,7 @@ When adding a new feature:
 
 ## AI Agent Notes
 
-- `JR_BASE_URL` env var overrides the configured Jira instance URL (used by tests to inject wiremock)
+- `JR_BASE_URL` env var overrides the configured Jira instance URL (used by tests to inject wiremock). **Debug builds only** — release binaries ignore this env var. Gated via `#[cfg(debug_assertions)]` in `JiraClient::from_config` to prevent a token-leak vector where `JR_BASE_URL=http://attacker/` would otherwise redirect authenticated requests to a non-Atlassian host. Mirrors the existing `JR_AUTH_HEADER` gate (SD-002).
 - `JR_PROFILE` env var overrides the active profile per-call (combine with direnv to scope a repo to a sandbox site)
 - `--profile NAME` flag overrides `JR_PROFILE` for one invocation; precedence is flag > env > config > "default"
 - `JiraClient::new_for_test(base_url, auth_header)` constructs a client for integration tests

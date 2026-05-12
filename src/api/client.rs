@@ -40,7 +40,14 @@ impl JiraClient {
         let base_url = config.base_url()?;
 
         // JR_BASE_URL overrides all URL targets (used by integration tests to inject wiremock).
+        // Debug builds only — release binaries ignore this env var to prevent
+        // JR_BASE_URL=http://attacker/ from leaking the bearer token to a non-Atlassian
+        // endpoint (paired with the existing JR_AUTH_HEADER #[cfg(debug_assertions)]
+        // gate below per SD-002 resolution). Closes audit-followup #335.
+        #[cfg(debug_assertions)]
         let test_override = std::env::var("JR_BASE_URL").ok();
+        #[cfg(not(debug_assertions))]
+        let test_override: Option<String> = None;
 
         // In test-override mode the profile is not consulted for any URL target,
         // and JR_AUTH_HEADER short-circuits credential loading. In real-use mode
