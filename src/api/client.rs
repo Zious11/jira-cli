@@ -1043,7 +1043,7 @@ fn serialize_value_bounded(v: &serde_json::Value, limit: usize) -> String {
         s.truncate(end);
     }
     // Append the truncation marker so consumers see that JSON is incomplete
-    // rather than a malformed-but-silently-truncated fragment (R10 finding).
+    // rather than a malformed-but-silently-truncated fragment.
     // Only when we actually overflowed AND we reserved budget for the marker.
     if overflowed && reserve_marker {
         s.push_str(TRUNCATION_MARKER);
@@ -1090,17 +1090,14 @@ fn serialize_value_bounded(v: &serde_json::Value, limit: usize) -> String {
 fn sanitize_for_stderr(input: String) -> String {
     use std::fmt::Write;
 
-    // Fast-path check: scan bytes for ASCII controls. Bytes alone can't
-    // detect C1 controls (U+0080..U+009F) since those are 2-byte UTF-8
-    // sequences (0xc2 0x80..0xc2 0x9f); we'd risk false positives on
-    // valid 2-byte UTF-8. Cheap path checks ASCII controls only; C1
-    // detection is then handled in the char loop. The slow path triggers
-    // only if ASCII controls OR oversized input is present — C1-only
-    // input falls through to the fast return below, which is fine
-    // because C1 chars in modern UTF-8 terminals are inert (R14 finding
-    // notes they're invalid UTF-8 continuation bytes and get dropped).
-    // For defense-in-depth against legacy/non-UTF8 terminals, we still
-    // escape C1 chars when we go through the slow path.
+    // Fast-path check: char-level scan for Unicode control chars (both
+    // ASCII C0+DEL and C1 U+0080..U+009F). `char::is_control()` covers
+    // the full control set; byte-level scanning is insufficient because
+    // C1 controls are 2-byte UTF-8 sequences (0xc2 0x80..0xc2 0x9f) that
+    // a raw byte scan can't distinguish from valid multi-byte text.
+    // Char decoding costs more than byte iteration but is required for
+    // comprehensive defense-in-depth against legacy/non-UTF8 terminals
+    // that may still interpret C1 codepoints as control sequences.
     let needs_sanitization = input.chars().any(|c| c.is_control());
     let needs_truncation = input.len() > MAX_SANITIZED_OUTPUT_LEN;
 
@@ -1128,12 +1125,12 @@ fn sanitize_for_stderr(input: String) -> String {
         //   (still 4x, preserving the 4 KiB cap's worst-case budget)
         // - Other chars: `c.len_utf8()` (1-4 bytes for any Unicode scalar)
         //
-        // R14 hardening (Perplexity-validated 2026-05-11): C1 controls are
-        // inert in modern UTF-8 terminals (rejected as invalid UTF-8
-        // continuation bytes) so this is not a current vector, but
-        // legacy/embedded/non-UTF8 terminals could still interpret U+009B
-        // (CSI) and friends as control sequences. `char::is_control()`
-        // catches both C0 and C1 for comprehensive defense-in-depth.
+        // C1 controls (U+0080..U+009F) are inert in modern UTF-8 terminals
+        // (rejected as invalid UTF-8 continuation bytes), so they are not
+        // a current vector — but legacy/embedded/non-UTF8 terminals could
+        // still interpret U+009B (CSI) and friends as control sequences.
+        // `char::is_control()` catches both C0 and C1 for comprehensive
+        // defense-in-depth.
         let needed = if c.is_control() {
             if c.is_ascii() { 4 } else { 8 }
         } else {
@@ -1240,7 +1237,7 @@ fn extract_error_message_raw(body: &[u8]) -> String {
             // at 3 bytes each) before conversion.
             //
             // Use a custom marker that records the ORIGINAL body.len() rather than
-            // relying on `cap_entry`'s default marker (R12 finding): cap_entry's
+            // relying on `cap_entry`'s default marker: cap_entry's
             // marker reports the *post-pre-cap* string length, which can never
             // exceed PRE_CAP_BYTES (~4096 bytes). When operators are diagnosing a
             // resource-exhaustion / flood attempt, they need to see that the
@@ -1278,7 +1275,7 @@ fn extract_error_message_raw(body: &[u8]) -> String {
     };
 
     // Memory-amplification defense at the JSON parse step (OWASP API4:2023 (Unrestricted Resource Consumption) / CWE-770 (Allocation of Resources Without Limits or Throttling),
-    // Perplexity-validated 2026-05-11, R11 finding). `serde_json::from_str::<Value>`
+    // Perplexity-validated 2026-05-11). `serde_json::from_str::<Value>`
     // materializes a full DOM that costs roughly 2-3x the body size in memory.
     // Even though every downstream cap (cap_entry, serialize_value_bounded,
     // sanitize_for_stderr) bounds OUTPUT, none of them prevent the INPUT DOM
@@ -1382,7 +1379,7 @@ fn extract_error_message_raw(body: &[u8]) -> String {
                     .take(MAX_ERROR_PAIRS)
                     .map(|(k, v)| {
                         // Cap server-controlled key length BEFORE format!
-                        // (R9 defense — see comment block above).
+                        // (see comment block above).
                         let k_capped = cap_entry(k);
                         if let Some(s) = v.as_str() {
                             // String value: borrow via Cow when no truncation.
@@ -1390,7 +1387,7 @@ fn extract_error_message_raw(body: &[u8]) -> String {
                         } else {
                             // Non-string value: bounded serialization avoids
                             // full Value::to_string() allocation against
-                            // hostile deeply-nested / huge values (R9 defense).
+                            // hostile deeply-nested / huge values.
                             let serialized = serialize_value_bounded(v, MAX_ERROR_ENTRY_LEN);
                             format!("{}: {}", k_capped, cap_entry(&serialized))
                         }
@@ -1723,7 +1720,7 @@ mod sanitize_tests {
     }
 
     // serialize_value_bounded tests — memory-amplification defense for
-    // non-string `errors`-map values (R9 finding).
+    // non-string `errors`-map values.
 
     #[test]
     fn test_serialize_value_bounded_small_value_fits_under_limit() {
@@ -1750,7 +1747,7 @@ mod sanitize_tests {
         );
         // Output should be a valid prefix of the full serialization.
         assert!(out.starts_with("{\"oversized\":\""));
-        // R10 pin: truncated output MUST end with a visible marker so
+        // Pin: truncated output MUST end with a visible marker so
         // operators see the JSON is incomplete rather than malformed.
         assert!(
             out.ends_with(" [...truncated]"),
@@ -1805,7 +1802,7 @@ mod sanitize_tests {
 
     #[test]
     fn test_serialize_value_bounded_no_marker_when_no_overflow() {
-        // R10 pin: when the value fits comfortably within the limit, the
+        // Pin: when the value fits comfortably within the limit, the
         // truncation marker must NOT be appended (otherwise legitimate
         // small responses would look truncated).
         let v = serde_json::json!({"code": 42, "msg": "hello"});
@@ -1819,7 +1816,7 @@ mod sanitize_tests {
 
     #[test]
     fn test_serialize_value_bounded_marker_fits_within_limit_for_oversized() {
-        // R10 pin: even WITH the marker appended, the function strictly
+        // Pin: even WITH the marker appended, the function strictly
         // satisfies `out.len() <= limit` — marker bytes are reserved upfront
         // from the byte budget so the prefix-plus-marker total fits.
         let big = "x".repeat(10_000);
@@ -1836,7 +1833,7 @@ mod sanitize_tests {
 
     #[test]
     fn test_serialize_value_bounded_no_marker_for_tiny_limit_below_marker_len() {
-        // R10 degenerate case: if `limit` is smaller than the marker itself
+        // Degenerate case: if `limit` is smaller than the marker itself
         // (~15 bytes), the function falls back to raw-bounded mode without
         // a marker rather than producing a marker-only output. Useful pin
         // for future callers who might pass a tiny limit.
@@ -1848,7 +1845,7 @@ mod sanitize_tests {
     }
 
     // MAX_PARSE_BODY_LEN gate tests — memory-amplification defense at the
-    // JSON parse step (R11 finding). serde_json::from_str::<Value> builds a
+    // JSON parse step. serde_json::from_str::<Value> builds a
     // full DOM that costs ~2-3x body size; the gate falls back to the
     // byte-bounded raw-body path for oversized bodies.
 
@@ -1903,7 +1900,7 @@ mod sanitize_tests {
         assert_eq!(MAX_PARSE_BODY_LEN, 16 * 1024);
     }
 
-    // R12 pins — std::io::Write contract compliance + non-UTF8 marker accuracy.
+    // Pins — std::io::Write contract compliance + non-UTF8 marker accuracy.
 
     #[test]
     fn test_serialize_value_bounded_returns_marker_with_correct_data_on_partial_write() {
@@ -1926,7 +1923,7 @@ mod sanitize_tests {
 
     #[test]
     fn test_extract_error_message_non_utf8_marker_reports_true_body_size() {
-        // R12 pin: the non-UTF8 fallback marker MUST report the actual
+        // Pin: the non-UTF8 fallback marker MUST report the actual
         // body.len(), not the pre-capped lossy-string length. Operators
         // diagnosing a flood attempt need to see "5000000 bytes total",
         // not "4096 bytes total" which would silently under-report.
@@ -1944,7 +1941,7 @@ mod sanitize_tests {
         assert!(out.len() <= MAX_SANITIZED_OUTPUT_LEN);
     }
 
-    // R14 pins — Unicode C1 control coverage (defense-in-depth against
+    // Pins — Unicode C1 control coverage (defense-in-depth against
     // legacy/non-UTF8 terminals; modern UTF-8 terminals drop these as
     // invalid continuation bytes but is_control() future-proofs).
 
@@ -1975,7 +1972,7 @@ mod sanitize_tests {
 
     #[test]
     fn test_sanitize_for_stderr_preserves_non_control_unicode_above_ascii() {
-        // R14 anti-regression: only U+0080..U+009F are CONTROL chars
+        // Anti-regression: only U+0080..U+009F are CONTROL chars
         // above ASCII. Other code points in the U+00A0+ range (e.g.,
         // non-breaking space U+00A0, é U+00E9, 日 U+65E5) MUST pass
         // through unchanged — char::is_control() returns false for them.
@@ -1990,7 +1987,7 @@ mod sanitize_tests {
 
     #[test]
     fn test_extract_error_message_non_utf8_small_body_no_marker() {
-        // R12 pin: a small non-UTF8 body that fits in MAX_ERROR_ENTRY_LEN
+        // Pin: a small non-UTF8 body that fits in MAX_ERROR_ENTRY_LEN
         // skips the marker (the fast path). No regression for legitimate
         // tiny non-UTF8 responses.
         let body = vec![0xffu8; 16];
