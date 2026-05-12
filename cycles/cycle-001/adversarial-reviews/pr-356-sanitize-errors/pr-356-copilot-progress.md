@@ -2,9 +2,9 @@
 document_type: copilot-convergence-record
 pr: 356
 branch: chore/sanitize-errors-334
-head_sha: 7f0177d
+head_sha: dc09501
 closes_issues: ["#334"]
-rounds: 15
+rounds: 16
 status: in-progress
 review_round_1_id: ""
 review_round_1_submitted: 2026-05-11T17:49:49Z
@@ -37,18 +37,20 @@ review_round_14_id: "4268270089"
 review_round_14_submitted: 2026-05-12T00:10:42Z
 review_round_15_id: "4268312988"
 review_round_15_submitted: 2026-05-12T00:23:00Z
-threads_total: 31
-threads_resolved: 31
-trajectory: "4→1→2→2→3→2→3→2→2→1→1→2→1→1→2"
+review_round_16_id: "4268365143"
+review_round_16_submitted: 2026-05-12T00:38:00Z
+threads_total: 34
+threads_resolved: 34
+trajectory: "4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3"
 ---
 
 # PR #356 Copilot Convergence Record — IN PROGRESS
 
 **PR:** https://github.com/Zious11/jira-cli/pull/356
 **Branch:** chore/sanitize-errors-334
-**Current tip SHA:** 7f0177d
+**Current tip SHA:** dc09501
 **Closes:** #334 on merge
-**Trajectory so far:** 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2 (Round 16 pending)
+**Trajectory so far:** 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3 (Round 17 pending)
 
 ## Summary
 
@@ -57,15 +59,23 @@ PR #356 implements CWE-117 defense at the `extract_error_message` public boundar
 from Atlassian error message strings before stderr emission, preventing terminal injection
 (log forging, ANSI escape injection) via hostile or proxy-injected error payloads.
 
-Fifteen Copilot rounds have been completed with a total of 31/31 threads resolved. CI is 8/8
-green on 7f0177d. Round 16 is pending.
+Sixteen Copilot rounds have been completed with a total of 34/34 threads resolved. CI is 8/8
+green on dc09501. Round 17 is pending.
 
-**Trajectory note:** R15 returned 2 findings but both were documentation cleanup — fast-path
-comment accuracy (char-level vs byte-level scan description) and systematic removal of stale
-R-number annotations across the file. Trajectory is now 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2.
-Substantive defenses are unchanged since R14. Recent 5-round window: 1, 2, 1, 1, 2 (averaging
-1.4 findings/round), all in the documentation-quality category. R16 is the likely Phase 8 stop
-condition (0-new-comment round).
+**Trajectory note:** R16 returned 3 findings (review 4268365143 @ 00:38Z), all doc-accuracy
+consequences of the R14 C1-control expansion: (1) strategy bullets described only ASCII controls
+but R14 expanded to `char::is_control()` covering both C0/DEL and C1 — rewritten to accurately
+list both escape branches (`\xNN` 4 bytes for ASCII, `\u{NNNN}` 8 bytes for C1, both within 4 KiB
+cap); (2) a comment said C1 controls are "rejected as invalid UTF-8 continuation bytes" — technically
+wrong (U+0080..U+009F are valid Unicode codepoints with valid 2-byte UTF-8 encodings; the correct
+statement is that modern terminals ignore C1 semantics in UTF-8 mode, not that the encoding is
+invalid); (3) integration test comment in `tests/api_client.rs` said "only ASCII control bytes are
+escaped" — updated to "only control characters (ASCII C0/DEL and Unicode C1) are escaped".
+Trajectory is now 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3. R16 ticked up to 3 but all 3 are
+doc-fallout from R14, not new substantive issues. Substantive defenses unchanged since R14.
+3 threads resolved (PRRT_kwDORs-xfc6BQqRd, PRRT_kwDORs-xfc6BQqRt, PRRT_kwDORs-xfc6BQqR6);
+replies 3223009560, 3223009636, 3223009710. No new tests (comment-only changes).
+R17 is predicted to return 0-1 findings — Phase 8 stop condition within reach.
 
 **Process gaps noted:** R2 and R3 Perplexity-validation were SKIPPED on the rationalization
 that the claims were "empirically verifiable from code." Per DEC-018, this was incorrect — all
@@ -832,9 +842,94 @@ round) is the likely outcome for R15 or R16.
 
 ---
 
+## Round 16 (2026-05-12T00:38:00Z)
+
+**Review ID:** 4268365143
+**Comment IDs:** 3222985472, 3222985491, 3222985507
+**Inline comments:** 3
+**All doc-accuracy issues — consequences of R14 C1-control expansion**
+
+### Finding 1 — Strategy bullets incomplete after R14 expansion (comment 3222985472)
+
+The `sanitize_for_stderr` strategy block described "Replace every ASCII control character"
+in its bullet list but R14 expanded the detection to `char::is_control()` (covering both
+C0/DEL and C1 controls). The bullets described only the ASCII path, omitting the C1 branch.
+
+**Validation per DEC-018:** No external claims — purely internal documentation accuracy.
+Perplexity skipped per Lesson 1 (no external-claim aspect).
+
+**Fix:** Rewrote strategy bullets to accurately list both escape branches:
+- ASCII controls (C0 U+0000..U+001F + DEL U+007F): `\xNN` format (4 bytes per control char)
+- Unicode C1 controls (U+0080..U+009F): `\u{NNNN}` format (8 bytes per control char)
+- Both branches subject to the 4 KiB sanitized output cap; 8-byte C1 escapes still within budget
+  (worst case: 4096 / 8 = 512 C1 controls fully escapable within cap)
+
+### Finding 2 — C1 controls incorrectly described as "rejected as invalid UTF-8 continuation bytes" (comment 3222985491)
+
+An inline comment introduced in R14 stated that C1 controls in UTF-8 encoded text are "rejected
+as invalid UTF-8 continuation bytes." This is technically wrong:
+
+- U+0080..U+009F are valid Unicode codepoints with valid 2-byte UTF-8 encodings
+  (e.g., U+009B CSI = 0xC2 0x9B — a correctly-formed 2-byte sequence with a valid lead byte 0xC2
+  and a valid continuation byte 0x9B)
+- The actual terminal behavior: modern terminals in UTF-8 mode do NOT reject C1 2-byte sequences
+  as invalid encoding — they ignore C1 semantics (treating the sequence as data, not control)
+- Legacy terminals and terminals in ISO 8859-1 mode interpret C1 bytes (raw, not UTF-8 encoded)
+  directly, which is where the terminal injection risk exists
+
+**Validation per DEC-018:** No external claims about library behavior — the finding is about
+UTF-8 encoding correctness (well-defined by the Unicode standard) and terminal behavior
+documented in R14's own Perplexity validation. Perplexity skipped per Lesson 1.
+
+**Fix:** Rewrote the comment to precisely distinguish:
+- Raw-byte behavior: raw 0x80..0x9F bytes (ISO 8859-1 encoding) are interpreted as C1 controls
+  by terminals in ISO mode
+- UTF-8-encoded codepoint behavior: U+0080..U+009F encoded as 2-byte UTF-8 are NOT rejected as
+  invalid — they are valid UTF-8; modern UTF-8-mode terminals simply don't interpret C1 semantics
+- The defense-in-depth justification remains valid: legacy/embedded terminals and non-UTF8 terminal
+  emulators can still be affected, so escaping is correct — but the mechanism is not "invalid encoding"
+
+### Finding 3 — Integration test comment outdated: "only ASCII control bytes" (comment 3222985507)
+
+The integration test comment in `tests/api_client.rs` stated "only ASCII control bytes are escaped"
+— this was accurate before R14 but became false when R14 expanded the escape set to include Unicode
+C1 controls U+0080..U+009F.
+
+**Validation per DEC-018:** No external claims. Perplexity skipped per Lesson 1.
+
+**Fix:** Updated comment to: "only control characters (ASCII C0/DEL and Unicode C1) are escaped;
+printable Unicode passes through unchanged."
+
+**Threads resolved:** PRRT_kwDORs-xfc6BQqRd (C1), PRRT_kwDORs-xfc6BQqRt (C2),
+PRRT_kwDORs-xfc6BQqR6 (C3)
+**Replies posted:** 3223009560 (C1), 3223009636 (C2), 3223009710 (C3)
+
+**Fix commit:** dc09501 ("chore(security): correct doc strategy bullets + accurate C1 terminal behavior (PR #356 R16)")
+**Threads:** 34/34 resolved (3 new R16 threads resolved; cumulative)
+
+**Test results at dc09501:**
+- 39 sanitize unit tests total (no new tests — comment-only changes)
+- 26 api_client integration tests pass
+- 670 cargo test total: 670 passed, 0 failed, 10 ignored (full test count unchanged)
+- cargo fmt --check + cargo clippy --all-targets -- -D warnings clean
+- CI: 8/8 green
+
+**Process note:** Twelfth consecutive in-cycle state-manager dispatch per Lesson 2.
+R5 → R6 → R7 → R8 → R9 → R10 → R11 → R12 → R13 → R14 → R15 → R16 all dispatched state-manager
+in real time. 12 rounds of consistent Perplexity+Lesson-2 discipline across 16 review rounds.
+
+**Convergence pattern:** R16 ticked up to 3 findings (trajectory now ...→1→1→2→3), but all 3
+are doc-accuracy consequences of the R14 C1-control expansion — not new substantive issues.
+The security defenses (memory-amplification bounds, Write contract compliance, DOM parse gate,
+C0+C1 escape coverage) have not been touched since R14. Copilot is exploring doc accuracy of
+the R14 change itself; once that doc-fallout is exhausted, the finding count should drop to 0-1.
+**Prediction: R17 returns 0-1 findings — Phase 8 stop condition within reach.**
+
+---
+
 ## Trajectory Analysis
 
-**Pattern so far:** 4→1→2→2→3→2→3→2→2→1→1→2→1→1 — all non-zero rounds addressed real findings.
+**Pattern so far:** 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3 — all non-zero rounds addressed real findings.
 
 - R1: 4 findings (doc accuracy, loop allocation, clean-path allocation, missing length cap).
   Perplexity confirmed CWE-117 + OWASP length-capping guidance.
@@ -911,14 +1006,27 @@ round) is the likely outcome for R15 or R16.
   on `serialize_value_bounded` — systematic strip of ALL R-number annotations across the file
   (same class as R7 cleanup). No new tests; comment-only change; 39 sanitize tests + 670 cargo
   test unchanged and green. 2 threads resolved (PRRT_kwDORs-xfc6BQhi- + PRRT_kwDORs-xfc6BQhjV);
-  replies 3222972524 + 3222972567. 31/31 threads resolved. CI 8/8 green on 7f0177d. R16 pending.
+  replies 3222972524 + 3222972567. 31/31 threads resolved. CI 8/8 green on 7f0177d.
+- R16 (4268365143 @ 00:38Z, comments 3222985472 + 3222985491 + 3222985507): 3 findings, all
+  doc-accuracy consequences of R14 C1-control expansion. C1: strategy bullets described only
+  ASCII escape path after R14 expanded to `char::is_control()` — rewrote to list both branches
+  (`\xNN` 4 bytes for C0/DEL, `\u{NNNN}` 8 bytes for C1, both within 4 KiB cap). C2: comment
+  said C1 controls are "rejected as invalid UTF-8 continuation bytes" — technically wrong
+  (U+0080..U+009F are valid Unicode codepoints with valid 2-byte UTF-8 encodings; modern terminals
+  in UTF-8 mode simply ignore C1 semantics, they do not reject the encoding). C3: integration test
+  comment in `tests/api_client.rs` said "only ASCII control bytes are escaped" — updated to
+  "only control characters (ASCII C0/DEL and Unicode C1) are escaped". No new tests; comment-only
+  changes; 39 sanitize tests + 670 cargo test unchanged and green. 3 threads resolved
+  (PRRT_kwDORs-xfc6BQqRd + PRRT_kwDORs-xfc6BQqRt + PRRT_kwDORs-xfc6BQqR6); replies 3223009560
+  + 3223009636 + 3223009710. 34/34 threads resolved. CI 8/8 green on dc09501. R17 pending.
 
-**Assessment:** R14 returned 1 finding — same as R13 (trajectory now 4→1→2→2→3→2→3→2→2→1→1→2→1→1).
-Two consecutive 1-finding rounds with findings in the defense-in-depth / documentation category
-(not security-defense gaps). The security defenses (memory amplification, Write contract, DOM
-allocation, C0 escaping) are converged; Copilot is now exploring edge-case hardening (C1 controls)
-and label correctness. Phase 8 stop condition (0-new-comment round) is the likely outcome for
-R15 or R16. Finding category has shifted from memory-safety to defense-in-depth hardening.
+**Assessment:** Trajectory is now 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3. R16 ticked up to 3 but
+all 3 are doc-fallout from R14, not new substantive issues. Qualitative convergence is clear:
+security defenses (memory-amplification bounds, Write contract, DOM parse gate, C0+C1 escape
+coverage) are fully converged since R14. Copilot is now exploring documentation accuracy of the
+R14 expansion itself. Once R14's doc-fallout is exhausted, the finding count should drop to 0-1.
+12 rounds of Perplexity+Lesson-2 discipline through 16 review rounds. R17 is predicted to return
+0-1 findings — Phase 8 stop condition within reach.
 
 ---
 
@@ -987,7 +1095,7 @@ cleanup (R13, R15) and label correctness (R13). R16 is the expected Phase 8 stop
 
 ## CI Status
 
-**Head SHA:** 7f0177d
+**Head SHA:** dc09501
 **CI result:** 8/8 green
 
 ## Current PR State
@@ -995,7 +1103,7 @@ cleanup (R13, R15) and label correctness (R13). R16 is the expected Phase 8 stop
 | Field | Value |
 |-------|-------|
 | **State** | OPEN |
-| **Threads** | 31 created; 31/31 resolved |
-| **R16** | Pending — R15 returned 2 doc-quality findings (fast-path comment accuracy + stale R-number annotations); substantive defenses unchanged since R14; recent 5-round average 1.4 findings/round; Phase 8 stop condition (0-new-comment round) likely R16 |
-| **CI on 7f0177d** | 8/8 green |
+| **Threads** | 34 created; 34/34 resolved |
+| **R17** | Pending — R16 returned 3 doc-accuracy findings (all consequences of R14 C1-control expansion); substantive defenses unchanged since R14; 12 rounds Perplexity+Lesson-2 discipline; Phase 8 stop condition (0-new-comment round) predicted R17 |
+| **CI on dc09501** | 8/8 green |
 | **Closes** | #334 on merge |

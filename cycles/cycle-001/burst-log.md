@@ -2257,4 +2257,36 @@ Skip is per-spec, not a rationalization.
 | orchestrator | Triage 2 Copilot R15 findings (comments 3222937344 + 3222937368 @ 00:23:00Z); both documentation-only; Perplexity not required (no external claims per Lesson 1) | Confirmed valid documentation gaps |
 | implementer | Rewrite fast-path comment in `sanitize_for_stderr` to describe char-level scan and explain C1 2-byte UTF-8 encoding constraint; systematically strip all R-number annotations from src/api/client.rs | src/api/client.rs 7f0177d |
 | orchestrator | Resolve threads PRRT_kwDORs-xfc6BQhi- + PRRT_kwDORs-xfc6BQhjV; post replies 3222972524 + 3222972567; commit 7f0177d; push; verify CI 8/8 green | 31/31 threads resolved; CI green; R16 pending |
+
+---
+
+## Burst: PR #356 Copilot R16 (2026-05-12T00:38Z)
+
+**Agents dispatched:** orchestrator, implementer, state-manager
+**Files touched:** src/api/client.rs, tests/api_client.rs
+**Versions bumped:** (none)
+**Commit:** dc09501 ("chore(security): correct doc strategy bullets + accurate C1 terminal behavior (PR #356 R16)")
+
+### Summary
+
+Copilot R16 returned 3 findings (review 4268365143 @ 00:38Z), all doc-accuracy consequences of
+the R14 C1-control expansion. No behavior change; no new tests; 39 sanitize tests + 670 cargo
+test unchanged and green. CI 8/8 green on dc09501. 34/34 threads resolved (0 unresolved).
+
+**Trajectory:** 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3 — R16 ticked up to 3 but all doc-fallout
+from R14. Substantive defenses unchanged since R14. 12 consecutive in-cycle state-manager
+dispatches (Lesson 2). R17 pending; predicted 0-1 findings (Phase 8 stop condition within reach).
+
+**Perplexity-validation per DEC-018:** All 3 findings are purely internal-consistency /
+doc-accuracy questions with no external library or API behavior claims. Perplexity not required
+per Lesson 1 wording ("at least one external-claim aspect"). Skips are per-spec.
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| orchestrator | Triage 3 Copilot R16 findings (comments 3222985472 + 3222985491 + 3222985507 @ 00:38Z); all doc-accuracy consequences of R14 C1 expansion; Perplexity not required (no external claims per Lesson 1) | Confirmed valid doc-accuracy gaps |
+| implementer | (C1) Rewrite strategy bullets in `sanitize_for_stderr` to list both escape branches (`\xNN` C0/DEL, `\u{NNNN}` C1); (C2) Fix C1 control description — not "invalid UTF-8 continuation bytes" but "valid 2-byte UTF-8 encoding whose semantics modern terminals ignore in UTF-8 mode"; (C3) Update integration test comment "only ASCII control bytes" → "only control characters (ASCII C0/DEL and Unicode C1)" | src/api/client.rs + tests/api_client.rs dc09501 |
+| orchestrator | Resolve threads PRRT_kwDORs-xfc6BQqRd + PRRT_kwDORs-xfc6BQqRt + PRRT_kwDORs-xfc6BQqR6; post replies 3223009560 + 3223009636 + 3223009710; commit dc09501; push; verify CI 8/8 green | 34/34 threads resolved; CI green; R17 pending |
+| state-manager | Update STATE.md + burst-log.md + pr-356-copilot-progress.md for R16; commit factory-artifacts | Factory state current through R16 |
 | state-manager | Eleventh consecutive in-cycle dispatch per Lesson 2 | STATE.md, burst-log.md, pr-356-copilot-progress.md updated |
