@@ -154,31 +154,62 @@ please report at <repo-issues-url> so we can update the known-status list.
 
 ## Public API impact
 
-- `BulkOperationProgress::is_terminal()` — **unchanged**.
-- `BulkOperationProgress::is_known_status()` — **new** public method.
+- `BulkOperationProgress::is_terminal()` — **signature unchanged**; recognized
+  set **expanded** to include `PARTIAL_FAILURE` and `PROCESSED_WITH_ERRORS`
+  (Atlassian enum additions verified Perplexity 2026-05-12). Existing callers
+  that route by `is_terminal()` now exit the poll loop on these statuses
+  instead of falling through to the unknown-status warn+grace path.
+- `BulkOperationProgress::is_known_status()` — **new** public method covering
+  the full documented enum (terminal ∪ non-terminal).
 - `JiraClient::await_bulk_task(task_id, timeout)` — **unchanged** signature;
-  internal behavior gains the warn + escalate paths.
+  internal behavior gains the warn + escalate paths. Uses
+  `DEFAULT_UNKNOWN_STATUS_GRACE_SECS` (30s).
 - `JiraClient::await_bulk_task_with_grace_for_test(...)` — **new**, gated
-  `#[cfg(test)]`. Not part of release API surface.
+  `#[cfg(test)]`. Not part of release API surface. Used by in-lib wiremock
+  tests in `src/api/jira/bulk.rs`.
+- `JR_BULK_UNKNOWN_GRACE_SECS` env var — **new**, gated
+  `#[cfg(debug_assertions)]` so release binaries ignore it (mirrors the
+  `JR_BASE_URL` / `JR_AUTH_HEADER` debug-only pattern). Lets CLI-level
+  integration tests drive the warn+escalate path through the binary without
+  waiting 30 seconds. Not security-sensitive (no token-leak vector) — at worst
+  a misuse shortens or lengthens the grace, both bounded by the 5-minute
+  overall timeout.
 
 ## Test plan
 
-1. **Unit test** in `mod tests` of `src/types/jira/bulk.rs`:
+1. **Unit tests** in `mod tests` of `src/types/jira/bulk.rs`:
    - `test_336_is_known_status_recognizes_documented_set` — all documented
-     statuses return `true`; novel statuses (`PARTIAL_FAILURE`, `FOO`, empty)
+     statuses (terminal ∪ non-terminal) return `true`; novel/unknown values
      return `false`.
-2. **Integration test** in `tests/issue_bulk_pr2.rs` (or new
-   `tests/bulk_unknown_status.rs`):
-   - `test_336_unknown_status_warns_then_escalates_after_grace` — wiremock
-     returns `PARTIAL_FAILURE` indefinitely; call
-     `await_bulk_task_with_grace_for_test` with `timeout=10s, grace=200ms`;
-     expect `Err` with `PARTIAL_FAILURE` in the message; expect stderr
-     warning seen (`assert_stderr` capture).
-   - `test_336_known_status_does_not_trigger_warning` — wiremock returns
-     `ENQUEUED → COMPLETE`; no warning emitted; returns `Ok(...)`.
-   - `test_336_transient_unknown_then_known_resets_tracker` — wiremock
-     returns `PARTIAL_FAILURE → COMPLETE`; warning emits once; no error;
-     returns `Ok(...)`.
+   - `is_terminal` test updated to cover the two new terminal statuses
+     `PARTIAL_FAILURE` and `PROCESSED_WITH_ERRORS`.
+2. **In-lib wiremock tests** in `mod unknown_status_grace_tests` of
+   `src/api/jira/bulk.rs` — drive `await_bulk_task_with_grace_for_test` end-
+   to-end against `wiremock::MockServer`:
+   - `test_336_unknown_status_warns_then_escalates_after_grace` —
+     server returns `MYSTERY_STATUS_FAKE` (a deliberately-novel string that
+     won't collide with future enum additions) indefinitely; with
+     `timeout=10s, grace=200ms` the call returns `Err` containing the status
+     string. Asserts the escalation contract.
+   - `test_336_known_status_sequence_returns_ok_without_escalation` — server
+     returns `ENQUEUED → COMPLETE`; call returns `Ok(progress)`.
+   - `test_336_transient_unknown_then_known_resets_tracker` — server returns
+     `TRANSIENT_FAKE_STATUS → COMPLETE`; the tracker resets on the known
+     status and the call returns `Ok(progress)` rather than escalating.
+
+   These tests verify the escalation/reset contract via the function return
+   value. They do **not** assert on stderr (capturing `eprintln!` from an
+   async unit test requires a `tracing` migration that is out of scope for
+   #336 — Perplexity-validated 2026-05-12).
+3. **CLI-level integration test** in `tests/issue_bulk_pr2.rs` —
+   `test_336_cli_unknown_status_emits_warning_and_escalates` drives the path
+   through `jr issue move` via `assert_cmd`. Mocks the bulk POST + queue GET
+   to return `MYSTERY_STATUS_FAKE`, sets `JR_BULK_UNKNOWN_GRACE_SECS=0` so
+   the test completes in ~1s, and captures the binary's stderr to assert:
+   - the unknown-status warning text is emitted;
+   - the eventual escalation error mentions the status and the grace.
+   This closes Copilot R1 finding: warning emission is verified at the
+   process boundary, where it actually reaches operators.
 
 ## Out of scope
 

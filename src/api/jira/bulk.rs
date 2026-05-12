@@ -46,6 +46,57 @@ const POLL_MAX_SECS: u64 = 10;
 /// Closes audit-followup #336.
 const DEFAULT_UNKNOWN_STATUS_GRACE_SECS: u64 = 30;
 
+/// Format a `Duration` for inclusion in an operator-facing error or warning
+/// message. Picks the most precise unit that doesn't truncate to zero:
+///   - sub-second values render in milliseconds (e.g., `"200ms"`);
+///   - one-second-and-above values render in whole seconds (e.g., `"30s"`).
+///
+/// `Duration::as_secs()` alone is unsuitable because it truncates sub-second
+/// values to `0` — producing `"... for >= 0s; ..."` in tests that drive the
+/// grace path with sub-second values (and would mislead anyone reading logs
+/// if a future configuration knob exposed a sub-second grace).
+///
+/// Manual implementation rather than pulling in `humantime`: only one call
+/// site needs it, the format vocabulary here is small (ms vs s), and a
+/// dedicated helper keeps the unit test surface focused on the two boundaries
+/// that matter for #336. Perplexity-validated 2026-05-12: `humantime` is the
+/// idiomatic dep when many duration values need rendering, but a single-call-
+/// site helper is the lighter call when the format vocabulary is narrow.
+fn format_grace_duration(d: Duration) -> String {
+    if d < Duration::from_secs(1) {
+        format!("{}ms", d.as_millis())
+    } else {
+        format!("{}s", d.as_secs())
+    }
+}
+
+/// Resolve the unknown-status grace period for `await_bulk_task`.
+///
+/// Release builds always return `DEFAULT_UNKNOWN_STATUS_GRACE_SECS` (30s).
+/// Debug builds also honor `JR_BULK_UNKNOWN_GRACE_SECS` (decimal seconds —
+/// integer values only) so CLI-level integration tests can drive the warn+
+/// escalate path through the binary in sub-second wall-clock time without
+/// shipping the knob to production. Unparseable / non-numeric values are
+/// silently ignored (fall back to default) — the env var is a test seam,
+/// not user-configurable surface, and a typo shouldn't break the polling
+/// loop in a dev shell.
+///
+/// Gated `#[cfg(debug_assertions)]` mirrors the existing `JR_BASE_URL` and
+/// `JR_AUTH_HEADER` debug-only patterns (CLAUDE.md "AI Agent Notes"). Unlike
+/// those env vars there is no token-leak vector, so a single-site gate is
+/// sufficient — there is no production code path that reads it.
+fn resolve_unknown_status_grace() -> Duration {
+    #[cfg(debug_assertions)]
+    {
+        if let Ok(s) = std::env::var("JR_BULK_UNKNOWN_GRACE_SECS") {
+            if let Ok(secs) = s.parse::<u64>() {
+                return Duration::from_secs(secs);
+            }
+        }
+    }
+    Duration::from_secs(DEFAULT_UNKNOWN_STATUS_GRACE_SECS)
+}
+
 /// Maximum byte length for a taskId received from Atlassian, used as a sanity
 /// cap before embedding the value into the bulk-queue URL path.
 ///
@@ -208,19 +259,17 @@ impl JiraClient {
     /// Returns `Err(...)` when timeout is exceeded or an HTTP error occurs.
     ///
     /// Uses `DEFAULT_UNKNOWN_STATUS_GRACE_SECS` (30s) for the unknown-status
-    /// escalation grace period. Tests can override via
-    /// `await_bulk_task_with_grace_for_test`.
+    /// escalation grace period. In-lib tests override via
+    /// `await_bulk_task_with_grace_for_test`. CLI-level integration tests
+    /// (in `tests/`) override via the `JR_BULK_UNKNOWN_GRACE_SECS` env var,
+    /// gated `#[cfg(debug_assertions)]` so release binaries ignore it.
     pub async fn await_bulk_task(
         &self,
         task_id: &str,
         timeout: Duration,
     ) -> anyhow::Result<BulkOperationProgress> {
-        self.await_bulk_task_inner(
-            task_id,
-            timeout,
-            Duration::from_secs(DEFAULT_UNKNOWN_STATUS_GRACE_SECS),
-        )
-        .await
+        self.await_bulk_task_inner(task_id, timeout, resolve_unknown_status_grace())
+            .await
     }
 
     /// Test-only variant of `await_bulk_task` that exposes the unknown-status
@@ -303,9 +352,9 @@ impl JiraClient {
                         // and re-warn so operators see the transition.
                         eprintln!(
                             "warning: bulk task {task_id} now returning a DIFFERENT \
-                             unrecognized status {status:?} (was {last_status:?} for {}s) \
+                             unrecognized status {status:?} (was {last_status:?} for {}) \
                              — resetting grace-period counter.",
-                            now.duration_since(*first_seen).as_secs()
+                            format_grace_duration(now.duration_since(*first_seen))
                         );
                         unknown_state = Some((now, status));
                     }
@@ -314,11 +363,11 @@ impl JiraClient {
                         if now.duration_since(*first_seen) >= unknown_status_grace {
                             return Err(anyhow::anyhow!(
                                 "Bulk task {task_id} polled unrecognized status {status:?} \
-                                 for >= {}s; treating as terminal-with-error. If this status \
+                                 for >= {}; treating as terminal-with-error. If this status \
                                  indicates progress (not failure), please report at \
                                  https://github.com/Zious11/jira-cli/issues so the \
                                  known-status list can be updated.",
-                                unknown_status_grace.as_secs()
+                                format_grace_duration(unknown_status_grace)
                             ));
                         }
                         // Within grace — fall through to sleep+retry.
@@ -368,7 +417,37 @@ impl JiraClient {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_TASK_ID_LEN, validate_task_id};
+    use std::time::Duration;
+
+    use super::{MAX_TASK_ID_LEN, format_grace_duration, validate_task_id};
+
+    #[test]
+    fn test_336_format_grace_duration_sub_second_renders_ms() {
+        // Sub-second values must render in milliseconds — `as_secs()` alone
+        // truncates 200ms to 0, producing misleading ">= 0s" messages in
+        // test diagnostics and (hypothetically) any future sub-second grace
+        // configuration. Copilot R1-4 driver.
+        assert_eq!(format_grace_duration(Duration::from_millis(200)), "200ms");
+        assert_eq!(format_grace_duration(Duration::from_millis(1)), "1ms");
+        assert_eq!(format_grace_duration(Duration::from_millis(999)), "999ms");
+    }
+
+    #[test]
+    fn test_336_format_grace_duration_at_one_second_boundary_renders_s() {
+        // The boundary case: exactly 1s should render as "1s" (full-second
+        // resolution), not "1000ms". Above-one-second values render in
+        // whole seconds.
+        assert_eq!(format_grace_duration(Duration::from_secs(1)), "1s");
+        assert_eq!(format_grace_duration(Duration::from_secs(30)), "30s");
+        assert_eq!(format_grace_duration(Duration::from_secs(300)), "300s");
+    }
+
+    #[test]
+    fn test_336_format_grace_duration_zero_renders_zero_ms() {
+        // grace=0 is a legitimate test seam (`JR_BULK_UNKNOWN_GRACE_SECS=0`)
+        // and must produce a coherent string rather than empty/absurd output.
+        assert_eq!(format_grace_duration(Duration::ZERO), "0ms");
+    }
 
     #[test]
     fn test_validate_task_id_accepts_uuid() {
@@ -533,9 +612,21 @@ mod unknown_status_grace_tests {
     }
 
     /// Persistent unknown status → escalation to terminal-with-error after the
-    /// configured grace period elapses. Verifies the core #336 contract.
+    /// configured grace period elapses. Verifies the **escalation half** of
+    /// the #336 contract: that the polling loop converts a persistent novel
+    /// status into a definitive `Err` rather than waiting the full 5-minute
+    /// timeout.
+    ///
+    /// The **warning-emission half** of the contract (the stderr `eprintln!`
+    /// fired on first sighting) is verified at the CLI-level integration
+    /// test `test_336_cli_unknown_status_emits_warning_and_escalates` in
+    /// `tests/issue_bulk_pr2.rs`, which drives the binary via `assert_cmd`
+    /// and asserts on captured stderr. Capturing `eprintln!` from an async
+    /// unit test would require a `tracing` migration (Perplexity-validated
+    /// 2026-05-12: no stdlib mechanism; the `gag` / `stdio-override` crates
+    /// are sync-only and unmaintained) and is out of scope for #336.
     #[tokio::test]
-    async fn test_336_unknown_status_warns_then_escalates_after_grace() {
+    async fn test_336_persistent_unknown_status_escalates_to_err_after_grace() {
         let server = MockServer::start().await;
         let task_id = "test-unknown-336";
 
