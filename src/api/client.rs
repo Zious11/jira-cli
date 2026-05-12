@@ -865,8 +865,10 @@ const MAX_SANITIZED_OUTPUT_LEN: usize = 4096;
 
 /// Maximum byte length of an error response body that will be parsed as JSON.
 ///
-/// Defense against memory-amplification at the JSON parse step (OWASP A06 /
-/// AP11, Perplexity-validated 2026-05-11). `serde_json::from_str::<Value>`
+/// Defense against memory-amplification at the JSON parse step (OWASP
+/// API4:2023 — Unrestricted Resource Consumption / CWE-770 — Allocation of
+/// Resources Without Limits or Throttling, Perplexity-validated 2026-05-11).
+/// `serde_json::from_str::<Value>`
 /// builds a full DOM that costs roughly 2-3x the body size in memory; a
 /// hostile server returning a valid 100 MB JSON body would force 200-300 MB
 /// of DOM allocation even though every downstream cap (`cap_entry`,
@@ -928,7 +930,7 @@ fn cap_entry(s: &str) -> std::borrow::Cow<'_, str> {
 
 /// Bounded JSON serialization of a `serde_json::Value`.
 ///
-/// Defense-in-depth against memory-amplification DoS (OWASP A06 / AP11) for the
+/// Defense-in-depth against memory-amplification DoS (OWASP API4:2023 (Unrestricted Resource Consumption) / CWE-770 (Allocation of Resources Without Limits or Throttling)) for the
 /// non-string-value branch of `extract_error_message_raw`. `Value::to_string()`
 /// (or `serde_json::to_string`) fully serializes the input into a `String`
 /// BEFORE `cap_entry` can truncate it — a hostile response with a deeply
@@ -1202,7 +1204,7 @@ fn extract_error_message_raw(body: &[u8]) -> String {
     let body_str = match std::str::from_utf8(body) {
         Ok(s) => s,
         Err(_) => {
-            // Memory-amplification defense (OWASP A06 / AP11, Perplexity-validated
+            // Memory-amplification defense (OWASP API4:2023 (Unrestricted Resource Consumption) / CWE-770 (Allocation of Resources Without Limits or Throttling), Perplexity-validated
             // 2026-05-11): `String::from_utf8_lossy` allocates an owned String for
             // the ENTIRE byte slice even though `cap_entry` will truncate the result
             // to MAX_ERROR_ENTRY_LEN. A hostile server returning a massive non-UTF8
@@ -1249,7 +1251,7 @@ fn extract_error_message_raw(body: &[u8]) -> String {
         }
     };
 
-    // Memory-amplification defense at the JSON parse step (OWASP A06 / AP11,
+    // Memory-amplification defense at the JSON parse step (OWASP API4:2023 (Unrestricted Resource Consumption) / CWE-770 (Allocation of Resources Without Limits or Throttling),
     // Perplexity-validated 2026-05-11, R11 finding). `serde_json::from_str::<Value>`
     // materializes a full DOM that costs roughly 2-3x the body size in memory.
     // Even though every downstream cap (cap_entry, serialize_value_bounded,
@@ -1271,7 +1273,7 @@ fn extract_error_message_raw(body: &[u8]) -> String {
 
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(body_str) {
         if let Some(msgs) = json.get("errorMessages").and_then(|v| v.as_array()) {
-            // Memory-amplification defense (OWASP A06 / AP11, Perplexity-validated
+            // Memory-amplification defense (OWASP API4:2023 (Unrestricted Resource Consumption) / CWE-770 (Allocation of Resources Without Limits or Throttling), Perplexity-validated
             // 2026-05-11): even though each entry is per-entry-capped via
             // cap_entry, the NUMBER of entries is server-controlled. A hostile
             // response with a million entries × 1024 bytes each would force a
@@ -1320,7 +1322,7 @@ fn extract_error_message_raw(body: &[u8]) -> String {
         }
         if let Some(errors) = json.get("errors").and_then(|v| v.as_object()) {
             if !errors.is_empty() {
-                // Memory-amplification defense (OWASP A06 / AP11, same threat
+                // Memory-amplification defense (OWASP API4:2023 (Unrestricted Resource Consumption) / CWE-770 (Allocation of Resources Without Limits or Throttling), same threat
                 // class as the errorMessages streaming join earlier). Three
                 // server-controlled vectors are bounded here:
                 //
