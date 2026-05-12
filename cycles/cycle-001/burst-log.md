@@ -2290,3 +2290,48 @@ per Lesson 1 wording ("at least one external-claim aspect"). Skips are per-spec.
 | orchestrator | Resolve threads PRRT_kwDORs-xfc6BQqRd + PRRT_kwDORs-xfc6BQqRt + PRRT_kwDORs-xfc6BQqR6; post replies 3223009560 + 3223009636 + 3223009710; commit dc09501; push; verify CI 8/8 green | 34/34 threads resolved; CI green; R17 pending |
 | state-manager | Update STATE.md + burst-log.md + pr-356-copilot-progress.md for R16; commit factory-artifacts | Factory state current through R16 |
 | state-manager | Eleventh consecutive in-cycle dispatch per Lesson 2 | STATE.md, burst-log.md, pr-356-copilot-progress.md updated |
+
+---
+
+## Burst: PR #356 Copilot R17 (2026-05-12T00:55Z)
+
+**Agents dispatched:** orchestrator, implementer, state-manager
+**Files touched:** tests/api_client.rs (comment-only: header comment updated to mention both ASCII \xNN and C1 \u{NNNN} escapes)
+**Versions bumped:** (none)
+**Commit:** fb91f32 ("chore(security): correct integration-test header comment for C1 escapes (PR #356 R17)")
+**CI:** 8/8 green on fb91f32
+
+### Summary
+
+Copilot R17 returned 1 finding (review 4268400605 @ 00:54Z, comment id 3223021119). Comment-only
+change; no behavior change; no new tests; 39 sanitize tests + 26 api_client tests pass;
+670 cargo test green. CI 8/8 green on fb91f32. 35/35 threads resolved (0 unresolved).
+
+**Finding (CWE-117 integration-test header comment stale, comment 3223021119):**
+The header comment block in `tests/api_client.rs` described the sanitization as rendering hostile
+control chars "as \xNN literals". This was accurate before R14 but became incomplete after R14
+expanded the escape set to include Unicode C1 controls (U+0080..U+009F), which use `\u{NNNN}`
+format rather than `\xNN`. The comment now reads to cover both: ASCII C0/DEL chars escaped as
+`\xNN` and C1 chars escaped as `\u{NNNN}`.
+
+**Perplexity-validation per DEC-018:** No external library or API behavior claims — purely
+internal doc accuracy. Perplexity skipped per Lesson 1 ("at least one external-claim aspect"
+required). Skip is per-spec, not a rationalization.
+
+**Thread resolved:** PRRT_kwDORs-xfc6BQwwb (1 new R17 thread). All 35/35 threads resolved
+(0 unresolved). Reply 3223040033 posted.
+
+**Trajectory:** 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3→1 — R17 down to 1, continuing the tapering
+of the R14 doc-fallout cluster (R15:2 → R16:3 → R17:1). Substantive defenses unchanged since
+R14. Phase 8 prediction: R18 likely 0-finding stop condition.
+
+**Perplexity-validation per DEC-018:** No external claims; skip per Lesson 1.
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| orchestrator | Triage 1 Copilot R17 finding (comment 3223021119 @ 00:54Z, review 4268400605); doc-accuracy only; Perplexity not required (no external claims per Lesson 1) | Confirmed valid doc-accuracy gap |
+| implementer | Extend tests/api_client.rs header comment to mention both `\xNN` (ASCII C0/DEL) and `\u{NNNN}` (C1) escapes | tests/api_client.rs fb91f32 |
+| orchestrator | Resolve thread PRRT_kwDORs-xfc6BQwwb; post reply 3223040033; commit fb91f32; push; verify CI 8/8 green | 35/35 threads resolved; CI green; R18 pending |
+| state-manager | Thirteenth consecutive in-cycle dispatch per Lesson 2 | STATE.md, burst-log.md, pr-356-copilot-progress.md updated |

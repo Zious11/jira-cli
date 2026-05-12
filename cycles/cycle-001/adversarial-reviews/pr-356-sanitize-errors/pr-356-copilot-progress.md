@@ -2,9 +2,9 @@
 document_type: copilot-convergence-record
 pr: 356
 branch: chore/sanitize-errors-334
-head_sha: dc09501
+head_sha: fb91f32
 closes_issues: ["#334"]
-rounds: 16
+rounds: 17
 status: in-progress
 review_round_1_id: ""
 review_round_1_submitted: 2026-05-11T17:49:49Z
@@ -39,18 +39,20 @@ review_round_15_id: "4268312988"
 review_round_15_submitted: 2026-05-12T00:23:00Z
 review_round_16_id: "4268365143"
 review_round_16_submitted: 2026-05-12T00:38:00Z
-threads_total: 34
-threads_resolved: 34
-trajectory: "4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3"
+review_round_17_id: "4268400605"
+review_round_17_submitted: 2026-05-12T00:54:00Z
+threads_total: 35
+threads_resolved: 35
+trajectory: "4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3→1"
 ---
 
 # PR #356 Copilot Convergence Record — IN PROGRESS
 
 **PR:** https://github.com/Zious11/jira-cli/pull/356
 **Branch:** chore/sanitize-errors-334
-**Current tip SHA:** dc09501
+**Current tip SHA:** fb91f32
 **Closes:** #334 on merge
-**Trajectory so far:** 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3 (Round 17 pending)
+**Trajectory so far:** 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3→1 (Round 18 pending)
 
 ## Summary
 
@@ -59,23 +61,18 @@ PR #356 implements CWE-117 defense at the `extract_error_message` public boundar
 from Atlassian error message strings before stderr emission, preventing terminal injection
 (log forging, ANSI escape injection) via hostile or proxy-injected error payloads.
 
-Sixteen Copilot rounds have been completed with a total of 34/34 threads resolved. CI is 8/8
-green on dc09501. Round 17 is pending.
+Seventeen Copilot rounds have been completed with a total of 35/35 threads resolved. CI is 8/8
+green on fb91f32. Round 18 is pending.
 
-**Trajectory note:** R16 returned 3 findings (review 4268365143 @ 00:38Z), all doc-accuracy
-consequences of the R14 C1-control expansion: (1) strategy bullets described only ASCII controls
-but R14 expanded to `char::is_control()` covering both C0/DEL and C1 — rewritten to accurately
-list both escape branches (`\xNN` 4 bytes for ASCII, `\u{NNNN}` 8 bytes for C1, both within 4 KiB
-cap); (2) a comment said C1 controls are "rejected as invalid UTF-8 continuation bytes" — technically
-wrong (U+0080..U+009F are valid Unicode codepoints with valid 2-byte UTF-8 encodings; the correct
-statement is that modern terminals ignore C1 semantics in UTF-8 mode, not that the encoding is
-invalid); (3) integration test comment in `tests/api_client.rs` said "only ASCII control bytes are
-escaped" — updated to "only control characters (ASCII C0/DEL and Unicode C1) are escaped".
-Trajectory is now 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3. R16 ticked up to 3 but all 3 are
-doc-fallout from R14, not new substantive issues. Substantive defenses unchanged since R14.
-3 threads resolved (PRRT_kwDORs-xfc6BQqRd, PRRT_kwDORs-xfc6BQqRt, PRRT_kwDORs-xfc6BQqR6);
-replies 3223009560, 3223009636, 3223009710. No new tests (comment-only changes).
-R17 is predicted to return 0-1 findings — Phase 8 stop condition within reach.
+**Trajectory note:** R17 returned 1 finding (review 4268400605 @ 00:54Z, comment id 3223021119):
+the integration-test header comment in `tests/api_client.rs` still described hostile control chars
+as rendering "as \xNN literals" — accurate before R14 but incomplete afterward since C1 controls
+(U+0080..U+009F) now escape as `\u{NNNN}`. Extended comment to mention both branches.
+No new tests; comment-only change; 39 sanitize tests + 26 api_client tests pass; 670 cargo test green.
+1 thread resolved (PRRT_kwDORs-xfc6BQwwb); reply 3223040033.
+Trajectory is now 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3→1. R17 is down to 1 finding, continuing
+the taper of the R14 doc-fallout cluster (R15:2 → R16:3 → R17:1). Substantive defenses unchanged
+since R14. Phase 8 prediction: R18 likely 0-finding stop condition.
 
 **Process gaps noted:** R2 and R3 Perplexity-validation were SKIPPED on the rationalization
 that the claims were "empirically verifiable from code." Per DEC-018, this was incorrect — all
@@ -927,9 +924,54 @@ the R14 change itself; once that doc-fallout is exhausted, the finding count sho
 
 ---
 
+## Round 17 (2026-05-12T00:54:00Z)
+
+**Review ID:** 4268400605
+**Comment ID:** 3223021119
+**Inline comments:** 1
+**Valid (doc accuracy — integration-test header comment incomplete after R14 C1 expansion)**
+
+### Finding 1 — Integration-test header comment describes only `\xNN` escape format (comment 3223021119)
+
+The header comment block in `tests/api_client.rs` stated that hostile control characters render
+"as \xNN literals". This was accurate before R14 but became incomplete when R14 expanded the
+escape set to include Unicode C1 controls U+0080..U+009F, which are rendered as `\u{NNNN}`
+(8-byte format) rather than `\xNN` (4-byte format). The comment continued to imply that only
+the `\xNN` escape form was used, omitting the C1 branch entirely.
+
+**Validation per DEC-018:** No external library or API behavior claims — purely internal
+documentation accuracy. Perplexity skipped per Lesson 1 ("at least one external-claim aspect"
+required). Skip is per-spec, not a rationalization.
+
+**Fix:** Extended the header comment to explicitly cover both escape branches:
+- ASCII C0/DEL controls: escaped as `\xNN` (4 bytes per character)
+- Unicode C1 controls (U+0080..U+009F): escaped as `\u{NNNN}` (8 bytes per character)
+
+No new tests; comment-only change. 39 sanitize tests + 26 api_client tests pass; 670 cargo test
+green; CI 8/8 green on fb91f32.
+
+**Thread resolved:** PRRT_kwDORs-xfc6BQwwb
+**Reply posted:** 3223040033
+
+**Fix commit:** fb91f32 ("chore(security): correct integration-test header comment for C1 escapes (PR #356 R17)")
+**Threads:** 35/35 resolved (1 new R17 thread resolved; cumulative)
+
+**Process note:** Thirteenth consecutive in-cycle state-manager dispatch per Lesson 2.
+R5 → R6 → R7 → R8 → R9 → R10 → R11 → R12 → R13 → R14 → R15 → R16 → R17 all dispatched
+state-manager in real time. 13 rounds of consistent Perplexity+Lesson-2 discipline across
+17 review rounds.
+
+**Convergence pattern:** R17 returned 1 finding — down from R16's 3. The R14 doc-fallout cluster
+trajectory: R15:2 → R16:3 → R17:1. The cluster is tapering. Substantive defenses (memory-
+amplification bounds, Write contract, DOM parse gate, C0+C1 escape coverage) fully converged
+since R14 and untouched through R15-R17. **Phase 8 prediction: R18 likely returns 0 findings —
+stop condition.**
+
+---
+
 ## Trajectory Analysis
 
-**Pattern so far:** 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3 — all non-zero rounds addressed real findings.
+**Pattern so far:** 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3→1 — all non-zero rounds addressed real findings.
 
 - R1: 4 findings (doc accuracy, loop allocation, clean-path allocation, missing length cap).
   Perplexity confirmed CWE-117 + OWASP length-capping guidance.
@@ -1018,15 +1060,20 @@ the R14 change itself; once that doc-fallout is exhausted, the finding count sho
   "only control characters (ASCII C0/DEL and Unicode C1) are escaped". No new tests; comment-only
   changes; 39 sanitize tests + 670 cargo test unchanged and green. 3 threads resolved
   (PRRT_kwDORs-xfc6BQqRd + PRRT_kwDORs-xfc6BQqRt + PRRT_kwDORs-xfc6BQqR6); replies 3223009560
-  + 3223009636 + 3223009710. 34/34 threads resolved. CI 8/8 green on dc09501. R17 pending.
+  + 3223009636 + 3223009710. 34/34 threads resolved. CI 8/8 green on dc09501.
+- R17 (4268400605 @ 00:54Z, comment 3223021119): 1 finding, doc-accuracy only. Integration-test
+  header comment in `tests/api_client.rs` still described hostile control chars as rendering
+  "as \xNN literals" — accurate before R14 but incomplete after R14 expanded the escape set to
+  include Unicode C1 controls (U+0080..U+009F) which use `\u{NNNN}` format. Extended comment to
+  mention both branches. No new tests; comment-only change; 39 sanitize + 26 api_client tests pass;
+  670 cargo test green. 1 thread resolved (PRRT_kwDORs-xfc6BQwwb); reply 3223040033. 35/35 threads
+  resolved. CI 8/8 green on fb91f32.
 
-**Assessment:** Trajectory is now 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3. R16 ticked up to 3 but
-all 3 are doc-fallout from R14, not new substantive issues. Qualitative convergence is clear:
-security defenses (memory-amplification bounds, Write contract, DOM parse gate, C0+C1 escape
-coverage) are fully converged since R14. Copilot is now exploring documentation accuracy of the
-R14 expansion itself. Once R14's doc-fallout is exhausted, the finding count should drop to 0-1.
-12 rounds of Perplexity+Lesson-2 discipline through 16 review rounds. R17 is predicted to return
-0-1 findings — Phase 8 stop condition within reach.
+**Assessment:** Trajectory is now 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3→1. R14 doc-fallout cluster
+tapering: R15:2 → R16:3 → R17:1. Substantive defenses (memory-amplification bounds, Write contract,
+DOM parse gate, C0+C1 escape coverage) fully converged since R14 and untouched through R15-R17.
+13 rounds of Perplexity+Lesson-2 discipline through 17 review rounds. **Phase 8 prediction: R18
+likely returns 0 findings — stop condition.**
 
 ---
 
