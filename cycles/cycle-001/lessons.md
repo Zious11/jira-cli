@@ -609,3 +609,67 @@ Lesson codified in R19 (PR #356), applied in R1 (PR #357), verified effective at
 _Confirmed applied: PR #357 merge @ d208a6d, 2026-05-12T03:03:12Z_
 _Tagged: [confirmed-applied] — first successful application of the doc-fallout cluster lesson; closes the lesson-to-practice loop_
 _Reference: doc-fallout cluster lesson (2026-05-12 PR #356 R14-R18 section above)_
+
+---
+
+## 2026-05-12 — PR #358 R3 Doc-Fallout Sub-Lesson (Second Cluster in 2 Days)
+
+### [codified] Sub-lesson: grep narration-style comments (Strategy:, Logic:, etc.) before pushing a behavior-expanding commit
+
+**Context:** PR #358 R3 returned 2 findings, both doc-fallout from R2's tolerant-matcher commit
+(c708211). This is the SECOND doc-fallout cluster in 2 consecutive PRs in 2 days — PR #356
+R15–R18 was the first (4 rounds, 7 findings from the R14 behavioral change).
+
+**Root cause:** The doc-fallout lesson was codified during PR #356 R19 convergence and
+successfully applied in PR #357 (same-commit CLAUDE.md update). But it was NOT applied in
+PR #358 R2, even though R2 was a behavior-expanding commit that introduced the
+`is_matching_closing_brace` closure.
+
+**Why it was missed:** The strategy doc and `Logic:` block describing the old behavior were
+located ~15 lines above the changed closure in the same function. When the closure was edited,
+the implementer did not scroll up to re-read the strategy narration. The changed code and its
+narration were in different visual paragraphs — close enough to be in scope, far enough to be
+skipped without a deliberate audit.
+
+**The gap in the existing doc-fallout lesson:** The existing lesson focuses on "audit ALL doc
+comments in the same commit after a behavior expansion." This is necessary but not sufficient.
+The harder sub-problem is identifying which comments to audit when the changed code has
+narration-style commentary (Strategy:, Logic:, Note:, Algorithm:, etc.) that describes the
+implementation in natural language. These prose blocks are more expensive to keep in sync than
+inline `//` comments because they are written as durable explanations, not just annotations.
+
+**Sub-lesson rule:** Before pushing any commit that changes the behavior of a function that
+has narration-style comments (blocks labeled `Strategy:`, `Logic:`, `Note:`, `Algorithm:`,
+`Approach:`, or equivalent prose description), run a targeted grep to find all such blocks
+in the file and verify each one still accurately describes the post-change behavior:
+
+```bash
+grep -n "Strategy:\|Logic:\|Algorithm:\|Approach:\|Note:\|Overview:" src/<file>.rs
+```
+
+Review every match in the same function and its immediately surrounding context. If any
+narration describes a behavior the commit changes, update it in the same commit.
+
+**Why this is distinct from the existing doc-fallout lesson:** The existing lesson triggers
+on "escape, encoding, validation, or classification function" changes. The sub-lesson triggers
+on ANY behavior-expanding commit to a function with prose-style narration comments — including
+test helpers, parser functions, and string matchers. Prose narration is more durable (intended
+to survive multiple edits) and therefore more likely to go stale after a behavioral change.
+
+**Concrete example (PR #358 R2 → R3):**
+- R2 changed: the `is_matching_closing_brace` closure (behavior: exact `"    },"` → tolerant
+  trim_start + flexible closer)
+- Not changed: the `Strategy:` block above the function describing "8-space indent + `},` exact
+  close" behavior; the `Logic:` annotation referencing "8-space indent (clap variant fields use
+  8-space indent)"
+- Cost: 1 extra Copilot round (R3: 2 findings, both documentation-only)
+- Prevention: 1 `grep -n "Strategy:\|Logic:" src/cli/issue/create.rs` + 2 doc lines updated
+
+**Quantified pattern:** Second doc-fallout cluster in 2 PRs; combined cluster cost: R15–R18
+(PR #356, 4 rounds, 7 findings) + R3 (PR #358, 1 round, 2 findings) = 5 extra rounds,
+9 documentation-only findings. Both clusters were preventable by a pre-push grep step.
+
+_Discovered: PR #358 R3 post-analysis, 2026-05-12_
+_Tagged: [codified] — sub-lesson under the doc-fallout cluster lesson; second occurrence in 2 days_
+_Scope: any commit that changes behavior in a function with narration-style (Strategy:/Logic:/etc.) prose comments_
+_Root-cause: changed code and its narration were in different visual paragraphs; no pre-push narration grep was run_

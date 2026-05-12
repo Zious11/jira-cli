@@ -2788,3 +2788,38 @@ Trajectory: 1 → 1 → R3 pending. Quality pattern: steady at 1 finding per rou
 | state-manager | Append this burst entry | burst-log.md |
 
 **Outcome:** PR #358 R2 recorded in all factory artifacts. R3 pending.
+
+---
+
+## Burst 60 (2026-05-12) — PR #358 R3 COMPLETE: doc-fallout cluster from R2 tolerant-matcher
+
+**Agents dispatched:** state-manager
+**Files touched:** .factory/STATE.md, .factory/cycles/cycle-001/burst-log.md, .factory/cycles/cycle-001/adversarial-reviews/pr-358-edit-field-categorization-test/pr-358-copilot-progress.md, .factory/cycles/cycle-001/lessons.md
+**Versions bumped:** (none)
+
+### Summary
+
+PR #358 Round 3 complete. Commit 925da89 (`chore(test): align doc + remove dead-code check in field extractor`) pushed at 2026-05-12. CI 8/8 green. cargo test 1252 passed, 0 failed. All 4 original #343 tests still pass.
+
+2 findings returned in R3, both doc-fallout from the R2 tolerant-matcher commit (c708211) — a classic doc-fallout cluster, the second in 2 PRs in 2 days (PR #356 R15–R18 was the first):
+
+**Finding 1** (comment 3223569286 / thread PRRT_kwDORs-xfc6BSS3f): The strategy doc comment on `extract_edit_field_names` still described the pre-R2 matching behavior: "8-space indent + `},` exact close". After R2 introduced `is_matching_closing_brace`, the strategy doc was not updated. The doc described a behavior the code no longer used. Fix: updated strategy doc to describe the actual trim_start + tolerant matcher behavior, and fixed the surrounding inline `Logic:` block that referenced "8-space indent (clap variant fields use 8-space indent)" — replaced with an explanation of the real byte-positioning mechanism (position is computed by searching for the `Edit {` line and measuring its indent, not by assuming a hardcoded 8 spaces). Reply 3223583146.
+
+**Finding 2** (comment 3223569301 / thread PRRT_kwDORs-xfc6BSS3r): Redundant `rest.starts_with(' ')` check in the `is_matching_closing_brace` closure. After `strip_prefix('}')` succeeds, `rest` contains whatever follows `}` in the source line — which is never a space character (real closers are `}`, `},`, `}, // comment`). The space-check can never be true. Dead code. Fix: removed the dead branch and updated the comment to explain that deeper-indent rejection works via the byte-positioning mechanism (strip_prefix fails when more indentation precedes `}`). Reply 3223583216.
+
+Both threads resolved. R4 pending.
+
+**Process observation (doc-fallout root-cause):** This is the SECOND doc-fallout cluster in 2 PRs in 2 days. The codified lesson says "audit all related doc comments in the same commit after a behavior expansion." The lesson was NOT applied when c708211 (R2) introduced the tolerant matcher — the strategy doc and Logic block were in a different paragraph from the changed closure (~15 lines away), and the changed closure was not audited together with its surrounding narration. Sub-lesson added to lessons.md: "grep narration-style comments (Strategy:, Logic:, etc.) before pushing a behavior-expanding commit."
+
+Trajectory: 1 → 1 → 2 → R4 pending.
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| state-manager | Update STATE.md: Last Updated, Current Phase, Phase Progress row (R3 complete, head 925da89, trajectory 1→1→2→R4), Current Phase Steps (archive oldest row; add R3 row), Phase 3-adv convergence tracker, Session Resume Checkpoint | STATE.md |
+| state-manager | Update pr-358-copilot-progress.md: fill R3 round entry (2 findings, fix commit, thread resolutions, trajectory) | pr-358-edit-field-categorization-test/pr-358-copilot-progress.md |
+| state-manager | Append this burst entry | burst-log.md |
+| state-manager | Append sub-lesson to lessons.md (doc-fallout cluster sub-lesson: grep narration-style comments before behavior-expanding commits) | lessons.md |
+
+**Outcome:** PR #358 R3 recorded in all factory artifacts. R4 pending.
