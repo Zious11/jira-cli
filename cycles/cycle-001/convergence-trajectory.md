@@ -359,3 +359,40 @@ Single finding ADV-P2-S12-001 (MEDIUM): S-1.08 body line 274 "Depends on S-0.05"
 CONVERGED. 0 substantive findings. OBS-13-1 RESOLVED (JiaClient typo global sweep; S-0.05:62/206, S-1.06:165 — 0 remaining). OBS-13-2 RESOLVED (Story Manifest table added to STORY-INDEX v1.4.1, 31 rows; version bumped to 1.4.1→1.4.2 after CV2-002 fix). ADV-P2-S12-001 body fix verified not regressed. 8 lens axes all clean. Final trajectory: 14→5→5→5→4→5→4→4→4→1→0→1→0.
 
 **Phase 2-adv: 3/3 FULL CONVERGENCE achieved 2026-05-07.**
+
+---
+
+## Phase 3-adv — PR #357 Copilot Review (chore/release-gate-jr-base-url-335)
+
+### PR #357 Trajectory Summary
+
+| Round | Date | Findings | Delta | Fix SHA | Notes |
+|-------|------|----------|-------|---------|-------|
+| R1 | 2026-05-12 | 3 | — | 144aaff | CRITICAL: Config::base_url() ungated; MEDIUM: missing regression tests; LOW: CLAUDE.md inaccuracy. All 3 Perplexity-validated before acting. Two-site gating completed (config.rs + client.rs). 4 test_335_* tests added. CLAUDE.md updated. |
+| R2 | 2026-05-12 | 0 | -3 | — | Review id 4268805775 @ 2026-05-12T02:52:59Z. "Copilot reviewed 4 out of 4 changed files in this pull request and generated no new comments." **PHASE 8 STOP CONDITION HIT.** PR #357 CONVERGED. |
+
+**Trajectory shorthand:** `3→0` — **CONVERGED** at R2 / **MERGED** @ d208a6d (2026-05-12T03:03:12Z)
+
+**Initial commit:** cb3e8a3 (8-line diff: src/api/client.rs + CLAUDE.md)
+**Fix commit:** 144aaff (added Config::base_url() gate + tests/base_url_release_gate.rs + CLAUDE.md two-site doc)
+**Merge SHA:** d208a6d (squash: "chore(security): release-gate JR_BASE_URL to prevent token leak (#335) (#357)")
+
+### Comparative Analysis: PR #357 vs PR #356
+
+| Metric | PR #356 (sanitize-errors-334) | PR #357 (release-gate-jr-base-url-335) |
+|--------|-------------------------------|----------------------------------------|
+| Rounds | 19 | 2 |
+| Findings total | 36 | 3 |
+| Trajectory | 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3→1→1→0 | 3→0 |
+| Fix commits | Multiple (51e2807, d061b14, 274961c, fe25e22, ...etc.) | 1 (144aaff) |
+| Doc-fallout cluster? | Yes (R14→R18: 7 findings from Unicode C1 change) | No — doc-fallout lesson applied (CLAUDE.md updated in same fix commit) |
+| Order of magnitude difference | — | ~10x fewer rounds |
+
+**Root cause of order-of-magnitude difference:**
+1. **Tight scope:** PR #357 was an 8-line diff with one security pattern, vs PR #356's broad escape-encoding behavioral change.
+2. **Pre-validation done before R1:** Perplexity validated the #[cfg(debug_assertions)] approach (retroactively, but before R1 was triaged). No round was wasted on an invalid fix approach.
+3. **R1 caught the critical gap immediately:** The CRITICAL finding (Config::base_url() ungated) was surfaced and fixed in a single tight commit covering all three issues atomically.
+4. **Doc-fallout lesson applied:** commit 144aaff updated CLAUDE.md in the SAME commit as the code fix — preventing the 4-round doc-fallout cluster pattern seen in PR #356 R14-R18.
+5. **No regression accumulation:** PR #356 had regressions at R5, R8, R11, R14, R17 (5 regression rounds); PR #357 had zero — the fix was correct on the first attempt once the surface area was complete.
+
+**Lesson validated:** Pre-fixing the doc-fallout class (updating docs atomically with behavior) eliminates an entire category of subsequent review rounds. PR #357 is the first confirmed successful application of the doc-fallout lesson codified during PR #356 R19.

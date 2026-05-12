@@ -2643,4 +2643,66 @@ gap was fixed with a tightly scoped commit, no residual issues remained.
 | state-manager | Append R2 burst entry to burst-log.md | This entry |
 | state-manager | Update STATE.md Phase Progress row + Convergence Tracker + Session Checkpoint | STATE.md updated |
 
+---
+
+## Burst N+2 — PR #357 MERGE + VSDD Synthesis (2026-05-12)
+
+**Agents dispatched:** state-manager
+**Files touched:** .factory/STATE.md, .factory/cycles/cycle-001/burst-log.md, .factory/cycles/cycle-001/adversarial-reviews/pr-357-release-gate-jr-base-url/pr-357-copilot-progress.md, .factory/cycles/cycle-001/convergence-trajectory.md, .factory/cycles/cycle-001/lessons.md, .factory/cycles/cycle-001/cycle-manifest.md, .factory/cycles/cycle-001/session-checkpoints.md
+**Versions bumped:** (none)
+
+### Summary
+
+PR #357 merged to develop @ d208a6d (2026-05-12T03:03:12Z). Squash commit:
+"chore(security): release-gate JR_BASE_URL to prevent token leak (#335) (#357)".
+Issue #335 CLOSED. Worktree .worktrees/issue-335-jr-base-url-release-gate removed.
+Branch chore/release-gate-jr-base-url-335 retained (squash-merge artifact; no
+force-delete without user approval).
+
+This burst is also a comprehensive VSDD synthesis pass as explicitly requested.
+All 8 synthesis items completed:
+
+1. STATE.md: Phase Progress row updated CONVERGED → MERGED; Last Updated updated;
+   Current Phase updated; Current Phase Steps: merge event row added; Convergence
+   Tracker updated; Session Resume Checkpoint updated (post-#335 state, 7 remaining).
+   Audit-followup count: 8 → 7 (#335 now closed; #331 still sandbox-blocked deferred).
+
+2. burst-log.md: This entry (final merge burst, distinct from the R2 convergence entry).
+
+3. pr-357-copilot-progress.md: frontmatter status converged → merged; merge timestamp
+   + SHA recorded; cycle summary updated with MERGED status.
+
+4. convergence-trajectory.md: PR #357 trajectory appended (3→0, R1→R2 stop, 1 fix commit
+   cb3e8a3 → 144aaff). Comparative note added: PR #357 2 rounds vs PR #356's 19 rounds.
+
+5. lessons.md: Verified all 3 new lessons from this session are cleanly written and complete:
+   (a) Lesson 1 addendum: "pattern already in same file" is a rationalization (codified).
+   (b) Lesson 2 addendum: state-manager dispatch at 3 events — PR open, each round, merge.
+   (c) Lesson 1 sub-lesson: "Perplexity validates APPROACH; grep validates SURFACE AREA."
+   Added new data point: successful application of doc-fallout lesson (commit 144aaff).
+
+6. cycle-manifest.md: PRs #355, #356, #357 verified/added to delivered PR index.
+
+7. session-checkpoints.md: Old pre-#335 checkpoint archived; new checkpoint reflects
+   post-#335 merge state, 7 remaining audit-followups.
+
+8. Doc-fallout pattern verification: PR #357 commit 144aaff updated CLAUDE.md, config.rs
+   gate, AND tests/base_url_release_gate.rs in the same commit — doc-fallout lesson
+   successfully applied. Noted in lessons.md as confirmed successful application data point.
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| state-manager | Update STATE.md (8 fields: last-updated, current-phase, phase-progress row, current-steps, convergence-tracker, session-checkpoint) | STATE.md |
+| state-manager | Update pr-357-copilot-progress.md: status merged, merge SHA d208a6d, cycle summary | pr-357-copilot-progress.md |
+| state-manager | Append PR #357 trajectory to convergence-trajectory.md | convergence-trajectory.md |
+| state-manager | Verify + update lessons.md (3 lessons + doc-fallout application data point) | lessons.md |
+| state-manager | Update cycle-manifest.md with PRs #355, #356, #357 | cycle-manifest.md |
+| state-manager | Archive prior checkpoint to session-checkpoints.md; write new post-#335 checkpoint | session-checkpoints.md |
+| state-manager | Append this burst entry | burst-log.md |
+
+**Outcome:** PR #357 MERGED recorded in all factory artifacts. VSDD synthesis complete.
+7 audit-followups remain: #333, #336, #340, #343, #345, #346, #350.
+
 **Outcome:** PR #357 CONVERGED @ 144aaff. Phase 8 stop condition hit (R2: 0 inline comments). Next action: awaiting human merge approval to close #335.

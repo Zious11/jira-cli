@@ -570,3 +570,42 @@ Prevention cost: 1 `grep -rn JR_BASE_URL src/` command before pushing.
 _Discovered: PR #357 R1 Copilot finding 3223330261 (CRITICAL), 2026-05-12_
 _Tagged: [codified] — sub-lesson under Lesson 1 / DEC-018; "Perplexity validates APPROACH; grep validates SURFACE AREA"_
 _Scope: all security-sensitive env-var gating; generalizes to any "fix how X is done → audit everywhere X is done" class_
+
+---
+
+## 2026-05-12 — PR #357 MERGE: Successful Application of Doc-Fallout Lesson
+
+### [confirmed-applied] Doc-fallout lesson (PR #356 R14-R18) was successfully applied in PR #357
+
+**Context:** The doc-fallout cluster lesson was codified during PR #356 R19 convergence
+(2026-05-12). It states: "When a commit changes the behavior of an escape, encoding,
+validation, or classification function — particularly when it EXPANDS the set of values
+handled differently — the implementer MUST audit ALL documentation sites describing the
+old behavior and update them in the SAME commit."
+
+**PR #357 application:** Commit 144aaff (the R1 fix) updated three artifacts atomically:
+1. `src/config.rs` — added `#[cfg(debug_assertions)]` gate to `Config::base_url()`
+2. `tests/base_url_release_gate.rs` — created 4 regression tests (test_335_*)
+3. `CLAUDE.md` — updated "AI Agent Notes" to document two-site gating
+
+The CLAUDE.md update in the SAME commit as the code fix is the direct application of
+the doc-fallout lesson. In PR #356, the R14 behavioral change updated only the implementation
+and immediately adjacent inline comments — producing 4 subsequent rounds (R15-R18: 7 findings)
+of documentation-only cleanup. PR #357 avoided this entirely.
+
+**Outcome:** PR #357 converged in 2 rounds (vs PR #356's 19). Round counts:
+- Rounds attributable to missing doc sync (doc-fallout class): 0
+- Rounds attributable to the substantive security gap (Config::base_url() ungated): 1
+- Rounds to confirm convergence: 1
+Total: 2.
+
+**Quantified benefit:** The doc-fallout lesson, applied for the first time here, avoided
+at minimum 4 documentation-only review rounds. The investment was 4 CLAUDE.md lines added
+to a commit that was already being written.
+
+**Conclusion:** The lesson-to-practice loop closed for the first time in this cycle with PR #357.
+Lesson codified in R19 (PR #356), applied in R1 (PR #357), verified effective at merge.
+
+_Confirmed applied: PR #357 merge @ d208a6d, 2026-05-12T03:03:12Z_
+_Tagged: [confirmed-applied] — first successful application of the doc-fallout cluster lesson; closes the lesson-to-practice loop_
+_Reference: doc-fallout cluster lesson (2026-05-12 PR #356 R14-R18 section above)_

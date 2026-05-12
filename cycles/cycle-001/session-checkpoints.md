@@ -17,6 +17,18 @@ Superseded checkpoints are archived here when STATE.md is updated with a newer o
 
 ---
 
+## Checkpoint archived 2026-05-12 (PR #357 CONVERGED @ 144aaff, awaiting human merge)
+
+_Was the active checkpoint after PR #357 R2 returned 0 new comments. Superseded when PR #357 merged @ d208a6d._
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-12 |
+| **Position** | **PR #356 MERGED** @ 9acf01d (closes #334; 2026-05-12T01:37:46Z; CWE-117 sanitize_for_stderr; 19 rounds; 36/36 threads resolved). **PR #357 CONVERGED** @ 144aaff (closes #335; chore/release-gate-jr-base-url-335; R2 review id 4268805775 @ 2026-05-12T02:52:59Z: 0 inline comments; Phase 8 stop condition; 2 rounds; trajectory 3→0; 3/3 threads resolved; 1248 tests passed; CI 8/8 green; awaiting human merge approval). **8 audit-followups remain after #335 closes: #331, #333, #336, #340, #343, #345, #346, #350.** Sub-lesson: "Perplexity validates APPROACH; grep validates SURFACE AREA." |
+| **Convergence counter** | 3/3 CONVERGED Phase 2-adv; Phase 3-adv: Wave 2 gate CLOSED; Feature Mode #110-pr2 F5 CONVERGED; PRs #351–#356 MERGED; **PR #357 CONVERGED @ 144aaff (closes #335; trajectory 3→0; stop condition R2; awaiting merge)** |
+
+---
+
 ## Checkpoint archived 2026-05-11 (PR #352 CONVERGED, awaiting human merge)
 
 _Was the active checkpoint after PR #352 Round 2 returned 0 new comments. Superseded when PR #352 merged and PR #353 opened._
