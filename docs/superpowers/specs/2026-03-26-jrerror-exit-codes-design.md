@@ -16,14 +16,16 @@ Replace `anyhow::anyhow!(...)` with the appropriate `JrError` variant at 13 loca
 
 The current `ConfigError` variant has `#[error("Configuration error: {0}")]`, which prepends "Configuration error: " to the message. To preserve existing error message text exactly, change the format to `#[error("{0}")]` — matching `UserError`'s format. The error is already semantically identified by its variant and exit code; the prefix is redundant.
 
-### Exit Code Mapping (existing, unchanged)
+### Exit Code Mapping
 
 | Variant | Exit Code | sysexits.h | Meaning |
 |---------|-----------|------------|---------|
 | `JrError::ConfigError` | 78 | EX_CONFIG | Missing config file values |
 | `JrError::UserError` | 64 | EX_USAGE | Missing CLI input / bad usage |
 | `JrError::NotAuthenticated` | 2 | — | Auth required |
+| `JrError::InsufficientScope` | 2 | — | OAuth scope error |
 | `JrError::Interrupted` | 130 | — | Ctrl+C |
+| `JrError::DeadlineExceeded` | 124 | — | Caller-supplied deadline expired (POSIX `timeout(1)` convention). Introduced by S-333 (bulk-poll deadline clamp; audit-followup #333). |
 | All others | 1 | — | Generic / runtime |
 
 ### Group 1 — ConfigError (exit 78)
