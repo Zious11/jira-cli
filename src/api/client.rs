@@ -1090,11 +1090,22 @@ fn serialize_value_bounded(v: &serde_json::Value, limit: usize) -> String {
 fn sanitize_for_stderr(input: String) -> String {
     use std::fmt::Write;
 
-    let needs_sanitization = input.bytes().any(|b| b.is_ascii_control());
+    // Fast-path check: scan bytes for ASCII controls. Bytes alone can't
+    // detect C1 controls (U+0080..U+009F) since those are 2-byte UTF-8
+    // sequences (0xc2 0x80..0xc2 0x9f); we'd risk false positives on
+    // valid 2-byte UTF-8. Cheap path checks ASCII controls only; C1
+    // detection is then handled in the char loop. The slow path triggers
+    // only if ASCII controls OR oversized input is present — C1-only
+    // input falls through to the fast return below, which is fine
+    // because C1 chars in modern UTF-8 terminals are inert (R14 finding
+    // notes they're invalid UTF-8 continuation bytes and get dropped).
+    // For defense-in-depth against legacy/non-UTF8 terminals, we still
+    // escape C1 chars when we go through the slow path.
+    let needs_sanitization = input.chars().any(|c| c.is_control());
     let needs_truncation = input.len() > MAX_SANITIZED_OUTPUT_LEN;
 
-    // Fast path: no control bytes AND under the output cap → return the
-    // input String unchanged. No new allocation. Optimizes the common case.
+    // Fast path: no control chars (C0, DEL, OR C1) AND under the output
+    // cap → return the input String unchanged. No new allocation.
     if !needs_sanitization && !needs_truncation {
         return input;
     }
@@ -1111,11 +1122,20 @@ fn sanitize_for_stderr(input: String) -> String {
     let mut truncated = false;
 
     for c in input.chars() {
-        // Compute the byte cost of emitting `c` BEFORE pushing it. Control
-        // chars expand 1→4 bytes (`\xNN`); other chars take `c.len_utf8()`
-        // bytes (1-4 bytes for any valid Unicode scalar).
-        let needed = if c.is_ascii_control() {
-            4
+        // Compute the byte cost of emitting `c` BEFORE pushing it.
+        // - ASCII controls (C0 + DEL): expand 1→4 bytes via `\xNN`
+        // - C1 controls (U+0080..U+009F): expand 2→8 bytes via `\u{NNNN}`
+        //   (still 4x, preserving the 4 KiB cap's worst-case budget)
+        // - Other chars: `c.len_utf8()` (1-4 bytes for any Unicode scalar)
+        //
+        // R14 hardening (Perplexity-validated 2026-05-11): C1 controls are
+        // inert in modern UTF-8 terminals (rejected as invalid UTF-8
+        // continuation bytes) so this is not a current vector, but
+        // legacy/embedded/non-UTF8 terminals could still interpret U+009B
+        // (CSI) and friends as control sequences. `char::is_control()`
+        // catches both C0 and C1 for comprehensive defense-in-depth.
+        let needed = if c.is_control() {
+            if c.is_ascii() { 4 } else { 8 }
         } else {
             c.len_utf8()
         };
@@ -1123,12 +1143,18 @@ fn sanitize_for_stderr(input: String) -> String {
             truncated = true;
             break;
         }
-        if c.is_ascii_control() {
+        if c.is_control() {
             // Write directly into `out` via fmt::Write — avoids the per-escape
             // String allocation that `format!()` would introduce.
             // write! on String is infallible; ignore the Result to avoid a
             // distracting `expect()` in a hot loop.
-            let _ = write!(out, "\\x{:02x}", c as u8);
+            if c.is_ascii() {
+                let _ = write!(out, "\\x{:02x}", c as u8);
+            } else {
+                // C1 control: emit visible `\u{NNNN}` form so operators can
+                // see WHICH control was injected (e.g., \u{009b} = CSI).
+                let _ = write!(out, "\\u{{{:04x}}}", c as u32);
+            }
         } else {
             out.push(c);
         }
@@ -1916,6 +1942,50 @@ mod sanitize_tests {
         assert!(out.contains("non-UTF8 body"));
         // And still respect the post-sanitization output cap.
         assert!(out.len() <= MAX_SANITIZED_OUTPUT_LEN);
+    }
+
+    // R14 pins — Unicode C1 control coverage (defense-in-depth against
+    // legacy/non-UTF8 terminals; modern UTF-8 terminals drop these as
+    // invalid continuation bytes but is_control() future-proofs).
+
+    #[test]
+    fn test_sanitize_for_stderr_escapes_unicode_csi_c1_control() {
+        // U+009B is the Control Sequence Introducer (CSI) — semantically
+        // equivalent to "ESC [" in 8-bit/legacy modes. Must be escaped
+        // rather than passed through.
+        let input = "before\u{009b}31mafter".to_string();
+        let result = sanitize(&input);
+        assert!(result.contains("\\u{009b}"));
+        // The non-control text must survive unchanged.
+        assert!(result.contains("before"));
+        assert!(result.contains("31mafter"));
+        // No raw CSI byte in the output.
+        assert!(!result.contains('\u{009b}'));
+    }
+
+    #[test]
+    fn test_sanitize_for_stderr_escapes_unicode_nel_c1_control() {
+        // U+0085 is NEL (Next Line) — interpreted as a line break in
+        // some 8-bit terminal modes. Escape rather than emit raw.
+        let input = "line1\u{0085}line2".to_string();
+        let result = sanitize(&input);
+        assert!(result.contains("\\u{0085}"));
+        assert!(!result.contains('\u{0085}'));
+    }
+
+    #[test]
+    fn test_sanitize_for_stderr_preserves_non_control_unicode_above_ascii() {
+        // R14 anti-regression: only U+0080..U+009F are CONTROL chars
+        // above ASCII. Other code points in the U+00A0+ range (e.g.,
+        // non-breaking space U+00A0, é U+00E9, 日 U+65E5) MUST pass
+        // through unchanged — char::is_control() returns false for them.
+        let input = "résumé 日本語のエラー\u{00a0}end".to_string();
+        let result = sanitize_for_stderr(input.clone());
+        // No escape sequences inserted.
+        assert!(!result.contains("\\u{"));
+        assert!(!result.contains("\\x"));
+        // String preserved bit-for-bit.
+        assert_eq!(result, input);
     }
 
     #[test]
