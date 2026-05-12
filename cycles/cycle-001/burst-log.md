@@ -2611,3 +2611,36 @@ The sub-lesson is appended under Lesson 1 in `cycles/cycle-001/lessons.md`.
 | state-manager | Update STATE.md, burst-log.md, lessons.md, pr-357-copilot-progress.md | This commit |
 
 **Outcome:** PR #357 R1 COMPLETE @ 144aaff. 3/3 R1 threads resolved. CI 8/8 green. Two-site JR_BASE_URL gating confirmed. R2 requested.
+
+---
+
+## Burst N+1 — PR #357 R2 Convergence (2026-05-12)
+
+**Agents dispatched:** state-manager
+**Files touched:** .factory/STATE.md, .factory/cycles/cycle-001/burst-log.md, .factory/cycles/cycle-001/adversarial-reviews/pr-357-release-gate-jr-base-url/pr-357-copilot-progress.md
+**Versions bumped:** (none)
+
+### Summary
+
+PR #357 Copilot R2 hit the Phase 8 stop condition. Review id 4268805775 posted
+2026-05-12T02:52:59Z returned zero inline comments: "Copilot reviewed 4 out of 4 changed
+files in this pull request and generated no new comments." Trajectory 3→0. PR #357
+CONVERGED. Awaiting human merge approval.
+
+Cycle stats: 2 rounds total, 3 findings in R1 (all resolved), 0 in R2. 2 commits
+(cb3e8a3 initial, 144aaff R1 fix). cargo test: 1248 passed (+4 regression tests vs
+baseline 1244). 3/3 threads resolved. CI 8/8 green. Mergeable: CLEAN.
+
+This is the fastest convergence in cycle-001 to date (2 rounds vs PR #356's 19). Speed
+is attributed to the CRITICAL nature of R1's primary finding: once the two-site gating
+gap was fixed with a tightly scoped commit, no residual issues remained.
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| state-manager | Record R2 stop condition in pr-357-copilot-progress.md + cycle summary | pr-357-copilot-progress.md updated (status: converged) |
+| state-manager | Append R2 burst entry to burst-log.md | This entry |
+| state-manager | Update STATE.md Phase Progress row + Convergence Tracker + Session Checkpoint | STATE.md updated |
+
+**Outcome:** PR #357 CONVERGED @ 144aaff. Phase 8 stop condition hit (R2: 0 inline comments). Next action: awaiting human merge approval to close #335.
