@@ -1086,7 +1086,7 @@ fn is_subtask_parent_error(err: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use crate::error::JrError;
-    use std::collections::HashSet;
+    use std::collections::BTreeSet;
 
     #[test]
     fn missing_project_returns_user_error() {
@@ -1170,7 +1170,7 @@ mod tests {
         let edit_fields = extract_edit_field_names(cli_source);
 
         // SELECTORS — flags that pick which issues to edit, not what changes.
-        let selectors: HashSet<&str> = [
+        let selectors: BTreeSet<&str> = [
             "keys",    // positional issue keys (single or multi-key)
             "jql",     // JQL match set for bulk edit
             "max",     // upper bound on JQL match count
@@ -1183,7 +1183,7 @@ mod tests {
         // BULK_SUPPORTED — field flags that work in multi-key bulk context.
         // These must be honored by both the single-key path AND the bulk path
         // (handle_edit_bulk_fields / handle_edit_bulk_labels).
-        let bulk_supported: HashSet<&str> = [
+        let bulk_supported: BTreeSet<&str> = [
             "summary",    // text summary update
             "issue_type", // issue type change (clap flag: --type)
             "priority",   // priority change
@@ -1197,7 +1197,7 @@ mod tests {
         // C-1 rejection block in handle_edit (see lines ~426-465 of this file).
         // Adding to this set without extending the rejection block reintroduces
         // the silent-drop bug C-1 was meant to fix.
-        let rejected_in_bulk: HashSet<&str> = [
+        let rejected_in_bulk: BTreeSet<&str> = [
             "parent",
             "no_parent",
             "team",
@@ -1225,17 +1225,17 @@ mod tests {
         );
 
         // 2. Pairwise disjoint — no field categorized in more than one set.
-        let s_b: HashSet<&&str> = selectors.intersection(&bulk_supported).collect();
+        let s_b: BTreeSet<&&str> = selectors.intersection(&bulk_supported).collect();
         assert!(
             s_b.is_empty(),
             "SELECTORS and BULK_SUPPORTED overlap: {s_b:?} — every field belongs to exactly one category"
         );
-        let s_r: HashSet<&&str> = selectors.intersection(&rejected_in_bulk).collect();
+        let s_r: BTreeSet<&&str> = selectors.intersection(&rejected_in_bulk).collect();
         assert!(
             s_r.is_empty(),
             "SELECTORS and REJECTED_IN_BULK overlap: {s_r:?} — every field belongs to exactly one category"
         );
-        let b_r: HashSet<&&str> = bulk_supported.intersection(&rejected_in_bulk).collect();
+        let b_r: BTreeSet<&&str> = bulk_supported.intersection(&rejected_in_bulk).collect();
         assert!(
             b_r.is_empty(),
             "BULK_SUPPORTED and REJECTED_IN_BULK overlap: {b_r:?} — every field belongs to exactly one category"
@@ -1243,7 +1243,7 @@ mod tests {
 
         // 3. Union equals the extracted set — every Edit field is categorized
         //    AND no category lists a field that doesn't exist in Edit.
-        let categorized: HashSet<String> = selectors
+        let categorized: BTreeSet<String> = selectors
             .iter()
             .chain(bulk_supported.iter())
             .chain(rejected_in_bulk.iter())
@@ -1291,9 +1291,12 @@ mod tests {
     ///    as a field declaration. Skip lines that start with `#[` (attributes)
     ///    or `///` (doc comments).
     ///
-    /// Returns the extracted field names as an alphabetically-stable
-    /// `HashSet<String>`.
-    fn extract_edit_field_names(source: &str) -> HashSet<String> {
+    /// Returns the extracted field names as a `BTreeSet<String>` so the
+    /// iteration/`Debug` output order is deterministic — assertion failure
+    /// messages produce stable, reviewable diffs across runs and machines.
+    /// (`HashSet` would not satisfy this: its iteration order depends on the
+    /// hash seed, which varies per process.)
+    fn extract_edit_field_names(source: &str) -> BTreeSet<String> {
         let lines: Vec<&str> = source.lines().collect();
 
         let edit_start = lines
@@ -1322,7 +1325,7 @@ mod tests {
                  The variant's closing brace may have been reformatted; update the extractor.",
             );
 
-        let mut fields = HashSet::new();
+        let mut fields = BTreeSet::new();
 
         for line in &lines[edit_start + 1..edit_end] {
             let trimmed = line.trim_start();
