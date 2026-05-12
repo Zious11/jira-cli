@@ -355,6 +355,12 @@ impl Config {
     }
 
     pub fn base_url(&self) -> anyhow::Result<String> {
+        // JR_BASE_URL override is debug builds only — release binaries ignore this
+        // env var to prevent JR_BASE_URL=http://attacker/ from becoming `self.base_url`
+        // and redirecting authenticated requests to a non-Atlassian host (token-leak
+        // vector). Mirrors the SD-002 JR_AUTH_HEADER gate in src/api/client.rs.
+        // Closes audit-followup #335 (Config-layer half of the fix).
+        #[cfg(debug_assertions)]
         if let Ok(override_url) = std::env::var("JR_BASE_URL") {
             return Ok(override_url.trim_end_matches('/').to_string());
         }
