@@ -47,21 +47,36 @@ const POLL_MAX_SECS: u64 = 10;
 const DEFAULT_UNKNOWN_STATUS_GRACE_SECS: u64 = 30;
 
 /// Format a `Duration` for inclusion in an operator-facing error or warning
-/// message. Picks the most precise unit that doesn't truncate to zero:
+/// message. Targets the **millisecond-to-seconds range** which covers every
+/// grace value the #336 code paths can produce:
+///   - the production default is 30s (`DEFAULT_UNKNOWN_STATUS_GRACE_SECS`);
+///   - the env-var override `JR_BULK_UNKNOWN_GRACE_SECS` parses as `u64`
+///     whole seconds, so its minimum non-zero value is 1s and 0s renders
+///     as `"0ms"` (the helper's smallest representable bucket);
+///   - in-lib tests pass `Duration` directly to
+///     `await_bulk_task_with_grace_for_test`, smallest realistic value
+///     `Duration::from_millis(200)`.
+///
+/// Rendering rules (in this range):
 ///   - sub-second values render in milliseconds (e.g., `"200ms"`);
 ///   - one-second-and-above values render in whole seconds (e.g., `"30s"`).
 ///
-/// `Duration::as_secs()` alone is unsuitable because it truncates sub-second
-/// values to `0` — producing `"... for >= 0s; ..."` in tests that drive the
-/// grace path with sub-second values (and would mislead anyone reading logs
-/// if a future configuration knob exposed a sub-second grace).
+/// Sub-millisecond durations (`Duration::from_nanos(500)` etc.) ARE truncated
+/// by `as_millis()` to `"0ms"`. This is deliberate — no current configuration
+/// knob can produce a sub-ms grace, and an operator-facing escalation message
+/// like "polled unrecognized status for >= 500ns" would be absurd. If a
+/// future knob requires sub-ms resolution, switch this to the `humantime`
+/// crate (Perplexity-validated 2026-05-12 as the idiomatic Tokio/reqwest
+/// dep for multi-unit rendering).
 ///
-/// Manual implementation rather than pulling in `humantime`: only one call
-/// site needs it, the format vocabulary here is small (ms vs s), and a
-/// dedicated helper keeps the unit test surface focused on the two boundaries
-/// that matter for #336. Perplexity-validated 2026-05-12: `humantime` is the
-/// idiomatic dep when many duration values need rendering, but a single-call-
-/// site helper is the lighter call when the format vocabulary is narrow.
+/// `Duration::as_secs()` alone is unsuitable because it truncates ALL
+/// sub-second values to `0` — producing `"... for >= 0s; ..."` in tests
+/// that drive the grace path with `Duration::from_millis(200)`.
+///
+/// Manual implementation rather than pulling in `humantime` for one call
+/// site, where the format vocabulary is narrow (ms vs s) and the dedicated
+/// helper keeps the unit test surface focused on the two boundaries that
+/// matter for #336.
 fn format_grace_duration(d: Duration) -> String {
     if d < Duration::from_secs(1) {
         format!("{}ms", d.as_millis())
