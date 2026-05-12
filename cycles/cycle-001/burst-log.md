@@ -2335,3 +2335,52 @@ R14. Phase 8 prediction: R18 likely 0-finding stop condition.
 | implementer | Extend tests/api_client.rs header comment to mention both `\xNN` (ASCII C0/DEL) and `\u{NNNN}` (C1) escapes | tests/api_client.rs fb91f32 |
 | orchestrator | Resolve thread PRRT_kwDORs-xfc6BQwwb; post reply 3223040033; commit fb91f32; push; verify CI 8/8 green | 35/35 threads resolved; CI green; R18 pending |
 | state-manager | Thirteenth consecutive in-cycle dispatch per Lesson 2 | STATE.md, burst-log.md, pr-356-copilot-progress.md updated |
+
+---
+
+## Burst: PR #356 Copilot R18 (2026-05-12T01:07Z)
+
+**Agents dispatched:** orchestrator, implementer, state-manager
+**Files touched:** src/api/client.rs (comment-only: public-API doc extended to describe both ASCII \xNN and C1 \u{NNNN} escape branches; threat-model phrase extended from "CR/LF/ANSI" to "CR/LF/ANSI/CSI")
+**Versions bumped:** (none)
+**Commit:** 9acf01d ("chore(security): correct extract_error_message public-API doc for C1 escapes (PR #356 R18)")
+**CI:** 8/8 green on 9acf01d
+
+### Summary
+
+Copilot R18 returned 1 finding (review 4268435007 @ 01:05Z, comment id 3223053065). Comment-only
+change; no behavior change; no new tests; 39 sanitize tests + 26 api_client tests pass;
+670 cargo test green. CI 8/8 green on 9acf01d. 36/36 threads resolved (0 unresolved).
+
+**Finding (CWE-117 public-API doc comment stale, comment 3223053065):**
+The `extract_error_message` public-API doc comment (visible to all callers of the public API)
+described only the ASCII control character escape branch — "escapes ASCII control chars ... as
+\xNN". This was accurate before R14 but became incomplete after R14 expanded the escape set to
+also cover Unicode C1 controls (U+0080..U+009F), which are escaped as `\u{NNNN}` rather than
+`\xNN`. In addition, the threat-model phrase "protects against CR/LF/ANSI injection" omitted
+CSI (U+009B, the C1 control sequence introducer). Fixed by: extending the doc to accurately
+describe both branches (C0/DEL → `\xNN`, C1 → `\u{NNNN}`) and expanding the threat-model
+phrase to "CR/LF/ANSI/CSI injection".
+
+**Perplexity-validation per DEC-018:** No external library or API behavior claims — purely
+internal doc accuracy. Perplexity skipped per Lesson 1 ("at least one external-claim aspect"
+required). Skip is per-spec, not a rationalization.
+
+**Thread resolved:** PRRT_kwDORs-xfc6BQ2o4 (1 new R18 thread). All 36/36 threads resolved
+(0 unresolved). Reply 3223074074 posted.
+
+**Trajectory:** 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3→1→1 — R18 held at 1, completing the
+R14 doc-fallout cluster tapering (R15:2 → R16:3 → R17:1 → R18:1). This is the final known
+doc-fallout item from R14's C1 expansion. Substantive defenses unchanged since R14. All known
+doc sites now updated: public API doc (R18), strategy bullets (R16 C1), C1 description (R16 C2),
+integration test comment (R17), R-number cleanup in progress records (prior rounds). Phase 8
+prediction: R19 very likely 0-finding stop condition.
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| orchestrator | Triage 1 Copilot R18 finding (comment 3223053065 @ 01:05Z, review 4268435007); doc-accuracy only; Perplexity not required (no external claims per Lesson 1) | Confirmed valid doc-accuracy gap |
+| implementer | Extend extract_error_message public-API doc to describe both `\xNN` (ASCII C0/DEL) and `\u{NNNN}` (C1) escapes; expand threat-model phrase from "CR/LF/ANSI" to "CR/LF/ANSI/CSI" | src/api/client.rs 9acf01d |
+| orchestrator | Resolve thread PRRT_kwDORs-xfc6BQ2o4; post reply 3223074074; commit 9acf01d; push; verify CI 8/8 green | 36/36 threads resolved; CI green; R19 pending |
+| state-manager | Fourteenth consecutive in-cycle dispatch per Lesson 2 | STATE.md, burst-log.md, pr-356-copilot-progress.md updated |

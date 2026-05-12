@@ -2,9 +2,9 @@
 document_type: copilot-convergence-record
 pr: 356
 branch: chore/sanitize-errors-334
-head_sha: fb91f32
+head_sha: 9acf01d
 closes_issues: ["#334"]
-rounds: 17
+rounds: 18
 status: in-progress
 review_round_1_id: ""
 review_round_1_submitted: 2026-05-11T17:49:49Z
@@ -41,18 +41,20 @@ review_round_16_id: "4268365143"
 review_round_16_submitted: 2026-05-12T00:38:00Z
 review_round_17_id: "4268400605"
 review_round_17_submitted: 2026-05-12T00:54:00Z
-threads_total: 35
-threads_resolved: 35
-trajectory: "4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3→1"
+review_round_18_id: "4268435007"
+review_round_18_submitted: 2026-05-12T01:05:00Z
+threads_total: 36
+threads_resolved: 36
+trajectory: "4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3→1→1"
 ---
 
 # PR #356 Copilot Convergence Record — IN PROGRESS
 
 **PR:** https://github.com/Zious11/jira-cli/pull/356
 **Branch:** chore/sanitize-errors-334
-**Current tip SHA:** fb91f32
+**Current tip SHA:** 9acf01d
 **Closes:** #334 on merge
-**Trajectory so far:** 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3→1 (Round 18 pending)
+**Trajectory so far:** 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3→1→1 (Round 19 pending)
 
 ## Summary
 
@@ -61,18 +63,22 @@ PR #356 implements CWE-117 defense at the `extract_error_message` public boundar
 from Atlassian error message strings before stderr emission, preventing terminal injection
 (log forging, ANSI escape injection) via hostile or proxy-injected error payloads.
 
-Seventeen Copilot rounds have been completed with a total of 35/35 threads resolved. CI is 8/8
-green on fb91f32. Round 18 is pending.
+Eighteen Copilot rounds have been completed with a total of 36/36 threads resolved. CI is 8/8
+green on 9acf01d. Round 19 is pending.
 
-**Trajectory note:** R17 returned 1 finding (review 4268400605 @ 00:54Z, comment id 3223021119):
-the integration-test header comment in `tests/api_client.rs` still described hostile control chars
-as rendering "as \xNN literals" — accurate before R14 but incomplete afterward since C1 controls
-(U+0080..U+009F) now escape as `\u{NNNN}`. Extended comment to mention both branches.
+**Trajectory note:** R18 returned 1 finding (review 4268435007 @ 01:05Z, comment id 3223053065):
+the `extract_error_message` public-API doc comment described only the ASCII escape branch
+("\xNN for control chars") without mentioning the C1 Unicode escape branch ("\u{NNNN} for
+U+0080..U+009F") added in R14; the threat-model phrase "CR/LF/ANSI" also omitted CSI (U+009B).
+Extended the public-API doc to accurately describe both branches; expanded threat-model phrase
+from "CR/LF/ANSI" to "CR/LF/ANSI/CSI".
 No new tests; comment-only change; 39 sanitize tests + 26 api_client tests pass; 670 cargo test green.
-1 thread resolved (PRRT_kwDORs-xfc6BQwwb); reply 3223040033.
-Trajectory is now 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3→1. R17 is down to 1 finding, continuing
-the taper of the R14 doc-fallout cluster (R15:2 → R16:3 → R17:1). Substantive defenses unchanged
-since R14. Phase 8 prediction: R18 likely 0-finding stop condition.
+1 thread resolved (PRRT_kwDORs-xfc6BQ2o4); reply 3223074074.
+Trajectory is now 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3→1→1. R18 held at 1 — the R14 doc-fallout
+cluster tapering is R15:2 → R16:3 → R17:1 → R18:1. All known R14 doc-fallout now corrected:
+public API doc (R18), strategy bullets (R16-C1), C1 description (R16-C2), integration test
+comment (R17), R-number annotations (R15-C2). Substantive defenses unchanged since R14.
+Phase 8 prediction: R19 very likely 0-finding stop condition.
 
 **Process gaps noted:** R2 and R3 Perplexity-validation were SKIPPED on the rationalization
 that the claims were "empirically verifiable from code." Per DEC-018, this was incorrect — all
@@ -969,6 +975,58 @@ stop condition.**
 
 ---
 
+## Round 18 (2026-05-12T01:05:00Z)
+
+**Review ID:** 4268435007
+**Comment ID:** 3223053065
+**Inline comments:** 1
+**Valid (doc accuracy — extract_error_message public-API doc incomplete after R14 C1 expansion)**
+
+### Finding 1 — Public-API doc comment describes only ASCII escape branch (comment 3223053065)
+
+The `extract_error_message` public-API doc comment (visible to all callers via rustdoc) described
+only the ASCII control character escape branch: "escapes ASCII control chars ... as \xNN". This was
+accurate before R14 but became incomplete when R14 expanded the escape set to include Unicode C1
+controls U+0080..U+009F, which are rendered as `\u{NNNN}` (8-byte format) rather than `\xNN`
+(4-byte format). In addition, the threat-model phrase "protects against CR/LF/ANSI injection"
+omitted CSI (U+009B, the C1 control sequence introducer that ANSI terminals use to begin escape
+sequences), making the threat model appear narrower than the implementation.
+
+**Validation per DEC-018:** No external library or API behavior claims — purely internal
+documentation accuracy. Perplexity skipped per Lesson 1 ("at least one external-claim aspect"
+required). Skip is per-spec, not a rationalization.
+
+**Fix:** Extended the public-API doc comment to accurately describe both escape branches:
+- ASCII C0/DEL controls (U+0000..U+001F, U+007F): escaped as `\xNN` (4 bytes per character)
+- Unicode C1 controls (U+0080..U+009F): escaped as `\u{NNNN}` (8 bytes per character)
+
+Also expanded the threat-model phrase from "CR/LF/ANSI injection" to "CR/LF/ANSI/CSI injection"
+to reflect that the C1 range explicitly covers the CSI codepoint (U+009B).
+
+No new tests; comment-only change. 39 sanitize tests + 26 api_client tests pass; 670 cargo test
+green; CI 8/8 green on 9acf01d.
+
+**Thread resolved:** PRRT_kwDORs-xfc6BQ2o4
+**Reply posted:** 3223074074
+
+**Fix commit:** 9acf01d ("chore(security): correct extract_error_message public-API doc for C1 escapes (PR #356 R18)")
+**Threads:** 36/36 resolved (1 new R18 thread resolved; cumulative)
+
+**Process note:** Fourteenth consecutive in-cycle state-manager dispatch per Lesson 2.
+R5 → R6 → R7 → R8 → R9 → R10 → R11 → R12 → R13 → R14 → R15 → R16 → R17 → R18 all dispatched
+state-manager in real time. 14 rounds of consistent Perplexity+Lesson-2 discipline across
+18 review rounds.
+
+**Convergence pattern:** R18 held at 1 finding. The R14 doc-fallout cluster tapering is complete:
+R15:2 → R16:3 → R17:1 → R18:1. All known doc-fallout sites from R14's C1 expansion have now been
+corrected: public API doc (R18), strategy bullets in sanitize_for_stderr (R16-C1), C1 description
+comment (R16-C2), integration test header comment (R17), R-number annotation cleanup (R15-C2).
+Substantive defenses (memory-amplification bounds, Write contract, DOM parse gate, C0+C1 escape
+coverage) fully converged since R14 and untouched through R15-R18. **Phase 8 prediction: R19
+very likely returns 0 findings — stop condition.**
+
+---
+
 ## Trajectory Analysis
 
 **Pattern so far:** 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3→1 — all non-zero rounds addressed real findings.
@@ -1068,12 +1126,20 @@ stop condition.**
   mention both branches. No new tests; comment-only change; 39 sanitize + 26 api_client tests pass;
   670 cargo test green. 1 thread resolved (PRRT_kwDORs-xfc6BQwwb); reply 3223040033. 35/35 threads
   resolved. CI 8/8 green on fb91f32.
+- R18 (4268435007 @ 01:05Z, comment 3223053065): 1 finding, doc-accuracy only. The
+  `extract_error_message` public-API doc comment described only the ASCII escape branch ("\xNN")
+  without mentioning the C1 Unicode escape branch ("\u{NNNN}" for U+0080..U+009F); threat-model
+  phrase "CR/LF/ANSI" also omitted CSI. Extended public-API doc to cover both escape branches;
+  expanded threat-model phrase to "CR/LF/ANSI/CSI". No new tests; comment-only change; 39 sanitize
+  + 26 api_client tests pass; 670 cargo test green. 1 thread resolved (PRRT_kwDORs-xfc6BQ2o4);
+  reply 3223074074. 36/36 threads resolved. CI 8/8 green on 9acf01d.
 
-**Assessment:** Trajectory is now 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3→1. R14 doc-fallout cluster
-tapering: R15:2 → R16:3 → R17:1. Substantive defenses (memory-amplification bounds, Write contract,
-DOM parse gate, C0+C1 escape coverage) fully converged since R14 and untouched through R15-R17.
-13 rounds of Perplexity+Lesson-2 discipline through 17 review rounds. **Phase 8 prediction: R18
-likely returns 0 findings — stop condition.**
+**Assessment:** Trajectory is now 4→1→2→2→3→2→3→2→2→1→1→2→1→1→2→3→1→1. R14 doc-fallout cluster
+tapering complete: R15:2 → R16:3 → R17:1 → R18:1. All known R14 doc-fallout sites corrected.
+Substantive defenses (memory-amplification bounds, Write contract, DOM parse gate, C0+C1 escape
+coverage) fully converged since R14 and untouched through R15-R18. 14 rounds of
+Perplexity+Lesson-2 discipline through 18 review rounds. **Phase 8 prediction: R19 very likely
+returns 0 findings — stop condition.**
 
 ---
 
@@ -1142,7 +1208,7 @@ cleanup (R13, R15) and label correctness (R13). R16 is the expected Phase 8 stop
 
 ## CI Status
 
-**Head SHA:** dc09501
+**Head SHA:** 9acf01d
 **CI result:** 8/8 green
 
 ## Current PR State
@@ -1150,7 +1216,7 @@ cleanup (R13, R15) and label correctness (R13). R16 is the expected Phase 8 stop
 | Field | Value |
 |-------|-------|
 | **State** | OPEN |
-| **Threads** | 34 created; 34/34 resolved |
-| **R17** | Pending — R16 returned 3 doc-accuracy findings (all consequences of R14 C1-control expansion); substantive defenses unchanged since R14; 12 rounds Perplexity+Lesson-2 discipline; Phase 8 stop condition (0-new-comment round) predicted R17 |
-| **CI on dc09501** | 8/8 green |
+| **Threads** | 36 created; 36/36 resolved |
+| **R19** | Pending — R18 returned 1 doc-accuracy finding (extract_error_message public-API doc missing C1 escape branch + threat-model phrase missing CSI); all known R14 doc-fallout now corrected; substantive defenses unchanged since R14; 14 rounds Perplexity+Lesson-2 discipline; Phase 8 stop condition (0-new-comment round) very likely R19 |
+| **CI on 9acf01d** | 8/8 green |
 | **Closes** | #334 on merge |
