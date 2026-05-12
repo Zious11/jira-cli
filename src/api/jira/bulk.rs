@@ -4,8 +4,17 @@
 //! - Submit bulk operation → receive taskId
 //! - Poll GET /rest/api/3/bulk/queue/{taskId} until terminal status
 //!
-//! Terminal statuses: COMPLETE | FAILED | CANCELLED | DEAD (also accepts COMPLETED
-//! for empirical safety — OpenAPI says COMPLETE but live API unverified).
+//! Terminal statuses (per Atlassian OpenAPI, Perplexity-verified 2026-05-12):
+//!   COMPLETE | FAILED | CANCELLED | DEAD | PARTIAL_FAILURE | PROCESSED_WITH_ERRORS
+//! Also accepts COMPLETED as an empirical-safety alias for COMPLETE.
+//! Non-terminal (continue polling): ENQUEUED | RUNNING | CANCEL_REQUESTED.
+//! Unknown statuses are warned-on-first-sighting and escalate to terminal-with-
+//! error after the unknown-status grace period (default 30s via
+//! `DEFAULT_UNKNOWN_STATUS_GRACE_SECS`, resolved through
+//! `resolve_unknown_status_grace()` — debug builds also honor the
+//! `JR_BULK_UNKNOWN_GRACE_SECS` env var so CLI integration tests can drive
+//! the warn+escalate path in ~1s; release builds always use the default).
+//! Closes audit-followup #336.
 //!
 //! Per CLAUDE.md: blanket-401 → auto-refresh is already wired into JiraClient::send.
 //! 429 during polling: JiraClient::send retries up to MAX_RETRIES times using
@@ -31,6 +40,84 @@ pub const BULK_MAX_KEYS: usize = 1000;
 const POLL_BASE_SECS: u64 = 1;
 /// Maximum backoff interval (caps exponential growth).
 const POLL_MAX_SECS: u64 = 10;
+
+/// Grace period after which an UNRECOGNIZED bulk task status is treated as
+/// terminal-with-error. Set to 30 seconds — Perplexity-validated 2026-05-12
+/// as the industry-standard heuristic (~10% of the 5-minute overall timeout;
+/// matches kubectl/Helm/`gh` polling-client conventions; below human
+/// perception threshold for "hanging" while long enough to absorb transient
+/// deploy/rollback artifacts).
+///
+/// Closes audit-followup #336.
+const DEFAULT_UNKNOWN_STATUS_GRACE_SECS: u64 = 30;
+
+/// Format a `Duration` for inclusion in an operator-facing error or warning
+/// message. Targets the **millisecond-to-seconds range** which covers every
+/// grace value the #336 code paths can produce:
+///   - the production default is 30s (`DEFAULT_UNKNOWN_STATUS_GRACE_SECS`);
+///   - the env-var override `JR_BULK_UNKNOWN_GRACE_SECS` parses as `u64`
+///     whole seconds, so its minimum non-zero value is 1s and 0s renders
+///     as `"0ms"` (the helper's smallest representable bucket);
+///   - in-lib tests pass `Duration` directly to
+///     `await_bulk_task_with_grace_for_test`, smallest realistic value
+///     `Duration::from_millis(200)`.
+///
+/// Rendering rules (in this range):
+///   - sub-second values render in milliseconds (e.g., `"200ms"`);
+///   - one-second-and-above values render in whole seconds (e.g., `"30s"`).
+///
+/// Sub-millisecond durations (`Duration::from_nanos(500)` etc.) ARE truncated
+/// by `as_millis()` to `"0ms"`. This is deliberate — no current configuration
+/// knob can produce a sub-ms grace, and an operator-facing escalation message
+/// like "polled unrecognized status for >= 500ns" would be absurd. If a
+/// future knob requires sub-ms resolution, switch this to the `humantime`
+/// crate (Perplexity-validated 2026-05-12 as the idiomatic Tokio/reqwest
+/// dep for multi-unit rendering).
+///
+/// `Duration::as_secs()` alone is unsuitable because it truncates ALL
+/// sub-second values to `0` — producing `"... for >= 0s; ..."` in tests
+/// that drive the grace path with `Duration::from_millis(200)`.
+///
+/// Manual implementation rather than pulling in `humantime` for one call
+/// site, where the format vocabulary is narrow (ms vs s) and the dedicated
+/// helper keeps the unit test surface focused on the two boundaries that
+/// matter for #336.
+fn format_grace_duration(d: Duration) -> String {
+    if d < Duration::from_secs(1) {
+        format!("{}ms", d.as_millis())
+    } else {
+        format!("{}s", d.as_secs())
+    }
+}
+
+/// Resolve the unknown-status grace period for `await_bulk_task`.
+///
+/// Release builds always return `DEFAULT_UNKNOWN_STATUS_GRACE_SECS` (30s).
+/// Debug builds also honor `JR_BULK_UNKNOWN_GRACE_SECS` (whole seconds —
+/// parsed as `u64`, so `"0"`, `"1"`, `"30"` etc. but NOT `"0.5"`) so CLI-
+/// level integration tests can drive the warn+escalate path through the
+/// binary quickly — typically by setting it to `"0"` so escalation fires
+/// on the second poll (one ~1s sleep cycle after the first sighting) —
+/// without shipping the knob to production. Unparseable / non-numeric
+/// values are silently ignored (fall back to default) — the env var is a
+/// test seam, not user-configurable surface, and a typo shouldn't break
+/// the polling loop in a dev shell.
+///
+/// Gated `#[cfg(debug_assertions)]` mirrors the existing `JR_BASE_URL` and
+/// `JR_AUTH_HEADER` debug-only patterns (CLAUDE.md "AI Agent Notes"). Unlike
+/// those env vars there is no token-leak vector, so a single-site gate is
+/// sufficient — there is no production code path that reads it.
+fn resolve_unknown_status_grace() -> Duration {
+    #[cfg(debug_assertions)]
+    {
+        if let Ok(s) = std::env::var("JR_BULK_UNKNOWN_GRACE_SECS") {
+            if let Ok(secs) = s.parse::<u64>() {
+                return Duration::from_secs(secs);
+            }
+        }
+    }
+    Duration::from_secs(DEFAULT_UNKNOWN_STATUS_GRACE_SECS)
+}
 
 /// Maximum byte length for a taskId received from Atlassian, used as a sanity
 /// cap before embedding the value into the bulk-queue URL path.
@@ -192,10 +279,45 @@ impl JiraClient {
     ///
     /// Returns `Ok(BulkOperationProgress)` when a terminal status is reached.
     /// Returns `Err(...)` when timeout is exceeded or an HTTP error occurs.
+    ///
+    /// Uses `DEFAULT_UNKNOWN_STATUS_GRACE_SECS` (30s) for the unknown-status
+    /// escalation grace period. In-lib tests override via
+    /// `await_bulk_task_with_grace_for_test`. CLI-level integration tests
+    /// (in `tests/`) override via the `JR_BULK_UNKNOWN_GRACE_SECS` env var,
+    /// gated `#[cfg(debug_assertions)]` so release binaries ignore it.
     pub async fn await_bulk_task(
         &self,
         task_id: &str,
         timeout: Duration,
+    ) -> anyhow::Result<BulkOperationProgress> {
+        self.await_bulk_task_inner(task_id, timeout, resolve_unknown_status_grace())
+            .await
+    }
+
+    /// Test-only variant of `await_bulk_task` that exposes the unknown-status
+    /// grace-period parameter so tests can verify the warn+escalate path
+    /// quickly — typically in ~1 second of wall-clock time rather than the
+    /// 30-second production default. The polling loop's `POLL_BASE_SECS` (1s)
+    /// minimum sleep between polls means escalation cannot complete in
+    /// strictly sub-second time, but a sub-second `unknown_status_grace`
+    /// (e.g., `Duration::from_millis(200)`) guarantees the grace expiry check
+    /// fires on the second poll. NOT part of the release API surface.
+    #[cfg(test)]
+    pub async fn await_bulk_task_with_grace_for_test(
+        &self,
+        task_id: &str,
+        timeout: Duration,
+        unknown_status_grace: Duration,
+    ) -> anyhow::Result<BulkOperationProgress> {
+        self.await_bulk_task_inner(task_id, timeout, unknown_status_grace)
+            .await
+    }
+
+    async fn await_bulk_task_inner(
+        &self,
+        task_id: &str,
+        timeout: Duration,
+        unknown_status_grace: Duration,
     ) -> anyhow::Result<BulkOperationProgress> {
         // Validate task_id at function entry — BEFORE the deadline is computed.
         // The timeout-exceeded error message below interpolates task_id via
@@ -210,6 +332,13 @@ impl JiraClient {
         let deadline = Instant::now() + timeout;
         let mut backoff = POLL_BASE_SECS;
 
+        // Unknown-status tracking (audit-followup #336). Holds the first
+        // sighting timestamp + status string. Reset when a known status is
+        // observed OR when a DIFFERENT unknown status appears (distinct
+        // novel statuses each get their own grace period — likely indicates
+        // genuine state transitions rather than stuck-in-novel-status).
+        let mut unknown_state: Option<(Instant, String)> = None;
+
         loop {
             // Check timeout before each poll attempt.
             if Instant::now() >= deadline {
@@ -222,6 +351,56 @@ impl JiraClient {
 
             // poll_bulk_task → self.get → self.send (handles 429 + 401 auto-refresh).
             let progress = self.poll_bulk_task(task_id).await?;
+
+            // Unknown-status escalation path (#336). Three cases:
+            //  1. Known status — reset the unknown tracker and continue normally.
+            //  2. Same unknown status as last poll AND grace exceeded — escalate.
+            //  3. New unknown status OR same unknown still within grace — warn
+            //     (only on first sighting per distinct status) and continue.
+            if progress.is_known_status() {
+                unknown_state = None;
+            } else {
+                let status = progress.status.clone();
+                let now = Instant::now();
+                match &unknown_state {
+                    None => {
+                        // First sighting of any unknown status — emit warning.
+                        eprintln!(
+                            "warning: bulk task {task_id} returned unrecognized status \
+                             {status:?} — treating as non-terminal. If the operation \
+                             hangs, this may be a new Atlassian status; report at \
+                             https://github.com/Zious11/jira-cli/issues so the known-status \
+                             list can be updated."
+                        );
+                        unknown_state = Some((now, status));
+                    }
+                    Some((first_seen, last_status)) if *last_status != status => {
+                        // Different unknown status than last poll — reset tracker
+                        // and re-warn so operators see the transition.
+                        eprintln!(
+                            "warning: bulk task {task_id} now returning a DIFFERENT \
+                             unrecognized status {status:?} (was {last_status:?} for {}) \
+                             — resetting grace-period counter.",
+                            format_grace_duration(now.duration_since(*first_seen))
+                        );
+                        unknown_state = Some((now, status));
+                    }
+                    Some((first_seen, _)) => {
+                        // Same unknown status persisting — check grace expiry.
+                        if now.duration_since(*first_seen) >= unknown_status_grace {
+                            return Err(anyhow::anyhow!(
+                                "Bulk task {task_id} polled unrecognized status {status:?} \
+                                 for >= {}; treating as terminal-with-error. If this status \
+                                 indicates progress (not failure), please report at \
+                                 https://github.com/Zious11/jira-cli/issues so the \
+                                 known-status list can be updated.",
+                                format_grace_duration(unknown_status_grace)
+                            ));
+                        }
+                        // Within grace — fall through to sleep+retry.
+                    }
+                }
+            }
 
             if progress.is_terminal() {
                 // C-2: FAILED/CANCELLED/DEAD are terminal but unsuccessful.
@@ -265,7 +444,37 @@ impl JiraClient {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_TASK_ID_LEN, validate_task_id};
+    use std::time::Duration;
+
+    use super::{MAX_TASK_ID_LEN, format_grace_duration, validate_task_id};
+
+    #[test]
+    fn test_336_format_grace_duration_sub_second_renders_ms() {
+        // Sub-second values must render in milliseconds — `as_secs()` alone
+        // truncates 200ms to 0, producing misleading ">= 0s" messages in
+        // test diagnostics and (hypothetically) any future sub-second grace
+        // configuration. Copilot R1-4 driver.
+        assert_eq!(format_grace_duration(Duration::from_millis(200)), "200ms");
+        assert_eq!(format_grace_duration(Duration::from_millis(1)), "1ms");
+        assert_eq!(format_grace_duration(Duration::from_millis(999)), "999ms");
+    }
+
+    #[test]
+    fn test_336_format_grace_duration_at_one_second_boundary_renders_s() {
+        // The boundary case: exactly 1s should render as "1s" (full-second
+        // resolution), not "1000ms". Above-one-second values render in
+        // whole seconds.
+        assert_eq!(format_grace_duration(Duration::from_secs(1)), "1s");
+        assert_eq!(format_grace_duration(Duration::from_secs(30)), "30s");
+        assert_eq!(format_grace_duration(Duration::from_secs(300)), "300s");
+    }
+
+    #[test]
+    fn test_336_format_grace_duration_zero_renders_zero_ms() {
+        // grace=0 is a legitimate test seam (`JR_BULK_UNKNOWN_GRACE_SECS=0`)
+        // and must produce a coherent string rather than empty/absurd output.
+        assert_eq!(format_grace_duration(Duration::ZERO), "0ms");
+    }
 
     #[test]
     fn test_validate_task_id_accepts_uuid() {
@@ -389,5 +598,179 @@ mod tests {
         // taskIds are all ASCII per observed and inferred formats.
         let err = validate_task_id("tâsk-123").expect_err("non-ASCII accepted");
         assert!(err.to_string().contains("disallowed characters"));
+    }
+}
+
+#[cfg(test)]
+mod unknown_status_grace_tests {
+    //! Integration tests for #336 unknown-status warn+grace-period escalation.
+    //!
+    //! These use wiremock to drive `await_bulk_task_with_grace_for_test` (the
+    //! `#[cfg(test)]` shim around `await_bulk_task_inner`) through:
+    //!   1. Persistent unknown → escalation to `Err` after the grace period.
+    //!   2. Known-only polling sequence → no warning path, returns `Ok`.
+    //!   3. Transient unknown → known → tracker resets, returns `Ok` on the
+    //!      known terminal.
+    //!
+    //! The grace value in each test is sub-second so the test suite completes
+    //! quickly; production callers use `DEFAULT_UNKNOWN_STATUS_GRACE_SECS`
+    //! (30s, Perplexity-validated 2026-05-12).
+    //!
+    //! NOTE: the polling loop sleeps `tokio::time::sleep` with `POLL_BASE_SECS`
+    //! (1s) between polls. Each test below thus takes ~1 wall-clock second.
+    //! `tokio::time::pause()` would let us advance virtually, but wiremock
+    //! relies on real I/O for its mock server — pausing time risks deadlock.
+    //! 1s per test is acceptable; total suite cost ~3s.
+    use std::time::Duration;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use crate::api::client::JiraClient;
+
+    fn progress_json(task_id: &str, status: &str) -> serde_json::Value {
+        serde_json::json!({
+            "taskId": task_id,
+            "status": status,
+            "progressPercent": 0,
+            "totalIssueCount": 0,
+            "processedAccessibleIssues": [],
+            "failedAccessibleIssues": {},
+        })
+    }
+
+    /// Persistent unknown status → escalation to terminal-with-error after the
+    /// configured grace period elapses. Verifies the **escalation half** of
+    /// the #336 contract: that the polling loop converts a persistent novel
+    /// status into a definitive `Err` rather than waiting the full 5-minute
+    /// timeout.
+    ///
+    /// The **warning-emission half** of the contract (the stderr `eprintln!`
+    /// fired on first sighting) is verified at the CLI-level integration
+    /// test `test_336_cli_unknown_status_emits_warning_and_escalates` in
+    /// `tests/issue_bulk_pr2.rs`, which drives the binary via `assert_cmd`
+    /// and asserts on captured stderr. Capturing `eprintln!` from an async
+    /// unit test would require a `tracing` migration (Perplexity-validated
+    /// 2026-05-12: no stdlib mechanism; the `gag` / `stdio-override` crates
+    /// are sync-only and unmaintained) and is out of scope for #336.
+    #[tokio::test]
+    async fn test_336_persistent_unknown_status_escalates_to_err_after_grace() {
+        let server = MockServer::start().await;
+        let task_id = "test-unknown-336";
+
+        // Always-on mock returning a made-up status outside the documented enum.
+        // `MYSTERY_STATUS_FAKE` is deliberately chosen so a future Atlassian
+        // enum addition won't accidentally collide and silently invalidate the
+        // assertion.
+        Mock::given(method("GET"))
+            .and(path(format!("/rest/api/3/bulk/queue/{task_id}")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(progress_json(task_id, "MYSTERY_STATUS_FAKE")),
+            )
+            .mount(&server)
+            .await;
+
+        let client = JiraClient::new_for_test(server.uri(), "Bearer test".to_string());
+        let result = client
+            .await_bulk_task_with_grace_for_test(
+                task_id,
+                Duration::from_secs(10),
+                Duration::from_millis(200),
+            )
+            .await;
+
+        let err = result.expect_err("expected escalation error for persistent unknown status");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("MYSTERY_STATUS_FAKE"),
+            "escalation error should mention the offending status; got: {msg}"
+        );
+        assert!(
+            msg.contains("terminal-with-error"),
+            "escalation error should mention 'terminal-with-error'; got: {msg}"
+        );
+    }
+
+    /// Known-only polling sequence (ENQUEUED → COMPLETE) → no escalation,
+    /// `Ok(progress)` returned. Confirms the warn/grace path is not engaged
+    /// for documented statuses.
+    #[tokio::test]
+    async fn test_336_known_status_sequence_returns_ok_without_escalation() {
+        let server = MockServer::start().await;
+        let task_id = "test-known-336";
+
+        // Poll 1: ENQUEUED (known non-terminal).
+        Mock::given(method("GET"))
+            .and(path(format!("/rest/api/3/bulk/queue/{task_id}")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(progress_json(task_id, "ENQUEUED")),
+            )
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        // Poll 2+: COMPLETE (known terminal).
+        Mock::given(method("GET"))
+            .and(path(format!("/rest/api/3/bulk/queue/{task_id}")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(progress_json(task_id, "COMPLETE")),
+            )
+            .mount(&server)
+            .await;
+
+        let client = JiraClient::new_for_test(server.uri(), "Bearer test".to_string());
+        let result = client
+            .await_bulk_task_with_grace_for_test(
+                task_id,
+                Duration::from_secs(10),
+                Duration::from_millis(200),
+            )
+            .await;
+
+        let progress = result.expect("known-only sequence should converge on Ok");
+        assert_eq!(progress.status, "COMPLETE");
+    }
+
+    /// Transient unknown then known terminal → tracker resets on the known
+    /// status, and the loop returns `Ok(progress)` instead of escalating.
+    /// Verifies the unknown_state-reset branch.
+    #[tokio::test]
+    async fn test_336_transient_unknown_then_known_resets_tracker() {
+        let server = MockServer::start().await;
+        let task_id = "test-transient-336";
+
+        // Poll 1: unknown.
+        Mock::given(method("GET"))
+            .and(path(format!("/rest/api/3/bulk/queue/{task_id}")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(progress_json(task_id, "TRANSIENT_FAKE_STATUS")),
+            )
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        // Poll 2+: COMPLETE.
+        Mock::given(method("GET"))
+            .and(path(format!("/rest/api/3/bulk/queue/{task_id}")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(progress_json(task_id, "COMPLETE")),
+            )
+            .mount(&server)
+            .await;
+
+        let client = JiraClient::new_for_test(server.uri(), "Bearer test".to_string());
+        // Use a long-enough grace (2s) that even if the test were slow, the
+        // single unknown sighting wouldn't trigger escalation — we want to
+        // assert the reset path explicitly, not race the grace clock.
+        let result = client
+            .await_bulk_task_with_grace_for_test(
+                task_id,
+                Duration::from_secs(10),
+                Duration::from_secs(2),
+            )
+            .await;
+
+        let progress =
+            result.expect("transient unknown followed by COMPLETE should converge on Ok");
+        assert_eq!(progress.status, "COMPLETE");
     }
 }

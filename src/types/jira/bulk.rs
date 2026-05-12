@@ -92,10 +92,53 @@ pub struct BulkOperationProgress {
 
 impl BulkOperationProgress {
     /// Whether this status is a terminal (final) state.
+    ///
+    /// Includes `PARTIAL_FAILURE` and `PROCESSED_WITH_ERRORS` (Perplexity-
+    /// validated 2026-05-12 additions to the Atlassian OpenAPI enum — both
+    /// indicate the operation finished, just with mixed per-item outcomes).
+    /// Caller routing in `await_bulk_task` treats them like `COMPLETE` and
+    /// returns `Ok(progress)`; partial-failure detail surfaces via
+    /// `failed_accessible_issues` + `is_success()`.
     pub fn is_terminal(&self) -> bool {
         matches!(
             self.status.as_str(),
-            "COMPLETE" | "FAILED" | "CANCELLED" | "DEAD" | "COMPLETED"
+            "COMPLETE"
+                | "COMPLETED"
+                | "FAILED"
+                | "CANCELLED"
+                | "DEAD"
+                | "PARTIAL_FAILURE"
+                | "PROCESSED_WITH_ERRORS"
+        )
+    }
+
+    /// Whether this status is documented per the Atlassian OpenAPI spec or
+    /// an empirical safety alias the client recognizes.
+    ///
+    /// Returns `false` for novel statuses Atlassian may introduce after this
+    /// crate was published. Caller (`await_bulk_task`) treats those as
+    /// suspicious: warn on first sighting and escalate to terminal-with-error
+    /// after a grace period so a novel-but-actually-terminal status doesn't
+    /// silently poll until the 5-minute timeout. Closes audit-followup #336.
+    ///
+    /// Set source: Atlassian Jira Cloud REST API v3 OpenAPI spec, verified
+    /// Perplexity 2026-05-12. Update this list if Atlassian adds more
+    /// statuses and the integration tests start hitting the warn+grace path.
+    pub fn is_known_status(&self) -> bool {
+        matches!(
+            self.status.as_str(),
+            // Terminal (per OpenAPI + COMPLETED empirical alias):
+            "COMPLETE"
+                | "COMPLETED"
+                | "FAILED"
+                | "CANCELLED"
+                | "DEAD"
+                | "PARTIAL_FAILURE"
+                | "PROCESSED_WITH_ERRORS"
+            // Non-terminal (per OpenAPI):
+            | "ENQUEUED"
+                | "RUNNING"
+                | "CANCEL_REQUESTED"
         )
     }
 
@@ -152,11 +195,25 @@ mod tests {
 
     #[test]
     fn is_terminal_recognizes_documented_and_empirical_aliases() {
-        // Documented terminal statuses per OpenAPI: COMPLETE, FAILED, CANCELLED, DEAD.
-        // COMPLETED is included as an empirical-safety alias (some live API responses
-        // observed it; tracked at #331 pending sandbox verification). Do not remove
-        // COMPLETED without confirming the live API never emits it.
-        let terminal = ["COMPLETE", "COMPLETED", "FAILED", "CANCELLED", "DEAD"];
+        // Documented terminal statuses per OpenAPI (verified Perplexity
+        // 2026-05-12): COMPLETE, FAILED, CANCELLED, DEAD, PARTIAL_FAILURE,
+        // PROCESSED_WITH_ERRORS. COMPLETED is included as an empirical-safety
+        // alias (some live API responses observed it; tracked at #331 pending
+        // sandbox verification). Do not remove COMPLETED without confirming
+        // the live API never emits it.
+        //
+        // PARTIAL_FAILURE and PROCESSED_WITH_ERRORS are 2026 additions to
+        // the Atlassian enum — added via audit-followup #336 alongside the
+        // unknown-status grace-period fix.
+        let terminal = [
+            "COMPLETE",
+            "COMPLETED",
+            "FAILED",
+            "CANCELLED",
+            "DEAD",
+            "PARTIAL_FAILURE",
+            "PROCESSED_WITH_ERRORS",
+        ];
         let non_terminal = [
             "RUNNING",
             "ENQUEUED",
@@ -176,6 +233,51 @@ mod tests {
             assert!(
                 !progress_with_status(s).is_terminal(),
                 "expected {s} non-terminal"
+            );
+        }
+    }
+
+    #[test]
+    fn test_336_is_known_status_recognizes_documented_set() {
+        // is_known_status() returns true for the full documented enum
+        // (terminal ∪ non-terminal) and false for novel/unrecognized values.
+        // Source: Atlassian Jira Cloud REST API v3 OpenAPI spec (Perplexity-
+        // verified 2026-05-12).
+        let known = [
+            // Terminal
+            "COMPLETE",
+            "COMPLETED",
+            "FAILED",
+            "CANCELLED",
+            "DEAD",
+            "PARTIAL_FAILURE",
+            "PROCESSED_WITH_ERRORS",
+            // Non-terminal
+            "ENQUEUED",
+            "RUNNING",
+            "CANCEL_REQUESTED",
+        ];
+        let unknown = [
+            // Strings not in the OpenAPI enum — these trigger the
+            // warn+grace-period path in await_bulk_task.
+            "PAUSED",
+            "PENDING",     // observed-in-test only, not in OpenAPI
+            "IN_PROGRESS", // observed-in-test only, not in OpenAPI
+            "FOO_BAR",
+            "",
+            "unknown",
+            "complete", // case-sensitive: lowercase != COMPLETE
+        ];
+        for s in known {
+            assert!(
+                progress_with_status(s).is_known_status(),
+                "expected {s} to be a known status"
+            );
+        }
+        for s in unknown {
+            assert!(
+                !progress_with_status(s).is_known_status(),
+                "expected {s} to be an unknown status"
             );
         }
     }

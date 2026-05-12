@@ -2521,3 +2521,109 @@ async fn test_label_with_description_rejected_before_search() {
         "Expected zero HTTP calls when --label combined with --description"
     );
 }
+
+// ---------------------------------------------------------------------------
+// #336: CLI-level verification of warn+escalate for unrecognized bulk status.
+// ---------------------------------------------------------------------------
+
+/// Multi-key `jr issue move FOO-1 FOO-2 ... Done` against a wiremock that
+/// returns `MYSTERY_STATUS_FAKE` (a deliberately-novel status not in the
+/// Atlassian OpenAPI enum) for the bulk-queue poll. With
+/// `JR_BULK_UNKNOWN_GRACE_SECS=0` the warn+escalate path completes in one
+/// poll cycle (~1s wall-clock) instead of waiting the production 30-second
+/// grace.
+///
+/// This test closes the Copilot R1 finding on PR #359: the in-lib wiremock
+/// tests verify the **escalation** half of the contract (return value), but
+/// the **warning emission** half (the `eprintln!` to stderr on first sighting
+/// of an unknown status) is only observable at the process boundary. Async
+/// in-lib tests can't easily capture `eprintln!` (Perplexity-validated
+/// 2026-05-12: no stdlib mechanism, sync-only crates `gag`/`stdio-override`
+/// don't compose with `#[tokio::test]`, and `tracing` migration is out of
+/// scope for this PR). `assert_cmd` does capture stdout/stderr from the
+/// spawned binary, so we drive the path through `jr issue move` and assert
+/// on what an operator would actually see.
+///
+/// Assertions:
+///   - non-zero exit (escalation is `Err`, surfaced as exit != 0);
+///   - stderr contains the first-sighting warning prefix
+///     ("warning: bulk task ... returned unrecognized status");
+///   - stderr contains the made-up status name `MYSTERY_STATUS_FAKE`;
+///   - stderr contains the escalation phrase `terminal-with-error`.
+#[tokio::test]
+async fn test_336_cli_unknown_status_emits_warning_and_escalates() {
+    let server = MockServer::start().await;
+    let task_id = "test-336-cli-unknown";
+
+    // GET /rest/api/3/issue/FOO-1/transitions — used by handle_move_bulk to
+    // discover the transition ID from the first key. One transition, named
+    // "Done" with id "21".
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1/transitions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            common::fixtures::transitions_response_with_status(vec![("21", "Mark Done", "Done")]),
+        ))
+        .mount(&server)
+        .await;
+
+    // POST /rest/api/3/bulk/issues/transition — submit returns taskId.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/transition"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "taskId": task_id,
+        })))
+        .mount(&server)
+        .await;
+
+    // GET /rest/api/3/bulk/queue/{taskId} — always returns the novel status.
+    // The polling loop will see it twice (sleep 1s between polls), emit the
+    // first-sighting warning, then escalate because grace=0.
+    Mock::given(method("GET"))
+        .and(path(format!("/rest/api/3/bulk/queue/{task_id}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "taskId": task_id,
+            "status": "MYSTERY_STATUS_FAKE",
+            "progressPercent": 0,
+            "totalIssueCount": 2,
+            "processedAccessibleIssues": [],
+            "failedAccessibleIssues": {},
+            "invalidOrInaccessibleIssueCount": 0
+        })))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        // Zero-second grace (the env var parses as whole seconds via u64)
+        // turns the 30s production wait into ~1s test wait: the first poll
+        // emits the first-sighting warning and seeds the unknown-state
+        // tracker; after the ~1s exponential-backoff sleep the second poll
+        // sees the same unknown status, and `now - first_seen >= 0s` fires
+        // the escalation Err immediately.
+        .env("JR_BULK_UNKNOWN_GRACE_SECS", "0")
+        .arg("--no-input")
+        .arg("issue")
+        .arg("move")
+        .arg("FOO-1")
+        .arg("FOO-2")
+        .arg("Done")
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Expected non-zero exit on escalation; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("warning: bulk task") && stderr.contains("returned unrecognized status"),
+        "Expected first-sighting warning in stderr; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("MYSTERY_STATUS_FAKE"),
+        "Expected the offending status name in stderr; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("terminal-with-error"),
+        "Expected escalation phrase 'terminal-with-error' in stderr; got: {stderr}"
+    );
+}
