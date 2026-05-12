@@ -9,7 +9,12 @@
 //! Also accepts COMPLETED as an empirical-safety alias for COMPLETE.
 //! Non-terminal (continue polling): ENQUEUED | RUNNING | CANCEL_REQUESTED.
 //! Unknown statuses are warned-on-first-sighting and escalate to terminal-with-
-//! error after DEFAULT_UNKNOWN_STATUS_GRACE_SECS (#336 fix).
+//! error after the unknown-status grace period (default 30s via
+//! `DEFAULT_UNKNOWN_STATUS_GRACE_SECS`, resolved through
+//! `resolve_unknown_status_grace()` — debug builds also honor the
+//! `JR_BULK_UNKNOWN_GRACE_SECS` env var so CLI integration tests can drive
+//! the warn+escalate path in ~1s; release builds always use the default).
+//! Closes audit-followup #336.
 //!
 //! Per CLAUDE.md: blanket-401 → auto-refresh is already wired into JiraClient::send.
 //! 429 during polling: JiraClient::send retries up to MAX_RETRIES times using
