@@ -68,13 +68,21 @@ struct ApproximateCountResponse {
 /// adds top-level response fields and the SDK convention is to ignore
 /// unknowns silently.
 ///
-/// `Default` is required — removing it produces:
+/// `Default` is required here, but NOT for the fundamental reason one might
+/// assume: `Vec<T>::default()` returns `vec![]` for ANY `T`, so the runtime
+/// semantics of `#[serde(default)]` on `CursorPage::issues: Vec<T>` do NOT
+/// actually require `T: Default`.
+///
+/// The requirement comes from serde-derive's CONSERVATIVE bound-inference
+/// algorithm: when `#[serde(default)]` appears on a field of type `Vec<T>`,
+/// the generated `Deserialize` impl adds `T: Default` to its where-clause
+/// regardless of whether the bound is logically necessary. Removing `Default`
+/// from `IssueKeyRow` produces:
 ///   error[E0277]: the trait bound `IssueKeyRow: Default` is not satisfied
 ///   required for `CursorPage<IssueKeyRow>` to implement `DeserializeOwned`
-///   (the `#[serde(default)]` on `CursorPage::issues: Vec<T>` causes serde's
-///   derive macro to add a `T: Default` bound for deserialization).
-/// The default value is never used at runtime; `Default` here is a derive-macro
-/// artefact imposed by serde's `#[serde(default)]` on the container field.
+/// This is a known serde-derive limitation (conservative macro bounds), not a
+/// fundamental requirement of `Vec` or serde's runtime logic. The `Default`
+/// value is never used at runtime.
 #[derive(Deserialize, Default)]
 struct IssueKeyRow {
     key: String,
