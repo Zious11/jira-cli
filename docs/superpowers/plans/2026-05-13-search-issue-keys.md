@@ -17,7 +17,7 @@
 ## File Plan
 
 **New files:**
-- `tests/search_issue_keys.rs` — wiremock integration tests for the new method (10 tests).
+- `tests/search_issue_keys.rs` — wiremock integration tests for the new method (11 tests).
 
 **Modified files:**
 - `src/api/jira/issues.rs` — add `KeySearchResult` struct, `IssueKeyRow` private deserialization helper, `search_issue_keys` method.
@@ -846,7 +846,7 @@ async fn test_handle_edit_jql_truncation_error_still_triggers_after_migration() 
             "issue", "edit",
             "--jql", "project = X",
             "--max", "5",
-            "--add-label", "foo",
+            "--label", "add:foo",
             "--yes",
         ])
         .output()
@@ -1057,7 +1057,7 @@ Expected: exit 0 (BC counts are aligned).
 cargo test --test search_issue_keys test_search_issue_keys_sends_fields_key_only -- --nocapture 2>&1 | tail -5
 ```
 
-Expected: pass. This test mocks `body_partial_json({"fields": ["key"]})` — its passing proves the wire path now sends ONLY `key` and not `BASE_ISSUE_FIELDS`.
+Expected: pass. This test uses `MockServer::received_requests()` and `assert_eq!` on `serde_json::Value` to enforce length-strict matching that `body["fields"] == json!(["key"])` exactly — proving the wire path sends ONLY `key` and not `BASE_ISSUE_FIELDS`. Note: `body_partial_json` was NOT used here because its array semantics are subset-matching (`assert_json_include`), which would silently pass even if `BASE_ISSUE_FIELDS` leaked into the request. See spec §Risks for the full retraction note on the `body_partial_json` claim.
 
 - [ ] **Step 6: No commit required — proceed to PR creation**
 
@@ -1111,11 +1111,11 @@ Wire payload for the JQL bulk-edit selection round-trip drops from
 
 - [x] `cargo fmt --check` passes
 - [x] `cargo clippy --all-targets -- -D warnings` passes
-- [x] `cargo test` — full suite green (all existing + 10 new wiremock tests
-      in `tests/search_issue_keys.rs` + 1 regression test in `tests/issue_bulk_pr2.rs`)
+- [x] `cargo test` — full suite green (all existing + 11 new wiremock tests
+      in `tests/search_issue_keys.rs` (10 library tokio + 1 subprocess) + 1 regression test in `tests/issue_bulk_pr2.rs`)
 - [x] `scripts/check-spec-counts.sh` exits 0
 - [x] `test_search_issue_keys_sends_fields_key_only` proves wire body sent
-      `fields: ["key"]` (length-strict array via wiremock's `body_partial_json`)
+      `fields: ["key"]` exactly (length-strict via `MockServer::received_requests()` + `assert_eq!` on `serde_json::Value`, NOT wiremock's `body_partial_json` which is subset-matching)
 - [x] Existing `test_jql_*` cases pass unchanged after caller migration
 
 ## Follow-up issue
