@@ -207,7 +207,7 @@ Wiremock-rs 0.6.5 against a test-only `JiraClient`. **Important matcher note:** 
 
 ### Caller-level integration test (existing `tests/edit_bulk_jql.rs` or sibling)
 
-`test_handle_edit_jql_truncation_error_still_triggers_after_migration` — runs `jr issue edit --jql '<q>' --max 5 --add-label foo` with wiremock returning 7 keys; asserts the existing "JQL matched at least 6 issues, which exceeds --max 5" error path still fires after the migration. Pins regression invariant.
+`test_handle_edit_jql_truncation_error_still_triggers_after_migration` — runs `jr issue edit --jql '<q>' --max 5 --label add:foo` with wiremock returning 7 keys; asserts the existing "JQL matched at least 6 issues, which exceeds --max 5" error path still fires after the migration. Pins regression invariant.
 
 ### Unit tests
 
