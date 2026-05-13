@@ -9,11 +9,13 @@
 // Library-level tests use `jr::api::client::JiraClient::new_for_test`
 // (no subprocess wiring). Pattern mirrors `tests/issue_read_holdouts.rs`.
 
+use assert_cmd::Command;
 use jr::api::client::JiraClient;
 // Imported to assert the type is publicly accessible at this path (type-visibility
 // check); clippy considers it unused because tests access fields via inference.
 #[allow(unused_imports)]
 use jr::api::jira::issues::KeySearchResult;
+use tempfile::TempDir;
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -273,11 +275,11 @@ async fn test_search_issue_keys_repeated_cursor_aborts_with_warning() {
 
     // Keys from at least page 1 are kept; loop is broken before runaway.
     assert!(!result.keys.is_empty());
-    // The eprintln! is hard to capture inside a library test without
-    // forking stderr; the behavior contract is "loop aborts", which we
-    // verify above by the `.expect(1..=3)` bound. The literal stderr
-    // assertion is covered by a subprocess test in tests/issue_bulk_pr2.rs
-    // (existing JRACLOUD-94632 coverage), so we don't duplicate it here.
+    // `eprintln!` writes directly to the process's stderr fd; it cannot be
+    // captured inside a library-level test. The literal "JRACLOUD-94632"
+    // assertion for the `search_issue_keys` codepath is in the subprocess
+    // test `test_search_issue_keys_stderr_emits_jracloud_94632_literal`
+    // below, which exercises the same path via `jr issue edit --jql ... --dry-run`.
 }
 
 // ---------------------------------------------------------------------------
@@ -408,4 +410,75 @@ async fn test_search_issue_keys_malformed_json_returns_error() {
     let result = client.search_issue_keys("q", None).await;
 
     assert!(result.is_err(), "malformed JSON must propagate as Err");
+}
+
+// ---------------------------------------------------------------------------
+// AC-003 (BC-2.6.050 §3) — JRACLOUD-94632 stderr-literal coverage.
+//
+// Subprocess test: exercises `search_issue_keys` through the real `jr` binary
+// via `jr issue edit --jql ... --dry-run --no-input`.
+//
+// A stuck-cursor mock causes `search_issue_keys` to fire the anti-loop guard,
+// which emits the JRACLOUD-94632 warning via `eprintln!` to the process's
+// stderr fd. `--dry-run` short-circuits all HTTP mutations so no additional
+// mocks are needed beyond the search endpoint.
+//
+// AC-003 requires: `String::from_utf8_lossy(&output.stderr).contains("JRACLOUD-94632")`.
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit --jql 'project = X' --label add:foo --dry-run --no-input`
+/// with a stuck cursor on /rest/api/3/search/jql:
+///   - `search_issue_keys` fires the JRACLOUD-94632 anti-loop guard on page 2.
+///   - stderr contains the literal string "JRACLOUD-94632".
+///   - `--dry-run` exits 0 and produces no bulk HTTP mutations.
+#[tokio::test]
+async fn test_search_issue_keys_stderr_emits_jracloud_94632_literal() {
+    let server = MockServer::start().await;
+
+    // Mount a mock that always returns the same nextPageToken — simulates
+    // JRACLOUD-94632: the server never advances the cursor.
+    // `search_issue_keys` detects the repeated token on the second iteration
+    // and breaks with a JRACLOUD-94632 warning emitted to stderr.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_keys_response(
+            &["X-1"],
+            Some("stuck-loop"),
+            false,
+        )))
+        .mount(&server)
+        .await;
+
+    let config_dir = TempDir::new().unwrap();
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("XDG_CACHE_HOME", config_dir.path())
+        .env_remove("JR_PROFILE")
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "--jql",
+            "project = X",
+            "--label",
+            "add:foo",
+            "--dry-run",
+        ])
+        .timeout(std::time::Duration::from_secs(15))
+        .output()
+        .expect("jr subprocess must not time out");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // AC-003 literal assertion: the JRACLOUD-94632 warning must appear in stderr
+    // when search_issue_keys detects a repeated cursor in the new codepath.
+    assert!(
+        stderr.contains("JRACLOUD-94632"),
+        "AC-003: stderr must contain 'JRACLOUD-94632' when search_issue_keys \
+         fires the anti-loop guard. Got stderr: {stderr}"
+    );
 }
