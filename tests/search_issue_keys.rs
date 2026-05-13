@@ -493,6 +493,11 @@ async fn test_search_issue_keys_stderr_emits_jracloud_94632_literal() {
     // JRACLOUD-94632: the server never advances the cursor.
     // `search_issue_keys` detects the repeated token on the second iteration
     // and breaks with a JRACLOUD-94632 warning emitted to stderr.
+    //
+    // `.expect(2)` pins the loop-termination invariant at the subprocess level:
+    // page 1 establishes prev_cursor, page 2 triggers the guard before a 3rd
+    // request. Without a bound, a regression that disables the guard would loop
+    // until the 15s timeout fires, flooding CI and masking the root cause.
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
         .respond_with(ResponseTemplate::new(200).set_body_json(jql_keys_response(
@@ -500,6 +505,7 @@ async fn test_search_issue_keys_stderr_emits_jracloud_94632_literal() {
             Some("stuck-loop"),
             false,
         )))
+        .expect(2)
         .mount(&server)
         .await;
 

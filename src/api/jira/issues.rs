@@ -41,16 +41,18 @@ pub struct SearchResult {
 /// Rust SDK precedent surveyed in
 /// `.factory/research/issue-350-search-issue-keys-design.md`.
 ///
-/// `has_more` is `true` iff the caller's `limit` was hit AND the upstream
-/// API still had more rows available; pure cursor exhaustion always
-/// returns `has_more = false`. Same semantics as [`SearchResult::has_more`].
+/// `has_more` is set to `true` in two cases:
 ///
-/// **JRACLOUD-94632 guard abort:** when the anti-loop guard fires (upstream
-/// returns the same `nextPageToken` twice), `has_more` is set to `true`
-/// and a stderr warning is emitted. This signals that pagination was
-/// incomplete due to a server bug, not natural exhaustion. Callers that
-/// need completeness guarantees should treat `has_more = true` as "results
-/// may be truncated" regardless of whether a `limit` was supplied.
+/// 1. **Caller limit hit:** the caller supplied a `limit` and upstream still
+///    had rows available beyond that limit.
+/// 2. **JRACLOUD-94632 guard abort:** the anti-loop guard fired (upstream
+///    returned the same `nextPageToken` twice), pagination was aborted with
+///    a stderr warning, and results may be incomplete due to a server bug.
+///
+/// Pure cursor exhaustion (no limit set, upstream returns `isLast: true`)
+/// always returns `has_more = false`. Callers that need completeness
+/// guarantees should treat `has_more = true` as "results may be truncated"
+/// regardless of whether a `limit` was supplied.
 ///
 /// Traces to BC-2.6.050.
 #[derive(Debug, Clone, PartialEq)]
@@ -185,12 +187,16 @@ impl JiraClient {
     /// bulk-edit selection at `cli/issue/create.rs::handle_edit`). For
     /// body-bearing reads use [`Self::search_issues`].
     ///
-    /// `has_more` is `true` iff the caller's `limit` was hit AND the
-    /// upstream API still had rows available; pure cursor exhaustion
-    /// returns `has_more = false`. The per-page clamp `.min(100)` is a
-    /// conservative client-side choice for parity with `search_issues`;
-    /// Atlassian docs note that id/key-only requests can return more
-    /// rows per page than full-body requests.
+    /// `has_more` is set to `true` in two cases: (1) the caller's `limit`
+    /// was hit AND upstream still had rows available, or (2) the
+    /// JRACLOUD-94632 anti-loop guard fired (upstream returned the same
+    /// `nextPageToken` twice), aborting pagination early with a stderr
+    /// warning. Pure cursor exhaustion returns `has_more = false`. See
+    /// [`KeySearchResult`] for the full contract.
+    ///
+    /// The per-page clamp `.min(100)` is a conservative client-side choice
+    /// for parity with `search_issues`; Atlassian docs note that id/key-only
+    /// requests can return more rows per page than full-body requests.
     ///
     /// Traces to BC-2.6.050.
     pub async fn search_issue_keys(
@@ -230,6 +236,12 @@ impl JiraClient {
 
             if let Some(max) = limit {
                 if all_keys.len() >= max as usize {
+                    // `all_keys.len() > max` handles the Apr 2025 regression
+                    // (JRACLOUD-95368) where the server overshoots maxResults AND
+                    // sets isLast:true — the overshoot proves more data existed.
+                    // `page_has_more` handles the normal "server said more pages" case.
+                    // Do NOT simplify to `page_has_more` alone — that would miss the
+                    // regression scenario.
                     more_available = all_keys.len() > max as usize || page_has_more;
                     all_keys.truncate(max as usize);
                     break;
