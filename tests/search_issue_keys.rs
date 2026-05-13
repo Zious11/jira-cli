@@ -260,7 +260,10 @@ async fn test_search_issue_keys_repeated_cursor_aborts_with_warning() {
             Some("loop"),
             false,
         )))
-        .expect(1..=3) // at least one, at most 3 (defensive — guard should fire on 2nd)
+        // Exactly 2 hits: page 1 establishes prev_cursor = Some("loop"),
+        // page 2 returns the same token and triggers the guard before a 3rd request.
+        // An upper bound of 3 would mask a regression where the guard fails to fire.
+        .expect(2)
         .mount(&server)
         .await;
 
@@ -270,8 +273,14 @@ async fn test_search_issue_keys_repeated_cursor_aborts_with_warning() {
         .await
         .expect("guard must abort gracefully");
 
-    // Keys from at least page 1 are kept; loop is broken before runaway.
+    // Keys from page 1 are kept; loop is broken before runaway.
     assert!(!result.keys.is_empty());
+    // Guard-aborted pagination signals has_more=true — caller can distinguish
+    // "server-bug abort" from "clean cursor exhaustion".
+    assert!(
+        result.has_more,
+        "guard abort must set has_more=true to signal incomplete results"
+    );
     // `eprintln!` writes directly to the process's stderr fd; it cannot be
     // captured inside a library-level test. The literal "JRACLOUD-94632"
     // assertion for the `search_issue_keys` codepath is in the subprocess

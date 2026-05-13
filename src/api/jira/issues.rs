@@ -45,6 +45,13 @@ pub struct SearchResult {
 /// API still had more rows available; pure cursor exhaustion always
 /// returns `has_more = false`. Same semantics as [`SearchResult::has_more`].
 ///
+/// **JRACLOUD-94632 guard abort:** when the anti-loop guard fires (upstream
+/// returns the same `nextPageToken` twice), `has_more` is set to `true`
+/// and a stderr warning is emitted. This signals that pagination was
+/// incomplete due to a server bug, not natural exhaustion. Callers that
+/// need completeness guarantees should treat `has_more = true` as "results
+/// may be truncated" regardless of whether a `limit` was supplied.
+///
 /// Traces to BC-2.6.050.
 #[derive(Debug, Clone, PartialEq)]
 pub struct KeySearchResult {
@@ -243,6 +250,12 @@ impl JiraClient {
                      nextPageToken twice — aborting pagination loop. Some results may \
                      be missing. Upstream bug: JRACLOUD-94632."
                 );
+                // Guard-aborted: signal incomplete results via has_more=true so callers
+                // can distinguish "clean exhaustion" from "server-bug abort". Atlassian's
+                // API guarantees non-overlapping pages even when the cursor token repeats
+                // (JRACLOUD-94632 is a cursor metadata bug, not a duplicate-data bug), so
+                // all_keys collected so far are unique — but the result set is incomplete.
+                more_available = true;
                 break;
             }
 
