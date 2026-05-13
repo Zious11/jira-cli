@@ -67,9 +67,20 @@ Alternatives considered and rejected:
 /// Rust-SDK precedent surveyed in
 /// `.factory/research/issue-350-search-issue-keys-design.md`.
 ///
-/// `has_more` is `true` iff the caller's `limit` was hit AND the upstream
-/// API still had more rows available; pure cursor exhaustion always
-/// returns `has_more = false`. (Same semantics as `SearchResult::has_more`.)
+/// `has_more` is set to `true` in two cases:
+///
+/// 1. **Caller limit hit:** the caller supplied a `limit` and upstream still
+///    had rows available beyond that limit.
+/// 2. **JRACLOUD-94632 guard abort:** the anti-loop guard fired (upstream
+///    returned the same `nextPageToken` twice), pagination was aborted with
+///    a stderr warning, and results may be incomplete due to a server bug.
+///
+/// Pure cursor exhaustion (no limit set, upstream returns `isLast: true`)
+/// always returns `has_more = false`. Callers that need completeness
+/// guarantees should treat `has_more = true` as "results may be truncated"
+/// regardless of whether a `limit` was supplied.
+///
+/// Traces to BC-2.6.050.
 #[derive(Debug, Clone, PartialEq)]
 pub struct KeySearchResult {
     pub keys: Vec<String>,
@@ -184,7 +195,7 @@ The `+1` lookahead is preserved so the exact-count error message is unchanged. T
 ### Doc and spec fallout
 
 - **CLAUDE.md** — one-line update to the `src/api/jira/issues.rs` blurb (currently "search, get, create, edit, list comments") to note `search_issue_keys` exists alongside `search_issues`.
-- **`.factory/specs/prd/bc-2-issue-read.md`** — add BC-2.6.050 in subdomain 2.6 (API layer), after BC-2.6.049. Suggested text: *"`client.search_issue_keys(jql, limit)` posts `/rest/api/3/search/jql` with body `fields: ["key"]` and deserializes only the top-level `key` field; returns `KeySearchResult { keys, has_more }` where `has_more` reflects caller-side truncation."* Also bump the file's frontmatter `definitional_count` from 49 → 50.
+- **`.factory/specs/prd/bc-2-issue-read.md`** — add BC-2.6.050 in subdomain 2.6 (API layer), after BC-2.6.049. Suggested text: *"`client.search_issue_keys(jql, limit)` posts `/rest/api/3/search/jql` with body `fields: ["key"]` and deserializes only the top-level `key` field; returns `KeySearchResult { keys, has_more }` where `has_more` is `true` on caller-side truncation OR JRACLOUD-94632 guard abort, and `false` on pure cursor exhaustion."* Also bump the file's frontmatter `definitional_count` from 49 → 50.
 - **`.factory/specs/prd/BC-INDEX.md`** — bump frontmatter `total_bcs` from 545 → 546 AND update the `sections:` line for `bc-2-issue-read.md` from `49 individually-bodied` → `50 individually-bodied`. Both counts must stay aligned with each other and with `bc-2-issue-read.md`'s `definitional_count`.
 - **`scripts/check-spec-counts.sh`** — run as a verification (exit 0 required) before committing the spec changes. The script enforces frontmatter ↔ body count alignment per DRIFT-001 mitigation.
 
@@ -219,7 +230,7 @@ None required. The new method is a thin wrapper over the HTTP surface; its seman
 
 - **Inconclusive: `fields{}` echo (Validated API Facts §6).** Mitigated by reading only top-level `key`. If Jira ever inverts this, tests 2/3/8 fail loudly with a serde "missing field `key`" deserialization error (NOT empty-string keys — IssueKeyRow.key has no #[serde(default)]).
 - **JRACLOUD-94632 false positives (addendum §Q4).** The inherited warning text overclaims "server bug" but is correct ~95 % of the time; live-data-drift false positives exist (JRACLOUD-95368). This PR inherits the existing text verbatim and files a separate follow-up to tighten the wording. Not blocking.
-- **`has_more` semantic drift.** If a future caller assumes `has_more = true` means "API has more pages" (rather than "caller-side truncation only"), they could mis-paginate. Mitigated by explicit rustdoc on the struct + test 5 pinning the contract.
+- **`has_more` semantic drift.** `has_more = true` has two distinct truthy triggers: caller-side truncation (limit hit) OR JRACLOUD-94632 guard abort (incomplete results due to server bug). If a future caller assumes only one trigger is possible, they could mis-paginate or miss the guard-abort signal. Mitigated by explicit rustdoc on the struct (two numbered cases) + test 5 pinning the truncation contract + test 4 pinning the guard-abort path.
 - **Length-strict array enforcement on `fields`.** `wiremock::body_partial_json` is subset-matching, so the strictness assertion lives in the test body (`received_requests()` + `assert_eq!`), not in the matcher. The addendum §Q3 claim that `body_partial_json` was length-strict is retracted in this spec — see Tests §1 note. A negative `.expect(0)` mock is not needed because the explicit `assert_eq!` is stronger.
 
 ## Backwards Compatibility
