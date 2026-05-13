@@ -1,1 +1,1 @@
-{"status":"pass","timestamp":"2026-05-12T02:22:55Z","command":"cargo test 2>&1 | grep \"test result\" | awk '{passed += $4; failed += $6} END {print \"Test groups:\", NR, \"| Total passed:\", passed, \"| Total failed:\", failed}'"}
+{"status":"pass","timestamp":"2026-05-12T20:00:35Z","command":"cargo test -- --test-threads=1 2>&1 > /tmp/jr-regression-4.log; echo \"exit=$?\"; grep -cE \"test result:\" /tmp/jr-regression-4.log; grep -E \"test result:\" /tmp/jr-regression-4.log | grep -v \"0 failed\" | head; grep -E \"^failures:|FAILED\" /tmp/jr-regression-4.log | head"}
