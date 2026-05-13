@@ -28,7 +28,9 @@ const BASE_ISSUE_FIELDS: &[&str] = &[
     "issuelinks",
 ];
 
-/// Result of a paginated issue search, including whether more results exist.
+/// Result of a paginated issue search, including a flag indicating whether
+/// the result set may be incomplete (caller-limit truncation OR
+/// repeated-cursor guard abort).
 ///
 /// `has_more` is set to `true` in two cases (parallel to [`KeySearchResult`]):
 ///
