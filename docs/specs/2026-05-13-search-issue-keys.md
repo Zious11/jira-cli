@@ -192,9 +192,9 @@ The `+1` lookahead is preserved so the exact-count error message is unchanged. T
 
 ### Integration tests (new file: `tests/search_issue_keys.rs`)
 
-Wiremock-rs 0.6.5 against a test-only `JiraClient`. Matchers use `body_partial_json` (array matching in `wiremock`/`assert-json-diff` is length-strict — equivalent to a full equality check on the array argument).
+Wiremock-rs 0.6.5 against a test-only `JiraClient`. **Important matcher note:** `wiremock::matchers::body_partial_json` uses `assert_json_diff::assert_json_include` which is SUBSET-matching, NOT length-strict, for arrays — a matcher built from `["key"]` would also match a body whose `fields` array was `["key", "summary", "description"]`. The addendum §Q3 claim that it was length-strict is **retracted** (verified via Perplexity 2026-05-13 against wiremock 0.6.5 source). For true length-strict assertions on the `fields` array, tests capture the request via `MockServer::received_requests().await` and use `assert_eq!` on the resulting `serde_json::Value` (which IS length-strict for arrays).
 
-1. `test_search_issue_keys_sends_fields_key_only` — `body_partial_json({"fields": ["key"]})` mounted with `.expect(1)`. Pins the perf goal: the request body asks for only `key`. (Negative `.expect(0)` mocks are NOT added — the positive matcher's length-strict array check already proves `BASE_ISSUE_FIELDS` is not sent. See addendum §Q3.)
+1. `test_search_issue_keys_sends_fields_key_only` — calls the method, then asserts on the captured request body via `received_requests()` that `body["fields"] == json!(["key"])` exactly. Pins the perf goal: the request body asks for only `key`, never `BASE_ISSUE_FIELDS`.
 2. `test_search_issue_keys_happy_path` — three rows return `{"key": "FOO-1", "fields": {}}` etc.; asserts `keys == ["FOO-1", "FOO-2", "FOO-3"]` and `has_more == false`.
 3. `test_search_issue_keys_paginates_with_next_page_token` — page 1 returns `nextPageToken: "abc"`, page 2 returns `isLast: true`; asserts both keys arrays concatenated in order, `has_more == false`, both mocks `.expect(1)`.
 4. `test_search_issue_keys_repeated_cursor_aborts_with_warning` — page 1 returns `nextPageToken: "loop"`, page 2 returns the SAME `nextPageToken: "loop"`; asserts loop aborts, stderr contains literal `JRACLOUD-94632`, returns only page 1's keys.
@@ -218,7 +218,7 @@ None required. The new method is a thin wrapper over the HTTP surface; its seman
 - **Inconclusive: `fields{}` echo (Validated API Facts §6).** Mitigated by reading only top-level `key`. If Jira ever inverts this, tests 2/3/8 fail loudly with empty-string keys.
 - **JRACLOUD-94632 false positives (addendum §Q4).** The inherited warning text overclaims "server bug" but is correct ~95 % of the time; live-data-drift false positives exist (JRACLOUD-95368). This PR inherits the existing text verbatim and files a separate follow-up to tighten the wording. Not blocking.
 - **`has_more` semantic drift.** If a future caller assumes `has_more = true` means "API has more pages" (rather than "caller-side truncation only"), they could mis-paginate. Mitigated by explicit rustdoc on the struct + test 5 pinning the contract.
-- **`.expect(1)` strictness on the negative-mock alternative.** Some wiremock test patterns add `.expect(0)` mocks as documentation. Skipped here per addendum §Q3 — the positive `.expect(1)` mock with length-strict array matching is sufficient.
+- **Length-strict array enforcement on `fields`.** `wiremock::body_partial_json` is subset-matching, so the strictness assertion lives in the test body (`received_requests()` + `assert_eq!`), not in the matcher. The addendum §Q3 claim that `body_partial_json` was length-strict is retracted in this spec — see Tests §1 note. A negative `.expect(0)` mock is not needed because the explicit `assert_eq!` is stronger.
 
 ## Backwards Compatibility
 
