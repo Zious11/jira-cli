@@ -43,3 +43,188 @@ fn jql_keys_response(keys: &[&str], next_page_token: Option<&str>, is_last: bool
     }
     body
 }
+
+// ---------------------------------------------------------------------------
+// AC-001 (BC-2.6.050 §1) — request body asks for ONLY the `key` field.
+//
+// IMPORTANT — wiremock's `body_partial_json` uses
+// `assert_json_diff::assert_json_include` which has SUBSET semantics for
+// arrays: a matcher built from `["key"]` would ALSO match a request whose
+// `fields` array was `["key", "summary", "description"]`. That would silently
+// pass while BASE_ISSUE_FIELDS leaked back in. To get true length-strict
+// matching on the array, we inspect the captured request post-hoc via
+// `MockServer::received_requests()` and compare with `assert_eq!` on the
+// serde_json::Value, which IS length-strict for arrays.
+//
+// Verified via Perplexity 2026-05-13 against wiremock 0.6.5 source.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_search_issue_keys_sends_fields_key_only() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(jql_keys_response(&["FOO-1"], None, true)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server);
+    let result = client
+        .search_issue_keys("project = FOO", Some(50))
+        .await
+        .expect("happy path must succeed");
+
+    assert_eq!(result.keys, vec!["FOO-1".to_string()]);
+    assert!(!result.has_more);
+
+    // Length-strict assertion on `fields`: prove BASE_ISSUE_FIELDS is NOT sent.
+    let requests = server
+        .received_requests()
+        .await
+        .expect("wiremock must record requests");
+    assert_eq!(requests.len(), 1, "exactly one request expected");
+    let body: serde_json::Value =
+        serde_json::from_slice(&requests[0].body).expect("body must be valid JSON");
+    let fields = body.get("fields").expect("body must include `fields` key");
+    assert_eq!(
+        fields,
+        &serde_json::json!(["key"]),
+        "request body `fields` must be EXACTLY [\"key\"] (length-strict), got: {fields}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AC-002 (BC-2.6.050 §2) — deserialization reads only top-level `key`.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_search_issue_keys_happy_path() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(jql_keys_response(&["FOO-1", "FOO-2", "FOO-3"], None, true)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server);
+    let result = client
+        .search_issue_keys("project = FOO", None)
+        .await
+        .expect("happy path must succeed");
+
+    assert_eq!(
+        result.keys,
+        vec!["FOO-1".to_string(), "FOO-2".to_string(), "FOO-3".to_string()],
+    );
+    assert!(!result.has_more, "pure exhaustion must report has_more=false");
+}
+
+// ---------------------------------------------------------------------------
+// AC-003 (BC-2.6.050 §3) — paginates via nextPageToken across two pages.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_search_issue_keys_paginates_with_next_page_token() {
+    let server = MockServer::start().await;
+
+    // Page 1 — has cursor.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(serde_json::json!({"jql": "q"})))
+        // No nextPageToken in body → matches the first request only because
+        // we mount page 2 with a higher-specificity matcher below.
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(jql_keys_response(&["P1-A", "P1-B"], Some("cursor-2"), false)),
+        )
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Page 2 — terminal.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(serde_json::json!({"nextPageToken": "cursor-2"})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(jql_keys_response(&["P2-A"], None, true)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server);
+    let result = client.search_issue_keys("q", None).await.expect("ok");
+
+    assert_eq!(result.keys, vec!["P1-A", "P1-B", "P2-A"]);
+    assert!(!result.has_more);
+}
+
+// ---------------------------------------------------------------------------
+// AC-004 (BC-2.6.050 §4) — has_more=true when limit is hit before exhaustion.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_search_issue_keys_truncates_at_limit_and_sets_has_more() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(jql_keys_response(
+                &["FOO-1", "FOO-2", "FOO-3"],
+                None,
+                true,
+            )),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server);
+    let result = client
+        .search_issue_keys("project = FOO", Some(2))
+        .await
+        .expect("ok");
+
+    assert_eq!(result.keys.len(), 2);
+    assert!(result.has_more, "limit was hit → has_more must be true");
+}
+
+// ---------------------------------------------------------------------------
+// AC-004 (BC-2.6.050 §4) — empty result is empty + has_more=false.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_search_issue_keys_returns_empty_for_no_matches() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(jql_keys_response(&[], None, true)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server);
+    let result = client
+        .search_issue_keys("project = NOWHERE", None)
+        .await
+        .expect("ok");
+
+    assert!(result.keys.is_empty());
+    assert!(!result.has_more);
+}
