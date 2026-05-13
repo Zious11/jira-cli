@@ -2627,3 +2627,73 @@ async fn test_336_cli_unknown_status_emits_warning_and_escalates() {
         "Expected escalation phrase 'terminal-with-error' in stderr; got: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Issue #350 regression: caller migrated to search_issue_keys; the
+// truncation-error path must still fire with the exact existing message.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_handle_edit_jql_truncation_error_still_triggers_after_migration() {
+    let server = MockServer::start().await;
+
+    // Server returns 7 keys; user passes --max 5 → expect the
+    // "matched at least N exceeds --max M" error with the +1 lookahead
+    // count (6, because we request effective_max+1 = 6).
+    let returned_keys = ["X-1", "X-2", "X-3", "X-4", "X-5", "X-6"];
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_search_response(&returned_keys)))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "issue", "edit",
+            "--jql", "project = X",
+            "--max", "5",
+            "--add-label", "foo",
+            "--yes",
+        ])
+        .output()
+        .expect("jr must spawn");
+
+    assert!(
+        !output.status.success(),
+        "truncation error must exit non-zero"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("matched at least 6 issues"),
+        "stderr missing exact truncation count: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("exceeds --max 5"),
+        "stderr missing --max 5 reference: {}",
+        stderr
+    );
+
+    // Pin the perf goal at the caller level too — inspect the captured
+    // request body and assert `fields` is exactly `["key"]`. This proves
+    // the migration actually swapped the wire shape (not just the code
+    // path). Length-strict assertion via `assert_eq!` on serde_json::Value
+    // — body_partial_json arrays are subset-matched and would falsely pass
+    // if BASE_ISSUE_FIELDS were leaked.
+    let requests = server
+        .received_requests()
+        .await
+        .expect("wiremock must record requests");
+    let search_req = requests
+        .iter()
+        .find(|r| r.url.path() == "/rest/api/3/search/jql")
+        .expect("must have hit /search/jql");
+    let body: serde_json::Value =
+        serde_json::from_slice(&search_req.body).expect("body must be valid JSON");
+    assert_eq!(
+        body.get("fields").expect("fields key in body"),
+        &serde_json::json!(["key"]),
+        "post-migration: request body `fields` must be EXACTLY [\"key\"]"
+    );
+}
