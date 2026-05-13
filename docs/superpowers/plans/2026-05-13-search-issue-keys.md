@@ -357,8 +357,8 @@ async fn test_search_issue_keys_repeated_cursor_aborts_with_warning() {
     // The eprintln! is hard to capture inside a library test without
     // forking stderr; the behavior contract is "loop aborts", which we
     // verify above by the `.expect(1..=3)` bound. The literal stderr
-    // assertion is covered by a subprocess test in tests/issue_bulk_pr2.rs
-    // (existing JRACLOUD-94632 coverage), so we don't duplicate it here.
+    // assertion is covered by a subprocess test in tests/search_issue_keys.rs
+    // (test_search_issue_keys_stderr_emits_jracloud_94632_literal — added during pass-01 F-02 fix), so we don't duplicate it here.
 }
 
 // ---------------------------------------------------------------------------

@@ -234,7 +234,7 @@ impl JiraClient {
             }
 
             // GUARD: detect repeated cursor token (next == prev) → abort + warn.
-            // Mirrors `search_issues` line 100-107.
+            // Mirrors the JRACLOUD-94632 guard block in search_issues above — same prev/next cursor check, same stderr warning text.
             // Stderr-literal pin: tests/search_issue_keys.rs::test_search_issue_keys_stderr_emits_jracloud_94632_literal
             // Do NOT change the literal "JRACLOUD-94632" without updating that test.
             if next_cursor.is_some() && next_cursor == prev_cursor {

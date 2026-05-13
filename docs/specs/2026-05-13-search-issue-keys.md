@@ -40,7 +40,7 @@ From the official Atlassian REST API v3 documentation (`api-group-issue-search`)
 2. **Top-level `key` is always present** in each issue object regardless of the `fields` value. The minimal response per row is approximately `{"id":"...", "key":"...", "self":"..."}` plus a possibly-empty `fields: {}` body.
 3. **`maxResults` is not API-capped at 100.** Atlassian explicitly documents that "the greatest number of items returned per page is achieved when requesting id or key only." The existing `.min(100)` clamp in `search_issues` is a conservative *client-side* choice. This spec keeps `.min(100)` for parity; lifting it is a separate decision.
 4. **Pagination on `/search/jql` is cursor-only**: response carries `nextPageToken` (no `startAt`, no `total`). Same as `search_issues`.
-5. **The `nextPageToken` repeated-cursor bug is endpoint-level, not fields-level.** [JRACLOUD-94632](https://jira.atlassian.com/browse/JRACLOUD-94632), [JRACLOUD-92049](https://jira.atlassian.com/browse/JRACLOUD-92049), [JRACLOUD-85546](https://jira.atlassian.com/browse/JRACLOUD-85546) all apply to keys-only requests just as they do to full-body requests. The existing anti-loop guard in `search_issues` (lines 97-107) MUST be mirrored verbatim.
+5. **The `nextPageToken` repeated-cursor bug is endpoint-level, not fields-level.** [JRACLOUD-94632](https://jira.atlassian.com/browse/JRACLOUD-94632), [JRACLOUD-92049](https://jira.atlassian.com/browse/JRACLOUD-92049), [JRACLOUD-85546](https://jira.atlassian.com/browse/JRACLOUD-85546) all apply to keys-only requests just as they do to full-body requests. The existing anti-loop guard in `search_issues` (the "GUARD: detect repeated cursor token" block) MUST be mirrored verbatim.
 6. **Inconclusive — `fields{}` body echo.** Some Perplexity sources suggested Jira may echo `key` inside `fields: {"key": "..."}` for `fields: ["key"]` requests. No empirical capture in published docs. Mitigation: deserialize only the top-level `key`. If Jira ever inverts this, the deserialization fails loudly rather than silently returning empty strings.
 7. **April 2025 regression.** [community.developer.atlassian.com thread 88287](https://community.developer.atlassian.com/t/post-rest-api-3-search-jql-does-not-respect-maxresults-param/88287) reports a window where `maxResults` was disrespected and up to 10 000 issues were returned. Worth a regression-pinning test that the local truncate to `limit` still holds.
 
@@ -148,7 +148,7 @@ struct IssueKeyRow {
 
 ### Pagination loop
 
-Logic mirrors `search_issues` (issues.rs:68-111) exactly, with two-name-substitution: `Issue` → `IssueKeyRow`, `SearchResult` → `KeySearchResult`. Specifically:
+Logic mirrors the body of `search_issues` exactly, with two type substitutions: `Issue` → `IssueKeyRow` and `SearchResult` → `KeySearchResult`. Specifically:
 
 - `maxResults` clamped to `.min(100)` (parity with `search_issues`, see Validated API Facts §3).
 - `next_page_token` advance + `is_last` termination identical.
@@ -206,7 +206,7 @@ Wiremock-rs 0.6.5 against a test-only `JiraClient`. **Important matcher note:** 
 10. `test_search_issue_keys_malformed_json_returns_error` — page 1 returns 200 with corrupted body `{"issues": [{"key": ` (incomplete JSON); asserts `Err` propagates from serde. *(Added per addendum §Q6.)*
 11. `test_search_issue_keys_stderr_emits_jracloud_94632_literal` — *(subprocess test)* — spawns `jr issue edit --jql ... --dry-run` against a stuck-cursor mock; captures stderr and asserts it contains the literal `"JRACLOUD-94632"`. Pairs with test 4 to satisfy AC-003's stderr-literal arm — library tests cannot capture `eprintln!` from inside the same process. *(Added during pass-01 F-02 fix.)*
 
-### Caller-level integration test (existing `tests/edit_bulk_jql.rs` or sibling)
+### Caller-level integration test (`tests/issue_bulk_pr2.rs`)
 
 `test_handle_edit_jql_truncation_error_still_triggers_after_migration` — runs `jr issue edit --jql '<q>' --max 5 --label add:foo` with wiremock returning 7 keys; asserts the existing "JQL matched at least 6 issues, which exceeds --max 5" error path still fires after the migration. Pins regression invariant.
 
