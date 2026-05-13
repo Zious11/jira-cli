@@ -2653,7 +2653,7 @@ async fn test_handle_edit_jql_truncation_error_still_triggers_after_migration() 
             "issue", "edit",
             "--jql", "project = X",
             "--max", "5",
-            "--add-label", "foo",
+            "--label", "add:foo",
             "--yes",
         ])
         .output()

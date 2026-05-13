@@ -383,11 +383,11 @@ pub(super) async fn handle_edit(
 
         // --dry-run with --jql: search is read-only, allowed.
         let search_result = client
-            .search_issues(jql_str, Some(effective_max + 1), &[])
+            .search_issue_keys(jql_str, Some(effective_max + 1))
             .await?;
-        let matched = search_result.issues;
+        let matched_keys = search_result.keys;
 
-        if matched.is_empty() {
+        if matched_keys.is_empty() {
             return Err(JrError::UserError(format!(
                 "JQL '{}' matched 0 issues. Refine your query or pass keys directly.",
                 jql_str,
@@ -395,18 +395,18 @@ pub(super) async fn handle_edit(
             .into());
         }
 
-        if matched.len() > effective_max as usize {
+        if matched_keys.len() > effective_max as usize {
             return Err(JrError::UserError(format!(
                 "JQL matched at least {} issues, which exceeds --max {}. \
                  Use --max <N> to allow up to {} issues, or refine your JQL.",
-                matched.len(),
+                matched_keys.len(),
                 effective_max,
                 BULK_MAX_KEYS,
             ))
             .into());
         }
 
-        matched.into_iter().map(|i| i.key).collect()
+        matched_keys
     } else {
         // Positional keys: enforce the Atlassian hard ceiling.
         if keys.len() > BULK_MAX_KEYS {
