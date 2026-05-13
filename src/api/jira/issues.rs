@@ -29,6 +29,25 @@ const BASE_ISSUE_FIELDS: &[&str] = &[
 ];
 
 /// Result of a paginated issue search, including whether more results exist.
+///
+/// `has_more` is set to `true` in two cases (parallel to [`KeySearchResult`]):
+///
+/// 1. **Caller limit hit:** the caller supplied a `limit` and upstream still
+///    had rows available beyond that limit. No guard-induced duplicates in
+///    this case.
+/// 2. **Repeated-cursor guard abort:** the anti-loop guard fired (upstream
+///    returned the same `nextPageToken` twice — typically live-data drift
+///    per JRACLOUD-95368), pagination was aborted with a stderr warning,
+///    and the result set may be **incomplete AND may contain duplicate
+///    issues**. `search_issues` does not dedupe; under live-data drift the
+///    server may have emitted the same issue on multiple pages before the
+///    cursor repeated. Callers that need strict uniqueness should re-issue
+///    with a stable secondary sort (`ORDER BY key ASC`) — Atlassian's KB
+///    mitigation — or dedupe locally.
+///
+/// Pure cursor exhaustion (no limit set, upstream returns `isLast: true`)
+/// always returns `has_more = false`. Callers cannot distinguish case 1 from
+/// case 2 from `has_more` alone — the stderr warning fires only in case 2.
 pub struct SearchResult {
     pub issues: Vec<Issue>,
     pub has_more: bool,
@@ -63,9 +82,15 @@ pub struct SearchResult {
 /// the stderr warning fires only in case 2. Today's sole caller
 /// (`handle_edit::effective_keys` in `cli/issue/create.rs`) requests
 /// `limit = effective_max + 1` and treats `keys.len() > effective_max` as a
-/// truncation error, which is dup-tolerant by construction. Future callers
-/// that need a richer signal should track the deferred follow-up to surface
-/// "incomplete-and-possibly-duplicated" via the type system.
+/// truncation error. **This is NOT dup-tolerant**: a single drift-induced
+/// duplicate inflates `keys.len()` by 1 and can spuriously trip the
+/// truncation error when the true unique-key count is at the limit. Bulk
+/// edits also do not dedupe — the same issue could receive the same field
+/// edit twice (idempotent at the Jira API for most fields, but wasteful).
+/// Both effects are user-visible-but-safe; not blocking. Future callers
+/// that need a richer signal should track the deferred follow-up
+/// (`feat(search): dedupe keys on JRACLOUD-95368 repeated-cursor guard abort`)
+/// to surface "incomplete-and-possibly-duplicated" via the type system.
 ///
 /// Pure cursor exhaustion (no limit set, upstream returns `isLast: true`)
 /// always returns `has_more = false`. Callers that need completeness
@@ -198,6 +223,16 @@ impl JiraClient {
                      JRACLOUD-95368). Mitigation: add a stable secondary sort like \
                      `ORDER BY key ASC` to your JQL."
                 );
+                // Guard-aborted: signal incomplete results via has_more=true so
+                // callers can distinguish "clean exhaustion" from
+                // "repeated-cursor abort". Matches the `KeySearchResult`
+                // contract for symmetry; otherwise `SearchResult.has_more`
+                // would silently be `false` despite the explicit
+                // "Some results may be missing" warning above. Note: under
+                // JRACLOUD-95368 (live-data drift, the typical cause), earlier
+                // pages MAY contain issues that the server would emit again
+                // after the cursor repeats — `search_issues` does not dedupe.
+                more_available = true;
                 break;
             }
 

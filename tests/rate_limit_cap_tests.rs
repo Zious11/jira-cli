@@ -323,3 +323,81 @@ async fn ac_008_and_ac_new_d_search_jql_cursor_loop_terminates_with_jracloud_war
          tracker. Pre-implementation: no warning emitted. Got stderr: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// search_issues guard-abort has_more=true contract pin (Copilot review on PR #364).
+//
+// Library-level companion to the subprocess `ac_008_...` test above: directly
+// calls `client.search_issues(...)` against a stuck-cursor mock and asserts
+// `SearchResult.has_more == true` after the guard fires. Matches the parallel
+// `KeySearchResult` contract — both result types now signal incompleteness
+// via `has_more = true` on repeated-cursor abort, instead of silently
+// returning `has_more = false` despite the explicit "Some results may be
+// missing" warning.
+//
+// Three CLI readers consume `SearchResult.has_more` for truncation hints:
+// `cli/issue/list.rs`, `cli/board.rs`, `cli/sprint.rs`. With this contract,
+// they will correctly display the "Showing N of M, use --all to see more"
+// hint on guard-abort instead of misleading the user that the result set is
+// complete.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_search_issues_repeated_cursor_abort_sets_has_more_true() {
+    let server = MockServer::start().await;
+
+    let stuck_response = serde_json::json!({
+        "issues": [
+            {
+                "key": "TEST-1",
+                "fields": {
+                    "summary": "Test issue",
+                    "status": {"name": "To Do"},
+                    "issuetype": {"name": "Task"},
+                    "priority": {"name": "Medium"},
+                    "assignee": null,
+                    "reporter": null,
+                    "project": {"key": "TEST"},
+                    "description": null,
+                    "created": "2026-01-01T00:00:00.000+0000",
+                    "updated": "2026-01-01T00:00:00.000+0000",
+                    "resolution": null,
+                    "components": [],
+                    "fixVersions": [],
+                    "labels": [],
+                    "parent": null,
+                    "issuelinks": []
+                }
+            }
+        ],
+        "nextPageToken": "stuck-loop"
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&stuck_response))
+        // Exactly 2 hits: page 1 establishes prev_cursor, page 2 repeats it
+        // and triggers the guard before a 3rd request would be sent.
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let client = JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let result = client
+        .search_issues("project = TEST", None, &[])
+        .await
+        .expect("guard must abort gracefully");
+
+    // Contract pin: guard-abort sets has_more=true (matches KeySearchResult).
+    // Pre-fix (Copilot review): has_more was silently false.
+    assert!(
+        result.has_more,
+        "search_issues MUST set has_more=true on repeated-cursor guard abort \
+         to match KeySearchResult and honour the explicit 'Some results may be \
+         missing' stderr warning. Pre-fix: has_more was false."
+    );
+    assert!(
+        !result.issues.is_empty(),
+        "guard-abort must preserve page 1's issues; loop is broken before runaway"
+    );
+}
