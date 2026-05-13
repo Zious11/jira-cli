@@ -228,3 +228,166 @@ async fn test_search_issue_keys_returns_empty_for_no_matches() {
     assert!(result.keys.is_empty());
     assert!(!result.has_more);
 }
+
+// ---------------------------------------------------------------------------
+// AC-003 (BC-2.6.050 §3) — JRACLOUD-94632 repeated-cursor abort.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_search_issue_keys_repeated_cursor_aborts_with_warning() {
+    let server = MockServer::start().await;
+
+    // Two pages, both return the SAME nextPageToken `"loop"`.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(jql_keys_response(&["X-1"], Some("loop"), false)),
+        )
+        .expect(1..=3) // at least one, at most 3 (defensive — guard should fire on 2nd)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server);
+    let result = client
+        .search_issue_keys("q", None)
+        .await
+        .expect("guard must abort gracefully");
+
+    // Keys from at least page 1 are kept; loop is broken before runaway.
+    assert!(!result.keys.is_empty());
+    // The eprintln! is hard to capture inside a library test without
+    // forking stderr; the behavior contract is "loop aborts", which we
+    // verify above by the `.expect(1..=3)` bound. The literal stderr
+    // assertion is covered by a subprocess test in tests/issue_bulk_pr2.rs
+    // (existing JRACLOUD-94632 coverage), so we don't duplicate it here.
+}
+
+// ---------------------------------------------------------------------------
+// Defense-in-depth: Apr 2025 Atlassian maxResults regression
+// (community.developer.atlassian.com thread 88287). Server returns more
+// rows than asked for; our `limit` truncate must still hold.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_search_issue_keys_apr2025_regression_bound() {
+    let server = MockServer::start().await;
+
+    // Server returns 500 rows in a single page despite maxResults=10.
+    let many: Vec<String> = (0..500).map(|i| format!("REG-{}", i)).collect();
+    let many_refs: Vec<&str> = many.iter().map(String::as_str).collect();
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(jql_keys_response(&many_refs, None, true)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server);
+    let result = client.search_issue_keys("q", Some(10)).await.expect("ok");
+
+    assert_eq!(result.keys.len(), 10, "caller-side truncate must hold");
+    assert!(result.has_more, "got more than limit → has_more=true");
+}
+
+// ---------------------------------------------------------------------------
+// AC-002 (BC-2.6.050 §2) — unknown top-level fields are silently ignored.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_search_issue_keys_ignores_unknown_fields() {
+    let server = MockServer::start().await;
+
+    let resp = serde_json::json!({
+        "issues": [
+            {
+                "id": "10001",
+                "key": "FOO-1",
+                "self": "https://example/issue/10001",
+                "fields": {},
+                "expand": "names",                      // unknown top-level
+                "securityLevel": {"name": "Public"}     // future-hypothetical
+            }
+        ],
+        "isLast": true,
+        "expand": "names,schema"                        // unknown response-level
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(resp))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server);
+    let result = client.search_issue_keys("q", None).await.expect("ok");
+
+    assert_eq!(result.keys, vec!["FOO-1"]);
+}
+
+// ---------------------------------------------------------------------------
+// AC-003 (BC-2.6.050 §3) — 401 mid-pagination propagates as Err.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_search_issue_keys_401_mid_pagination_propagates() {
+    let server = MockServer::start().await;
+
+    // Page 1: 200 with cursor.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(serde_json::json!({"jql": "q"})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(jql_keys_response(&["P1-A"], Some("c2"), false)),
+        )
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Page 2: 401.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(serde_json::json!({"nextPageToken": "c2"})))
+        .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+            "errorMessages": ["Authentication required"]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server);
+    let result = client.search_issue_keys("q", None).await;
+
+    assert!(result.is_err(), "401 on page 2 must propagate as Err");
+}
+
+// ---------------------------------------------------------------------------
+// Malformed JSON body on page 1 → serde error propagates.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_search_issue_keys_malformed_json_returns_error() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"issues": [{"key": "#), // truncated mid-string
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server);
+    let result = client.search_issue_keys("q", None).await;
+
+    assert!(result.is_err(), "malformed JSON must propagate as Err");
+}
