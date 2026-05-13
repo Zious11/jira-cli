@@ -44,7 +44,7 @@ src/
 │   │   ├── schemas.rs       # api/assets/schemas.rs — schema discovery + object-type attributes (~44 LOC)
 │   │   └── tickets.rs       # connected tickets
 │   └── jira/            # Jira-specific API call implementations (one file per resource)
-│       ├── issues.rs    # search, get, create, edit, list comments
+│       ├── issues.rs    # search (full + keys-only), get, create, edit, list comments
 │       ├── boards.rs    # list boards, get board config
 │       ├── sprints.rs   # list sprints, get sprint issues
 │       ├── fields.rs    # list fields, story points + CMDB field discovery
