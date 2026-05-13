@@ -57,6 +57,21 @@ struct ApproximateCountResponse {
     count: u64,
 }
 
+/// Minimal deserialization target for `search_issue_keys`.
+///
+/// Reads ONLY the top-level `key` field per issue. Atlassian guarantees
+/// `key` is at the top level regardless of the request body's `fields`
+/// value; the `fields` map itself is intentionally not deserialized here
+/// to keep the payload contract narrow.
+///
+/// Does NOT use `#[serde(deny_unknown_fields)]` — Atlassian routinely
+/// adds top-level response fields and the SDK convention is to ignore
+/// unknowns silently.
+#[derive(Deserialize)]
+struct IssueKeyRow {
+    key: String,
+}
+
 impl JiraClient {
     /// Search issues using JQL with cursor-based pagination.
     pub async fn search_issues(
