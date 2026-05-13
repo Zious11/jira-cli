@@ -220,8 +220,9 @@ impl JiraClient {
                      nextPageToken twice — aborting pagination to prevent an infinite \
                      loop. Some results may be missing. Likely cause: live data \
                      mutation between page fetches (snapshot-instability, \
-                     JRACLOUD-95368). Mitigation: add a stable secondary sort like \
-                     `ORDER BY key ASC` to your JQL."
+                     JRACLOUD-95368). Mitigation: end your JQL with `key ASC` in the \
+                     ORDER BY (append `, key ASC` to an existing sort, or use \
+                     `ORDER BY key ASC` if none)."
                 );
                 // Guard-aborted: signal incomplete results via has_more=true so
                 // callers can distinguish "clean exhaustion" from
@@ -340,8 +341,9 @@ impl JiraClient {
                      nextPageToken twice — aborting pagination to prevent an infinite \
                      loop. Some results may be missing. Likely cause: live data \
                      mutation between page fetches (snapshot-instability, \
-                     JRACLOUD-95368). Mitigation: add a stable secondary sort like \
-                     `ORDER BY key ASC` to your JQL."
+                     JRACLOUD-95368). Mitigation: end your JQL with `key ASC` in the \
+                     ORDER BY (append `, key ASC` to an existing sort, or use \
+                     `ORDER BY key ASC` if none)."
                 );
                 // Guard-aborted: signal incomplete results via has_more=true so callers
                 // can distinguish "clean exhaustion" from "repeated-cursor abort". Note:

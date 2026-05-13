@@ -308,7 +308,9 @@ async fn test_search_issue_keys_repeated_cursor_aborts_with_warning() {
 async fn test_search_issue_keys_repeated_cursor_abort_does_not_dedupe() {
     let server = MockServer::start().await;
 
-    // Page 1 — no nextPageToken in body → returns ["X-1"] with cursor "loop".
+    // Page 1 — request body has NO `nextPageToken` (initial fetch); response
+    // contains `nextPageToken: "loop"` and `["X-1"]`. The matcher binds on
+    // `jql: "q"` only, which is unique enough to disambiguate from page 2.
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
         .and(body_partial_json(serde_json::json!({"jql": "q"})))
@@ -322,12 +324,12 @@ async fn test_search_issue_keys_repeated_cursor_abort_does_not_dedupe() {
         .mount(&server)
         .await;
 
-    // Page 2 — body has nextPageToken "loop" → returns ["X-1", "X-2"] with the
-    // SAME cursor "loop". This simulates live-data drift mid-pagination: the
-    // server has emitted "X-1" twice (drift caused the position to slide back),
-    // and is now repeating the cursor — the guard must fire on the NEXT
-    // iteration check, but before it does, page 2's payload is already
-    // extended into all_keys.
+    // Page 2 — request body has `nextPageToken: "loop"`; response repeats the
+    // same `nextPageToken: "loop"` and returns ["X-1", "X-2"]. This simulates
+    // live-data drift mid-pagination: the server has emitted "X-1" twice (drift
+    // caused the position to slide back), and is now repeating the cursor — the
+    // guard must fire on the NEXT iteration check, but before it does, page 2's
+    // payload is already extended into all_keys.
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
         .and(body_partial_json(
