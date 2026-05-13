@@ -67,7 +67,13 @@ struct ApproximateCountResponse {
 /// Does NOT use `#[serde(deny_unknown_fields)]` — Atlassian routinely
 /// adds top-level response fields and the SDK convention is to ignore
 /// unknowns silently.
-#[derive(Deserialize)]
+///
+/// `Default` is required because `CursorPage<T>` uses `#[serde(default)]`
+/// on its `issues: Vec<T>` field, which causes serde's derive macro to
+/// add a `T: Default` bound for `CursorPage<T>: Deserialize<'de>`.
+/// The default value is never used at runtime; `Default` here is purely
+/// a derive-macro artefact.
+#[derive(Deserialize, Default)]
 struct IssueKeyRow {
     key: String,
 }
@@ -145,6 +151,94 @@ impl JiraClient {
 
         Ok(SearchResult {
             issues: all_issues,
+            has_more: more_available,
+        })
+    }
+
+    /// Search issues using JQL and return ONLY the matching issue keys.
+    ///
+    /// Lightweight variant of [`Self::search_issues`] — requests
+    /// `fields: ["key"]` in the POST body and deserializes only the
+    /// top-level `key`, avoiding the ~10 KB-per-issue payload that
+    /// `BASE_ISSUE_FIELDS` incurs.
+    ///
+    /// Use this when the caller only needs keys (e.g., JQL-driven
+    /// bulk-edit selection at `cli/issue/create.rs::handle_edit`). For
+    /// body-bearing reads use [`Self::search_issues`].
+    ///
+    /// `has_more` is `true` iff the caller's `limit` was hit AND the
+    /// upstream API still had rows available; pure cursor exhaustion
+    /// returns `has_more = false`. The per-page clamp `.min(100)` is a
+    /// conservative client-side choice for parity with `search_issues`;
+    /// Atlassian docs note that id/key-only requests can return more
+    /// rows per page than full-body requests.
+    ///
+    /// Traces to BC-2.6.050.
+    pub async fn search_issue_keys(
+        &self,
+        jql: &str,
+        limit: Option<u32>,
+    ) -> Result<KeySearchResult> {
+        let max_per_page = limit.unwrap_or(50).min(100);
+        let mut all_keys: Vec<String> = Vec::new();
+        let mut next_page_token: Option<String> = None;
+
+        let mut more_available = false;
+
+        // Anti-loop guard: Jira Cloud /rest/api/3/search/jql intermittently returns
+        // the same nextPageToken twice, causing infinite pagination loops. This is a
+        // confirmed upstream bug — JRACLOUD-94632, JRACLOUD-92049, JRACLOUD-85546
+        // (also reported in atlassian/atlassian-mcp-server#118 and
+        // ankitpokhrel/jira-cli#898). Mirrors the guard in `search_issues`.
+        let mut prev_cursor: Option<String> = None;
+
+        loop {
+            let mut body = serde_json::json!({
+                "jql": jql,
+                "maxResults": max_per_page,
+                "fields": ["key"]
+            });
+
+            if let Some(ref token) = next_page_token {
+                body["nextPageToken"] = serde_json::json!(token);
+            }
+
+            let page: CursorPage<IssueKeyRow> =
+                self.post("/rest/api/3/search/jql", &body).await?;
+
+            let page_has_more = page.has_more();
+            let next_cursor = page.next_page_token.clone();
+            all_keys.extend(page.issues.into_iter().map(|r| r.key));
+
+            if let Some(max) = limit {
+                if all_keys.len() >= max as usize {
+                    more_available = all_keys.len() > max as usize || page_has_more;
+                    all_keys.truncate(max as usize);
+                    break;
+                }
+            }
+
+            if !page_has_more {
+                break;
+            }
+
+            // GUARD: detect repeated cursor token (next == prev) → abort + warn.
+            // Mirrors `search_issues` line 100-107.
+            if next_cursor.is_some() && next_cursor == prev_cursor {
+                eprintln!(
+                    "[jr] WARNING: Atlassian /rest/api/3/search/jql returned the same \
+                     nextPageToken twice — aborting pagination loop. Some results may \
+                     be missing. Upstream bug: JRACLOUD-94632."
+                );
+                break;
+            }
+
+            prev_cursor = next_cursor.clone();
+            next_page_token = next_cursor;
+        }
+
+        Ok(KeySearchResult {
+            keys: all_keys,
             has_more: more_available,
         })
     }
