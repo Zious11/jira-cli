@@ -245,7 +245,7 @@ async fn test_search_issue_keys_returns_empty_for_no_matches() {
 }
 
 // ---------------------------------------------------------------------------
-// AC-003 (BC-2.6.050 §3) — JRACLOUD-94632 repeated-cursor abort.
+// AC-003 (BC-2.6.050 §3) — repeated-cursor abort (JRACLOUD-95368 live-data drift).
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -276,16 +276,92 @@ async fn test_search_issue_keys_repeated_cursor_aborts_with_warning() {
     // Keys from page 1 are kept; loop is broken before runaway.
     assert!(!result.keys.is_empty());
     // Guard-aborted pagination signals has_more=true — caller can distinguish
-    // "server-bug abort" from "clean cursor exhaustion".
+    // "repeated-cursor abort" from "clean cursor exhaustion".
     assert!(
         result.has_more,
         "guard abort must set has_more=true to signal incomplete results"
     );
     // `eprintln!` writes directly to the process's stderr fd; it cannot be
-    // captured inside a library-level test. The literal "JRACLOUD-94632"
+    // captured inside a library-level test. The literal "JRACLOUD-95368"
     // assertion for the `search_issue_keys` codepath is in the subprocess
-    // test `test_search_issue_keys_stderr_emits_jracloud_94632_literal`
+    // test `test_search_issue_keys_stderr_emits_jracloud_95368_literal`
     // below, which exercises the same path via `jr issue edit --jql ... --dry-run`.
+}
+
+// ---------------------------------------------------------------------------
+// No-dedupe contract pin (issue #361 follow-up).
+//
+// When the repeated-cursor guard fires under JRACLOUD-95368 live-data drift,
+// earlier pages may already have collected keys that the server emits again
+// on a later page before the cursor repeats. `search_issue_keys` does NOT
+// dedupe — callers see the duplicates. This test pins that contract: if a
+// future "helpful" dedupe is added inside `search_issue_keys`, this assertion
+// fails and forces an explicit decision (with a corresponding caller-level
+// migration plan).
+//
+// The deferred follow-up to add in-function dedupe should also update this
+// test: see "New follow-up (deferred)" in
+// `docs/specs/2026-05-13-search-issue-keys.md::Out of Scope / Follow-ups`.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_search_issue_keys_repeated_cursor_abort_does_not_dedupe() {
+    let server = MockServer::start().await;
+
+    // Page 1 — no nextPageToken in body → returns ["X-1"] with cursor "loop".
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(serde_json::json!({"jql": "q"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_keys_response(
+            &["X-1"],
+            Some("loop"),
+            false,
+        )))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Page 2 — body has nextPageToken "loop" → returns ["X-1", "X-2"] with the
+    // SAME cursor "loop". This simulates live-data drift mid-pagination: the
+    // server has emitted "X-1" twice (drift caused the position to slide back),
+    // and is now repeating the cursor — the guard must fire on the NEXT
+    // iteration check, but before it does, page 2's payload is already
+    // extended into all_keys.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(
+            serde_json::json!({"nextPageToken": "loop"}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_keys_response(
+            &["X-1", "X-2"],
+            Some("loop"),
+            false,
+        )))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server);
+    let result = client
+        .search_issue_keys("q", None)
+        .await
+        .expect("guard must abort gracefully");
+
+    // Contract pin: duplicates are preserved. `result.keys` MUST equal exactly
+    // ["X-1", "X-1", "X-2"] — no dedupe inside search_issue_keys.
+    assert_eq!(
+        result.keys,
+        vec!["X-1".to_string(), "X-1".to_string(), "X-2".to_string()],
+        "search_issue_keys MUST NOT dedupe on repeated-cursor abort — duplicates \
+         from live-data drift are passed through to callers. Callers needing \
+         uniqueness must dedupe themselves or re-issue with `ORDER BY key ASC`."
+    );
+    assert!(
+        result.has_more,
+        "repeated-cursor abort must set has_more=true (incomplete results)"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -467,32 +543,39 @@ async fn test_search_issue_keys_clamps_max_results_to_100_per_page() {
 }
 
 // ---------------------------------------------------------------------------
-// AC-003 (BC-2.6.050 §3) — JRACLOUD-94632 stderr-literal coverage.
+// AC-003 (BC-2.6.050 §3) — JRACLOUD-95368 stderr-literal coverage.
 //
 // Subprocess test: exercises `search_issue_keys` through the real `jr` binary
 // via `jr issue edit --jql ... --dry-run --no-input`.
 //
 // A stuck-cursor mock causes `search_issue_keys` to fire the anti-loop guard,
-// which emits the JRACLOUD-94632 warning via `eprintln!` to the process's
+// which emits the JRACLOUD-95368 warning via `eprintln!` to the process's
 // stderr fd. `--dry-run` short-circuits all HTTP mutations so no additional
 // mocks are needed beyond the search endpoint.
 //
-// AC-003 requires: `String::from_utf8_lossy(&output.stderr).contains("JRACLOUD-94632")`.
+// AC-003 requires: `String::from_utf8_lossy(&output.stderr).contains("JRACLOUD-95368")`.
+//
+// Citation history: the stderr literal was rebound from JRACLOUD-94632 to
+// JRACLOUD-95368 by issue #361 after research showed 94632 covers an unrelated
+// /search/jql defect (resolved Jun 2025). 95368 is the correctly-attributed
+// root-cause ticket: "nextPageToken pagination is not snapshot-stable under
+// live mutation".
 // ---------------------------------------------------------------------------
 
 /// `jr issue edit --jql 'project = X' --label add:foo --dry-run --no-input`
 /// with a stuck cursor on /rest/api/3/search/jql:
-///   - `search_issue_keys` fires the JRACLOUD-94632 anti-loop guard on page 2.
-///   - stderr contains the literal string "JRACLOUD-94632".
+///   - `search_issue_keys` fires the repeated-cursor anti-loop guard on page 2.
+///   - stderr contains the literal string "JRACLOUD-95368".
 ///   - `--dry-run` exits 0 and produces no bulk HTTP mutations.
 #[tokio::test]
-async fn test_search_issue_keys_stderr_emits_jracloud_94632_literal() {
+async fn test_search_issue_keys_stderr_emits_jracloud_95368_literal() {
     let server = MockServer::start().await;
 
     // Mount a mock that always returns the same nextPageToken — simulates
-    // JRACLOUD-94632: the server never advances the cursor.
+    // the JRACLOUD-95368 repeated-cursor symptom: live-data drift between
+    // page fetches causes the server to land on a previously-emitted offset.
     // `search_issue_keys` detects the repeated token on the second iteration
-    // and breaks with a JRACLOUD-94632 warning emitted to stderr.
+    // and breaks with a JRACLOUD-95368 warning emitted to stderr.
     //
     // `.expect(2)` pins the loop-termination invariant at the subprocess level:
     // page 1 establishes prev_cursor, page 2 triggers the guard before a 3rd
@@ -539,11 +622,11 @@ async fn test_search_issue_keys_stderr_emits_jracloud_94632_literal() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    // AC-003 literal assertion: the JRACLOUD-94632 warning must appear in stderr
+    // AC-003 literal assertion: the JRACLOUD-95368 warning must appear in stderr
     // when search_issue_keys detects a repeated cursor in the new codepath.
     assert!(
-        stderr.contains("JRACLOUD-94632"),
-        "AC-003: stderr must contain 'JRACLOUD-94632' when search_issue_keys \
+        stderr.contains("JRACLOUD-95368"),
+        "AC-003: stderr must contain 'JRACLOUD-95368' when search_issue_keys \
          fires the anti-loop guard. Got stderr: {stderr}"
     );
 }
