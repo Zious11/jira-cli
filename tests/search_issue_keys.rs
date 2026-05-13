@@ -11,9 +11,6 @@
 
 use assert_cmd::Command;
 use jr::api::client::JiraClient;
-// Imported to assert the type is publicly accessible at this path (type-visibility
-// check); clippy considers it unused because tests access fields via inference.
-#[allow(unused_imports)]
 use jr::api::jira::issues::KeySearchResult;
 use tempfile::TempDir;
 use wiremock::matchers::{body_partial_json, method, path};
@@ -128,7 +125,7 @@ async fn test_search_issue_keys_happy_path() {
         .await;
 
     let client = test_client(&server);
-    let result = client
+    let result: KeySearchResult = client
         .search_issue_keys("project = FOO", None)
         .await
         .expect("happy path must succeed");
