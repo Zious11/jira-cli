@@ -127,7 +127,7 @@ R1/R4 prefix = deepening round that introduced it.
 
 ---
 
-## Section 2: Issue Read (bc-2-issue-read.md) — 91 BCs cumulative; 50 individually-bodied
+## Section 2: Issue Read (bc-2-issue-read.md) — 92 BCs cumulative; 50 individually-bodied
 
 ### 2.1 JQL Composition (17 BCs: BC-2.1.001..017)
 

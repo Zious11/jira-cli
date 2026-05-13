@@ -12,7 +12,7 @@ risk_level: HIGH
 
 # BC-02: Issue Read
 
-Covers the read side of the Issue domain: `jr issue list`, `jr issue view`, `jr issue comments`, and `jr issue changelog`. Largest BC by behavioral contract count (91 BCs, ~2,500 LOC).
+Covers the read side of the Issue domain: `jr issue list`, `jr issue view`, `jr issue comments`, and `jr issue changelog`. Largest BC by behavioral contract count (92 BCs, ~2,500 LOC).
 
 ---
 
