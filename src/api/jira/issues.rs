@@ -68,11 +68,13 @@ struct ApproximateCountResponse {
 /// adds top-level response fields and the SDK convention is to ignore
 /// unknowns silently.
 ///
-/// `Default` is required because `CursorPage<T>` uses `#[serde(default)]`
-/// on its `issues: Vec<T>` field, which causes serde's derive macro to
-/// add a `T: Default` bound for `CursorPage<T>: Deserialize<'de>`.
-/// The default value is never used at runtime; `Default` here is purely
-/// a derive-macro artefact.
+/// `Default` is required — removing it produces:
+///   error[E0277]: the trait bound `IssueKeyRow: Default` is not satisfied
+///   required for `CursorPage<IssueKeyRow>` to implement `DeserializeOwned`
+///   (the `#[serde(default)]` on `CursorPage::issues: Vec<T>` causes serde's
+///   derive macro to add a `T: Default` bound for deserialization).
+/// The default value is never used at runtime; `Default` here is a derive-macro
+/// artefact imposed by serde's `#[serde(default)]` on the container field.
 #[derive(Deserialize, Default)]
 struct IssueKeyRow {
     key: String,
