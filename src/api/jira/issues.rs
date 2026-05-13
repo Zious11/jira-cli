@@ -146,6 +146,8 @@ impl JiraClient {
             // GUARD: detect repeated cursor token (next == prev) → abort + warn.
             // NFR-R-F: prevents infinite loop when server returns the same
             // nextPageToken twice (confirmed upstream bug JRACLOUD-94632).
+            // Stderr-literal pin: tests/rate_limit_cap_tests.rs::ac_008_and_ac_new_d_search_jql_cursor_loop_terminates_with_jracloud_warning
+            // Do NOT change the literal "JRACLOUD-94632" without updating that test.
             if next_cursor.is_some() && next_cursor == prev_cursor {
                 eprintln!(
                     "[jr] WARNING: Atlassian /rest/api/3/search/jql returned the same \
@@ -233,6 +235,8 @@ impl JiraClient {
 
             // GUARD: detect repeated cursor token (next == prev) → abort + warn.
             // Mirrors `search_issues` line 100-107.
+            // Stderr-literal pin: tests/search_issue_keys.rs::test_search_issue_keys_stderr_emits_jracloud_94632_literal
+            // Do NOT change the literal "JRACLOUD-94632" without updating that test.
             if next_cursor.is_some() && next_cursor == prev_cursor {
                 eprintln!(
                     "[jr] WARNING: Atlassian /rest/api/3/search/jql returned the same \

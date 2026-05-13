@@ -458,6 +458,11 @@ async fn test_search_issue_keys_stderr_emits_jracloud_94632_literal() {
         .env("XDG_CONFIG_HOME", config_dir.path())
         .env("XDG_CACHE_HOME", config_dir.path())
         .env_remove("JR_PROFILE")
+        // Insulate the stderr substring assertion from locale/ANSI variation
+        // in case a future change adds color to warning output.
+        .env("NO_COLOR", "1")
+        .env("TERM", "dumb")
+        .env("CLICOLOR", "0")
         .args([
             "--no-input",
             "issue",
