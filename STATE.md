@@ -36,7 +36,7 @@ activation_version: "v0.5.0-dev.7"
 | **Language** | Rust |
 | **Target Workspace** | develop → main |
 | **Started** | 2026-05-04 |
-| **Last Updated** | 2026-05-13 — **PR #362 MERGED @ 8010445** (squash: "feat(bulk): add search_issue_keys lightweight API for JQL bulk-edit selection (closes #350)"; closes #350; merged 2026-05-13T17:51:09Z). F5 11-pass adversarial CONVERGED (4→0→5→5→3→5→2→1→0→0→0; 3 consecutive CLEAN at pass-09/10/11; longest cycle-001 cycle); Copilot R3=0 (CONVERGED after R1=5→R2=4 fix cycles). 3 audit-followups remain (#340, #345, #346); 1 new follow-up filed (#361 — JRACLOUD-94632 wording tightening). |
+| **Last Updated** | 2026-05-13 — **PR #363 MERGED @ 3acd07f** (docs follow-up to #362: backport has_more guard-abort trigger to public spec rustdoc snippet; closes the post-Copilot doc-fallout gap; 8/8 CI green, Copilot 0 findings R1). Post-Copilot doc-fallout sweep pattern codified in sidecar-learning.md + DRIFT-005. 3 audit-followups remain (#340, #345, #346) + 1 new (#361). |
 | **Current Phase** | Phase 3 — TDD Implementation **IN PROGRESS** — Wave 3 CLOSED (10/10). Feature Mode #110-pr2 COMPLETE. PRs #355–#362 MERGED. **3 audit-followups remain: #340, #345, #346** + **1 new: #361** (#331 sandbox-blocked deferred; #333 closed by PR #360; #350 closed by PR #362). |
 | **Next Phase** | Wave 3 — 10 stories (S-3.01..S-3.10) |
 | **Activation HEAD** | dea166471e22eff55974d7675593469b37048c5f (v0.5.0-dev.7) |
@@ -71,6 +71,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | 3-feature-edit-field-categorization-343 | **MERGED** — PR #358 MERGED @ 561217b (squash: "chore(test): assert every IssueCommand::Edit field is categorized (#343) (#358)"; closes #343; 5 rounds; trajectory 1→1→2→1-FP→0; merged 2026-05-12) | 2026-05-12 | 2026-05-12 | MERGED | 1→1→2→1-FP→0 |
 | 3-feature-bulk-deadline-clamp-333 | **MERGED** — PR #360 MERGED @ 1ffc332 (squash: "fix(bulk): clamp 429-retry + outer-loop sleep by caller deadline (closes #333) (#360)"; closes #333; full F1-F7 lifecycle; **F5 6-pass adversarial CONVERGED** 14→7→8→2→2→2 (3 consecutive CLEAN); Copilot R1 = 0 inline; merged 2026-05-12T20:35:12Z) | 2026-05-12 | 2026-05-12 | MERGED | 14→7→8→2→2→2 |
 | 3-feature-search-issue-keys-350 | **MERGED** — PR #362 MERGED @ 8010445 (squash: "feat(bulk): add search_issue_keys lightweight API for JQL bulk-edit selection (closes #350)"; closes #350; F5 11-pass adversarial CONVERGED; Copilot R3=0; merged 2026-05-13T17:51:09Z) | 2026-05-13 | 2026-05-13 | MERGED | 4→0→5→5→3→5→2→1→0→0→0 |
+| 3-feature-search-issue-keys-350-spec-followup | **MERGED** — PR #363 MERGED @ 3acd07f (squash: "docs(spec): backport has_more guard-abort trigger to public spec rustdoc snippet (PR #362 follow-up)"; 8/8 CI green; Copilot R1=0 findings; closes post-merge doc-fallout gap detected on PR #362) | 2026-05-13 | 2026-05-13 | MERGED | R1=0 |
 | 4: Holdout Evaluation | not-started | | | | |
 | 5: Adversarial Refinement | not-started | | | | |
 | 6: Formal Hardening | not-started | | | | |
@@ -82,11 +83,11 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 
 | Step | Agent | Status | Output |
 |------|-------|--------|--------|
-| PR #362 OPENED — Copilot requested | pr-manager | complete | https://github.com/Zious11/jira-cli/pull/362 — base develop, head `feat/issue-350-search-issue-keys` @ 4c6332b. Copilot requested. CI 8/8 green (Test macos/ubuntu, Clippy, Format, Coverage, MSRV 1.85.0, Deny, Secret Scan) after one transient rustup-init macOS cache-poisoning rerun. |
-| PR #362 Copilot R1 — 5 inline | pr-manager | complete | All 5 Perplexity-validated per DEC-018. Fixed 2 (has_more=true on JRACLOUD-94632 guard abort — real bug; tighten test mock expect(1..=3)→expect(2)). Deferred 1 (Atlassian-API-contract moot per Perplexity). Skipped 2 (Default-derive comment + maxResults wire assertion — both correct as-is per Perplexity). Commit `2e32195`. |
-| PR #362 Copilot R2 — 4 inline | pr-manager | complete | All 4 fixed: docstring "iff" contradiction; method rustdoc missing guard-abort case; subprocess test unbounded mock; `\|\|` branch inline doc. Commit `4c6332b`. |
-| PR #362 Copilot R3 — CONVERGED | pr-manager | complete | "generated no new comments" — Phase 8 stop condition met. All threads resolved via GraphQL `resolveReviewThread`. |
-| PR #362 MERGED @ 8010445 | human | complete | Merged 2026-05-13T17:51:09Z (squash). Issue #350 CLOSED. Worktree `.worktrees/issue-350-search-keys` removed; branch `feat/issue-350-search-issue-keys` deleted locally. Develop FF'd to 8010445. 3 audit-followups remain (#340, #345, #346); new #361 follow-up filed. |
+| Post-#362 audit detected doc-fallout | orchestrator | complete | BC-2.6.050 §4 contract refinement from Copilot R1 (commit 2e32195) didn't propagate from code rustdoc → BC body / story AC / public spec snippet. Caught post-merge by "did we document this?" check. |
+| Factory-artifacts backport | state-manager | complete | Commit `cf9ddd4` — BC-2.6.050 §4 body updated (two-condition has_more); Story AC-004 restructured to 4-item list with guard-abort test; sidecar-learning.md gains 2026-05-13 entry codifying post-Copilot doc-fallout sweep; STATE.md DRIFT-005 added. Story 1.0.0 → 1.0.1. |
+| PR #363 OPENED — spec snippet alignment | pr-manager | complete | https://github.com/Zious11/jira-cli/pull/363 — base develop, head `docs/spec-350-has-more-refinement` @ 44eb3ce. Single docs file edit verbatim-aligning the spec's rustdoc snippet with code rustdoc; plus 2 related sentences in §Risks + §Doc-fallout. CI 8/8 green first try. |
+| PR #363 Copilot R1 — CONVERGED | pr-manager | complete | Review state COMMENTED with 0 inline findings. Phase 8 stop condition met. No fix iterations needed. |
+| PR #363 MERGED @ 3acd07f | human | complete | Merged 2026-05-13T18:32:13Z (squash). Worktree `.worktrees/spec-350-has-more` removed; branch `docs/spec-350-has-more-refinement` deleted locally. Develop FF'd to 3acd07f. DRIFT-005 codification remains active for future PRs. |
 
 ## Decisions Log
 
@@ -201,8 +202,8 @@ _Not started._
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-13 |
-| **Position** | **PR #362 MERGED @ 8010445** (closes #350; squash: "feat(bulk): add search_issue_keys lightweight API for JQL bulk-edit selection"). Develop FF'd to 8010445. Worktree removed; branch deleted. F5 trajectory 4→0→5→5→3→5→2→1→0→0→0 (11 passes; 3 consecutive CLEAN — longest cycle-001 to date). Copilot R1=5 → R2=4 → R3=0 CONVERGED. Net delivery: BC-2.6.050 + 13 tests + 8 ACs + ~70 LOC impl. **3 audit-followups remain: #340, #345, #346** + new #361 (JRACLOUD-94632 wording). Next: continue audit-followup queue OR advance to Phase 4 holdout eval. |
-| **Convergence counter** | F5 CONVERGED at pass-11 (3/3); 11-pass trajectory; Copilot CONVERGED at R3 |
+| **Position** | **PR #363 MERGED @ 3acd07f** (docs follow-up to PR #362 — backports has_more guard-abort trigger to public spec rustdoc snippet). Develop FF'd to 3acd07f. Worktree removed; branch deleted. Closes the post-Copilot doc-fallout gap detected post-#362-merge: BC body + Story AC + sidecar-learning + DRIFT-005 already landed on factory-artifacts in commit cf9ddd4; PR #363 closed the public spec snippet gap. Post-Copilot doc-fallout sweep now CODIFIED as a future-PR forcing function. **3 audit-followups remain: #340, #345, #346 + 1 new #361 (JRACLOUD-94632 wording)**. Next: continue audit-followup queue OR advance to Phase 4 holdout eval. |
+| **Convergence counter** | All convergences clean: PR #362 F5 11-pass + Copilot R3=0; PR #363 Copilot R1=0 |
 
 ## Historical Content
 
