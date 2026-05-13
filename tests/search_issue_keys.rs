@@ -423,10 +423,11 @@ async fn test_search_issue_keys_clamps_max_results_to_100_per_page() {
 
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(jql_keys_response(&["FOO-1"], None, true)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_keys_response(
+            &["FOO-1"],
+            None,
+            true,
+        )))
         .expect(1)
         .mount(&server)
         .await;
