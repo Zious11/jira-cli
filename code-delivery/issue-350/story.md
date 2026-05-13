@@ -104,13 +104,18 @@ the request body's `fields` array contains anything other than exactly
 silently dropped), and `test_search_issue_keys_malformed_json_returns_error`
 (corrupted body propagates `Err`). Pins the deserialization contract.
 
-**AC-003** (traces to BC-2.6.050 §3). Integration tests
-`test_search_issue_keys_paginates_with_next_page_token` (two-page cursor walk,
-both `.expect(1)`),
-`test_search_issue_keys_repeated_cursor_aborts_with_warning` (JRACLOUD-94632
-guard fires, stderr contains literal `"JRACLOUD-94632"`), and
-`test_search_issue_keys_401_mid_pagination_propagates` (HTTP 401 on page 2
-returns `Err`, not a partial-success). Pins the pagination contract.
+**AC-003** (traces to BC-2.6.050 §3). Four integration tests pin the
+pagination contract:
+1. `test_search_issue_keys_paginates_with_next_page_token` — two-page
+   cursor walk; both mocks `.expect(1)`.
+2. `test_search_issue_keys_repeated_cursor_aborts_with_warning` —
+   JRACLOUD-94632 guard fires; loop aborts; only page 1's keys are returned.
+3. `test_search_issue_keys_stderr_emits_jracloud_94632_literal` — subprocess
+   test that spawns `jr` and asserts `stderr.contains("JRACLOUD-94632")`.
+   Pairs with test 2 because `eprintln!` cannot be captured inside a
+   library-level test.
+4. `test_search_issue_keys_401_mid_pagination_propagates` — HTTP 401 on
+   page 2 returns `Err`, not a partial-success.
 
 **AC-004** (traces to BC-2.6.050 §4). Integration tests
 `test_search_issue_keys_truncates_at_limit_and_sets_has_more`
