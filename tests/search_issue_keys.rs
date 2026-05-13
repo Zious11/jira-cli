@@ -309,8 +309,14 @@ async fn test_search_issue_keys_repeated_cursor_abort_does_not_dedupe() {
     let server = MockServer::start().await;
 
     // Page 1 — request body has NO `nextPageToken` (initial fetch); response
-    // contains `nextPageToken: "loop"` and `["X-1"]`. The matcher binds on
-    // `jql: "q"` only, which is unique enough to disambiguate from page 2.
+    // contains `nextPageToken: "loop"` and `["X-1"]`. Note the page-1 matcher
+    // `{"jql": "q"}` is a SUBSET match and ALSO matches the page-2 request body
+    // (which adds `nextPageToken: "loop"` but keeps `jql: "q"`); disambiguation
+    // between pages relies on (i) `up_to_n_times(1)` exhausting this mock after
+    // its single hit, and (ii) the page-2 mock below having a more specific
+    // matcher on `nextPageToken: "loop"` that wiremock prefers when both pages
+    // would otherwise match. Same pattern as
+    // `test_search_issue_keys_paginates_with_next_page_token`.
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
         .and(body_partial_json(serde_json::json!({"jql": "q"})))

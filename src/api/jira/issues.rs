@@ -45,8 +45,10 @@ const BASE_ISSUE_FIELDS: &[&str] = &[
 ///    with a stable secondary sort (`ORDER BY key ASC`) — Atlassian's KB
 ///    mitigation — or dedupe locally.
 ///
-/// Pure cursor exhaustion (no limit set, upstream returns `isLast: true`)
-/// always returns `has_more = false`. Callers cannot distinguish case 1 from
+/// Pure cursor exhaustion (no limit set, upstream returns no
+/// `nextPageToken` — `CursorPage::has_more()` checks `next_page_token.is_some()`,
+/// not the protocol-level `isLast` field which this client does not
+/// deserialize) always returns `has_more = false`. Callers cannot distinguish case 1 from
 /// case 2 from `has_more` alone — the stderr warning fires only in case 2.
 pub struct SearchResult {
     pub issues: Vec<Issue>,
@@ -92,8 +94,10 @@ pub struct SearchResult {
 /// (`feat(search): dedupe keys on JRACLOUD-95368 repeated-cursor guard abort`)
 /// to surface "incomplete-and-possibly-duplicated" via the type system.
 ///
-/// Pure cursor exhaustion (no limit set, upstream returns `isLast: true`)
-/// always returns `has_more = false`. Callers that need completeness
+/// Pure cursor exhaustion (no limit set, upstream returns no
+/// `nextPageToken` — `CursorPage::has_more()` checks `next_page_token.is_some()`,
+/// not the protocol-level `isLast` field which this client does not
+/// deserialize) always returns `has_more = false`. Callers that need completeness
 /// guarantees should treat `has_more = true` as "results may be truncated"
 /// regardless of whether a `limit` was supplied.
 ///
