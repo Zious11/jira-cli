@@ -89,9 +89,14 @@ purely additive on the public API surface. No silent semantic shifts.
 
 **AC-001** (traces to BC-2.6.050 §1). Integration test
 `tests/search_issue_keys.rs::test_search_issue_keys_sends_fields_key_only`:
-wiremock matcher `body_partial_json({"fields": ["key"]})` mounted with
-`.expect(1)`. Test fails if the request body's `fields` array contains
-anything other than exactly `["key"]`. Pins the perf goal.
+calls `search_issue_keys`, then captures the request via
+`MockServer::received_requests().await` and asserts
+`body["fields"] == json!(["key"])` exactly. Length-strict because
+`assert_eq!` on `serde_json::Value` is exact for arrays (unlike
+`wiremock::body_partial_json` which uses `assert_json_include` subset
+semantics — verified 2026-05-13 against wiremock 0.6.5). Test fails if
+the request body's `fields` array contains anything other than exactly
+`["key"]`. Pins the perf goal.
 
 **AC-002** (traces to BC-2.6.050 §2). Integration tests
 `test_search_issue_keys_happy_path` (3 keys round-trip),
@@ -305,4 +310,4 @@ let effective_keys: Vec<String> = if let Some(ref jql_str) = jql {
 - **JRACLOUD-94632 stderr text overclaims "server bug".** Live-data drift (JRACLOUD-95368) can also trigger the guard. Inherited verbatim by design §4; tightened in a follow-up PR. Not blocking.
 - **`has_more` semantic drift risk.** A future caller could assume `has_more` reflects API state; rustdoc + AC-004 test pin the caller-side-truncation-only contract.
 - **Refactor preservation.** Migration at create.rs:386 must preserve ALL existing error-message text exactly: "matched 0 issues" and "matched at least N issues" remain unchanged.
-- **Negative-mock strictness (addendum §Q3).** `wiremock::matchers::body_partial_json` array matching is length-strict via `assert-json-diff` — equivalent to a full equality check on the array. The positive `.expect(1)` mock at AC-001 alone proves `BASE_ISSUE_FIELDS` is not sent; no `.expect(0)` negative mock is added.
+- **Length-strict `fields` enforcement at AC-001 (addendum §Q3 — RETRACTED).** `wiremock::matchers::body_partial_json` uses `assert_json_diff::assert_json_include` which has SUBSET semantics for arrays — a matcher built from `["key"]` would silently pass on a body with `["key", "summary", ...]`. Retracted via Perplexity verification 2026-05-13 against wiremock 0.6.5 source. AC-001 instead asserts on the captured request via `MockServer::received_requests().await` + `assert_eq!` on `serde_json::Value`, which IS length-strict for arrays.
