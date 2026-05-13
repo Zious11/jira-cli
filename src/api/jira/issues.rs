@@ -50,8 +50,11 @@ const BASE_ISSUE_FIELDS: &[&str] = &[
 /// Pure cursor exhaustion (no limit set, upstream returns no
 /// `nextPageToken` — `CursorPage::has_more()` checks `next_page_token.is_some()`,
 /// not the protocol-level `isLast` field which this client does not
-/// deserialize) always returns `has_more = false`. Callers cannot distinguish case 1 from
-/// case 2 from `has_more` alone — the stderr warning fires only in case 2.
+/// deserialize) always returns `has_more = false`. When `limit` is set,
+/// callers cannot distinguish case 1 from case 2 from `has_more` alone —
+/// the stderr warning fires only in case 2. When `limit` is `None`, case 1
+/// cannot trigger, so `has_more = true` unambiguously signals case 2
+/// (repeated-cursor guard abort).
 pub struct SearchResult {
     pub issues: Vec<Issue>,
     pub has_more: bool,
@@ -82,8 +85,10 @@ pub struct SearchResult {
 ///    with a stable secondary sort (`ORDER BY key ASC`) — Atlassian's KB
 ///    mitigation — or dedupe locally.
 ///
-/// Callers cannot distinguish case 1 from case 2 from `has_more` alone —
-/// the stderr warning fires only in case 2. Today's sole caller
+/// When `limit` is set, callers cannot distinguish case 1 from case 2 from
+/// `has_more` alone — the stderr warning fires only in case 2. When `limit`
+/// is `None`, case 1 cannot trigger, so `has_more = true` unambiguously
+/// signals case 2 (repeated-cursor guard abort). Today's sole caller
 /// (`handle_edit::effective_keys` in `cli/issue/create.rs`) requests
 /// `limit = effective_max + 1` and treats `keys.len() > effective_max` as a
 /// truncation error. **This is NOT dup-tolerant**: a single drift-induced

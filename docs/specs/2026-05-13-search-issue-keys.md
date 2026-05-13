@@ -85,8 +85,10 @@ Alternatives considered and rejected:
 ///    with a stable secondary sort (`ORDER BY key ASC`) — Atlassian's KB
 ///    mitigation — or dedupe locally.
 ///
-/// Callers cannot distinguish case 1 from case 2 from `has_more` alone —
-/// the stderr warning fires only in case 2. Today's sole caller
+/// When `limit` is set, callers cannot distinguish case 1 from case 2 from
+/// `has_more` alone — the stderr warning fires only in case 2. When `limit`
+/// is `None`, case 1 cannot trigger, so `has_more = true` unambiguously
+/// signals case 2 (repeated-cursor guard abort). Today's sole caller
 /// (`handle_edit::effective_keys` in `cli/issue/create.rs`) requests
 /// `limit = effective_max + 1` and treats `keys.len() > effective_max` as a
 /// truncation error. **This is NOT dup-tolerant**: a single drift-induced
@@ -259,7 +261,7 @@ None required. The new method is a thin wrapper over the HTTP surface; its seman
 
 No public API or CLI behavior change for any consumer who does not call the new method:
 
-- `search_issues(jql, limit, extra_fields)` — signature and semantics unchanged.
+- `search_issues(jql, limit, extra_fields)` — signature unchanged. Semantics unchanged at spec-write time, but **PR #364 (issue #361 follow-up)** added one carve-out: `SearchResult.has_more` is now set to `true` on repeated-cursor guard abort (was silently `false`), matching the `KeySearchResult` contract this spec introduced. Three CLI readers (`cli/issue/list.rs`, `cli/board.rs`, `cli/sprint.rs`) will display the existing "Showing N of M" truncation hint in that case where they previously silently reported a complete result. No CLI flag, JSON shape, or error changes; see the Out-of-Scope bullet above for the full rationale.
 - `jr issue list --jql ...` — uses `search_issues`; unchanged.
 - `jr issue view <key>` — uses `get_issue`; unchanged.
 - `jr issue edit --jql ... --max N` — was: full-body fetch for selection. **Now**: keys-only fetch for selection. Same external behavior (same error messages, same truncation logic), faster wire path.
