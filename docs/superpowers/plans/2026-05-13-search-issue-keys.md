@@ -17,7 +17,7 @@
 ## File Plan
 
 **New files:**
-- `tests/search_issue_keys.rs` — wiremock integration tests for the new method (11 tests).
+- `tests/search_issue_keys.rs` — wiremock integration tests for the new method (12 tests).
 
 **Modified files:**
 - `src/api/jira/issues.rs` — add `KeySearchResult` struct, `IssueKeyRow` private deserialization helper, `search_issue_keys` method.
@@ -696,13 +696,13 @@ Insert inside `impl JiraClient`, after the closing brace of `search_issues` (aro
     }
 ```
 
-- [ ] **Step 2: Verify all 11 wiremock tests pass**
+- [ ] **Step 2: Verify all 12 wiremock tests pass**
 
 ```bash
 cargo test --test search_issue_keys 2>&1 | tail -15
 ```
 
-Expected: `test result: ok. 11 passed; 0 failed`.
+Expected: `test result: ok. 12 passed; 0 failed`.
 
 - [ ] **Step 3: Verify full test suite still green**
 
@@ -945,7 +945,7 @@ After the BC-2.6.049 block (and before the next subdomain or end-of-file), inser
 
 **Caller:** `src/cli/issue/create.rs::handle_edit::effective_keys` (the JQL-driven bulk-edit selection path).
 
-**Tests:** `tests/search_issue_keys.rs` (11 wiremock tests pinning the contract above — 10 library tokio + 1 subprocess) and `tests/issue_bulk_pr2.rs::test_handle_edit_jql_truncation_error_still_triggers_after_migration` (caller-level regression).
+**Tests:** `tests/search_issue_keys.rs` (12 wiremock tests pinning the contract above — 11 library tokio + 1 subprocess) and `tests/issue_bulk_pr2.rs::test_handle_edit_jql_truncation_error_still_triggers_after_migration` (caller-level regression).
 ```
 
 - [ ] **Step 3: Bump frontmatter `definitional_count` in `bc-2-issue-read.md`**
@@ -1041,7 +1041,7 @@ Expected: zero warnings. If clippy fires, fix the root cause — DO NOT add `#[a
 cargo test 2>&1 | tail -15
 ```
 
-Expected: all suites green, including the 10 new `tests/search_issue_keys.rs` cases and the 1 new regression in `tests/issue_bulk_pr2.rs`.
+Expected: all suites green, including the 12 new `tests/search_issue_keys.rs` cases (11 library tokio + 1 subprocess) and the 1 new regression in `tests/issue_bulk_pr2.rs`.
 
 - [ ] **Step 4: Run `scripts/check-spec-counts.sh`**
 
@@ -1111,8 +1111,8 @@ Wire payload for the JQL bulk-edit selection round-trip drops from
 
 - [x] `cargo fmt --check` passes
 - [x] `cargo clippy --all-targets -- -D warnings` passes
-- [x] `cargo test` — full suite green (all existing + 11 new wiremock tests
-      in `tests/search_issue_keys.rs` (10 library tokio + 1 subprocess) + 1 regression test in `tests/issue_bulk_pr2.rs`)
+- [x] `cargo test` — full suite green (all existing + 12 new wiremock tests
+      in `tests/search_issue_keys.rs` (11 library tokio + 1 subprocess) + 1 regression test in `tests/issue_bulk_pr2.rs`)
 - [x] `scripts/check-spec-counts.sh` exits 0
 - [x] `test_search_issue_keys_sends_fields_key_only` proves wire body sent
       `fields: ["key"]` exactly (length-strict via `MockServer::received_requests()` + `assert_eq!` on `serde_json::Value`, NOT wiremock's `body_partial_json` which is subset-matching)

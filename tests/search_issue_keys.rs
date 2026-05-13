@@ -410,6 +410,53 @@ async fn test_search_issue_keys_malformed_json_returns_error() {
 }
 
 // ---------------------------------------------------------------------------
+// BC-2.6.050 §5 — `.min(100)` per-page clamp is honored.
+//
+// Caller passes `limit = Some(200)` (> 100). The clamp must reduce
+// `maxResults` to 100 in the request body. Verified by inspecting the
+// captured request via `MockServer::received_requests()`.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_search_issue_keys_clamps_max_results_to_100_per_page() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(jql_keys_response(&["FOO-1"], None, true)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server);
+    let _ = client
+        .search_issue_keys("project = FOO", Some(200))
+        .await
+        .expect("clamp must not error");
+
+    // Inspect the captured request body — `maxResults` must be 100, not 200.
+    let requests = server
+        .received_requests()
+        .await
+        .expect("wiremock must record requests");
+    assert_eq!(requests.len(), 1, "exactly one request expected");
+    let body: serde_json::Value =
+        serde_json::from_slice(&requests[0].body).expect("body must be valid JSON");
+    let max_results = body
+        .get("maxResults")
+        .expect("body must include `maxResults`")
+        .as_u64()
+        .expect("`maxResults` must be a u64");
+    assert_eq!(
+        max_results, 100,
+        "BC-2.6.050 §5: per-page clamp must reduce caller's limit=200 to maxResults=100"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // AC-003 (BC-2.6.050 §3) — JRACLOUD-94632 stderr-literal coverage.
 //
 // Subprocess test: exercises `search_issue_keys` through the real `jr` binary

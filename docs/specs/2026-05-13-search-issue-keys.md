@@ -205,6 +205,7 @@ Wiremock-rs 0.6.5 against a test-only `JiraClient`. **Important matcher note:** 
 9. `test_search_issue_keys_401_mid_pagination_propagates` — page 1 returns 200 with `nextPageToken`, page 2 returns 401; asserts the second `?` propagates and the method returns `Err`. Pins error-propagation contract across page boundaries (and validates interaction with the S-3.03 v2 auto-refresh path: refresh fires once, retry observes the original failure on the test seam). *(Added per addendum §Q6.)*
 10. `test_search_issue_keys_malformed_json_returns_error` — page 1 returns 200 with corrupted body `{"issues": [{"key": ` (incomplete JSON); asserts `Err` propagates from serde. *(Added per addendum §Q6.)*
 11. `test_search_issue_keys_stderr_emits_jracloud_94632_literal` — *(subprocess test)* — spawns `jr issue edit --jql ... --dry-run` against a stuck-cursor mock; captures stderr and asserts it contains the literal `"JRACLOUD-94632"`. Pairs with test 4 to satisfy AC-003's stderr-literal arm — library tests cannot capture `eprintln!` from inside the same process. *(Added during pass-01 F-02 fix.)*
+12. `test_search_issue_keys_clamps_max_results_to_100_per_page` — caller passes `limit = Some(200)` (> 100); the `.min(100)` clamp must reduce `maxResults` to 100 in the request body. Verified by capturing the request via `MockServer::received_requests()` and asserting `body["maxResults"] == 100`. Pins BC-2.6.050 §5. *(Added during pass-07 F-01 fix.)*
 
 ### Caller-level integration test (`tests/issue_bulk_pr2.rs`)
 
@@ -216,7 +217,7 @@ None required. The new method is a thin wrapper over the HTTP surface; its seman
 
 ## Risks and Mitigations
 
-- **Inconclusive: `fields{}` echo (Validated API Facts §6).** Mitigated by reading only top-level `key`. If Jira ever inverts this, tests 2/3/8 fail loudly with empty-string keys.
+- **Inconclusive: `fields{}` echo (Validated API Facts §6).** Mitigated by reading only top-level `key`. If Jira ever inverts this, tests 2/3/8 fail loudly with a serde "missing field `key`" deserialization error (NOT empty-string keys — IssueKeyRow.key has no #[serde(default)]).
 - **JRACLOUD-94632 false positives (addendum §Q4).** The inherited warning text overclaims "server bug" but is correct ~95 % of the time; live-data-drift false positives exist (JRACLOUD-95368). This PR inherits the existing text verbatim and files a separate follow-up to tighten the wording. Not blocking.
 - **`has_more` semantic drift.** If a future caller assumes `has_more = true` means "API has more pages" (rather than "caller-side truncation only"), they could mis-paginate. Mitigated by explicit rustdoc on the struct + test 5 pinning the contract.
 - **Length-strict array enforcement on `fields`.** `wiremock::body_partial_json` is subset-matching, so the strictness assertion lives in the test body (`received_requests()` + `assert_eq!`), not in the matcher. The addendum §Q3 claim that `body_partial_json` was length-strict is retracted in this spec — see Tests §1 note. A negative `.expect(0)` mock is not needed because the explicit `assert_eq!` is stronger.
