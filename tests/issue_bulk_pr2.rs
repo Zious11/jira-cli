@@ -2640,7 +2640,7 @@ async fn test_handle_edit_jql_truncation_error_still_triggers_after_migration() 
     // Server returns 7 keys; user passes --max 5 → expect the
     // "matched at least N exceeds --max M" error with the +1 lookahead
     // count (6, because we request effective_max+1 = 6).
-    let returned_keys = ["X-1", "X-2", "X-3", "X-4", "X-5", "X-6"];
+    let returned_keys = ["X-1", "X-2", "X-3", "X-4", "X-5", "X-6", "X-7"];
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
         .respond_with(ResponseTemplate::new(200).set_body_json(jql_search_response(&returned_keys)))
