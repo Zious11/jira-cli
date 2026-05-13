@@ -6,7 +6,7 @@ last_updated: 2026-05-13
 source_pass: 3
 sections:
   - bc-1-auth-identity.md (57 BCs cumulative; 46 individually-bodied)
-  - bc-2-issue-read.md (91 BCs cumulative; 50 individually-bodied)
+  - bc-2-issue-read.md (92 BCs cumulative; 50 individually-bodied)
   - bc-3-issue-write.md (77 BCs cumulative; 48 individually-bodied)
   - bc-4-assets-cmdb.md (32 BCs cumulative; 22 individually-bodied)
   - bc-5-boards-sprints.md (35 BCs cumulative; 17 individually-bodied)
@@ -641,7 +641,7 @@ R1/R4 prefix = deepening round that introduced it.
 | Section | BC Count (cumulative) | Individually-bodied |
 |---|---|---|
 | 1: Auth & Identity | 57 | 46 |
-| 2: Issue Read | 91 | 50 |
+| 2: Issue Read | 92 | 50 |
 | 3: Issue Write | 77 | 48 |
 | 4: Assets & CMDB | 32 | 22 |
 | 5: Boards & Sprints | 35 | 17 |

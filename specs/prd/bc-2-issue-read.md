@@ -1,7 +1,7 @@
 ---
 context: bc-2
 title: "Issue Read (list/view/comments/changelog)"
-total_bcs: 91   # cumulative claim (incl. range-collapsed); definitional_count below is individually-bodied headings
+total_bcs: 92   # cumulative claim (incl. range-collapsed); definitional_count below is individually-bodied headings
 definitional_count: 50   # count of `#### BC-` headings in this file
 last_updated: 2026-05-13
 source_pass: 3
@@ -14,7 +14,7 @@ trace: |
 
 # BC-2 — Issue Read (list / view / comments / changelog)
 
-91 behavioral contracts across 6 subdomains: JQL composition (2.1), Issue list
+92 behavioral contracts across 6 subdomains: JQL composition (2.1), Issue list
 behavior (2.2), Issue view (2.3), Comments (2.4), Changelog (2.5), API layer (2.6).
 
 ---
@@ -490,20 +490,11 @@ behavior (2.2), Issue view (2.3), Comments (2.4), Changelog (2.5), API layer (2.
 
 #### BC-2.6.050: `client.search_issue_keys(jql, limit)` posts `/rest/api/3/search/jql` with body `fields: ["key"]` and returns `KeySearchResult { keys, has_more }`
 
-**Source:** issue #350 (audit-followup from PR #348 / issue #110 PR2 Copilot review round 7); spec at `docs/specs/2026-05-13-search-issue-keys.md`; research at `.factory/research/issue-350-search-issue-keys-design.md`.
-
-**Contract:**
-- POST `/rest/api/3/search/jql` MUST send body `fields: ["key"]` (and ONLY `key` — never `BASE_ISSUE_FIELDS` content).
-- Deserializes only the top-level `key` per issue; ignores `fields {}` body content and unknown top-level fields.
-- Paginates via `nextPageToken` cursor identically to `search_issues`, including the JRACLOUD-94632 repeated-cursor anti-loop guard with the same stderr warning text.
-- Returns `KeySearchResult { keys: Vec<String>, has_more: bool }`. `has_more = true` iff caller-side truncation occurred (the `limit` argument was hit AND the upstream API still had rows); pure cursor exhaustion always returns `has_more = false`.
-- Clamps `maxResults` per page to `.min(100)` for parity with `search_issues` (NOT an API limit; conservative client-side choice).
-
-**Implementation:** `src/api/jira/issues.rs::search_issue_keys`.
-
-**Caller:** `src/cli/issue/create.rs::handle_edit::effective_keys` (the JQL-driven bulk-edit selection path).
-
-**Tests:** `tests/search_issue_keys.rs` (10 wiremock tests pinning the contract above) and `tests/issue_bulk_pr2.rs::test_handle_edit_jql_truncation_error_still_triggers_after_migration` (caller-level regression).
+**Confidence**: HIGH
+**Source**: issue #350 (audit-followup from PR #348 / issue #110 PR2 Copilot review round 7); spec at `docs/specs/2026-05-13-search-issue-keys.md`; research at `.factory/research/issue-350-search-issue-keys-design.md`
+**Subject**: Issue read (API layer — keys-only JQL search)
+**Behavior**: POST `/rest/api/3/search/jql` sends body `fields: ["key"]` exclusively (never `BASE_ISSUE_FIELDS`). Deserializes only the top-level `key` per issue; ignores `fields {}` and unknown top-level fields. Paginates via `nextPageToken` cursor identically to `search_issues`, including the JRACLOUD-94632 repeated-cursor anti-loop guard (same stderr warning text). Returns `KeySearchResult { keys: Vec<String>, has_more: bool }`; `has_more = true` iff the `limit` argument was hit while the API still had rows — pure cursor exhaustion always returns `has_more = false`. Clamps `maxResults` per page to `.min(100)` for parity with `search_issues`.
+**Trace**: `src/api/jira/issues.rs::search_issue_keys` (impl); `src/cli/issue/create.rs::handle_edit::effective_keys` (caller); `tests/search_issue_keys.rs` (11 wiremock tests) + `tests/issue_bulk_pr2.rs::test_handle_edit_jql_truncation_error_still_triggers_after_migration` (caller-level regression)
 
 ---
 
@@ -517,4 +508,4 @@ All issue-read errors follow the universal pattern (BC-X.3.012):
 
 Pass 3 sources: `tests/issue_list_errors.rs`, `tests/issue_view_errors.rs`, `tests/comments.rs`
 
-## Total BCs in this file: 50 (representative set; BC-INDEX.md carries all 91)
+## Total BCs in this file: 50 (representative set; BC-INDEX.md carries all 92)

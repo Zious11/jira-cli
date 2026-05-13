@@ -6,7 +6,7 @@ traces_to: "README.md"
 source_passes: "Pass 2 broad §2a.2 Jira + §2b.1 + R5 §3.2 (NEW-INV-216..244) + Pass 8 §2.2 BC#2"
 entity_count: 32
 invariant_count: 28
-bc_count: 91
+bc_count: 92
 risk_level: HIGH
 ---
 

@@ -20,14 +20,14 @@ re-run to verify. Disputes go here first.
 | File | Actual `#### BC-` count | Frontmatter `definitional_count` | Match? |
 |------|------------------------|----------------------------------|--------|
 | bc-1-auth-identity.md | 46 | 46 | YES |
-| bc-2-issue-read.md | 49 | 49 | YES |
+| bc-2-issue-read.md | 50 | 50 | YES |
 | bc-3-issue-write.md | 48 | 48 | YES |
 | bc-4-assets-cmdb.md | 22 | 22 | YES |
 | bc-5-boards-sprints.md | 17 | 17 | YES |
 | bc-6-config-cache.md | 29 | 29 | YES |
 | bc-7-output-render.md | 38 | 38 | YES |
 | cross-cutting.md | 64 | 64 | YES |
-| **Total individually-bodied** | **313** | — | — |
+| **Total individually-bodied** | **314** | — | — |
 
 Verification command:
 ```bash
@@ -41,22 +41,22 @@ done
 | File | Frontmatter `total_bcs` |
 |------|------------------------|
 | bc-1-auth-identity.md | 57 |
-| bc-2-issue-read.md | 91 |
+| bc-2-issue-read.md | 92 |
 | bc-3-issue-write.md | 77 |
 | bc-4-assets-cmdb.md | 32 |
 | bc-5-boards-sprints.md | 35 |
 | bc-6-config-cache.md | 39 |
 | bc-7-output-render.md | 84 |
 | cross-cutting.md | 130 |
-| **Sum** | **545** |
+| **Sum** | **546** |
 
 ### Grand total
 
-**Canonical grand total: 545** (+4 BC-7.4.013-016 added 2026-05-08 via Fix-PR A `28b0f35`)
+**Canonical grand total: 546** (+4 BC-7.4.013-016 added 2026-05-08 via Fix-PR A `28b0f35`; +1 BC-2.6.050 added 2026-05-13 via issue #350)
 
 Breakdown:
-- 545 = sum of per-file `total_bcs` values
-- 313 of 545 are individually-bodied (have a `#### BC-` heading)
+- 546 = sum of per-file `total_bcs` values
+- 314 of 546 are individually-bodied (have a `#### BC-` heading)
 - 232 are range-collapsed (counted in cumulative claim, no individual heading)
 - BC-X.4.009 (ADV-P1-029) is a `#### BC-` heading in cross-cutting.md; it is
   included in cross-cutting's `total_bcs: 130` and in the 541 sum.
@@ -77,7 +77,7 @@ bc_count in L2 represents the same cumulative claim (individually-bodied + range
 | L2 File | L2 bc_count (after P17 fix) | L3 File | L3 total_bcs | Aligned? |
 |---------|----------------------------|---------|--------------|----------|
 | bc-01-auth-identity.md | 57 | bc-1-auth-identity.md | 57 | YES |
-| bc-02-issue-read.md | 91 | bc-2-issue-read.md | 91 | YES |
+| bc-02-issue-read.md | 92 | bc-2-issue-read.md | 92 | YES |
 | bc-03-issue-write.md | 77 | bc-3-issue-write.md | 77 | YES |
 | bc-04-assets-cmdb.md | 32 | bc-4-assets-cmdb.md | 32 | YES (was 44) |
 | bc-05-boards-sprints.md | 35 | bc-5-boards-sprints.md | 35 | YES |
