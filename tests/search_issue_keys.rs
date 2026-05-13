@@ -10,6 +10,9 @@
 // (no subprocess wiring). Pattern mirrors `tests/issue_read_holdouts.rs`.
 
 use jr::api::client::JiraClient;
+// Imported to assert the type is publicly accessible at this path (type-visibility
+// check); clippy considers it unused because tests access fields via inference.
+#[allow(unused_imports)]
 use jr::api::jira::issues::KeySearchResult;
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -22,7 +25,11 @@ fn test_client(server: &MockServer) -> JiraClient {
 /// Build a `/rest/api/3/search/jql` response with the given keys and an
 /// optional next-page cursor. Mirrors the minimal shape `search_issue_keys`
 /// expects (top-level `key`, possibly-empty `fields {}`, cursor metadata).
-fn jql_keys_response(keys: &[&str], next_page_token: Option<&str>, is_last: bool) -> serde_json::Value {
+fn jql_keys_response(
+    keys: &[&str],
+    next_page_token: Option<&str>,
+    is_last: bool,
+) -> serde_json::Value {
     let issues: Vec<serde_json::Value> = keys
         .iter()
         .map(|k| {
@@ -65,10 +72,11 @@ async fn test_search_issue_keys_sends_fields_key_only() {
 
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(jql_keys_response(&["FOO-1"], None, true)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_keys_response(
+            &["FOO-1"],
+            None,
+            true,
+        )))
         .expect(1)
         .mount(&server)
         .await;
@@ -108,10 +116,11 @@ async fn test_search_issue_keys_happy_path() {
 
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(jql_keys_response(&["FOO-1", "FOO-2", "FOO-3"], None, true)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_keys_response(
+            &["FOO-1", "FOO-2", "FOO-3"],
+            None,
+            true,
+        )))
         .expect(1)
         .mount(&server)
         .await;
@@ -124,9 +133,16 @@ async fn test_search_issue_keys_happy_path() {
 
     assert_eq!(
         result.keys,
-        vec!["FOO-1".to_string(), "FOO-2".to_string(), "FOO-3".to_string()],
+        vec![
+            "FOO-1".to_string(),
+            "FOO-2".to_string(),
+            "FOO-3".to_string()
+        ],
     );
-    assert!(!result.has_more, "pure exhaustion must report has_more=false");
+    assert!(
+        !result.has_more,
+        "pure exhaustion must report has_more=false"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -143,10 +159,11 @@ async fn test_search_issue_keys_paginates_with_next_page_token() {
         .and(body_partial_json(serde_json::json!({"jql": "q"})))
         // No nextPageToken in body → matches the first request only because
         // we mount page 2 with a higher-specificity matcher below.
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(jql_keys_response(&["P1-A", "P1-B"], Some("cursor-2"), false)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_keys_response(
+            &["P1-A", "P1-B"],
+            Some("cursor-2"),
+            false,
+        )))
         .up_to_n_times(1)
         .expect(1)
         .mount(&server)
@@ -155,11 +172,14 @@ async fn test_search_issue_keys_paginates_with_next_page_token() {
     // Page 2 — terminal.
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
-        .and(body_partial_json(serde_json::json!({"nextPageToken": "cursor-2"})))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(jql_keys_response(&["P2-A"], None, true)),
-        )
+        .and(body_partial_json(
+            serde_json::json!({"nextPageToken": "cursor-2"}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_keys_response(
+            &["P2-A"],
+            None,
+            true,
+        )))
         .expect(1)
         .mount(&server)
         .await;
@@ -181,13 +201,11 @@ async fn test_search_issue_keys_truncates_at_limit_and_sets_has_more() {
 
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(jql_keys_response(
-                &["FOO-1", "FOO-2", "FOO-3"],
-                None,
-                true,
-            )),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_keys_response(
+            &["FOO-1", "FOO-2", "FOO-3"],
+            None,
+            true,
+        )))
         .expect(1)
         .mount(&server)
         .await;
@@ -212,9 +230,7 @@ async fn test_search_issue_keys_returns_empty_for_no_matches() {
 
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(jql_keys_response(&[], None, true)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_keys_response(&[], None, true)))
         .expect(1)
         .mount(&server)
         .await;
@@ -240,10 +256,11 @@ async fn test_search_issue_keys_repeated_cursor_aborts_with_warning() {
     // Two pages, both return the SAME nextPageToken `"loop"`.
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(jql_keys_response(&["X-1"], Some("loop"), false)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_keys_response(
+            &["X-1"],
+            Some("loop"),
+            false,
+        )))
         .expect(1..=3) // at least one, at most 3 (defensive — guard should fire on 2nd)
         .mount(&server)
         .await;
@@ -280,8 +297,7 @@ async fn test_search_issue_keys_apr2025_regression_bound() {
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(jql_keys_response(&many_refs, None, true)),
+            ResponseTemplate::new(200).set_body_json(jql_keys_response(&many_refs, None, true)),
         )
         .expect(1)
         .mount(&server)
@@ -342,10 +358,11 @@ async fn test_search_issue_keys_401_mid_pagination_propagates() {
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
         .and(body_partial_json(serde_json::json!({"jql": "q"})))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(jql_keys_response(&["P1-A"], Some("c2"), false)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_keys_response(
+            &["P1-A"],
+            Some("c2"),
+            false,
+        )))
         .up_to_n_times(1)
         .expect(1)
         .mount(&server)
@@ -354,7 +371,9 @@ async fn test_search_issue_keys_401_mid_pagination_propagates() {
     // Page 2: 401.
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
-        .and(body_partial_json(serde_json::json!({"nextPageToken": "c2"})))
+        .and(body_partial_json(
+            serde_json::json!({"nextPageToken": "c2"}),
+        ))
         .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
             "errorMessages": ["Authentication required"]
         })))
@@ -379,8 +398,7 @@ async fn test_search_issue_keys_malformed_json_returns_error() {
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(r#"{"issues": [{"key": "#), // truncated mid-string
+            ResponseTemplate::new(200).set_body_string(r#"{"issues": [{"key": "#), // truncated mid-string
         )
         .expect(1)
         .mount(&server)

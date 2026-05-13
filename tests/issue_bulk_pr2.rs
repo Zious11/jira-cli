@@ -2650,10 +2650,14 @@ async fn test_handle_edit_jql_truncation_error_still_triggers_after_migration() 
 
     let output = jr_cmd(&server.uri())
         .args([
-            "issue", "edit",
-            "--jql", "project = X",
-            "--max", "5",
-            "--label", "add:foo",
+            "issue",
+            "edit",
+            "--jql",
+            "project = X",
+            "--max",
+            "5",
+            "--label",
+            "add:foo",
             "--yes",
         ])
         .output()

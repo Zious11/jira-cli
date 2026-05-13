@@ -203,8 +203,7 @@ impl JiraClient {
                 body["nextPageToken"] = serde_json::json!(token);
             }
 
-            let page: CursorPage<IssueKeyRow> =
-                self.post("/rest/api/3/search/jql", &body).await?;
+            let page: CursorPage<IssueKeyRow> = self.post("/rest/api/3/search/jql", &body).await?;
 
             let page_has_more = page.has_more();
             let next_cursor = page.next_page_token.clone();
