@@ -34,6 +34,24 @@ pub struct SearchResult {
     pub has_more: bool,
 }
 
+/// Result of a keys-only paginated issue search.
+///
+/// Parallel to [`SearchResult`]. The field name `keys` mirrors the `issues`
+/// field name on `SearchResult` (domain-named, not generic `items`) per the
+/// Rust SDK precedent surveyed in
+/// `.factory/research/issue-350-search-issue-keys-design.md`.
+///
+/// `has_more` is `true` iff the caller's `limit` was hit AND the upstream
+/// API still had more rows available; pure cursor exhaustion always
+/// returns `has_more = false`. Same semantics as [`SearchResult::has_more`].
+///
+/// Traces to BC-2.6.050.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeySearchResult {
+    pub keys: Vec<String>,
+    pub has_more: bool,
+}
+
 #[derive(Deserialize)]
 struct ApproximateCountResponse {
     count: u64,
