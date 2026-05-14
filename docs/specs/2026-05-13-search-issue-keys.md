@@ -264,9 +264,11 @@ None required. The new method is a thin wrapper over the HTTP surface; its seman
 No public API or CLI behavior change for any consumer who does not call the new method:
 
 - `search_issues(jql, limit, extra_fields)` — signature unchanged. Semantics unchanged at spec-write time, but **PR #364 (issue #361 follow-up)** added one carve-out: `SearchResult.has_more` is now set to `true` on repeated-cursor guard abort (was silently `false`), matching the `KeySearchResult` contract this spec introduced. Three CLI readers (`cli/issue/list.rs`, `cli/board.rs`, `cli/sprint.rs`) will display the existing "Showing N of M" truncation hint in that case where they previously silently reported a complete result. No CLI flag, JSON shape, or error changes; see the Out-of-Scope bullet above for the full rationale.
-- `jr issue list --jql ...` — uses `search_issues`; unchanged.
+- `jr issue list --jql ...` — uses `search_issues`. Unchanged at spec-write time, with one corner-case carve-out under PR #364: in the rare repeated-cursor guard-abort scenario (`/rest/api/3/search/jql` returning the same `nextPageToken` twice — typically JRACLOUD-95368 live-data drift), the truncation hint at `cli/issue/list.rs` (the `has_more && !all` branch) will now print "Showing N of M, use --all to see more" where it previously silently reported a complete result. The new hint is correct behavior; no flag, JSON shape, or exit-code change.
+- `jr board view` — uses `search_issues` for the kanban path. Same corner-case carve-out as `jr issue list` above (the `has_more` consumer at `cli/board.rs:206/216` will display the existing truncation hint on guard abort).
+- `jr sprint current` — uses `get_sprint_issues` for the active-sprint path. **Not** affected by the `search_issues` carve-out (it consumes `OffsetPage`, not the `/search/jql` cursor). The `has_more` consumer at `cli/sprint.rs:245` is unchanged.
 - `jr issue view <key>` — uses `get_issue`; unchanged.
-- `jr issue edit --jql ... --max N` — was: full-body fetch for selection. **Now**: keys-only fetch for selection. Same external behavior (same error messages, same truncation logic), faster wire path.
+- `jr issue edit --jql ... --max N` — was: full-body fetch for selection. **Now**: keys-only fetch for selection. Same external behavior (same error messages, same truncation logic), faster wire path. The `KeySearchResult.has_more` semantics described in the Out-of-Scope section apply: under guard abort, `effective_keys` may include duplicates that spuriously trip the `--max` truncation error or generate redundant bulk-edit calls (both safe-but-user-visible; tracked in #365).
 
 ## Out of Scope / Follow-ups
 

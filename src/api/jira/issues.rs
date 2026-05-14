@@ -282,7 +282,9 @@ impl JiraClient {
     /// JRACLOUD-95368), aborting pagination early with a stderr warning
     /// (**keys may be incomplete AND may contain duplicates** — this
     /// function does NOT dedupe; callers needing uniqueness should re-issue
-    /// with `ORDER BY key ASC` or dedupe locally). Pure cursor exhaustion
+    /// with `key ASC` as a stable secondary sort in the ORDER BY (append
+    /// `, key ASC` to an existing sort, or use `ORDER BY key ASC` if none —
+    /// JQL allows only one ORDER BY clause), or dedupe locally). Pure cursor exhaustion
     /// returns `has_more = false`. See [`KeySearchResult`] for the full
     /// contract including the caller-dedup analysis.
     ///
