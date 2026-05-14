@@ -44,8 +44,10 @@ const BASE_ISSUE_FIELDS: &[&str] = &[
 ///    issues**. `search_issues` does not dedupe; under live-data drift the
 ///    server may have emitted the same issue on multiple pages before the
 ///    cursor repeated. Callers that need strict uniqueness should re-issue
-///    with a stable secondary sort (`ORDER BY key ASC`) — Atlassian's KB
-///    mitigation — or dedupe locally.
+///    with `key ASC` as a stable secondary sort in the ORDER BY (append
+///    `, key ASC` to an existing sort, or use `ORDER BY key ASC` if none —
+///    JQL allows only one ORDER BY clause) — Atlassian's KB mitigation —
+///    or dedupe locally.
 ///
 /// Pure cursor exhaustion (no limit set, upstream returns no
 /// `nextPageToken` — `CursorPage::has_more()` checks `next_page_token.is_some()`,
@@ -82,8 +84,10 @@ pub struct SearchResult {
 ///    keys**. `search_issue_keys` does not dedupe; under live-data drift the
 ///    server may have emitted the same key on multiple pages before the
 ///    cursor repeated. Callers that need strict uniqueness should re-issue
-///    with a stable secondary sort (`ORDER BY key ASC`) — Atlassian's KB
-///    mitigation — or dedupe locally.
+///    with `key ASC` as a stable secondary sort in the ORDER BY (append
+///    `, key ASC` to an existing sort, or use `ORDER BY key ASC` if none —
+///    JQL allows only one ORDER BY clause) — Atlassian's KB mitigation —
+///    or dedupe locally.
 ///
 /// When `limit` is set, callers cannot distinguish case 1 from case 2 from
 /// `has_more` alone — the stderr warning fires only in case 2. When `limit`
@@ -180,8 +184,9 @@ impl JiraClient {
         // offset. JRACLOUD-95368's public Description names duplicates/skips
         // as the documented symptoms; cursor-repetition is one inferential
         // step (same root cause class, observed differently). The recommended
-        // caller-side mitigation per Atlassian KB is a stable secondary sort
-        // (`ORDER BY key ASC`). Symptoms have also been reported anecdotally
+        // caller-side mitigation per Atlassian KB is a stable secondary sort —
+        // append `, key ASC` to an existing ORDER BY, or use `ORDER BY key ASC`
+        // if none (JQL allows only one ORDER BY clause). Symptoms have also been reported anecdotally
         // in atlassian/atlassian-mcp-server#118 and ankitpokhrel/jira-cli#898.
         // Follows the same defensive intent as the "did pagination advance?"
         // guard in `get_changelog` (which uses `next <= start_at` on
@@ -361,8 +366,9 @@ impl JiraClient {
                 // under JRACLOUD-95368 (live-data drift, the typical cause), earlier
                 // pages MAY contain keys that the server would emit again after the
                 // cursor repeats — this function does NOT dedupe. Callers needing
-                // strict uniqueness should re-issue with a stable secondary sort
-                // (`ORDER BY key ASC`) or dedupe locally.
+                // strict uniqueness should re-issue with `key ASC` as a stable
+                // secondary sort (append `, key ASC` to an existing ORDER BY, or
+                // use `ORDER BY key ASC` if none) or dedupe locally.
                 more_available = true;
                 break;
             }
