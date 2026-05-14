@@ -215,6 +215,30 @@ When adding a new feature:
   `jr issue list --jql "<query> AND status != \"<target>\"" --output json` and pass
   them as positional args. The `--jql` selection form is on `edit` only — `move` does
   not accept `--jql`.
+- **`/rest/api/3/search/jql` repeated-`nextPageToken` symptom = JRACLOUD-95368, NOT
+  JRACLOUD-94632 / -92049 / -85546.** When Jira Cloud's enhanced JQL search returns the
+  same `nextPageToken` on consecutive pages (which would cause an infinite client loop
+  without the anti-loop guard in `search_issues` / `search_issue_keys` in
+  `src/api/jira/issues.rs`), the documented root-cause ticket is
+  [JRACLOUD-95368](https://jira.atlassian.com/browse/JRACLOUD-95368) — *"nextPageToken
+  pagination is not snapshot-stable under live mutation"* — i.e. live-data drift between
+  page fetches. Earlier code/spec versions cited JRACLOUD-94632 / -92049 / -85546 as
+  "confirmed upstream bugs"; **all three are misattributed** (94632 = initial
+  `nextPageToken=null` rejection, fixed Jun 2025; 92049 = `startAt` offset behavior,
+  resolved Invalid; 85546 = `/field/search` `nextPage` field, different endpoint). The
+  rebind happened in issue #361 / PR #364 (2026-05-14). Both `SearchResult.has_more`
+  and `KeySearchResult.has_more` set `true` on guard abort; `search_issue_keys` does
+  NOT dedupe (live-data drift can produce duplicate keys before the cursor repeats —
+  tracked for in-function dedupe in #365). The user-facing stderr warning includes an
+  actionable ORDER BY mitigation; do NOT revert to a single-`ORDER BY` shorthand like
+  "add `ORDER BY key ASC` to your JQL" — JQL allows only one ORDER BY clause, so users
+  with an existing sort would receive HTTP 400. The precise wording is "append
+  `, key ASC` to an existing sort, or use `ORDER BY key ASC` if none". Stderr-literal
+  pin: any change to the literal `"JRACLOUD-95368"` in the warning must be paired with
+  updates to `tests/rate_limit_cap_tests.rs::ac_008_and_ac_new_d_…` and
+  `tests/search_issue_keys.rs::test_search_issue_keys_stderr_emits_jracloud_95368_literal`.
+  Source: `.factory/research/issue-361-jra95368-scope.md`,
+  `.factory/research/issue-361-jql-orderby.md`.
 
 ## AI Agent Notes
 
@@ -222,6 +246,7 @@ When adding a new feature:
 - `JR_BULK_UNKNOWN_GRACE_SECS` env var overrides the unknown-bulk-task-status grace period (default 30s). **Debug builds only** — gated via `#[cfg(debug_assertions)]` in `src/api/jira/bulk.rs::resolve_unknown_status_grace`. Used by CLI integration tests to drive the warn+escalate path in ~1s. Not security-critical (no token-leak vector); single-site gate. Regression-pinned by `tests/bulk_unknown_grace_release_gate.rs`. Closes audit-followup #336.
 - `JR_BULK_AWAIT_TIMEOUT_SECS` env var overrides the bulk-poll wall-clock timeout (default 300s / 5min). **Debug builds only** — gated via `#[cfg(debug_assertions)]` in `src/api/jira/bulk.rs::resolve_bulk_await_timeout`. Used by `tests/bulk_deadline_propagation.rs` to drive the 429-storm clamp through the binary in ~30s instead of ~300s. Not security-critical (no token-leak vector); single-site gate. Regression-pinned by `tests/bulk_await_timeout_release_gate.rs`. Closes audit-followup #333.
 - **When adding a new `JR_*` test-seam env var:** grep `CLAUDE.md` for existing `JR_*` entries and add a parallel line in the SAME commit as the code change. This is the codified doc-fallout pattern from #335/#357; first applied retroactively when `JR_BULK_UNKNOWN_GRACE_SECS` and `JR_BULK_AWAIT_TIMEOUT_SECS` shipped without documentation.
+- **Citation discipline for external-tracker IDs in user-facing strings:** when adding a JRACLOUD-* / GitHub-issue / community-thread citation to anything a user will see (stderr warnings, error messages, JSON output, runtime hints) OR to a rustdoc / code comment that future maintainers will read literally, validate the cited source actually documents the symptom you're attributing to it — Perplexity is the cheapest validator. The PR #364 cycle (issue #361) showed the existing codebase had three misattributed JRACLOUD tickets that survived multiple PRs because no one had read them; nine rounds of Copilot review then surfaced five separate sites where rustdoc shorthand "(`ORDER BY key ASC`)" would have prompted invalid JQL when copy-pasted. Default to: (1) Perplexity-validate any external claim, (2) ensure user-facing strings are syntactically valid in the user's likely environment (e.g., JQL only allows one ORDER BY clause), (3) if rustdoc/comment paraphrases the user-facing text, keep them in lockstep. Source: `.factory/research/issue-361-validation.md` and `-followup.md`.
 - `JR_PROFILE` env var overrides the active profile per-call (combine with direnv to scope a repo to a sandbox site)
 - `--profile NAME` flag overrides `JR_PROFILE` for one invocation; precedence is flag > env > config > "default"
 - `JiraClient::new_for_test(base_url, auth_header)` constructs a client for integration tests
