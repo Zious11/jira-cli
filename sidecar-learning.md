@@ -252,3 +252,12 @@ Step contents:
 **Codification target:** Update the validated-feature-lifecycle skill (.claude/skills/validated-feature-lifecycle/SKILL.md if applicable, or the orchestrator's per-story-delivery.md reference) to add the doc-fallout sweep as Phase 8 step 6. Cross-reference DEC-018 (Perplexity-validate Copilot findings) and this entry.
 
 **Status:** Pattern identified; codification pending. Next PR (#361 or other) should exercise this sweep proactively as a forcing function.
+- Session ended at 2026-05-13T18:28:19Z (awaiting /session-review)
+- Session ended at 2026-05-13T18:30:56Z (awaiting /session-review)
+- Session ended at 2026-05-13T18:35:07Z (awaiting /session-review)
+- Session ended at 2026-05-13T19:16:17Z (awaiting /session-review)
+- Session ended at 2026-05-13T20:07:40Z (awaiting /session-review)
+- Session ended at 2026-05-13T21:19:22Z (awaiting /session-review)
+- Session ended at 2026-05-14T12:49:58Z (awaiting /session-review)
+- Session ended at 2026-05-14T13:20:23Z (awaiting /session-review)
+- Session ended at 2026-05-14T13:32:41Z (awaiting /session-review)

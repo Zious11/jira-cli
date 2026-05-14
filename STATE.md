@@ -4,7 +4,7 @@ level: ops
 version: "2.0"
 status: active
 producer: state-manager
-timestamp: 2026-05-13T00:00:00
+timestamp: 2026-05-14T00:00:00
 phase: phase-3-tdd-implementation
 inputs: []
 input-hash: "[live-state]"
@@ -36,7 +36,7 @@ activation_version: "v0.5.0-dev.7"
 | **Language** | Rust |
 | **Target Workspace** | develop → main |
 | **Started** | 2026-05-04 |
-| **Last Updated** | 2026-05-14 — **PR #366 MERGED @ ad6b979** (docs(claude-md): codify JRACLOUD-95368 + citation-validation discipline; closes #364 follow-up). **PR #364 MERGED @ b8a87c5** (chore(search): rebind repeated-cursor warning to JRACLOUD-95368; closes #361). **New cycle open: #365** (search_issue_keys dedupe on guard-abort path). **3 audit-followups remain: #340, #345, #346**. |
+| **Last Updated** | 2026-05-14 — **F1d CONVERGED for #365** (search_issue_keys dedupe; 11 passes, 6 resets, spec v0.1.0→v0.1.8; 3/3 CLEAN at P9-P11). Per-pass files committed to factory-artifacts. F1-gate (human approval) next. |
 | **Current Phase** | Phase 3 — TDD Implementation **IN PROGRESS** — Wave 3 CLOSED (10/10). Feature Mode #110-pr2 COMPLETE. PRs #355–#364, #366 MERGED. **3 audit-followups remain: #340, #345, #346** (#331 sandbox-blocked deferred; #333 closed by PR #360; #350 closed by PR #362; #361 closed by PR #364). **Active cycle: #365 (search_issue_keys dedupe).** |
 | **Next Phase** | Wave 3 — 10 stories (S-3.01..S-3.10) |
 | **Activation HEAD** | dea166471e22eff55974d7675593469b37048c5f (v0.5.0-dev.7) |
@@ -74,7 +74,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | 3-feature-search-issue-keys-350-spec-followup | **MERGED** — PR #363 MERGED @ 3acd07f (squash: "docs(spec): backport has_more guard-abort trigger to public spec rustdoc snippet (PR #362 follow-up)"; 8/8 CI green; Copilot R1=0 findings; closes post-merge doc-fallout gap detected on PR #362) | 2026-05-13 | 2026-05-13 | MERGED | R1=0 |
 | 3-feature-search-warning-citation-rebind-361 | **MERGED** — PR #364 MERGED @ b8a87c5 (squash: "chore(search): rebind repeated-cursor warning to JRACLOUD-95368 (closes #361) (#364)"; rebinds JRACLOUD-94632 citation to JRACLOUD-95368; fixes has_more asymmetry in search_issues; adds test_search_issue_keys_repeated_cursor_abort_does_not_dedupe; updates spec with citation + per-CLI carve-out bullets; 11+ Copilot rounds; closes #361) | 2026-05-14 | 2026-05-14 | MERGED | F5 CONVERGED ~10 Copilot rounds →0 |
 | 3-feature-claude-md-doc-followup-364 | **MERGED** — PR #366 MERGED @ ad6b979 (squash: "docs(claude-md): codify JRACLOUD-95368 attribution + citation-validation discipline (PR #364 follow-up) (#366)"; adds Gotcha entry for JRACLOUD-95368 + has_more carve-outs + no-dedupe note + ORDER BY tie-breaker; adds AI Agent Note for citation discipline; Copilot R1=0 findings) | 2026-05-14 | 2026-05-14 | MERGED | R1=0 |
-| 3-feature-search-issue-keys-dedupe-365 | **IN_PROGRESS** — cycle open 2026-05-14; F0-pre backfill complete; F1 next (research-agent + product-owner); implements in-function dedupe on search_issue_keys repeated-cursor guard-abort path (closes #365, deferred by PR #364); lockstep rewrite of test_search_issue_keys_repeated_cursor_abort_does_not_dedupe; symmetric treatment for search_issues TBD; updates KeySearchResult.has_more rustdoc + spec annotation | 2026-05-14 | | F1-pre | — |
+| 3-feature-search-issue-keys-dedupe-365 | **F1d CONVERGED** — 3/3 CLEAN at pass 11 (11 total passes, 6 counter resets, spec v0.1.0 → v0.1.8). Awaiting F1-gate (human approval). Implements in-function dedupe on all exit paths of search_issue_keys (guard-abort + limit-truncation + cursor-exhaustion). Closes #365. | 2026-05-14 | | F1d CONVERGED — awaiting F1-gate | 0/4/2→0/0/2→0/1/3→0/2/2→0/1/1→0/2/5→0/1/4→0/1/2→0→0→0 |
 | 4: Holdout Evaluation | not-started | | | | |
 | 5: Adversarial Refinement | not-started | | | | |
 | 6: Formal Hardening | not-started | | | | |
@@ -86,11 +86,11 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 
 | Step | Agent | Status | Output |
 |------|-------|--------|--------|
-| PR #363 MERGED @ 3acd07f | human | complete | Merged 2026-05-13T18:32:13Z (squash). Worktree `.worktrees/spec-350-has-more` removed; branch `docs/spec-350-has-more-refinement` deleted locally. Develop FF'd to 3acd07f. DRIFT-005 codification remains active for future PRs. |
-| PR #364 MERGED @ b8a87c5 | human | complete | Merged (squash). Branch `chore/search-warning-jra-95368`. Rebinds JRACLOUD-94632 → JRACLOUD-95368 in repeated-cursor stderr warning; fixes has_more asymmetry in search_issues; adds no-dedupe contract test; updates spec. Closes #361. 11+ Copilot rounds. |
+| PR #364 MERGED @ b8a87c5 | human | complete | Merged (squash). Branch `chore/search-warning-jra-95368`. Rebinds JRACLOUD-94632 → JRACLOUD-95368; fixes has_more asymmetry in search_issues; pins no-dedupe contract test; updates spec. Closes #361. 11+ Copilot rounds. |
 | PR #366 MERGED @ ad6b979 | human | complete | Merged (squash). Branch `docs/claude-md-jracloud-95368-followup`. CLAUDE.md Gotcha + AI Agent Note for JRACLOUD-95368 + citation-validation discipline. Copilot R1=0. Closes #364 follow-up. |
-| Cycle #365 opened (search_issue_keys dedupe) | orchestrator | complete | Issue #365 — implement in-function dedupe on repeated-cursor guard-abort path. Carved out by PR #364. F0-pre state recorded. F1 next (research-agent + product-owner). |
+| Cycle #365 opened (search_issue_keys dedupe) | orchestrator | complete | Issue #365 — implement in-function dedupe on all exit paths. Carved out by PR #364. F0-pre state recorded. F1 complete (research + spec). |
 | State backfill committed (2026-05-14) | state-manager | complete | STATE.md: +3 Phase Progress rows (PRs #364, #366, cycle #365); Last Updated + Current Phase metadata bumped; Session Resume Checkpoint replaced; Convergence Tracker updated. |
+| F1d adversarial spec convergence — #365 | adversary | complete | 3/3 CLEAN at pass 11 (11 total passes, 6 counter resets, spec v0.1.0 → v0.1.8). Per-pass + convergence files written to cycles/cycle-001/adversarial-reviews/issue-365-search-issue-keys-dedupe/. 2 process-gap flags (PG-365-1 BC trace stale-count; PG-365-2 F1d citation scope). |
 
 ## Decisions Log
 
@@ -200,7 +200,7 @@ _Wave gate: not started. Feature Mode #110-pr2: **F5 CONVERGED** 12→5→0→0�
 
 **Issue #365 follow-up (CLAUDE.md citation-validation discipline) MERGED 2026-05-14** — PR #366 @ ad6b979. Branch `docs/claude-md-jracloud-95368-followup`. Copilot R1=0. Adds CLAUDE.md Gotcha for JRACLOUD-95368 + AI Agent Note for external-tracker citation discipline.
 
-**Issue #365 (search_issue_keys in-function dedupe) IN_PROGRESS** — Cycle opened 2026-05-14. F1 next.
+**Issue #365 (search_issue_keys in-function dedupe) F1d CONVERGED 2026-05-14** — 11 total passes; 6 counter resets; spec v0.1.0→v0.1.8. 3 consecutive CLEAN at P9-P10-P11. Trajectory: 0/4/2→0/0/2→0/1/3→0/2/2→0/1/1→0/2/5→0/1/4→0/1/2→0→0→0. Full record: `.factory/cycles/cycle-001/adversarial-reviews/issue-365-search-issue-keys-dedupe/CONVERGENCE.md`. F1-gate awaiting human approval.
 
 ### Phase 5-adv — Adversarial Refinement
 _Not started._
@@ -211,8 +211,8 @@ _Not started._
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-14 |
-| **Position** | **PR #366 MERGED @ ad6b979** (CLAUDE.md: JRACLOUD-95368 + citation-validation discipline). **PR #364 MERGED @ b8a87c5** (rebind JRACLOUD-94632 → JRACLOUD-95368; closes #361). Develop HEAD = ad6b979. **New active cycle: #365** (search_issue_keys in-function dedupe on guard-abort path; deferred by PR #364). F1 next. **3 audit-followups remain: #340, #345, #346** (#361 CLOSED by PR #364). |
-| **Convergence counter** | All convergences clean: PR #362 F5 11-pass + Copilot R3=0; PR #363 Copilot R1=0; PR #364 Copilot ~10 rounds →0; PR #366 Copilot R1=0 |
+| **Position** | **F1d CONVERGED for #365** (search_issue_keys dedupe; spec v0.1.8; 11 passes 3/3 CLEAN at P9-P11). Develop HEAD = ad6b979. **Active cycle: #365** — F1-gate (human approval) next. **3 audit-followups remain: #340, #345, #346**. |
+| **Convergence counter** | #365 F1d: 3/3 CLEAN at pass 11. PR #366 Copilot R1=0. PR #364 Copilot ~10 rounds →0. |
 
 ## Historical Content
 

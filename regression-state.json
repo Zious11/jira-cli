@@ -1,1 +1,1 @@
-{"status":"pass","timestamp":"2026-05-13T17:06:33Z","command":"cd /Users/zious/Documents/GITHUB/jira-cli/.worktrees/issue-350-search-keys && cargo test 2>&1 | grep \"FAILED\" | wc -l"}
+{"status":"pass","timestamp":"2026-05-14T12:43:32Z","command":"touch src/api/jira/issues.rs && cargo fmt --all -- --check 2>&1 | tail -3 ; echo \"--- clippy ---\" ; cargo clippy --all-targets -- -D warnings 2>&1 | tail -3 ; echo \"--- tests ---\" ; cargo test --test search_issue_keys --test rate_limit_cap_tests 2>&1 | grep -E \"test result:\" | head -3"}
