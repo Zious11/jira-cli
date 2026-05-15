@@ -39,22 +39,29 @@ fi
 # for this BC are in tests/foo.rs").
 #
 # Pattern breakdown (POSIX ERE — portable across GNU grep and BSD grep):
-#   [0-9]+                       — a bare integer
-#   [[:space:]]+                 — whitespace separator
-#   ([[:alnum:]_]+[[:space:]]+){0,3}  — up to 3 optional adjective words
-#   tests?                       — "test" or "tests"
-#   ([^[:alnum:]]|$)             — not followed by an alphanumeric (avoids
-#                                  matching "tester", "testing")
+#   [0-9]+                         — a bare integer
+#   [[:space:]]+                   — whitespace separator
+#   ([[:alnum:]_-]+[[:space:]]+){0,3}  — up to 3 optional adjective words;
+#                                      [[:alnum:]_-] includes hyphen so patterns
+#                                      like "end-to-end" or "wiremock-based" match
+#   tests?                         — "test" or "tests"
+#   ([^[:alnum:]]|$)               — not followed by an alphanumeric (avoids
+#                                    matching "tester", "testing")
 #
 # Note: \b, \w, \s are PCRE/GNU extensions not available in POSIX ERE or
 # BSD grep (macOS). Use [[:space:]], [[:alnum:]], and bracket-expression
 # boundaries for portability.
 
-PATTERN='[0-9]+[[:space:]]+([[:alnum:]_]+[[:space:]]+){0,3}tests?([^[:alnum:]]|$)'
+PATTERN='[0-9]+[[:space:]]+([[:alnum:]_-]+[[:space:]]+){0,3}tests?([^[:alnum:]]|$)'
 
-violations=$(grep -nE '^\*\*(Trace|Source)\*\*:' "$BC_DIR"/bc-*.md 2>/dev/null \
+# Scan using the pre-validated bc_files array (no glob ambiguity).
+# 2>/dev/null is intentionally omitted: I/O errors (unreadable files) must
+# surface as grep exit 2, not be silently absorbed. The compound `|| { ... }`
+# treats grep exit 1 (no matches = clean) as success but re-raises exit 2+
+# so an I/O error causes the script to fail visibly.
+violations=$(grep -nE '^\*\*(Trace|Source)\*\*:' "${bc_files[@]}" \
   | grep -E "$PATTERN" \
-  || true)
+  || { rc=$?; [ "$rc" -eq 1 ] || exit "$rc"; })
 
 if [ -n "$violations" ]; then
   echo "ERROR: BC Trace/Source fields must not contain numeric test counts (PG-365-1 convention)." >&2
