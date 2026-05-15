@@ -262,3 +262,8 @@ When adding a new feature:
 - Run `scripts/check-spec-counts.sh` after any edit to .factory/specs/prd/ BC files,
   nfr-catalog.md, or holdout-scenarios.md. Exits 0 if frontmatter counts match body counts.
   Exits 1 with specific mismatch details if drift is detected (DRIFT-001 mitigation).
+- **BC Trace and Source fields must not contain numeric test counts.** The `Trace:` and
+  `Source:` fields in `.factory/specs/prd/bc-*.md` BC bodies should describe coverage
+  qualitatively (file path + test category) rather than enumerate counts. Counts drift as
+  tests are added; qualitative descriptions are stable. Enforced by
+  `scripts/check-bc-no-numeric-test-counts.sh` in CI. Convention added by PG-365-1.
