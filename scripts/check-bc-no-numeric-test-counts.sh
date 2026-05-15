@@ -21,7 +21,7 @@ fi
 # Match patterns like:
 #   "16 wiremock tests"
 #   "15 library tests"
-#   "1 subprocess tests"
+#   "1 subprocess test"
 #   "3 tests"
 #   "69 unit tests"
 #   "4 new dedupe tests"
