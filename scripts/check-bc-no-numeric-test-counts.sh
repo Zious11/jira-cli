@@ -25,8 +25,8 @@ fi
 #   "3 tests"
 #   "69 unit tests"
 #   "4 new dedupe tests"
-# in lines starting with "**Trace**:" (the BC Trace field marker).
-# Be specific to Trace fields to avoid false positives from spec body prose
+# in lines starting with "**Trace**:" or "**Source**:" (both BC traceability fields).
+# Be specific to these field markers to avoid false positives from spec body prose
 # that may mention test counts in passing (e.g., "the existing 26 unit tests
 # for this BC are in tests/foo.rs").
 #
@@ -44,12 +44,12 @@ fi
 
 PATTERN='[0-9]+[[:space:]]+([[:alnum:]_]+[[:space:]]+){0,3}tests?([^[:alnum:]]|$)'
 
-violations=$(grep -nE '^\*\*Trace\*\*:' "$BC_DIR"/bc-*.md 2>/dev/null \
+violations=$(grep -nE '^\*\*(Trace|Source)\*\*:' "$BC_DIR"/bc-*.md 2>/dev/null \
   | grep -E "$PATTERN" \
   || true)
 
 if [ -n "$violations" ]; then
-  echo "ERROR: BC Trace fields must not contain numeric test counts (PG-365-1 convention)." >&2
+  echo "ERROR: BC Trace/Source fields must not contain numeric test counts (PG-365-1 convention)." >&2
   echo "Numeric counts drift as tests are added; use qualitative descriptions instead." >&2
   echo "" >&2
   echo "Offending lines:" >&2
@@ -60,4 +60,4 @@ if [ -n "$violations" ]; then
   exit 1
 fi
 
-echo "OK: no numeric test counts in BC Trace fields."
+echo "OK: no numeric test counts in BC Trace/Source fields."
