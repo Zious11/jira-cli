@@ -227,9 +227,13 @@ When adding a new feature:
   `nextPageToken=null` rejection, fixed Jun 2025; 92049 = `startAt` offset behavior,
   resolved Invalid; 85546 = `/field/search` `nextPage` field, different endpoint). The
   rebind happened in issue #361 / PR #364 (2026-05-14). Both `SearchResult.has_more`
-  and `KeySearchResult.has_more` set `true` on guard abort; `search_issue_keys` does
-  NOT dedupe (live-data drift can produce duplicate keys before the cursor repeats —
-  tracked for in-function dedupe in #365). The user-facing stderr warning includes an
+  and `KeySearchResult.has_more` set `true` on guard abort. Both `search_issue_keys`
+  and `search_issues` use an incremental `seen_keys: HashSet<String>` (maintained
+  outside the pagination loop) to deduplicate on all exit paths — unique keys/issues
+  are appended once in first-occurrence order; the accumulated Vec is never rescanned
+  (implemented in #365 — closed). Duplicate keys/issues from live-data drift are
+  eliminated client-side before any break-decision check. Callers receive a
+  duplicate-free result. The user-facing stderr warning includes an
   actionable ORDER BY mitigation; do NOT revert to a single-`ORDER BY` shorthand like
   "add `ORDER BY key ASC` to your JQL" — JQL allows only one ORDER BY clause, so users
   with an existing sort would receive HTTP 400. The precise wording is "append

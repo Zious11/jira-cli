@@ -289,23 +289,26 @@ async fn test_search_issue_keys_repeated_cursor_aborts_with_warning() {
 }
 
 // ---------------------------------------------------------------------------
-// No-dedupe contract pin (issue #361 follow-up).
+// Dedupe contract pin (issue #365).
 //
 // When the repeated-cursor guard fires under JRACLOUD-95368 live-data drift,
 // earlier pages may already have collected keys that the server emits again
-// on a later page before the cursor repeats. `search_issue_keys` does NOT
-// dedupe — callers see the duplicates. This test pins that contract: if a
-// future "helpful" dedupe is added inside `search_issue_keys`, this assertion
-// fails and forces an explicit decision (with a corresponding caller-level
-// migration plan).
+// on a later page before the cursor repeats. As of #365, `search_issue_keys`
+// DOES dedupe — callers see a duplicate-free result with first-occurrence order
+// preserved. This test pins that contract: if the dedupe is removed, this
+// assertion fails and forces an explicit decision.
 //
-// The deferred follow-up to add in-function dedupe should also update this
-// test: see "New follow-up (deferred)" in
-// `docs/specs/2026-05-13-search-issue-keys.md::Out of Scope / Follow-ups`.
+// Vec::dedup() would be WRONG for JRACLOUD-95368 because the duplicate may be
+// non-consecutive (e.g., ["X-1"] on page 1 and ["X-1", "X-2"] on page 2 —
+// consecutive in the combined vec, but ["X-1"] + ["X-2", "X-1"] would NOT be).
+// See test_search_issue_keys_dedupes_non_consecutive_across_pages for the
+// load-bearing non-consecutive case.
+//
+// Traces to BC-2.6.050 (AC-001 of issue #365).
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn test_search_issue_keys_repeated_cursor_abort_does_not_dedupe() {
+async fn test_search_issue_keys_repeated_cursor_abort_dedupes() {
     let server = MockServer::start().await;
 
     // Page 1 — request body has NO `nextPageToken` (initial fetch); response
@@ -357,18 +360,223 @@ async fn test_search_issue_keys_repeated_cursor_abort_does_not_dedupe() {
         .await
         .expect("guard must abort gracefully");
 
-    // Contract pin: duplicates are preserved. `result.keys` MUST equal exactly
-    // ["X-1", "X-1", "X-2"] — no dedupe inside search_issue_keys.
+    // Dedupe contract: `result.keys` MUST equal exactly ["X-1", "X-2"] —
+    // search_issue_keys MUST dedupe on repeated-cursor abort while preserving
+    // first-occurrence order. The pre-dedupe candidate keys were ["X-1", "X-1",
+    // "X-2"]; the incremental seen_keys HashSet rejects the duplicate X-1 so
+    // it is never appended to all_keys.
     assert_eq!(
         result.keys,
-        vec!["X-1".to_string(), "X-1".to_string(), "X-2".to_string()],
-        "search_issue_keys MUST NOT dedupe on repeated-cursor abort — duplicates \
-         from live-data drift are passed through to callers. Callers needing \
-         uniqueness must dedupe themselves or re-issue with `ORDER BY key ASC`."
+        vec!["X-1".to_string(), "X-2".to_string()],
+        "search_issue_keys MUST dedupe on repeated-cursor abort while preserving \
+         first-occurrence order."
     );
     assert!(
         result.has_more,
         "repeated-cursor abort must set has_more=true (incomplete results)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Non-consecutive duplicate correctness pin (issue #365).
+//
+// This is the load-bearing test that proves Vec::dedup() would be WRONG.
+// Vec::dedup() only removes CONSECUTIVE duplicates. JRACLOUD-95368 drift can
+// emit a key on page 2 that was already on page 1, making the duplicate
+// non-consecutive in the combined `all_keys` vec.
+//
+// Setup: page 1 returns ["X-1"], page 2 returns ["X-2", "X-1"] (with same
+// nextPageToken, triggering the guard). Combined before dedupe: ["X-1", "X-2",
+// "X-1"]. Vec::dedup() would return ["X-1", "X-2", "X-1"] unchanged (the
+// two X-1 entries are not adjacent). The incremental seen_keys HashSet
+// correctly returns ["X-1", "X-2"].
+//
+// Traces to BC-2.6.050 (AC-001 of issue #365).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_search_issue_keys_dedupes_non_consecutive_across_pages() {
+    let server = MockServer::start().await;
+
+    // Page 1 — initial fetch; returns ["X-1"] with nextPageToken: "loop".
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(serde_json::json!({"jql": "q"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_keys_response(
+            &["X-1"],
+            Some("loop"),
+            false,
+        )))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Page 2 — returns ["X-2", "X-1"] with same nextPageToken: "loop".
+    // X-1 is a non-consecutive duplicate when combined with page 1's ["X-1"].
+    // The guard fires in this same iteration (page-2 iteration): `next_cursor="loop"`
+    // matches `prev_cursor="loop"` set during page-1. The page-2 payload is extended
+    // and deduped before the guard check runs.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(
+            serde_json::json!({"nextPageToken": "loop"}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_keys_response(
+            &["X-2", "X-1"],
+            Some("loop"),
+            false,
+        )))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server);
+    let result = client
+        .search_issue_keys("q", None)
+        .await
+        .expect("guard must abort gracefully");
+
+    // Dedupe contract: ["X-1", "X-2"] — incremental seen_keys HashSet rejects
+    // the non-adjacent duplicate X-1. Vec::dedup() would incorrectly return
+    // ["X-1", "X-2", "X-1"] unchanged (consecutive-only).
+    assert_eq!(
+        result.keys,
+        vec!["X-1".to_string(), "X-2".to_string()],
+        "search_issue_keys MUST dedupe non-consecutive duplicates (Vec::dedup() \
+         is insufficient — it only removes consecutive duplicates)"
+    );
+    assert!(
+        result.has_more,
+        "repeated-cursor guard abort must set has_more=true"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Limit-truncation path dedupe pin (issue #365, AC-002).
+//
+// When a single page returns duplicates and the post-dedupe unique count falls
+// BELOW the limit, the truncation check must NOT fire (because the dedupe
+// happened BEFORE the check). This ensures spurious "JQL matched at least N
+// issues" errors are eliminated when the true unique count is within limit.
+//
+// Setup: limit=11. Single page returns 11 keys with "A-1" duplicated:
+// ["A-1","A-1","B-1","C-1","D-1","E-1","F-1","G-1","H-1","I-1","J-1"].
+// After per-iteration dedupe: 10 unique keys. Truncation check: 10 < 11 →
+// does NOT fire. Cursor exhaustion (no nextPageToken) exits the loop.
+//
+// If dedupe runs AFTER the truncation check (wrong placement), 11 >= 11 would
+// fire the truncation block spuriously and set has_more=true.
+//
+// Traces to BC-2.6.050 (AC-002 of issue #365).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_search_issue_keys_limit_truncation_dedupes_under_drift() {
+    let server = MockServer::start().await;
+
+    // Single page: 11 keys with "A-1" duplicated, no nextPageToken.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_keys_response(
+            &[
+                "A-1", "A-1", "B-1", "C-1", "D-1", "E-1", "F-1", "G-1", "H-1", "I-1", "J-1",
+            ],
+            None,
+            true,
+        )))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server);
+    // limit=11: the +1 over-fetch sentinel pattern used by handle_edit::effective_keys.
+    let result = client
+        .search_issue_keys("q", Some(11))
+        .await
+        .expect("must succeed");
+
+    // After dedupe: 10 unique keys. Truncation check 10 < 11 does NOT fire.
+    // Cursor exhaustion exits the loop normally.
+    assert_eq!(
+        result.keys,
+        [
+            "A-1", "B-1", "C-1", "D-1", "E-1", "F-1", "G-1", "H-1", "I-1", "J-1"
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>(),
+        "after dedupe the 10 unique keys must be returned in first-occurrence order"
+    );
+    assert!(
+        !result.has_more,
+        "cursor exhaustion after dedupe (10 < 11 limit) must set has_more=false"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// NEGATIVE-PIN: Risk #5 collision corner (issue #365, AC-002 negative).
+//
+// When the post-dedupe unique count exactly equals the limit, the truncation
+// check DOES fire (10 >= 10). In this edge case `more_available` is computed
+// as `(10 > 10) || page_has_more = false`, so has_more=false even though a
+// duplicate was involved. This is a documented Risk #5 limitation — the dedupe
+// silences what would otherwise have been an overshoot signal.
+//
+// This test pins that behavior. A future PR fixing Risk #5 MUST update the
+// has_more assertion from false to true in lockstep.
+//
+// Setup: limit=10. Single page returns 11 keys with "X-1" duplicated, no
+// nextPageToken. After dedupe: 10 unique. Truncation check: 10 >= 10 → fires.
+// more_available = (10 > 10) || false = false. has_more = false.
+//
+// Traces to BC-2.6.050 (AC-002 negative-pin of issue #365).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_search_issue_keys_apr2025_overshoot_silenced_by_drift_dedupe() {
+    let server = MockServer::start().await;
+
+    // Single page: 11 keys with "X-1" duplicated, no nextPageToken.
+    // Simulates the Apr 2025 server-overshoot + drift-induced duplicate collision.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(jql_keys_response(
+            &[
+                "X-1", "X-1", "A-2", "A-3", "A-4", "A-5", "A-6", "A-7", "A-8", "A-9", "A-10",
+            ],
+            None,
+            true,
+        )))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server);
+    // limit=10: exactly the effective_max used by handle_edit::effective_keys.
+    let result = client
+        .search_issue_keys("q", Some(10))
+        .await
+        .expect("must succeed");
+
+    // After dedupe: 10 unique keys. Truncation check: 10 >= 10 → fires.
+    // more_available = (10 > 10) || false = false → has_more = false.
+    assert_eq!(result.keys.len(), 10);
+    assert_eq!(
+        result.keys[0], "X-1",
+        "first-occurrence order must be preserved"
+    );
+    // REGRESSION-PIN: has_more is false because dedupe collapsed the Apr 2025
+    // overshoot duplicate before the truncation check could detect it. This is
+    // Risk #5 — not the desired behavior (ideally has_more=true to signal that
+    // the overshoot happened). A future PR fixing Risk #5 MUST update this
+    // assertion to `assert!(result.has_more)` in lockstep.
+    assert!(
+        !result.has_more,
+        "REGRESSION-PIN: has_more is false because dedupe collapsed the Apr 2025 \
+         overshoot duplicate. This is Risk #5 — not desired behavior. \
+         Update this assertion if Risk #5 is fixed."
     );
 }
 

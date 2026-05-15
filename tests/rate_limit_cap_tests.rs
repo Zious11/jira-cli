@@ -25,7 +25,7 @@ mod common;
 use assert_cmd::Command;
 use jr::api::client::JiraClient;
 use tempfile::TempDir;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 // ---------------------------------------------------------------------------
@@ -399,5 +399,311 @@ async fn test_search_issues_repeated_cursor_abort_sets_has_more_true() {
     assert!(
         !result.issues.is_empty(),
         "guard-abort must preserve page 1's issues; loop is broken before runaway"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// search_issues dedupe contract pin (issue #365, AC-003).
+//
+// When the repeated-cursor guard fires, search_issues MUST dedupe the
+// accumulated issues keyed on issue.key (first-occurrence wins). This mirrors
+// the search_issue_keys dedupe added in the same PR.
+//
+// Setup: page 1 returns [TEST-1], page 2 returns [TEST-1, TEST-2] with the
+// same nextPageToken. Combined before dedupe: [TEST-1, TEST-1, TEST-2].
+// After incremental seen_keys HashSet dedupe (keyed on issue.key): [TEST-1, TEST-2].
+// Guard fires; has_more=true.
+//
+// Mock disambiguation: page-1 matcher uses body_partial_json({"jql": "q"}) +
+// up_to_n_times(1); page-2 matcher uses body_partial_json({"nextPageToken":
+// "loop"}) per the pattern established in search_issue_keys test 13.
+//
+// Traces to BC-2.6.051 (AC-003 of issue #365).
+// ---------------------------------------------------------------------------
+
+/// Build a minimal full-issue JSON body for `issue.key`. Field shapes mirror
+/// the `stuck_response` used in `test_search_issues_repeated_cursor_abort_sets_has_more_true`.
+fn issue_body(key: &str) -> serde_json::Value {
+    serde_json::json!({
+        "key": key,
+        "fields": {
+            "summary": format!("Issue {}", key),
+            "status": {"name": "To Do"},
+            "issuetype": {"name": "Task"},
+            "priority": {"name": "Medium"},
+            "assignee": null,
+            "reporter": null,
+            "project": {"key": key.split('-').next().expect("split always yields at least one item")},
+            "description": null,
+            "created": "2026-01-01T00:00:00.000+0000",
+            "updated": "2026-01-01T00:00:00.000+0000",
+            "resolution": null,
+            "components": [],
+            "fixVersions": [],
+            "labels": [],
+            "parent": null,
+            "issuelinks": []
+        }
+    })
+}
+
+/// Build a `/rest/api/3/search/jql` response with the given issue keys and an
+/// optional next-page cursor. Issue field shapes mirror `stuck_response` in
+/// `test_search_issues_repeated_cursor_abort_sets_has_more_true`.
+fn jql_issues_response(keys: &[&str], next_page_token: Option<&str>) -> serde_json::Value {
+    let issues: Vec<serde_json::Value> = keys.iter().map(|k| issue_body(k)).collect();
+    let mut body = serde_json::json!({
+        "issues": issues,
+    });
+    if let Some(t) = next_page_token {
+        body["nextPageToken"] = serde_json::json!(t);
+    }
+    body
+}
+
+#[tokio::test]
+async fn test_search_issues_repeated_cursor_abort_dedupes() {
+    let server = MockServer::start().await;
+
+    // Page 1 — initial fetch; returns [TEST-1] with nextPageToken: "loop".
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(serde_json::json!({"jql": "q"})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(jql_issues_response(&["TEST-1"], Some("loop"))),
+        )
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Page 2 — returns [TEST-1, TEST-2] with the same nextPageToken: "loop".
+    // TEST-1 is a consecutive duplicate in the combined vec; guard fires.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(
+            serde_json::json!({"nextPageToken": "loop"}),
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(jql_issues_response(&["TEST-1", "TEST-2"], Some("loop"))),
+        )
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let result = client
+        .search_issues("q", None, &[])
+        .await
+        .expect("guard must abort gracefully");
+
+    // Dedupe contract: [TEST-1, TEST-2] — incremental seen_keys HashSet rejects
+    // the duplicate TEST-1. The pre-dedup candidate list was [TEST-1, TEST-1, TEST-2].
+    assert_eq!(
+        result
+            .issues
+            .iter()
+            .map(|i| i.key.as_str())
+            .collect::<Vec<_>>(),
+        vec!["TEST-1", "TEST-2"],
+        "search_issues MUST dedupe on repeated-cursor abort while preserving \
+         first-occurrence order (keyed on issue.key)"
+    );
+    assert!(
+        result.has_more,
+        "repeated-cursor guard abort must set has_more=true"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Non-consecutive duplicate correctness pin for search_issues (issue #365).
+//
+// Mirror of test_search_issue_keys_dedupes_non_consecutive_across_pages for
+// full Issue bodies. Page 1 returns [TEST-1], page 2 returns [TEST-2, TEST-1]
+// (non-consecutive duplicate). Combined before dedupe: [TEST-1, TEST-2, TEST-1].
+// Vec::dedup() would return [TEST-1, TEST-2, TEST-1] unchanged (non-adjacent).
+// Incremental seen_keys HashSet correctly returns [TEST-1, TEST-2].
+//
+// Traces to BC-2.6.051 (AC-003 of issue #365).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_search_issues_dedupes_non_consecutive_across_pages() {
+    let server = MockServer::start().await;
+
+    // Page 1 — returns [TEST-1] with nextPageToken: "loop".
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(serde_json::json!({"jql": "q"})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(jql_issues_response(&["TEST-1"], Some("loop"))),
+        )
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Page 2 — returns [TEST-2, TEST-1] (non-consecutive duplicate) with same token.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(body_partial_json(
+            serde_json::json!({"nextPageToken": "loop"}),
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(jql_issues_response(&["TEST-2", "TEST-1"], Some("loop"))),
+        )
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let result = client
+        .search_issues("q", None, &[])
+        .await
+        .expect("guard must abort gracefully");
+
+    // Dedupe contract: [TEST-1, TEST-2] — incremental seen_keys HashSet rejects
+    // the non-adjacent duplicate TEST-1. Vec::dedup() would incorrectly return
+    // [TEST-1, TEST-2, TEST-1] unchanged (consecutive-only).
+    assert_eq!(
+        result
+            .issues
+            .iter()
+            .map(|i| i.key.as_str())
+            .collect::<Vec<_>>(),
+        vec!["TEST-1", "TEST-2"],
+        "search_issues MUST dedupe non-consecutive duplicates (Vec::dedup() \
+         is insufficient — it only removes consecutive duplicates)"
+    );
+    assert!(
+        result.has_more,
+        "repeated-cursor guard abort must set has_more=true"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Limit-truncation path dedupe pin for search_issues (issue #365, AC-004).
+//
+// Mirror of test_search_issue_keys_limit_truncation_dedupes_under_drift for
+// full Issue bodies. limit=11. Single page returns 11 issues with TEST-1
+// duplicated, no nextPageToken. After per-iteration dedupe: 10 unique issues.
+// Truncation check: 10 < 11 → does NOT fire. Cursor exhaustion exits loop.
+//
+// If dedupe runs AFTER the truncation check (wrong placement), 11 >= 11 would
+// fire the truncation block spuriously and set has_more=true.
+//
+// Traces to BC-2.6.051 (AC-004 of issue #365).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_search_issues_limit_truncation_dedupes_under_drift() {
+    let server = MockServer::start().await;
+
+    // Single page: 11 issues with TEST-1 duplicated, no nextPageToken.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(jql_issues_response(
+                &[
+                    "TEST-1", "TEST-1", "TEST-2", "TEST-3", "TEST-4", "TEST-5", "TEST-6", "TEST-7",
+                    "TEST-8", "TEST-9", "TEST-10",
+                ],
+                None,
+            )),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    // limit=11: the +1 over-fetch sentinel pattern used by handle_edit::effective_keys.
+    let result = client
+        .search_issues("q", Some(11), &[])
+        .await
+        .expect("must succeed");
+
+    // After dedupe: 10 unique issues. Truncation check 10 < 11 does NOT fire.
+    assert_eq!(
+        result.issues.len(),
+        10,
+        "after deduplication, exactly 10 unique issues must be returned"
+    );
+    assert_eq!(
+        result.issues[0].key, "TEST-1",
+        "first-occurrence order must be preserved (TEST-1 was first on the page)"
+    );
+    assert!(
+        !result.has_more,
+        "cursor exhaustion after dedupe (10 < 11 limit) must set has_more=false"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// NEGATIVE-PIN: Risk #5 collision corner for search_issues (issue #365, AC-004).
+//
+// Mirror of test_search_issue_keys_apr2025_overshoot_silenced_by_drift_dedupe
+// for full Issue bodies. When the post-dedupe unique count exactly equals the
+// limit (10 == 10), the truncation check fires and more_available =
+// (10 > 10) || false = false → has_more=false. This is Risk #5 — the dedupe
+// silences the overshoot signal.
+//
+// A future PR fixing Risk #5 MUST update the has_more assertion from false to
+// true in lockstep.
+//
+// Traces to BC-2.6.051 (AC-004 negative-pin of issue #365).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_search_issues_apr2025_overshoot_silenced_by_drift_dedupe() {
+    let server = MockServer::start().await;
+
+    // Single page: 11 issues with TEST-1 duplicated, no nextPageToken.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(jql_issues_response(
+                &[
+                    "TEST-1", "TEST-1", "TEST-2", "TEST-3", "TEST-4", "TEST-5", "TEST-6", "TEST-7",
+                    "TEST-8", "TEST-9", "TEST-10",
+                ],
+                None,
+            )),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    // limit=10: exactly effective_max; triggers the truncation-check collision.
+    let result = client
+        .search_issues("q", Some(10), &[])
+        .await
+        .expect("must succeed");
+
+    // After dedupe: 10 unique issues. Truncation check: 10 >= 10 → fires.
+    // more_available = (10 > 10) || false = false → has_more = false.
+    assert_eq!(
+        result.issues.len(),
+        10,
+        "exactly 10 unique issues must be returned after dedupe"
+    );
+    // REGRESSION-PIN: has_more is false because dedupe collapsed the Apr 2025
+    // overshoot duplicate before the truncation check could detect it. This is
+    // Risk #5 — not the desired behavior (ideally has_more=true to signal the
+    // overshoot). A future PR fixing Risk #5 MUST update this assertion to
+    // `assert!(result.has_more)` in lockstep. See
+    // test_search_issue_keys_apr2025_overshoot_silenced_by_drift_dedupe for
+    // the parallel keys-only variant.
+    assert!(
+        !result.has_more,
+        "REGRESSION-PIN: has_more is false because dedupe collapsed the Apr 2025 \
+         overshoot duplicate. This is Risk #5 — not desired behavior. \
+         Update this assertion if Risk #5 is fixed."
     );
 }
