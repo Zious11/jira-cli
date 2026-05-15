@@ -2,7 +2,7 @@
 document_type: feature-spec
 issue: 365
 traces_to: [BC-2.6.050, BC-2.6.051]
-status: draft
+status: implemented
 version: 0.1.12
 date: 2026-05-14
 related_research: .factory/research/issue-365-design-validation.md

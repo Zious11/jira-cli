@@ -413,8 +413,9 @@ async fn test_search_issue_keys_dedupes_non_consecutive_across_pages() {
 
     // Page 2 — returns ["X-2", "X-1"] with same nextPageToken: "loop".
     // X-1 is a non-consecutive duplicate when combined with page 1's ["X-1"].
-    // The guard fires on the NEXT iteration, but page 2's payload is already
-    // extended into all_keys before the check runs.
+    // The guard fires in this same iteration (page-2 iteration): `next_cursor="loop"`
+    // matches `prev_cursor="loop"` set during page-1. The page-2 payload is extended
+    // and deduped before the guard check runs.
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
         .and(body_partial_json(

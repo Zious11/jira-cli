@@ -59,6 +59,7 @@ const BASE_ISSUE_FIELDS: &[&str] = &[
 /// the stderr warning fires only in case 2. When `limit` is `None`, case 1
 /// cannot trigger, so `has_more = true` unambiguously signals case 2
 /// (repeated-cursor guard abort).
+#[derive(Debug)]
 pub struct SearchResult {
     pub issues: Vec<Issue>,
     pub has_more: bool,
