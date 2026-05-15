@@ -1,8 +1,8 @@
 ---
 context: bc-2
 title: "Issue Read (list/view/comments/changelog)"
-total_bcs: 92   # cumulative claim (incl. range-collapsed); definitional_count below is individually-bodied headings
-definitional_count: 50   # count of `#### BC-` headings in this file
+total_bcs: 93   # cumulative claim (incl. range-collapsed); definitional_count below is individually-bodied headings
+definitional_count: 51   # count of `#### BC-` headings in this file
 last_updated: 2026-05-13
 source_pass: 3
 trace: |
@@ -493,8 +493,18 @@ behavior (2.2), Issue view (2.3), Comments (2.4), Changelog (2.5), API layer (2.
 **Confidence**: HIGH
 **Source**: issue #350 (audit-followup from PR #348 / issue #110 PR2 Copilot review round 7); spec at `docs/specs/2026-05-13-search-issue-keys.md`; research at `.factory/research/issue-350-search-issue-keys-design.md`
 **Subject**: Issue read (API layer — keys-only JQL search)
-**Behavior**: POST `/rest/api/3/search/jql` sends body `fields: ["key"]` exclusively (never `BASE_ISSUE_FIELDS`). Deserializes only the top-level `key` per issue; ignores `fields {}` and unknown top-level fields. Paginates via `nextPageToken` cursor identically to `search_issues`, including the JRACLOUD-94632 repeated-cursor anti-loop guard (same stderr warning text). Returns `KeySearchResult { keys: Vec<String>, has_more: bool }`; `has_more = true` under TWO conditions: (a) the caller's limit was hit while the API still had rows (caller-side truncation), OR (b) the JRACLOUD-94632 repeated-cursor anti-loop guard fired (results may be incomplete; data loss is signaled to callers via this bit). Pure cursor exhaustion (page_has_more = false on a non-truncated path) always returns `has_more = false`. Refinement from PR #362 Copilot R1. Clamps `maxResults` per page to `.min(100)` for parity with `search_issues`.
-**Trace**: `src/api/jira/issues.rs::search_issue_keys` (impl); `src/cli/issue/create.rs::handle_edit::effective_keys` (caller); `tests/search_issue_keys.rs` (12 wiremock tests — 11 library tokio + 1 subprocess) + `tests/issue_bulk_pr2.rs::test_handle_edit_jql_truncation_error_still_triggers_after_migration` (caller-level regression)
+**Behavior**: POST `/rest/api/3/search/jql` sends body `fields: ["key"]` exclusively (never `BASE_ISSUE_FIELDS`). Deserializes only the top-level `key` per issue; ignores `fields {}` and unknown top-level fields. Paginates via `nextPageToken` cursor identically to `search_issues`, including the JRACLOUD-95368 repeated-cursor anti-loop guard (same stderr warning text). Returns `KeySearchResult { keys: Vec<String>, has_more: bool }`; `has_more = true` under TWO conditions: (a) the caller's limit was hit while the API still had rows (caller-side truncation), OR (b) the JRACLOUD-95368 repeated-cursor anti-loop guard fired (results may be incomplete; data loss is signaled to callers via this bit). Pure cursor exhaustion (page_has_more = false on a non-truncated path) always returns `has_more = false`. Refinement from PR #362 Copilot R1. Clamps `maxResults` per page to `.min(100)` for parity with `search_issues`. On every page-fetch iteration, after extending `all_keys` and before any break-decision check, `search_issue_keys` deduplicates `all_keys` in-place using order-preserving, first-occurrence-wins deduplication (HashSet retain, keyed on the key string). All exit paths (guard-abort, limit-truncation, cursor-exhaustion) therefore return a duplicate-free `keys` vec. Introduced in #365.
+**Trace**: `src/api/jira/issues.rs::search_issue_keys` (impl); `src/cli/issue/create.rs::handle_edit::effective_keys` (caller); `tests/search_issue_keys.rs` (16 wiremock tests — 15 library tokio + 1 subprocess) + `tests/issue_bulk_pr2.rs::test_handle_edit_jql_truncation_error_still_triggers_after_migration` (caller-level regression)
+
+---
+
+#### BC-2.6.051: `client.search_issues(jql, limit, fields)` deduplicates results in-place on all exit paths (JRACLOUD-95368 mitigation)
+
+**Confidence**: HIGH
+**Source**: issue #365 (dedupe follow-up from PR #362); spec at `docs/specs/2026-05-14-search-issue-keys-dedupe.md`; research at `.factory/research/issue-365-design-validation.md`
+**Subject**: Issue read (API layer — full-body JQL search)
+**Behavior**: On every page-fetch iteration, after extending `all_issues` and before any break-decision check, `search_issues` deduplicates `all_issues` in-place using order-preserving, first-occurrence-wins deduplication keyed on `issue.key` (HashSet<String> of cloned keys, because `Issue` does not impl `Hash`). All exit paths (guard-abort, limit-truncation, cursor-exhaustion) therefore return a duplicate-free `issues` vec. `SearchResult.has_more` semantics are unchanged. As of issue #365, `has_more = true` on the guard-abort path no longer implies that `issues` contains duplicates. Symmetric to BC-2.6.050.
+**Trace**: `src/api/jira/issues.rs::search_issues` (impl); `tests/rate_limit_cap_tests.rs` (4 new dedupe tests: `test_search_issues_repeated_cursor_abort_dedupes`, `test_search_issues_dedupes_non_consecutive_across_pages`, `test_search_issues_limit_truncation_dedupes_under_drift`, `test_search_issues_apr2025_overshoot_silenced_by_drift_dedupe`)
 
 ---
 
@@ -508,4 +518,4 @@ All issue-read errors follow the universal pattern (BC-X.3.012):
 
 Pass 3 sources: `tests/issue_list_errors.rs`, `tests/issue_view_errors.rs`, `tests/comments.rs`
 
-## Total BCs in this file: 50 (representative set; BC-INDEX.md carries all 92)
+## Total BCs in this file: 51 (representative set; BC-INDEX.md carries all 93)
