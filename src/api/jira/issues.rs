@@ -4,6 +4,7 @@ use crate::types::jira::{Comment, CreateIssueResponse, Issue, TransitionsRespons
 use anyhow::Result;
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::HashSet;
 
 /// Default fields requested when fetching issues (search and get).
 ///
@@ -40,14 +41,15 @@ const BASE_ISSUE_FIELDS: &[&str] = &[
 /// 2. **Repeated-cursor guard abort:** the anti-loop guard fired (upstream
 ///    returned the same `nextPageToken` twice — typically live-data drift
 ///    per JRACLOUD-95368), pagination was aborted with a stderr warning,
-///    and the result set may be **incomplete AND may contain duplicate
-///    issues**. `search_issues` does not dedupe; under live-data drift the
-///    server may have emitted the same issue on multiple pages before the
-///    cursor repeated. Callers that need strict uniqueness should re-issue
-///    with `key ASC` as a stable secondary sort in the ORDER BY (append
-///    `, key ASC` to an existing sort, or use `ORDER BY key ASC` if none —
-///    JQL allows only one ORDER BY clause) — Atlassian's KB mitigation —
-///    or dedupe locally.
+///    and the result set may be **incomplete**. Duplicates are eliminated
+///    client-side on this path: `search_issues` applies a per-iteration
+///    order-preserving deduplication keyed on `issue.key` (introduced in
+///    issue #365). As of issue #365, `has_more = true` on the guard-abort path
+///    no longer implies that `issues` contains duplicates. Callers that need
+///    strict ordering should re-issue with `key ASC` as a stable secondary
+///    sort in the ORDER BY (append `, key ASC` to an existing sort, or use
+///    `ORDER BY key ASC` if none — JQL allows only one ORDER BY clause) —
+///    Atlassian's KB mitigation.
 ///
 /// Pure cursor exhaustion (no limit set, upstream returns no
 /// `nextPageToken` — `CursorPage::has_more()` checks `next_page_token.is_some()`,
@@ -80,30 +82,19 @@ pub struct SearchResult {
 ///    returned the same `nextPageToken` twice — typically live-data drift
 ///    per JRACLOUD-95368, "nextPageToken pagination is not snapshot-stable
 ///    under live mutation"), pagination was aborted with a stderr warning,
-///    and the result set may be **incomplete AND may contain duplicate
-///    keys**. `search_issue_keys` does not dedupe; under live-data drift the
-///    server may have emitted the same key on multiple pages before the
-///    cursor repeated. Callers that need strict uniqueness should re-issue
-///    with `key ASC` as a stable secondary sort in the ORDER BY (append
-///    `, key ASC` to an existing sort, or use `ORDER BY key ASC` if none —
-///    JQL allows only one ORDER BY clause) — Atlassian's KB mitigation —
-///    or dedupe locally.
+///    and the result set may be **incomplete**. Duplicates are eliminated
+///    client-side on this path via per-iteration order-preserving
+///    deduplication (introduced in issue #365). Callers should still prefer
+///    `key ASC` in the ORDER BY (append `, key ASC` to an existing sort,
+///    or use `ORDER BY key ASC` if none — JQL allows only one ORDER BY
+///    clause) — Atlassian's KB mitigation for snapshot instability.
+///    As of issue #365, `has_more = true` on the guard-abort path no longer
+///    implies that `keys` contains duplicates.
 ///
 /// When `limit` is set, callers cannot distinguish case 1 from case 2 from
 /// `has_more` alone — the stderr warning fires only in case 2. When `limit`
 /// is `None`, case 1 cannot trigger, so `has_more = true` unambiguously
-/// signals case 2 (repeated-cursor guard abort). Today's sole caller
-/// (`handle_edit::effective_keys` in `cli/issue/create.rs`) requests
-/// `limit = effective_max + 1` and treats `keys.len() > effective_max` as a
-/// truncation error. **This is NOT dup-tolerant**: a single drift-induced
-/// duplicate inflates `keys.len()` by 1 and can spuriously trip the
-/// truncation error when the true unique-key count is at the limit. Bulk
-/// edits also do not dedupe — the same issue could receive the same field
-/// edit twice (idempotent at the Jira API for most fields, but wasteful).
-/// Both effects are user-visible-but-safe; not blocking. Future callers
-/// that need a richer signal should track the deferred follow-up
-/// (`feat(search): dedupe keys on JRACLOUD-95368 repeated-cursor guard abort`)
-/// to surface "incomplete-and-possibly-duplicated" via the type system.
+/// signals case 2 (repeated-cursor guard abort).
 ///
 /// Pure cursor exhaustion (no limit set, upstream returns no
 /// `nextPageToken` — `CursorPage::has_more()` checks `next_page_token.is_some()`,
@@ -213,6 +204,14 @@ impl JiraClient {
             let next_cursor = page.next_page_token.clone();
             all_issues.extend(page.issues);
 
+            // Per-iteration order-preserving dedupe: JRACLOUD-95368 drift can emit the
+            // same issue on multiple pages. Issue does not impl Hash, so we key on
+            // issue.key (String). See #365.
+            {
+                let mut seen: HashSet<String> = HashSet::with_capacity(all_issues.len());
+                all_issues.retain(|i| seen.insert(i.key.clone()));
+            }
+
             if let Some(max) = limit {
                 if all_issues.len() >= max as usize {
                     more_available = all_issues.len() > max as usize || page_has_more;
@@ -245,10 +244,10 @@ impl JiraClient {
                 // "repeated-cursor abort". Matches the `KeySearchResult`
                 // contract for symmetry; otherwise `SearchResult.has_more`
                 // would silently be `false` despite the explicit
-                // "Some results may be missing" warning above. Note: under
-                // JRACLOUD-95368 (live-data drift, the typical cause), earlier
-                // pages MAY contain issues that the server would emit again
-                // after the cursor repeats — `search_issues` does not dedupe.
+                // "Some results may be missing" warning above. As of #365,
+                // all_issues is already deduplicated (keyed on issue.key) by
+                // the per-iteration dedupe applied above (HashSet retain,
+                // order-preserving). No additional dedupe call is needed here.
                 more_available = true;
                 break;
             }
@@ -277,16 +276,15 @@ impl JiraClient {
     /// `has_more` is set to `true` in two cases: (1) the caller's `limit`
     /// was hit AND upstream still had rows available (no guard-induced
     /// duplicates), or (2) the repeated-cursor anti-loop guard fired
-    /// (upstream returned the
-    /// same `nextPageToken` twice — typically live-data drift per
-    /// JRACLOUD-95368), aborting pagination early with a stderr warning
-    /// (**keys may be incomplete AND may contain duplicates** — this
-    /// function does NOT dedupe; callers needing uniqueness should re-issue
-    /// with `key ASC` as a stable secondary sort in the ORDER BY (append
-    /// `, key ASC` to an existing sort, or use `ORDER BY key ASC` if none —
-    /// JQL allows only one ORDER BY clause), or dedupe locally). Pure cursor exhaustion
-    /// returns `has_more = false`. See [`KeySearchResult`] for the full
-    /// contract including the caller-dedup analysis.
+    /// (upstream returned the same `nextPageToken` twice — typically
+    /// live-data drift per JRACLOUD-95368), aborting pagination early with
+    /// a stderr warning (keys may be **incomplete** — as of issue #365,
+    /// duplicates are eliminated client-side on this path via per-iteration
+    /// order-preserving deduplication; callers should still prefer
+    /// `key ASC` in the ORDER BY (append `, key ASC` to an existing sort,
+    /// or use `ORDER BY key ASC` if none — JQL allows only one ORDER BY
+    /// clause) — Atlassian's KB mitigation). Pure cursor exhaustion returns
+    /// `has_more = false`. See [`KeySearchResult`] for the full contract.
     ///
     /// The per-page clamp `.min(100)` is a conservative client-side choice
     /// for parity with `search_issues`; Atlassian docs note that id/key-only
@@ -329,6 +327,19 @@ impl JiraClient {
             let next_cursor = page.next_page_token.clone();
             all_keys.extend(page.issues.into_iter().map(|r| r.key));
 
+            // Per-iteration order-preserving dedupe: JRACLOUD-95368 drift can emit the
+            // same key on multiple pages (or within a single page under extreme drift).
+            // Vec::dedup() is wrong here (consecutive-only); HashSet retain is correct.
+            // Per-iteration cost: O(all_keys.len()) growing across iterations; total
+            // O(N²/page_size); negligible at N≤1001. Required for correctness: must run
+            // before the limit-truncation check so `all_keys.len()` reflects unique-key
+            // count when the truncation sentinel fires. See #365.
+            // search_issues applies the same dedupe pattern keyed on issue.key.
+            {
+                let mut seen: HashSet<String> = HashSet::with_capacity(all_keys.len());
+                all_keys.retain(|k| seen.insert(k.clone()));
+            }
+
             if let Some(max) = limit {
                 if all_keys.len() >= max as usize {
                     // `all_keys.len() > max` handles the Apr 2025 regression
@@ -363,14 +374,10 @@ impl JiraClient {
                      ORDER BY (append `, key ASC` to an existing sort, or use \
                      `ORDER BY key ASC` if none)."
                 );
-                // Guard-aborted: signal incomplete results via has_more=true so callers
-                // can distinguish "clean exhaustion" from "repeated-cursor abort". Note:
-                // under JRACLOUD-95368 (live-data drift, the typical cause), earlier
-                // pages MAY contain keys that the server would emit again after the
-                // cursor repeats — this function does NOT dedupe. Callers needing
-                // strict uniqueness should re-issue with `key ASC` as a stable
-                // secondary sort (append `, key ASC` to an existing ORDER BY, or
-                // use `ORDER BY key ASC` if none) or dedupe locally.
+                // Guard-aborted: signal incomplete results via has_more=true. As of
+                // #365, all_keys is already deduplicated by the per-iteration dedupe
+                // applied above (HashSet retain, order-preserving). No additional
+                // dedupe call is needed here.
                 more_available = true;
                 break;
             }
