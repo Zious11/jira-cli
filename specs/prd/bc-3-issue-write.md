@@ -222,7 +222,7 @@ Create (3.3), Edit+Open (3.4), Comment (3.5), Links (3.6), Remote links (3.7).
 #### BC-3.3.001: `issue create` POSTs `/rest/api/3/issue` returning `{"key": "FOO-123"}`
 
 **Confidence**: HIGH
-**Source**: `tests/issue_create_json.rs` (29 tests)
+**Source**: `tests/issue_create_json.rs` (integration tests covering create body shape, field combinations, and JSON output)
 **Subject**: Issue write
 **Behavior**: Body includes summary, project, issuetype, optional priority, labels, description (ADF), team UUID, story points. Output JSON: `{"key": "FOO-123"}`.
 **Trace**: Pass 3 BC-211

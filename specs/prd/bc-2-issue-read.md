@@ -36,7 +36,7 @@ behavior (2.2), Issue view (2.3), Comments (2.4), Changelog (2.5), API layer (2.
 #### BC-2.1.002: `--jql X` wraps in parens, strips ORDER BY, re-appends `ORDER BY updated DESC`
 
 **Confidence**: HIGH
-**Source**: `src/cli/issue/list.rs:36-52`; `tests/all_flag_behavior.rs:54-66`; 26 unit tests
+**Source**: `src/cli/issue/list.rs:36-52`; `tests/all_flag_behavior.rs:54-66`; unit tests covering `build_jql_base_parts` variants
 **Subject**: Issue read
 **Behavior**: `build_jql_base_parts(jql, project_key)` calls `jql::strip_order_by(jql)`, wraps in parens. Order-by slot is ALWAYS `"updated DESC"` — user's `ORDER BY rank ASC` is silently replaced. `--jql "priority = Highest ORDER BY created DESC" --project PROJ` → `(project = "PROJ") AND (priority = Highest) ORDER BY updated DESC`.
 **Edge cases**: user ORDER BY is stripped, never preserved.
@@ -86,7 +86,7 @@ behavior (2.2), Issue view (2.3), Comments (2.4), Changelog (2.5), API layer (2.
 #### BC-2.1.007: `build_filter_clauses` emits in stable order: assignee, reporter, status, open, team, recent, asset, created-after/before, updated-after/before
 
 **Confidence**: HIGH
-**Source**: `src/cli/issue/list.rs:613-649`; 17 unit tests including `build_jql_parts_*`
+**Source**: `src/cli/issue/list.rs:613-649`; unit tests covering `build_jql_parts_*` clause variants
 **Subject**: Issue read
 **Behavior**: Each `Some` flag pushes clause in listed order. Final JQL: `parts.join(" AND ")`. Order stable across invocations. Key clause shapes:
 - `assignee = currentUser()` (for `--assignee me`)
@@ -429,7 +429,7 @@ behavior (2.2), Issue view (2.3), Comments (2.4), Changelog (2.5), API layer (2.
 #### BC-2.5.043: `issue changelog --field <substr>` filters items by case-insensitive field substring (client-side)
 
 **Confidence**: MEDIUM
-**Source**: `src/cli/issue/changelog.rs`; 38 unit tests
+**Source**: `src/cli/issue/changelog.rs`; unit tests in `src/cli/issue/changelog.rs::tests`
 **Trace**: Pass 3 BC-119
 
 ---
@@ -494,7 +494,7 @@ behavior (2.2), Issue view (2.3), Comments (2.4), Changelog (2.5), API layer (2.
 **Source**: issue #350 (audit-followup from PR #348 / issue #110 PR2 Copilot review round 7); spec at `docs/specs/2026-05-13-search-issue-keys.md`; research at `.factory/research/issue-350-search-issue-keys-design.md`
 **Subject**: Issue read (API layer — keys-only JQL search)
 **Behavior**: POST `/rest/api/3/search/jql` sends body `fields: ["key"]` exclusively (never `BASE_ISSUE_FIELDS`). Deserializes only the top-level `key` per issue; ignores `fields {}` and unknown top-level fields. Paginates via `nextPageToken` cursor identically to `search_issues`, including the JRACLOUD-95368 repeated-cursor anti-loop guard (same stderr warning text). Returns `KeySearchResult { keys: Vec<String>, has_more: bool }`; `has_more = true` under TWO conditions: (a) the caller's limit was hit while the API still had rows (caller-side truncation), OR (b) the JRACLOUD-95368 repeated-cursor anti-loop guard fired (results may be incomplete; data loss is signaled to callers via this bit). Pure cursor exhaustion (page_has_more = false on a non-truncated path) always returns `has_more = false`. Refinement from PR #362 Copilot R1. Clamps `maxResults` per page to `.min(100)` for parity with `search_issues`. On every page-fetch iteration, after extending `all_keys` and before any break-decision check, `search_issue_keys` deduplicates `all_keys` in-place using order-preserving, first-occurrence-wins deduplication (HashSet retain, keyed on the key string). All exit paths (guard-abort, limit-truncation, cursor-exhaustion) therefore return a duplicate-free `keys` vec. Introduced in #365.
-**Trace**: `src/api/jira/issues.rs::search_issue_keys` (impl); `src/cli/issue/create.rs::handle_edit::effective_keys` (caller); `tests/search_issue_keys.rs` (16 wiremock tests — 15 library tokio + 1 subprocess) + `tests/issue_bulk_pr2.rs::test_handle_edit_jql_truncation_error_still_triggers_after_migration` (caller-level regression)
+**Trace**: `src/api/jira/issues.rs::search_issue_keys` (impl); `src/cli/issue/create.rs::handle_edit::effective_keys` (caller); `tests/search_issue_keys.rs` (wiremock suite: library tokio + subprocess) + `tests/issue_bulk_pr2.rs::test_handle_edit_jql_truncation_error_still_triggers_after_migration` (caller-level regression)
 
 ---
 

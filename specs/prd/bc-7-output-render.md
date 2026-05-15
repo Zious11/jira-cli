@@ -75,7 +75,7 @@ Error display (7.3), JSON output shapes (7.4), Observability (7.5). (+4 BC-7.4.0
 #### BC-7.2.001: `text_to_adf("hello")` emits `{type:"doc", version:1, content:[{type:"paragraph", content:[{type:"text", text:"hello"}]}]}`
 
 **Confidence**: HIGH
-**Source**: `src/adf.rs::tests` (69 unit tests)
+**Source**: `src/adf.rs::tests` (unit tests covering text→ADF, markdown→ADF, ADF→text variants)
 **Subject**: Output rendering
 **Behavior**: Standard ADF doc shape. Version is always 1.
 **Trace**: Pass 3 BC-1104
