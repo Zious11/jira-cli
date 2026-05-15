@@ -2980,3 +2980,47 @@ Last Updated bumped to 2026-05-14. Session Resume Checkpoint updated. Convergenc
 | state-manager | Update Phase 3-adv Convergence Tracker | STATE.md |
 
 **Outcome:** STATE.md reflects PRs #363, #364, #366 MERGED + issue #365 cycle IN_PROGRESS. 3 audit-followups remain (#340, #345, #346). #361 closed by PR #364.
+
+---
+
+## Burst N+1 (2026-05-15) — F1d Round-2 Convergence Persistence for #365
+
+**Agents dispatched:** state-manager
+**Files touched:** .factory/STATE.md, .factory/cycles/cycle-001/adversarial-reviews/issue-365-search-issue-keys-dedupe/ (pass-12..pass-17.md, CONVERGENCE.md), .factory/cycles/cycle-001/burst-log.md
+
+### Archived Current Phase Steps (rows displaced by round-2 addition)
+
+| Step | Agent | Status | Output |
+|------|-------|--------|--------|
+| PR #364 MERGED @ b8a87c5 | human | complete | Merged (squash). Branch `chore/search-warning-jra-95368`. Rebinds JRACLOUD-94632 → JRACLOUD-95368; fixes has_more asymmetry in search_issues; pins no-dedupe contract test; updates spec. Closes #361. 11+ Copilot rounds. |
+| PR #366 MERGED @ ad6b979 | human | complete | Merged (squash). Branch `docs/claude-md-jracloud-95368-followup`. CLAUDE.md Gotcha + AI Agent Note for JRACLOUD-95368 + citation-validation discipline. Copilot R1=0. Closes #364 follow-up. |
+
+### Summary
+
+F1d round-2 convergence for issue #365 persisted. Round 2 triggered by user-approved
+scope expansion: extend dedupe from `search_issue_keys` only (v0.1.8) to include
+`search_issues` symmetric dedupe (v0.1.12). 6 passes (P12-P17); 2 counter resets;
+3/3 CLEAN at P15-P16-P17. Key round-2 findings: caller-list factual errors (P13),
+BC semantic mis-anchoring → BC-2.6.051 introduced (P13), BC count propagation
+BLOCKING exact-edits missing (P14), product-owner scope violation (direct BC file
+edits during F1d) reverted by orchestrator and reframed in v0.1.12 (P14 mid-pass).
+2 drift items added: PG-365-1 (BC Trace field stale-count pattern) and PG-365-2
+(F1d adversary citation-verification scope — engine-level follow-up).
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| state-manager | Write per-pass files P12-P17 | .factory/cycles/cycle-001/adversarial-reviews/issue-365-search-issue-keys-dedupe/pass-12..pass-17.md |
+| state-manager | Update CONVERGENCE.md with round-2 trajectory and themes | .factory/cycles/cycle-001/adversarial-reviews/issue-365-search-issue-keys-dedupe/CONVERGENCE.md |
+| state-manager | Update STATE.md Phase Progress row for #365 | STATE.md |
+| state-manager | Update STATE.md Current Phase Steps (5 rows; archive 2 displaced rows here) | STATE.md + burst-log.md |
+| state-manager | Add drift items PG-365-1 and PG-365-2 to STATE.md | STATE.md |
+| state-manager | Update STATE.md Session Resume Checkpoint | STATE.md |
+| state-manager | Update Phase 3-adv Convergence Tracker for #365 round-2 | STATE.md |
+| state-manager | Bump Last Updated to 2026-05-15 | STATE.md |
+
+**Outcome:** STATE.md reflects #365 F1d ROUND-2 CONVERGED at v0.1.12 (17 total passes,
+spec v0.1.0→v0.1.12). F1-gate round-2 awaiting human approval. 2 new drift items
+(PG-365-1, PG-365-2) recorded with explicit targets per S-7.02 deferral-with-target
+requirement.
