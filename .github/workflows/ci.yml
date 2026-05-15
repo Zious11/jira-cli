@@ -74,6 +74,21 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
+  spec-guard:
+    name: Spec Guards (BC counts + no numeric test counts)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+      - name: Fetch factory-artifacts branch (.factory/specs/prd/)
+        run: |
+          git fetch origin factory-artifacts
+          git worktree add .factory factory-artifacts
+      - name: check-spec-counts (DRIFT-001)
+        run: bash scripts/check-spec-counts.sh
+      - name: check-bc-no-numeric-test-counts (PG-365-1)
+        run: bash scripts/check-bc-no-numeric-test-counts.sh
+
   security:
     name: Secret Scan (gitleaks)
     runs-on: ubuntu-latest
