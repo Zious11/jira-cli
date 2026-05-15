@@ -26,13 +26,14 @@ is detected and the guard fires — OR before the limit-truncation check fires.
 
 For `search_issue_keys`: the current no-dedupe contract is pinned by test 13
 in `tests/search_issue_keys.rs`. This feature flips that contract: after this
-change, `all_keys` is deduplicated in-place on both the guard-abort path and
-the limit-truncation path, immediately before the relevant `break;`.
+change, `all_keys` is deduplicated on all exit paths (guard-abort,
+limit-truncation, and cursor-exhaustion) via an incremental `seen_keys` HashSet
+maintained outside the loop — only newly-seen keys are appended.
 
 For `search_issues`: the same root cause (JRACLOUD-95368) applies. DP-4
 ("symmetric treatment for `search_issues` is out of scope") is reversed by user
-decision. `all_issues` is deduplicated in-place using `issue.key` as the
-dedupe key on the same per-iteration schedule as `search_issue_keys`. This
+decision. `all_issues` is deduplicated via the same incremental seen_keys
+approach (keyed on `issue.key`) as `search_issue_keys`. This
 lets the `SearchResult` rustdoc drop the "may contain duplicate issues" warning,
 simplifying the public contract and eliminating a latent bug for future callers
 that adopt `+1` over-fetch with `search_issues`.
@@ -161,14 +162,13 @@ bug on all paths.
 Justification:
 - The bug is real and reproducible on the truncation path under drift.
 - The allocation cost remains negligible (O(N²/page_size) across all iterations,
-  ≤ 5500 operations + 1000 String clones for a worst-case N=1001 fetch at 100
-  items/page, because `HashSet::retain` runs over the entire accumulated
-  `all_keys` vec — which grows monotonically — on every iteration, not just
-  the latest page). Per-iteration dedupe is required for **correctness** (must
-  run before the limit-truncation check fires), not chosen for cost-efficiency.
-  A single post-loop O(N) dedupe would be cheaper but cannot fix the
-  spurious-truncation bug because the truncation check would already have
-  fired pre-dedupe.
+  ≤ 1001 unique-key insertions for a worst-case N=1001 fetch at 100 items/page,
+  because the incremental seen_keys HashSet only stores unique keys — O(N) total
+  across all pages; no per-iteration Vec rescan). Per-iteration dedupe (before
+  the break-decision checks) is required for **correctness**, not just chosen
+  for cost-efficiency. A single post-loop O(N) dedupe would be cheaper but
+  cannot fix the spurious-truncation bug because the truncation check would
+  already have fired pre-dedupe.
 - The behavioral surface is slightly larger than DP-2's literal framing but
   strictly correct: deduplication is a monotone improvement that cannot break
   callers (it produces fewer or equal keys, never more).
@@ -209,9 +209,10 @@ iteration insertion point is the same as for `search_issue_keys` — after
 
 The new contract, replacing the current no-dedupe pin:
 
-**All exit paths:** `all_keys` is deduplicated in-place (order-preserving,
-first-occurrence wins, using `HashSet` retain) on every loop iteration,
-after `all_keys.extend(...)` and before any break-decision check. This means:
+**All exit paths:** `all_keys` is deduplicated on every loop iteration via
+an incremental `seen_keys: HashSet<String>` maintained outside the loop —
+only newly-seen keys are appended (order-preserving, first-occurrence wins),
+and the check runs before any break-decision. This means:
 
 - `all_keys` is deduplicated before the limit-truncation check (`all_keys.len()
   >= max`). If drift caused a page to emit duplicates, `all_keys.len()` reflects
@@ -229,11 +230,11 @@ after `all_keys.extend(...)` and before any break-decision check. This means:
 - The stderr warning text is unchanged — the `JRACLOUD-95368` literal is still
   emitted (and pinned by `test_search_issue_keys_stderr_emits_jracloud_95368_literal`).
 
-**Pure cursor-exhaustion path** (loop exits via `!page_has_more`): dedupe
-runs on the final page's data as part of the per-iteration dedupe. No
-additional action needed. This path cannot produce cross-page duplicates in
-normal operation; the per-iteration dedupe is a harmless no-op when no
-duplicates exist.
+**Pure cursor-exhaustion path** (loop exits via `!page_has_more`): the
+incremental seen_keys check runs on the final page's data before the loop
+exits. No additional action needed. This path cannot produce cross-page
+duplicates in normal operation; the dedup insert is a no-op when no
+duplicate keys appear.
 
 **Limit-truncation path** (loop exits via `all_keys.len() >= max`): dedupe
 runs before the truncation check on each iteration. `all_keys.truncate(max)`
@@ -245,13 +246,12 @@ correct unique-key count on all paths without any code change.
 
 ### `search_issues`
 
-**All exit paths:** `all_issues` is deduplicated in-place on every loop
-iteration, after `all_issues.extend(page.issues)` and before any
-break-decision check. Dedupe key: `issue.key` (a `String` field). Because
-`Issue` does not impl `Hash`, the retain pattern uses a `HashSet<String>`
-storing cloned keys — the same approach as `search_issue_keys`, with the
-difference that the HashSet values are derived from `issue.key`, not from the
-element itself. This means:
+**All exit paths:** `all_issues` is deduplicated on every loop iteration via
+an incremental `seen_keys: HashSet<String>` maintained outside the loop —
+only newly-seen issues (keyed by `issue.key`) are appended (order-preserving,
+first-occurrence wins), and the check runs before any break-decision. Because
+`Issue` does not impl `Hash`, the HashSet stores cloned `issue.key` strings,
+not Issue structs — the same approach as `search_issue_keys`. This means:
 
 - `all_issues` is deduplicated before the limit-truncation check
   (`all_issues.len() >= max`). Drift-induced issue duplicates do not inflate
@@ -401,7 +401,7 @@ if !page_has_more {
 // GUARD: detect repeated cursor token (next == prev) → abort + warn.
 if next_cursor.is_some() && next_cursor == prev_cursor {
     eprintln!("[jr] WARNING: ...");
-    // [NOTE] all_issues is already deduped by the per-iteration dedupe above.
+    // [NOTE] all_issues is already deduped by the incremental seen_keys HashSet.
     // No additional dedupe call needed here.
     more_available = true;
     break;
@@ -1071,22 +1071,21 @@ F3 implementer must add BC-2.6.051 immediately after BC-2.6.050 in
 `.factory/specs/prd/bc-2-issue-read.md`:
 
 ```
-#### BC-2.6.051: `client.search_issues(jql, limit, fields)` deduplicates results in-place on all exit paths (JRACLOUD-95368 mitigation)
+#### BC-2.6.051: `client.search_issues(jql, limit, fields)` deduplicates results on all exit paths (JRACLOUD-95368 mitigation)
 
 **Confidence**: HIGH
 **Source**: issue #365; spec at `docs/specs/2026-05-14-search-issue-keys-dedupe.md`
 **Subject**: Issue read (API layer — full-body JQL search)
-**Behavior**: On every page-fetch iteration, after extending `all_issues` and
-before any break-decision check, `search_issues` deduplicates `all_issues`
-in-place using order-preserving, first-occurrence-wins deduplication (HashSet
-retain keyed on `issue.key`; `Issue` does not impl `Hash` so key strings are
-cloned). All exit paths (guard-abort, limit-truncation, cursor-exhaustion)
-therefore return a duplicate-free `issues` vec. `SearchResult.has_more` semantics
-are unchanged — `has_more = true` on guard-abort regardless of dedupe. The
-`SearchResult` rustdoc "may contain duplicate issues" warning is dropped; see
-Doc and Spec Fallout in `docs/specs/2026-05-14-search-issue-keys-dedupe.md`.
-Introduced in #365. For the symmetric `search_issue_keys` dedupe contract, see
-BC-2.6.050.
+**Behavior**: An incremental `seen_keys: HashSet<String>` maintained outside
+the pagination loop ensures only newly-seen issues (keyed on `issue.key`;
+`Issue` does not impl `Hash` so key strings are cloned) are appended to
+`all_issues`. All exit paths (guard-abort, limit-truncation, cursor-exhaustion)
+therefore return a duplicate-free `issues` vec in first-occurrence order.
+`SearchResult.has_more` semantics are unchanged — `has_more = true` on
+guard-abort regardless of dedupe. The `SearchResult` rustdoc "may contain
+duplicate issues" warning is dropped; see Doc and Spec Fallout in
+`docs/specs/2026-05-14-search-issue-keys-dedupe.md`. Introduced in #365.
+For the symmetric `search_issue_keys` dedupe contract, see BC-2.6.050.
 **Trace**: `src/api/jira/issues.rs::search_issues` (impl); `cli/issue/list.rs`,
 `cli/board.rs`, `cli/queue.rs` (callers); `tests/rate_limit_cap_tests.rs` or
 `tests/search_issues_dedupe.rs` (new dedupe tests added by #365)
@@ -1119,7 +1118,7 @@ BC-2.6.051 body entry (`#### BC-2.6.051:` heading) to this file:
 | Line 9 `sections:` entry | `bc-2-issue-read.md (92 BCs cumulative; 50 individually-bodied)` | `(93 BCs cumulative; 51 individually-bodied)` |
 | Section 2 header | `## Section 2: Issue Read (bc-2-issue-read.md) — 92 BCs cumulative; 50 individually-bodied` | `93/51` |
 | 2.6 subsection header | `### 2.6 API Layer (4 BCs: BC-2.6.047..050)` | `(5 BCs: BC-2.6.047..051)` |
-| After BC-2.6.050 row | _(no row)_ | New row: `\| BC-2.6.051 \| \`client.search_issues(jql, limit, fields)\` deduplicates results in-place on all exit paths (JRACLOUD-95368 mitigation) \| — (issue #365) \| tests/rate_limit_cap_tests.rs; tests/search_issues_dedupe.rs \| HIGH \|` |
+| After BC-2.6.050 row | _(no row)_ | New row: `\| BC-2.6.051 \| \`client.search_issues(jql, limit, fields)\` deduplicates results on all exit paths (JRACLOUD-95368 mitigation) \| — (issue #365) \| tests/rate_limit_cap_tests.rs; tests/search_issues_dedupe.rs \| HIGH \|` |
 | Totals table `2: Issue Read` row | `92 \| 50` | `93 \| 51` |
 | Totals table `\*\*Total\*\*` row | `\*\*546\*\* \| \*\*314\*\*` | `\*\*547\*\* \| \*\*315\*\*` |
 | Canonical total note | `Canonical total is \*\*546\*\*` | `\*\*547\*\*` (+ append `+1 BC-2.6.051 added 2026-05-14 via issue #365`) |
@@ -1159,20 +1158,20 @@ Items entry separately.
 
 ## Risks
 
-1. **Allocation cost at n ≤ 100 per iteration (negligible).**
-   With per-iteration dedupe, the `HashSet::with_capacity(all_keys.len())`
-   (or `all_issues.len()`) allocation is sized to the current accumulated
-   count at each iteration, not the final total. For typical operation
-   (≤10 pages, ≤100 items/page), the HashSet is never larger than 1001
-   entries (BULK_MAX_KEYS=1000 + one-over-fetch) — confirmed: `BULK_MAX_KEYS`
-   is defined as `1000` at `src/api/jira/bulk.rs:37`. For Jira keys
-   (7–12 ASCII chars), each String clone is a small heap allocation. Total
-   allocation is approximately 24 KB in the worst case for
-   `search_issue_keys` and ~25 KB for `search_issues` (which clones
-   key strings from Issue structs, not Issue structs directly) — negligible
-   on any modern system. This path only runs when drift is detected; normal
-   (non-drift) pages produce no duplicates so the `retain` closure exits
-   early for all elements after the first pass. Risk: negligible. Accepted.
+1. **Allocation cost (single HashSet per call, negligible).**
+   The incremental `seen_keys: HashSet<String>` is allocated once per
+   function call (outside the loop) and grows as unique keys are inserted.
+   For typical operation (≤10 pages, ≤100 items/page), the HashSet holds
+   at most 1001 entries (BULK_MAX_KEYS=1000 + one-over-fetch) — confirmed:
+   `BULK_MAX_KEYS` is defined as `1000` at `src/api/jira/bulk.rs:37`. For
+   Jira keys (7–12 ASCII chars), each String clone is a small heap allocation.
+   Total allocation is approximately 24 KB in the worst case for
+   `search_issue_keys` and ~25 KB for `search_issues` (which clones key
+   strings from Issue structs, not Issue structs directly) — negligible on
+   any modern system. The HashSet lives for the duration of the function call
+   and is dropped after the loop completes. Normal (non-drift) pages produce
+   no duplicates so insert attempts on seen keys return false immediately
+   (no structural work). Risk: negligible. Accepted.
 
 2. **~~Behavioral asymmetry between `search_issue_keys` (dedupes) and
    `search_issues` (does not).~~** **RESOLVED in v0.1.9.**
