@@ -20,22 +20,23 @@ fi
 
 # Match patterns like:
 #   "16 wiremock tests"
-#   "15 library tokio"
+#   "15 library tests"
 #   "1 subprocess tests"
 #   "3 tests"
 #   "69 unit tests"
+#   "4 new dedupe tests"
 # in lines starting with "**Trace**:" (the BC Trace field marker).
 # Be specific to Trace fields to avoid false positives from spec body prose
 # that may mention test counts in passing (e.g., "the existing 26 unit tests
 # for this BC are in tests/foo.rs").
 #
 # Pattern breakdown:
-#   \b[0-9]+\b  — a bare integer word-boundary-bounded
-#   \s+         — whitespace separator
-#   (\w+\s+)?   — optional category word (wiremock, unit, tokio, etc.)
-#   tests?\b    — "test" or "tests"
+#   \b[0-9]+\b       — a bare integer word-boundary-bounded
+#   \s+              — whitespace separator
+#   (\w+\s+){0,3}    — up to 3 optional adjective words (unit, new dedupe, etc.)
+#   tests?\b         — "test" or "tests"
 
-PATTERN='\b[0-9]+\s+(\w+\s+)?tests?\b'
+PATTERN='\b[0-9]+\s+(\w+\s+){0,3}tests?\b'
 
 violations=$(grep -nE '^\*\*Trace\*\*:' "$BC_DIR"/bc-*.md 2>/dev/null \
   | grep -E "$PATTERN" \
