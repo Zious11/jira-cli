@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # scripts/check-bc-no-numeric-test-counts.sh
-# Enforce PG-365-1 convention: BC `Trace:` fields MUST NOT contain numeric test counts.
-# Numeric counts drift as tests are added — qualitative descriptions are stable.
+# Enforce PG-365-1 convention: BC `Trace:` and `Source:` fields MUST NOT contain numeric
+# test counts. Numeric counts drift as tests are added — qualitative descriptions are stable.
 # Sibling to scripts/check-spec-counts.sh.
 #
 # Exit codes:
 #   0 — no violations
-#   1 — one or more Trace fields contain numeric test counts
-#   2 — BC directory not found
+#   1 — one or more Trace/Source fields contain numeric test counts
+#   2 — BC directory not found or contains no bc-*.md files
 
 set -euo pipefail
 
@@ -15,6 +15,14 @@ BC_DIR=".factory/specs/prd"
 
 if [ ! -d "$BC_DIR" ]; then
   echo "ERROR: BC directory not found: $BC_DIR" >&2
+  exit 2
+fi
+
+# Explicitly verify at least one bc-*.md file exists so the guard cannot
+# pass silently when the glob fails to expand (e.g. misconfigured worktree).
+bc_files=("$BC_DIR"/bc-*.md)
+if [ ! -f "${bc_files[0]}" ]; then
+  echo "ERROR: no bc-*.md files found in $BC_DIR — nothing to scan" >&2
   exit 2
 fi
 
