@@ -411,7 +411,7 @@ async fn test_search_issues_repeated_cursor_abort_sets_has_more_true() {
 //
 // Setup: page 1 returns [TEST-1], page 2 returns [TEST-1, TEST-2] with the
 // same nextPageToken. Combined before dedupe: [TEST-1, TEST-1, TEST-2].
-// After per-iteration HashSet retain (keyed on issue.key): [TEST-1, TEST-2].
+// After incremental seen_keys HashSet dedupe (keyed on issue.key): [TEST-1, TEST-2].
 // Guard fires; has_more=true.
 //
 // Mock disambiguation: page-1 matcher uses body_partial_json({"jql": "q"}) +
@@ -500,8 +500,8 @@ async fn test_search_issues_repeated_cursor_abort_dedupes() {
         .await
         .expect("guard must abort gracefully");
 
-    // After per-iteration HashSet retain keyed on issue.key: [TEST-1, TEST-2].
-    // The pre-dedupe raw vec was [TEST-1, TEST-1, TEST-2].
+    // Dedupe contract: [TEST-1, TEST-2] — incremental seen_keys HashSet rejects
+    // the duplicate TEST-1. The pre-dedup candidate list was [TEST-1, TEST-1, TEST-2].
     assert_eq!(
         result
             .issues
@@ -525,7 +525,7 @@ async fn test_search_issues_repeated_cursor_abort_dedupes() {
 // full Issue bodies. Page 1 returns [TEST-1], page 2 returns [TEST-2, TEST-1]
 // (non-consecutive duplicate). Combined before dedupe: [TEST-1, TEST-2, TEST-1].
 // Vec::dedup() would return [TEST-1, TEST-2, TEST-1] unchanged (non-adjacent).
-// HashSet retain correctly returns [TEST-1, TEST-2].
+// Incremental seen_keys HashSet correctly returns [TEST-1, TEST-2].
 //
 // Traces to BC-2.6.051 (AC-003 of issue #365).
 // ---------------------------------------------------------------------------
@@ -568,8 +568,9 @@ async fn test_search_issues_dedupes_non_consecutive_across_pages() {
         .await
         .expect("guard must abort gracefully");
 
-    // After per-iteration HashSet retain: [TEST-1, TEST-2].
-    // Vec::dedup() would incorrectly return [TEST-1, TEST-2, TEST-1] unchanged.
+    // Dedupe contract: [TEST-1, TEST-2] — incremental seen_keys HashSet rejects
+    // the non-adjacent duplicate TEST-1. Vec::dedup() would incorrectly return
+    // [TEST-1, TEST-2, TEST-1] unchanged (consecutive-only).
     assert_eq!(
         result
             .issues

@@ -167,9 +167,12 @@ impl JiraClient {
 
         // Incremental order-preserving dedupe: JRACLOUD-95368 drift can emit the
         // same issue on multiple pages. Issue does not impl Hash so we key on
-        // issue.key (String). Maintained outside the loop so each key is hashed
-        // exactly once across all pages — O(N) total vs the O(N²) that a
-        // per-iteration retain+rebuild would incur on large result sets. See #365.
+        // issue.key (String). Maintained outside the loop so each unique key is
+        // stored once and we avoid rescanning the accumulated Vec on every page —
+        // O(N) total vs the O(N²) that a per-iteration retain+rebuild would
+        // incur on large result sets. Duplicates still get hashed on insert
+        // attempts (HashSet::insert always hashes its argument) but are never
+        // appended to all_issues. See #365.
         let mut seen_keys: HashSet<String> = HashSet::new();
 
         // Anti-loop guard: protect against Jira Cloud /rest/api/3/search/jql
@@ -213,7 +216,8 @@ impl JiraClient {
             let next_cursor = page.next_page_token.clone();
 
             // Append only issues not yet seen — first-occurrence order preserved.
-            // `seen_keys` lives outside the loop so no key is ever hashed twice.
+            // `seen_keys` lives outside the loop; unique keys are stored once
+            // and the accumulated Vec is never rescanned per-iteration.
             for issue in page.issues {
                 if seen_keys.insert(issue.key.clone()) {
                     all_issues.push(issue);
@@ -311,11 +315,14 @@ impl JiraClient {
         let mut more_available = false;
 
         // Incremental order-preserving dedupe: JRACLOUD-95368 drift can emit the
-        // same key on multiple pages. Maintained outside the loop so each key is
-        // hashed exactly once across all pages — O(N) total vs the O(N²) that a
-        // per-iteration retain+rebuild would incur on large result sets. Must be
-        // applied before the limit-truncation check so `all_keys.len()` reflects
-        // the unique-key count when the truncation sentinel fires. See #365.
+        // same key on multiple pages. Maintained outside the loop so each unique
+        // key is stored once and we avoid rescanning the accumulated Vec on every
+        // page — O(N) total vs the O(N²) that a per-iteration retain+rebuild
+        // would incur on large result sets. Duplicates still get hashed on insert
+        // attempts (HashSet::insert always hashes its argument) but are never
+        // appended to all_keys. Applied before the limit-truncation check so
+        // `all_keys.len()` reflects the unique-key count when the truncation
+        // sentinel fires. See #365.
         let mut seen_keys: HashSet<String> = HashSet::new();
 
         // Anti-loop guard: protect against Jira Cloud /rest/api/3/search/jql
@@ -343,7 +350,8 @@ impl JiraClient {
             let next_cursor = page.next_page_token.clone();
 
             // Append only keys not yet seen — first-occurrence order preserved.
-            // `seen_keys` lives outside the loop so no key is ever hashed twice.
+            // `seen_keys` lives outside the loop; unique keys are stored once
+            // and the accumulated Vec is never rescanned per-iteration.
             for key in page.issues.into_iter().map(|r| r.key) {
                 if seen_keys.insert(key.clone()) {
                     all_keys.push(key);

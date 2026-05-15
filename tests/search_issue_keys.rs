@@ -362,8 +362,9 @@ async fn test_search_issue_keys_repeated_cursor_abort_dedupes() {
 
     // Dedupe contract: `result.keys` MUST equal exactly ["X-1", "X-2"] —
     // search_issue_keys MUST dedupe on repeated-cursor abort while preserving
-    // first-occurrence order. The pre-dedupe raw vec was ["X-1", "X-1", "X-2"];
-    // after per-iteration HashSet retain the duplicate X-1 is removed.
+    // first-occurrence order. The pre-dedupe candidate keys were ["X-1", "X-1",
+    // "X-2"]; the incremental seen_keys HashSet rejects the duplicate X-1 so
+    // it is never appended to all_keys.
     assert_eq!(
         result.keys,
         vec!["X-1".to_string(), "X-2".to_string()],
@@ -387,8 +388,8 @@ async fn test_search_issue_keys_repeated_cursor_abort_dedupes() {
 // Setup: page 1 returns ["X-1"], page 2 returns ["X-2", "X-1"] (with same
 // nextPageToken, triggering the guard). Combined before dedupe: ["X-1", "X-2",
 // "X-1"]. Vec::dedup() would return ["X-1", "X-2", "X-1"] unchanged (the
-// two X-1 entries are not adjacent). HashSet retain correctly returns
-// ["X-1", "X-2"].
+// two X-1 entries are not adjacent). The incremental seen_keys HashSet
+// correctly returns ["X-1", "X-2"].
 //
 // Traces to BC-2.6.050 (AC-001 of issue #365).
 // ---------------------------------------------------------------------------
@@ -437,9 +438,9 @@ async fn test_search_issue_keys_dedupes_non_consecutive_across_pages() {
         .await
         .expect("guard must abort gracefully");
 
-    // After per-iteration HashSet retain: ["X-1", "X-2"].
-    // Vec::dedup() would incorrectly return ["X-1", "X-2", "X-1"] unchanged
-    // because the two X-1 entries are non-adjacent.
+    // Dedupe contract: ["X-1", "X-2"] — incremental seen_keys HashSet rejects
+    // the non-adjacent duplicate X-1. Vec::dedup() would incorrectly return
+    // ["X-1", "X-2", "X-1"] unchanged (consecutive-only).
     assert_eq!(
         result.keys,
         vec!["X-1".to_string(), "X-2".to_string()],

@@ -125,8 +125,8 @@ incorrectly claimed `itertools::unique()` is consecutive-only (conflation with
 against docs.rs. The `itertools::Itertools::unique` documentation is
 unambiguous: it is a global (non-consecutive) dedupe with `Clone + Eq + Hash`
 bounds. See `.factory/research/issue-365-design-validation.md` §Q1 §C.2.
-This does not affect the chosen algorithm (HashSet retain wins on zero-new-dependency
-grounds regardless) but it is recorded here because it is a live Perplexity
+This does not affect the chosen algorithm (incremental HashSet insert wins on
+zero-new-dependency grounds regardless) but it is recorded here because it is a live Perplexity
 accuracy gap for Rust crate method semantics.
 
 ## Design Divergences from Research
@@ -277,54 +277,58 @@ replacement text.
 
 ### Algorithm
 
-Apply `HashSet` retain pattern once per loop iteration, immediately after
-`all_keys.extend(...)` and before any break-decision check:
+Use an incremental `seen_keys: HashSet<String>` maintained **outside** the
+loop. On each page, push only keys/issues not yet in `seen_keys` — preserving
+first-occurrence order without rescanning the accumulated Vec:
 
 ```rust
-// After: all_keys.extend(page.issues.into_iter().map(|r| r.key));
-// Before: if let Some(max) = limit { ... } and !page_has_more check.
+// BEFORE the loop:
+let mut seen_keys: HashSet<String> = HashSet::new();
 
-// Per-iteration order-preserving dedupe: JRACLOUD-95368 drift can emit the
-// same key on multiple pages (or within a single page under extreme drift).
-// Vec::dedup() is wrong here (consecutive-only); HashSet retain is correct.
-// Per-iteration cost: O(all_keys.len()) where all_keys grows across iterations;
-// total work O(N²/page_size); negligible at N≤1001. Required for correctness:
-// must run before the limit-truncation check so `all_keys.len()` reflects
-// unique-key count when the truncation sentinel fires. A cheaper post-loop
-// O(N) dedupe would not fix the spurious-truncation bug.
-// search_issues applies the same dedupe pattern keyed on issue.key — see #365.
-use std::collections::HashSet;
-let mut seen: HashSet<&str> = HashSet::with_capacity(all_keys.len());
-// Note: using &str into seen to avoid clones; retain uses &T already.
-// However, since seen must outlive the retain closure and borrow-checker
-// requires seen to not borrow all_keys while all_keys is mutated,
-// we use the String-clone form for correctness:
-let mut seen: HashSet<String> = HashSet::with_capacity(all_keys.len());
-all_keys.retain(|k| seen.insert(k.clone()));
+// INSIDE the loop, after the page fetch:
+// For search_issue_keys:
+for key in page.issues.into_iter().map(|r| r.key) {
+    if seen_keys.insert(key.clone()) {
+        all_keys.push(key);
+    }
+}
+
+// For search_issues (keyed on issue.key; Issue does not impl Hash):
+for issue in page.issues {
+    if seen_keys.insert(issue.key.clone()) {
+        all_issues.push(issue);
+    }
+}
 ```
 
 The `use std::collections::HashSet;` import belongs at the top of the file
-alongside other `use` declarations, not inside the loop — the inline form is
-shown for readability only.
+alongside other `use` declarations.
 
-> **Implementation note:** the two `let mut seen` lines in the pseudocode
-> above illustrate the alternative considered; only the second (`HashSet<String>`)
-> form is used. The `HashSet<&str>` form would require a borrow on `all_keys`
-> inside `retain`'s `&mut self` call, which is not permissible under Rust's
-> borrow rules. The `HashSet<String>` form with `k.clone()` is idiomatic and
-> correct at n ≤ 100 per iteration.
+**Why incremental (not per-iteration retain+rebuild)?** The earlier design
+draft used `Vec::retain` with a locally-built `HashSet` after each
+`all_keys.extend(...)`. That approach rescans the entire accumulated Vec on
+every page — O(N²/page_size) total work. For `search_issue_keys(..., None)`
+(unbounded) this grows quadratically with result-set size. The incremental
+approach adds each key at most once across all pages — O(N) total (each
+unique key stored once; duplicate keys are still hashed on `insert` attempts
+but are never appended). Required for correctness: the dedup runs before the
+limit-truncation check so `all_keys.len()` reflects unique-key count when the
+truncation sentinel fires. `Vec::dedup()` is wrong regardless (consecutive-only;
+JRACLOUD-95368 drift can emit the same key non-consecutively across pages).
 
 ### Placement within the loop
 
-Revised loop body structure (showing insertion point):
+Revised loop body structure (showing insertion point for `search_issue_keys`):
 
 ```
-all_keys.extend(page.issues.into_iter().map(|r| r.key));
+// [NEW — outside the loop, before it begins]
+let mut seen_keys: HashSet<String> = HashSet::new();
 
-// [NEW] Per-iteration order-preserving dedupe (see #365)
-{
-    let mut seen: HashSet<String> = HashSet::with_capacity(all_keys.len());
-    all_keys.retain(|k| seen.insert(k.clone()));
+// INSIDE the loop, after page fetch:
+for key in page.issues.into_iter().map(|r| r.key) {
+    if seen_keys.insert(key.clone()) {
+        all_keys.push(key);
+    }
 }
 
 if let Some(max) = limit {
@@ -341,7 +345,7 @@ if !page_has_more {
 // GUARD: detect repeated cursor token (next == prev) → abort + warn.
 if next_cursor.is_some() && next_cursor == prev_cursor {
     eprintln!("[jr] WARNING: ...");
-    // [NOTE] all_keys is already deduped by the per-iteration dedupe above.
+    // [NOTE] all_keys is already deduped by the incremental seen_keys HashSet.
     // No additional dedupe call needed here.
     more_available = true;
     break;
@@ -349,37 +353,37 @@ if next_cursor.is_some() && next_cursor == prev_cursor {
 ```
 
 The guard-abort block's inline comment ("this function does NOT dedupe") must
-be replaced with a note that the per-iteration dedupe (applied above) already
-handled it. See "Doc and Spec Fallout" below for the precise text changes.
+be replaced with a note that the incremental seen_keys HashSet (maintained
+outside the loop) already handled it. See "Doc and Spec Fallout" below for the
+precise text changes.
 
 ### Implementation Outline — `search_issues`
 
 **Algorithm** (parallel to `search_issue_keys`, keyed on `issue.key`):
 
 ```rust
-// After: all_issues.extend(page.issues);
-// Before: if let Some(max) = limit { ... } and !page_has_more check.
+// BEFORE the loop:
+let mut seen_keys: HashSet<String> = HashSet::new();
 
-// Per-iteration order-preserving dedupe: JRACLOUD-95368 drift can emit the
-// same issue on multiple pages. Issue does not impl Hash, so we key on
-// issue.key (String). HashSet<String> with cloned keys is correct and
-// idiomatic at n ≤ 100 per iteration. Applying dedupe before the
-// limit-truncation check ensures all_issues.len() reflects unique-issue count.
-{
-    let mut seen: HashSet<String> = HashSet::with_capacity(all_issues.len());
-    all_issues.retain(|i| seen.insert(i.key.clone()));
+// INSIDE the loop, after page fetch — Issue does not impl Hash, key on issue.key:
+for issue in page.issues {
+    if seen_keys.insert(issue.key.clone()) {
+        all_issues.push(issue);
+    }
 }
 ```
 
 **Placement within the `search_issues` loop body:**
 
 ```
-all_issues.extend(page.issues);
+// [NEW — outside the loop, before it begins]
+let mut seen_keys: HashSet<String> = HashSet::new();
 
-// [NEW] Per-iteration order-preserving dedupe (see #365)
-{
-    let mut seen: HashSet<String> = HashSet::with_capacity(all_issues.len());
-    all_issues.retain(|i| seen.insert(i.key.clone()));
+// INSIDE the loop, after page fetch:
+for issue in page.issues {
+    if seen_keys.insert(issue.key.clone()) {
+        all_issues.push(issue);
+    }
 }
 
 if let Some(max) = limit {
@@ -489,7 +493,7 @@ appears again, non-consecutively), page 2's response repeats `nextPageToken:
 ```rust
 // Page 1: returns ["X-1"] with nextPageToken "loop"
 // Page 2: returns ["X-2", "X-1"] with nextPageToken "loop" (repeated)
-// Guard fires. After HashSet retain: ["X-1", "X-2"].
+// Guard fires. After incremental seen_keys dedupe: ["X-1", "X-2"].
 // Vec::dedup() would incorrectly return ["X-1", "X-2", "X-1"].
 assert_eq!(result.keys, vec!["X-1".to_string(), "X-2".to_string()]);
 assert!(result.has_more);
@@ -544,8 +548,8 @@ test infrastructure at the implementer's discretion:
 
 1. **`test_search_issue_keys_guard_abort_empty_keys_no_panic`** — page 1
    returns `[]` (no keys) with `nextPageToken: "loop"`, page 2 returns `[]`
-   with the same token. Guard fires with `all_keys` empty. `HashSet::retain` on
-   an empty Vec is a no-op; this test pins that no panic occurs and
+   with the same token. Guard fires with `all_keys` empty. The incremental
+   seen_keys loop over an empty page is a no-op; this test pins that no panic occurs and
    `result.keys == []`, `result.has_more == true`.
 
 2. **`test_search_issue_keys_guard_abort_single_key_no_dup`** — page 1 returns
@@ -629,7 +633,7 @@ Scenario: page 1 returns `[TEST-1]`, page 2 returns `[TEST-2, TEST-1]` (TEST-1
 appears again, non-consecutively), page 2's `nextPageToken` repeats. Guard fires.
 
 ```rust
-// After HashSet retain keyed on issue.key: issues = [TEST-1, TEST-2].
+// After incremental seen_keys dedupe keyed on issue.key: issues = [TEST-1, TEST-2].
 // Vec::dedup() keyed on issue.key would leave [TEST-1, TEST-2, TEST-1]
 // unchanged (no adjacent duplicate key).
 assert_eq!(
@@ -840,8 +844,8 @@ Replace with:
 
 > `Guard-aborted: signal incomplete results via has_more=true so callers can
 > distinguish "clean exhaustion" from "repeated-cursor abort". As of #365,
-> all_issues is already deduplicated (keyed on issue.key) by the per-iteration
-> dedupe applied above (HashSet retain, order-preserving). No additional dedupe
+> all_issues is already deduplicated (keyed on issue.key) by the incremental
+> seen_keys HashSet maintained outside the loop. No additional dedupe
 > call is needed here.`
 
 ### `src/api/jira/issues.rs` — rustdoc update for `KeySearchResult` (lines 65–115)
@@ -913,8 +917,8 @@ currently says:
 Replace the entire comment block (lines 366–373) with:
 > `Guard-aborted: signal incomplete results via has_more=true so callers can
 > distinguish "clean exhaustion" from "repeated-cursor abort". As of #365,
-> all_keys is already deduplicated by the per-iteration dedupe applied above
-> (HashSet retain, order-preserving). No additional dedupe call is needed here.`
+> all_keys is already deduplicated by the incremental seen_keys HashSet
+> maintained outside the loop. No additional dedupe call is needed here.`
 
 ### `docs/specs/2026-05-13-search-issue-keys.md` — close-out note
 
@@ -1038,10 +1042,10 @@ Append to the **Behavior** field of BC-2.6.050 (after the existing sentence
 ending "...clamps `maxResults` per page to `.min(100)` for parity with
 `search_issues`."):
 
-> On every page-fetch iteration, after extending `all_keys` and before any
-> break-decision check, `search_issue_keys` deduplicates `all_keys` in-place
-> using order-preserving, first-occurrence-wins deduplication (HashSet retain,
-> keyed on the key string). All exit paths (guard-abort, limit-truncation,
+> On every page-fetch iteration, `search_issue_keys` appends only newly-seen
+> keys to `all_keys` using an incremental `seen_keys: HashSet<String>` (maintained
+> outside the loop) — order-preserving, first-occurrence-wins deduplication
+> keyed on the key string. All exit paths (guard-abort, limit-truncation,
 > cursor-exhaustion) therefore return a duplicate-free `keys` vec. Introduced
 > in #365. For the symmetric `search_issues` dedupe contract, see BC-2.6.051.
 
@@ -1129,9 +1133,9 @@ After applying all edits above, run `scripts/check-spec-counts.sh`. It must exit
 ### `CLAUDE.md` — updated
 
 The existing `CLAUDE.md` gotcha for JRACLOUD-95368 was updated in this PR to
-reflect that both `search_issue_keys` and `search_issues` now apply
-per-iteration order-preserving HashSet retain dedupe on all exit paths
-(implemented by issue #365). The gotcha text now states that `search_issue_keys`
+reflect that both `search_issue_keys` and `search_issues` now use an incremental
+`seen_keys` HashSet to deduplicate on all exit paths (implemented by issue #365).
+The gotcha text now states that `search_issue_keys`
 and `search_issues` return duplicate-free results and that the `#365` tracking
 item is closed. Earlier spec drafts said "no update required" because the dedupe
 was initially scoped as an implementation detail of `search_issue_keys` alone;
@@ -1184,14 +1188,13 @@ Items entry separately.
    local dedupe will do unnecessary work but not produce wrong results. The
    rustdoc update (see Doc and Spec Fallout) addresses this. Risk: low.
 
-4. **`Vec::retain` with HashSet requires one `clone()` per key per iteration.**
-   The `retain` closure takes `&String` (not `String`) because `Vec::retain`
-   uses `&T`. The `HashSet<String>` requires ownership for `insert`, so each
-   key must be cloned on the first time it is seen. An alternative using
-   `HashSet<&str>` would avoid clones but requires borrow-lifetime management
-   that complicates the closure (cannot borrow `all_keys` inside `retain`'s
-   `&mut self`). The clone cost is acceptable at n ≤ 100 per iteration.
-   Risk: negligible.
+4. **Incremental `seen_keys` insert requires one `clone()` per key candidate.**
+   `HashSet<String>::insert` requires ownership, so each key is cloned once when
+   passed to `insert`. Unique keys are cloned once (for `seen_keys`) and moved
+   into `all_keys`; duplicate keys are cloned once (for the `insert` call) and
+   then dropped. An alternative using `HashSet<&str>` would require lifetime
+   management across the mutable borrow on `all_keys`. The clone cost per
+   iteration is bounded by page size (≤ 100 items). Risk: negligible.
 
 5. **Per-iteration dedupe weakens the Apr 2025 maxResults-overshoot detector
    in a narrow triple-collision corner — applies to both functions.**
@@ -1318,4 +1321,4 @@ Scope). Spec-internal paraphrase blocks (`> **Implementer note:**`,
 against `docs.rs`; the adversary cannot re-verify without WebFetch (read-only tool
 profile). The claim is recorded here; its correctness is trusted from research-agent output
 (PG-365-2 describes the trust boundary). The claim does NOT affect the chosen algorithm
-(HashSet retain wins regardless).
+(incremental HashSet insert wins regardless).
