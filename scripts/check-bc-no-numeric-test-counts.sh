@@ -30,13 +30,19 @@ fi
 # that may mention test counts in passing (e.g., "the existing 26 unit tests
 # for this BC are in tests/foo.rs").
 #
-# Pattern breakdown:
-#   \b[0-9]+\b       — a bare integer word-boundary-bounded
-#   \s+              — whitespace separator
-#   (\w+\s+){0,3}    — up to 3 optional adjective words (unit, new dedupe, etc.)
-#   tests?\b         — "test" or "tests"
+# Pattern breakdown (POSIX ERE — portable across GNU grep and BSD grep):
+#   [0-9]+                       — a bare integer
+#   [[:space:]]+                 — whitespace separator
+#   ([[:alnum:]_]+[[:space:]]+){0,3}  — up to 3 optional adjective words
+#   tests?                       — "test" or "tests"
+#   ([^[:alnum:]]|$)             — not followed by an alphanumeric (avoids
+#                                  matching "tester", "testing")
+#
+# Note: \b, \w, \s are PCRE/GNU extensions not available in POSIX ERE or
+# BSD grep (macOS). Use [[:space:]], [[:alnum:]], and bracket-expression
+# boundaries for portability.
 
-PATTERN='\b[0-9]+\s+(\w+\s+){0,3}tests?\b'
+PATTERN='[0-9]+[[:space:]]+([[:alnum:]_]+[[:space:]]+){0,3}tests?([^[:alnum:]]|$)'
 
 violations=$(grep -nE '^\*\*Trace\*\*:' "$BC_DIR"/bc-*.md 2>/dev/null \
   | grep -E "$PATTERN" \
