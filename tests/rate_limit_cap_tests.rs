@@ -433,7 +433,7 @@ fn issue_body(key: &str) -> serde_json::Value {
             "priority": {"name": "Medium"},
             "assignee": null,
             "reporter": null,
-            "project": {"key": key.split('-').next().unwrap_or("TEST")},
+            "project": {"key": key.split('-').next().expect("split always yields at least one item")},
             "description": null,
             "created": "2026-01-01T00:00:00.000+0000",
             "updated": "2026-01-01T00:00:00.000+0000",

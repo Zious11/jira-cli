@@ -116,7 +116,7 @@ as the upstream mitigation.
 and JRACLOUD-95368 drift can emit the same key non-consecutively across pages
 (e.g., `X-1` on page 1, `X-2` on page 2, `X-1` again from page 2 before the
 cursor repeats — this is the load-bearing non-consecutive case demonstrated by
-the new `test_search_issue_keys_repeated_cursor_abort_dedupes_non_consecutive`
+the new `test_search_issue_keys_dedupes_non_consecutive_across_pages`
 test introduced below in the Test Diff section).
 
 **Research caveat (noted for adversary):** Perplexity confidently but
@@ -474,7 +474,7 @@ reference to this spec.
 
 ### New test — non-consecutive duplicate across pages (correctness pin for Vec::dedup-is-wrong)
 
-**Name:** `test_search_issue_keys_repeated_cursor_abort_dedupes_non_consecutive`
+**Name:** `test_search_issue_keys_dedupes_non_consecutive_across_pages`
 
 This test is the load-bearing correctness pin: it proves that `Vec::dedup()`
 would be wrong and that the `HashSet` retain approach handles non-consecutive
@@ -623,7 +623,7 @@ mirrors the `stuck_response` in `test_search_issues_repeated_cursor_abort_sets_h
 
 **Name:** `test_search_issues_dedupes_non_consecutive_across_pages`
 
-Mirrors `test_search_issue_keys_repeated_cursor_abort_dedupes_non_consecutive`.
+Mirrors `test_search_issue_keys_dedupes_non_consecutive_across_pages`.
 
 Scenario: page 1 returns `[TEST-1]`, page 2 returns `[TEST-2, TEST-1]` (TEST-1
 appears again, non-consecutively), page 2's `nextPageToken` repeats. Guard fires.

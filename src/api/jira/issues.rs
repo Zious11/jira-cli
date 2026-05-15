@@ -165,6 +165,13 @@ impl JiraClient {
 
         let mut more_available = false;
 
+        // Incremental order-preserving dedupe: JRACLOUD-95368 drift can emit the
+        // same issue on multiple pages. Issue does not impl Hash so we key on
+        // issue.key (String). Maintained outside the loop so each key is hashed
+        // exactly once across all pages — O(N) total vs the O(N²) that a
+        // per-iteration retain+rebuild would incur on large result sets. See #365.
+        let mut seen_keys: HashSet<String> = HashSet::new();
+
         // Anti-loop guard: protect against Jira Cloud /rest/api/3/search/jql
         // returning the same nextPageToken twice, which would otherwise cause
         // an infinite pagination loop. The documented root cause class —
@@ -204,14 +211,13 @@ impl JiraClient {
 
             let page_has_more = page.has_more();
             let next_cursor = page.next_page_token.clone();
-            all_issues.extend(page.issues);
 
-            // Per-iteration order-preserving dedupe: JRACLOUD-95368 drift can emit the
-            // same issue on multiple pages. Issue does not impl Hash, so we key on
-            // issue.key (String). See #365.
-            {
-                let mut seen: HashSet<String> = HashSet::with_capacity(all_issues.len());
-                all_issues.retain(|i| seen.insert(i.key.clone()));
+            // Append only issues not yet seen — first-occurrence order preserved.
+            // `seen_keys` lives outside the loop so no key is ever hashed twice.
+            for issue in page.issues {
+                if seen_keys.insert(issue.key.clone()) {
+                    all_issues.push(issue);
+                }
             }
 
             if let Some(max) = limit {
@@ -248,8 +254,8 @@ impl JiraClient {
                 // would silently be `false` despite the explicit
                 // "Some results may be missing" warning above. As of #365,
                 // all_issues is already deduplicated (keyed on issue.key) by
-                // the per-iteration dedupe applied above (HashSet retain,
-                // order-preserving). No additional dedupe call is needed here.
+                // the incremental seen_keys HashSet maintained outside the loop.
+                // No additional dedupe call is needed here.
                 more_available = true;
                 break;
             }
@@ -304,6 +310,14 @@ impl JiraClient {
 
         let mut more_available = false;
 
+        // Incremental order-preserving dedupe: JRACLOUD-95368 drift can emit the
+        // same key on multiple pages. Maintained outside the loop so each key is
+        // hashed exactly once across all pages — O(N) total vs the O(N²) that a
+        // per-iteration retain+rebuild would incur on large result sets. Must be
+        // applied before the limit-truncation check so `all_keys.len()` reflects
+        // the unique-key count when the truncation sentinel fires. See #365.
+        let mut seen_keys: HashSet<String> = HashSet::new();
+
         // Anti-loop guard: protect against Jira Cloud /rest/api/3/search/jql
         // returning the same nextPageToken twice (typically JRACLOUD-95368
         // live-data drift — `nextPageToken` encodes a non-snapshot position so
@@ -327,19 +341,13 @@ impl JiraClient {
 
             let page_has_more = page.has_more();
             let next_cursor = page.next_page_token.clone();
-            all_keys.extend(page.issues.into_iter().map(|r| r.key));
 
-            // Per-iteration order-preserving dedupe: JRACLOUD-95368 drift can emit the
-            // same key on multiple pages (or within a single page under extreme drift).
-            // Vec::dedup() is wrong here (consecutive-only); HashSet retain is correct.
-            // Per-iteration cost: O(all_keys.len()) growing across iterations; total
-            // O(N²/page_size); negligible at N≤1001. Required for correctness: must run
-            // before the limit-truncation check so `all_keys.len()` reflects unique-key
-            // count when the truncation sentinel fires. See #365.
-            // search_issues applies the same dedupe pattern keyed on issue.key.
-            {
-                let mut seen: HashSet<String> = HashSet::with_capacity(all_keys.len());
-                all_keys.retain(|k| seen.insert(k.clone()));
+            // Append only keys not yet seen — first-occurrence order preserved.
+            // `seen_keys` lives outside the loop so no key is ever hashed twice.
+            for key in page.issues.into_iter().map(|r| r.key) {
+                if seen_keys.insert(key.clone()) {
+                    all_keys.push(key);
+                }
             }
 
             if let Some(max) = limit {
@@ -377,8 +385,8 @@ impl JiraClient {
                      `ORDER BY key ASC` if none)."
                 );
                 // Guard-aborted: signal incomplete results via has_more=true. As of
-                // #365, all_keys is already deduplicated by the per-iteration dedupe
-                // applied above (HashSet retain, order-preserving). No additional
+                // #365, all_keys is already deduplicated by the incremental
+                // seen_keys HashSet maintained outside the loop. No additional
                 // dedupe call is needed here.
                 more_available = true;
                 break;
