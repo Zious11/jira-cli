@@ -1126,12 +1126,17 @@ After applying all edits above, run `scripts/check-spec-counts.sh`. It must exit
 
 ---
 
-### `CLAUDE.md` — no change required
+### `CLAUDE.md` — updated
 
-The existing `CLAUDE.md` entry for JRACLOUD-95368 describes the guard-abort
-behavior at the architectural level. The dedupe is an implementation detail of
-`search_issue_keys`; it does not change the gotcha-level behavior described in
-CLAUDE.md. No update required.
+The existing `CLAUDE.md` gotcha for JRACLOUD-95368 was updated in this PR to
+reflect that both `search_issue_keys` and `search_issues` now apply
+per-iteration order-preserving HashSet retain dedupe on all exit paths
+(implemented by issue #365). The gotcha text now states that `search_issue_keys`
+and `search_issues` return duplicate-free results and that the `#365` tracking
+item is closed. Earlier spec drafts said "no update required" because the dedupe
+was initially scoped as an implementation detail of `search_issue_keys` alone;
+the scope expanded to `search_issues` as well, and the CLAUDE.md gotcha is the
+canonical architectural reference for maintainers — it must stay in lockstep.
 
 ### BC-2.6.050 Trace field — pre-existing stale tech debt (NIT-4, process-gap, do not fix here)
 

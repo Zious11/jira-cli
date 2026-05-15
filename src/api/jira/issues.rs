@@ -33,23 +33,24 @@ const BASE_ISSUE_FIELDS: &[&str] = &[
 /// the result set may be incomplete (caller-limit truncation OR
 /// repeated-cursor guard abort).
 ///
+/// **Invariant:** `issues` is always returned duplicate-free (first-occurrence
+/// order preserved). `search_issues` applies per-iteration order-preserving
+/// deduplication keyed on `issue.key` on every exit path: limit-truncation,
+/// repeated-cursor guard abort, and clean cursor exhaustion (introduced in
+/// issue #365). Callers can rely on this guarantee regardless of which exit
+/// fires. To minimize live-data drift in the first place, use `key ASC` as a
+/// stable secondary sort (append `, key ASC` to an existing sort, or use
+/// `ORDER BY key ASC` if none — JQL allows only one ORDER BY clause) —
+/// Atlassian's KB mitigation for snapshot instability per JRACLOUD-95368.
+///
 /// `has_more` is set to `true` in two cases (parallel to [`KeySearchResult`]):
 ///
 /// 1. **Caller limit hit:** the caller supplied a `limit` and upstream still
-///    had rows available beyond that limit. No guard-induced duplicates in
-///    this case.
+///    had rows available beyond that limit.
 /// 2. **Repeated-cursor guard abort:** the anti-loop guard fired (upstream
 ///    returned the same `nextPageToken` twice — typically live-data drift
 ///    per JRACLOUD-95368), pagination was aborted with a stderr warning,
-///    and the result set may be **incomplete**. Duplicates are eliminated
-///    client-side on this path: `search_issues` applies a per-iteration
-///    order-preserving deduplication keyed on `issue.key` (introduced in
-///    issue #365). As of issue #365, `has_more = true` on the guard-abort path
-///    no longer implies that `issues` contains duplicates. Callers that need
-///    strict ordering should re-issue with `key ASC` as a stable secondary
-///    sort in the ORDER BY (append `, key ASC` to an existing sort, or use
-///    `ORDER BY key ASC` if none — JQL allows only one ORDER BY clause) —
-///    Atlassian's KB mitigation.
+///    and the result set may be **incomplete**.
 ///
 /// Pure cursor exhaustion (no limit set, upstream returns no
 /// `nextPageToken` — `CursorPage::has_more()` checks `next_page_token.is_some()`,
@@ -72,25 +73,25 @@ pub struct SearchResult {
 /// Rust SDK precedent surveyed in
 /// `.factory/research/issue-350-search-issue-keys-design.md`.
 ///
+/// **Invariant:** `keys` is always returned duplicate-free (order-preserving,
+/// first occurrence wins). `search_issue_keys` applies per-iteration
+/// order-preserving deduplication on every exit path: limit-truncation,
+/// repeated-cursor guard abort, and clean cursor exhaustion (introduced in
+/// issue #365). Callers can rely on this guarantee regardless of which exit
+/// fires. To minimize live-data drift in the first place, use `key ASC` as a
+/// stable secondary sort (append `, key ASC` to an existing sort, or use
+/// `ORDER BY key ASC` if none — JQL allows only one ORDER BY clause) —
+/// Atlassian's KB mitigation for snapshot instability per JRACLOUD-95368.
+///
 /// `has_more` is set to `true` in two cases:
 ///
 /// 1. **Caller limit hit:** the caller supplied a `limit` and upstream still
-///    had rows available beyond that limit. No guard-induced duplicates in
-///    this case (within-page dedupe is the server's responsibility — Jira
-///    does not document an explicit uniqueness guarantee, but does not
-///    typically emit within-page duplicates absent live mutation).
+///    had rows available beyond that limit.
 /// 2. **Repeated-cursor guard abort:** the anti-loop guard fired (upstream
 ///    returned the same `nextPageToken` twice — typically live-data drift
 ///    per JRACLOUD-95368, "nextPageToken pagination is not snapshot-stable
 ///    under live mutation"), pagination was aborted with a stderr warning,
-///    and the result set may be **incomplete**. Duplicates are eliminated
-///    client-side on this path via per-iteration order-preserving
-///    deduplication (introduced in issue #365). Callers should still prefer
-///    `key ASC` in the ORDER BY (append `, key ASC` to an existing sort,
-///    or use `ORDER BY key ASC` if none — JQL allows only one ORDER BY
-///    clause) — Atlassian's KB mitigation for snapshot instability.
-///    As of issue #365, `has_more = true` on the guard-abort path no longer
-///    implies that `keys` contains duplicates.
+///    and the result set may be **incomplete**.
 ///
 /// When `limit` is set, callers cannot distinguish case 1 from case 2 from
 /// `has_more` alone — the stderr warning fires only in case 2. When `limit`
