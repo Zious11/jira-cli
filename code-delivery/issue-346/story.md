@@ -13,15 +13,16 @@ nfr_anchors: []     # NFR-S-E (SHA-pinning hygiene), R-L12 (timeout gap) are REA
 adr_refs: []
 sd_refs: []
 files_modified:
-  - .github/workflows/ci.yml (add `mutants` job; PR-only trigger; --in-diff mode; timeout-minutes: 60)
+  - .github/workflows/ci.yml (add `mutants` job; PR-only trigger; --in-diff <diff-file> mode; timeout-minutes: 60)
   - .gitignore (add mutants.out/)
   - CLAUDE.md (Build & Test: add `cargo mutants` invocation; AI Agent Notes: cargo-mutants is binary-only, not a dependency)
-  - .cargo/mutants.toml (NEW; timeout_multiplier = 3.0; explicit file scope for three designated files) (v27 reads config from .cargo/mutants.toml, not .mutants.toml at repo root)
+  - .cargo/mutants.toml (NEW; timeout_multiplier = 3.0; examine_globs scope for three designated files; v27 reads config from .cargo/mutants.toml, not .mutants.toml at repo root)
   - docs/specs/cargo-mutants-policy.md (NEW; #[mutants::skip] whitelist convention + justification requirement + deferral policy)
+  - docs/demo-evidence/S-346/baseline-mutants-report.txt (NEW; partial baseline; follow-up #372 for completion)
 test_files: []
 breaking_change: false
 producer: story-writer
-version: "1.0.2"
+version: "1.0.3"
 last_updated: 2026-05-16
 depends_on:
   - S-340     # S-340 is the immediate predecessor in the audit-followup cluster; bulk.rs is the primary mutation target
@@ -56,6 +57,17 @@ during F2 (2026-05-16) and serves as the canonical reference for implementation.
 This story is an audit-followup in the same cluster as S-340 and S-345. It introduces
 no production code changes. All deliverables are CI infrastructure, config, and docs.
 
+**Post-Pass-2 state (back-sync note):** The F4 implementer empirically determined during
+delivery that cargo-mutants v27's `--in-diff` requires a file path, not a git ref — the
+ref-form (`--in-diff origin/<base_ref>`) fails with "No such file or directory". The
+actual implementation writes the diff via `git diff origin/${{ github.base_ref }}...HEAD >
+"$DIFF_FILE"` and passes `$DIFF_FILE` to cargo-mutants. Scope is enforced via
+`.cargo/mutants.toml::examine_globs` rather than `--file` flags. Adversary Pass 2
+findings F6 and F7 caught that cicd-setup.md and this story's AC-1 still documented the
+pre-discovery forms; this v1.0.3 back-sync corrects both. Pass 2 also confirmed the 90%
+kill-rate denominator semantics: `caught / (caught + missed + timeout)` with unviable
+mutants excluded — this is now explicit in cicd-setup.md §1.1a.
+
 ## Behavioral Contracts
 
 This story has no BC anchors. The 90% kill-rate target is a CI enforcement policy, not
@@ -89,9 +101,12 @@ kill-rate on first baseline run.
   any new SHA-pin surface (NFR-S-E compliance).
 - Uses `Swatinem/rust-cache` (existing project precedent) for cargo install caching so
   the binary is not rebuilt on every CI run.
-- Runs `cargo mutants --in-diff origin/${{ github.base_ref }} --file
-  src/cli/issue/create.rs --file src/api/jira/bulk.rs --file src/types/jira/bulk.rs`
-  (scopes mutations to lines changed in the PR diff for the three designated files).
+- Runs `cargo mutants --in-diff "$DIFF_FILE" --jobs 4` where `$DIFF_FILE` is
+  `${{ runner.temp }}/pr-${{ github.run_id }}.diff` populated by
+  `git diff origin/${{ github.base_ref }}...HEAD`. Scope enforced via
+  `.cargo/mutants.toml::examine_globs` (no `--file` flags). Note: cargo-mutants v27's
+  `--in-diff` requires a file path; the ref-form (`--in-diff origin/<base_ref>`) fails
+  with "No such file or directory" and was rejected after F4 empirical verification.
 - Enforces the 90% kill-rate target via an inline shell step reading line counts from
   `mutants.out/caught.txt` and `mutants.out/missed.txt`. The threshold value lives in
   the CI YAML (not in `.cargo/mutants.toml`) for CI-artifact visibility.
@@ -184,12 +199,16 @@ mutants:
     - uses: Swatinem/rust-cache@<SHA>  # already pinned in ci.yml
     - name: Install cargo-mutants
       run: cargo install cargo-mutants
+    - name: Generate diff for --in-diff
+      run: |
+        DIFF_FILE="${{ runner.temp }}/pr-${{ github.run_id }}.diff"
+        git diff origin/${{ github.base_ref }}...HEAD > "$DIFF_FILE"
+        echo "DIFF_FILE=$DIFF_FILE" >> $GITHUB_ENV
     - name: Run mutation tests
       run: |
-        cargo mutants --in-diff origin/${{ github.base_ref }} \
-          --file src/cli/issue/create.rs \
-          --file src/api/jira/bulk.rs \
-          --file src/types/jira/bulk.rs
+        cargo mutants --in-diff "$DIFF_FILE" --jobs 4
+        # Scope enforced via .cargo/mutants.toml::examine_globs.
+        # Note: v27 requires --in-diff to receive a file path; ref-form fails.
     - name: Check kill rate
       run: |
         caught=$(wc -l < mutants.out/caught.txt 2>/dev/null || echo 0)
@@ -255,20 +274,21 @@ Each whitelisted case also requires a `track-debt` entry per the deferral policy
 ### `fetch-depth: 0` for `--in-diff`
 
 The `actions/checkout` step in the `mutants` job must use `fetch-depth: 0` to enable
-`--in-diff origin/${{ github.base_ref }}`. A shallow clone (the default `fetch-depth: 1`)
-may not have the base branch ref available for diff computation, causing `--in-diff` to
-fail or generate zero mutants unexpectedly.
+`git diff origin/${{ github.base_ref }}...HEAD` (used to write `$DIFF_FILE` before
+cargo-mutants is invoked). A shallow clone (the default `fetch-depth: 1`) may not have
+the base branch ref available for diff computation, causing the diff step to fail or
+produce an empty file, which would cause cargo-mutants to generate zero mutants unexpectedly.
 
 ## TDD Plan
 
 1. Add `.cargo/mutants.toml` with `timeout_multiplier = 3.0` and file scope.
 2. Add `mutants.out/` line to `.gitignore`.
 3. Install cargo-mutants locally: `cargo install cargo-mutants`.
-4. Run local baseline: `cargo mutants --file src/cli/issue/create.rs --file
-   src/api/jira/bulk.rs --file src/types/jira/bulk.rs`. Capture output to
-   `docs/demo-evidence/S-346/baseline-mutants-report.txt`. (Use scoped file flags, not
-   `--in-diff`, for the local baseline since the local tree may not have a remote base
-   ref available.)
+4. Run local baseline: `cargo mutants` (scope enforced via `.cargo/mutants.toml::examine_globs`).
+   For diff-scoped local runs, write a diff first:
+   `DIFF=$(mktemp -t pr.diff.XXXXXX) && git diff origin/develop...HEAD > "$DIFF" && cargo mutants --in-diff "$DIFF"`.
+   Capture output to `docs/demo-evidence/S-346/baseline-mutants-report.txt`.
+   Note: do NOT pass a git ref directly to `--in-diff`; v27 requires a file path.
 5. Review surviving mutants:
    - Genuine test gap that is easy to close: add a tighter assertion or targeted test.
    - Defensive / unreachable / performance-only: add `#[mutants::skip]` with mandatory
@@ -348,8 +368,10 @@ and `Swatinem/rust-cache` rather than introducing new floating tags.
    lives in the CI step's shell logic (most visible to reviewers), not in `.cargo/mutants.toml`.
 
 7. **`fetch-depth: 0`**: The `actions/checkout` step in the `mutants` job MUST include
-   `fetch-depth: 0` so `--in-diff origin/${{ github.base_ref }}` can resolve the base
-   ref for diff computation.
+   `fetch-depth: 0` so `git diff origin/${{ github.base_ref }}...HEAD` can resolve the
+   base ref when writing `$DIFF_FILE`. cargo-mutants v27 requires `--in-diff` to receive
+   a file path; the git ref is consumed by the preceding diff step, not passed directly
+   to cargo-mutants.
 
 8. **No suppression**: Do not add `#[allow(...)]` to work around clippy warnings on new
    code. Per project zero-suppression policy.
@@ -375,10 +397,10 @@ Do not add any new Cargo dependencies.
 
 | File | Action | Notes |
 |------|--------|-------|
-| `.github/workflows/ci.yml` | MODIFY | Add `mutants` job (~30-40 lines). Job uses `if: github.event_name == 'pull_request'`; uses existing SHA-pinned checkout + rust-cache; installs cargo-mutants via `cargo install`; runs `--in-diff` scoped to three files; enforces 90% kill-rate via shell one-liner; sets `timeout-minutes: 60`. |
+| `.github/workflows/ci.yml` | MODIFY | Add `mutants` job (~40-50 lines). Job uses `if: github.event_name == 'pull_request'`; uses existing SHA-pinned checkout + rust-cache; writes diff to `$DIFF_FILE` via `git diff origin/${{ github.base_ref }}...HEAD`; installs cargo-mutants via `cargo install`; runs `--in-diff "$DIFF_FILE" --jobs 4` (v27 file-path form; scope via `.cargo/mutants.toml::examine_globs`); enforces 90% kill-rate via shell one-liner; sets `timeout-minutes: 60`. |
 | `.gitignore` | MODIFY | Add `mutants.out/` line. Location: near end of file, after existing build artifact exclusions. |
 | `CLAUDE.md` | MODIFY | (1) Build & Test section: new `cargo mutants` invocation line. (2) AI Agent Notes section: new line documenting cargo-mutants as binary-only, never a Cargo.toml dependency. |
-| `.cargo/mutants.toml` | CREATE | Minimal config: `timeout_multiplier = 3.0` + explicit file scope for three designated files. |
+| `.cargo/mutants.toml` | CREATE | Minimal config: `timeout_multiplier = 3.0` + `examine_globs` scope for three designated files. Note: v27 reads from `.cargo/mutants.toml`, not `.mutants.toml` at repo root. |
 | `docs/specs/cargo-mutants-policy.md` | CREATE | Policy doc: 90% kill-rate target + rationale; `#[mutants::skip]` convention with mandatory justification template; deferral policy for initial-baseline misses; local invocation snippets. |
 | `docs/demo-evidence/S-346/baseline-mutants-report.txt` | CREATE | Baseline run output captured during F4. Contains kill rate, caught/missed/unviable counts, surviving mutant list. |
 | `Cargo.toml` | DO NOT TOUCH | cargo-mutants is not a Cargo dependency. |

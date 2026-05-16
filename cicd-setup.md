@@ -42,7 +42,7 @@ identifies gaps for Phase 3 remediation. No workflow files were modified.
 | `msrv` | `ubuntu-latest` | `cargo check --all-features` against `dtolnay/rust-toolchain@1.85.0` — MSRV pin verification |
 | `deny` | `ubuntu-latest` | `EmbarkStudios/cargo-deny-action@v2` — license allowlist + advisory check |
 | `coverage` | `ubuntu-latest` | `cargo llvm-cov` → `lcov.info` → Codecov upload (`fail_ci_if_error: false`) |
-| `mutants` | `ubuntu-latest` | `cargo-mutants` mutation testing — scoped to `src/cli/issue/create.rs`, `src/api/jira/bulk.rs`, `src/types/jira/bulk.rs`; PR-only trigger (`if: github.event_name == 'pull_request'`); `--in-diff origin/${{ github.base_ref }}` (only mutates lines changed in the PR); 90% kill-rate target enforced via inline shell; `timeout-minutes: 60`; installed via `cargo install cargo-mutants` (no new SHA-pin surface). See §1.1a for full specification. |
+| `mutants` | `ubuntu-latest` | `cargo-mutants` mutation testing — scoped to `src/cli/issue/create.rs`, `src/api/jira/bulk.rs`, `src/types/jira/bulk.rs`; PR-only trigger (`if: github.event_name == 'pull_request'`); `--in-diff <diff-file>` (diff written via `git diff origin/${{ github.base_ref }}...HEAD > "$DIFF_FILE"`; cargo-mutants v27 requires a file path, not a git ref); scope via `.cargo/mutants.toml::examine_globs`; 90% kill-rate target enforced via inline shell; `timeout-minutes: 60`; installed via `cargo install cargo-mutants` (no new SHA-pin surface). See §1.1a for full specification. |
 
 **Caching:** `Swatinem/rust-cache@v2` on `clippy`, `test`, `msrv`, `coverage` jobs.
 
@@ -71,14 +71,14 @@ if: github.event_name == 'pull_request'
 ```
 Runs on PRs to `develop` only. Does NOT run on direct push to `develop` or `main`, bounding blast radius to the PR review phase. Pattern mirrors the existing `security` job guard.
 
-**Scope:** Three files, fixed in `.mutants.toml` and mirrored as explicit `--file` flags in the CI step:
+**Scope:** Three files, fixed in `.cargo/mutants.toml` and enforced via `examine_globs` (no `--file` flags in the CI invocation). Note: cargo-mutants v27 reads configuration from `.cargo/mutants.toml`, not `.mutants.toml` at repo root.
 - `src/cli/issue/create.rs`
 - `src/api/jira/bulk.rs`
 - `src/types/jira/bulk.rs`
 
-**Diff-mode:** `--in-diff origin/${{ github.base_ref }}` — only mutates lines that are changed in the PR diff. This amortizes the per-mutant cost: a PR touching 50 lines runs in minutes rather than hours. Full-file mutation (without `--in-diff`) is reserved for local baseline runs.
+**Diff-mode:** `--in-diff <diff-file>` — only mutates lines that are changed in the PR diff. Note: cargo-mutants v27 requires `--in-diff` to receive a file path (not a git ref directly); the CI workflow writes the diff via `git diff origin/${{ github.base_ref }}...HEAD > "$DIFF_FILE"` before invoking cargo-mutants. The diff-file path uses `${{ runner.temp }}/pr-${{ github.run_id }}.diff` for run-unique safety. Local invocation: use `mktemp -t pr.diff.XXXXXX`. This amortizes the per-mutant cost: a PR touching 50 lines runs in minutes rather than hours. Full-file mutation (without `--in-diff`) is reserved for local baseline runs.
 
-**Kill-rate target:** 90% (configurable in `.mutants.toml`). Threshold enforcement is a shell one-liner in the CI step reading `mutants.out/caught.txt` and `mutants.out/missed.txt`. The kill-rate value is kept in the YAML (not in `.mutants.toml`) for CI-artifact visibility.
+**Kill-rate target:** 90% (configurable in `.cargo/mutants.toml`). Threshold enforcement is a shell one-liner in the CI step reading `mutants.out/caught.txt` and `mutants.out/missed.txt`. The kill-rate value is kept in the YAML (not in `.cargo/mutants.toml`) for CI-artifact visibility. Kill rate is computed as `caught / (caught + missed + timeout)` per cargo-mutants v27 convention. Unviable mutants (build errors under mutation) are excluded from the denominator.
 
 **Timeout:** `timeout-minutes: 60` at the job level. This satisfies the GAP-2 timeout gap for this job specifically. The `--in-diff` scoping keeps actual runtime well under this ceiling for typical PRs; the limit guards against runaway full-corpus mutation if the diff guard fails.
 
@@ -187,7 +187,7 @@ All files require review from `@Zious11`. This satisfies the "code owner approva
 | Action SHA pinning | **MISSING** | All actions use version tags (`@v6`, `@v2`, `@v7`, `@v8`, `@stable`, `@1.85.0`) rather than full SHA hashes |
 | MSRV verification in CI | **PRESENT** | `ci.yml` `msrv` job: `dtolnay/rust-toolchain@1.85.0` + `cargo check --all-features` |
 | Coverage reporting | **PRESENT** | `ci.yml` `coverage` job: `cargo llvm-cov` → Codecov |
-| Mutation testing (meta-verification layer) | **PRESENT** | `ci.yml` `mutants` job (added issue #346): `cargo-mutants` scoped to bulk + edit modules, PR-only, `--in-diff` diff-mode, 90% kill-rate target, `timeout-minutes: 60`. Policy in `docs/specs/cargo-mutants-policy.md`. |
+| Mutation testing (meta-verification layer) | **PRESENT** | `ci.yml` `mutants` job (added issue #346): `cargo-mutants` scoped to bulk + edit modules via `.cargo/mutants.toml::examine_globs`; PR-only; `--in-diff <diff-file>` mode (v27 file-path form); 90% kill-rate target (`caught / (caught + missed + timeout)`); `timeout-minutes: 60`. Policy in `docs/specs/cargo-mutants-policy.md`. |
 
 **Summary counts:**
 - PRESENT: 10
@@ -353,7 +353,7 @@ gh api repos/Zious11/jira-cli/branches/main/protection
 
 | Addition | Issue | Description |
 |---|---|---|
-| `mutants` CI job | #346 | Mutation testing on bulk + edit modules (see §1.1a). Complements unit tests, integration tests, and proptests as a meta-verification layer: detects weak assertions that would pass even when the implementation is silently broken. PR-only, `--in-diff` diff-mode, 90% kill-rate target. |
+| `mutants` CI job | #346 | Mutation testing on bulk + edit modules (see §1.1a). Complements unit tests, integration tests, and proptests as a meta-verification layer: detects weak assertions that would pass even when the implementation is silently broken. PR-only, `--in-diff <diff-file>` mode (v27 file-path form; scope via `.cargo/mutants.toml::examine_globs`), 90% kill-rate target (`caught / (caught + missed + timeout)`). |
 
 ### Defer as tech debt (Phase 3+ or post-v1.0)
 
