@@ -118,9 +118,7 @@ jobs:
           # Need full history so `git diff origin/<base_ref>...HEAD` can resolve the
           # base ref (used by --in-diff to scope mutation testing to changed lines).
           fetch-depth: 0
-      - uses: taiki-e/install-action@e5de28abeb52d916c5e5875d54b21a9e738b61ec  # cargo-mutants
-        with:
-          tool: cargo-mutants
+      - uses: taiki-e/install-action@aae1387a167f5eee4267fe2946da57ae49a68770  # cargo-mutants
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
       - name: Run mutation tests on PR diff
         # --in-diff scopes to lines changed vs origin/<base_ref> (the merge target).
