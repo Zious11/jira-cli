@@ -138,3 +138,63 @@ Mutation reverted. `git diff src/api/jira/bulk.rs` confirmed empty.
 | `cargo test --test bulk_deadline_propagation` | PASS (2/2) |
 
 Red Gate equivalent for Pass 1 nits: MUTATION-PASSED (re-verified).
+
+---
+
+## Pass 2 Nit Fixes — Re-Verification (2026-05-15)
+
+### Changes applied (worktree commit `d63b2eb`)
+
+Four adversary Pass 2 NIT findings applied to `tests/bulk_deadline_propagation.rs`:
+
+**F1 — Line range correction:**
+- Before: `// at src/api/jira/bulk.rs:408-417 (return site of JrError::DeadlineExceeded).`
+- After: `// at src/api/jira/bulk.rs:411-415 (the message format inside the JrError::DeadlineExceeded Err-return block at lines 408-418).`
+- Rationale: 408-417 was off-by-one on the closing brace (line 418); 411-415 is the
+  precise `format!(...)` expression that interpolates `{task_id}`.
+
+**F2 — Loose assertion restored:**
+- Added `assert!(stderr.contains(task_id), "BC-3.4.009 VIOLATION (loose): ...")` BEFORE the strict fragment assertion.
+- Rationale: the strict assertion alone deviates from story S-340 AC #1 literal text
+  `"stderr.contains(task_id)"`. Both forms coexist: loose satisfies the story AC literal;
+  strict is the false-positive guard.
+
+**F3 — Case-insensitive strict assertion:**
+- Changed `stderr.contains(&expected_fragment)` to
+  `stderr.to_lowercase().contains(&expected_fragment.to_lowercase())`.
+- Rationale: harmonizes with existing tertiary assertion style (line 381:
+  `stderr.to_lowercase().contains("deadline")`). `cargo fmt` reformatted the chain
+  to the idiomatic multi-line form.
+
+**F4 — BC ↔ test index comment:**
+- Added a 7-line `// BC ↔ Test index` block after the module-level doc-comments and
+  before `#[allow(dead_code)]`. Maps `BC-3.4.009 → test_333_b1_*` with production
+  site citation (`src/api/jira/bulk.rs:411-415`) for audit-followup discoverability.
+
+### Mutation re-verification (third pass)
+
+Mutation: `{task_id}` → `<redacted>` in `src/api/jira/bulk.rs:412`.
+
+**Loose assertion failure (fires first):**
+```
+thread 'test_333_b1_bulk_running_storm_respects_deadline_via_outer_clamp' panicked at tests/bulk_deadline_propagation.rs:403:5:
+BC-3.4.009 VIOLATION (loose): expected stderr to contain task_id literal "task-333-b1-running-storm". Got stderr:
+Error: Deadline exceeded: [deadline:bulk-outer] Bulk task <redacted> did not complete within 30s timeout. Check Jira for task status.
+```
+
+The strict assertion would also fire (task_id absent from fragment) — Rust panics on first
+failure so only the loose is visible, but both discriminate the contract independently.
+
+Mutation reverted. `git diff src/api/jira/bulk.rs` confirmed empty.
+
+**Post-revert test run:** PASS (2 tests, 0 failures).
+
+### Full suite verification
+
+| Check | Result |
+|-------|--------|
+| `cargo fmt --check` | PASS |
+| `cargo clippy --all-targets -- -D warnings` | PASS |
+| `cargo test --test bulk_deadline_propagation` | PASS (2/2) |
+
+Red Gate equivalent for Pass 2 nits: MUTATION-PASSED (re-verified).
