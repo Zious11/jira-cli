@@ -63,7 +63,7 @@ identifies gaps for Phase 3 remediation. No workflow files were modified.
 
 **Purpose:** Mutation testing on the bulk create/edit modules to detect weak test assertions — tests that pass even when the implementation is silently broken by small code mutations (negated conditions, removed returns, swapped operators). Complements unit tests, integration tests, and proptests as a meta-verification layer.
 
-**Tooling:** `cargo-mutants` — a binary tool installed via `cargo install cargo-mutants` in the CI step. It is NOT a Cargo dependency and MUST NOT be added to `[dev-dependencies]` in `Cargo.toml`. See `CLAUDE.md` AI Agent Notes for the canonical prohibition.
+**Tooling:** `cargo-mutants` — a binary tool installed via `taiki-e/install-action@<SHA>` (cargo-mutants-specific release; same action publisher as the cargo-llvm-cov install, pinned at a different SHA for the cargo-mutants release) in the CI step. It is NOT a Cargo dependency and MUST NOT be added to `[dev-dependencies]` in `Cargo.toml`. See `CLAUDE.md` AI Agent Notes for the canonical prohibition.
 
 **Trigger:**
 ```yaml
@@ -78,7 +78,7 @@ Runs on PRs to `develop` only. Does NOT run on direct push to `develop` or `main
 
 **Diff-mode:** `--in-diff <diff-file>` — only mutates lines that are changed in the PR diff. Note: cargo-mutants v27 requires `--in-diff` to receive a file path (not a git ref directly); the CI workflow writes the diff via `git diff origin/${{ github.base_ref }}...HEAD > "$DIFF_FILE"` before invoking cargo-mutants. The diff-file path uses `${{ runner.temp }}/pr-${{ github.run_id }}.diff` for run-unique safety. Local invocation: use `mktemp -t pr.diff.XXXXXX`. This amortizes the per-mutant cost: a PR touching 50 lines runs in minutes rather than hours. Full-file mutation (without `--in-diff`) is reserved for local baseline runs.
 
-**Kill-rate target:** 90% (hardcoded in the workflow shell script at `.github/workflows/ci.yml` Check kill rate step; cargo-mutants v27 does not expose a fail-under threshold via TOML config). Threshold enforcement is a shell one-liner in the CI step reading `mutants.out/caught.txt` and `mutants.out/missed.txt`. Kill rate is computed as `caught / (caught + missed + timeout)` per cargo-mutants v27 convention. Unviable mutants (build errors under mutation) are excluded from the denominator.
+**Kill-rate target:** 90% (hardcoded in the workflow shell script at `.github/workflows/ci.yml` Check kill rate step; cargo-mutants v27 does not expose a fail-under threshold via TOML config). Threshold enforcement is a shell block in the CI step using `jq` to parse `mutants.out/outcomes.json` (cargo-mutants v27 emits top-level `caught`/`missed`/`timeout`/`unviable` scalars). Falls back to `wc -l` on per-status `.txt` files if `jq` is unavailable. Kill rate is computed as `caught / (caught + missed + timeout)` per cargo-mutants v27 convention. Unviable mutants (build errors under mutation) are excluded from the denominator.
 
 **Timeout:** `timeout-minutes: 60` at the job level. This satisfies the GAP-2 timeout gap for this job specifically. The `--in-diff` scoping keeps actual runtime well under this ceiling for typical PRs; the limit guards against runaway full-corpus mutation if the diff guard fails.
 
@@ -97,7 +97,7 @@ The convention and rationale are codified in `docs/specs/cargo-mutants-policy.md
 2. `track-debt` entries are filed for each whitelisted case.
 3. The 90% gate becomes enforced in full after the baseline issue set is addressed.
 
-**Security surface:** No new secrets required. No new network calls from the harness. No `GITHUB_TOKEN` permission escalation. NFR-S-E compliance maintained: installs via `cargo install` in a `run:` step (not a `uses:` action reference), introducing zero new SHA-pin surface.
+**Security surface:** No new secrets required. No new network calls from the harness. No `GITHUB_TOKEN` permission escalation. NFR-S-E compliance maintained: installs via `taiki-e/install-action` (the action publisher is already SHA-pinned elsewhere in this workflow for cargo-llvm-cov — same publisher, different tool-specific SHA — minimizing new SHA-pin surface). The prebuilt binary download avoids the ~5-10 min cargo-mutants source build per PR.
 
 **Artifacts produced:** `mutants.out/` directory (gitignored via `.gitignore` entry added in issue #346). Not uploaded as a CI artifact; results are visible in the job log.
 

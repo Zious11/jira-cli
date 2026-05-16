@@ -22,7 +22,7 @@ files_modified:
 test_files: []
 breaking_change: false
 producer: story-writer
-version: "1.0.4"
+version: "1.0.5"
 last_updated: 2026-05-16
 depends_on:
   - S-340     # S-340 is the immediate predecessor in the audit-followup cluster; bulk.rs is the primary mutation target
@@ -96,9 +96,7 @@ kill-rate on first baseline run.
 - Triggers ONLY on `pull_request` via `if: github.event_name == 'pull_request'` at the
   job level (mirrors the existing `security` job pattern). Does NOT trigger on `push`
   to `develop` or `main`.
-- Uses `cargo install cargo-mutants` in a `run:` step. Does NOT use a `uses:
-  sourcefrog/cargo-mutants-action@...` reference — raw invocation avoids introducing
-  any new SHA-pin surface (NFR-S-E compliance).
+- Uses `taiki-e/install-action@<SHA>` with `tool: cargo-mutants` to install a prebuilt cargo-mutants binary (the cargo-mutants-specific release tag of an action ALREADY SHA-pinned elsewhere in this workflow for cargo-llvm-cov; reusing this action publisher minimizes new SHA-pin surface). Does NOT use `sourcefrog/cargo-mutants-action` (the vendor wrapper) — that would add a fundamentally new SHA. The prebuilt binary eliminates ~5-10 min cold rebuild per PR vs raw `cargo install`.
 - Uses `Swatinem/rust-cache` (existing project precedent) for cargo install caching so
   the binary is not rebuilt on every CI run.
 - Runs `cargo mutants --in-diff "$DIFF_FILE" --jobs 4` where `$DIFF_FILE` is
@@ -107,9 +105,7 @@ kill-rate on first baseline run.
   `.cargo/mutants.toml::examine_globs` (no `--file` flags). Note: cargo-mutants v27's
   `--in-diff` requires a file path; the ref-form (`--in-diff origin/<base_ref>`) fails
   with "No such file or directory" and was rejected after F4 empirical verification.
-- Enforces the 90% kill-rate target via an inline shell step reading line counts from
-  `mutants.out/caught.txt` and `mutants.out/missed.txt`. The threshold value lives in
-  the CI YAML (not in `.cargo/mutants.toml`) for CI-artifact visibility.
+- Enforces the 90% kill-rate target via an inline shell step using `jq` to parse `mutants.out/outcomes.json` (cargo-mutants v27 emits top-level scalar fields `caught`, `missed`, `timeout`, `unviable`, `total_mutants`). Falls back to `wc -l` on the per-status `.txt` files when `jq` is unavailable (defensive only — `jq` is pre-installed on ubuntu-latest runners). The threshold value lives in the CI YAML (not in `.cargo/mutants.toml`) for CI-artifact visibility.
 - Sets `timeout-minutes: 60` at the job level (satisfies R-L12 for this job).
 - All GHA actions used in the job are SHA-pinned (per StepSecurity convention from
   PR #368). Since the job uses only `actions/checkout` and `Swatinem/rust-cache` (both
@@ -349,11 +345,7 @@ and `Swatinem/rust-cache` rather than introducing new floating tags.
    'pull_request'` at the job level. It MUST NOT trigger on `push` to `develop` or
    `main`. Blast radius is bounded to the PR review phase.
 
-2. **No new SHA-pin surface**: The `mutants` job MUST use raw `cargo install
-   cargo-mutants` in a `run:` step. It MUST NOT use `uses: sourcefrog/cargo-mutants-
-   action@...` or any other new action reference. Any GHA action references in the job
-   must already be SHA-pinned in the existing workflow (i.e., `actions/checkout` and
-   `Swatinem/rust-cache`).
+2. **No new SHA-pin surface**: The `mutants` job MUST use `taiki-e/install-action` with `tool: cargo-mutants` (the cargo-mutants-specific release SHA pinned in this workflow). MUST NOT use `sourcefrog/cargo-mutants-action` (the vendor wrapper introduces a new SHA-pin surface; taiki-e is an already-pinned action publisher reused here for caching). Any other GHA action references in the job must already be SHA-pinned in the existing workflow (i.e., `actions/checkout` and `Swatinem/rust-cache`).
 
 3. **No Cargo.toml modification**: `cargo-mutants` MUST NOT be added to `Cargo.toml`
    as a `[dev-dependencies]` entry or in any other section. It is a binary tool
