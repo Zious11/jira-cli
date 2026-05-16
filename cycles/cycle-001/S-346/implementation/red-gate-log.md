@@ -106,6 +106,58 @@ The discriminator is exercised in future cycles, not this one.
 - cargo test: PASS (all tests green)
 - YAML parse: PASS (yq + ruby)
 
+## Adversary Pass 2 Fixes (applied 2026-05-16)
+
+### BLOCKER findings addressed
+
+- **F1 (BLOCKER):** Implemented actual 90% kill-rate gate. Previous logic used
+  `if [ "${missed}" -gt 0 ] → exit 1` which is implicitly 100%. New logic:
+  `kill_rate = (caught * 100) / (caught + missed + timeout)`. Timeouts count as
+  survived per cargo-mutants v27 convention. If `killable == 0` (all unviable or
+  no mutants), gate is skipped with OK message.
+
+- **F2 (BLOCKER):** "Check kill rate" was dead code in the failure path. Fixed by
+  adding `continue-on-error: true` to "Run mutation tests" step and `if: always()`
+  to "Check kill rate" step. "Check kill rate" is now the sole pass/fail arbiter.
+
+### CONCERN findings addressed
+
+- **F3:** timeout and unviable now extracted from outcomes.json (primary path) and
+  from `mutants.out/timeout.txt` / `mutants.out/unviable.txt` (fallback). Arithmetic
+  uses `survived = missed + timeout`, `killable = caught + survived`.
+
+- **F4+F5:** Replaced fragile file-presence regex heuristic (duplicated examine_globs)
+  with `cargo mutants --in-diff "${DIFF_FILE}" --list 2>/dev/null | wc -l` for the
+  positive-coverage assertion. This respects .cargo/mutants.toml examine_globs and
+  only counts genuinely mutable lines — comment/doc-only PRs no longer trigger false
+  positives. Verified locally: `--list --in-diff` is supported in v27 and returns
+  empty output (0 lines) for diffs that don't touch scoped Rust code.
+
+- **F8:** CLAUDE.md Build & Test snippet and docs/specs/cargo-mutants-policy.md
+  Local Invocation section now use `mktemp -t pr.diff.XXXXXX` + `trap 'rm -f'`
+  instead of `/tmp/pr.diff` (race-prone on concurrent shells). CI was already using
+  `${{ runner.temp }}/pr-${{ github.run_id }}.diff`; docs are now in sync.
+
+### NIT findings addressed
+
+- **F9:** Added `command -v jq >/dev/null || { echo "FATAL: jq not found on PATH"; exit 1; }`
+  guard at top of "Check kill rate" bash block, with comment noting jq is pre-installed
+  on ubuntu-latest runner images.
+
+- **F10:** baseline-mutants-report.txt NOTES section expanded with explicit partial-run
+  caveat, prior-run summary, and explanation of new kill-rate formula post-F1+F2 fixes.
+
+- **F11:** `${var:-0}` explicit defaults added after all jq/grep extractions to harden
+  against empty command substitutions under `set -e` / `bash -eo pipefail`.
+
+### Verification
+
+- cargo fmt --check: PASS
+- cargo clippy --all-targets -- -D warnings: PASS
+- cargo test: PASS (all tests green)
+- YAML parse (ruby): PASS
+- `cargo mutants --list --in-diff $DIFF_FILE`: verified locally; 0 for docs-only diff
+
 ## Worktree Commits
 1. chore(S-346): add .gitignore + .cargo/mutants.toml config (3c35bdc)
 2. chore(S-346): add mutants CI job (PR-only, --in-diff, scoped) (68466f5)
@@ -113,3 +165,5 @@ The discriminator is exercised in future cycles, not this one.
 4. chore(S-346): adversary Pass 1 fixes — cached install + safer diff path + positive-coverage assertion (9329f3c)
 5. fix(S-346): use cargo-mutants-specific SHA for taiki-e/install-action (b253f29)
 6. fix(S-346): suppress grep -c exit-1 on empty files under bash -eo pipefail (7ec38ef)
+7. chore(S-346): re-capture baseline evidence (Pass 1 F6+F7) — partial run (73be70b)
+8. ci(S-346): adversary Pass 2 BLOCKERs + CONCERNs — 90% gate, dead-diagnostic-step fix, timeout arithmetic, mktemp safety (1b0bd3e)
