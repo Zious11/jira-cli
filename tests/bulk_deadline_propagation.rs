@@ -47,6 +47,14 @@
 //!      incompatible with subprocess + wiremock (tokio #4522), so the real-
 //!      time wall-clock test is the right tradeoff for this AC.
 
+// ---------------------------------------------------------------------------
+// BC ↔ Test index (audit-followup discoverability)
+// ---------------------------------------------------------------------------
+// BC-3.4.009  →  test_333_b1_bulk_running_storm_respects_deadline_via_outer_clamp
+//                (S-340 / issue #340: pins task_id literal in [deadline:bulk-outer]
+//                stderr message; production site at src/api/jira/bulk.rs:411-415.)
+// ---------------------------------------------------------------------------
+
 #[allow(dead_code)]
 mod common;
 
@@ -388,13 +396,26 @@ async fn test_333_b1_bulk_running_storm_respects_deadline_via_outer_clamp() {
     // `jr api /rest/api/3/bulk/queue/<task_id>` without hunting through the
     // Jira UI.
     // Pinning the existing `"[deadline:bulk-outer] Bulk task {task_id} ..."` format
-    // at src/api/jira/bulk.rs:408-417 (return site of JrError::DeadlineExceeded).
+    // at src/api/jira/bulk.rs:411-415 (the message format inside the JrError::DeadlineExceeded Err-return block at lines 408-418).
+
+    // (Loose form — satisfies story S-340 AC #1 literal "stderr.contains(task_id)"
+    // and BC-3.4.009 minimum postcondition: the task_id literal MUST appear in stderr.)
+    assert!(
+        stderr.contains(task_id),
+        "BC-3.4.009 VIOLATION (loose): expected stderr to contain task_id literal \
+         {task_id:?}. Got stderr:\n{stderr}",
+    );
+
+    // (Strict form — guards against substring false-positives, e.g., a future
+    // --verbose test printing the GET URL `/rest/api/3/bulk/queue/<task_id>`
+    // that would mask a regression in the deadline-message itself.)
     let expected_fragment = format!("[deadline:bulk-outer] Bulk task {task_id} did not");
     assert!(
-        stderr.contains(&expected_fragment),
-        "BC-3.4.009 VIOLATION: expected stderr to contain the deadline-message \
+        stderr
+            .to_lowercase()
+            .contains(&expected_fragment.to_lowercase()),
+        "BC-3.4.009 VIOLATION (strict): expected stderr to contain the deadline-message \
          fragment {expected_fragment:?} (proves task_id is interpolated inside the \
-         [deadline:bulk-outer] message, not coincidentally elsewhere in stderr — \
-         e.g., a --verbose request URL log). Got stderr:\n{stderr}",
+         [deadline:bulk-outer] message, not coincidentally elsewhere). Got stderr:\n{stderr}",
     );
 }
