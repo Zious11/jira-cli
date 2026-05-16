@@ -3,8 +3,15 @@
 **Story:** S-345 — Extract label-coalesce JSON builder into pure function + proptest
 **Issue:** #345
 **Worktree branch:** feature/S-345-label-coalesce-extract
-**HEAD:** 283fde88be1042fc5d63c6753442237fbc7e5fff
+**Original evidence HEAD:** 283fde88be1042fc5d63c6753442237fbc7e5fff (AC-1..AC-5 captures + Red Gate)
+**Report last updated:** 66842f6 (Files section + relative path fix per Copilot cycle 1)
 **Recorded:** 2026-05-15
+
+Note: AC evidence files (ac1-ac5, red-gate) were captured at commit 283fde8 (before
+the .gitignore and evidence-report fix commits). The application source being tested
+(`src/cli/issue/create.rs`) is identical at all later commits on this branch — the only
+changes after 283fde8 are supporting artifacts (evidence-report.md, .gitignore,
+ac5a-fmt-check.txt), not the production code being evidenced.
 
 ## Type
 REFACTOR + PROPTEST — extracts pure helper from handle_edit_bulk_labels; production behavior unchanged.

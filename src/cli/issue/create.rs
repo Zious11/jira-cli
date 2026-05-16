@@ -1545,6 +1545,11 @@ mod build_labels_proptests {
                     let (action, names) = extract_action_names(&Value::Object(obj.clone()));
                     prop_assert_eq!(action, "ADD", "BC-3.4.006: single-ADD MUST set labelsAction=ADD");
                     prop_assert_eq!(names, adds.clone(), "BC-3.4.006: ADD names MUST match input");
+                    // Assert inner labels array length matches input to prevent silent extra-item drift.
+                    let inner_arr = obj.get("labels").and_then(|v| v.as_array()).expect(
+                        "BC-3.4.006: single-ADD labels entry MUST have an inner 'labels' array",
+                    );
+                    prop_assert_eq!(inner_arr.len(), adds.len(), "BC-3.4.006: inner ADD labels array length MUST equal input length");
                 }
                 // Single-action REMOVE: object-form, labelsAction=REMOVE.
                 (true, false) => {
@@ -1554,6 +1559,11 @@ mod build_labels_proptests {
                     let (action, names) = extract_action_names(&Value::Object(obj.clone()));
                     prop_assert_eq!(action, "REMOVE", "BC-3.4.006: single-REMOVE MUST set labelsAction=REMOVE");
                     prop_assert_eq!(names, removes.clone(), "BC-3.4.006: REMOVE names MUST match input");
+                    // Assert inner labels array length matches input to prevent silent extra-item drift.
+                    let inner_arr = obj.get("labels").and_then(|v| v.as_array()).expect(
+                        "BC-3.4.006: single-REMOVE labels entry MUST have an inner 'labels' array",
+                    );
+                    prop_assert_eq!(inner_arr.len(), removes.len(), "BC-3.4.006: inner REMOVE labels array length MUST equal input length");
                 }
                 // Both empty: filtered by prop_assume!; unreachable.
                 (true, true) => unreachable!("filtered by prop_assume! above"),

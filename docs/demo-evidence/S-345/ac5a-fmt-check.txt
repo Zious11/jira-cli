@@ -1,0 +1,3 @@
+$ cargo fmt --all -- --check
+(no output — formatting is clean)
+Exit code: 0
