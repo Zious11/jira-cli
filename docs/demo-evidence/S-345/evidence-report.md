@@ -39,10 +39,14 @@ REFACTOR + PROPTEST — extracts pure helper from handle_edit_bulk_labels; produ
 3 consecutive CLEAN passes (Pass 4, 5, 6) — convergence achieved.
 
 ## Files
+Application source changes:
 - src/cli/issue/create.rs (+127, -32) — extract function + add proptest + 3 nit/concern fix passes
-- No other files in worktree diff
+
+Supporting artifacts added in this PR (not application source):
+- docs/demo-evidence/S-345/ (10 files: AC-1..AC-5 evidence captures + Red Gate + this report)
+- .gitignore (+3 lines: add proptest-regressions/ exclusion)
 
 ## Trace
 - BC-3.4.006 pinned (HIGH confidence after this PR)
 - Story S-345 AC-1 through AC-5 all satisfied
-- Mutation Red Gate substituted for green-on-first-run pattern (see /Users/zious/Documents/GITHUB/jira-cli/.factory/cycles/cycle-001/S-345/implementation/red-gate-log.md)
+- Mutation Red Gate substituted for green-on-first-run pattern (see `.factory/cycles/cycle-001/S-345/implementation/red-gate-log.md` — note: `.factory/` is gitignored and not committed; the committed evidence is `docs/demo-evidence/S-345/red-gate-mutation-fails.txt`)
