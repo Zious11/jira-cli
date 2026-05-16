@@ -2,8 +2,8 @@
 document_type: story-index
 phase: phase-2-story-decomposition
 producer: story-writer
-version: "1.4.11"
-total_stories: 35
+version: "1.4.12"
+total_stories: 36
 total_waves: 4
 status: complete-pending-adv-review
 last_updated: 2026-05-16
@@ -27,7 +27,7 @@ Phase 1 converged at adversary Pass 28. Gate approved 2026-05-04.
 | 3 | Low priority + deferred (DEFER NFRs, shard splits, process codification, DOCUMENT-AS-IS) | 10 | ~5-7 dev-days | Per-story gates; no v0.5 blocking |
 | feature-followup | Audit-followup test pins for shipped features (S-333, #340) | 1 | ~0.5 dev-days | cargo test green; per-story BC gates |
 
-**Final totals: 35 stories across 4 waves + feature-followup group.** Wave 0: 7, Wave 1: 8, Wave 2: 7, Wave 3: 10 (+S-3.10 added during Wave 2 as S-2.06 DEFER-01 follow-up). Wave 2: **7/7 COMPLETE** (PRs #303-#309; 2026-05-08). Feature-followup: 2 (S-340 — issue #340 task_id pin; 2026-05-15; S-345 — issue #345 label-coalesce refactor + proptest; 2026-05-16).
+**Final totals: 36 stories across 4 waves + feature-followup group.** Wave 0: 7, Wave 1: 8, Wave 2: 7, Wave 3: 10 (+S-3.10 added during Wave 2 as S-2.06 DEFER-01 follow-up). Wave 2: **7/7 COMPLETE** (PRs #303-#309; 2026-05-08). Feature-followup: 3 (S-340 — issue #340 task_id pin; 2026-05-15; S-345 — issue #345 label-coalesce refactor + proptest; 2026-05-16; S-346 — issue #346 cargo-mutants CI job + whitelist policy; 2026-05-16).
 
 Story file naming: `stories/wave-W/S-W.NN-short-slug.md`
 Story ID convention: `S-W.NN` (e.g., `S-0.01`, `S-1.03`)
@@ -181,6 +181,7 @@ They have `wave: feature-followup` in frontmatter and live under `.factory/code-
 |----------|-------|------------|-----------------|--------|-------------|
 | S-340 | Pin task_id-in-bulk-poll-timeout-message contract with regression test | BC-3.4.009 | — | MERGED — PR #370 @ 394dc25 (2026-05-16) | small |
 | S-345 | Extract label-coalesce JSON builder into pure function with proptest coverage | BC-3.4.006 | — | MERGED — PR #371 @ bb352ea (2026-05-16) | small |
+| S-346 | Add cargo-mutants CI job + whitelist policy for bulk + create modules | — | — | draft (issue #346) | small |
 
 Feature-followup story files: `.factory/code-delivery/issue-NNN/story.md`
 
@@ -245,7 +246,7 @@ gaps that are not blocking for v0.5 but should be tracked.
 ## Story Manifest
 
 Complete mapping of every `story_id` to its absolute file path. Generated 2026-05-07; updated 2026-05-08 (S-3.10 added).
-Total rows: 35 (matches `total_stories: 35` in frontmatter). Updated 2026-05-15 (S-340 added). Updated 2026-05-16 (S-345 added).
+Total rows: 36 (matches `total_stories: 36` in frontmatter). Updated 2026-05-15 (S-340 added). Updated 2026-05-16 (S-345 added). Updated 2026-05-16 (S-346 added).
 
 ### Wave 0
 
@@ -305,3 +306,4 @@ Total rows: 35 (matches `total_stories: 35` in frontmatter). Updated 2026-05-15 
 |----------|------|-----------|
 | S-340 | feature-followup | /Users/zious/Documents/GITHUB/jira-cli/.factory/code-delivery/issue-340/story.md |
 | S-345 | feature-followup | /Users/zious/Documents/GITHUB/jira-cli/.factory/code-delivery/issue-345/story.md |
+| S-346 | feature-followup | /Users/zious/Documents/GITHUB/jira-cli/.factory/code-delivery/issue-346/story.md |
