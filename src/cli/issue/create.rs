@@ -800,6 +800,34 @@ pub(super) async fn handle_edit(
     Ok(())
 }
 
+/// Build the `editedFieldsInput.labels` JSON value for a bulk-labels edit.
+///
+/// Returns the JSON shape per BC-3.4.006:
+/// - Single-action (only adds OR only removes): object-form
+///   `{"labels": {"labelsAction": "ADD"|"REMOVE", "labels": [{"name": ...}, ...]}}`
+/// - Both-action (adds AND removes): array-form with ADD then REMOVE
+///   `{"labels": [{"labelsAction": "ADD", "labels": [...]}, {"labelsAction": "REMOVE", "labels": [...]}]}`
+///
+/// Caller MUST bail BEFORE calling this if both inputs are empty.
+///
+/// Pure function — no I/O, no async, no client refs. Enables proptest coverage
+/// of the JSON shape invariants without wiremock.
+///
+/// Schema note: this pins the CURRENT shape sent by the code; whether the
+/// array-form is what Atlassian actually accepts is tracked in issue #331.
+///
+/// STUB PHASE (S-345 Red Gate): function is `#[cfg(test)]`-only and returns a
+/// deliberately wrong value so the proptest fails red. Implementer (next dispatch)
+/// will remove the `#[cfg(test)]` gate, replace the stub body with the real
+/// implementation, and wire it into `handle_edit_bulk_labels`.
+#[cfg(test)]
+fn build_labels_edited_fields(adds: &[String], removes: &[String]) -> serde_json::Value {
+    // STUB: deliberately wrong so the proptest fails red.
+    // Implementer (next dispatch) replaces this with the real implementation.
+    let _ = (adds, removes);
+    serde_json::json!({"STUB_INTENTIONALLY_WRONG": true})
+}
+
 /// Route label edits through the Atlassian Bulk Fields API.
 ///
 /// Supports 1..=1000 keys. `labels` is a list of "add:NAME" / "remove:NAME" / "NAME" strings.
@@ -1452,5 +1480,84 @@ pub enum IssueCommand {
         );
 
         fields
+    }
+}
+
+#[cfg(test)]
+mod build_labels_proptests {
+    use super::build_labels_edited_fields;
+    use proptest::prelude::*;
+    use serde_json::Value;
+
+    proptest! {
+        /// BC-3.4.006 invariants: top-level "labels" key always present; ADD/REMOVE
+        /// entries appear iff respective input non-empty; single-action uses object-form;
+        /// both-action uses array-form with ADD-at-index-0, REMOVE-at-index-1.
+        ///
+        /// `prop_assume!` filters out the empty/empty case because the caller
+        /// (`handle_edit_bulk_labels`) bails on `adds.is_empty() && removes.is_empty()`.
+        #[test]
+        fn build_labels_edited_fields_invariants(
+            adds in proptest::collection::vec("[a-z]{1,10}", 0..5),
+            removes in proptest::collection::vec("[a-z]{1,10}", 0..5),
+        ) {
+            prop_assume!(!adds.is_empty() || !removes.is_empty());
+
+            let result = build_labels_edited_fields(&adds, &removes);
+
+            // Invariant 1: top-level "labels" key is always present.
+            let labels = result.get("labels").expect("BC-3.4.006: top-level 'labels' key MUST be present");
+
+            // Helper closure.
+            let extract_action_names = |action_obj: &Value| -> (String, Vec<String>) {
+                let action = action_obj.get("labelsAction").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let names: Vec<String> = action_obj
+                    .get("labels")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|item| item.get("name").and_then(|n| n.as_str()).map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                (action, names)
+            };
+
+            match (adds.is_empty(), removes.is_empty()) {
+                // Both-action: array-form with ADD then REMOVE.
+                (false, false) => {
+                    let arr = labels.as_array().expect(
+                        "BC-3.4.006: both-action MUST produce array-form (not object-form)",
+                    );
+                    prop_assert_eq!(arr.len(), 2, "BC-3.4.006: array-form MUST have exactly 2 entries (ADD + REMOVE)");
+                    let (a0_action, a0_names) = extract_action_names(&arr[0]);
+                    let (a1_action, a1_names) = extract_action_names(&arr[1]);
+                    prop_assert_eq!(a0_action, "ADD",    "BC-3.4.006: array index 0 MUST be ADD");
+                    prop_assert_eq!(a1_action, "REMOVE", "BC-3.4.006: array index 1 MUST be REMOVE");
+                    prop_assert_eq!(a0_names, adds.clone(),    "BC-3.4.006: ADD names MUST match input");
+                    prop_assert_eq!(a1_names, removes.clone(), "BC-3.4.006: REMOVE names MUST match input");
+                }
+                // Single-action ADD: object-form, labelsAction=ADD.
+                (false, true) => {
+                    let obj = labels.as_object().expect(
+                        "BC-3.4.006: single-action ADD MUST produce object-form (not array-form)",
+                    );
+                    let (action, names) = extract_action_names(&Value::Object(obj.clone()));
+                    prop_assert_eq!(action, "ADD", "BC-3.4.006: single-ADD MUST set labelsAction=ADD");
+                    prop_assert_eq!(names, adds.clone(), "BC-3.4.006: ADD names MUST match input");
+                }
+                // Single-action REMOVE: object-form, labelsAction=REMOVE.
+                (true, false) => {
+                    let obj = labels.as_object().expect(
+                        "BC-3.4.006: single-action REMOVE MUST produce object-form (not array-form)",
+                    );
+                    let (action, names) = extract_action_names(&Value::Object(obj.clone()));
+                    prop_assert_eq!(action, "REMOVE", "BC-3.4.006: single-REMOVE MUST set labelsAction=REMOVE");
+                    prop_assert_eq!(names, removes.clone(), "BC-3.4.006: REMOVE names MUST match input");
+                }
+                // Both empty: filtered by prop_assume!; unreachable.
+                (true, true) => unreachable!("filtered by prop_assume! above"),
+            }
+        }
     }
 }
