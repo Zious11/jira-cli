@@ -105,6 +105,41 @@ Worktree commit: `e7d8736`
 
 ---
 
+## Pass 3 Adversary Fixes — Applied 2026-05-15
+
+One finding applied to `src/cli/issue/create.rs` in worktree commit `283fde8`.
+
+### F2 (CONCERN) — Handler doc-comment internal contradiction softened
+
+Lines 883-884 previously read:
+```
+/// canonical Atlassian schema (per #331) requires top-level `labelsFields`
+/// array always — that's the long-term target for both code paths.
+```
+
+This contradicted line 866's explicit "best-guess pending #331 empirical verification"
+qualifier. Issue #331 is still open and sandbox-blocked; the `labelsFields` claim
+derives from Perplexity research, not a live API probe. Per CLAUDE.md citation-discipline
+policy, the authoritative phrasing was overstated.
+
+Replaced with:
+```
+/// per #331's Perplexity research, the canonical Atlassian schema is documented
+/// to use a top-level `labelsFields` array — that's the long-term target for
+/// both code paths once #331's empirical sandbox verification confirms it.
+```
+
+### Verification Results
+- `cargo test --lib build_labels_proptests`: 1 passed (256 cases)
+- `cargo test --test issue_bulk_pr2`: 40 passed, 0 failed
+- `cargo test --test issue_bulk`: 9 passed, 0 failed
+- `cargo fmt --check`: clean
+- `cargo clippy --all-targets -- -D warnings`: clean (no warnings)
+
+Worktree commit: `283fde8`
+
+---
+
 ## Verbatim Red Gate proof
 
 ```
