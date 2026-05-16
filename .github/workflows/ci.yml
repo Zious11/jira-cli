@@ -104,3 +104,46 @@ jobs:
         uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  mutants:
+    name: Mutation testing
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # PR-only — mutation testing is too slow for every push to develop/main.
+    # --in-diff keeps per-PR cost bounded to changed lines only.
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+        with:
+          # Need full history so `cargo mutants --in-diff` can compute the diff
+          # vs github.base_ref (the target branch of the PR).
+          fetch-depth: 0
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants --locked
+      - name: Run mutation tests on PR diff
+        # --in-diff scopes to lines changed vs origin/<base_ref> (the merge target).
+        # .cargo/mutants.toml further scopes to bulk + create modules.
+        run: |
+          git diff origin/${{ github.base_ref }}...HEAD > /tmp/pr.diff
+          cargo mutants --in-diff /tmp/pr.diff \
+            --file src/cli/issue/create.rs \
+            --file src/api/jira/bulk.rs \
+            --file src/types/jira/bulk.rs
+      - name: Check kill rate
+        # The 90% kill-rate threshold lives here (not in .cargo/mutants.toml) for
+        # CI-artifact visibility. Job passes if no mutants touch scoped files.
+        run: |
+          caught=$(wc -l < mutants.out/caught.txt 2>/dev/null || echo 0)
+          missed=$(wc -l < mutants.out/missed.txt 2>/dev/null || echo 0)
+          total=$((caught + missed))
+          if [ "$total" -eq 0 ]; then
+            echo "No mutants generated (diff may not touch scoped files) — skip threshold check"
+            exit 0
+          fi
+          pct=$((caught * 100 / total))
+          echo "Kill rate: ${pct}% (${caught}/${total})"
+          if [ "$pct" -lt 90 ]; then
+            echo "ERROR: kill rate ${pct}% is below 90% threshold"
+            exit 1
+          fi
