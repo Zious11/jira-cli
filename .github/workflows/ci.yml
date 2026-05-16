@@ -115,35 +115,69 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
         with:
-          # Need full history so `cargo mutants --in-diff` can compute the diff
-          # vs github.base_ref (the target branch of the PR).
+          # Need full history so `git diff origin/<base_ref>...HEAD` can resolve the
+          # base ref (used by --in-diff to scope mutation testing to changed lines).
           fetch-depth: 0
+      - uses: taiki-e/install-action@e5de28abeb52d916c5e5875d54b21a9e738b61ec  # cargo-mutants
+        with:
+          tool: cargo-mutants
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
-      - name: Install cargo-mutants
-        run: cargo install cargo-mutants --locked
       - name: Run mutation tests on PR diff
         # --in-diff scopes to lines changed vs origin/<base_ref> (the merge target).
         # .cargo/mutants.toml further scopes to bulk + create modules.
+        # Use runner.temp + run_id to avoid /tmp race conditions on concurrent jobs.
         run: |
-          git diff origin/${{ github.base_ref }}...HEAD > /tmp/pr.diff
-          cargo mutants --in-diff /tmp/pr.diff \
-            --file src/cli/issue/create.rs \
-            --file src/api/jira/bulk.rs \
-            --file src/types/jira/bulk.rs
+          DIFF_FILE="${{ runner.temp }}/pr-${{ github.run_id }}.diff"
+          git diff origin/${{ github.base_ref }}...HEAD > "${DIFF_FILE}"
+          cargo mutants --in-diff "${DIFF_FILE}" --jobs 4
       - name: Check kill rate
         # The 90% kill-rate threshold lives here (not in .cargo/mutants.toml) for
-        # CI-artifact visibility. Job passes if no mutants touch scoped files.
+        # CI-artifact visibility.
+        # Positive-coverage gate (POL-11): if the PR diff touches scoped files,
+        # cargo-mutants MUST generate at least 1 mutant — otherwise the config or
+        # diff is broken and we fail explicitly rather than silently passing.
         run: |
-          caught=$(wc -l < mutants.out/caught.txt 2>/dev/null || echo 0)
-          missed=$(wc -l < mutants.out/missed.txt 2>/dev/null || echo 0)
-          total=$((caught + missed))
-          if [ "$total" -eq 0 ]; then
-            echo "No mutants generated (diff may not touch scoped files) — skip threshold check"
-            exit 0
+          # Determine whether the PR diff touches any scoped file.
+          diff_touches_scope=$(git diff origin/${{ github.base_ref }}...HEAD --name-only \
+            | grep -cE '^(src/cli/issue/create\.rs|src/api/jira/bulk\.rs|src/types/jira/bulk\.rs)$' \
+            || true)
+
+          # Parse machine-readable summary from outcomes.json.
+          if [ -f mutants.out/outcomes.json ]; then
+            total_mutants=$(jq '.total_mutants // 0' mutants.out/outcomes.json)
+            caught=$(jq '.caught // 0' mutants.out/outcomes.json)
+            missed=$(jq '.missed // 0' mutants.out/outcomes.json)
+          else
+            # Fallback: count lines in text files (grep -c '' counts lines reliably).
+            if [ -f mutants.out/caught.txt ]; then
+              caught=$(grep -c '' mutants.out/caught.txt)
+            else
+              caught=0
+            fi
+            if [ -f mutants.out/missed.txt ]; then
+              missed=$(grep -c '' mutants.out/missed.txt)
+            else
+              missed=0
+            fi
+            total_mutants=$((caught + missed))
           fi
-          pct=$((caught * 100 / total))
-          echo "Kill rate: ${pct}% (${caught}/${total})"
-          if [ "$pct" -lt 90 ]; then
-            echo "ERROR: kill rate ${pct}% is below 90% threshold"
+
+          # Positive-coverage gate (POL-11): diff touches scope → must have mutants.
+          if [ "${diff_touches_scope}" -gt 0 ] && [ "${total_mutants}" -eq 0 ]; then
+            echo "FAIL: PR diff touches scoped files but cargo-mutants generated 0 mutants."
+            echo "      This indicates a config or runtime breakage. Check mutants.out/ logs."
             exit 1
+          fi
+
+          # Kill-rate gate: only when there are mutants to evaluate.
+          if [ "${total_mutants}" -gt 0 ]; then
+            echo "Mutants summary: ${caught} caught / ${missed} missed / ${total_mutants} total"
+            if [ "${missed}" -gt 0 ]; then
+              echo "FAIL: ${missed} mutant(s) survived. See mutants.out/missed.txt."
+              if [ -f mutants.out/missed.txt ]; then cat mutants.out/missed.txt; fi
+              exit 1
+            fi
+            echo "OK: cargo-mutants gate passed (kill rate 100%)."
+          else
+            echo "No mutants generated (diff does not touch scoped files) — skip threshold check."
           fi

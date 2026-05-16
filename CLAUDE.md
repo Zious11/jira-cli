@@ -89,7 +89,7 @@ cargo test --test '*'                # Integration tests only
 cargo clippy -- -D warnings          # Lint (zero warnings policy)
 cargo fmt --all -- --check           # Format check
 cargo deny check                     # License + vulnerability audit
-cargo mutants --in-diff <(git diff origin/develop...HEAD)  # Mutation testing on PR diff scope (see docs/specs/cargo-mutants-policy.md)
+git diff origin/develop...HEAD > /tmp/pr.diff && cargo mutants --in-diff /tmp/pr.diff --jobs 4  # Mutation testing on PR diff scope (see docs/specs/cargo-mutants-policy.md)
 ```
 
 ## Conventions
