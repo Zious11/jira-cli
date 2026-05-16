@@ -880,8 +880,9 @@ fn build_labels_edited_fields(adds: &[String], removes: &[String]) -> serde_json
 ///   {"labels": {"labelsAction": "ADD", "labels": [{"name": "foo"}]}}
 ///   ```
 /// Tests use `body_string_contains` matchers to tolerate the shape difference;
-/// canonical Atlassian schema (per #331) requires top-level `labelsFields`
-/// array always — that's the long-term target for both code paths.
+/// per #331's Perplexity research, the canonical Atlassian schema is documented
+/// to use a top-level `labelsFields` array — that's the long-term target for
+/// both code paths once #331's empirical sandbox verification confirms it.
 /// `.expect(1)` enforces ONE bulk POST even when both ADD+REMOVE are specified.
 ///
 /// Output:
