@@ -1019,3 +1019,52 @@ When writing a proptest that pins an exact JSON wire shape, use `iter().map()` c
 
 _Discovered: S-345 F5 adversary review / F6 Copilot review, 2026-05-16_
 _Tagged: [novel-pg] — first occurrence; monitor for recurrence before promoting to codified rule_
+
+---
+
+## 2026-05-16 — S-346 Cycle Close-out Lessons
+
+### L-S346-1 [novel-pg] Empirically verify adversary's schema/API claims before fixing
+
+When an adversary produces a CRITICAL or BLOCKER finding about an external tool's API schema (e.g., "jq will silently produce nulls because the field doesn't exist at the path you think"), do NOT fix the code based on the claim alone. Verify directly by inspecting the actual tool output.
+
+**Concrete instance (S-346 Pass 5 F1):** The adversary claimed cargo-mutants v27's `outcomes.json` uses a nested per-outcome array structure (`.outcomes[] | select(.kind=="caught")`) rather than top-level scalar keys, asserting that the existing jq queries `.caught // 0`, `.missed // 0` etc. would silently return null. This was presented with high confidence as a CRITICAL finding. Directly inspecting a locally produced `mutants.out/outcomes.json` via `jq 'keys'` showed the top-level keys `caught`, `missed`, `timeout`, `unviable`, `total_mutants` — matching the existing jq queries exactly. The adversary's claim was speculative, not evidence-based. REFUTED with zero code changes.
+
+**Rule:** For any adversary finding that claims an external tool's output schema differs from what the code assumes — particularly when the code was written by inspecting the tool's actual output — verify by running the tool and examining the output with `jq 'keys'`, `jq '.'`, or equivalent before making any code change. Adversaries can produce confident-sounding speculative findings about external tool schemas; the cost of verification is one shell command; the cost of acting on a wrong claim is a spurious code change that passes CI but breaks empirical correctness.
+
+**Generalization:** This applies beyond cargo-mutants. Any adversary claim about the JSON/YAML/TOML schema of an external tool (cargo, rustc, jq, yq, gh, etc.) should be treated as "unverified hypothesis until locally confirmed."
+
+- First occurrence in cycle-001. Logged as [novel-pg] only.
+- Codify into adversarial-review SKILL.md or per-story-delivery if the "speculative schema" adversary pattern recurs.
+- Reference: S-346 Pass 5 F1 REFUTED; `.factory/cycles/cycle-001/S-346/implementation/red-gate-log.md`.
+
+_Discovered: S-346 F5 adversary Pass 5, 2026-05-16_
+_Tagged: [novel-pg] — first occurrence; monitor for recurrence before promoting to codified rule_
+
+---
+
+### L-S346-2 [novel-pg] Doc-drift across reference docs is the main risk for CI-infrastructure stories
+
+For CI-infrastructure stories (those that add/modify CI jobs, config files, and documentation without touching production code), documentation drift across multiple reference files is the dominant convergence challenge — not implementation correctness.
+
+**Concrete instance (S-346):** The implementation required 5 fix rounds across 8 adversary passes. Every fix round triggered at least one back-sync cascade to keep multiple reference documents in lockstep with the iterating CI implementation:
+
+- `.github/workflows/ci.yml` (the implementation)
+- `.factory/cicd-setup.md` (the canonical CI spec — pre-updated by F2 architect)
+- `docs/specs/cargo-mutants-policy.md` (the whitelist policy doc)
+- `docs/demo-evidence/S-346/baseline-mutants-report.txt` (the baseline evidence)
+- `CLAUDE.md` (the AI agent notes)
+- `.factory/code-delivery/issue-346/story.md` (the story spec AC-1 implementation notes)
+
+Each adversary pass that changed the CI YAML (kill-rate formula, diff generation, harness-health gate logic) required auditing all 5+ reference documents for stale descriptions of the old behavior.
+
+**Rule:** For CI-infrastructure stories, plan the doc-fallout sweep as an explicit named step in the implementation checklist, not as a one-shot cleanup at the end. After each implementation revision, immediately grep all reference documents for terminology describing the OLD behavior and update them in the same commit. Failure to do this atomically produces back-sync churn in subsequent adversary passes.
+
+**Anti-pattern name:** CI-infra doc-drift — when iterative refinements to a CI job cascade into stale descriptions across multiple reference docs, each requiring a separate back-sync commit.
+
+- First occurrence in cycle-001. Logged as [novel-pg] only.
+- Codify into story-writer template for CI-infrastructure stories if the pattern recurs.
+- Reference: S-346 5-round convergence with doc-fallout at every pass; `.factory/code-delivery/issue-346/story.md`.
+
+_Discovered: S-346 F5 adversary convergence retrospective, 2026-05-16_
+_Tagged: [novel-pg] — first occurrence; monitor for recurrence before promoting to codified rule_

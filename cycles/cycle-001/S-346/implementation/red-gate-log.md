@@ -216,6 +216,36 @@ The discriminator is exercised in future cycles, not this one.
 - cargo test: PASS (all tests green)
 - YAML parse (ruby): PASS
 
+## Adversary Pass 5 Fixes (applied 2026-05-16)
+
+### Finding status
+
+- **F1 (EMPIRICALLY REFUTED):** Claimed jq schema mismatch — that outcomes.json uses
+  nested `.outcomes[] | select(.kind=="caught")` rather than top-level `.caught` scalar.
+  Refuted by inspecting a local cargo-mutants v27 outcomes.json baseline: the file has
+  top-level `caught`, `missed`, `timeout`, `unviable`, `total_mutants` scalars. The jq
+  queries `.caught // 0` etc. are correct. No code change.
+
+- **F2 (HIGH — fixed):** Malformed outcomes.json (truncated or OOM-killed mid-write)
+  would silently default all counts to 0 via `jq '.caught // 0'` → false-green.
+  Added `jq empty mutants.out/outcomes.json` parseability check immediately before the
+  count queries. Malformed JSON now hard-fails with a clear "FAIL: malformed JSON" message.
+
+- **F5 (MEDIUM, latent — fixed):** `grep -c '' file` on empty file prints "0\n" then
+  exits 1. Under `bash -eo pipefail`, this triggered `|| echo 0`, producing a
+  newline-embedded `"0\n0"` value that breaks subsequent bash arithmetic. Replaced with
+  `wc -l < file` (exits 0 on empty file, prints clean "0"). Added `tr -d ' '` whitespace
+  trim for macOS compatibility (wc -l pads with spaces on macOS, not on Linux).
+
+- **F3+F4:** Dispatched to state-manager (spec back-sync tasks, not worktree scope).
+
+### Verification
+
+- cargo fmt --check: PASS
+- cargo clippy --all-targets -- -D warnings: PASS
+- cargo test: PASS (all tests green)
+- YAML parse (ruby): PASS
+
 ## Worktree Commits
 1. chore(S-346): add .gitignore + .cargo/mutants.toml config (3c35bdc)
 2. chore(S-346): add mutants CI job (PR-only, --in-diff, scoped) (68466f5)
@@ -227,3 +257,21 @@ The discriminator is exercised in future cycles, not this one.
 8. ci(S-346): adversary Pass 2 BLOCKERs + CONCERNs — 90% gate, dead-diagnostic-step fix, timeout arithmetic, mktemp safety (1b0bd3e)
 9. ci(S-346): adversary Pass 3 fixes — policy.md --file dedupe + harness-health gate (no shared-failure false-green) (315f16b)
 10. ci(S-346): adversary Pass 4 F1+F2 fixes — distinguish harness crash from zero-mutant clean PR (b3e0acd)
+11. ci(S-346): adversary Pass 5 F2+F5 — JSON parseability check + wc -l fallback (6548050)
+
+---
+
+## Cycle Close-out (2026-05-16)
+
+- PR #373 squash-merged to develop at SHA d909e65 on 2026-05-16T14:49:25Z
+- **Total adversary passes:** 8 (Passes 1–8)
+- **Fix rounds:** 5 (Passes 1–5 each required fixes; Passes 6/7/8 were consecutive CLEAN)
+- **Final convergence:** 3 consecutive CLEAN passes (Passes 6, 7, 8)
+- **Finding trajectory:** 0/6/14 → 2/6/4 → 0/3/3 → 0/2/4 → 2/3/3 (1 REFUTED) → 0/0/3 CLEAN → 0/0/0 CLEAN → 0/0/0 CLEAN
+- **Pass 5 F1 empirical refutation:** Adversary CRITICAL claimed cargo-mutants v27 `outcomes.json` uses nested per-outcome objects (`.outcomes[] | select(.kind=="caught")`) rather than top-level scalars. Directly inspecting a locally produced `outcomes.json` via `jq 'keys'` showed top-level keys `caught`, `missed`, `timeout`, `unviable`, `total_mutants` — matching the existing jq queries. REFUTED; no code change.
+- **Mutation-based Red Gate outcome:** S-346 is CI infrastructure (no production code changed). The "red gate" is conceptual — future PRs that fail the 90% kill-rate threshold will cause the new `mutants` CI job to fail and block the merge. All 10 CI checks on the PR itself (including the new `mutants` job running on its own diff) passed; the clean-PR path produced 0 mutants from the CI-only file change, which correctly exits 0 per the zero-mutants branch in the kill-rate step.
+- **Copilot Review:** R1 = APPROVE; 2 non-blocking findings (S1 persist-credentials note, TD1 long CLAUDE.md line)
+- **CI:** 10/10 green (fmt, clippy, test, msrv, deny, coverage, security, spec-guard, mutants, build)
+- **Issue #346 CLOSED** via PR's `Closes #346` footer; confirmed CLOSED/COMPLETED
+- **Follow-up #372 filed** to complete the partial mutation baseline (16/115 caught at PR merge; 99 mutants unprocessed)
+- **Audit-followup cluster status:** ALL 3 CLEARED — #340 (PR #370), #345 (PR #371), #346 (PR #373)

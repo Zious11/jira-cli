@@ -3,7 +3,7 @@ document_type: story
 story_id: "S-346"
 title: "Add cargo-mutants CI job + whitelist policy for bulk + create modules"
 wave: feature-followup
-status: ready
+status: completed
 priority: low
 estimated_effort: small
 tdd_mode: standard   # NOT strict — this is CI infrastructure, not test-driven production code
@@ -22,7 +22,7 @@ files_modified:
 test_files: []
 breaking_change: false
 producer: story-writer
-version: "1.0.5"
+version: "1.1.0"
 last_updated: 2026-05-16
 depends_on:
   - S-340     # S-340 is the immediate predecessor in the audit-followup cluster; bulk.rs is the primary mutation target
@@ -403,6 +403,17 @@ Do not add any new Cargo dependencies.
 | `tests/` (all test files) | DO NOT TOUCH | Existing test suite serves as the mutation harness without modification. |
 | `.factory/cicd-setup.md` | DO NOT TOUCH | F2 architect already updated this file (commit 44e2b76). |
 | `.factory/specs/prd/BC-INDEX.md` | DO NOT TOUCH | No new BC; no in-place BC extension. |
+
+## Delivery Outcome
+
+- **PR #373 merged** to develop at SHA d909e65 on 2026-05-16T14:49:25Z (squash merge)
+- **Issue #346 closed** via PR's `Closes #346` footer; state confirmed CLOSED/COMPLETED
+- **Follow-up #372 filed** to complete the partial mutation baseline (16/115 mutants processed at PR open; 99 unprocessed)
+- **Convergence:** 8 adversary passes, 5 fix rounds, 3 consecutive CLEAN passes (Passes 6/7/8) for convergence
+- **Finding trajectory:** 0/6/14 → 2/6/4 → 0/3/3 → 0/2/4 → 2/3/3 (1 REFUTED) → 0/0/3 CLEAN → 0/0/0 CLEAN → 0/0/0 CLEAN
+- **Copilot review:** 1 cycle, APPROVE on first pass, 2 non-blocking findings (S1 persist-credentials + TD1 long CLAUDE.md line)
+- **CI:** All 10 CI checks passed including the new mutation testing job (clean-PR path: 0 mutants from CI-only diff → "PASS in 19s")
+- **Notable empirical refutation:** Pass 5 F1 "jq schema mismatch" CRITICAL was REFUTED by directly inspecting `mutants.out/outcomes.json` — the file contains top-level scalar keys (`caught`, `missed`, `timeout`, `unviable`, `total_mutants`) as expected. The adversary's claim was speculative, not evidence-based; the jq queries were correct as written.
 
 ## References
 

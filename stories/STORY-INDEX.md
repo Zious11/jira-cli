@@ -181,7 +181,7 @@ They have `wave: feature-followup` in frontmatter and live under `.factory/code-
 |----------|-------|------------|-----------------|--------|-------------|
 | S-340 | Pin task_id-in-bulk-poll-timeout-message contract with regression test | BC-3.4.009 | — | MERGED — PR #370 @ 394dc25 (2026-05-16) | small |
 | S-345 | Extract label-coalesce JSON builder into pure function with proptest coverage | BC-3.4.006 | — | MERGED — PR #371 @ bb352ea (2026-05-16) | small |
-| S-346 | Add cargo-mutants CI job + whitelist policy for bulk + create modules | — | — | ready (issue #346) | small |
+| S-346 | Add cargo-mutants CI job + whitelist policy for bulk + create modules | — | — | MERGED — PR #373 @ d909e65 (2026-05-16) | small |
 
 Feature-followup story files: `.factory/code-delivery/issue-NNN/story.md`
 
