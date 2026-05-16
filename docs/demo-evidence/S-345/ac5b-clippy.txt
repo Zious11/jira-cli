@@ -1,1 +1,5 @@
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.13s
+$ cargo clippy --all-targets -- -D warnings
+    Checking jr v0.5.0-dev.9 (...)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in ...
+(no warnings — clean finish)
+Exit code: 0

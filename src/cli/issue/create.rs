@@ -800,9 +800,10 @@ pub(super) async fn handle_edit(
     Ok(())
 }
 
-/// Build the `editedFieldsInput.labels` JSON value for a bulk-labels edit.
+/// Build the edited-fields JSON object for a bulk-labels edit.
 ///
-/// Returns the JSON shape per BC-3.4.006:
+/// Returns the complete `editedFieldsInput` object (with a top-level `"labels"` key)
+/// to be passed directly to `bulk_edit_fields`. JSON shapes per BC-3.4.006:
 /// - Single-action ADD: object-form
 ///   `{"labels": {"labelsAction": "ADD", "labels": [{"name": "foo"}]}}`
 /// - Single-action REMOVE: object-form
@@ -917,7 +918,7 @@ async fn handle_edit_bulk_labels(
     }
 
     // Coalesce ADD and REMOVE into a single bulk POST when both are present.
-    // Both operations submitted in one request as an array of label-action objects.
+    // Both operations are submitted in one request as an array of label-action objects.
     // See build_labels_edited_fields doc-comment for the verbatim #331 schema caveat.
     let edited_fields = build_labels_edited_fields(&adds, &removes);
 
@@ -1536,6 +1537,15 @@ mod build_labels_proptests {
                     prop_assert_eq!(a1_action, "REMOVE", "BC-3.4.006: array index 1 MUST be REMOVE");
                     prop_assert_eq!(a0_names, adds.clone(),    "BC-3.4.006: ADD names MUST match input");
                     prop_assert_eq!(a1_names, removes.clone(), "BC-3.4.006: REMOVE names MUST match input");
+                    // Assert inner labels array lengths to prevent silent extra-item drift via filter_map.
+                    let add_inner = arr[0].get("labels").and_then(|v| v.as_array()).expect(
+                        "BC-3.4.006: both-action ADD entry MUST have an inner 'labels' array",
+                    );
+                    let rem_inner = arr[1].get("labels").and_then(|v| v.as_array()).expect(
+                        "BC-3.4.006: both-action REMOVE entry MUST have an inner 'labels' array",
+                    );
+                    prop_assert_eq!(add_inner.len(), adds.len(),    "BC-3.4.006: both-action inner ADD labels array length MUST equal input length");
+                    prop_assert_eq!(rem_inner.len(), removes.len(), "BC-3.4.006: both-action inner REMOVE labels array length MUST equal input length");
                 }
                 // Single-action ADD: object-form, labelsAction=ADD.
                 (false, true) => {
