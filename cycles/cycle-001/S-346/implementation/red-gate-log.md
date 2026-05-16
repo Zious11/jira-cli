@@ -188,6 +188,34 @@ The discriminator is exercised in future cycles, not this one.
   (line 21 = new corrected claim "no --file CLI flags"; line 109 = local-invocation
   note; line 116 = single-file inspection example command)
 
+## Adversary Pass 4 Fixes (applied 2026-05-16)
+
+### CONCERN findings addressed
+
+- **F1 (CONCERN):** Pass 3's `outcomes.json`-existence check conflated harness crash with
+  zero-mutants clean PR — both produce missing `outcomes.json` on cargo-mutants v27.
+  Replaced with 2x2 decision matrix on `(steps.run-mutants.outcome, outcomes.json)`:
+  - `success + present`  → enforce 90% gate
+  - `success + absent`   → clean PR (exit 0)
+  - `failure + present`  → enforce 90% gate (gate catches missed)
+  - `failure + absent`   → harness crash (FAIL, exit 1)
+  Added `id: run-mutants` to "Run mutation tests" step so `steps.run-mutants.outcome`
+  is addressable from the "Check kill rate" step.
+
+- **F2 (CONCERN):** Stale comment in "Check kill rate" step described the removed
+  `cargo mutants --list` positive-coverage mechanism (Pass 2 artefact). Replaced with
+  comment describing the actual `steps.run-mutants.outcome` + `outcomes.json` gate logic.
+
+- **Obs-3:** `cicd-setup.md:81` claim "configurable in `.cargo/mutants.toml`" dispatched
+  to state-manager — not touched from worktree per task constraints.
+
+### Verification
+
+- cargo fmt --check: PASS
+- cargo clippy --all-targets -- -D warnings: PASS
+- cargo test: PASS (all tests green)
+- YAML parse (ruby): PASS
+
 ## Worktree Commits
 1. chore(S-346): add .gitignore + .cargo/mutants.toml config (3c35bdc)
 2. chore(S-346): add mutants CI job (PR-only, --in-diff, scoped) (68466f5)
@@ -198,3 +226,4 @@ The discriminator is exercised in future cycles, not this one.
 7. chore(S-346): re-capture baseline evidence (Pass 1 F6+F7) — partial run (73be70b)
 8. ci(S-346): adversary Pass 2 BLOCKERs + CONCERNs — 90% gate, dead-diagnostic-step fix, timeout arithmetic, mktemp safety (1b0bd3e)
 9. ci(S-346): adversary Pass 3 fixes — policy.md --file dedupe + harness-health gate (no shared-failure false-green) (315f16b)
+10. ci(S-346): adversary Pass 4 F1+F2 fixes — distinguish harness crash from zero-mutant clean PR (b3e0acd)
