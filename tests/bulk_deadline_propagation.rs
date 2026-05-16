@@ -388,10 +388,13 @@ async fn test_333_b1_bulk_running_storm_respects_deadline_via_outer_clamp() {
     // `jr api /rest/api/3/bulk/queue/<task_id>` without hunting through the
     // Jira UI.
     // Pinning the existing `"[deadline:bulk-outer] Bulk task {task_id} ..."` format
-    // at src/api/jira/bulk.rs:412.
+    // at src/api/jira/bulk.rs:408-417 (return site of JrError::DeadlineExceeded).
+    let expected_fragment = format!("[deadline:bulk-outer] Bulk task {task_id} did not");
     assert!(
-        stderr.contains(task_id),
-        "BC-3.4.009 VIOLATION: expected stderr to contain task_id literal {task_id:?}. \
-         Got stderr:\n{stderr}",
+        stderr.contains(&expected_fragment),
+        "BC-3.4.009 VIOLATION: expected stderr to contain the deadline-message \
+         fragment {expected_fragment:?} (proves task_id is interpolated inside the \
+         [deadline:bulk-outer] message, not coincidentally elsewhere in stderr — \
+         e.g., a --verbose request URL log). Got stderr:\n{stderr}",
     );
 }
