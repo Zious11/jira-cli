@@ -813,9 +813,15 @@ pub(super) async fn handle_edit(
 /// Pure function — no I/O, no async, no client refs. Enables proptest coverage
 /// of the JSON shape invariants without wiremock.
 ///
-/// Schema note: this pins the CURRENT shape sent by the code; whether the
-/// array-form is what Atlassian actually accepts is tracked in issue #331.
+/// Shape is best-guess (unverified against live Atlassian API; tracked at #331).
+/// PR2 test asserts .expect(1) on bulk POST to ensure ADD+REMOVE coalesce into ONE call,
+/// but the exact JSON nesting matches a loose `body_string_contains` matcher — schema
+/// accuracy is the work being deferred to #331.
 fn build_labels_edited_fields(adds: &[String], removes: &[String]) -> serde_json::Value {
+    debug_assert!(
+        !adds.is_empty() || !removes.is_empty(),
+        "build_labels_edited_fields: caller MUST bail when both inputs are empty (BC-3.4.006)",
+    );
     let mut label_ops: Vec<serde_json::Value> = Vec::new();
     if !adds.is_empty() {
         let add_entries: Vec<serde_json::Value> = adds.iter().map(|n| json!({"name": n})).collect();
@@ -907,6 +913,8 @@ async fn handle_edit_bulk_labels(
         bail!("No label changes specified.");
     }
 
+    // Coalesce ADD and REMOVE into a single bulk POST when both are present.
+    // Both operations submitted in one request as an array of label-action objects.
     // Delegate JSON construction to the pure builder (BC-3.4.006).
     // PR2 test asserts .expect(1) on bulk POST to ensure ADD+REMOVE coalesce into ONE call;
     // body_string_contains matchers tolerate the object/array shape difference per PR1 compat.
@@ -1492,6 +1500,10 @@ mod build_labels_proptests {
             prop_assume!(!adds.is_empty() || !removes.is_empty());
 
             let result = build_labels_edited_fields(&adds, &removes);
+
+            // Invariant 0: top-level value MUST be a JSON object with EXACTLY one key ("labels").
+            let obj = result.as_object().expect("BC-3.4.006: top-level value MUST be a JSON object");
+            prop_assert_eq!(obj.len(), 1, "BC-3.4.006: top-level object MUST have exactly one key ('labels')");
 
             // Invariant 1: top-level "labels" key is always present.
             let labels = result.get("labels").expect("BC-3.4.006: top-level 'labels' key MUST be present");
