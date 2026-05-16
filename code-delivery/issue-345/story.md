@@ -3,7 +3,7 @@ document_type: story
 story_id: "S-345"
 title: "Extract label-coalesce JSON builder into pure function with proptest coverage"
 wave: feature-followup
-status: ready
+status: completed
 priority: low
 estimated_effort: small
 tdd_mode: strict
@@ -19,7 +19,7 @@ test_files:
   - src/cli/issue/create.rs (inline #[cfg(test)] mod proptests — proptest covering JSON shape invariants)
 breaking_change: false
 producer: story-writer
-version: "1.0.1"
+version: "1.1.0"
 last_updated: 2026-05-16
 depends_on:
   - S-110-pr2   # original bulk-edit feature delivery; S-345 is an audit-followup refactor of that work

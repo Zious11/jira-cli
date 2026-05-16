@@ -979,3 +979,43 @@ Both are first occurrences in cycle-001. Logged as [novel-pg] only. Do NOT file 
 
 _Discovered: S-340 F5 adversary passes 1 and 4, 2026-05-15_
 _Tagged: [novel-pg] — first occurrence; monitor for recurrence before promoting to codified rule_
+
+---
+
+## 2026-05-16 — S-345 Cycle Close-out Lessons
+
+### L-S345-1 [novel-pg] Evidence-staleness chase-your-tail on PRs that include demo evidence files
+
+When iterating Copilot reviews on a PR that includes captured evidence files (e.g., test output transcripts, cargo output logs, snapshot captures), every code fix that shifts line numbers or output formatting causes evidence files to become stale. This produces a "chase-your-tail" pattern: each Copilot round that fixes a real finding also triggers a new "stale evidence" comment in the next round, which triggers a new evidence-regeneration commit, which shifts line numbers again.
+
+**Resolution pattern observed in PR #371:** Rather than regenerating evidence incrementally per Copilot round, defer all evidence regeneration to a single consolidated commit at the FINAL HEAD — after all behavioral fixes have been applied and no further code changes are expected. A single `convergence batch` commit (9420f1b in this case) regenerated ALL evidence files atomically, eliminating the evidence-staleness feedback loop entirely.
+
+**Rule:** When a PR includes demo evidence files AND Copilot review is expected to produce multiple rounds, do NOT regenerate evidence files after each round. Regenerate ALL evidence in one consolidated commit after the final behavioral fix, before requesting the last Copilot review pass.
+
+**Anti-pattern name:** evidence-staleness chase-your-tail — each evidence update triggers another stale-evidence comment.
+
+- First occurrence in cycle-001. Logged as [novel-pg] only.
+- Codify into demo-recorder prompt or pr-manager process if the pattern recurs in a future cycle.
+- Reference: PR #371 convergence batch commit 9420f1b, S-345 F7 cycle close-out.
+
+_Discovered: S-345 F7 Copilot review cycles, 2026-05-16_
+_Tagged: [novel-pg] — first occurrence; monitor for recurrence before promoting to codified rule_
+
+---
+
+### L-S345-2 [novel-pg] Proptest helper filter_map masks malformed shapes — use map + assert instead
+
+When writing a proptest that pins an exact JSON wire shape, use `iter().map()` combined with `assert!` (or `prop_assert!`) instead of `iter().filter_map()`. The `filter_map` combinator silently drops entries that do not match the expected shape — including malformed shapes that represent contract violations. A proptest that uses `filter_map` to extract "expected" structure will trivially pass even when the function under test returns a structurally wrong value, because the malformed entry is silently discarded from the iteration rather than triggering an assertion failure.
+
+**Concrete manifestation (PR #371 / S-345):** An early proptest draft used `filter_map` to extract `"labelsAction"` keys from the returned JSON array. On a structurally wrong return value (no `"labelsAction"` key), `filter_map` would have returned `None` and silently skipped the entry — producing `0 assertions checked` rather than `1 assertion FAILED`. The proptest would have reported `256 cases: OK` on a broken implementation.
+
+**Correct pattern:** `iter().map(|entry| entry["labelsAction"].as_str().expect("BC-3.4.006: labelsAction must be present"))` — uses `expect!` (or `prop_assert!`) to fail explicitly on malformed entries rather than silently skipping them.
+
+**Rule:** In proptests that pin exact JSON or struct shapes, always use assertion-based extraction (`expect`, `unwrap_or_else`, `prop_assert!`) rather than silently-dropping combinators (`filter_map`, `find`, `flatten`). The discriminating power of the proptest depends on the assertions firing on malformed entries.
+
+- First occurrence in cycle-001. Logged as [novel-pg] only.
+- Codify into test-writer prompt if the pattern recurs in a future proptest delivery.
+- Reference: PR #371 / S-345 proptest for `build_labels_edited_fields` invariants, BC-3.4.006.
+
+_Discovered: S-345 F5 adversary review / F6 Copilot review, 2026-05-16_
+_Tagged: [novel-pg] — first occurrence; monitor for recurrence before promoting to codified rule_

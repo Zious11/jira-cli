@@ -36,8 +36,8 @@ activation_version: "v0.5.0-dev.7"
 | **Language** | Rust |
 | **Target Workspace** | develop → main |
 | **Started** | 2026-05-04 |
-| **Last Updated** | 2026-05-16 — F3 done (S-345 committed @ 2e26acd); F4 worktree+TDD dispatch in flight. |
-| **Current Phase** | Phase 3 — TDD Implementation **IN PROGRESS** — Wave 3 CLOSED (10/10). Feature Mode #110-pr2 COMPLETE. PRs #355–#364, #366–#367, #369–#370 MERGED. **2 audit-followups remain: #345, #346** (#331 sandbox-blocked deferred; #333 closed by PR #360; #340 closed by PR #370; #350 closed by PR #362; #361 closed by PR #364; #365 closed by PR #367; PG-365-1 closed by PR #369). No active cycle. |
+| **Last Updated** | PR #371 MERGED @ bb352ea (2026-05-16) — closes #345. Audit-followup cluster now 1 remaining: #346 (cargo-mutants CI). |
+| **Current Phase** | Phase 3 — TDD Implementation **IN PROGRESS** — Wave 3 CLOSED (10/10). Feature Mode #110-pr2 COMPLETE. PRs #355–#364, #366–#367, #369–#371 MERGED. **1 audit-followup remains: #346** (#331 sandbox-blocked deferred; #333 closed by PR #360; #340 closed by PR #370; #345 closed by PR #371; #350 closed by PR #362; #361 closed by PR #364; #365 closed by PR #367; PG-365-1 closed by PR #369). No active cycle. |
 | **Next Phase** | Wave 3 — 10 stories (S-3.01..S-3.10) |
 | **Activation HEAD** | dea166471e22eff55974d7675593469b37048c5f (v0.5.0-dev.7) |
 | **factory-artifacts SHA** | 0b01262 (Phase 1 gate APPROVE; phase-1-converged tag) |
@@ -77,7 +77,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | 3-feature-search-issue-keys-dedupe-365 | **MERGED — PR #367 @ e193c16 (squash); closes #365; full F1-F7 lifecycle CONVERGED in single cycle** — F1d: 17 passes (R1: P1-P11 CONVERGED v0.1.8; R2: P12-P17 CONVERGED v0.1.12). F5: 4 passes (adversary 3-clean + code-reviewer CONVERGENCE_REACHED + security LOW-RISK APPROVE). F6: 5 Copilot rounds (R2 O(N²)→O(N) algorithmic fix; R3-R4 doc cascade; R5 clean). Merged 2026-05-15T17:51:09Z. | 2026-05-14 | 2026-05-15 | MERGED @ e193c16 | F1d R1: 0/4/2→…→0→0→0 (11p) \| F1d R2: 0/0/3→0/6/0→1B/2/0→0→0/0/2→0 (6p) \| F5: →→→clean×3 \| F6: 5R→clean |
 | 3-chore-pg365-1-bc-trace-cleanup | **MERGED** — PR #369 @ 6ca9587 (squash); resolves PG-365-1 Drift Item from cycle #365 | 2026-05-15 | 2026-05-15 | MERGED — 7 Copilot rounds, 9 valid findings | R1=1 R2=1 R3=1 R4=1 R5=3 R6=2 R7=0 |
 | 3-feature-340-bulk-poll-task-id-pin | **MERGED** — PR #370 @ 394dc25 (squash); closes #340; F1-F7 full cycle CONVERGED in single delivery | 2026-05-15 | 2026-05-16 | MERGED — 5 adv passes (0/0 trajectory), 3 CLEAN; Copilot R1=0; CI 9/9 green | 8→5→3-obs→7→4 (BLOCKER+CONCERN: 0 every pass) |
-| 3-feature-345-label-coalesce-extract | F1+F2+F3 COMPLETE — F4 dispatch ready | 2026-05-16 | — | F1 orchestrator-approved (delta-analysis-345.md) | — |
+| 3-feature-345-label-coalesce-extract | **MERGED** — PR #371 @ bb352ea (squash, admin); closes #345; F1-F7 full cycle CONVERGED | 2026-05-16 | 2026-05-16 | MERGED — 6 adv passes (3 CLEAN); 3 Copilot cycles + 1 convergence batch; 17 threads resolved; CI 9/9 green | 0/1/6 → 0/2/3 → 0/2/2 → 0/0/0 → 0/0/0 → 0/0/0 (3 consecutive CLEAN) |
 | 4: Holdout Evaluation | not-started | | | | |
 | 5: Adversarial Refinement | not-started | | | | |
 | 6: Formal Hardening | not-started | | | | |
@@ -95,6 +95,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | PR #367 MERGED @ e193c16 (2026-05-15T17:51:09Z) — cycle 3-feature-search-issue-keys-dedupe-365 CLOSED | state-manager | complete | Phase Progress row updated to MERGED. Session checkpoint updated. L-365-summary appended to lessons.md. Factory commits pushed to origin/factory-artifacts. |
 | PR #369 MERGED @ 6ca9587 — PG-365-1 RESOLVED. Single-pass F5 review missed Source-field coverage (Copilot R4 caught it) — see lesson L-PG365-1-process. 7 Copilot rounds, 9 valid findings. DRIFT-007 added. | state-manager | complete | Phase Progress row added. Lesson L-PG365-1-process codified in lessons.md. DRIFT-007 recorded in Drift Items. Session checkpoint updated. |
 | PR #370 MERGED @ 394dc25 — S-340 cycle-001 CLOSED. 5 adv passes, 3 CLEAN (P3/P4/P5); trajectory 8→5→3-obs→7→4. Copilot R1=0; CI 9/9 green. Issue #340 CLOSED. 2 audit-followups remain: #345, #346. | state-manager | complete | story.md status→completed v1.1.0; STORY-INDEX S-340→MERGED; cycle-001/S-340/red-gate-log.md cycle close-out appended; lessons.md mutation-Red-Gate [novel-pg] + machine-enforced red-gate [novel-pg] codified. |
+| PR #371 MERGED @ bb352ea — S-345 cycle-001 CLOSED. 6 adv passes, 3 CLEAN (P4/P5/P6); trajectory 0/1/6→0/2/3→0/2/2→0/0/0→0/0/0→0/0/0. 3 Copilot cycles + convergence batch (9420f1b); 17 threads resolved via GraphQL. Merge --admin (author self-approve restriction). CI 9/9 green. Issue #345 CLOSED. 1 audit-followup remains: #346. | state-manager | complete | story.md status→completed v1.1.0; STORY-INDEX S-345→MERGED; red-gate-log.md cycle close-out appended; lessons.md evidence-staleness + proptest-filter_map [novel-pg] codified. |
 
 ## Decisions Log
 
@@ -225,8 +226,8 @@ _Not started._
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-16 |
-| **Position** | **S-340 MERGED** — PR #370 MERGED @ 394dc25 (squash, 2026-05-16, closes #340). Audit-followup cluster: S-340 cycle CLOSED. **2 audit-followups remain: #345, #346** (#331 sandbox-blocked deferred). Develop HEAD = 394dc25. No active cycle. Lessons codified: mutation-Red-Gate [novel-pg], machine-enforced red-gate verification [novel-pg]. |
-| **Convergence counter** | No active convergence cycle. PR #370 (S-340): 5 adv passes (0/0 every pass), 3 CLEAN (P3/P4/P5); Copilot R1=0 → MERGED. Trajectory: 8→5→3-obs→7→4. |
+| **Position** | **S-345 MERGED** — PR #371 MERGED @ bb352ea (squash, 2026-05-16, closes #345). Audit-followup cluster: S-345 cycle CLOSED. **1 audit-followup remains: #346** (cargo-mutants CI; #331 sandbox-blocked deferred). Develop HEAD = bb352ea. No active cycle. Lessons codified: evidence-staleness chase-your-tail [novel-pg], proptest filter_map silent-drop [novel-pg]. |
+| **Convergence counter** | No active convergence cycle. PR #371 (S-345): 6 adv passes (3 CLEAN P4/P5/P6); 3 Copilot cycles + 1 convergence batch; Copilot final=0 → MERGED. Trajectory: 0/1/6→0/2/3→0/2/2→0/0/0→0/0/0→0/0/0. |
 
 ## Historical Content
 
