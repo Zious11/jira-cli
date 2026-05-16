@@ -815,17 +815,32 @@ pub(super) async fn handle_edit(
 ///
 /// Schema note: this pins the CURRENT shape sent by the code; whether the
 /// array-form is what Atlassian actually accepts is tracked in issue #331.
-///
-/// STUB PHASE (S-345 Red Gate): function is `#[cfg(test)]`-only and returns a
-/// deliberately wrong value so the proptest fails red. Implementer (next dispatch)
-/// will remove the `#[cfg(test)]` gate, replace the stub body with the real
-/// implementation, and wire it into `handle_edit_bulk_labels`.
-#[cfg(test)]
 fn build_labels_edited_fields(adds: &[String], removes: &[String]) -> serde_json::Value {
-    // STUB: deliberately wrong so the proptest fails red.
-    // Implementer (next dispatch) replaces this with the real implementation.
-    let _ = (adds, removes);
-    serde_json::json!({"STUB_INTENTIONALLY_WRONG": true})
+    let mut label_ops: Vec<serde_json::Value> = Vec::new();
+    if !adds.is_empty() {
+        let add_entries: Vec<serde_json::Value> = adds.iter().map(|n| json!({"name": n})).collect();
+        label_ops.push(json!({
+            "labelsAction": "ADD",
+            "labels": add_entries
+        }));
+    }
+    if !removes.is_empty() {
+        let remove_entries: Vec<serde_json::Value> =
+            removes.iter().map(|n| json!({"name": n})).collect();
+        label_ops.push(json!({
+            "labelsAction": "REMOVE",
+            "labels": remove_entries
+        }));
+    }
+
+    // Single-action: object-form (backward-compat with PR1 tests).
+    // Both-action: coalesced array-form (single bulk POST for ADD+REMOVE).
+    if label_ops.len() == 1 {
+        let op = label_ops.remove(0);
+        json!({ "labels": op })
+    } else {
+        json!({ "labels": label_ops })
+    }
 }
 
 /// Route label edits through the Atlassian Bulk Fields API.
@@ -892,38 +907,11 @@ async fn handle_edit_bulk_labels(
         bail!("No label changes specified.");
     }
 
-    // Coalesce ADD and REMOVE into a single bulk POST.
-    // Both operations are submitted in one request using an array of label action objects.
-    // Shape is best-guess (unverified against live Atlassian API; tracked at #331).
-    // PR2 test asserts .expect(1) on bulk POST to ensure ADD+REMOVE coalesce into ONE call,
-    // but the exact JSON nesting matches a loose `body_string_contains` matcher — schema
-    // accuracy is the work being deferred to #331.
-    let mut label_ops: Vec<serde_json::Value> = Vec::new();
-    if !adds.is_empty() {
-        let add_entries: Vec<serde_json::Value> = adds.iter().map(|n| json!({"name": n})).collect();
-        label_ops.push(json!({
-            "labelsAction": "ADD",
-            "labels": add_entries
-        }));
-    }
-    if !removes.is_empty() {
-        let remove_entries: Vec<serde_json::Value> =
-            removes.iter().map(|n| json!({"name": n})).collect();
-        label_ops.push(json!({
-            "labelsAction": "REMOVE",
-            "labels": remove_entries
-        }));
-    }
-
-    // When only one action is present, unwrap to the simpler object form
-    // for backward compatibility with PR1 tests (body_partial_json matchers).
-    let edited_fields = if label_ops.len() == 1 {
-        let op = label_ops.remove(0);
-        json!({ "labels": op })
-    } else {
-        // Both ADD and REMOVE: use the coalesced array form.
-        json!({ "labels": label_ops })
-    };
+    // Delegate JSON construction to the pure builder (BC-3.4.006).
+    // PR2 test asserts .expect(1) on bulk POST to ensure ADD+REMOVE coalesce into ONE call;
+    // body_string_contains matchers tolerate the object/array shape difference per PR1 compat.
+    // Schema accuracy (unverified against live Atlassian API) is tracked at #331.
+    let edited_fields = build_labels_edited_fields(&adds, &removes);
 
     // selectedActions for labels is always ["labels"] regardless of ADD/REMOVE/coalesce.
     let task_id = client
