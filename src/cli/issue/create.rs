@@ -500,9 +500,9 @@ pub(super) async fn handle_edit(
                     // POST shapes are best-guesses pending #331 empirical verification.
                     // Locking dry-run consumers to unverified canonical Atlassian
                     // shapes now would force a second breaking change once #331
-                    // confirms the true shapes. Once #331 verifies the wire shapes and
-                    // #345 extracts pure builders, this dry-run builder can be unified
-                    // with `handle_edit_bulk_labels` / `handle_edit_bulk_fields` to
+                    // confirms the true shapes. Once #331 verifies the wire shapes,
+                    // this dry-run builder can be unified with
+                    // `handle_edit_bulk_labels` / `handle_edit_bulk_fields` to
                     // emit byte-identical JSON.
                     let label_entries: Vec<serde_json::Value> = labels
                         .iter()
@@ -803,10 +803,12 @@ pub(super) async fn handle_edit(
 /// Build the `editedFieldsInput.labels` JSON value for a bulk-labels edit.
 ///
 /// Returns the JSON shape per BC-3.4.006:
-/// - Single-action (only adds OR only removes): object-form
-///   `{"labels": {"labelsAction": "ADD"|"REMOVE", "labels": [{"name": ...}, ...]}}`
-/// - Both-action (adds AND removes): array-form with ADD then REMOVE
-///   `{"labels": [{"labelsAction": "ADD", "labels": [...]}, {"labelsAction": "REMOVE", "labels": [...]}]}`
+/// - Single-action ADD: object-form
+///   `{"labels": {"labelsAction": "ADD", "labels": [{"name": "foo"}]}}`
+/// - Single-action REMOVE: object-form
+///   `{"labels": {"labelsAction": "REMOVE", "labels": [{"name": "bar"}]}}`
+/// - Both-action (ADD + REMOVE): array-form with ADD at index 0, REMOVE at index 1
+///   `{"labels": [{"labelsAction": "ADD", "labels": [{"name": "foo"}]}, {"labelsAction": "REMOVE", "labels": [{"name": "bar"}]}]}`
 ///
 /// Caller MUST bail BEFORE calling this if both inputs are empty.
 ///
@@ -856,10 +858,10 @@ fn build_labels_edited_fields(adds: &[String], removes: &[String]) -> serde_json
 /// NOTE: The `--dry-run --output json` `plannedChanges.labels` shape (built in the
 /// dry-run block of `handle_edit` above) is a SIMPLIFIED preview using `{action, name}`
 /// pairs in a flat array, NOT a byte-for-byte snapshot of the POST body built here.
-/// Dry-run is a human-and-tool-friendly diff; the POST body below is the current
-/// best-guess Atlassian shape (still unverified, pending #331). Once #331 confirms
-/// the canonical wire shape and #345 extracts a pure builder, the two paths can
-/// converge.
+/// Dry-run is a human-and-tool-friendly diff; the POST body is constructed by
+/// `build_labels_edited_fields` (BC-3.4.006) and represents the current best-guess
+/// Atlassian shape (still unverified, pending #331). Once #331 confirms the
+/// canonical wire shape, both paths can converge.
 ///
 /// editedFieldsInput shape (best-guess pending #331 empirical verification):
 /// - When BOTH ADD and REMOVE labels are present, coalesced into ONE bulk POST
@@ -915,10 +917,7 @@ async fn handle_edit_bulk_labels(
 
     // Coalesce ADD and REMOVE into a single bulk POST when both are present.
     // Both operations submitted in one request as an array of label-action objects.
-    // Delegate JSON construction to the pure builder (BC-3.4.006).
-    // PR2 test asserts .expect(1) on bulk POST to ensure ADD+REMOVE coalesce into ONE call;
-    // body_string_contains matchers tolerate the object/array shape difference per PR1 compat.
-    // Schema accuracy (unverified against live Atlassian API) is tracked at #331.
+    // See build_labels_edited_fields doc-comment for the verbatim #331 schema caveat.
     let edited_fields = build_labels_edited_fields(&adds, &removes);
 
     // selectedActions for labels is always ["labels"] regardless of ADD/REMOVE/coalesce.
