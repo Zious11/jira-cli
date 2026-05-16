@@ -17,8 +17,9 @@ high line coverage but untested assertion strength at the time of the F6 review.
 - `src/api/jira/bulk.rs` — `await_bulk_task`, polling loop, deadline propagation
 - `src/types/jira/bulk.rs` — serde structs for bulk API responses
 
-Configured in `.cargo/mutants.toml::examine_globs`. The CI job additionally passes
-`--file` flags matching the same three paths for belt-and-suspenders scope enforcement.
+Configured in `.cargo/mutants.toml::examine_globs`. The CI job relies on this
+configuration alone (no `--file` CLI flags) for scope enforcement; `--in-diff` further
+narrows to lines changed in the PR diff.
 
 Note: cargo-mutants v27+ reads its config from `.cargo/mutants.toml` (not `.mutants.toml`
 at repo root). This is the canonical config location for this project.
@@ -125,9 +126,11 @@ mutation testing cost bounded to the PR review phase.
 
 The job uses `--in-diff "$DIFF_FILE"` (where `DIFF_FILE` is a `mktemp`-created path
 under `${{ runner.temp }}`) to scope mutations to lines changed in the PR.
-Combined with `--file` flags, this means:
-- Only mutants in code **changed by the PR** AND **in the three scoped files** are tested.
+This means:
+- Only mutants in code **changed by the PR** AND **in the three scoped files** are tested
+  (`.cargo/mutants.toml::examine_globs` provides the file-scope; `--in-diff` narrows to
+  changed lines within those files).
 - PRs that do not touch the scoped files generate zero mutants; the kill-rate check
-  exits 0 ("No mutants generated — skip threshold check").
+  exits 0 ("no killable mutants — skip threshold check").
 
 See `.factory/cicd-setup.md` §1.1a for the canonical CI job specification.
