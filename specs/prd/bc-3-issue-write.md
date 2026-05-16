@@ -375,18 +375,26 @@ URL is composed as `format!("{}/browse/{}", client.instance_url(), key)`. `clien
 
 ---
 
-#### BC-3.4.009: `await_bulk_task` timeout error MUST include `task_id` literal in stderr message
+#### BC-3.4.009: outer-loop deadline check MUST include `task_id` literal in stderr message
 
 **Confidence**: HIGH
-**Source**: issue #340 + PR #360; `src/api/jira/bulk.rs:408-417`; `tests/bulk_deadline_propagation.rs`
+**Source**: issue #340 + PR #360; `src/api/jira/bulk.rs:408-418` (`[deadline:bulk-outer]` site); `tests/bulk_deadline_propagation.rs`
 **Subject**: Issue write (bulk edit path)
-**Behavior**: When `await_bulk_task(task_id, timeout)` exhausts its deadline without the
-bulk task completing, the `JrError::DeadlineExceeded` error message emitted to stderr MUST
-contain the literal value of `task_id`. The message format is:
+**Behavior**: When `await_bulk_task_inner`'s top-of-loop deadline check fires (i.e., the
+bulk task remained non-terminal until the caller-supplied wall-clock deadline expired),
+the `JrError::DeadlineExceeded` error message emitted to stderr MUST contain the literal
+value of `task_id` AND the site tag `[deadline:bulk-outer]`. The message format is:
 `"[deadline:bulk-outer] Bulk task <task_id> did not complete within <N>s timeout. Check Jira for task status."`
 This allows the user to recover manually by inspecting the task directly at
-`jr api /rest/api/3/bulk/queue/<task_id>`. The site tag `[deadline:bulk-outer]` is
-included to distinguish this site from inner-loop deadline sites.
+`jr api /rest/api/3/bulk/queue/<task_id>`.
+
+**Scope**: This contract applies exclusively to the outer-loop deadline site
+(`[deadline:bulk-outer]` tag at `src/api/jira/bulk.rs:408-418`). It does NOT extend to
+inner-loop deadline exits (`[deadline:429-retry]` in `JiraClient::send_inner`,
+`src/api/client.rs:585-600`), because `task_id` is not in scope at those sites and
+plumbing it through `send_inner` would require a non-trivial cross-module signature
+change. Out-of-scope deferral noted; if a future enhancement adds `task_id` to the
+client layer, a sibling BC SHOULD be created to cover that site.
 **Effects**: Exit code 124 (`JrError::DeadlineExceeded`). Stderr contains the `task_id` value.
 **Invariants**: The `task_id` value in the message MUST match the `taskId` returned by the
 initial bulk POST response. It MUST pass `validate_task_id` before insertion (CWE-117
@@ -394,7 +402,7 @@ log-injection guard — audited in PR #355).
 **VP Extension**: Extends `BC-bulk.poll.deadline-bounded` (issue-333 working label) —
 adds the requirement that `task_id` appears in the stderr output in addition to the
 existing wall-clock bound and `"deadline"` substring assertions.
-**Trace**: issue #340 AC #1; `src/api/jira/bulk.rs::await_bulk_task_inner`
+**Trace**: issue #340 AC #1; `src/api/jira/bulk.rs::await_bulk_task_inner` (`[deadline:bulk-outer]` site)
 
 ---
 
