@@ -1,0 +1,7 @@
+Found 115 mutants to test
+ok       Unmutated baseline in 31s build + 112s test
+ INFO Auto-set test timeout to 338s
+TIMEOUT  src/api/jira/bulk.rs:284:9: replace JiraClient::bulk_transition -> anyhow::Result<String> with Ok(String::new()) in 17s build + 338s test
+TIMEOUT  src/api/jira/bulk.rs:284:9: replace JiraClient::bulk_transition -> anyhow::Result<String> with Ok("xyzzy".into()) in 19s build + 338s test
+TIMEOUT  src/api/jira/bulk.rs:450:56: replace match guard *last_status != status with false in JiraClient::await_bulk_task_inner in 24s build + 338s test
+TIMEOUT  src/api/jira/bulk.rs:534:32: replace * with + in JiraClient::await_bulk_task_inner in 18s build + 338s test
