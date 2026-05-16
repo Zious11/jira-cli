@@ -65,6 +65,46 @@ Worktree commit: `2cf3930`
 
 ---
 
+## Pass 2 Adversary Fixes — Applied 2026-05-15
+
+All three findings applied to `src/cli/issue/create.rs` in worktree commit `e7d8736`.
+
+### F1 (CONCERN) — Handler doc-comment freshness
+Replaced the stale `handle_edit_bulk_labels` doc-comment line that said "the POST body below"
+and referenced "#345 extracts a pure builder" (future work that is now shipped in this PR)
+with text that correctly states "the POST body is constructed by `build_labels_edited_fields`
+(BC-3.4.006)". Also removed the stale `#345 extracts pure builders` forward-reference from
+the dry-run block comment inside `handle_edit`.
+
+### F3 (NIT) — #331 schema-caveat de-duplicated
+Condensed the 6-line call-site comment block above `build_labels_edited_fields(...)` to
+3 lines that preserve the coalesce rationale and point to the function doc-comment as the
+single authoritative source for the `#331` schema caveat. Verbatim duplicated schema detail
+removed from call site.
+
+### F4 (NIT) — Valid JSON examples in `build_labels_edited_fields` doc-comment
+Replaced the single-line pseudo-JSON `"ADD"|"REMOVE"` alternation (not valid JSON) with
+three concrete examples: one for ADD-only, one for REMOVE-only, one for the both-action
+array-form. Matches the style of the surrounding doc-comment block and satisfies CLAUDE.md
+citation-discipline policy (user-facing strings must be syntactically valid).
+
+### Deferred
+- F2 (NIT): BC file update — handled by product-owner in parallel (not in this commit).
+- F5 (process-gap): "re-tune caller doc-comment after pure-helper extraction" — to be
+  codified in per-story-delivery checklist by state-manager at cycle close-out.
+
+### Verification Results
+- `cargo test --lib build_labels_proptests`: 1 passed (proptest green)
+- `cargo test --test issue_bulk_pr2`: 40 passed, 0 failed
+- `cargo test --test issue_bulk`: 9 passed, 0 failed
+- `cargo fmt --check`: clean
+- `cargo clippy --all-targets -- -D warnings`: clean (no warnings)
+- `grep -n "#345" src/cli/issue/create.rs`: no output (zero stale forward-references)
+
+Worktree commit: `e7d8736`
+
+---
+
 ## Verbatim Red Gate proof
 
 ```
