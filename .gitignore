@@ -19,3 +19,6 @@ Thumbs.db
 # VSDD Factory
 .factory/
 .reference/
+
+# Proptest persisted regression seeds (local cache, never commit)
+proptest-regressions/

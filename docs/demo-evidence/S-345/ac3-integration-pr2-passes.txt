@@ -1,0 +1,48 @@
+   Compiling jr v0.5.0-dev.9 (/Users/zious/Documents/GITHUB/jira-cli/.worktrees/S-345)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.24s
+     Running tests/issue_bulk_pr2.rs (target/debug/deps/issue_bulk_pr2-0d64d9876999b2d8)
+
+running 40 tests
+test test_empty_jql_errors_before_search ... ok
+test test_dry_run_table_handles_unicode_description_without_panicking ... ok
+test test_dry_run_jql_with_no_field_changes_errors_before_search ... ok
+test test_dry_run_with_no_field_changes_errors_in_json_mode ... ok
+test test_dry_run_with_no_field_changes_errors_like_live_path ... ok
+test test_dry_run_includes_team_and_description_in_output ... ok
+test test_dry_run_with_multi_key_positional_skips_bulk_post ... ok
+test test_dry_run_output_json_emits_valid_json_with_dry_run_field ... ok
+test test_dry_run_json_includes_team_and_description ... ok
+test test_handle_edit_jql_truncation_error_still_triggers_after_migration ... ok
+test test_dry_run_skips_bulk_post_and_renders_diff ... ok
+test test_bulk_task_failed_status_exits_nonzero_with_failed_in_stderr ... ok
+test test_bulk_task_failed_with_failure_reason_surfaces_reason_in_stderr ... ok
+test test_jql_default_max_50_caps_matched_issues ... ok
+test test_jql_expansion_calls_search_then_bulk_with_matched_keys ... ok
+test test_label_with_description_rejected_before_search ... ok
+test test_jql_max_above_1000_clamps_or_errors ... ok
+test test_label_with_parent_rejected_before_search ... ok
+test test_label_with_priority_rejected_before_search ... ok
+test test_label_with_summary_rejected_before_search ... ok
+test test_label_add_remove_coalesce_emits_one_bulk_call ... ok
+test test_max_without_jql_rejected_before_any_http_call ... ok
+test test_jql_zero_matches_exits_nonzero_with_hint ... ok
+test test_label_with_summary_rejected_before_jql_search ... ok
+test test_jql_single_match_routes_to_single_key_put_not_bulk ... ok
+test test_label_with_team_rejected_before_search ... ok
+test test_markdown_alone_errors_before_search ... ok
+test test_jql_max_explicit_value_in_error_not_default ... ok
+test test_multi_key_jql_with_team_rejects_with_unsupported_flag_error ... ok
+test test_jql_with_max_75_allows_75_matched ... ok
+test test_max_zero_rejected_at_clap_layer ... ok
+test test_multi_key_with_no_parent_rejects_with_unsupported_flag_error ... ok
+test test_no_fields_specified_exits_64 ... ok
+test test_multi_key_summary_update_uses_bulk_fields_endpoint ... ok
+test test_multi_key_priority_update_uses_bulk_fields_endpoint ... ok
+test test_no_input_implicitly_skips_confirmation ... ok
+test test_multi_key_type_update_uses_consistent_issuetype_casing ... ok
+test test_yes_flag_passes_through_below_threshold_without_effect ... ok
+test test_no_input_without_yes_or_dry_run_errors_when_jql_matches_above_threshold ... ok
+test test_336_cli_unknown_status_emits_warning_and_escalates ... ok
+
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.70s
+

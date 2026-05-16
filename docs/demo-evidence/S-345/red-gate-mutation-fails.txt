@@ -1,0 +1,27 @@
+
+running 1 test
+test cli::issue::create::build_labels_proptests::build_labels_edited_fields_invariants ... FAILED
+
+failures:
+
+---- cli::issue::create::build_labels_proptests::build_labels_edited_fields_invariants stdout ----
+
+thread 'cli::issue::create::build_labels_proptests::build_labels_edited_fields_invariants' (28517550) panicked at src/cli/issue/create.rs:1489:5:
+Test failed: assertion failed: `(left == right)` 
+  left: `"WRONG_ADD"`, 
+ right: `"ADD"`: BC-3.4.006: single-ADD MUST set labelsAction=ADD at src/cli/issue/create.rs:1579.
+minimal failing input: adds = [
+    "a",
+], removes = []
+	successes: 0
+	local rejects: 0
+	global rejects: 0
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    cli::issue::create::build_labels_proptests::build_labels_edited_fields_invariants
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 701 filtered out; finished in 0.00s
+

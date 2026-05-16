@@ -1,0 +1,51 @@
+/// Build the edited-fields JSON object for a bulk-labels edit.
+///
+/// Returns the complete `editedFieldsInput` object (with a top-level `"labels"` key)
+/// to be passed directly to `bulk_edit_fields`. JSON shapes per BC-3.4.006:
+/// - Single-action ADD: object-form
+///   `{"labels": {"labelsAction": "ADD", "labels": [{"name": "foo"}]}}`
+/// - Single-action REMOVE: object-form
+///   `{"labels": {"labelsAction": "REMOVE", "labels": [{"name": "bar"}]}}`
+/// - Both-action (ADD + REMOVE): array-form with ADD at index 0, REMOVE at index 1
+///   `{"labels": [{"labelsAction": "ADD", "labels": [{"name": "foo"}]}, {"labelsAction": "REMOVE", "labels": [{"name": "bar"}]}]}`
+///
+/// Caller MUST bail BEFORE calling this if both inputs are empty.
+///
+/// Pure function — no I/O, no async, no client refs. Enables proptest coverage
+/// of the JSON shape invariants without wiremock.
+///
+/// Shape is best-guess (unverified against live Atlassian API; tracked at #331).
+/// PR2 test asserts .expect(1) on bulk POST to ensure ADD+REMOVE coalesce into ONE call,
+/// but the exact JSON nesting matches a loose `body_string_contains` matcher — schema
+/// accuracy is the work being deferred to #331.
+fn build_labels_edited_fields(adds: &[String], removes: &[String]) -> serde_json::Value {
+    debug_assert!(
+        !adds.is_empty() || !removes.is_empty(),
+        "build_labels_edited_fields: caller MUST bail when both inputs are empty (BC-3.4.006)",
+    );
+    let mut label_ops: Vec<serde_json::Value> = Vec::new();
+    if !adds.is_empty() {
+        let add_entries: Vec<serde_json::Value> = adds.iter().map(|n| json!({"name": n})).collect();
+        label_ops.push(json!({
+            "labelsAction": "ADD",
+            "labels": add_entries
+        }));
+    }
+    if !removes.is_empty() {
+        let remove_entries: Vec<serde_json::Value> =
+            removes.iter().map(|n| json!({"name": n})).collect();
+        label_ops.push(json!({
+            "labelsAction": "REMOVE",
+            "labels": remove_entries
+        }));
+    }
+
+    // Single-action: object-form (backward-compat with PR1 tests).
+    // Both-action: coalesced array-form (single bulk POST for ADD+REMOVE).
+    if label_ops.len() == 1 {
+        let op = label_ops.remove(0);
+        json!({ "labels": op })
+    } else {
+        json!({ "labels": label_ops })
+    }
+}

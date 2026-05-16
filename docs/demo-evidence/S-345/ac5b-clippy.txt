@@ -1,0 +1,2 @@
+    Checking jr v0.5.0-dev.9 (/Users/zious/Documents/GITHUB/jira-cli/.worktrees/S-345)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.09s
