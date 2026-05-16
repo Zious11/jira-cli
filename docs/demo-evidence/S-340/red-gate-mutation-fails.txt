@@ -1,0 +1,21 @@
+   Compiling jr v0.5.0-dev.9 (/Users/zious/Documents/GITHUB/jira-cli/.worktrees/S-340)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.84s
+     Running tests/bulk_deadline_propagation.rs (target/debug/deps/bulk_deadline_propagation-767a7afc58fbba55)
+
+running 1 test
+
+thread 'test_333_b1_bulk_running_storm_respects_deadline_via_outer_clamp' (28067043) panicked at tests/bulk_deadline_propagation.rs:403:5:
+BC-3.4.009 VIOLATION (loose): expected stderr to contain task_id literal "task-333-b1-running-storm". Got stderr:
+Error: Deadline exceeded: [deadline:bulk-outer] Bulk task <redacted> did not complete within 30s timeout. Check Jira for task status.
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test test_333_b1_bulk_running_storm_respects_deadline_via_outer_clamp ... FAILED
+
+failures:
+
+failures:
+    test_333_b1_bulk_running_storm_respects_deadline_via_outer_clamp
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 30.67s
+
+error: test failed, to rerun pass `--test bulk_deadline_propagation`
