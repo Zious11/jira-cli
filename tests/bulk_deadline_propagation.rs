@@ -382,4 +382,16 @@ async fn test_333_b1_bulk_running_storm_respects_deadline_via_outer_clamp() {
         "B-1 VIOLATION: expected stderr to contain 'deadline'. \
          Got stderr:\n{stderr}",
     );
+
+    // Quaternary assertion (AC #1 of issue #340 / BC-3.4.009): timeout error
+    // MUST include the task_id literal in stderr so the user can recover via
+    // `jr api /rest/api/3/bulk/queue/<task_id>` without hunting through the
+    // Jira UI.
+    // Pinning the existing `"[deadline:bulk-outer] Bulk task {task_id} ..."` format
+    // at src/api/jira/bulk.rs:412.
+    assert!(
+        stderr.contains(task_id),
+        "BC-3.4.009 VIOLATION: expected stderr to contain task_id literal {task_id:?}. \
+         Got stderr:\n{stderr}",
+    );
 }
