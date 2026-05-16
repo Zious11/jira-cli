@@ -99,13 +99,15 @@ cargo mutants --jobs 4
 PR-diff-equivalent run (matches CI scope):
 
 ```bash
-git diff origin/develop...HEAD > /tmp/pr.diff
-cargo mutants --in-diff /tmp/pr.diff \
-  --file src/cli/issue/create.rs \
-  --file src/api/jira/bulk.rs \
-  --file src/types/jira/bulk.rs \
-  --jobs 4
+DIFF_FILE=$(mktemp -t pr.diff.XXXXXX)
+trap 'rm -f "$DIFF_FILE"' EXIT
+git diff origin/develop...HEAD > "$DIFF_FILE"
+cargo mutants --in-diff "$DIFF_FILE" --jobs 4
 ```
+
+Note: the `--file` flags are omitted above because `.cargo/mutants.toml` already
+scopes via `examine_globs`. The `--in-diff` flag further narrows to lines changed in
+the diff. Using both is redundant (CI uses `--in-diff` only).
 
 Single-file inspection:
 
@@ -121,7 +123,8 @@ The `mutants` job in `.github/workflows/ci.yml` runs on PRs only (not pushes to
 `develop` / `main`). This is consistent with the `security` job pattern and keeps
 mutation testing cost bounded to the PR review phase.
 
-The job uses `--in-diff /tmp/pr.diff` to scope mutations to lines changed in the PR.
+The job uses `--in-diff "$DIFF_FILE"` (where `DIFF_FILE` is a `mktemp`-created path
+under `${{ runner.temp }}`) to scope mutations to lines changed in the PR.
 Combined with `--file` flags, this means:
 - Only mutants in code **changed by the PR** AND **in the three scoped files** are tested.
 - PRs that do not touch the scoped files generate zero mutants; the kill-rate check

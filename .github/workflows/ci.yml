@@ -124,27 +124,43 @@ jobs:
         # --in-diff scopes to lines changed vs origin/<base_ref> (the merge target).
         # .cargo/mutants.toml further scopes to bulk + create modules.
         # Use runner.temp + run_id to avoid /tmp race conditions on concurrent jobs.
+        # continue-on-error: true so the Check-kill-rate step (the sole pass/fail
+        # arbiter) always runs even when cargo-mutants exits non-zero on missed mutants.
+        continue-on-error: true
         run: |
           DIFF_FILE="${{ runner.temp }}/pr-${{ github.run_id }}.diff"
           git diff origin/${{ github.base_ref }}...HEAD > "${DIFF_FILE}"
           cargo mutants --in-diff "${DIFF_FILE}" --jobs 4
       - name: Check kill rate
+        # if: always() ensures this step runs regardless of whether Run-mutation-tests
+        # exited non-zero. This step is the sole pass/fail arbiter for the mutants job.
         # The 90% kill-rate threshold lives here (not in .cargo/mutants.toml) for
         # CI-artifact visibility.
-        # Positive-coverage gate (POL-11): if the PR diff touches scoped files,
-        # cargo-mutants MUST generate at least 1 mutant — otherwise the config or
-        # diff is broken and we fail explicitly rather than silently passing.
+        # Positive-coverage gate (POL-11): uses cargo-mutants --list to check whether
+        # the PR diff generates any mutants (avoids false-positive on comment/doc-only PRs).
+        if: always()
         run: |
-          # Determine whether the PR diff touches any scoped file.
-          diff_touches_scope=$(git diff origin/${{ github.base_ref }}...HEAD --name-only \
-            | grep -cE '^(src/cli/issue/create\.rs|src/api/jira/bulk\.rs|src/types/jira/bulk\.rs)$' \
-            || true)
+          # jq is pre-installed on the ubuntu-latest runner image (verified via GitHub
+          # runner-images doc). If migrating to a self-hosted runner, install jq first.
+          command -v jq >/dev/null || { echo "FATAL: jq not found on PATH"; exit 1; }
+
+          DIFF_FILE="${{ runner.temp }}/pr-${{ github.run_id }}.diff"
+
+          # Positive-coverage gate (POL-11): use cargo-mutants --list to determine
+          # how many mutants the diff scope would generate. This is more accurate than
+          # a file-presence heuristic because it respects examine_globs from
+          # .cargo/mutants.toml and only counts lines actually mutated (not comments
+          # or doc-only changes). If the diff generates > 0 expected mutants but the
+          # run produced 0 outcomes, the config or runtime is broken — fail explicitly.
+          expected_mutants=$(cargo mutants --in-diff "${DIFF_FILE}" --list 2>/dev/null | wc -l | tr -d ' ')
+          expected_mutants=${expected_mutants:-0}
 
           # Parse machine-readable summary from outcomes.json.
           if [ -f mutants.out/outcomes.json ]; then
-            total_mutants=$(jq '.total_mutants // 0' mutants.out/outcomes.json)
             caught=$(jq '.caught // 0' mutants.out/outcomes.json)
             missed=$(jq '.missed // 0' mutants.out/outcomes.json)
+            timeout=$(jq '.timeout // 0' mutants.out/outcomes.json)
+            unviable=$(jq '.unviable // 0' mutants.out/outcomes.json)
           else
             # Fallback: count lines in text files.
             # grep -c '' exits 1 on empty files (no matches) even though it
@@ -160,25 +176,62 @@ jobs:
             else
               missed=0
             fi
-            total_mutants=$((caught + missed))
+            if [ -f mutants.out/timeout.txt ]; then
+              timeout=$(grep -c '' mutants.out/timeout.txt || true)
+            else
+              timeout=0
+            fi
+            if [ -f mutants.out/unviable.txt ]; then
+              unviable=$(grep -c '' mutants.out/unviable.txt || true)
+            else
+              unviable=0
+            fi
           fi
 
-          # Positive-coverage gate (POL-11): diff touches scope → must have mutants.
-          if [ "${diff_touches_scope}" -gt 0 ] && [ "${total_mutants}" -eq 0 ]; then
-            echo "FAIL: PR diff touches scoped files but cargo-mutants generated 0 mutants."
-            echo "      This indicates a config or runtime breakage. Check mutants.out/ logs."
+          # Explicit numeric defaults to harden set -e interaction with empty
+          # command substitutions (e.g. if jq yields nothing on malformed JSON).
+          caught=${caught:-0}
+          missed=${missed:-0}
+          timeout=${timeout:-0}
+          unviable=${unviable:-0}
+
+          # Positive-coverage gate: if cargo-mutants predicted mutants but the run
+          # produced zero outcomes (caught + missed + timeout + unviable == 0), the
+          # config or runtime is broken.
+          total_outcomes=$((caught + missed + timeout + unviable))
+          if [ "${expected_mutants}" -gt 0 ] && [ "${total_outcomes}" -eq 0 ]; then
+            echo "FAIL: cargo-mutants listed ${expected_mutants} expected mutant(s) for this diff"
+            echo "      but the run produced 0 outcomes. Config or runtime breakage."
+            echo "      Check mutants.out/ logs."
             exit 1
           fi
 
-          # Kill-rate gate: only when there are mutants to evaluate.
-          if [ "${total_mutants}" -gt 0 ]; then
-            echo "Mutants summary: ${caught} caught / ${missed} missed / ${total_mutants} total"
-            if [ "${missed}" -gt 0 ]; then
-              echo "FAIL: ${missed} mutant(s) survived. See mutants.out/missed.txt."
-              if [ -f mutants.out/missed.txt ]; then cat mutants.out/missed.txt; fi
-              exit 1
-            fi
-            echo "OK: cargo-mutants gate passed (kill rate 100%)."
-          else
-            echo "No mutants generated (diff does not touch scoped files) — skip threshold check."
+          # Survived = missed + timeout (cargo-mutants v27 convention: timeouts are
+          # not caught — the test suite did not prove the mutant wrong within the
+          # deadline, so it counts as surviving for kill-rate purposes).
+          # Unviable = build errors (excluded from kill-rate denominator because
+          # they never ran).
+          survived=$((missed + timeout))
+          killable=$((caught + survived))
+
+          if [ "${killable}" -eq 0 ]; then
+            echo "OK: no killable mutants (diff has no mutable lines or all are unviable)."
+            echo "    Skipping kill-rate threshold check."
+            exit 0
           fi
+
+          # Kill rate as integer percentage (multiply first to avoid integer truncation).
+          kill_rate=$(( (caught * 100) / killable ))
+          echo "Mutants summary: ${caught} caught / ${missed} missed / ${timeout} timeout / ${unviable} unviable"
+          echo "Kill rate: ${kill_rate}% (target ≥ 90%)"
+
+          if [ "${kill_rate}" -lt 90 ]; then
+            echo "FAIL: kill rate ${kill_rate}% is below the 90% target."
+            echo "--- Missed mutants ---"
+            cat mutants.out/missed.txt 2>/dev/null || true
+            echo "--- Timeout mutants ---"
+            cat mutants.out/timeout.txt 2>/dev/null || true
+            exit 1
+          fi
+
+          echo "OK: cargo-mutants gate passed (kill rate ${kill_rate}% ≥ 90%)."
