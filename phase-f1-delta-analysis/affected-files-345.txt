@@ -1,0 +1,4 @@
+src/cli/issue/create.rs
+.factory/specs/prd/bc-3-issue-write.md
+.factory/code-delivery/issue-345/story.md
+.factory/stories/STORY-INDEX.md
