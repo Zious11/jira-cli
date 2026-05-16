@@ -353,7 +353,7 @@ URL is composed as `format!("{}/browse/{}", client.instance_url(), key)`. `clien
 #### BC-3.4.006: `issue edit --label add:foo --label remove:bar` interprets prefix and emits correct JSON wire shape
 
 **Confidence**: HIGH
-**Source**: `tests/issue_create_json.rs`; `tests/issue_bulk.rs`; `tests/issue_bulk_pr2.rs`; `src/cli/issue/create.rs::build_labels_edited_fields`; `src/cli/issue/create.rs` inline `#[cfg(test)] mod proptests`
+**Source**: `tests/issue_bulk.rs`; `tests/issue_bulk_pr2.rs`; `src/cli/issue/create.rs::build_labels_edited_fields`; `src/cli/issue/create.rs` inline `#[cfg(test)] mod build_labels_proptests`
 **Behavior**: `add:` and `remove:` prefixes adjust existing labels; bare label replaces.
 The label JSON builder (`build_labels_edited_fields`) produces one of two wire shapes
 depending on whether adds, removes, or both are present:
