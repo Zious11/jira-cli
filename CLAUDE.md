@@ -89,6 +89,7 @@ cargo test --test '*'                # Integration tests only
 cargo clippy -- -D warnings          # Lint (zero warnings policy)
 cargo fmt --all -- --check           # Format check
 cargo deny check                     # License + vulnerability audit
+DIFF_FILE=$(mktemp -t pr.diff.XXXXXX) && trap 'rm -f "$DIFF_FILE"' EXIT && git diff origin/develop...HEAD > "$DIFF_FILE" && cargo mutants --in-diff "$DIFF_FILE" --jobs 4  # Mutation testing on PR diff scope (see docs/specs/cargo-mutants-policy.md)
 ```
 
 ## Conventions
@@ -267,3 +268,4 @@ When adding a new feature:
   qualitatively (file path + test category) rather than enumerate counts. Counts drift as
   tests are added; qualitative descriptions are stable. Enforced by
   `scripts/check-bc-no-numeric-test-counts.sh` in CI. Convention added by PG-365-1.
+- `cargo-mutants` is a binary tool installed via `cargo install cargo-mutants --locked` — do NOT add it to `Cargo.toml` as a dev-dependency. Scope and config live in `.cargo/mutants.toml`; policy lives in `docs/specs/cargo-mutants-policy.md`.

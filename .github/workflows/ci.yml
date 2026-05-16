@@ -104,3 +104,145 @@ jobs:
         uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  mutants:
+    name: Mutation testing
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # PR-only — mutation testing is too slow for every push to develop/main.
+    # --in-diff keeps per-PR cost bounded to changed lines only.
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+        with:
+          # Need full history so `git diff origin/<base_ref>...HEAD` can resolve the
+          # base ref (used by --in-diff to scope mutation testing to changed lines).
+          fetch-depth: 0
+      - uses: taiki-e/install-action@aae1387a167f5eee4267fe2946da57ae49a68770  # cargo-mutants
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - name: Run mutation tests on PR diff
+        id: run-mutants
+        # --in-diff scopes to lines changed vs origin/<base_ref> (the merge target).
+        # .cargo/mutants.toml further scopes to bulk + create modules.
+        # Use runner.temp + run_id to avoid /tmp race conditions on concurrent jobs.
+        # continue-on-error: true so the Check-kill-rate step (the sole pass/fail
+        # arbiter) always runs even when cargo-mutants exits non-zero on missed mutants.
+        continue-on-error: true
+        run: |
+          DIFF_FILE="${{ runner.temp }}/pr-${{ github.run_id }}.diff"
+          git diff origin/${{ github.base_ref }}...HEAD > "${DIFF_FILE}"
+          cargo mutants --in-diff "${DIFF_FILE}" --jobs 4
+      - name: Check kill rate
+        # if: always() ensures this step runs regardless of whether Run-mutation-tests
+        # exited non-zero. This step is the sole pass/fail arbiter for the mutants job.
+        # The 90% kill-rate threshold lives here (not in .cargo/mutants.toml) for
+        # CI-artifact visibility.
+        # Pass 4 gate logic: distinguish harness crash from zero-mutant clean PR using
+        # steps.run-mutants.outcome + mutants.out/outcomes.json presence. Then enforce
+        # 90% kill-rate target on (caught + missed + timeout) — timeouts count as
+        # survived per cargo-mutants v27 convention.
+        if: always()
+        run: |
+          # Pass 4 F1 fix — distinguish harness crash from zero-mutants clean PR.
+          #
+          # cargo-mutants exit codes (v27):
+          #   0 → all mutants caught OR no mutants generated
+          #   non-zero → missed mutants, timeouts, or harness errors
+          #
+          # steps.run-mutants.outcome reflects cargo-mutants exit BEFORE continue-on-error
+          # is applied. Combined with outcomes.json presence, the (outcome, outcomes.json)
+          # matrix lets us distinguish:
+          #
+          #   outcome=success + outcomes.json present  → 100% caught (gate passes)
+          #   outcome=success + outcomes.json absent   → 0 mutants generated (clean PR — pass)
+          #   outcome=failure + outcomes.json present  → missed/timeout (enforce 90% gate)
+          #   outcome=failure + outcomes.json absent   → harness crash (FAIL)
+
+          run_outcome="${{ steps.run-mutants.outcome }}"
+          echo "cargo-mutants exit outcome: ${run_outcome}"
+
+          if [ ! -f mutants.out/outcomes.json ]; then
+            if [ "$run_outcome" = "success" ]; then
+              echo "OK: cargo-mutants exited 0 with no outcomes.json — 0 mutants generated from PR diff (clean/docs-only/out-of-scope)."
+              exit 0
+            else
+              echo "FAIL: cargo-mutants exited non-zero AND outcomes.json missing — harness crash."
+              echo "      Check the Run-mutation-tests step logs above for the underlying error."
+              exit 1
+            fi
+          fi
+
+          # outcomes.json exists — parse and enforce 90% gate.
+          # jq is pre-installed on the ubuntu-latest runner image (verified via GitHub
+          # runner-images doc). If migrating to a self-hosted runner, install jq first.
+
+          # F2 fix: validate outcomes.json is parseable JSON before relying on its values.
+          # A malformed file (truncated, partial flush from OOM-kill) would otherwise fall
+          # through to caught=missed=timeout=unviable=0 → false-green.
+          if ! jq empty mutants.out/outcomes.json 2>/dev/null; then
+            echo "FAIL: mutants.out/outcomes.json exists but is malformed JSON."
+            echo "      (cargo-mutants harness may have crashed mid-write.)"
+            exit 1
+          fi
+
+          if command -v jq >/dev/null; then
+            caught=$(jq '.caught // 0' mutants.out/outcomes.json)
+            missed=$(jq '.missed // 0' mutants.out/outcomes.json)
+            timeout=$(jq '.timeout // 0' mutants.out/outcomes.json)
+            unviable=$(jq '.unviable // 0' mutants.out/outcomes.json)
+          else
+            # F5 fix: wc -l prints "0" cleanly on empty file with exit 0; grep -c '' exits 1
+            # on empty match, triggering `|| echo 0` and producing newline-embedded "0\n0"
+            # that breaks bash arithmetic. Use wc -l with file-existence guard + whitespace trim
+            # (wc -l pads with spaces on macOS; defensive tr -d ' ' is harmless on Linux).
+            caught=$([ -f mutants.out/caught.txt ] && wc -l < mutants.out/caught.txt || echo 0)
+            caught=$(echo "$caught" | tr -d ' ')
+            missed=$([ -f mutants.out/missed.txt ] && wc -l < mutants.out/missed.txt || echo 0)
+            missed=$(echo "$missed" | tr -d ' ')
+            timeout=$([ -f mutants.out/timeout.txt ] && wc -l < mutants.out/timeout.txt || echo 0)
+            timeout=$(echo "$timeout" | tr -d ' ')
+            unviable=$([ -f mutants.out/unviable.txt ] && wc -l < mutants.out/unviable.txt || echo 0)
+            unviable=$(echo "$unviable" | tr -d ' ')
+          fi
+
+          # Explicit numeric defaults to harden set -e interaction with empty
+          # command substitutions (e.g. if jq yields nothing on malformed JSON).
+          caught=${caught:-0}
+          missed=${missed:-0}
+          timeout=${timeout:-0}
+          unviable=${unviable:-0}
+
+          total_outcomes=$((caught + missed + timeout + unviable))
+          echo "Mutants summary: ${caught} caught / ${missed} missed / ${timeout} timeout / ${unviable} unviable"
+
+          if [ "${total_outcomes}" -eq 0 ]; then
+            echo "OK: outcomes.json present but 0 mutants — same as zero-mutant clean PR."
+            exit 0
+          fi
+
+          # Survived = missed + timeout (cargo-mutants v27 convention: timeouts are
+          # not caught — the test suite did not prove the mutant wrong within the
+          # deadline, so it counts as surviving for kill-rate purposes).
+          # Unviable = build errors (excluded from kill-rate denominator because
+          # they never ran).
+          killable=$((caught + missed + timeout))
+
+          if [ "${killable}" -eq 0 ]; then
+            echo "OK: ${total_outcomes} mutant(s) generated, all unviable (no killable mutants to gate on)."
+            exit 0
+          fi
+
+          # Kill rate as integer percentage (multiply first to avoid integer truncation).
+          kill_rate=$(( (caught * 100) / killable ))
+          echo "Kill rate: ${kill_rate}% (target ≥ 90%)"
+
+          if [ "${kill_rate}" -lt 90 ]; then
+            echo "FAIL: kill rate ${kill_rate}% is below the 90% target."
+            echo "--- Missed mutants ---"
+            cat mutants.out/missed.txt 2>/dev/null || true
+            echo "--- Timeout mutants ---"
+            cat mutants.out/timeout.txt 2>/dev/null || true
+            exit 1
+          fi
+
+          echo "OK: cargo-mutants gate passed (kill rate ${kill_rate}% ≥ 90%)."

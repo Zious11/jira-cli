@@ -1,0 +1,24 @@
+# cargo-mutants project config — see docs/specs/cargo-mutants-policy.md
+#
+# Note: cargo-mutants v27+ reads this file from .cargo/mutants.toml (not .mutants.toml).
+# The story spec named it .mutants.toml but the tool's actual default path is
+# .cargo/mutants.toml. Both are equivalent when passed via --config; the .cargo/ location
+# is the zero-flags default.
+
+# Scope mutation testing to the bulk + create modules where F6 hardening review
+# identified weak-assertion risk.
+examine_globs = [
+    "src/api/jira/bulk.rs",
+    "src/types/jira/bulk.rs",
+    "src/cli/issue/create.rs",
+]
+
+# Async bulk paths use tokio::time::sleep and wiremock; mutations of `.await`
+# chains can produce hangs rather than test failures, which cargo-mutants would
+# otherwise count as "unviable". A 3x multiplier on the baseline timeout absorbs
+# this without inflating false-positives in the kill-rate denominator.
+timeout_multiplier = 3.0
+
+# Match the CI test invocation so mutation runs use the same feature set as
+# the verifying suite.
+additional_cargo_test_args = ["--all-features"]
