@@ -3,7 +3,7 @@ document_type: story
 story_id: "S-346"
 title: "Add cargo-mutants CI job + whitelist policy for bulk + create modules"
 wave: feature-followup
-status: draft
+status: ready
 priority: low
 estimated_effort: small
 tdd_mode: standard   # NOT strict — this is CI infrastructure, not test-driven production code
@@ -21,7 +21,7 @@ files_modified:
 test_files: []
 breaking_change: false
 producer: story-writer
-version: "1.0.0"
+version: "1.0.1"
 last_updated: 2026-05-16
 depends_on:
   - S-340     # S-340 is the immediate predecessor in the audit-followup cluster; bulk.rs is the primary mutation target

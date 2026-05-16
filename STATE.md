@@ -36,7 +36,7 @@ activation_version: "v0.5.0-dev.7"
 | **Language** | Rust |
 | **Target Workspace** | develop → main |
 | **Started** | 2026-05-04 |
-| **Last Updated** | Started F1 for #346 (final audit-followup). Scope: STANDARD CI-ONLY — cargo-mutants job with 90% kill-rate target + whitelist policy. Surviving-mutant remediation deferred to follow-ups if baseline misses 90%. |
+| **Last Updated** | F3 done (S-346 committed @ 5fcc943); F4 worktree+impl dispatch in flight. |
 | **Current Phase** | Phase 3 — TDD Implementation **IN PROGRESS** — Wave 3 CLOSED (10/10). Feature Mode #110-pr2 COMPLETE. PRs #355–#364, #366–#367, #369–#371 MERGED. **1 audit-followup remains: #346** (#331 sandbox-blocked deferred; #333 closed by PR #360; #340 closed by PR #370; #345 closed by PR #371; #350 closed by PR #362; #361 closed by PR #364; #365 closed by PR #367; PG-365-1 closed by PR #369). No active cycle. |
 | **Next Phase** | Wave 3 — 10 stories (S-3.01..S-3.10) |
 | **Activation HEAD** | dea166471e22eff55974d7675593469b37048c5f (v0.5.0-dev.7) |
@@ -78,7 +78,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | 3-chore-pg365-1-bc-trace-cleanup | **MERGED** — PR #369 @ 6ca9587 (squash); resolves PG-365-1 Drift Item from cycle #365 | 2026-05-15 | 2026-05-15 | MERGED — 7 Copilot rounds, 9 valid findings | R1=1 R2=1 R3=1 R4=1 R5=3 R6=2 R7=0 |
 | 3-feature-340-bulk-poll-task-id-pin | **MERGED** — PR #370 @ 394dc25 (squash); closes #340; F1-F7 full cycle CONVERGED in single delivery | 2026-05-15 | 2026-05-16 | MERGED — 5 adv passes (0/0 trajectory), 3 CLEAN; Copilot R1=0; CI 9/9 green | 8→5→3-obs→7→4 (BLOCKER+CONCERN: 0 every pass) |
 | 3-feature-345-label-coalesce-extract | **MERGED** — PR #371 @ bb352ea (squash, admin); closes #345; F1-F7 full cycle CONVERGED | 2026-05-16 | 2026-05-16 | MERGED — 6 adv passes (3 CLEAN); 3 Copilot cycles + 1 convergence batch; 17 threads resolved; CI 9/9 green | 0/1/6 → 0/2/3 → 0/2/2 → 0/0/0 → 0/0/0 → 0/0/0 (3 consecutive CLEAN) |
-| 3-feature-346-cargo-mutants-ci | F1 COMPLETE — STANDARD scope; CI-ONLY + whitelist convention | 2026-05-16 | — | F1 orchestrator-approved (delta-analysis-346.md) | — |
+| 3-feature-346-cargo-mutants-ci | F1+F2+F3 COMPLETE — F4 dispatch ready | 2026-05-16 | — | F1 orchestrator-approved (delta-analysis-346.md) | — |
 | 4: Holdout Evaluation | not-started | | | | |
 | 5: Adversarial Refinement | not-started | | | | |
 | 6: Formal Hardening | not-started | | | | |
