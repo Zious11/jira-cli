@@ -19,6 +19,7 @@ identifies gaps for Phase 3 remediation. No workflow files were modified.
 ## §1: Existing Workflows Inventory
 
 **Workflow files found:** 2 (`.github/workflows/ci.yml`, `.github/workflows/release.yml`)
+**Last updated:** 2026-05-16 — §1.1 job catalog updated to include `mutants` job (issue #346, F2 arch update)
 **Supplementary:** `.github/dependabot.yml`, `.github/CODEOWNERS`
 
 ---
@@ -41,17 +42,66 @@ identifies gaps for Phase 3 remediation. No workflow files were modified.
 | `msrv` | `ubuntu-latest` | `cargo check --all-features` against `dtolnay/rust-toolchain@1.85.0` — MSRV pin verification |
 | `deny` | `ubuntu-latest` | `EmbarkStudios/cargo-deny-action@v2` — license allowlist + advisory check |
 | `coverage` | `ubuntu-latest` | `cargo llvm-cov` → `lcov.info` → Codecov upload (`fail_ci_if_error: false`) |
+| `mutants` | `ubuntu-latest` | `cargo-mutants` mutation testing — scoped to `src/cli/issue/create.rs`, `src/api/jira/bulk.rs`, `src/types/jira/bulk.rs`; PR-only trigger (`if: github.event_name == 'pull_request'`); `--in-diff origin/${{ github.base_ref }}` (only mutates lines changed in the PR); 90% kill-rate target enforced via inline shell; `timeout-minutes: 60`; installed via `cargo install cargo-mutants` (no new SHA-pin surface). See §1.1a for full specification. |
 
 **Caching:** `Swatinem/rust-cache@v2` on `clippy`, `test`, `msrv`, `coverage` jobs.
 
 **What it does NOT do:**
-- No explicit timeout values on any job or step
+- No explicit timeout values on any job or step (except the `mutants` job — see §1.1a)
 - No Semgrep / CodeQL static analysis
 - No SBOM generation
 - No secrets scanning
 - No action SHA pinning (uses `@v6`, `@v2`, `@v7` tags, not SHA hashes)
 - No `cargo audit` (cargo-deny covers advisories but is a different tool)
 - `coverage` upload uses `fail_ci_if_error: false` — codecov failures are silent
+
+---
+
+### 1.1a `mutants` Job — Full Specification
+
+**Added by:** Issue #346 (F2 arch update, 2026-05-16)
+
+**Purpose:** Mutation testing on the bulk create/edit modules to detect weak test assertions — tests that pass even when the implementation is silently broken by small code mutations (negated conditions, removed returns, swapped operators). Complements unit tests, integration tests, and proptests as a meta-verification layer.
+
+**Tooling:** `cargo-mutants` — a binary tool installed via `cargo install cargo-mutants` in the CI step. It is NOT a Cargo dependency and MUST NOT be added to `[dev-dependencies]` in `Cargo.toml`. See `CLAUDE.md` AI Agent Notes for the canonical prohibition.
+
+**Trigger:**
+```yaml
+if: github.event_name == 'pull_request'
+```
+Runs on PRs to `develop` only. Does NOT run on direct push to `develop` or `main`, bounding blast radius to the PR review phase. Pattern mirrors the existing `security` job guard.
+
+**Scope:** Three files, fixed in `.mutants.toml` and mirrored as explicit `--file` flags in the CI step:
+- `src/cli/issue/create.rs`
+- `src/api/jira/bulk.rs`
+- `src/types/jira/bulk.rs`
+
+**Diff-mode:** `--in-diff origin/${{ github.base_ref }}` — only mutates lines that are changed in the PR diff. This amortizes the per-mutant cost: a PR touching 50 lines runs in minutes rather than hours. Full-file mutation (without `--in-diff`) is reserved for local baseline runs.
+
+**Kill-rate target:** 90% (configurable in `.mutants.toml`). Threshold enforcement is a shell one-liner in the CI step reading `mutants.out/caught.txt` and `mutants.out/missed.txt`. The kill-rate value is kept in the YAML (not in `.mutants.toml`) for CI-artifact visibility.
+
+**Timeout:** `timeout-minutes: 60` at the job level. This satisfies the GAP-2 timeout gap for this job specifically. The `--in-diff` scoping keeps actual runtime well under this ceiling for typical PRs; the limit guards against runaway full-corpus mutation if the diff guard fails.
+
+**Caching:** `Swatinem/rust-cache@v2` (shared with other jobs). `mutants.out/` is NOT cached — results must be fresh per run.
+
+**Whitelist convention:** `#[mutants::skip]` attribute with a mandatory justification comment on the same or preceding line:
+```rust
+// mutants::skip: this branch is unreachable under normal inputs; covered by property test X
+#[mutants::skip]
+fn invariant_guard(...) { ... }
+```
+The convention and rationale are codified in `docs/specs/cargo-mutants-policy.md`.
+
+**Deferral policy:** If the initial baseline run reveals surviving mutants below the 90% threshold, the PR is NOT blocked. Instead:
+1. For each surviving-mutant cluster: either add `#[mutants::skip]` with a mandatory justification comment, OR file a follow-up issue per uncovered region.
+2. `track-debt` entries are filed for each whitelisted case.
+3. The 90% gate becomes enforced in full after the baseline issue set is addressed.
+
+**Security surface:** No new secrets required. No new network calls from the harness. No `GITHUB_TOKEN` permission escalation. NFR-S-E compliance maintained: installs via `cargo install` in a `run:` step (not a `uses:` action reference), introducing zero new SHA-pin surface.
+
+**Artifacts produced:** `mutants.out/` directory (gitignored via `.gitignore` entry added in issue #346). Not uploaded as a CI artifact; results are visible in the job log.
+
+**Policy document:** `docs/specs/cargo-mutants-policy.md` — codifies the skip convention, kill-rate rationale, and deferral policy. Required reading before applying any `#[mutants::skip]` annotation.
 
 ---
 
@@ -137,9 +187,10 @@ All files require review from `@Zious11`. This satisfies the "code owner approva
 | Action SHA pinning | **MISSING** | All actions use version tags (`@v6`, `@v2`, `@v7`, `@v8`, `@stable`, `@1.85.0`) rather than full SHA hashes |
 | MSRV verification in CI | **PRESENT** | `ci.yml` `msrv` job: `dtolnay/rust-toolchain@1.85.0` + `cargo check --all-features` |
 | Coverage reporting | **PRESENT** | `ci.yml` `coverage` job: `cargo llvm-cov` → Codecov |
+| Mutation testing (meta-verification layer) | **PRESENT** | `ci.yml` `mutants` job (added issue #346): `cargo-mutants` scoped to bulk + edit modules, PR-only, `--in-diff` diff-mode, 90% kill-rate target, `timeout-minutes: 60`. Policy in `docs/specs/cargo-mutants-policy.md`. |
 
 **Summary counts:**
-- PRESENT: 9
+- PRESENT: 10
 - PRESENT-PARTIAL: 2
 - MISSING: 3
 
@@ -297,6 +348,12 @@ gh api repos/Zious11/jira-cli/branches/main/protection
 | GAP-1 (HIGH): Action SHA pinning | Pin all 8 action references to full SHA in `ci.yml` and `release.yml`. Use `dependabot` (already configured for github-actions) to keep SHAs current. | 30 min |
 | GAP-2 (HIGH): Job timeouts | Add `timeout-minutes:` to every job in both workflow files. | 15 min |
 | GAP-3 (HIGH): Secrets scanning | Enable GitHub secret scanning at repository level (Settings toggle, no code change). Optionally add `gitleaks` step to a new `security.yml`. | 1 hour |
+
+### Added in subsequent cycles (post-audit)
+
+| Addition | Issue | Description |
+|---|---|---|
+| `mutants` CI job | #346 | Mutation testing on bulk + edit modules (see §1.1a). Complements unit tests, integration tests, and proptests as a meta-verification layer: detects weak assertions that would pass even when the implementation is silently broken. PR-only, `--in-diff` diff-mode, 90% kill-rate target. |
 
 ### Defer as tech debt (Phase 3+ or post-v1.0)
 
