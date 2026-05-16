@@ -121,6 +121,7 @@ jobs:
       - uses: taiki-e/install-action@aae1387a167f5eee4267fe2946da57ae49a68770  # cargo-mutants
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
       - name: Run mutation tests on PR diff
+        id: run-mutants
         # --in-diff scopes to lines changed vs origin/<base_ref> (the merge target).
         # .cargo/mutants.toml further scopes to bulk + create modules.
         # Use runner.temp + run_id to avoid /tmp race conditions on concurrent jobs.
@@ -136,32 +137,55 @@ jobs:
         # exited non-zero. This step is the sole pass/fail arbiter for the mutants job.
         # The 90% kill-rate threshold lives here (not in .cargo/mutants.toml) for
         # CI-artifact visibility.
-        # Positive-coverage gate (POL-11): uses cargo-mutants --list to check whether
-        # the PR diff generates any mutants (avoids false-positive on comment/doc-only PRs).
+        # Pass 4 gate logic: distinguish harness crash from zero-mutant clean PR using
+        # steps.run-mutants.outcome + mutants.out/outcomes.json presence. Then enforce
+        # 90% kill-rate target on (caught + missed + timeout) — timeouts count as
+        # survived per cargo-mutants v27 convention.
         if: always()
         run: |
-          # POL-11 harness-health check:
-          # If outcomes.json does not exist, cargo-mutants did not complete — fail loudly.
-          # This is a real signal: the Run step's continue-on-error suppresses its exit
-          # code, but a missing outcomes.json means the harness itself broke (OOM,
-          # binary not found, etc.). The shared-failure-mode false-green from
-          # re-invoking `cargo mutants --list` in this step is eliminated by using
-          # outcomes.json existence as the health signal instead.
+          # Pass 4 F1 fix — distinguish harness crash from zero-mutants clean PR.
+          #
+          # cargo-mutants exit codes (v27):
+          #   0 → all mutants caught OR no mutants generated
+          #   non-zero → missed mutants, timeouts, or harness errors
+          #
+          # steps.run-mutants.outcome reflects cargo-mutants exit BEFORE continue-on-error
+          # is applied. Combined with outcomes.json presence, the (outcome, outcomes.json)
+          # matrix lets us distinguish:
+          #
+          #   outcome=success + outcomes.json present  → 100% caught (gate passes)
+          #   outcome=success + outcomes.json absent   → 0 mutants generated (clean PR — pass)
+          #   outcome=failure + outcomes.json present  → missed/timeout (enforce 90% gate)
+          #   outcome=failure + outcomes.json absent   → harness crash (FAIL)
+
+          run_outcome="${{ steps.run-mutants.outcome }}"
+          echo "cargo-mutants exit outcome: ${run_outcome}"
+
           if [ ! -f mutants.out/outcomes.json ]; then
-            echo "FAIL: mutants.out/outcomes.json missing — cargo-mutants harness did not complete."
-            echo "      (Check the Run-mutation-tests step logs above for the underlying error.)"
-            exit 1
+            if [ "$run_outcome" = "success" ]; then
+              echo "OK: cargo-mutants exited 0 with no outcomes.json — 0 mutants generated from PR diff (clean/docs-only/out-of-scope)."
+              exit 0
+            else
+              echo "FAIL: cargo-mutants exited non-zero AND outcomes.json missing — harness crash."
+              echo "      Check the Run-mutation-tests step logs above for the underlying error."
+              exit 1
+            fi
           fi
 
+          # outcomes.json exists — parse and enforce 90% gate.
           # jq is pre-installed on the ubuntu-latest runner image (verified via GitHub
           # runner-images doc). If migrating to a self-hosted runner, install jq first.
-          command -v jq >/dev/null || { echo "FATAL: jq not found on PATH"; exit 1; }
-
-          # Parse machine-readable summary from outcomes.json.
-          caught=$(jq '.caught // 0' mutants.out/outcomes.json)
-          missed=$(jq '.missed // 0' mutants.out/outcomes.json)
-          timeout=$(jq '.timeout // 0' mutants.out/outcomes.json)
-          unviable=$(jq '.unviable // 0' mutants.out/outcomes.json)
+          if command -v jq >/dev/null; then
+            caught=$(jq '.caught // 0' mutants.out/outcomes.json)
+            missed=$(jq '.missed // 0' mutants.out/outcomes.json)
+            timeout=$(jq '.timeout // 0' mutants.out/outcomes.json)
+            unviable=$(jq '.unviable // 0' mutants.out/outcomes.json)
+          else
+            caught=$(grep -c '' mutants.out/caught.txt 2>/dev/null || echo 0)
+            missed=$(grep -c '' mutants.out/missed.txt 2>/dev/null || echo 0)
+            timeout=$(grep -c '' mutants.out/timeout.txt 2>/dev/null || echo 0)
+            unviable=$(grep -c '' mutants.out/unviable.txt 2>/dev/null || echo 0)
+          fi
 
           # Explicit numeric defaults to harden set -e interaction with empty
           # command substitutions (e.g. if jq yields nothing on malformed JSON).
@@ -171,9 +195,10 @@ jobs:
           unviable=${unviable:-0}
 
           total_outcomes=$((caught + missed + timeout + unviable))
+          echo "Mutants summary: ${caught} caught / ${missed} missed / ${timeout} timeout / ${unviable} unviable"
 
           if [ "${total_outcomes}" -eq 0 ]; then
-            echo "OK: no mutants generated from PR diff (clean / docs-only / out-of-scope)."
+            echo "OK: outcomes.json present but 0 mutants — same as zero-mutant clean PR."
             exit 0
           fi
 
@@ -182,8 +207,7 @@ jobs:
           # deadline, so it counts as surviving for kill-rate purposes).
           # Unviable = build errors (excluded from kill-rate denominator because
           # they never ran).
-          survived=$((missed + timeout))
-          killable=$((caught + survived))
+          killable=$((caught + missed + timeout))
 
           if [ "${killable}" -eq 0 ]; then
             echo "OK: ${total_outcomes} mutant(s) generated, all unviable (no killable mutants to gate on)."
@@ -192,7 +216,6 @@ jobs:
 
           # Kill rate as integer percentage (multiply first to avoid integer truncation).
           kill_rate=$(( (caught * 100) / killable ))
-          echo "Mutants summary: ${caught} caught / ${missed} missed / ${timeout} timeout / ${unviable} unviable"
           echo "Kill rate: ${kill_rate}% (target ≥ 90%)"
 
           if [ "${kill_rate}" -lt 90 ]; then
