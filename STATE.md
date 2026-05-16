@@ -36,7 +36,7 @@ activation_version: "v0.5.0-dev.7"
 | **Language** | Rust |
 | **Target Workspace** | develop → main |
 | **Started** | 2026-05-04 |
-| **Last Updated** | 2026-05-15 — Started F1 for #340 (audit-followup cluster). Scope: TEST-PIN. Options (a)/(b) deferred. |
+| **Last Updated** | 2026-05-15 — F3 done (S-340 story committed @ a1d6c46); F4 worktree+TDD dispatch in flight. |
 | **Current Phase** | Phase 3 — TDD Implementation **IN PROGRESS** — Wave 3 CLOSED (10/10). Feature Mode #110-pr2 COMPLETE. PRs #355–#364, #366–#367, #369 MERGED. **3 audit-followups remain: #340, #345, #346** (#331 sandbox-blocked deferred; #333 closed by PR #360; #350 closed by PR #362; #361 closed by PR #364; #365 closed by PR #367; PG-365-1 closed by PR #369). No active cycle. |
 | **Next Phase** | Wave 3 — 10 stories (S-3.01..S-3.10) |
 | **Activation HEAD** | dea166471e22eff55974d7675593469b37048c5f (v0.5.0-dev.7) |
@@ -76,7 +76,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | 3-feature-claude-md-doc-followup-364 | **MERGED** — PR #366 MERGED @ ad6b979 (squash: "docs(claude-md): codify JRACLOUD-95368 attribution + citation-validation discipline (PR #364 follow-up) (#366)"; adds Gotcha entry for JRACLOUD-95368 + has_more carve-outs + no-dedupe note + ORDER BY tie-breaker; adds AI Agent Note for citation discipline; Copilot R1=0 findings) | 2026-05-14 | 2026-05-14 | MERGED | R1=0 |
 | 3-feature-search-issue-keys-dedupe-365 | **MERGED — PR #367 @ e193c16 (squash); closes #365; full F1-F7 lifecycle CONVERGED in single cycle** — F1d: 17 passes (R1: P1-P11 CONVERGED v0.1.8; R2: P12-P17 CONVERGED v0.1.12). F5: 4 passes (adversary 3-clean + code-reviewer CONVERGENCE_REACHED + security LOW-RISK APPROVE). F6: 5 Copilot rounds (R2 O(N²)→O(N) algorithmic fix; R3-R4 doc cascade; R5 clean). Merged 2026-05-15T17:51:09Z. | 2026-05-14 | 2026-05-15 | MERGED @ e193c16 | F1d R1: 0/4/2→…→0→0→0 (11p) \| F1d R2: 0/0/3→0/6/0→1B/2/0→0→0/0/2→0 (6p) \| F5: →→→clean×3 \| F6: 5R→clean |
 | 3-chore-pg365-1-bc-trace-cleanup | **MERGED** — PR #369 @ 6ca9587 (squash); resolves PG-365-1 Drift Item from cycle #365 | 2026-05-15 | 2026-05-15 | MERGED — 7 Copilot rounds, 9 valid findings | R1=1 R2=1 R3=1 R4=1 R5=3 R6=2 R7=0 |
-| 3-feature-340-bulk-timeout-task-id-pin | F1 COMPLETE — scope TEST-PIN approved | 2026-05-15 | 2026-05-15 | F1 orchestrator-approved (delta-analysis.md @ .factory/phase-f1-delta-analysis/) | — |
+| 3-feature-340-bulk-poll-task-id-pin | F1+F2+F3 COMPLETE — F4 dispatch ready | 2026-05-15 | — | story=S-340, BC=BC-3.4.009, worktree=pending | — |
 | 4: Holdout Evaluation | not-started | | | | |
 | 5: Adversarial Refinement | not-started | | | | |
 | 6: Formal Hardening | not-started | | | | |
@@ -93,7 +93,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | F7 cycle-close prep — #365 | state-manager | complete | STATE.md Phase Progress row updated to F6 CONVERGED/PR #367 OPEN. 4 lessons codified (L-365-1..L-365-4). DRIFT-006 added. Factory commit pending. |
 | PR #367 MERGED @ e193c16 (2026-05-15T17:51:09Z) — cycle 3-feature-search-issue-keys-dedupe-365 CLOSED | state-manager | complete | Phase Progress row updated to MERGED. Session checkpoint updated. L-365-summary appended to lessons.md. Factory commits pushed to origin/factory-artifacts. |
 | PR #369 MERGED @ 6ca9587 — PG-365-1 RESOLVED. Single-pass F5 review missed Source-field coverage (Copilot R4 caught it) — see lesson L-PG365-1-process. 7 Copilot rounds, 9 valid findings. DRIFT-007 added. | state-manager | complete | Phase Progress row added. Lesson L-PG365-1-process codified in lessons.md. DRIFT-007 recorded in Drift Items. Session checkpoint updated. |
-| F1 delta analysis — #340 (bulk-timeout task_id pin) | state-manager | complete | Synthesized architect-input.md + business-analyst-input.md. Scope: TEST-PIN only. Options (a)/(b) deferred as separate issues. 1 new BC needed (ID TBD in F2). Artifacts: delta-analysis.md + affected-files.txt @ .factory/phase-f1-delta-analysis/. |
+| F1+F2+F3 complete — #340 (bulk-timeout task_id pin) | state-manager | complete | S-340 story committed @ a1d6c46 (status: ready, v1.0.1). Cycle dir .factory/cycles/cycle-001/S-340/implementation/ scaffolded. STATE.md + STORY-INDEX updated. F4 worktree+TDD dispatch in flight. |
 
 ## Decisions Log
 
