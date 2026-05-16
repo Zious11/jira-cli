@@ -1,9 +1,9 @@
-921-    // See build_labels_edited_fields doc-comment for the verbatim #331 schema caveat.
-922:    let edited_fields = build_labels_edited_fields(&adds, &removes);
-923-
-924-    // selectedActions for labels is always ["labels"] regardless of ADD/REMOVE/coalesce.
+    // See build_labels_edited_fields doc-comment for the verbatim #331 schema caveat.
+    let edited_fields = build_labels_edited_fields(&adds, &removes);
+
+    // selectedActions for labels is always ["labels"] regardless of ADD/REMOVE/coalesce.
 --
-1501-
-1502:            let result = build_labels_edited_fields(&adds, &removes);
-1503-
-1504-            // Invariant 0: top-level value MUST be a JSON object with EXACTLY one key ("labels").
+
+            let result = build_labels_edited_fields(&adds, &removes);
+
+            // Invariant 0: top-level value MUST be a JSON object with EXACTLY one key ("labels").

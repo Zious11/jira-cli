@@ -1,3 +1,1 @@
-$ cargo fmt --all -- --check
-(no output — formatting is clean)
-Exit code: 0
+exit_code: 0 — cargo fmt --check produced no output (formatting already correct).

@@ -1,6 +1,7 @@
-/// Build the `editedFieldsInput.labels` JSON value for a bulk-labels edit.
+/// Build the edited-fields JSON object for a bulk-labels edit.
 ///
-/// Returns the JSON shape per BC-3.4.006:
+/// Returns the complete `editedFieldsInput` object (with a top-level `"labels"` key)
+/// to be passed directly to `bulk_edit_fields`. JSON shapes per BC-3.4.006:
 /// - Single-action ADD: object-form
 ///   `{"labels": {"labelsAction": "ADD", "labels": [{"name": "foo"}]}}`
 /// - Single-action REMOVE: object-form
@@ -48,11 +49,3 @@ fn build_labels_edited_fields(adds: &[String], removes: &[String]) -> serde_json
         json!({ "labels": label_ops })
     }
 }
-
-/// Route label edits through the Atlassian Bulk Fields API.
-///
-/// Supports 1..=1000 keys. `labels` is a list of "add:NAME" / "remove:NAME" / "NAME" strings.
-///
-/// NOTE: The `--dry-run --output json` `plannedChanges.labels` shape (built in the
-/// dry-run block of `handle_edit` above) is a SIMPLIFIED preview using `{action, name}`
-/// pairs in a flat array, NOT a byte-for-byte snapshot of the POST body built here.

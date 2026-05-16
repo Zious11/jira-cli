@@ -1509,18 +1509,45 @@ mod build_labels_proptests {
             // Invariant 1: top-level "labels" key is always present.
             let labels = result.get("labels").expect("BC-3.4.006: top-level 'labels' key MUST be present");
 
-            // Helper closure.
-            let extract_action_names = |action_obj: &Value| -> (String, Vec<String>) {
-                let action = action_obj.get("labelsAction").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let names: Vec<String> = action_obj
+            // Strict shape-pinning helper — panics with BC-3.4.006 message on any
+            // key-set deviation so a regression that emits {"WRONG_KEY": "foo"} instead
+            // of {"name": "foo"} fails loudly rather than being silently dropped.
+            let extract_action_and_names = |action_obj: &Value| -> (String, Vec<String>) {
+                let obj = action_obj.as_object().expect(
+                    "BC-3.4.006: each action entry MUST be a JSON object",
+                );
+                assert_eq!(
+                    obj.len(), 2,
+                    "BC-3.4.006: each action entry MUST have EXACTLY 2 keys (labelsAction + labels), got: {:?}",
+                    obj.keys().collect::<Vec<_>>()
+                );
+                let action = obj
+                    .get("labelsAction")
+                    .and_then(|v| v.as_str())
+                    .expect("BC-3.4.006: action entry MUST have labelsAction: String")
+                    .to_string();
+                let inner_labels = obj
                     .get("labels")
                     .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|item| item.get("name").and_then(|n| n.as_str()).map(String::from))
-                            .collect()
+                    .expect("BC-3.4.006: action entry MUST have labels: Array");
+                let names: Vec<String> = inner_labels
+                    .iter()
+                    .map(|item| {
+                        let item_obj = item.as_object().expect(
+                            "BC-3.4.006: each label entry MUST be a JSON object",
+                        );
+                        assert_eq!(
+                            item_obj.len(), 1,
+                            "BC-3.4.006: each label entry MUST have EXACTLY 1 key (name), got: {:?}",
+                            item_obj.keys().collect::<Vec<_>>()
+                        );
+                        item_obj
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .expect("BC-3.4.006: each label entry MUST have name: String")
+                            .to_string()
                     })
-                    .unwrap_or_default();
+                    .collect();
                 (action, names)
             };
 
@@ -1531,49 +1558,40 @@ mod build_labels_proptests {
                         "BC-3.4.006: both-action MUST produce array-form (not object-form)",
                     );
                     prop_assert_eq!(arr.len(), 2, "BC-3.4.006: array-form MUST have exactly 2 entries (ADD + REMOVE)");
-                    let (a0_action, a0_names) = extract_action_names(&arr[0]);
-                    let (a1_action, a1_names) = extract_action_names(&arr[1]);
+                    let (a0_action, a0_names) = extract_action_and_names(&arr[0]);
+                    let (a1_action, a1_names) = extract_action_and_names(&arr[1]);
                     prop_assert_eq!(a0_action, "ADD",    "BC-3.4.006: array index 0 MUST be ADD");
                     prop_assert_eq!(a1_action, "REMOVE", "BC-3.4.006: array index 1 MUST be REMOVE");
                     prop_assert_eq!(a0_names, adds.clone(),    "BC-3.4.006: ADD names MUST match input");
                     prop_assert_eq!(a1_names, removes.clone(), "BC-3.4.006: REMOVE names MUST match input");
-                    // Assert inner labels array lengths to prevent silent extra-item drift via filter_map.
-                    let add_inner = arr[0].get("labels").and_then(|v| v.as_array()).expect(
-                        "BC-3.4.006: both-action ADD entry MUST have an inner 'labels' array",
-                    );
-                    let rem_inner = arr[1].get("labels").and_then(|v| v.as_array()).expect(
-                        "BC-3.4.006: both-action REMOVE entry MUST have an inner 'labels' array",
-                    );
-                    prop_assert_eq!(add_inner.len(), adds.len(),    "BC-3.4.006: both-action inner ADD labels array length MUST equal input length");
-                    prop_assert_eq!(rem_inner.len(), removes.len(), "BC-3.4.006: both-action inner REMOVE labels array length MUST equal input length");
                 }
                 // Single-action ADD: object-form, labelsAction=ADD.
                 (false, true) => {
                     let obj = labels.as_object().expect(
                         "BC-3.4.006: single-action ADD MUST produce object-form (not array-form)",
                     );
-                    let (action, names) = extract_action_names(&Value::Object(obj.clone()));
+                    prop_assert_eq!(
+                        obj.len(), 2,
+                        "BC-3.4.006: single-ADD labels object MUST have EXACTLY 2 keys (labelsAction + labels), got: {:?}",
+                        obj.keys().collect::<Vec<_>>()
+                    );
+                    let (action, names) = extract_action_and_names(&Value::Object(obj.clone()));
                     prop_assert_eq!(action, "ADD", "BC-3.4.006: single-ADD MUST set labelsAction=ADD");
                     prop_assert_eq!(names, adds.clone(), "BC-3.4.006: ADD names MUST match input");
-                    // Assert inner labels array length matches input to prevent silent extra-item drift.
-                    let inner_arr = obj.get("labels").and_then(|v| v.as_array()).expect(
-                        "BC-3.4.006: single-ADD labels entry MUST have an inner 'labels' array",
-                    );
-                    prop_assert_eq!(inner_arr.len(), adds.len(), "BC-3.4.006: inner ADD labels array length MUST equal input length");
                 }
                 // Single-action REMOVE: object-form, labelsAction=REMOVE.
                 (true, false) => {
                     let obj = labels.as_object().expect(
                         "BC-3.4.006: single-action REMOVE MUST produce object-form (not array-form)",
                     );
-                    let (action, names) = extract_action_names(&Value::Object(obj.clone()));
+                    prop_assert_eq!(
+                        obj.len(), 2,
+                        "BC-3.4.006: single-REMOVE labels object MUST have EXACTLY 2 keys (labelsAction + labels), got: {:?}",
+                        obj.keys().collect::<Vec<_>>()
+                    );
+                    let (action, names) = extract_action_and_names(&Value::Object(obj.clone()));
                     prop_assert_eq!(action, "REMOVE", "BC-3.4.006: single-REMOVE MUST set labelsAction=REMOVE");
                     prop_assert_eq!(names, removes.clone(), "BC-3.4.006: REMOVE names MUST match input");
-                    // Assert inner labels array length matches input to prevent silent extra-item drift.
-                    let inner_arr = obj.get("labels").and_then(|v| v.as_array()).expect(
-                        "BC-3.4.006: single-REMOVE labels entry MUST have an inner 'labels' array",
-                    );
-                    prop_assert_eq!(inner_arr.len(), removes.len(), "BC-3.4.006: inner REMOVE labels array length MUST equal input length");
                 }
                 // Both empty: filtered by prop_assume!; unreachable.
                 (true, true) => unreachable!("filtered by prop_assume! above"),
