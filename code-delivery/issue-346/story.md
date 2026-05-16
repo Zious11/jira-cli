@@ -16,12 +16,12 @@ files_modified:
   - .github/workflows/ci.yml (add `mutants` job; PR-only trigger; --in-diff mode; timeout-minutes: 60)
   - .gitignore (add mutants.out/)
   - CLAUDE.md (Build & Test: add `cargo mutants` invocation; AI Agent Notes: cargo-mutants is binary-only, not a dependency)
-  - .mutants.toml (NEW; timeout_multiplier = 3.0; explicit file scope for three designated files)
+  - .cargo/mutants.toml (NEW; timeout_multiplier = 3.0; explicit file scope for three designated files) (v27 reads config from .cargo/mutants.toml, not .mutants.toml at repo root)
   - docs/specs/cargo-mutants-policy.md (NEW; #[mutants::skip] whitelist convention + justification requirement + deferral policy)
 test_files: []
 breaking_change: false
 producer: story-writer
-version: "1.0.1"
+version: "1.0.2"
 last_updated: 2026-05-16
 depends_on:
   - S-340     # S-340 is the immediate predecessor in the audit-followup cluster; bulk.rs is the primary mutation target
@@ -72,7 +72,7 @@ surface.
 ## Goal
 
 Land a new `mutants` CI job in `.github/workflows/ci.yml` with supporting infrastructure:
-`.mutants.toml` configuration, `.gitignore` exclusion for `mutants.out/`, CLAUDE.md
+`.cargo/mutants.toml` configuration, `.gitignore` exclusion for `mutants.out/`, CLAUDE.md
 documentation additions, and `docs/specs/cargo-mutants-policy.md` codifying the
 `#[mutants::skip]` whitelist convention. Run a baseline locally during implementation;
 whitelist or defer surviving mutants per policy. Do NOT block the PR on achieving 90%
@@ -94,18 +94,22 @@ kill-rate on first baseline run.
   (scopes mutations to lines changed in the PR diff for the three designated files).
 - Enforces the 90% kill-rate target via an inline shell step reading line counts from
   `mutants.out/caught.txt` and `mutants.out/missed.txt`. The threshold value lives in
-  the CI YAML (not in `.mutants.toml`) for CI-artifact visibility.
+  the CI YAML (not in `.cargo/mutants.toml`) for CI-artifact visibility.
 - Sets `timeout-minutes: 60` at the job level (satisfies R-L12 for this job).
 - All GHA actions used in the job are SHA-pinned (per StepSecurity convention from
   PR #368). Since the job uses only `actions/checkout` and `Swatinem/rust-cache` (both
   already SHA-pinned in the existing workflow), no new unpinned actions are introduced.
 
-**AC-2** — `.mutants.toml` exists at repo root containing at minimum:
+**AC-2** — `.cargo/mutants.toml` exists containing at minimum:
 - `timeout_multiplier = 3.0` — prevents false "unviable" results on the async bulk
   code paths where mutations of `.await` chains can cause test timeouts.
 - Explicit `--file` scope for the three designated files so local `cargo mutants`
   invocations without flags match CI behavior by default.
-- Kill-rate threshold NOT set in `.mutants.toml`; it belongs in the CI YAML step.
+- Kill-rate threshold NOT set in `.cargo/mutants.toml`; it belongs in the CI YAML step.
+
+Note: cargo-mutants v27 reads configuration from `.cargo/mutants.toml`, not `.mutants.toml`
+at the repo root. The F4 implementer adapted this per official docs; rationale captured in
+the Red Gate log.
 
 **AC-3** — `.gitignore` has a `mutants.out/` entry so local baseline runs do not
 accidentally commit mutation results artifacts.
@@ -220,7 +224,7 @@ Based on the F1 architect input, three patterns are most likely to survive:
 2. **`await_bulk_task` grace-period branch** — debug-only path exercised only by
    integration tests with `JR_BULK_UNKNOWN_GRACE_SECS` override. Mutation timeout
    sensitivity is the most likely source of a below-90% result. `timeout_multiplier =
-   3.0` in `.mutants.toml` is the primary mitigation.
+   3.0` in `.cargo/mutants.toml` is the primary mitigation.
 
 3. **`build_labels_edited_fields` object-vs-array branch** — `if label_ops.len() == 1`.
    The S-345 proptest should catch mutants here because it explicitly tests both the
@@ -257,7 +261,7 @@ fail or generate zero mutants unexpectedly.
 
 ## TDD Plan
 
-1. Add `.mutants.toml` at repo root with `timeout_multiplier = 3.0` and file scope.
+1. Add `.cargo/mutants.toml` with `timeout_multiplier = 3.0` and file scope.
 2. Add `mutants.out/` line to `.gitignore`.
 3. Install cargo-mutants locally: `cargo install cargo-mutants`.
 4. Run local baseline: `cargo mutants --file src/cli/issue/create.rs --file
@@ -340,8 +344,8 @@ and `Swatinem/rust-cache` rather than introducing new floating tags.
    anti-pattern. Any `#[mutants::skip]` annotation applied during baseline cleanup
    is a policy violation without an adjacent justification comment.
 
-6. **Kill-rate threshold in CI YAML, not in `.mutants.toml`**: The 90% threshold value
-   lives in the CI step's shell logic (most visible to reviewers), not in `.mutants.toml`.
+6. **Kill-rate threshold in CI YAML, not in `.cargo/mutants.toml`**: The 90% threshold value
+   lives in the CI step's shell logic (most visible to reviewers), not in `.cargo/mutants.toml`.
 
 7. **`fetch-depth: 0`**: The `actions/checkout` step in the `mutants` job MUST include
    `fetch-depth: 0` so `--in-diff origin/${{ github.base_ref }}` can resolve the base
@@ -374,7 +378,7 @@ Do not add any new Cargo dependencies.
 | `.github/workflows/ci.yml` | MODIFY | Add `mutants` job (~30-40 lines). Job uses `if: github.event_name == 'pull_request'`; uses existing SHA-pinned checkout + rust-cache; installs cargo-mutants via `cargo install`; runs `--in-diff` scoped to three files; enforces 90% kill-rate via shell one-liner; sets `timeout-minutes: 60`. |
 | `.gitignore` | MODIFY | Add `mutants.out/` line. Location: near end of file, after existing build artifact exclusions. |
 | `CLAUDE.md` | MODIFY | (1) Build & Test section: new `cargo mutants` invocation line. (2) AI Agent Notes section: new line documenting cargo-mutants as binary-only, never a Cargo.toml dependency. |
-| `.mutants.toml` | CREATE | Minimal config: `timeout_multiplier = 3.0` + explicit file scope for three designated files. |
+| `.cargo/mutants.toml` | CREATE | Minimal config: `timeout_multiplier = 3.0` + explicit file scope for three designated files. |
 | `docs/specs/cargo-mutants-policy.md` | CREATE | Policy doc: 90% kill-rate target + rationale; `#[mutants::skip]` convention with mandatory justification template; deferral policy for initial-baseline misses; local invocation snippets. |
 | `docs/demo-evidence/S-346/baseline-mutants-report.txt` | CREATE | Baseline run output captured during F4. Contains kill rate, caught/missed/unviable counts, surviving mutant list. |
 | `Cargo.toml` | DO NOT TOUCH | cargo-mutants is not a Cargo dependency. |
