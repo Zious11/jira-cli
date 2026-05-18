@@ -153,6 +153,12 @@ When adding a new feature:
 - **Multi-profile boundary:** every cache reader/writer takes `profile: &str` as its first arg. Pass `&config.active_profile_name` from any handler that has `&Config` in scope. Cross-profile cache leakage is a correctness bug, not a UX issue — sandbox vs prod custom-field IDs can differ.
 - **Per-profile vs shared OAuth keys:** `email`, `api-token`, `oauth_client_id`, `oauth_client_secret` live under flat keychain keys (account-level, shared across profiles). `oauth-access-token` / `oauth-refresh-token` are namespaced as `<profile>:oauth-*` because they're cloudId-scoped. The `"default"` profile lazy-migrates legacy flat keys on first read; other profiles do not.
 - **Cache format changes:** `~/.cache/jr/v1/<profile>/cmdb_fields.json` stores `(id, name)` tuples. Old format (ID-only) causes deserialization failure, handled as cache miss. If you change cache structs, old caches auto-expire (7-day TTL) or fail gracefully. To break compatibility cleanly, bump the cache root from `v1/` to `v2/` — old files orphan harmlessly.
+  - **Request-type caches (S-288-pr2):** `~/.cache/jr/v1/<profile>/request_types_<service_desk_id>.json`
+    stores the list of `RequestType` structs; `request_type_fields_<service_desk_id>_<request_type_id>.json`
+    stores the fields response. Both inherit `RequestType`/`RequestTypeField` shape from
+    `src/types/jsm/request_type.rs`; if Atlassian adds required fields to either response,
+    older cache files fail to deserialize (handled as cache miss → refetch; self-heals).
+    Same 7-day TTL as all other caches; same `v1/` root-bump path for incompatible changes.
 - **`list.rs` is large (~970 lines):** Contains both `handle_list` and `handle_view` plus all JQL composition logic. If modifying, read the full function you're changing — context matters.
 - **`aqlFunction()` not `assetsQuery()`:** The Jira Assets JQL function is `aqlFunction()`. It requires the human-readable field **name**, not `cf[ID]` or `customfield_NNNNN`. AQL attribute for object key is `Key` (not `objectKey` — that's the JSON field name).
 - **Status category colors are fixed:** `green` = Done, `yellow` = In Progress, `blue-gray` = To Do. These mappings are hardcoded in Jira Cloud across all instances. Used by `--open` filtering.

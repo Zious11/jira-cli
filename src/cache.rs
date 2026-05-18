@@ -374,6 +374,12 @@ pub fn read_request_type_cache(
     profile: &str,
     service_desk_id: &str,
 ) -> Result<Option<Vec<crate::types::jsm::RequestType>>> {
+    debug_assert!(
+        service_desk_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-'),
+        "service_desk_id contains unsafe characters for filename: {service_desk_id:?}"
+    );
     let filename = format!("request_types_{service_desk_id}.json");
     Ok(read_cache::<RequestTypeCache>(profile, &filename)?.map(|c| c.types))
 }
@@ -394,6 +400,12 @@ pub fn write_request_type_cache(
     service_desk_id: &str,
     types: &[crate::types::jsm::RequestType],
 ) -> Result<()> {
+    debug_assert!(
+        service_desk_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-'),
+        "service_desk_id contains unsafe characters for filename: {service_desk_id:?}"
+    );
     let filename = format!("request_types_{service_desk_id}.json");
     let result = write_cache(
         profile,
@@ -428,6 +440,18 @@ pub fn read_request_type_fields_cache(
     service_desk_id: &str,
     request_type_id: &str,
 ) -> Result<Option<crate::types::jsm::RequestTypeFieldsResponse>> {
+    debug_assert!(
+        service_desk_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-'),
+        "service_desk_id contains unsafe characters for filename: {service_desk_id:?}"
+    );
+    debug_assert!(
+        request_type_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-'),
+        "request_type_id contains unsafe characters for filename: {request_type_id:?}"
+    );
     let filename = format!("request_type_fields_{service_desk_id}_{request_type_id}.json");
     Ok(read_cache::<RequestTypeFieldsCache>(profile, &filename)?.map(|c| c.response))
 }
@@ -455,6 +479,19 @@ pub fn write_request_type_fields_cache(
     // contained `_`, which the Atlassian schema does not permit. If Atlassian
     // ever changes IDs to non-numeric strings, switch to a structural delimiter
     // (e.g., urlencoding both components) and bump the cache root to `v2/`.
+    // Charset constraint enforced by debug_assert! above (in debug builds).
+    debug_assert!(
+        service_desk_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-'),
+        "service_desk_id contains unsafe characters for filename: {service_desk_id:?}"
+    );
+    debug_assert!(
+        request_type_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-'),
+        "request_type_id contains unsafe characters for filename: {request_type_id:?}"
+    );
     let filename = format!("request_type_fields_{service_desk_id}_{request_type_id}.json");
     let result = write_cache(
         profile,

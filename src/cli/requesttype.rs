@@ -6,6 +6,7 @@
 //! per-(profile, serviceDeskId) request-type cache (7d TTL).
 
 use anyhow::Result;
+use serde_json;
 
 use crate::api::client::JiraClient;
 use crate::api::jsm::servicedesks;
@@ -73,6 +74,10 @@ async fn handle_list(
     output_format: &OutputFormat,
     client: &JiraClient,
 ) -> Result<()> {
+    // Normalize Some("") to None — empty-string search would forward
+    // `?searchQuery=` with no value to the API and bypass cache for no reason.
+    let search = search.filter(|s| !s.is_empty());
+
     let types = if search.is_some() {
         // Always fetch when searching — search results are not cached.
         client.list_request_types(service_desk_id, search).await?
@@ -151,12 +156,31 @@ async fn handle_fields(
         })
         .collect();
 
-    output::print_output(
-        output_format,
-        &["Field Name", "Required", "Type"],
-        &rows,
-        &fields_response,
-    )
+    // H-1: BC-X.12.007 mandates JSON keys { canRaiseOnBehalfOf, canAddRequestParticipants, fields }.
+    // The `RequestTypeFieldsResponse` type serializes the fields array as `requestTypeFields`
+    // (camelCase from the Atlassian API) — intentional at the type layer for API round-trip.
+    // We shape the output here at the handler layer to match the BC-mandated public key names.
+    match output_format {
+        OutputFormat::Json => {
+            let shaped = serde_json::json!({
+                "canRaiseOnBehalfOf": fields_response.can_raise_on_behalf_of,
+                "canAddRequestParticipants": fields_response.can_add_request_participants,
+                "fields": fields_response.request_type_fields,
+            });
+            output::print_output(
+                output_format,
+                &["Field Name", "Required", "Type"],
+                &rows,
+                &shaped,
+            )
+        }
+        OutputFormat::Table => output::print_output(
+            output_format,
+            &["Field Name", "Required", "Type"],
+            &rows,
+            &fields_response,
+        ),
+    }
 }
 
 /// Resolve a request type name to its ID using partial_match.
@@ -199,7 +223,7 @@ async fn resolve_request_type_id(
         }
         MatchResult::Ambiguous(matches) => Err(JrError::UserError(format!(
             "Ambiguous request type \"{name}\" matches: {}. \
-             Run `jr requesttype list --project {project_key}` to see available types.",
+             Run `jr requesttype list --project {project_key}` to see all request types.",
             matches
                 .iter()
                 .map(|m| format!("\"{m}\""))
@@ -209,7 +233,7 @@ async fn resolve_request_type_id(
         .into()),
         MatchResult::None(_) => Err(JrError::UserError(format!(
             "Request type \"{name}\" not found. \
-             Run `jr requesttype list --project {project_key}` to see current types, \
+             Run `jr requesttype list --project {project_key}` to see all request types, \
              or delete the cache file at ~/.cache/jr/v1/{profile}/request_types_{service_desk_id}.json \
              if a recent admin change is suspected."
         ))
