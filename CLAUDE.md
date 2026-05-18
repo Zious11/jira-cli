@@ -31,7 +31,8 @@ src/
 │   ├── auth.rs          # auth login/switch/list/status/refresh/logout/remove. Multi-profile aware via --profile.
 │   ├── init.rs          # Interactive setup (prefetches org metadata + team cache + story points field)
 │   ├── project.rs       # project fields (types, priorities, statuses, CMDB fields)
-│   └── queue.rs         # queue list/view (JSM service desks)
+│   ├── queue.rs         # queue list/view (JSM service desks)
+│   └── requesttype.rs   # requesttype list/fields (JSM request-type discovery + 7d cache)
 ├── api/
 │   ├── client.rs        # JiraClient — HTTP methods, auth headers, rate limit retry, 429/401 handling
 │   ├── auth.rs          # OAuth 2.0 flow + per-profile keychain layout (shared email/api-token/oauth_client_*; namespaced <profile>:oauth-access-token / <profile>:oauth-refresh-token); lazy migration of legacy flat OAuth keys for the "default" profile
@@ -185,6 +186,18 @@ When adding a new feature:
   pagination (selects range [startAt, startAt+maxResults) then applies permission
   filtering), so a short non-empty page does NOT mean end-of-data. Advancing by returned
   count would overlap windows and produce duplicates. Do not change this behavior.
+- **`jr request-type list/fields` (JSM request-type discovery):** `cli/requesttype.rs` implements
+  two subcommands: `list` (table: Name, Description; JSON array) and `fields <NAME|ID>` (table:
+  Field Name, Required, Type; JSON object). Request types are cached per `(profile, serviceDeskId)`
+  as `request_types_<sid>.json` (7-day TTL); field schemas per `(profile, sid, rtId)` as
+  `request_type_fields_<sid>_<rtId>.json`. Search results (`--search`) are never cached — only
+  the full list is. Cache functions: `read_request_type_cache`, `write_request_type_cache`,
+  `read_request_type_fields_cache`, `write_request_type_fields_cache`.
+- **`require_service_desk` call-site label (BC-X.8.004):** `servicedesks::require_service_desk`
+  accepts a `call_site_label: &'static str` parameter whose value is embedded in the "requires a
+  Jira Service Management project" error message. Pass `"queue commands"` from `cli/queue.rs` and
+  `"jr requesttype"` from `cli/requesttype.rs`. Every new JSM caller MUST supply a distinct label
+  so users see a command-specific error rather than a generic one.
 - **`board view` truncation hint emits to stderr:** The truncation hint ("Showing N of M
   columns — use --all to see everything") is written to stderr, consistent with the
   convention used by `issue list` and `sprint current`. This is intentional — stderr
