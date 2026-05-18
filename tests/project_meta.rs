@@ -117,11 +117,32 @@ async fn require_service_desk_errors_for_software_project() {
 
     let client =
         jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".into());
-    let result =
-        jr::api::jsm::servicedesks::require_service_desk(&client, "DEV", "queue commands").await;
+    // H-3: Use the realistic call_site_label form as produced by cli/queue.rs —
+    // the rustdoc for require_service_desk mandates a full noun-phrase ending in
+    // the matching verb. The old "queue commands" (lowercase, no verb) was
+    // ungrammatical and violates the BC-X.8.004 call_site_label invariant.
+    let result = jr::api::jsm::servicedesks::require_service_desk(
+        &client,
+        "DEV",
+        "Queue commands (`jr queue`) require",
+    )
+    .await;
 
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("Jira Software project"));
-    assert!(err.contains("queue commands"));
+    // BC-X.8.004 verbatim prefix: "Project \"DEV\" is a Jira Software project."
+    assert!(
+        err.contains("Project \"DEV\" is a Jira Software project."),
+        "Expected 'Project \"DEV\" is a Jira Software project.' prefix; got: {err}"
+    );
+    // BC-X.8.004 verbatim middle clause with realistic label.
+    assert!(
+        err.contains("Queue commands (`jr queue`) require a Jira Service Management project."),
+        "Expected BC-X.8.004 verbatim middle clause; got: {err}"
+    );
+    // BC-X.8.004 verbatim closing — "find a JSM project" (not "see available projects").
+    assert!(
+        err.contains("Run \"jr project list\" to find a JSM project."),
+        "Expected BC-X.8.004 verbatim closing; got: {err}"
+    );
 }

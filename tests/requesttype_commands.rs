@@ -391,11 +391,25 @@ async fn test_requesttype_list_non_jsm_project_exits_64_with_callsite_message() 
         "Expected exit 64 for non-JSM project, got {:?}. stderr: {stderr}",
         output.status.code()
     );
+    // C-1: BC-X.12.003 prefix pin — "Project " prefix (was missing in pre-adv-03 impl).
+    assert!(
+        stderr.contains("Project \"SW\" is a"),
+        "BC-X.12.003: error must start with 'Project \"<KEY>\" is a'; got: {stderr}"
+    );
     // H-2 fix: assert the verbatim BC-X.12.003 phrase rather than a tautological
     // substring that would pass even if the BC-mandated wording were absent.
     assert!(
         stderr.contains("`jr requesttype` commands require a Jira Service Management project"),
         "AC-003 / BC-X.12.003: stderr must contain the verbatim BC phrase; got: {stderr}"
+    );
+    // C-1: BC-X.12.003 closing pin — "find a JSM project" (was "see available projects" pre-adv-03).
+    assert!(
+        stderr.contains("Run \"jr project list\" to find a JSM project."),
+        "BC-X.12.003: closing must use 'find a JSM project'; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("see available projects"),
+        "Old drifted closing must not appear; got: {stderr}"
     );
     // Negative assertion: the old missing-verb form must not appear.
     assert!(
@@ -566,14 +580,34 @@ async fn test_requesttype_fields_resolves_name_and_returns_table() {
         stdout.contains("summary") || stdout.contains("What do you need"),
         "Expected summary field row in stdout table, got: {stdout}"
     );
-    // Table should have column headers
+    // M-4: BC-X.12.005: columns MUST be exactly Field Name, Required, Type (verbatim headers).
     assert!(
-        stdout.contains("Field") || stdout.contains("field"),
-        "Expected 'Field' column header in stdout table, got: {stdout}"
+        stdout.contains("Field Name"),
+        "BC-X.12.005: first column header must be 'Field Name'; got: {stdout}"
     );
     assert!(
-        stdout.contains("Required") || stdout.contains("required"),
-        "Expected 'Required' column header in stdout table, got: {stdout}"
+        stdout.contains("Required"),
+        "BC-X.12.005: second column header must be 'Required'; got: {stdout}"
+    );
+    assert!(
+        stdout.contains("Type"),
+        "BC-X.12.005: third column header must be 'Type'; got: {stdout}"
+    );
+    // H-2: BC-X.12.005: Required column MUST emit uppercase YES/NO (not lowercase).
+    // The fixture has one required=true field ("What do you need?") and one required=false ("Nominee").
+    assert!(
+        stdout.contains("YES"),
+        "BC-X.12.005: Required column must contain uppercase YES (for required field); got: {stdout}"
+    );
+    assert!(
+        stdout.contains("NO"),
+        "BC-X.12.005: Required column must contain uppercase NO (for optional field); got: {stdout}"
+    );
+    // Negative: lowercase yes/no must not appear in the table output.
+    // Bordered substrings avoid false-positives on words like "Synonym" or "necessary".
+    assert!(
+        !stdout.contains(" yes ") && !stdout.contains(" no "),
+        "Lowercase yes/no must not appear in table output; got: {stdout}"
     );
 }
 
@@ -693,6 +727,133 @@ async fn test_requesttype_fields_ambiguous_exits_64_with_hint() {
     assert!(
         !stderr.contains("request-type"),
         "Stderr must not contain kebab-case 'request-type' (canonical form is single-word 'requesttype'). Got: {stderr}"
+    );
+}
+
+// ─── H-1: ExactMultiple with case-variant duplicates lists all IDs ───────────
+
+/// H-1 (adversary pass-03): `jr requesttype fields "password reset"` when the
+/// request types list contains three case variants of the same name ("Password
+/// Reset", "password reset", "PASSWORD RESET") must exit 64 with a
+/// "Multiple request types named" error that lists ALL THREE numeric IDs.
+///
+/// Pre-fix, `resolve_request_type_id`'s ExactMultiple branch used a
+/// case-SENSITIVE filter (`t.name == matched_name`), so only the one variant
+/// whose name exactly matched the string returned by partial_match would have
+/// its ID included; the other two IDs were silently dropped.
+///
+/// The fix: `.filter(|t| t.name.to_lowercase() == matched_name.to_lowercase())`
+/// (mirrors `cli/queue.rs::resolve_queue_by_name` which uses `q.name.to_lowercase()`).
+///
+/// Traces: BC-X.12.006 §ExactMultiple, adversary pass-03 H-1
+#[tokio::test]
+async fn test_requesttype_fields_case_variant_duplicates_lists_all_ids() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_project_meta_help(&server).await;
+    mount_service_desk_list(&server).await;
+
+    // Three request types that are case variants of "password reset".
+    // partial_match resolves "password reset" (lowercase input) to ExactMultiple
+    // because all three names are equal under case-insensitive comparison.
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk/10/requesttype"))
+        .and(query_param("start", "0"))
+        .and(query_param("limit", "50"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 3,
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "_links": {},
+            "values": [
+                {
+                    "id": "11001",
+                    "name": "Password Reset",
+                    "description": "Mixed case",
+                    "issueTypeId": "12345",
+                    "serviceDeskId": "10",
+                    "portalId": "2",
+                    "groupIds": ["12"]
+                },
+                {
+                    "id": "11002",
+                    "name": "password reset",
+                    "description": "Lower case",
+                    "issueTypeId": "12345",
+                    "serviceDeskId": "10",
+                    "portalId": "2",
+                    "groupIds": ["12"]
+                },
+                {
+                    "id": "11003",
+                    "name": "PASSWORD RESET",
+                    "description": "Upper case",
+                    "issueTypeId": "12345",
+                    "serviceDeskId": "10",
+                    "portalId": "2",
+                    "groupIds": ["12"]
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    // Invoke with lowercase input — should match all three via case-insensitive Exact resolution.
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "requesttype",
+            "fields",
+            "password reset",
+            "--project",
+            "HELP",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 for ExactMultiple case-variants, got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+
+    // BC-X.12.006 §ExactMultiple: error must start with the disambiguation prefix.
+    assert!(
+        stderr.contains("Multiple request types named"),
+        "BC-X.12.006 §ExactMultiple: stderr must contain 'Multiple request types named'; got: {stderr}"
+    );
+
+    // H-1 regression guard: ALL THREE IDs must appear — pre-fix only the first case-variant's
+    // ID would appear because the ExactMultiple filter was case-sensitive.
+    assert!(
+        stderr.contains("11001"),
+        "H-1: ID 11001 ('Password Reset') must appear in disambiguation error; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("11002"),
+        "H-1: ID 11002 ('password reset') must appear in disambiguation error; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("11003"),
+        "H-1: ID 11003 ('PASSWORD RESET') must appear in disambiguation error; got: {stderr}"
+    );
+
+    // BC-X.12.006: the BC-mandated hint to pass the numeric ID directly.
+    assert!(
+        stderr.contains("Pass the numeric ID directly."),
+        "BC-X.12.006: stderr must contain 'Pass the numeric ID directly.'; got: {stderr}"
     );
 }
 

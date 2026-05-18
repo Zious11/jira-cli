@@ -479,16 +479,26 @@ async fn test_queue_list_non_jsm_project_emits_canonical_callsite_message() {
         output.status.code()
     );
 
+    // BC-X.8.004 prefix pin: "Project " prefix (C-1 fix mirrored here for queue).
+    assert!(
+        stderr.contains("Project \"DEV\" is a"),
+        "BC-X.8.004: error must start with 'Project \"DEV\" is a'; got: {stderr}"
+    );
+
     // BC-X.8.004 verbatim phrase — capitalised, plural noun, plural-agreement verb.
     assert!(
         stderr.contains("Queue commands (`jr queue`) require a Jira Service Management project"),
         "BC-X.8.004: stderr must contain the verbatim canonical phrase; got: {stderr}"
     );
 
-    // BC-X.8.004 closing sentence.
+    // C-2: BC-X.8.004 closing sentence — BC-verbatim "find a JSM project".
     assert!(
-        stderr.contains("Run \"jr project list\" to see available projects."),
-        "BC-X.8.004: stderr must contain closing sentence; got: {stderr}"
+        stderr.contains("Run \"jr project list\" to find a JSM project."),
+        "BC-X.8.004: closing must use 'find a JSM project'; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("see available projects"),
+        "Old drifted closing 'see available projects' must not appear; got: {stderr}"
     );
 
     // Regression guard: the pre-adv-01 lowercase/singular-verb form must never appear.

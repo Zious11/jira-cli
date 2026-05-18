@@ -1189,4 +1189,59 @@ mod request_type_cache_tests {
             );
         });
     }
+
+    /// M-2 corrupt-cache regression test 1: corrupt `request_types_<sid>.json`
+    /// must self-heal as a cache miss (Ok(None)), NOT propagate an error.
+    ///
+    /// Mirrors `corrupt_team_cache_returns_none` and `corrupt_workspace_cache_returns_none`
+    /// in the parent `tests` module. Establishes sibling-coverage parity for the two new
+    /// S-288-pr2 cache families (M-2 axis from adversary pass-03).
+    ///
+    /// Traces: adversary pass-03 M-2, S-7.01 sibling-coverage
+    #[test]
+    fn test_corrupt_request_type_cache_returns_none_self_heals() {
+        with_temp_cache(|| {
+            let dir = cache_dir("test");
+            std::fs::create_dir_all(&dir).unwrap();
+
+            // Write malformed JSON bytes to the cache file for service desk "10".
+            std::fs::write(dir.join("request_types_10.json"), b"not valid json{").unwrap();
+
+            // Must return Ok(None) — corrupt cache must self-heal as a miss, not Err.
+            let result = read_request_type_cache("test", "10").unwrap();
+            assert!(
+                result.is_none(),
+                "corrupt request_types cache must self-heal as Ok(None), not propagate an error"
+            );
+        });
+    }
+
+    /// M-2 corrupt-cache regression test 2: corrupt `request_type_fields_<sid>_<rtid>.json`
+    /// must self-heal as a cache miss (Ok(None)), NOT propagate an error.
+    ///
+    /// Mirrors the request_type_cache corruption test above and the sibling team/workspace
+    /// corrupt-cache tests. Establishes sibling-coverage parity for the fields cache family.
+    ///
+    /// Traces: adversary pass-03 M-2, S-7.01 sibling-coverage
+    #[test]
+    fn test_corrupt_request_type_fields_cache_returns_none_self_heals() {
+        with_temp_cache(|| {
+            let dir = cache_dir("test");
+            std::fs::create_dir_all(&dir).unwrap();
+
+            // Write malformed JSON bytes to the fields cache file for (sid="10", rtId="200").
+            std::fs::write(
+                dir.join("request_type_fields_10_200.json"),
+                b"not valid json{",
+            )
+            .unwrap();
+
+            // Must return Ok(None) — corrupt cache must self-heal as a miss, not Err.
+            let result = read_request_type_fields_cache("test", "10", "200").unwrap();
+            assert!(
+                result.is_none(),
+                "corrupt request_type_fields cache must self-heal as Ok(None), not propagate an error"
+            );
+        });
+    }
 }
