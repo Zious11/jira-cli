@@ -36,7 +36,7 @@ activation_version: "v0.5.0-dev.7"
 | **Language** | Rust |
 | **Target Workspace** | develop → main |
 | **Started** | 2026-05-04 |
-| **Last Updated** | 2026-05-18 — F1d pass-10 THIRD CONSECUTIVE CLEAN-PASS for #288 — CONVERGED 3/3. 0B/0C/0N; all 18 mandates CLEAR. Trajectory →0B/0C/0N→0B/0C/0N→0B/0C/0N. F2 spec evolution ready for human approval. |
+| **Last Updated** | 2026-05-18 — F3 incremental story decomposition for #288 COMPLETE — 4 stories created (S-288-pr1-api / pr2-cli / pr3-scope / pr4-dispatch). STORY-INDEX bumped 36→40. Dependency graph acyclic: pr1+pr3 Wave 1 (parallel), pr2 Wave 2 (depends pr1), pr4 Wave 3 (depends pr1+pr2+pr3). Awaiting human approval. |
 | **Current Phase** | Phase 3 — TDD Implementation **IN PROGRESS** — Wave 3 CLOSED (10/10). Feature Mode #110-pr2 COMPLETE. PRs #355–#364, #366–#367, #369–#373 MERGED. **0 audit-followups remain** (#331 sandbox-blocked deferred; #333 closed by PR #360; #340 closed by PR #370; #345 closed by PR #371; #346 closed by PR #373; #350 closed by PR #362; #361 closed by PR #364; #365 closed by PR #367; PG-365-1 closed by PR #369). No active cycle. |
 | **Next Phase** | Wave 3 — 10 stories (S-3.01..S-3.10) |
 | **Activation HEAD** | dea166471e22eff55974d7675593469b37048c5f (v0.5.0-dev.7) |
@@ -79,7 +79,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | 3-feature-340-bulk-poll-task-id-pin | **MERGED** — PR #370 @ 394dc25 (squash); closes #340; F1-F7 full cycle CONVERGED in single delivery | 2026-05-15 | 2026-05-16 | MERGED — 5 adv passes (0/0 trajectory), 3 CLEAN; Copilot R1=0; CI 9/9 green | 8→5→3-obs→7→4 (BLOCKER+CONCERN: 0 every pass) |
 | 3-feature-345-label-coalesce-extract | **MERGED** — PR #371 @ bb352ea (squash, admin); closes #345; F1-F7 full cycle CONVERGED | 2026-05-16 | 2026-05-16 | MERGED — 6 adv passes (3 CLEAN); 3 Copilot cycles + 1 convergence batch; 17 threads resolved; CI 9/9 green | 0/1/6 → 0/2/3 → 0/2/2 → 0/0/0 → 0/0/0 → 0/0/0 (3 consecutive CLEAN) |
 | 3-feature-346-cargo-mutants-ci | **MERGED** — PR #373 @ d909e65 (2026-05-16); closes #346. 8 adv passes, 5 fix rounds, 3 CLEAN; trajectory 0/6/14→2/6/4→0/3/3→0/2/4→2/3/3(1 REFUTED)→0/0/3→0/0/0→0/0/0. Copilot R1=APPROVE; CI 10/10 green. Follow-up #372 filed for partial-baseline completion. | 2026-05-16 | 2026-05-16 | MERGED — 3 CLEAN convergence | 0/6/14→2/6/4→0/3/3→0/2/4→2/3/3→0/0/3→0/0/0→0/0/0 |
-| 3-feature-jsm-request-types-288 | **F2 READY FOR HUMAN APPROVAL** — F1d CONVERGED 3/3 at pass-10. 10 total passes (7 substantive + 3 confirmation CLEAN). All 18 mandates CLEAR. CONVERGENCE.md written. | 2026-05-18 | 2026-05-18 | F1d 3/3 CONVERGED — awaiting human approval gate | 4B/6C/3N → 0B/3C/4N → 0B/4C/6N → 0B/2C/5N → 0B/2C/3N → 0B/2C/3N → 0B/1C/3N → 0B/0C/0N → 0B/0C/0N → 0B/0C/0N (CLEAN 3/3 CONVERGED) |
+| 3-feature-jsm-request-types-288 | **F3 stories created — awaiting human approval** — F1d CONVERGED 3/3 at pass-10; F3 story decomposition complete: 4 stories (S-288-pr1-api/pr2-cli/pr3-scope/pr4-dispatch). STORY-INDEX bumped 36→40. | 2026-05-18 | 2026-05-18 | F1d 3/3 CONVERGED — F3 complete — awaiting human approval | 4B/6C/3N → 0B/3C/4N → 0B/4C/6N → 0B/2C/5N → 0B/2C/3N → 0B/2C/3N → 0B/1C/3N → 0B/0C/0N → 0B/0C/0N → 0B/0C/0N (CLEAN 3/3 CONVERGED) \| F3 4 stories \| |
 | 4: Holdout Evaluation | not-started | | | | |
 | 5: Adversarial Refinement | not-started | | | | |
 | 6: Formal Hardening | not-started | | | | |
@@ -91,12 +91,11 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 
 | Step | Agent | Status | Output |
 |------|-------|--------|--------|
-| F1d adversarial spec review pass-05 — #288 | adversary | complete | Pass-04 disposition: 6 ADDRESSED. Net-new 5 (0B/2C/3N): BC-X.12.001 self-contradiction on default table columns (F38, intra-BC — Behavior says "ID, Name, Description" vs Outputs/Effects + BC-X.12.004 + BC-INDEX all say "Name, Description"); CANONICAL-COUNTS risk total 28 vs actual 36 (F39, 8-risk gap pre-existing + #288 surfaced; S-3.03×5 + S-3.07×1 + #288×2). PO remediated both: BC-X.12.001 Behavior updated to "Name, Description" (ID in json only); CANONICAL-COUNTS risks updated to 36 with severity breakdown 1C/7H/11M/17L. Counter 0/3. Pass-06 pending. |
-| F1d adversarial spec review pass-06 — #288 | adversary | complete | Pass-05 disposition: 5 ADDRESSED. Net-new 5 (0B/2C/3N): bc-3 frontmatter `trace:` stale (F43), ADR-0014 `related:` cites non-existent R-H288-2 (F44), verification-delta cites wrong BC for raiseOnBehalfOf (F47), +2 NITs. PO did frontmatter sweep — F43/F44/F47 fixed. Counter 0/3. Pass-07 pending. |
-| F1d adversarial spec review pass-07 — #288 | adversary | complete | Pass-06 disposition: 4 ADDRESSED + 1 DEFERRED. Net-new 4 (0B/1C/3N): risk-register.md header self-contradicts body Summary (F48; pass-06 routed F46 to STATE.md reclassification only — never patched source); 3 NITs informational. PO fixed F48. DRIFT-010 CLOSED. Counter 0/3. Pass-08 pending. |
 | F1d adversarial spec review pass-08 — #288 | adversary | complete | **FIRST CLEAN-PASS** — 0B/0C/0N. Pass-07 F48 ADDRESSED. All 18 mandates CLEAR. Counter 1/3. Pass-09 pending. |
 | F1d adversarial spec review pass-09 — #288 | adversary | complete | **SECOND CONSECUTIVE CLEAN-PASS** — 0B/0C/0N. Independent re-derivation of all 18 mandates confirmed CLEAR. Subtle pattern observation: monotonic decay no oscillation — genuine convergence. Counter 2/3. Pass-10 required (final confirmation gate). |
 | F1d adversarial spec review pass-10 — #288 | adversary | complete | **F1d CONVERGED 3/3** — Pass-09 was CLEAN. Pass-10 final confirmation gate also CLEAN. 18 mandates verified CLEAR. Novelty zero across 3 consecutive passes. F2 spec evolution ready for human approval. |
+| F2 spec evolution — #288 | spec-evolution | complete | F1d CONVERGED 3/3; spec corpus stable. F2 human approval gate passed; incremental story decomposition authorized. |
+| F3 incremental stories — #288 | story-writer | complete | 4 stories created (issue-288-pr1-api/pr2-cli/pr3-scope/pr4-dispatch). Dependency graph acyclic: pr1+pr3 in Wave 1 (parallel), pr2 in Wave 2 (depends pr1), pr4 in Wave 3 (depends pr1+pr2+pr3). STORY-INDEX bumped 36→40. consistency-validator validation pending. |
 
 ## Decisions Log
 
@@ -230,8 +229,8 @@ _Not started._
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-18 |
-| **Position** | **#288 F1d CONVERGED 3/3 — pass-10 FINAL CLEAN-PASS** — All 3 confirmation passes (P08/P09/P10) returned 0B/0C/0N. 18 mandates CLEAR across all 3 independent re-derivations. 10 total passes (7 substantive + 3 confirmation). CONVERGENCE.md written. Trajectory: 4B/6C/3N→0B/3C/4N→0B/4C/6N→0B/2C/5N→0B/2C/3N→0B/2C/3N→0B/1C/3N→0B/0C/0N→0B/0C/0N→0B/0C/0N. Develop HEAD = d909e65. Next: Human approval gate → F3 incremental story decomposition. |
-| **Convergence counter** | #288 F1d: 10 passes. 7 FINDINGS-PRESENT + 3 CLEAN. Counter: 3/3 — CONVERGED. F2 spec evolution AWAITING HUMAN APPROVAL GATE. |
+| **Position** | **#288 F3 COMPLETE — 4 stories created, awaiting human approval** — F1d CONVERGED 3/3 at pass-10 (trajectory: 4B/6C/3N→…→0B/0C/0N CLEAN 3×). F3 story decomposition complete: S-288-pr1-api (Wave 1), S-288-pr2-cli (Wave 2, depends pr1), S-288-pr3-scope (Wave 1, parallel to pr1), S-288-pr4-dispatch (Wave 3, depends pr1+pr2+pr3). STORY-INDEX bumped 36→40. CONVERGENCE.md written. Develop HEAD = d909e65. Next: Human approval gate → consistency-validator → F4/F5 implementation. |
+| **Convergence counter** | #288 F1d: 10 passes. 7 FINDINGS-PRESENT + 3 CLEAN. Counter: 3/3 — CONVERGED. F3 story decomposition: 4 stories. AWAITING HUMAN APPROVAL GATE. |
 
 ## Historical Content
 
