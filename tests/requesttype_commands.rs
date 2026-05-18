@@ -174,7 +174,7 @@ async fn test_requesttype_list_returns_types_table() {
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
         .env("XDG_CONFIG_HOME", config_dir.path())
-        .args(["request-type", "list", "--project", "HELP", "--no-input"])
+        .args(["requesttype", "list", "--project", "HELP", "--no-input"])
         .output()
         .unwrap();
 
@@ -255,7 +255,7 @@ async fn test_requesttype_list_search_forwarded_as_query_param() {
         .env("XDG_CACHE_HOME", cache_dir.path())
         .env("XDG_CONFIG_HOME", config_dir.path())
         .args([
-            "request-type",
+            "requesttype",
             "list",
             "--project",
             "HELP",
@@ -325,7 +325,7 @@ async fn test_requesttype_list_search_omitted_when_not_set() {
         .env("XDG_CACHE_HOME", cache_dir.path())
         .env("XDG_CONFIG_HOME", config_dir.path())
         .args([
-            "request-type",
+            "requesttype",
             "list",
             "--project",
             "HELP",
@@ -379,7 +379,7 @@ async fn test_requesttype_list_non_jsm_project_exits_64_with_callsite_message() 
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
         .env("XDG_CONFIG_HOME", config_dir.path())
-        .args(["request-type", "list", "--project", "SW", "--no-input"])
+        .args(["requesttype", "list", "--project", "SW", "--no-input"])
         .output()
         .unwrap();
 
@@ -438,7 +438,7 @@ async fn test_requesttype_list_output_json_shape() {
         .env("XDG_CACHE_HOME", cache_dir.path())
         .env("XDG_CONFIG_HOME", config_dir.path())
         .args([
-            "request-type",
+            "requesttype",
             "list",
             "--project",
             "HELP",
@@ -540,7 +540,7 @@ async fn test_requesttype_fields_resolves_name_and_returns_table() {
         .env("XDG_CACHE_HOME", cache_dir.path())
         .env("XDG_CONFIG_HOME", config_dir.path())
         .args([
-            "request-type",
+            "requesttype",
             "fields",
             "Password Reset",
             "--project",
@@ -637,7 +637,7 @@ async fn test_requesttype_fields_ambiguous_exits_64_with_hint() {
         .env("XDG_CACHE_HOME", cache_dir.path())
         .env("XDG_CONFIG_HOME", config_dir.path())
         .args([
-            "request-type",
+            "requesttype",
             "fields",
             "Password",
             "--project",
@@ -663,12 +663,16 @@ async fn test_requesttype_fields_ambiguous_exits_64_with_hint() {
         stderr.contains("Password Change"),
         "Expected candidate 'Password Change' in stderr, got: {stderr}"
     );
-    // The hint may use either "jr request-type list" (kebab, clap default) or
-    // "jr requesttype list" (alias). Assert the substantive content is present.
+    // The hint MUST use the canonical single-word `requesttype` subcommand
+    // (pinned via `#[command(name = "requesttype")]` in `cli/mod.rs`). The kebab-case
+    // form `request-type` is not a valid subcommand and would mis-direct users.
     assert!(
-        stderr.contains("request-type list --project HELP")
-            || stderr.contains("requesttype list --project HELP"),
-        "Expected hint containing 'request-type list --project HELP' (or 'requesttype') in stderr, got: {stderr}"
+        stderr.contains("requesttype list --project HELP"),
+        "Expected hint containing 'requesttype list --project HELP' in stderr, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("request-type"),
+        "Stderr must not contain kebab-case 'request-type' (canonical form is single-word 'requesttype'). Got: {stderr}"
     );
 }
 
@@ -714,7 +718,7 @@ async fn test_requesttype_fields_output_json_shape() {
         .env("XDG_CACHE_HOME", cache_dir.path())
         .env("XDG_CONFIG_HOME", config_dir.path())
         .args([
-            "request-type",
+            "requesttype",
             "fields",
             "Password Reset",
             "--project",
@@ -829,7 +833,7 @@ async fn test_requesttype_list_cache_hit_no_second_http() {
         .env("XDG_CACHE_HOME", cache_dir.path())
         .env("XDG_CONFIG_HOME", config_dir.path())
         .args([
-            "request-type",
+            "requesttype",
             "list",
             "--project",
             "HELP",
@@ -859,7 +863,7 @@ async fn test_requesttype_list_cache_hit_no_second_http() {
         .env("XDG_CACHE_HOME", cache_dir.path())
         .env("XDG_CONFIG_HOME", config_dir.path())
         .args([
-            "request-type",
+            "requesttype",
             "list",
             "--project",
             "HELP",
@@ -938,7 +942,7 @@ async fn test_requesttype_fields_cache_hit_no_second_http() {
         .env("XDG_CACHE_HOME", cache_dir.path())
         .env("XDG_CONFIG_HOME", config_dir.path())
         .args([
-            "request-type",
+            "requesttype",
             "fields",
             "Password Reset",
             "--project",
@@ -969,7 +973,7 @@ async fn test_requesttype_fields_cache_hit_no_second_http() {
         .env("XDG_CACHE_HOME", cache_dir.path())
         .env("XDG_CONFIG_HOME", config_dir.path())
         .args([
-            "request-type",
+            "requesttype",
             "fields",
             "Password Reset",
             "--project",
@@ -1045,7 +1049,7 @@ async fn test_requesttype_list_uses_profile_project_when_no_flag() {
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
         .env("XDG_CONFIG_HOME", config_dir.path())
-        .args(["request-type", "list", "--no-input", "--output", "json"])
+        .args(["requesttype", "list", "--no-input", "--output", "json"])
         .output()
         .unwrap();
 

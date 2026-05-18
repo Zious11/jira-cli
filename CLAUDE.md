@@ -186,7 +186,7 @@ When adding a new feature:
   pagination (selects range [startAt, startAt+maxResults) then applies permission
   filtering), so a short non-empty page does NOT mean end-of-data. Advancing by returned
   count would overlap windows and produce duplicates. Do not change this behavior.
-- **`jr request-type list/fields` (JSM request-type discovery):** `cli/requesttype.rs` implements
+- **`jr requesttype list/fields` (JSM request-type discovery):** `cli/requesttype.rs` implements
   two subcommands: `list` (table: Name, Description; JSON array) and `fields <NAME|ID>` (table:
   Field Name, Required, Type; JSON object). Request types are cached per `(profile, serviceDeskId)`
   as `request_types_<sid>.json` (7-day TTL); field schemas per `(profile, sid, rtId)` as

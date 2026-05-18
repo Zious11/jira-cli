@@ -113,6 +113,7 @@ pub enum Command {
         command: QueueCommand,
     },
     /// Discover JSM request types and their fields
+    #[command(name = "requesttype")]
     RequestType {
         #[command(subcommand)]
         command: RequestTypeCommand,

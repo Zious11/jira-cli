@@ -193,7 +193,7 @@ async fn resolve_request_type_id(
         }
         MatchResult::Ambiguous(matches) => Err(JrError::UserError(format!(
             "Ambiguous request type \"{name}\" matches: {}. \
-             Run `jr request-type list --project {project_key}` to see available types.",
+             Run `jr requesttype list --project {project_key}` to see available types.",
             matches
                 .iter()
                 .map(|m| format!("\"{m}\""))
@@ -203,7 +203,7 @@ async fn resolve_request_type_id(
         .into()),
         MatchResult::None(_) => Err(JrError::UserError(format!(
             "Request type \"{name}\" not found. \
-             Run `jr request-type list --project {project_key}` to see available types."
+             Run `jr requesttype list --project {project_key}` to see available types."
         ))
         .into()),
     }
