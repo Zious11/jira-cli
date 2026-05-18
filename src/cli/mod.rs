@@ -6,6 +6,7 @@ pub mod init;
 pub mod issue;
 pub mod project;
 pub mod queue;
+pub mod requesttype;
 pub mod sprint;
 pub mod team;
 pub mod user;
@@ -110,6 +111,11 @@ pub enum Command {
     Queue {
         #[command(subcommand)]
         command: QueueCommand,
+    },
+    /// Discover JSM request types and their fields
+    RequestType {
+        #[command(subcommand)]
+        command: RequestTypeCommand,
     },
     /// Make a raw authenticated HTTP request to the Jira REST API.
     Api {
@@ -790,6 +796,21 @@ pub enum QueueCommand {
         /// Maximum number of issues to return
         #[arg(long)]
         limit: Option<u32>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum RequestTypeCommand {
+    /// List request types for the current project's service desk
+    List {
+        /// Filter results by name/description substring (server-side via searchQuery)
+        #[arg(long)]
+        search: Option<String>,
+    },
+    /// Show fields for a specific request type
+    Fields {
+        /// Request type name (partial match supported) OR numeric ID
+        name_or_id: String,
     },
 }
 

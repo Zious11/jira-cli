@@ -356,6 +356,66 @@ pub fn write_object_type_attr_cache(
     Ok(())
 }
 
+/// Cached list of request types for a (profile, serviceDeskId) pair.
+/// 7-day TTL. Cache file: ~/.cache/jr/v1/<profile>/request_types_<service_desk_id>.json
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct RequestTypeCache {
+    pub types: Vec<crate::types::jsm::RequestType>,
+    pub fetched_at: DateTime<Utc>,
+}
+
+impl Expiring for RequestTypeCache {
+    fn fetched_at(&self) -> DateTime<Utc> {
+        self.fetched_at
+    }
+}
+
+pub fn read_request_type_cache(
+    _profile: &str,
+    _service_desk_id: &str,
+) -> Result<Option<Vec<crate::types::jsm::RequestType>>> {
+    unimplemented!("BC-X.12.008: read request types cache (7d TTL)")
+}
+
+pub fn write_request_type_cache(
+    _profile: &str,
+    _service_desk_id: &str,
+    _types: &[crate::types::jsm::RequestType],
+) -> Result<()> {
+    unimplemented!("BC-X.12.008: write request types cache")
+}
+
+/// Cached fields for a specific request type within a service desk.
+/// 7-day TTL. Cache file: ~/.cache/jr/v1/<profile>/request_type_fields_<service_desk_id>_<request_type_id>.json
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct RequestTypeFieldsCache {
+    pub response: crate::types::jsm::RequestTypeFieldsResponse,
+    pub fetched_at: DateTime<Utc>,
+}
+
+impl Expiring for RequestTypeFieldsCache {
+    fn fetched_at(&self) -> DateTime<Utc> {
+        self.fetched_at
+    }
+}
+
+pub fn read_request_type_fields_cache(
+    _profile: &str,
+    _service_desk_id: &str,
+    _request_type_id: &str,
+) -> Result<Option<crate::types::jsm::RequestTypeFieldsResponse>> {
+    unimplemented!("BC-X.12.005: read request type fields cache (7d TTL)")
+}
+
+pub fn write_request_type_fields_cache(
+    _profile: &str,
+    _service_desk_id: &str,
+    _request_type_id: &str,
+    _response: &crate::types::jsm::RequestTypeFieldsResponse,
+) -> Result<()> {
+    unimplemented!("BC-X.12.005: write request type fields cache")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
