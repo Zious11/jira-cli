@@ -194,13 +194,16 @@ async fn test_requesttype_list_returns_types_table() {
         stdout.contains("Password Reset"),
         "Expected 'Password Reset' in stdout table, got: {stdout}"
     );
+    // M-2 (adversary pass-06): comfy-table emits headers verbatim; lowercase OR
+    // branch was gratuitous accept-either. BC-X.12.001 mandates "Name + Description"
+    // canonical case.
     assert!(
-        stdout.contains("Name") || stdout.contains("name"),
-        "Expected 'Name' column header in stdout table, got: {stdout}"
+        stdout.contains("Name"),
+        "BC-X.12.001: 'Name' column header must appear; got: {stdout}"
     );
     assert!(
-        stdout.contains("Description") || stdout.contains("description"),
-        "Expected 'Description' column header in stdout table, got: {stdout}"
+        stdout.contains("Description"),
+        "BC-X.12.001: 'Description' column header must appear; got: {stdout}"
     );
 }
 
@@ -575,10 +578,17 @@ async fn test_requesttype_fields_resolves_name_and_returns_table() {
         "Expected exit 0, got {:?}. stderr: {stderr}",
         output.status.code()
     );
-    // Table should have a row for the summary field
+    // Table should have a row for the summary field.
+    // M-1 (adversary pass-06): BC-X.12.005 mandates "Field Name (from `name`)" —
+    // `summary` is the field_id and is NOT rendered. Pin only the `name` value
+    // + negative-space pin that field_id leakage cannot occur.
     assert!(
-        stdout.contains("summary") || stdout.contains("What do you need"),
-        "Expected summary field row in stdout table, got: {stdout}"
+        stdout.contains("What do you need"),
+        "BC-X.12.005: Field Name column must contain the `name` field value, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("\nsummary"),
+        "BC-X.12.005: field_id (`summary`) must not leak into Field Name column; got: {stdout}"
     );
     // M-4: BC-X.12.005: columns MUST be exactly Field Name, Required, Type (verbatim headers).
     assert!(
@@ -691,6 +701,13 @@ async fn test_requesttype_fields_ambiguous_exits_64_with_hint() {
         Some(64),
         "Expected exit 64 for ambiguous name, got {:?}. stderr: {stderr}",
         output.status.code()
+    );
+    // M-5 (adversary pass-06): BC-X.12.006 mandates the verbatim prefix
+    // `Ambiguous request type "<name>" matches:`. Pin so a refactor like
+    // "Could not resolve <name> — candidates:" would fail.
+    assert!(
+        stderr.contains("Ambiguous request type \"Password\" matches:"),
+        "BC-X.12.006: error must start with 'Ambiguous request type \"<name>\" matches:'; got: {stderr}"
     );
     assert!(
         stderr.contains("Password Reset"),
@@ -848,6 +865,17 @@ async fn test_requesttype_fields_case_variant_duplicates_lists_all_ids() {
     assert!(
         stderr.contains("11003"),
         "H-1: ID 11003 ('PASSWORD RESET') must appear in disambiguation error; got: {stderr}"
+    );
+
+    // M-3 (adversary pass-06): BC-X.12.006 mandates the verbatim form
+    // `Multiple request types named "<name>" found (IDs: ...). Pass the numeric ID directly.`
+    // Pin the quoted-name + "found (IDs:" segment so a refactor that drops the
+    // quoted name would fail.
+    // partial_match returns the FIRST case-insensitive match from the candidate list
+    // ("Password Reset" at id 11001), preserving its original casing.
+    assert!(
+        stderr.contains("named \"Password Reset\" found (IDs:"),
+        "BC-X.12.006: ExactMultiple error must contain quoted matched-name + ' found (IDs:'; got: {stderr}"
     );
 
     // BC-X.12.006: the BC-mandated hint to pass the numeric ID directly.
