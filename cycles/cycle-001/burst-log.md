@@ -3073,6 +3073,18 @@ Checkpoint updated. Full cycle close (with merged-state row) deferred to post-me
 
 ---
 
+## Burst: F1d pass-09 SECOND CONSECUTIVE CLEAN-PASS — #288 (2026-05-18)
+
+Archived Current Phase Steps row displaced by 5-row window enforcement.
+
+### Archived Row (displaced by pass-09 addition)
+
+| Step | Agent | Status | Output |
+|------|-------|--------|--------|
+| F1d adversarial spec review pass-04 — #288 | adversary | complete | Pass-03 disposition: 9 ADDRESSED / 1 closed-as-non-issue (F25 footer already correct). Net-new 7 (0B/2C/5N): README.md Supplement Index 48 vs 55 self-contradiction (F31, new location class); prd-delta Open Questions items 3/4 with no 1/2 — both already resolved (F32). PO did focused remediation: README:108 → 55 holdouts; Open Questions emptied to §Validated; Reviewers' Map for holdouts and cross-cutting refreshed; pass-02 F-number bookkeeping corrected; phase-1-consistency-audit{,-r2}.md gain "Historical snapshot" markers. Counter 0/3. Pass-05 pending. |
+
+---
+
 ## Burst: F1d pass-08 FIRST CLEAN-PASS — #288 (2026-05-18)
 
 Archived Current Phase Steps rows displaced by 5-row window enforcement.

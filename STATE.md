@@ -36,7 +36,7 @@ activation_version: "v0.5.0-dev.7"
 | **Language** | Rust |
 | **Target Workspace** | develop → main |
 | **Started** | 2026-05-04 |
-| **Last Updated** | 2026-05-18 — F1d pass-08 FIRST CLEAN-PASS for #288. 0B/0C/0N; counter 1/3. Trajectory 4B/6C/3N→0B/3C/4N→0B/4C/6N→0B/2C/5N→0B/2C/3N→0B/2C/3N→0B/1C/3N→0B/0C/0N. All 18 mandates CLEAR. Pass-07 F48 ADDRESSED. 2 more CLEAN passes required. Pass-09 pending. |
+| **Last Updated** | 2026-05-18 — F1d pass-09 SECOND CONSECUTIVE CLEAN-PASS for #288. 0B/0C/0N; counter 2/3. Trajectory →0B/0C/0N→0B/0C/0N. All 18 mandates CLEAR (independent re-derivation). Genuine convergence (monotonic decay, no oscillation). Pass-10 pending (final gate). |
 | **Current Phase** | Phase 3 — TDD Implementation **IN PROGRESS** — Wave 3 CLOSED (10/10). Feature Mode #110-pr2 COMPLETE. PRs #355–#364, #366–#367, #369–#373 MERGED. **0 audit-followups remain** (#331 sandbox-blocked deferred; #333 closed by PR #360; #340 closed by PR #370; #345 closed by PR #371; #346 closed by PR #373; #350 closed by PR #362; #361 closed by PR #364; #365 closed by PR #367; PG-365-1 closed by PR #369). No active cycle. |
 | **Next Phase** | Wave 3 — 10 stories (S-3.01..S-3.10) |
 | **Activation HEAD** | dea166471e22eff55974d7675593469b37048c5f (v0.5.0-dev.7) |
@@ -79,7 +79,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | 3-feature-340-bulk-poll-task-id-pin | **MERGED** — PR #370 @ 394dc25 (squash); closes #340; F1-F7 full cycle CONVERGED in single delivery | 2026-05-15 | 2026-05-16 | MERGED — 5 adv passes (0/0 trajectory), 3 CLEAN; Copilot R1=0; CI 9/9 green | 8→5→3-obs→7→4 (BLOCKER+CONCERN: 0 every pass) |
 | 3-feature-345-label-coalesce-extract | **MERGED** — PR #371 @ bb352ea (squash, admin); closes #345; F1-F7 full cycle CONVERGED | 2026-05-16 | 2026-05-16 | MERGED — 6 adv passes (3 CLEAN); 3 Copilot cycles + 1 convergence batch; 17 threads resolved; CI 9/9 green | 0/1/6 → 0/2/3 → 0/2/2 → 0/0/0 → 0/0/0 → 0/0/0 (3 consecutive CLEAN) |
 | 3-feature-346-cargo-mutants-ci | **MERGED** — PR #373 @ d909e65 (2026-05-16); closes #346. 8 adv passes, 5 fix rounds, 3 CLEAN; trajectory 0/6/14→2/6/4→0/3/3→0/2/4→2/3/3(1 REFUTED)→0/0/3→0/0/0→0/0/0. Copilot R1=APPROVE; CI 10/10 green. Follow-up #372 filed for partial-baseline completion. | 2026-05-16 | 2026-05-16 | MERGED — 3 CLEAN convergence | 0/6/14→2/6/4→0/3/3→0/2/4→2/3/3→0/0/3→0/0/0→0/0/0 |
-| 3-feature-jsm-request-types-288 | **IN_PROGRESS** — F1d 8 passes; all pass-01 findings ADDRESSED; pass-08: FIRST CLEAN-PASS (0B/0C/0N); all 18 mandates CLEAR; counter 1/3; 2 more CLEAN passes required; pass-09 pending | 2026-05-18 | | F1d 8 passes | 4B/6C/3N → 0B/3C/4N → 0B/4C/6N → 0B/2C/5N → 0B/2C/3N → 0B/2C/3N → 0B/1C/3N → 0B/0C/0N (CLEAN 1/3) |
+| 3-feature-jsm-request-types-288 | **IN_PROGRESS** — F1d 9 passes; all pass-01 findings ADDRESSED; pass-08: FIRST CLEAN-PASS; pass-09: SECOND CONSECUTIVE CLEAN-PASS (0B/0C/0N); all 18 mandates CLEAR; counter 2/3; 1 more CLEAN pass required; pass-10 pending | 2026-05-18 | | F1d 9 passes | 4B/6C/3N → 0B/3C/4N → 0B/4C/6N → 0B/2C/5N → 0B/2C/3N → 0B/2C/3N → 0B/1C/3N → 0B/0C/0N → 0B/0C/0N (CLEAN 2/3) |
 | 4: Holdout Evaluation | not-started | | | | |
 | 5: Adversarial Refinement | not-started | | | | |
 | 6: Formal Hardening | not-started | | | | |
@@ -91,11 +91,11 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 
 | Step | Agent | Status | Output |
 |------|-------|--------|--------|
-| F1d adversarial spec review pass-04 — #288 | adversary | complete | Pass-03 disposition: 9 ADDRESSED / 1 closed-as-non-issue (F25 footer already correct). Net-new 7 (0B/2C/5N): README.md Supplement Index 48 vs 55 self-contradiction (F31, new location class); prd-delta Open Questions items 3/4 with no 1/2 — both already resolved (F32). PO did focused remediation: README:108 → 55 holdouts; Open Questions emptied to §Validated; Reviewers' Map for holdouts and cross-cutting refreshed; pass-02 F-number bookkeeping corrected; phase-1-consistency-audit{,-r2}.md gain "Historical snapshot" markers. Counter 0/3. Pass-05 pending. |
 | F1d adversarial spec review pass-05 — #288 | adversary | complete | Pass-04 disposition: 6 ADDRESSED. Net-new 5 (0B/2C/3N): BC-X.12.001 self-contradiction on default table columns (F38, intra-BC — Behavior says "ID, Name, Description" vs Outputs/Effects + BC-X.12.004 + BC-INDEX all say "Name, Description"); CANONICAL-COUNTS risk total 28 vs actual 36 (F39, 8-risk gap pre-existing + #288 surfaced; S-3.03×5 + S-3.07×1 + #288×2). PO remediated both: BC-X.12.001 Behavior updated to "Name, Description" (ID in json only); CANONICAL-COUNTS risks updated to 36 with severity breakdown 1C/7H/11M/17L. Counter 0/3. Pass-06 pending. |
 | F1d adversarial spec review pass-06 — #288 | adversary | complete | Pass-05 disposition: 5 ADDRESSED. Net-new 5 (0B/2C/3N): bc-3 frontmatter `trace:` stale (F43), ADR-0014 `related:` cites non-existent R-H288-2 (F44), verification-delta cites wrong BC for raiseOnBehalfOf (F47), +2 NITs. PO did frontmatter sweep — F43/F44/F47 fixed. Counter 0/3. Pass-07 pending. |
 | F1d adversarial spec review pass-07 — #288 | adversary | complete | Pass-06 disposition: 4 ADDRESSED + 1 DEFERRED. Net-new 4 (0B/1C/3N): risk-register.md header self-contradicts body Summary (F48; pass-06 routed F46 to STATE.md reclassification only — never patched source); 3 NITs informational. PO fixed F48. DRIFT-010 CLOSED. Counter 0/3. Pass-08 pending. |
-| F1d adversarial spec review pass-08 — #288 | adversary | complete | **FIRST CLEAN-PASS** — 0B/0C/0N. Pass-07 F48 ADDRESSED. All 18 mandates CLEAR. Counter 1/3. 2 more CLEAN passes required for convergence. Pass-09 pending. |
+| F1d adversarial spec review pass-08 — #288 | adversary | complete | **FIRST CLEAN-PASS** — 0B/0C/0N. Pass-07 F48 ADDRESSED. All 18 mandates CLEAR. Counter 1/3. Pass-09 pending. |
+| F1d adversarial spec review pass-09 — #288 | adversary | complete | **SECOND CONSECUTIVE CLEAN-PASS** — 0B/0C/0N. Independent re-derivation of all 18 mandates confirmed CLEAR. Subtle pattern observation: monotonic decay no oscillation — genuine convergence. Counter 2/3. Pass-10 required (final confirmation gate). |
 
 ## Decisions Log
 
@@ -229,8 +229,8 @@ _Not started._
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-18 |
-| **Position** | **#288 F1d pass-07 COMPLETE** — Pass-06 disposition: 4 ADDRESSED (F43/F44/F47 frontmatter sweep + F46 STATE-only) + 1 DEFERRED (F45 → DRIFT-008). Pass-07: 4 net-new (0B/1C/3N). F48 (CONCERN): risk-register.md:5-6 header said "Total risks: 34 / 1C/6H/10M/17L" — pass-06 F46 reclassified DRIFT-010 in STATE.md but never patched source. Classic fix-routing error. PO fixed lines 5-6 → 36 / 1C/7H/11M/17L. DRIFT-010 CLOSED. F49-F51 NITs informational (false-positive confirm, substring-match OK, DRY wording imprecise). CONCERN plateau broken: 2→1. Trajectory: 4B/6C/3N→0B/3C/4N→0B/4C/6N→0B/2C/5N→0B/2C/3N→0B/2C/3N→0B/1C/3N. Develop HEAD = d909e65. Next: F1d pass-08. |
-| **Convergence counter** | #288 F1d: 7 passes. 7 FINDINGS-PRESENT. 0 consecutive CLEAN. Counter: 0/3 (reset by CONCERN finding in pass-07). CONCERN trending down (2→1). Next: pass-08 pending; if CLEAN, counter advances to 1/3. |
+| **Position** | **#288 F1d pass-09 COMPLETE — SECOND CONSECUTIVE CLEAN-PASS** — Pass-08 was CLEAN (0B/0C/0N); pass-09 is independent re-derivation confirmation gate: all 18 mandates CLEAR (count arithmetic 566 BC/55 holdouts/36 risks; stale-count grep zero matches; intra-BC consistency BC-3.8.001..010 + BC-X.12.001..008 all consistent; frontmatter↔body; holdout setup↔BC postconditions; ADR-0014 related[] correct; README Document Map/Supplement Index current). Subtle pattern: monotonic decay from pass-04 — no oscillation — genuine convergence. Trajectory: 4B/6C/3N→0B/3C/4N→0B/4C/6N→0B/2C/5N→0B/2C/3N→0B/2C/3N→0B/1C/3N→0B/0C/0N→0B/0C/0N. Develop HEAD = d909e65. Next: F1d pass-10 (final confirmation gate). |
+| **Convergence counter** | #288 F1d: 9 passes. 7 FINDINGS-PRESENT + 2 CLEAN. Counter: 2/3. One more CLEAN-PASS required for full F1d convergence. Pass-10 pending. |
 
 ## Historical Content
 
