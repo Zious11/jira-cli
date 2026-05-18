@@ -621,7 +621,7 @@ backed by the service desk requesttype API. These are discovery commands used be
 
 **Confidence**: HIGH
 **Subject**: JSM request type discovery
-**Behavior**: `jr requesttype list --project <KEY>` calls `GET /rest/servicedeskapi/servicedesk/<id>/requesttype` (paginated via `isLastPage`). Default table output shows columns: ID, Name, Description. Returns all request types for the resolved service desk. Uses `require_service_desk(client, key)` to resolve the `serviceDeskId` before calling the list endpoint.
+**Behavior**: `jr requesttype list --project <KEY>` calls `GET /rest/servicedeskapi/servicedesk/<id>/requesttype` (paginated via `isLastPage`). Default table output shows columns: Name, Description. ID is available in `--output json` only. Returns all request types for the resolved service desk. Uses `require_service_desk(client, key)` to resolve the `serviceDeskId` before calling the list endpoint.
 **Inputs**: `--project <KEY>` (required; uses active-profile project if absent and profile has one configured)
 **Outputs/Effects**: stdout table (Name + Description columns by default); exit 0 on success.
 **Errors**: No project configured and no `--project` flag → exit 64 "project is required". Non-JSM project → exit 64 via `require_service_desk` (BC-X.8.004).

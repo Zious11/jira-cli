@@ -709,4 +709,4 @@ Sources: `src/cli/issue/snapshots/jr__cli__issue__json_output__tests__*.snap`; B
 
 ## Total BCs in this file: 59 individually-bodied (cumulative 88 incl. range-collapsed; see BC-INDEX.md)
 
-_Last updated 2026-05-18: +9 BCs (BC-3.8.001..009, issue #288 F2); BC-3.3.001 modified to add conditional routing clause. +1 BC (BC-3.8.010, issue #288 F1d adversary pass-01); BC-3.8.002 Errors updated (call-site-specific message); BC-3.8.007 Confidence HIGH + labels wire shape hardened + priority JSDSERVER-4564 caveat; BC-3.8.009 regex removed (pass-through behavior); BC-3.8 section header range updated to 001..010._
+_Last updated 2026-05-18: +10 BCs total (BC-3.8.001..010, issue #288): 9 added in F2 delta; 1 added in F1d adversary pass-01 to close the `--type` interaction risk. BC-3.3.001 modified to add conditional routing clause. BC-3.8.002 Errors updated (call-site-specific message); BC-3.8.007 Confidence HIGH + labels wire shape hardened + priority JSDSERVER-4564 caveat; BC-3.8.009 regex removed (pass-through behavior); BC-3.8 section header range updated to 001..010._

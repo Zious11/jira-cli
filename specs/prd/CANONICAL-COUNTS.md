@@ -122,21 +122,23 @@ _Note: holdout-scenarios.md frontmatter `total_holdouts: 55` counts all holdout 
 
 ## Risk Register
 
-**Canonical risk total: 28**
+**Canonical risk total: 36**
 
 Verification command:
 ```bash
 grep -c '^| \*\*R-[CHML]' .factory/architecture/risk-register.md
 ```
 
-Severity distribution:
+Severity distribution (per risk-register.md §Risk Summary):
 - CRITICAL: 1 (R-C1)
-- HIGH: 6 (R-H1, R-H2, R-H3, R-H4, R-H5, R-H6)
-- MEDIUM: 8 (R-M0, R-M1, R-M2, R-M4, R-M5, R-M6, R-M7, R-M8; R-M3 merged into R-L11 at Pass 8)
-- LOW: 13 (R-L1..R-L11; R-L12 + R-L13 added at CV-003 gate prep)
-- **Total: 28**
+- HIGH: 7 (R-H1..R-H6 baseline + R-H288-1 from issue #288)
+- MEDIUM: 11 (R-M0..R-M8 baseline + R-NEW-AR-1, R-NEW-AR-4 from S-3.03 + R-M288-1 from issue #288)
+- LOW: 17 (R-L1..R-L13 baseline + R-NEW-AR-2, R-NEW-AR-3, R-NEW-AR-5 from S-3.03 + R-NEW-S307-1 from S-3.07)
+- **Total: 36**
 
-Note: R-M3 was merged into R-L11 at Pass 8 (net -1). R-L12 and R-L13 added at Phase 1→2 gate prep (CV-003): CI/CD job timeouts and secrets scanning gaps. risk-register.md header is authoritative.
+Note: R-M3 was merged into R-L11 at Pass 8 (net -1). R-L12 + R-L13 added at CV-003 gate prep. 5 auto-refresh risks added S-3.03 v2 (2 MEDIUM, 3 LOW). 1 search anti-loop risk added S-3.07 v2 (1 LOW). 2 risks added issue #288 (1 HIGH, 1 MEDIUM). risk-register.md §Risk Summary is authoritative.
+
+Last reconciled: 2026-05-18 (post-#288 F2 delta; previous reconciliation pre-S-3.03)
 
 ---
 
