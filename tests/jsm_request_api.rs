@@ -206,11 +206,10 @@ async fn test_list_request_types_search_query_forwarded() {
 }
 
 /// AC-003 (negative) — When `search_query` is `None`, the `searchQuery` query param
-/// MUST NOT be sent. The mock here matches on path only (no searchQuery param), and
-/// expects exactly 1 call. If the implementation sends searchQuery=... it will still
-/// match this mock (wiremock is additive), but the assertion on the absence of the
-/// param is enforced by the test in the positive direction: we verify calling with
-/// None does not error or produce unexpected results.
+/// MUST NOT be sent. The mock uses `query_param_is_missing("searchQuery")` to enforce
+/// this: the mock will not match any request that includes `searchQuery`, so the test
+/// fails at the wiremock layer (unmatched request → panic) if the implementation leaks
+/// the param.
 #[tokio::test]
 async fn test_list_request_types_search_query_absent_when_none() {
     let server = MockServer::start().await;
