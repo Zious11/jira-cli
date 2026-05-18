@@ -6,7 +6,6 @@
 //! per-(profile, serviceDeskId) request-type cache (7d TTL).
 
 use anyhow::Result;
-use serde_json;
 
 use crate::api::client::JiraClient;
 use crate::api::jsm::servicedesks;

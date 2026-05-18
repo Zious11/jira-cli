@@ -359,9 +359,9 @@ pub fn write_object_type_attr_cache(
 /// Cached list of request types for a (profile, serviceDeskId) pair.
 /// 7-day TTL. Cache file: ~/.cache/jr/v1/<profile>/request_types_<service_desk_id>.json
 #[derive(Debug, Serialize, Deserialize)]
-pub struct RequestTypeCache {
-    pub types: Vec<crate::types::jsm::RequestType>,
-    pub fetched_at: DateTime<Utc>,
+pub(crate) struct RequestTypeCache {
+    types: Vec<crate::types::jsm::RequestType>,
+    fetched_at: DateTime<Utc>,
 }
 
 impl Expiring for RequestTypeCache {
@@ -424,9 +424,9 @@ pub fn write_request_type_cache(
 /// Cached fields for a specific request type within a service desk.
 /// 7-day TTL. Cache file: ~/.cache/jr/v1/<profile>/request_type_fields_<service_desk_id>_<request_type_id>.json
 #[derive(Debug, Serialize, Deserialize)]
-pub struct RequestTypeFieldsCache {
-    pub response: crate::types::jsm::RequestTypeFieldsResponse,
-    pub fetched_at: DateTime<Utc>,
+pub(crate) struct RequestTypeFieldsCache {
+    response: crate::types::jsm::RequestTypeFieldsResponse,
+    fetched_at: DateTime<Utc>,
 }
 
 impl Expiring for RequestTypeFieldsCache {
