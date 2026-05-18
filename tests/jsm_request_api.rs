@@ -5,7 +5,7 @@
 //! Serde round-trip tests (AC-005, AC-006) require no HTTP mock server.
 
 use serde_json::json;
-use wiremock::matchers::{method, path, query_param};
+use wiremock::matchers::{body_partial_json, method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// AC-001 — `create_jsm_request` POSTs to `/rest/servicedeskapi/request` and
@@ -18,6 +18,13 @@ async fn test_create_jsm_request_posts_to_servicedeskapi_and_returns_issue_key()
 
     Mock::given(method("POST"))
         .and(path("/rest/servicedeskapi/request"))
+        .and(body_partial_json(json!({
+            "serviceDeskId": "10",
+            "requestTypeId": "25",
+            "requestFieldValues": {
+                "summary": "test"
+            }
+        })))
         .respond_with(ResponseTemplate::new(201).set_body_json(json!({
             "issueId": "107001",
             "issueKey": "HELPDESK-1",
@@ -208,15 +215,13 @@ async fn test_list_request_types_search_query_forwarded() {
 async fn test_list_request_types_search_query_absent_when_none() {
     let server = MockServer::start().await;
 
-    // This mock matches ONLY when searchQuery is absent (no query_param("searchQuery") matcher).
-    // If the implementation sends an extra searchQuery param, it would still match this mock
-    // because wiremock matchers are ANDed — an extra param doesn't prevent a match.
-    // The stronger guarantee comes from AC-003's positive test which uses expect(1) on a
-    // searchQuery-specific mock, proving the param is forwarded when Some.
+    // query_param_is_missing enforces that searchQuery is truly absent from the request —
+    // the mock will NOT match if the implementation sends searchQuery=... as an extra param.
     Mock::given(method("GET"))
         .and(path("/rest/servicedeskapi/servicedesk/28/requesttype"))
         .and(query_param("start", "0"))
         .and(query_param("limit", "50"))
+        .and(query_param_is_missing("searchQuery"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "size": 1,
             "start": 0,
