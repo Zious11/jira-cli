@@ -10,7 +10,7 @@ trace: |
   - Source broad: .factory/semport/jira-cli/jira-cli-pass-3-behavioral-contracts.md §2.3
   - Source R4: .factory/semport/jira-cli/jira-cli-pass-3-deep-r4.md §3.1
   - F2 addition (2026-05-15): BC-3.4.009 — bulk-poll timeout task_id contract (issue #340)
-  - F2 addition (2026-05-18): BC-3.8.001..009 — JSM request submission (issue #288 F2); range extended to 001..010 by F1d
+  - F2 addition (2026-05-18): BC-3.8.001..010 — JSM request submission (issue #288 F2 added 001..009; F1d pass-01 added BC-3.8.010 to close --type interaction)
   - F1d addition (2026-05-18): BC-3.8.010 — --type ignored with warning when --request-type is set (issue #288 adversary pass-01)
 ---
 

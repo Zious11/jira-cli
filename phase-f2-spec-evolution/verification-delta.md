@@ -136,7 +136,7 @@ F5 adversarial review should explicitly check for non-reuse.
 |---|----------|----------|---------|----------|
 | C.1 | `build_jsm_request_body(summary: &str, description: Option<&str>, fields: &HashMap<String, Value>, on_behalf_of: Option<&str>, request_type_id: &str, service_desk_id: &str) -> serde_json::Value` (or whatever shape F4 produces) | **Summary is always present** in the resulting `requestFieldValues` map under key `"summary"`, regardless of what else is in the user-supplied `fields` map. If the user supplies `--field summary=X`, the user value MUST win (last-write-wins between CLI arg and `--field` override is a deliberate design choice — F4 to decide and pin). | BC-3.8.001, BC-3.8.007 | `(summary in "[A-Za-z0-9 ]{1,80}", extra_fields in prop::collection::hash_map("[A-Za-z]{1,10}", "[a-z]{1,30}", 0..5))`; build body; assert `body["requestFieldValues"]["summary"]` is non-null. |
 | C.2 | `build_jsm_request_body` | **Description is ADF when `isAdfRequest: true`.** If `description` is `Some(_)`, the body MUST contain `"isAdfRequest": true` AND `requestFieldValues.description` MUST be a JSON object (ADF root), not a bare string. If `description` is `None`, the field is absent (NOT `null`). | BC-3.8.001 (ADF clause) | `desc in proptest::option::of("[A-Za-z .]{1,100}")`; build body; assert `body["isAdfRequest"]` and `body["requestFieldValues"]["description"]` shape per `desc.is_some()`. |
-| C.3 | `build_jsm_request_body` | **`raiseOnBehalfOf` absence vs. presence.** If `on_behalf_of` is `None`, the body MUST NOT contain a `raiseOnBehalfOf` key at all (NOT `null`, NOT empty-string — absent). If `Some(account_id)`, the key MUST be present at the top level (NOT under `requestFieldValues`) with the exact account-id string. | BC-3.8.006 | `obo in proptest::option::of("[a-zA-Z0-9:-]{10,40}")`; build body; assert presence/absence via `serde_json::Value::get` checks. |
+| C.3 | `build_jsm_request_body` | **`raiseOnBehalfOf` absence vs. presence.** If `on_behalf_of` is `None`, the body MUST NOT contain a `raiseOnBehalfOf` key at all (NOT `null`, NOT empty-string — absent). If `Some(account_id)`, the key MUST be present at the top level (NOT under `requestFieldValues`) with the exact account-id string. | BC-3.8.009 | `obo in proptest::option::of("[a-zA-Z0-9:-]{10,40}")`; build body; assert presence/absence via `serde_json::Value::get` checks. |
 
 **File:** new proptest module in `src/api/jsm/requests.rs` (alongside the
 new API client function), pattern: `#[cfg(test)] mod proptests` at the
@@ -384,7 +384,7 @@ place. F6 is responsible for verifying each item.
    before being passed through?" This is a *behavioral* property
    (rejection of malformed input), not a *structural* property
    (presence/absence in body). Proptest C.3 covers the structural side;
-   the behavioral side is BC-3.8.006 integration test coverage.
+   the behavioral side is BC-3.8.009 integration test coverage.
    **Recommendation: handle as adversarial finding in F5, not F6 gap.**
    NOT a blocker for F6.
 

@@ -5,7 +5,7 @@ status: Accepted
 date: 2026-05-18
 supersedes: []
 superseded_by: []
-related: ["ADR-0001", "BC-3.3.001", "BC-3.8.001", "BC-3.8.010", "BC-1.3.023", "R-H288-1", "R-H288-2"]
+related: ["ADR-0001", "BC-3.3.001", "BC-3.8.001", "BC-3.8.010", "BC-1.3.023", "R-H288-1", "R-M288-1"]
 ---
 
 # ADR-0014: JSM Request Creation Dispatch Fork in `jr issue create`
