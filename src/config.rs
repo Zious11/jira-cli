@@ -22,6 +22,8 @@ pub struct ProfileConfig {
     pub oauth_scopes: Option<String>,
     pub team_field_id: Option<String>,
     pub story_points_field_id: Option<String>,
+    /// Default project key for this profile. Overridden by --project flag and .jr.toml.
+    pub project: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Default, Clone)]
@@ -178,6 +180,7 @@ pub fn migrate_legacy_global(mut global: GlobalConfig) -> GlobalConfig {
         oauth_scopes: global.instance.oauth_scopes.clone(),
         team_field_id: global.fields.team_field_id.clone(),
         story_points_field_id: global.fields.story_points_field_id.clone(),
+        project: None,
     };
     global.profiles.insert("default".to_string(), profile);
     global.default_profile = Some("default".to_string());
@@ -388,6 +391,7 @@ impl Config {
         cli_override
             .map(String::from)
             .or_else(|| self.project.project.clone())
+            .or_else(|| self.active_profile().project.clone())
     }
 
     pub fn board_id(&self, cli_override: Option<u64>) -> Option<u64> {
