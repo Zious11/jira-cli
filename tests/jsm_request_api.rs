@@ -62,7 +62,7 @@ async fn test_create_jsm_request_posts_to_servicedeskapi_and_returns_issue_key()
 ///
 /// Traces: BC-X.12.001
 #[tokio::test]
-async fn test_list_request_types_paginates_isLastPage() {
+async fn test_list_request_types_paginates_is_last_page() {
     let server = MockServer::start().await;
 
     // Page 1: start=0, isLastPage=false
