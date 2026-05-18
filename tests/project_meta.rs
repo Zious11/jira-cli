@@ -117,10 +117,11 @@ async fn require_service_desk_errors_for_software_project() {
 
     let client =
         jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".into());
-    let result = jr::api::jsm::servicedesks::require_service_desk(&client, "DEV").await;
+    let result =
+        jr::api::jsm::servicedesks::require_service_desk(&client, "DEV", "queue commands").await;
 
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("Jira Software project"));
-    assert!(err.contains("Queue commands require"));
+    assert!(err.contains("queue commands"));
 }

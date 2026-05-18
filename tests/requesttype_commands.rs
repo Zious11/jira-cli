@@ -8,7 +8,7 @@
 //! sets `JR_BASE_URL=<wiremock url>`, `JR_AUTH_HEADER=Basic dGVzdDp0ZXN0`.
 
 use assert_cmd::Command;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use wiremock::matchers::{method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -279,8 +279,15 @@ async fn test_requesttype_list_search_forwarded_as_query_param() {
 
     let parsed: Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("Expected valid JSON in stdout, got: {stdout}\nError: {e}"));
-    let arr = parsed.as_array().expect("Expected JSON array from --output json");
-    assert_eq!(arr.len(), 1, "Expected 1 result (filtered by search), got {}", arr.len());
+    let arr = parsed
+        .as_array()
+        .expect("Expected JSON array from --output json");
+    assert_eq!(
+        arr.len(),
+        1,
+        "Expected 1 result (filtered by search), got {}",
+        arr.len()
+    );
 }
 
 /// AC-002 (negative): When `--search` is NOT passed, the HTTP request MUST NOT
@@ -341,7 +348,12 @@ async fn test_requesttype_list_search_omitted_when_not_set() {
     let parsed: Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("Expected valid JSON in stdout, got: {stdout}\nError: {e}"));
     let arr = parsed.as_array().expect("Expected JSON array");
-    assert_eq!(arr.len(), 2, "Expected 2 results (no filter), got {}", arr.len());
+    assert_eq!(
+        arr.len(),
+        2,
+        "Expected 2 results (no filter), got {}",
+        arr.len()
+    );
 }
 
 // ─── AC-003: non-JSM project exits 64 with call-site-specific message ────────
@@ -448,8 +460,13 @@ async fn test_requesttype_list_output_json_shape() {
 
     let parsed: Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("Expected valid JSON in stdout, got: {stdout}\nError: {e}"));
-    let arr = parsed.as_array().expect("Expected JSON array from --output json");
-    assert!(!arr.is_empty(), "Expected at least one request type in output");
+    let arr = parsed
+        .as_array()
+        .expect("Expected JSON array from --output json");
+    assert!(
+        !arr.is_empty(),
+        "Expected at least one request type in output"
+    );
 
     let first = &arr[0];
     assert!(
@@ -508,7 +525,9 @@ async fn test_requesttype_fields_resolves_name_and_returns_table() {
 
     // Fields endpoint for request type 11002 (Password Reset).
     Mock::given(method("GET"))
-        .and(path("/rest/servicedeskapi/servicedesk/10/requesttype/11002/field"))
+        .and(path(
+            "/rest/servicedeskapi/servicedesk/10/requesttype/11002/field",
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(fields_response_body()))
         .expect(1)
         .mount(&server)
@@ -680,7 +699,9 @@ async fn test_requesttype_fields_output_json_shape() {
 
     // Fields endpoint for request type 11002.
     Mock::given(method("GET"))
-        .and(path("/rest/servicedeskapi/servicedesk/10/requesttype/11002/field"))
+        .and(path(
+            "/rest/servicedeskapi/servicedesk/10/requesttype/11002/field",
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(fields_response_body()))
         .expect(1)
         .mount(&server)
@@ -714,9 +735,12 @@ async fn test_requesttype_fields_output_json_shape() {
         output.status.code()
     );
 
-    let parsed: Value = serde_json::from_str(&stdout)
-        .unwrap_or_else(|e| panic!("Expected valid JSON object in stdout, got: {stdout}\nError: {e}"));
-    let obj = parsed.as_object().expect("Expected JSON object for fields output");
+    let parsed: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("Expected valid JSON object in stdout, got: {stdout}\nError: {e}")
+    });
+    let obj = parsed
+        .as_object()
+        .expect("Expected JSON object for fields output");
 
     assert!(
         obj.contains_key("canRaiseOnBehalfOf"),
@@ -733,7 +757,9 @@ async fn test_requesttype_fields_output_json_shape() {
         .or_else(|| obj.get("requestTypeFields"))
         .and_then(Value::as_array)
         .unwrap_or_else(|| {
-            panic!("Expected 'fields' or 'requestTypeFields' as array in JSON output, got: {parsed}")
+            panic!(
+                "Expected 'fields' or 'requestTypeFields' as array in JSON output, got: {parsed}"
+            )
         });
 
     assert!(
@@ -751,7 +777,10 @@ async fn test_requesttype_fields_output_json_shape() {
         "Expected 'name' as string in first field, got: {first_field}"
     );
     assert!(
-        first_field.get("required").and_then(Value::as_bool).is_some(),
+        first_field
+            .get("required")
+            .and_then(Value::as_bool)
+            .is_some(),
         "Expected 'required' as bool in first field, got: {first_field}"
     );
     assert!(
@@ -893,7 +922,9 @@ async fn test_requesttype_fields_cache_hit_no_second_http() {
 
     // CRITICAL: expect(1) — fields endpoint must fire EXACTLY ONCE across BOTH invocations.
     Mock::given(method("GET"))
-        .and(path("/rest/servicedeskapi/servicedesk/10/requesttype/11002/field"))
+        .and(path(
+            "/rest/servicedeskapi/servicedesk/10/requesttype/11002/field",
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(fields_response_body()))
         .expect(1)
         .mount(&server)
