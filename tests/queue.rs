@@ -437,6 +437,67 @@ async fn queue_list_unauthorized_dispatches_reauth_message() {
     assert!(!stderr.contains("panic"), "stderr leaked a panic: {stderr}");
 }
 
+/// AC-010 (S-288-pr2-cli) + BC-X.8.004: verifies the queue caller of
+/// `require_service_desk` produces the canonical capitalised plural-agreement
+/// error message. Regression guard for the pre-adv-01 lowercase/singular-verb
+/// drift ("queue commands requires" → "Queue commands (`jr queue`) require").
+#[tokio::test]
+async fn test_queue_list_non_jsm_project_emits_canonical_callsite_message() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    // Project meta for "DEV" returns a software project — NOT service_desk.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/DEV"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "100",
+            "key": "DEV",
+            "projectTypeKey": "software",
+            "simplified": true
+        })))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args(["queue", "list", "--project", "DEV", "--no-input"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 for non-JSM project, got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+
+    // BC-X.8.004 verbatim phrase — capitalised, plural noun, plural-agreement verb.
+    assert!(
+        stderr.contains("Queue commands (`jr queue`) require a Jira Service Management project"),
+        "BC-X.8.004: stderr must contain the verbatim canonical phrase; got: {stderr}"
+    );
+
+    // BC-X.8.004 closing sentence.
+    assert!(
+        stderr.contains("Run \"jr project list\" to see available projects."),
+        "BC-X.8.004: stderr must contain closing sentence; got: {stderr}"
+    );
+
+    // Regression guard: the pre-adv-01 lowercase/singular-verb form must never appear.
+    assert!(
+        !stderr.contains("queue commands requires"),
+        "Regression: lowercase singular-verb form 'queue commands requires' must not appear; got: {stderr}"
+    );
+}
+
 #[tokio::test]
 async fn queue_list_network_drop_surfaces_reach_error() {
     let cache_dir = tempfile::tempdir().unwrap();

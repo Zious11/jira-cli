@@ -1014,3 +1014,142 @@ mod resolution_cache_tests {
         });
     }
 }
+
+/// M-5 (adv-01): Cross-profile isolation unit tests for the new request-type
+/// and request-type-fields caches.
+///
+/// POLICY multi-profile-cache (CRITICAL) requires direct unit test coverage for
+/// every cache family. These mirror `cross_profile_isolation_team_cache` exactly,
+/// using the new `(profile, serviceDeskId)` and `(profile, sid, rtId)` keys.
+#[cfg(test)]
+mod request_type_cache_tests {
+    use super::tests::with_temp_cache;
+    use super::*;
+
+    fn make_request_type(id: &str, name: &str) -> crate::types::jsm::RequestType {
+        crate::types::jsm::RequestType {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: None,
+            help_text: None,
+            issue_type_id: None,
+            group_ids: vec![],
+        }
+    }
+
+    fn make_fields_response(field_name: &str) -> crate::types::jsm::RequestTypeFieldsResponse {
+        crate::types::jsm::RequestTypeFieldsResponse {
+            can_raise_on_behalf_of: true,
+            can_add_request_participants: false,
+            request_type_fields: vec![crate::types::jsm::RequestTypeField {
+                field_id: "summary".to_string(),
+                name: field_name.to_string(),
+                description: None,
+                required: true,
+                visible: true,
+                default_values: None,
+                valid_values: None,
+                jira_schema: serde_json::json!({"type": "string", "system": "summary"}),
+            }],
+        }
+    }
+
+    /// M-5 test 1: `request_type_cache` is isolated per profile.
+    ///
+    /// Both profiles write to the same service desk ID "10". Reads must return
+    /// the data written for that profile only — not the other profile's data.
+    /// Also verifies that the on-disk paths are distinct.
+    #[test]
+    fn test_request_type_cache_cross_profile_isolation() {
+        with_temp_cache(|| {
+            let prod_types = vec![make_request_type("1", "Prod RT")];
+            let sandbox_types = vec![make_request_type("2", "Sandbox RT")];
+
+            write_request_type_cache("prod", "10", &prod_types).unwrap();
+            write_request_type_cache("sandbox", "10", &sandbox_types).unwrap();
+
+            // Prod profile reads prod data.
+            let prod_read = read_request_type_cache("prod", "10")
+                .unwrap()
+                .expect("prod cache must exist");
+            assert_eq!(
+                prod_read[0].name, "Prod RT",
+                "prod profile must return 'Prod RT', not sandbox data"
+            );
+
+            // Sandbox profile reads sandbox data.
+            let sandbox_read = read_request_type_cache("sandbox", "10")
+                .unwrap()
+                .expect("sandbox cache must exist");
+            assert_eq!(
+                sandbox_read[0].name, "Sandbox RT",
+                "sandbox profile must return 'Sandbox RT', not prod data"
+            );
+
+            // Verify on-disk paths are distinct.
+            let prod_path = cache_dir("prod").join("request_types_10.json");
+            let sandbox_path = cache_dir("sandbox").join("request_types_10.json");
+            assert!(
+                prod_path.exists(),
+                "prod cache file must exist at {prod_path:?}"
+            );
+            assert!(
+                sandbox_path.exists(),
+                "sandbox cache file must exist at {sandbox_path:?}"
+            );
+            assert_ne!(
+                prod_path, sandbox_path,
+                "prod and sandbox cache paths must be distinct"
+            );
+        });
+    }
+
+    /// M-5 test 2: `request_type_fields_cache` is isolated per profile.
+    ///
+    /// Both profiles write fields for the same (sid="10", rtId="200"). Reads
+    /// must return the field data written for that profile only.
+    #[test]
+    fn test_request_type_fields_cache_cross_profile_isolation() {
+        with_temp_cache(|| {
+            let prod_fields = make_fields_response("Prod Field Name");
+            let sandbox_fields = make_fields_response("Sandbox Field Name");
+
+            write_request_type_fields_cache("prod", "10", "200", &prod_fields).unwrap();
+            write_request_type_fields_cache("sandbox", "10", "200", &sandbox_fields).unwrap();
+
+            // Prod profile reads prod fields.
+            let prod_read = read_request_type_fields_cache("prod", "10", "200")
+                .unwrap()
+                .expect("prod fields cache must exist");
+            assert_eq!(
+                prod_read.request_type_fields[0].name, "Prod Field Name",
+                "prod profile must return 'Prod Field Name', not sandbox data"
+            );
+
+            // Sandbox profile reads sandbox fields.
+            let sandbox_read = read_request_type_fields_cache("sandbox", "10", "200")
+                .unwrap()
+                .expect("sandbox fields cache must exist");
+            assert_eq!(
+                sandbox_read.request_type_fields[0].name, "Sandbox Field Name",
+                "sandbox profile must return 'Sandbox Field Name', not prod data"
+            );
+
+            // Verify on-disk paths are distinct.
+            let prod_path = cache_dir("prod").join("request_type_fields_10_200.json");
+            let sandbox_path = cache_dir("sandbox").join("request_type_fields_10_200.json");
+            assert!(
+                prod_path.exists(),
+                "prod fields cache file must exist at {prod_path:?}"
+            );
+            assert!(
+                sandbox_path.exists(),
+                "sandbox fields cache file must exist at {sandbox_path:?}"
+            );
+            assert_ne!(
+                prod_path, sandbox_path,
+                "prod and sandbox fields cache paths must be distinct"
+            );
+        });
+    }
+}

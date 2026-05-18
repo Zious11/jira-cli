@@ -391,13 +391,16 @@ async fn test_requesttype_list_non_jsm_project_exits_64_with_callsite_message() 
         "Expected exit 64 for non-JSM project, got {:?}. stderr: {stderr}",
         output.status.code()
     );
+    // H-2 fix: assert the verbatim BC-X.12.003 phrase rather than a tautological
+    // substring that would pass even if the BC-mandated wording were absent.
     assert!(
-        stderr.contains("jr requesttype"),
-        "Expected 'jr requesttype' in stderr error message, got: {stderr}"
+        stderr.contains("`jr requesttype` commands require a Jira Service Management project"),
+        "AC-003 / BC-X.12.003: stderr must contain the verbatim BC phrase; got: {stderr}"
     );
+    // Negative assertion: the old missing-verb form must not appear.
     assert!(
-        stderr.contains("Jira Service Management"),
-        "Expected 'Jira Service Management' in stderr error message, got: {stderr}"
+        !stderr.contains("jr requesttype requires"),
+        "Old missing-verb form must not appear (BC mandates 'commands require'); got: {stderr}"
     );
     // AC-003 specifically asserts the call-site label is NOT the queue label.
     assert!(
@@ -663,16 +666,112 @@ async fn test_requesttype_fields_ambiguous_exits_64_with_hint() {
         stderr.contains("Password Change"),
         "Expected candidate 'Password Change' in stderr, got: {stderr}"
     );
+    // M-2 fix: BC-X.12.006 (as updated 2026-05-18) mandates the "Run" imperative verb.
+    // Tightened from substring-only check so both the verb and the full hint phrase are pinned.
+    assert!(
+        stderr.contains("Run `jr requesttype list --project HELP`"),
+        "AC-006 / BC-X.12.006: hint must use 'Run' imperative; got: {stderr}"
+    );
+    // Negative: old "Use" verb form must not appear after BC alignment to "Run".
+    assert!(
+        !stderr.contains("Use `jr requesttype list"),
+        "Old 'Use' verb form must not appear after BC alignment to 'Run'; got: {stderr}"
+    );
     // The hint MUST use the canonical single-word `requesttype` subcommand
     // (pinned via `#[command(name = "requesttype")]` in `cli/mod.rs`). The kebab-case
     // form `request-type` is not a valid subcommand and would mis-direct users.
     assert!(
-        stderr.contains("requesttype list --project HELP"),
-        "Expected hint containing 'requesttype list --project HELP' in stderr, got: {stderr}"
-    );
-    assert!(
         !stderr.contains("request-type"),
         "Stderr must not contain kebab-case 'request-type' (canonical form is single-word 'requesttype'). Got: {stderr}"
+    );
+}
+
+// ─── H-4: not-found error includes BC-X.12.008 cache-deletion hint ───────────
+
+/// BC-X.12.008 §Stale-cache window: when `jr requesttype fields <NAME>` cannot
+/// find the request type via partial_match, the error message MUST contain both
+/// the standard not-found hint AND the manual cache-deletion sentence:
+///   '...or delete the cache file at ~/.cache/jr/v1/<profile>/request_types_<sid>.json
+///    if a recent admin change is suspected.'
+///
+/// This test decomposes the sentence into four overlapping substring assertions
+/// to tolerate the dynamic `<profile>` interpolation while still pinning each
+/// literal fragment that the BC mandates.
+///
+/// Traces: BC-X.12.008 §Stale-cache window
+#[tokio::test]
+async fn test_requesttype_fields_not_found_error_includes_cache_deletion_hint() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_project_meta_help(&server).await;
+    mount_service_desk_list(&server).await;
+
+    // Request types list: "NonExistentType" will not match any of these two types.
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk/10/requesttype"))
+        .and(query_param("start", "0"))
+        .and(query_param("limit", "50"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(two_request_types_body()))
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "requesttype",
+            "fields",
+            "NonExistentType",
+            "--project",
+            "HELP",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 for not-found request type, got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+
+    // BC-X.12.008: not-found phrase.
+    assert!(
+        stderr.contains("Request type \"NonExistentType\" not found"),
+        "BC-X.12.008: stderr must contain not-found phrase; got: {stderr}"
+    );
+
+    // BC-X.12.006 / BC-X.12.008: Run hint with "current types" wording.
+    assert!(
+        stderr.contains("Run `jr requesttype list --project HELP`"),
+        "BC-X.12.008: stderr must contain 'Run `jr requesttype list --project HELP`'; got: {stderr}"
+    );
+
+    // BC-X.12.008 §Stale-cache window: cache-deletion prefix (profile name is dynamic).
+    assert!(
+        stderr.contains("or delete the cache file at ~/.cache/jr/v1/"),
+        "BC-X.12.008: stderr must contain cache-deletion prefix; got: {stderr}"
+    );
+
+    // BC-X.12.008 §Stale-cache window: filename suffix with the service desk ID "10".
+    assert!(
+        stderr.contains("/request_types_10.json"),
+        "BC-X.12.008: stderr must contain '/request_types_10.json' (sid=10 from fixture); got: {stderr}"
+    );
+
+    // BC-X.12.008 §Stale-cache window: full closing phrase.
+    assert!(
+        stderr.contains("if a recent admin change is suspected"),
+        "BC-X.12.008: stderr must contain closing phrase; got: {stderr}"
     );
 }
 
@@ -891,6 +990,11 @@ async fn test_requesttype_list_cache_hit_no_second_http() {
         parsed2.as_array().map(|a| a.len()),
         "Invocation 1 and 2 produced different output lengths: {parsed1} vs {parsed2}"
     );
+    // M-6 fix: full-JSON equivalence pin — cache hit must produce byte-identical output.
+    assert_eq!(
+        parsed1, parsed2,
+        "cache hit must return byte-identical JSON output across invocations"
+    );
     // The expect(1) mock constraint is verified automatically by wiremock when the
     // MockServer drops — if the endpoint was called twice, the test panics here.
 }
@@ -1001,6 +1105,11 @@ async fn test_requesttype_fields_cache_hit_no_second_http() {
         parsed1.get("canRaiseOnBehalfOf"),
         parsed2.get("canRaiseOnBehalfOf"),
         "Expected both invocations to produce equivalent canRaiseOnBehalfOf"
+    );
+    // M-6 fix: full-JSON equivalence pin — cache hit must produce byte-identical output.
+    assert_eq!(
+        parsed1, parsed2,
+        "cache hit must return byte-identical JSON output across invocations"
     );
     // The expect(1) mock constraint is verified automatically by wiremock when the
     // MockServer drops — if the endpoint was called twice, the test panics here.
