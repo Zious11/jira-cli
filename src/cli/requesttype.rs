@@ -32,8 +32,12 @@ pub async fn handle(
         )
     })?;
 
-    let service_desk_id =
-        servicedesks::require_service_desk(client, &project_key, "jr requesttype").await?;
+    let service_desk_id = servicedesks::require_service_desk(
+        client,
+        &project_key,
+        "`jr requesttype` commands require",
+    )
+    .await?;
 
     let profile = &config.active_profile_name;
 
@@ -101,7 +105,9 @@ async fn handle_fields(
     client: &JiraClient,
 ) -> Result<()> {
     // Determine the request type ID.
-    let request_type_id = if name_or_id.chars().all(|c| c.is_ascii_digit()) {
+    let request_type_id = if !name_or_id.is_empty()
+        && name_or_id.chars().all(|c| c.is_ascii_digit())
+    {
         // All digits — treat as a numeric ID directly.
         name_or_id.to_string()
     } else {
@@ -177,7 +183,7 @@ async fn resolve_request_type_id(
     let names: Vec<String> = types.iter().map(|t| t.name.clone()).collect();
 
     match partial_match::partial_match(name, &names) {
-        MatchResult::Exact(matched_name) => find_id_by_name(&matched_name, &types),
+        MatchResult::Exact(matched_name) => Ok(find_id_by_name(&matched_name, &types)),
         MatchResult::ExactMultiple(matched_name) => {
             // Multiple types with the exact same name — list IDs and suggest disambiguation.
             let ids: Vec<String> = types
@@ -203,16 +209,18 @@ async fn resolve_request_type_id(
         .into()),
         MatchResult::None(_) => Err(JrError::UserError(format!(
             "Request type \"{name}\" not found. \
-             Run `jr requesttype list --project {project_key}` to see available types."
+             Run `jr requesttype list --project {project_key}` to see current types, \
+             or delete the cache file at ~/.cache/jr/v1/{profile}/request_types_{service_desk_id}.json \
+             if a recent admin change is suspected."
         ))
         .into()),
     }
 }
 
-fn find_id_by_name(name: &str, types: &[RequestType]) -> Result<String> {
+fn find_id_by_name(name: &str, types: &[RequestType]) -> String {
     types
         .iter()
         .find(|t| t.name == name)
         .map(|t| t.id.clone())
-        .ok_or_else(|| JrError::UserError(format!("Request type \"{name}\" not found.")).into())
+        .expect("matched name from partial_match::Exact must exist in types — caller invariant")
 }

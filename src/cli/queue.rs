@@ -26,8 +26,12 @@ pub async fn handle(
         )
     })?;
 
-    let service_desk_id =
-        servicedesks::require_service_desk(client, &project_key, "queue commands").await?;
+    let service_desk_id = servicedesks::require_service_desk(
+        client,
+        &project_key,
+        "Queue commands (`jr queue`) require",
+    )
+    .await?;
 
     match command {
         QueueCommand::List => handle_list(&service_desk_id, output_format, client).await,

@@ -358,7 +358,7 @@ pub fn write_object_type_attr_cache(
 
 /// Cached list of request types for a (profile, serviceDeskId) pair.
 /// 7-day TTL. Cache file: ~/.cache/jr/v1/<profile>/request_types_<service_desk_id>.json
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct RequestTypeCache {
     pub types: Vec<crate::types::jsm::RequestType>,
     pub fetched_at: DateTime<Utc>,
@@ -378,6 +378,17 @@ pub fn read_request_type_cache(
     Ok(read_cache::<RequestTypeCache>(profile, &filename)?.map(|c| c.types))
 }
 
+/// Write the request-type list to cache.
+///
+/// **Best-effort writer**: a `write_cache` failure (disk full, permission error)
+/// is logged to stderr but does NOT propagate as an error. The contract is that
+/// cache hygiene must never break a successful API call — at worst the next
+/// invocation pays a cache miss.
+///
+/// (Diverges from `write_team_cache` / `write_workspace_cache` etc. which
+/// propagate via `?`. Justified because the request-type cache is the first
+/// cache where a write failure could leak a confusing exit code into a
+/// scripted pipeline like `jr requesttype list --output json | jq ...`.)
 pub fn write_request_type_cache(
     profile: &str,
     service_desk_id: &str,
@@ -400,7 +411,7 @@ pub fn write_request_type_cache(
 
 /// Cached fields for a specific request type within a service desk.
 /// 7-day TTL. Cache file: ~/.cache/jr/v1/<profile>/request_type_fields_<service_desk_id>_<request_type_id>.json
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct RequestTypeFieldsCache {
     pub response: crate::types::jsm::RequestTypeFieldsResponse,
     pub fetched_at: DateTime<Utc>,
@@ -421,12 +432,29 @@ pub fn read_request_type_fields_cache(
     Ok(read_cache::<RequestTypeFieldsCache>(profile, &filename)?.map(|c| c.response))
 }
 
+/// Write the request-type fields response to cache.
+///
+/// **Best-effort writer**: a `write_cache` failure (disk full, permission error)
+/// is logged to stderr but does NOT propagate as an error. The contract is that
+/// cache hygiene must never break a successful API call — at worst the next
+/// invocation pays a cache miss.
+///
+/// (Diverges from `write_team_cache` / `write_workspace_cache` etc. which
+/// propagate via `?`. Justified because the request-type cache is the first
+/// cache where a write failure could leak a confusing exit code into a
+/// scripted pipeline like `jr requesttype fields <NAME> --output json | jq ...`.)
 pub fn write_request_type_fields_cache(
     profile: &str,
     service_desk_id: &str,
     request_type_id: &str,
     response: &crate::types::jsm::RequestTypeFieldsResponse,
 ) -> Result<()> {
+    // SAFETY: JSM service desk IDs and request type IDs are documented as
+    // numeric strings (verified via Atlassian REST API v3 schema). The filename
+    // uses `_` as the delimiter; ambiguity would only arise if either ID
+    // contained `_`, which the Atlassian schema does not permit. If Atlassian
+    // ever changes IDs to non-numeric strings, switch to a structural delimiter
+    // (e.g., urlencoding both components) and bump the cache root to `v2/`.
     let filename = format!("request_type_fields_{service_desk_id}_{request_type_id}.json");
     let result = write_cache(
         profile,
