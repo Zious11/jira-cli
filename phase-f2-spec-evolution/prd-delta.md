@@ -101,20 +101,18 @@ Group 9 added to holdout-scenarios.md (50 → 55):
 | File | Change Type | Lines (approx) |
 |------|-------------|-----------------|
 | `.factory/specs/prd/bc-3-issue-write.md` | Frontmatter updated; BC-3.3.001 body modified (routing clause); BC-3.8.001..010 section added; footer updated | BC-3.8 section: ~180 new lines |
-| `.factory/specs/prd/cross-cutting.md` | Frontmatter updated; BC-X.12.001..008 section added before Key Invariants | ~130 new lines |
+| `.factory/specs/prd/cross-cutting.md` | Frontmatter updated; BC-X.12.001..008 section added before Key Invariants; BC-X.8.004 modified (call-site label contract); BC-X.12.003 modified (call-site-specific error message); BC-X.12.005 §Caching subsection added; BC-X.12.008 stale-cache-window + recovery hint extended | ~130 new lines |
 | `.factory/specs/prd/bc-1-auth-identity.md` | BC-1.3.023 body updated (scope expansion, Developer Console note, update marker) | ~10 lines modified |
 | `.factory/specs/prd/BC-INDEX.md` | Frontmatter counts; section 1.3 BC-1.3.023 title; section 3 header; BC-3.3.001 title; new 3.8 subsection; new X.12 subsection; coverage stats table | ~30 lines modified/added |
 | `.factory/specs/prd/CANONICAL-COUNTS.md` | Per-file definitional table; per-file total_bcs table; grand total; holdout count; last_verified | ~20 lines modified |
-| `.factory/specs/prd/holdout-scenarios.md` | `total_holdouts` frontmatter; Group 9 section with 3 new holdouts appended | ~80 new lines |
+| `.factory/specs/prd/holdout-scenarios.md` | `total_holdouts` frontmatter; Group 9 section with 5 new holdouts appended (H-NEW-JSM-RT-001..005) | ~80 new lines |
 | `.factory/phase-f2-spec-evolution/prd-delta.md` | This file (new) | — |
 
 ---
 
 ## Open Questions / Scope Flags
 
-3. **BC-X.12.001 cross-cutting vs. bc-3**: The `jr requesttype` commands are placed in cross-cutting (X.12) rather than bc-3, consistent with the BA input rationale (discovery commands parallel `jr project` and `jr queue`). This grouping is stable.
-
-4. **CANONICAL-COUNTS.md total discrepancy**: Updated at F1d adversary pass-01 — CANONICAL-COUNTS now shows 566 as canonical total. BC-INDEX.md header updated to match.
+None remaining. All F2 open questions were resolved by F1d passes 01–04 (see §Validated).
 
 ---
 
@@ -125,6 +123,10 @@ The following Open Questions from the original F2 delta have been resolved via P
 1. **RESOLVED — BC-3.8.007 labels wire shape**: Atlassian docs confirm `labels` is a plain string array `["alpha","beta"]` for both `POST /rest/api/3/issue` and `POST /rest/servicedeskapi/request` `requestFieldValues`. The `[{"name":"..."}]` object-array concern was unwarranted. BC-3.8.007 Confidence promoted MEDIUM→HIGH. Source: https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-labels/
 
 2. **RESOLVED — BC-3.8.009 accountId format validation**: Regex `[a-zA-Z0-9]{24}` removed from BC-3.8.009. Atlassian accountIds are not documented as fixed-format; migrated accountIds use colon-separated forms (e.g., `557058:abc...`). Implementation uses pass-through (matching `--account-id` pattern at BC-3.1.001). Invalid accountIds rejected server-side by JSM 400. BC-3.8.009 updated to reflect pass-through behavior.
+
+3. **RESOLVED — BC-X.12.001 cross-cutting vs. bc-3**: The `jr requesttype` commands are placed in cross-cutting (X.12) rather than bc-3, consistent with the BA input rationale (discovery commands parallel `jr project` and `jr queue`). This grouping is stable. Closed at F2 authoring; confirmed by adversary passes 01–04.
+
+4. **RESOLVED — CANONICAL-COUNTS.md total discrepancy**: Updated at F1d adversary pass-01 — CANONICAL-COUNTS now shows 566 as canonical total. BC-INDEX.md header updated to match. No residual discrepancy.
 
 ---
 
@@ -157,7 +159,7 @@ Propagation fixes applied in pass-02:
 - Architecture cross-cutting.md §10.1 updated to list `request_type_fields_<sid>_<rtId>.json` (F16)
 - prd-delta.md count tables updated to reflect final F1d totals (F14)
 - CANONICAL-COUNTS.md stale breakdown prose removed/replaced (F15)
-- bc-1-auth-identity.md `last_updated` bumped (F17)
+- bc-1-auth-identity.md `last_updated` bumped (pass-02 cosmetic sweep)
 
 ---
 

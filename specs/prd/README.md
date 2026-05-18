@@ -105,7 +105,7 @@ These four BCs describe the CORRECT (post-fix) behavior. Phase 3 must turn them 
 | [nfr-catalog.md](nfr-catalog.md) | Architect, Phase 3 | 41 NFR gaps (1C/6H/15M/19L); severity, recommendation, Phase 3 routing |
 | [error-taxonomy.md](error-taxonomy.md) | Implementer, Test-writer | 11 JrError variants × exit codes; 7-level `extract_error_message` chain |
 | [edge-case-catalog.md](edge-case-catalog.md) | Test-writer, Holdout-evaluator | Cross-cutting edge cases; untested behavior gaps from Pass 3 §5 |
-| [holdout-scenarios.md](holdout-scenarios.md) | Holdout-evaluator | 48 holdout scenarios (H-001..H-047 + H-NEW-MP-001) |
+| [holdout-scenarios.md](holdout-scenarios.md) | Holdout-evaluator | 55 holdout scenarios (H-001..H-047 + H-NEW-MP-001 + H-NEW-VERBOSE-001/002 + H-NEW-AUTH-002 + H-NEW-JSM-RT-001..005) |
 
 ---
 

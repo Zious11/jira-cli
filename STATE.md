@@ -36,7 +36,7 @@ activation_version: "v0.5.0-dev.7"
 | **Language** | Rust |
 | **Target Workspace** | develop → main |
 | **Started** | 2026-05-04 |
-| **Last Updated** | 2026-05-18 — F1d pass-03 complete for #288. 0B/4C/6N; comprehensive sweep 17 fixes across 8 files. DRIFT-008 scope widened. BC 566, holdouts 55. |
+| **Last Updated** | 2026-05-18 — F1d pass-04 complete for #288. 0B/2C/5N; counter 0/3. Trajectory 4B/6C/3N→0B/3C/4N→0B/4C/6N→0B/2C/5N. CONCERN trending down; 1-2 passes from CLEAN. |
 | **Current Phase** | Phase 3 — TDD Implementation **IN PROGRESS** — Wave 3 CLOSED (10/10). Feature Mode #110-pr2 COMPLETE. PRs #355–#364, #366–#367, #369–#373 MERGED. **0 audit-followups remain** (#331 sandbox-blocked deferred; #333 closed by PR #360; #340 closed by PR #370; #345 closed by PR #371; #346 closed by PR #373; #350 closed by PR #362; #361 closed by PR #364; #365 closed by PR #367; PG-365-1 closed by PR #369). No active cycle. |
 | **Next Phase** | Wave 3 — 10 stories (S-3.01..S-3.10) |
 | **Activation HEAD** | dea166471e22eff55974d7675593469b37048c5f (v0.5.0-dev.7) |
@@ -79,7 +79,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | 3-feature-340-bulk-poll-task-id-pin | **MERGED** — PR #370 @ 394dc25 (squash); closes #340; F1-F7 full cycle CONVERGED in single delivery | 2026-05-15 | 2026-05-16 | MERGED — 5 adv passes (0/0 trajectory), 3 CLEAN; Copilot R1=0; CI 9/9 green | 8→5→3-obs→7→4 (BLOCKER+CONCERN: 0 every pass) |
 | 3-feature-345-label-coalesce-extract | **MERGED** — PR #371 @ bb352ea (squash, admin); closes #345; F1-F7 full cycle CONVERGED | 2026-05-16 | 2026-05-16 | MERGED — 6 adv passes (3 CLEAN); 3 Copilot cycles + 1 convergence batch; 17 threads resolved; CI 9/9 green | 0/1/6 → 0/2/3 → 0/2/2 → 0/0/0 → 0/0/0 → 0/0/0 (3 consecutive CLEAN) |
 | 3-feature-346-cargo-mutants-ci | **MERGED** — PR #373 @ d909e65 (2026-05-16); closes #346. 8 adv passes, 5 fix rounds, 3 CLEAN; trajectory 0/6/14→2/6/4→0/3/3→0/2/4→2/3/3(1 REFUTED)→0/0/3→0/0/0→0/0/0. Copilot R1=APPROVE; CI 10/10 green. Follow-up #372 filed for partial-baseline completion. | 2026-05-16 | 2026-05-16 | MERGED — 3 CLEAN convergence | 0/6/14→2/6/4→0/3/3→0/2/4→2/3/3→0/0/3→0/0/0→0/0/0 |
-| 3-feature-jsm-request-types-288 | **IN_PROGRESS** — F1d 3 passes; all pass-01 findings ADDRESSED; pass-02: 7 net-new (0B/3C/4N) remediated; pass-03: 10 net-new (0B/4C/6N) comprehensive sweep done; pass-04 pending | 2026-05-18 | | F1d 3 passes | 4B/6C/3N → 0B/3C/4N → 0B/4C/6N |
+| 3-feature-jsm-request-types-288 | **IN_PROGRESS** — F1d 4 passes; all pass-01 findings ADDRESSED; pass-02: 7 net-new (0B/3C/4N) remediated; pass-03: 10 net-new (0B/4C/6N) comprehensive sweep done; pass-04: 7 net-new (0B/2C/5N); counter 0/3; pass-05 pending | 2026-05-18 | | F1d 4 passes | 4B/6C/3N → 0B/3C/4N → 0B/4C/6N → 0B/2C/5N |
 | 4: Holdout Evaluation | not-started | | | | |
 | 5: Adversarial Refinement | not-started | | | | |
 | 6: Formal Hardening | not-started | | | | |
@@ -95,6 +95,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | F1d adversarial spec review pass-01 — #288 | adversary | complete | 13 findings (4B/6C/3N). Product-owner remediated all BLOCKING+CONCERN in same burst; F13 [process-gap] deferred to DRIFT-008. Spec at +18 BCs (+10 in BC-3.8.*, +8 in BC-X.12.*), 54 holdouts, BC-2.6.051 propagation fix to CANONICAL-COUNTS. |
 | F1d adversarial spec review pass-02 — #288 | adversary | complete | All 13 pass-01 findings ADDRESSED. 7 net-new (0B/3C/4N): remediation propagation drift in prd-delta count tables (F14), CANONICAL-COUNTS internal prose (F15), fields cache spec gap (F16), plus NITs. Product-owner remediated all in same burst. Counter 0/3. Pass-03 pending. |
 | F1d adversarial spec review pass-03 — #288 | adversary | complete | Pass-02 disposition: 4 addressed / 2 partial / 1 partial-regression. Net-new 10 (0B/4C/6N): all propagation drift at meta-meta level. Product-owner did comprehensive grep-based sweep: 17 fixes across 8 files (BC ranges, holdout counts, section headers, "Queue commands require" literal in index, last_updated timestamps, H-NEW-JSM-RT-005 mock cardinality). Pass-04 pending. |
+| F1d adversarial spec review pass-04 — #288 | adversary | complete | Pass-03 disposition: 9 ADDRESSED / 1 closed-as-non-issue (F25 footer already correct). Net-new 7 (0B/2C/5N): README.md Supplement Index 48 vs 55 self-contradiction (F31, new location class); prd-delta Open Questions items 3/4 with no 1/2 — both already resolved (F32). PO did focused remediation: README:108 → 55 holdouts; Open Questions emptied to §Validated; Reviewers' Map for holdouts and cross-cutting refreshed; pass-02 F-number bookkeeping corrected; phase-1-consistency-audit{,-r2}.md gain "Historical snapshot" markers. Counter 0/3. Pass-05 pending. |
 
 ## Decisions Log
 

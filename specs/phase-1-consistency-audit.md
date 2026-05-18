@@ -10,6 +10,8 @@ traces_to: ".factory/specs/prd/README.md"
 
 # Phase 1 Consistency Audit — jira-cli
 
+> **Historical snapshot:** This audit was run at the close of Phase 1 spec crystallization (2026-05-06). Holdout counts and BC enumerations in this file reflect the corpus at that time. Subsequent post-Phase-1 additions (H-NEW-VERBOSE-001/002, H-NEW-AUTH-002, H-NEW-JSM-RT-001..005, BC-2.6.050/051, BC-3.4.009, BC-3.8.001..010, BC-X.12.001..008) are NOT reflected here. For current counts, see CANONICAL-COUNTS.md.
+
 **Scope:** Cross-document validation of L2 Domain Spec, L3 PRD, and Architecture documents before Phase 1d adversarial review.
 
 **Auditor:** consistency-validator agent  
