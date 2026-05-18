@@ -221,10 +221,13 @@ When adding a new feature:
   the full list is. Cache functions: `read_request_type_cache`, `write_request_type_cache`,
   `read_request_type_fields_cache`, `write_request_type_fields_cache`.
 - **`require_service_desk` call-site label (BC-X.8.004):** `servicedesks::require_service_desk`
-  accepts a `call_site_label: &'static str` parameter whose value is embedded in the "requires a
-  Jira Service Management project" error message. Pass `"queue commands"` from `cli/queue.rs` and
-  `"jr requesttype"` from `cli/requesttype.rs`. Every new JSM caller MUST supply a distinct label
-  so users see a command-specific error rather than a generic one.
+  accepts a `call_site_label: &'static str` parameter; the rendered error embeds the label
+  followed by ` a Jira Service Management project.` (the template drops the verb to allow
+  correct plural/singular agreement). Every caller MUST supply a full noun-phrase ending in
+  the matching verb. Current callers:
+  - `cli/queue.rs:32` passes `"Queue commands (\`jr queue\`) require"`
+  - `cli/requesttype.rs:38` passes `` "`jr requesttype` commands require" ``
+  See `src/api/jsm/servicedesks.rs::require_service_desk` rustdoc for the canonical contract.
 - **`board view` truncation hint emits to stderr:** The truncation hint ("Showing N of M
   columns — use --all to see everything") is written to stderr, consistent with the
   convention used by `issue list` and `sprint current`. This is intentional — stderr
