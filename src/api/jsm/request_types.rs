@@ -24,9 +24,35 @@ impl JiraClient {
         service_desk_id: &str,
         search_query: Option<&str>,
     ) -> Result<Vec<RequestType>> {
-        unimplemented!(
-            "BC-X.12.001: GET /rest/servicedeskapi/servicedesk/{{id}}/requesttype paginated"
-        )
+        let base = format!(
+            "/rest/servicedeskapi/servicedesk/{}/requesttype",
+            urlencoding::encode(service_desk_id)
+        );
+        let mut all = Vec::new();
+        let mut start = 0u32;
+        let page_size = 50u32;
+
+        loop {
+            let path = match search_query {
+                Some(q) => format!(
+                    "{}?start={}&limit={}&searchQuery={}",
+                    base,
+                    start,
+                    page_size,
+                    urlencoding::encode(q)
+                ),
+                None => format!("{}?start={}&limit={}", base, start, page_size),
+            };
+            let page: ServiceDeskPage<RequestType> = self.get_from_instance(&path).await?;
+            let has_more = page.has_more();
+            let next = page.next_start();
+            all.extend(page.values);
+            if !has_more {
+                break;
+            }
+            start = next;
+        }
+        Ok(all)
     }
 
     /// Fetch the field schema for a specific request type.
@@ -39,6 +65,11 @@ impl JiraClient {
         service_desk_id: &str,
         request_type_id: &str,
     ) -> Result<RequestTypeFieldsResponse> {
-        unimplemented!("BC-X.12.005: GET .../requesttype/{{id}}/field")
+        let path = format!(
+            "/rest/servicedeskapi/servicedesk/{}/requesttype/{}/field",
+            urlencoding::encode(service_desk_id),
+            urlencoding::encode(request_type_id)
+        );
+        self.get_from_instance(&path).await
     }
 }
