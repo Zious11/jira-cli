@@ -331,8 +331,8 @@ fn test_request_type_struct_round_trip() {
         "groupIds": ["12", "34"]
     }"#;
 
-    let rt: jr::types::jsm::RequestType =
-        serde_json::from_str(raw).expect("RequestType should deserialize from Atlassian JSON shape");
+    let rt: jr::types::jsm::RequestType = serde_json::from_str(raw)
+        .expect("RequestType should deserialize from Atlassian JSON shape");
 
     assert_eq!(rt.id, "11001");
     assert_eq!(rt.name, "Get IT Help");
@@ -349,8 +349,8 @@ fn test_request_type_struct_round_trip() {
 
     // Re-serialize and parse back — confirms no data is lost in the round-trip
     let re_serialized = serde_json::to_string(&rt).expect("RequestType should serialize");
-    let rt2: jr::types::jsm::RequestType =
-        serde_json::from_str(&re_serialized).expect("RequestType should deserialize after re-serialization");
+    let rt2: jr::types::jsm::RequestType = serde_json::from_str(&re_serialized)
+        .expect("RequestType should deserialize after re-serialization");
 
     assert_eq!(rt2.id, rt.id);
     assert_eq!(rt2.name, rt.name);
