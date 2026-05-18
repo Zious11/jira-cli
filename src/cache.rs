@@ -371,18 +371,31 @@ impl Expiring for RequestTypeCache {
 }
 
 pub fn read_request_type_cache(
-    _profile: &str,
-    _service_desk_id: &str,
+    profile: &str,
+    service_desk_id: &str,
 ) -> Result<Option<Vec<crate::types::jsm::RequestType>>> {
-    unimplemented!("BC-X.12.008: read request types cache (7d TTL)")
+    let filename = format!("request_types_{service_desk_id}.json");
+    Ok(read_cache::<RequestTypeCache>(profile, &filename)?.map(|c| c.types))
 }
 
 pub fn write_request_type_cache(
-    _profile: &str,
-    _service_desk_id: &str,
-    _types: &[crate::types::jsm::RequestType],
+    profile: &str,
+    service_desk_id: &str,
+    types: &[crate::types::jsm::RequestType],
 ) -> Result<()> {
-    unimplemented!("BC-X.12.008: write request types cache")
+    let filename = format!("request_types_{service_desk_id}.json");
+    let result = write_cache(
+        profile,
+        &filename,
+        &RequestTypeCache {
+            types: types.to_vec(),
+            fetched_at: Utc::now(),
+        },
+    );
+    if let Err(e) = result {
+        eprintln!("warning: failed to write request type cache: {e}");
+    }
+    Ok(())
 }
 
 /// Cached fields for a specific request type within a service desk.
@@ -400,20 +413,33 @@ impl Expiring for RequestTypeFieldsCache {
 }
 
 pub fn read_request_type_fields_cache(
-    _profile: &str,
-    _service_desk_id: &str,
-    _request_type_id: &str,
+    profile: &str,
+    service_desk_id: &str,
+    request_type_id: &str,
 ) -> Result<Option<crate::types::jsm::RequestTypeFieldsResponse>> {
-    unimplemented!("BC-X.12.005: read request type fields cache (7d TTL)")
+    let filename = format!("request_type_fields_{service_desk_id}_{request_type_id}.json");
+    Ok(read_cache::<RequestTypeFieldsCache>(profile, &filename)?.map(|c| c.response))
 }
 
 pub fn write_request_type_fields_cache(
-    _profile: &str,
-    _service_desk_id: &str,
-    _request_type_id: &str,
-    _response: &crate::types::jsm::RequestTypeFieldsResponse,
+    profile: &str,
+    service_desk_id: &str,
+    request_type_id: &str,
+    response: &crate::types::jsm::RequestTypeFieldsResponse,
 ) -> Result<()> {
-    unimplemented!("BC-X.12.005: write request type fields cache")
+    let filename = format!("request_type_fields_{service_desk_id}_{request_type_id}.json");
+    let result = write_cache(
+        profile,
+        &filename,
+        &RequestTypeFieldsCache {
+            response: response.clone(),
+            fetched_at: Utc::now(),
+        },
+    );
+    if let Err(e) = result {
+        eprintln!("warning: failed to write request type fields cache: {e}");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
