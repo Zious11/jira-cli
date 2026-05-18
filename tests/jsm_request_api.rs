@@ -165,10 +165,12 @@ async fn test_list_request_types_paginates_is_last_page() {
 async fn test_list_request_types_search_query_forwarded() {
     let server = MockServer::start().await;
 
-    // Mock that enforces the searchQuery param is present
+    // Mock enforces searchQuery is present AND pagination params are sent correctly.
     Mock::given(method("GET"))
         .and(path("/rest/servicedeskapi/servicedesk/28/requesttype"))
         .and(query_param("searchQuery", "password"))
+        .and(query_param("start", "0"))
+        .and(query_param("limit", "50"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "size": 1,
             "start": 0,
