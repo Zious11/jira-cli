@@ -101,10 +101,14 @@ pub async fn get_or_fetch_project_meta(
 /// Require the project to be a JSM service desk. Returns the serviceDeskId or errors.
 ///
 /// `call_site_label` is embedded in the error message to produce caller-specific
-/// error text per BC-X.8.004. The label MUST be a full noun-phrase ending in the
-/// matching verb (e.g., "Queue commands (`jr queue`) require" or "`jr requesttype`
-/// commands require"), because the template drops the verb to allow correct
-/// number agreement for plural vs singular subjects.
+/// error text per BC-X.8.004 + BC-X.12.003. The label MUST be a full noun-phrase
+/// ending in the matching verb (e.g., "Queue commands (`jr queue`) require" or
+/// "`jr requesttype` commands require"), because the template drops the verb to
+/// allow correct number agreement for plural vs singular subjects.
+///
+/// Error message template (verbatim per BC-X.8.004 + BC-X.12.003):
+/// `Project "<KEY>" is a <TYPE> project. <LABEL> a Jira Service Management project.
+///  Run "jr project list" to find a JSM project.`
 pub async fn require_service_desk(
     client: &JiraClient,
     project_key: &str,
@@ -119,8 +123,8 @@ pub async fn require_service_desk(
             _ => "Jira",
         };
         return Err(JrError::UserError(format!(
-            "\"{}\" is a {} project. {} a Jira Service Management project. \
-             Run \"jr project list\" to see available projects.",
+            "Project \"{}\" is a {} project. {} a Jira Service Management project. \
+             Run \"jr project list\" to find a JSM project.",
             project_key, type_label, call_site_label
         ))
         .into());

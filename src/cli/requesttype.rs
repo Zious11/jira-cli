@@ -150,7 +150,7 @@ async fn handle_fields(
                 .to_string();
             vec![
                 f.name.clone(),
-                if f.required { "yes" } else { "no" }.to_string(),
+                if f.required { "YES" } else { "NO" }.to_string(),
                 type_label,
             ]
         })
@@ -210,9 +210,11 @@ async fn resolve_request_type_id(
         MatchResult::Exact(matched_name) => Ok(find_id_by_name(&matched_name, &types)),
         MatchResult::ExactMultiple(matched_name) => {
             // Multiple types with the exact same name — list IDs and suggest disambiguation.
+            // Use case-insensitive comparison to mirror cli/queue.rs ExactMultiple handling.
+            let matched_lower = matched_name.to_lowercase();
             let ids: Vec<String> = types
                 .iter()
-                .filter(|t| t.name == matched_name)
+                .filter(|t| t.name.to_lowercase() == matched_lower)
                 .map(|t| t.id.clone())
                 .collect();
             Err(JrError::UserError(format!(

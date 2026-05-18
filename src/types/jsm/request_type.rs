@@ -7,6 +7,12 @@
 use serde::{Deserialize, Serialize};
 
 /// A JSM request type associated with a service desk.
+///
+/// `Default` is required by `ServiceDeskPage<RequestType>` deserialization
+/// (the page generic bounds `T: Default` through serde's derive chain). No
+/// direct caller uses `RequestType::default()`. Default-constructed values
+/// have an empty `id` which corrupts cache filenames — do not persist a
+/// default-constructed `RequestType` to the request-type cache.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestType {

@@ -159,6 +159,27 @@ When adding a new feature:
     `src/types/jsm/request_type.rs`; if Atlassian adds required fields to either response,
     older cache files fail to deserialize (handled as cache miss → refetch; self-heals).
     Same 7-day TTL as all other caches; same `v1/` root-bump path for incompatible changes.
+- **`jr requesttype fields <NAME|ID>` numeric-bypass edge case:** When `<NAME|ID>`
+  is all ASCII digits, the handler treats it as a numeric request type ID and
+  skips `partial_match` resolution. If an admin names a request type `"100"` or
+  `"42"` (a legal Atlassian display name), `jr requesttype fields 100` will
+  hit `.../requesttype/100/field` directly and surface a raw API error if no
+  RT with that ID exists. To force name-based resolution, prefix with any
+  non-digit (no Atlassian-supported escape exists today; user must use the
+  numeric ID directly via `jr requesttype list --output json | jq` to look it
+  up). Tracked behavior — not a bug — but worth noting if you add a `--by-id`
+  flag in the future.
+- **Cache-write error handling — "best-effort writer" pattern (S-288-pr2):**
+  The `write_request_type_cache` and `write_request_type_fields_cache` functions
+  swallow disk-write errors via `eprintln!("warning: ...")` + return `Ok(())`,
+  diverging from all other cache writers in `src/cache.rs` which propagate
+  errors via `?`. The "best-effort" model exists because cache write failures
+  must NEVER break a successful API call (the cost of a missed write is at
+  most one extra HTTP on the next call). When adding a NEW cache family,
+  pick a model: (a) propagate via `?` if the cache is correctness-critical
+  (e.g., resolutions, team metadata where downstream code depends on values),
+  (b) swallow + warn if the cache is purely a read-acceleration shortcut.
+  Document the choice in the writer's rustdoc.
 - **`list.rs` is large (~970 lines):** Contains both `handle_list` and `handle_view` plus all JQL composition logic. If modifying, read the full function you're changing — context matters.
 - **`aqlFunction()` not `assetsQuery()`:** The Jira Assets JQL function is `aqlFunction()`. It requires the human-readable field **name**, not `cf[ID]` or `customfield_NNNNN`. AQL attribute for object key is `Key` (not `objectKey` — that's the JSON field name).
 - **Status category colors are fixed:** `green` = Done, `yellow` = In Progress, `blue-gray` = To Do. These mappings are hardcoded in Jira Cloud across all instances. Used by `--open` filtering.
