@@ -35,7 +35,7 @@ suite.
 | AC-002 | `list_request_types` paginates via `ServiceDeskPage` (`isLastPage`), accumulates all pages | `test_list_request_types_paginates_is_last_page` | tests/jsm_request_api.rs |
 | AC-003 | `search_query=Some(...)` forwarded as `searchQuery` param; `None` → param absent (enforced by `query_param_is_missing`) | `test_list_request_types_search_query_forwarded` (positive) + `test_list_request_types_search_query_absent_when_none` (negative) | tests/jsm_request_api.rs |
 | AC-004 | `get_request_type_fields` GETs `.../requesttype/{rtId}/field`, returns `RequestTypeFieldsResponse` | `test_get_request_type_fields_returns_field_list` | tests/jsm_request_api.rs |
-| AC-005 | `RequestType` and `RequestTypeField` serde structs match Atlassian camelCase shape | `test_request_type_struct_round_trip` | tests/jsm_request_api.rs |
+| AC-005 | `RequestType` serde struct matches Atlassian camelCase shape (round-trip verified); `RequestTypeField` shape verified implicitly via AC-004's deserialization of the fields endpoint response | `test_request_type_struct_round_trip` (RequestType) + `test_get_request_type_fields_returns_field_list` (RequestTypeField) | tests/jsm_request_api.rs |
 | AC-006 | `JsmRequestCreated` exposes `issue_key` and `issue_id`; `issue_id` is `Option` | `test_jsm_request_created_extracts_issue_key` | tests/jsm_request_api.rs |
 | AC-007 | Release gate: `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --all -- --check` all exit 0 | See release-gate table below | — |
 

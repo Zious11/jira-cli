@@ -351,7 +351,9 @@ fn test_request_type_struct_round_trip() {
     assert_eq!(rt.issue_type_id.as_deref(), Some("12345"));
     assert_eq!(rt.group_ids, vec!["12", "34"]);
 
-    // Re-serialize and parse back — confirms no data is lost in the round-trip
+    // Re-serialize and parse back — confirms fields captured by the struct survive the round-trip.
+    // Fields present in the Atlassian API shape but absent from RequestType (e.g. serviceDeskId,
+    // portalId) are intentionally not modelled and are not preserved.
     let re_serialized = serde_json::to_string(&rt).expect("RequestType should serialize");
     let rt2: jr::types::jsm::RequestType = serde_json::from_str(&re_serialized)
         .expect("RequestType should deserialize after re-serialization");
