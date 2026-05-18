@@ -27,6 +27,10 @@ pub struct RequestTypeField {
     pub name: String,
     pub description: Option<String>,
     pub required: bool,
+    /// Whether this field is visible to the customer in the portal form.
+    /// Consumers (pr2 CLI rendering) use this to decide whether to prompt for the field.
+    #[serde(default)]
+    pub visible: bool,
     pub default_values: Option<Vec<serde_json::Value>>,
     pub valid_values: Option<Vec<serde_json::Value>>,
     pub jira_schema: serde_json::Value,
@@ -41,9 +45,12 @@ pub struct RequestTypeFieldsResponse {
     pub request_type_fields: Vec<RequestTypeField>,
 }
 
-/// Minimal request body stub (unused fields accepted without failure).
+/// Typed POST body for `create_jsm_request`.
 ///
-/// Used by callers building the POST body for `create_jsm_request`.
+/// Serializes to the shape expected by `POST /rest/servicedeskapi/request`.
+/// For richer request bodies (e.g. ADF descriptions, `isAdfRequest: true`), pass
+/// a `serde_json::Value` directly to `create_jsm_request` instead — this struct
+/// covers the minimal fields required by the Atlassian API.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JsmRequest {

@@ -1,6 +1,6 @@
 //! Integration tests for the JSM request submission + request-type discovery API.
 //!
-//! Covers AC-001 .. AC-006 from `.factory/code-delivery/issue-288-pr1-api/story.md`.
+//! Covers AC-001 .. AC-006 from the pr1 story for issue #288.
 //! All HTTP tests use the wiremock harness pattern established in `tests/queue.rs`.
 //! Serde round-trip tests (AC-005, AC-006) require no HTTP mock server.
 
