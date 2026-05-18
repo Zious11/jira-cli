@@ -36,7 +36,7 @@ activation_version: "v0.5.0-dev.7"
 | **Language** | Rust |
 | **Target Workspace** | develop → main |
 | **Started** | 2026-05-04 |
-| **Last Updated** | 2026-05-18 — F1d pass-09 SECOND CONSECUTIVE CLEAN-PASS for #288. 0B/0C/0N; counter 2/3. Trajectory →0B/0C/0N→0B/0C/0N. All 18 mandates CLEAR (independent re-derivation). Genuine convergence (monotonic decay, no oscillation). Pass-10 pending (final gate). |
+| **Last Updated** | 2026-05-18 — F1d pass-10 THIRD CONSECUTIVE CLEAN-PASS for #288 — CONVERGED 3/3. 0B/0C/0N; all 18 mandates CLEAR. Trajectory →0B/0C/0N→0B/0C/0N→0B/0C/0N. F2 spec evolution ready for human approval. |
 | **Current Phase** | Phase 3 — TDD Implementation **IN PROGRESS** — Wave 3 CLOSED (10/10). Feature Mode #110-pr2 COMPLETE. PRs #355–#364, #366–#367, #369–#373 MERGED. **0 audit-followups remain** (#331 sandbox-blocked deferred; #333 closed by PR #360; #340 closed by PR #370; #345 closed by PR #371; #346 closed by PR #373; #350 closed by PR #362; #361 closed by PR #364; #365 closed by PR #367; PG-365-1 closed by PR #369). No active cycle. |
 | **Next Phase** | Wave 3 — 10 stories (S-3.01..S-3.10) |
 | **Activation HEAD** | dea166471e22eff55974d7675593469b37048c5f (v0.5.0-dev.7) |
@@ -79,7 +79,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | 3-feature-340-bulk-poll-task-id-pin | **MERGED** — PR #370 @ 394dc25 (squash); closes #340; F1-F7 full cycle CONVERGED in single delivery | 2026-05-15 | 2026-05-16 | MERGED — 5 adv passes (0/0 trajectory), 3 CLEAN; Copilot R1=0; CI 9/9 green | 8→5→3-obs→7→4 (BLOCKER+CONCERN: 0 every pass) |
 | 3-feature-345-label-coalesce-extract | **MERGED** — PR #371 @ bb352ea (squash, admin); closes #345; F1-F7 full cycle CONVERGED | 2026-05-16 | 2026-05-16 | MERGED — 6 adv passes (3 CLEAN); 3 Copilot cycles + 1 convergence batch; 17 threads resolved; CI 9/9 green | 0/1/6 → 0/2/3 → 0/2/2 → 0/0/0 → 0/0/0 → 0/0/0 (3 consecutive CLEAN) |
 | 3-feature-346-cargo-mutants-ci | **MERGED** — PR #373 @ d909e65 (2026-05-16); closes #346. 8 adv passes, 5 fix rounds, 3 CLEAN; trajectory 0/6/14→2/6/4→0/3/3→0/2/4→2/3/3(1 REFUTED)→0/0/3→0/0/0→0/0/0. Copilot R1=APPROVE; CI 10/10 green. Follow-up #372 filed for partial-baseline completion. | 2026-05-16 | 2026-05-16 | MERGED — 3 CLEAN convergence | 0/6/14→2/6/4→0/3/3→0/2/4→2/3/3→0/0/3→0/0/0→0/0/0 |
-| 3-feature-jsm-request-types-288 | **IN_PROGRESS** — F1d 9 passes; all pass-01 findings ADDRESSED; pass-08: FIRST CLEAN-PASS; pass-09: SECOND CONSECUTIVE CLEAN-PASS (0B/0C/0N); all 18 mandates CLEAR; counter 2/3; 1 more CLEAN pass required; pass-10 pending | 2026-05-18 | | F1d 9 passes | 4B/6C/3N → 0B/3C/4N → 0B/4C/6N → 0B/2C/5N → 0B/2C/3N → 0B/2C/3N → 0B/1C/3N → 0B/0C/0N → 0B/0C/0N (CLEAN 2/3) |
+| 3-feature-jsm-request-types-288 | **F2 READY FOR HUMAN APPROVAL** — F1d CONVERGED 3/3 at pass-10. 10 total passes (7 substantive + 3 confirmation CLEAN). All 18 mandates CLEAR. CONVERGENCE.md written. | 2026-05-18 | 2026-05-18 | F1d 3/3 CONVERGED — awaiting human approval gate | 4B/6C/3N → 0B/3C/4N → 0B/4C/6N → 0B/2C/5N → 0B/2C/3N → 0B/2C/3N → 0B/1C/3N → 0B/0C/0N → 0B/0C/0N → 0B/0C/0N (CLEAN 3/3 CONVERGED) |
 | 4: Holdout Evaluation | not-started | | | | |
 | 5: Adversarial Refinement | not-started | | | | |
 | 6: Formal Hardening | not-started | | | | |
@@ -96,6 +96,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | F1d adversarial spec review pass-07 — #288 | adversary | complete | Pass-06 disposition: 4 ADDRESSED + 1 DEFERRED. Net-new 4 (0B/1C/3N): risk-register.md header self-contradicts body Summary (F48; pass-06 routed F46 to STATE.md reclassification only — never patched source); 3 NITs informational. PO fixed F48. DRIFT-010 CLOSED. Counter 0/3. Pass-08 pending. |
 | F1d adversarial spec review pass-08 — #288 | adversary | complete | **FIRST CLEAN-PASS** — 0B/0C/0N. Pass-07 F48 ADDRESSED. All 18 mandates CLEAR. Counter 1/3. Pass-09 pending. |
 | F1d adversarial spec review pass-09 — #288 | adversary | complete | **SECOND CONSECUTIVE CLEAN-PASS** — 0B/0C/0N. Independent re-derivation of all 18 mandates confirmed CLEAR. Subtle pattern observation: monotonic decay no oscillation — genuine convergence. Counter 2/3. Pass-10 required (final confirmation gate). |
+| F1d adversarial spec review pass-10 — #288 | adversary | complete | **F1d CONVERGED 3/3** — Pass-09 was CLEAN. Pass-10 final confirmation gate also CLEAN. 18 mandates verified CLEAR. Novelty zero across 3 consecutive passes. F2 spec evolution ready for human approval. |
 
 ## Decisions Log
 
@@ -229,8 +230,8 @@ _Not started._
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-18 |
-| **Position** | **#288 F1d pass-09 COMPLETE — SECOND CONSECUTIVE CLEAN-PASS** — Pass-08 was CLEAN (0B/0C/0N); pass-09 is independent re-derivation confirmation gate: all 18 mandates CLEAR (count arithmetic 566 BC/55 holdouts/36 risks; stale-count grep zero matches; intra-BC consistency BC-3.8.001..010 + BC-X.12.001..008 all consistent; frontmatter↔body; holdout setup↔BC postconditions; ADR-0014 related[] correct; README Document Map/Supplement Index current). Subtle pattern: monotonic decay from pass-04 — no oscillation — genuine convergence. Trajectory: 4B/6C/3N→0B/3C/4N→0B/4C/6N→0B/2C/5N→0B/2C/3N→0B/2C/3N→0B/1C/3N→0B/0C/0N→0B/0C/0N. Develop HEAD = d909e65. Next: F1d pass-10 (final confirmation gate). |
-| **Convergence counter** | #288 F1d: 9 passes. 7 FINDINGS-PRESENT + 2 CLEAN. Counter: 2/3. One more CLEAN-PASS required for full F1d convergence. Pass-10 pending. |
+| **Position** | **#288 F1d CONVERGED 3/3 — pass-10 FINAL CLEAN-PASS** — All 3 confirmation passes (P08/P09/P10) returned 0B/0C/0N. 18 mandates CLEAR across all 3 independent re-derivations. 10 total passes (7 substantive + 3 confirmation). CONVERGENCE.md written. Trajectory: 4B/6C/3N→0B/3C/4N→0B/4C/6N→0B/2C/5N→0B/2C/3N→0B/2C/3N→0B/1C/3N→0B/0C/0N→0B/0C/0N→0B/0C/0N. Develop HEAD = d909e65. Next: Human approval gate → F3 incremental story decomposition. |
+| **Convergence counter** | #288 F1d: 10 passes. 7 FINDINGS-PRESENT + 3 CLEAN. Counter: 3/3 — CONVERGED. F2 spec evolution AWAITING HUMAN APPROVAL GATE. |
 
 ## Historical Content
 
