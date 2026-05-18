@@ -16,6 +16,7 @@ impl JiraClient {
     ///
     /// Traces: BC-3.8.001
     pub async fn create_jsm_request(&self, body: serde_json::Value) -> Result<JsmRequestCreated> {
-        unimplemented!("BC-3.8.001: POST /rest/servicedeskapi/request")
+        self.post_to_instance("/rest/servicedeskapi/request", &body)
+            .await
     }
 }
