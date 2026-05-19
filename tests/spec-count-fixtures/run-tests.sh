@@ -54,7 +54,7 @@ run() {
   # Capture both stdout+stderr and the exit code without triggering set -e.
   local output
   local exit_code
-  output=$(cd "$fixture" && bash "$(pwd)/../../../../$SCRIPT" 2>&1) && exit_code=0 || exit_code=$?
+  output=$(cd "$fixture" && bash "$(pwd)/../../../$SCRIPT" 2>&1) && exit_code=0 || exit_code=$?
 
   if [ "$exit_code" = "$expect" ]; then
     PASS=$((PASS+1))
