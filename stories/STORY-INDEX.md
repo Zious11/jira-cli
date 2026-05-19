@@ -3,10 +3,10 @@ document_type: story-index
 phase: phase-2-story-decomposition
 producer: story-writer
 version: "1.4.12"
-total_stories: 41
+total_stories: 42
 total_waves: 4
 status: complete-pending-adv-review
-last_updated: 2026-05-19 (S-383 completed PR #390 / 25f7211)
+last_updated: 2026-05-19 (S-392 added; cumulative BC-count guard DRIFT-002)
 activation_head: dea1664
 ---
 
@@ -27,7 +27,7 @@ Phase 1 converged at adversary Pass 28. Gate approved 2026-05-04.
 | 3 | Low priority + deferred (DEFER NFRs, shard splits, process codification, DOCUMENT-AS-IS) | 10 | ~5-7 dev-days | Per-story gates; no v0.5 blocking |
 | feature-followup | Audit-followup test pins for shipped features (S-333, #340) | 1 | ~0.5 dev-days | cargo test green; per-story BC gates |
 
-**Final totals: 36 stories across 4 waves + feature-followup group.** Wave 0: 7, Wave 1: 8, Wave 2: 7, Wave 3: 10 (+S-3.10 added during Wave 2 as S-2.06 DEFER-01 follow-up). Wave 2: **7/7 COMPLETE** (PRs #303-#309; 2026-05-08). Feature-followup: 3 (S-340 — issue #340 task_id pin; 2026-05-15; S-345 — issue #345 label-coalesce refactor + proptest; 2026-05-16; S-346 — issue #346 cargo-mutants CI job + whitelist policy; 2026-05-16).
+**Final totals: 36 stories across 4 waves + feature-followup group.** Wave 0: 7, Wave 1: 8, Wave 2: 7, Wave 3: 10 (+S-3.10 added during Wave 2 as S-2.06 DEFER-01 follow-up). Wave 2: **7/7 COMPLETE** (PRs #303-#309; 2026-05-08). Feature-followup: 3 (S-340 — issue #340 task_id pin; 2026-05-15; S-345 — issue #345 label-coalesce refactor + proptest; 2026-05-16; S-346 — issue #346 cargo-mutants CI job + whitelist policy; 2026-05-16). Feature-followup (infrastructure): S-382 (JrError::InsufficientScope refactor; 2026-05-19), S-383 (platform-inverse warnings; 2026-05-19), S-392 (cumulative BC-count guard DRIFT-002; 2026-05-19).
 
 Story file naming: `stories/wave-W/S-W.NN-short-slug.md`
 Story ID convention: `S-W.NN` (e.g., `S-0.01`, `S-1.03`)
@@ -184,6 +184,7 @@ They have `wave: feature-followup` in frontmatter and live under `.factory/code-
 | S-346 | Add cargo-mutants CI job + whitelist policy for bulk + create modules | — | — | MERGED — PR #373 @ d909e65 (2026-05-16) | small |
 | S-382 | Refactor JrError::InsufficientScope Display to use structured required_scope field (closes #382) | BC-1.6.042 | — | completed (PR #389 / b1c863e; merged 2026-05-19) | small (2 SP) |
 | S-383 | Emit stderr warnings when --field/--on-behalf-of used without --request-type on platform path (closes #383) | BC-3.8.012, BC-3.8.013 | — | completed (PR #390 / 25f7211; merged 2026-05-19) | small (2 SP) |
+| S-392 | Add cumulative BC-count CI guard: check-bc-cumulative-counts.sh + DRIFT-002 (closes #392) | N/A — CI tooling | — | ready | medium (4 SP) |
 
 Feature-followup story files: `.factory/code-delivery/issue-NNN/story.md`
 
@@ -339,3 +340,4 @@ Total rows: 41 (matches `total_stories: 41` in frontmatter). Updated 2026-05-15 
 | issue-288-pr4-dispatch | cycle-3-wave-3 | /Users/zious/Documents/GITHUB/jira-cli/.factory/code-delivery/issue-288-pr4-dispatch/story.md |
 | S-382 | feature-followup (quick-dev F4) | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/S-382-error-insufficient-scope-refactor.md |
 | S-383 | feature-followup (F3) | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/S-383-platform-inverse-warnings.md |
+| S-392 | feature-followup (infrastructure) | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/S-392-cumulative-spec-count-guard.md |

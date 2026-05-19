@@ -519,4 +519,16 @@ feature_followup_standalone:
     holdout_anchors: []
     issue: 383
     points: 2
-    notes: "F3 story. Closes issue #383. Two eprintln! guards inserted in handle_create (src/cli/issue/create.rs) before platform path. 7 new integration tests in tests/issue_create_jsm.rs (AC-1..AC-7). F2 CONVERGED 2026-05-19 (11 adversary passes). BC-3.8.012/013 sealed. Per-story adversary CONVERGED 3/3 (pass-01 CLEAN, pass-02-retry CLEAN, pass-03 CLEAN). CI 10/10 GREEN. Copilot: COMMENTED (0 inline). pr-reviewer: APPROVE 1 cycle (3 non-blocking). PR #390 MERGED @ 25f7211 (2026-05-19). Issue #383 auto-closed. 3 deferred follow-ups: DEFER-383-1 (heading depth harmonization), DEFER-383-2 (CANONICAL-COUNTS change-attribution wording), DEFER-383-3 (check-spec-counts.sh cumulative-sum extension — process-gap)."
+    notes: "F3 story. Closes issue #383. Two eprintln! guards inserted in handle_create (src/cli/issue/create.rs) before platform path. 7 new integration tests in tests/issue_create_jsm.rs (AC-1..AC-7). F2 CONVERGED 2026-05-19 (11 adversary passes). BC-3.8.012/013 sealed. Per-story adversary CONVERGED 3/3 (pass-01 CLEAN, pass-02-retry CLEAN, pass-03 CLEAN). CI 10/10 GREEN. Copilot: COMMENTED (0 inline). pr-reviewer: APPROVE 1 cycle (3 non-blocking). PR #390 MERGED @ 25f7211 (2026-05-19). Issue #383 auto-closed. 3 deferred follow-ups: DEFER-383-1 (heading depth harmonization), DEFER-383-2 (CANONICAL-COUNTS change-attribution wording), DEFER-383-3 (check-spec-counts.sh cumulative-sum extension — process-gap → resolved as S-392)."
+  - id: S-392
+    title: "Add cumulative BC-count CI guard: check-bc-cumulative-counts.sh + DRIFT-002 (closes #392)"
+    status: ready
+    pr: null
+    merge_sha: null
+    merged_at: null
+    depends_on: []
+    bc_anchors: []
+    holdout_anchors: []
+    issue: 392
+    points: 4
+    notes: "Infrastructure story. Closes issue #392 (DEFER-383-3). Adds sibling script scripts/check-bc-cumulative-counts.sh (DRIFT-002 mitigation): validates 7 must-agree surfaces (bc-N.md total_bcs frontmatter A vs BC-INDEX Section header B vs BC-INDEX sections: frontmatter C vs CANONICAL-COUNTS.md table row D vs body prose; grand total sum vs BC-INDEX total_bcs E vs CANONICAL-COUNTS **Sum** F vs CANONICAL-COUNTS grand-total prose G). PENDING carve-out skips L2-vs-L3 alignment table in CANONICAL-COUNTS.md. Fixture suite (4 trees) in tests/spec-count-fixtures/ + run-tests.sh. 2 new CI steps in spec-guard job (fixture self-test first, then real-repo DRIFT-002). One-line prose fix in bc-2-issue-read.md: '92 behavioral contracts' -> '93 behavioral contracts' (DRIFT-BC2-PROSE). CLAUDE.md updated with DRIFT-002 reference. TDD: fixtures written before script (Red Gate applies). F1 design at .factory/phase-f1-delta-analysis/issue-392/design.md."
