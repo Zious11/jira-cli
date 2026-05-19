@@ -9,11 +9,15 @@ pub enum JrError {
         "Insufficient token scope: {message}\n\n\
          The Atlassian API gateway rejects granular-scoped personal tokens on POST \
          requests (while PUT/GET succeed). Workarounds:\n  \
-         • Use a classic token with \"write:jira-work\" scope instead of granular scopes, or\n  \
+         • Use a classic token with \"{scope_hint}\" scope instead of granular scopes, or\n  \
          • Try OAuth 2.0 (run \"jr auth login --oauth\") — may avoid this bug, not verified\n\n\
-         See https://github.com/Zious11/jira-cli/issues/185 for details."
+         See https://github.com/Zious11/jira-cli/issues/185 for details.",
+        scope_hint = required_scope.as_deref().filter(|s| !s.is_empty()).unwrap_or("write:jira-work")
     )]
-    InsufficientScope { message: String },
+    InsufficientScope {
+        message: String,
+        required_scope: Option<String>,
+    },
 
     #[error("Could not reach {0} — check your connection")]
     NetworkError(String),
@@ -129,7 +133,8 @@ mod tests {
     fn insufficient_scope_exit_code() {
         assert_eq!(
             JrError::InsufficientScope {
-                message: "Unauthorized; scope does not match".into()
+                message: "Unauthorized; scope does not match".into(),
+                required_scope: None,
             }
             .exit_code(),
             2
@@ -170,6 +175,7 @@ mod tests {
     fn insufficient_scope_display_includes_workarounds() {
         let err = JrError::InsufficientScope {
             message: "Unauthorized; scope does not match".into(),
+            required_scope: None,
         };
         let s = err.to_string();
         assert!(s.contains("Insufficient token scope"), "got: {s}");

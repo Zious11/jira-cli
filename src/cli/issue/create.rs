@@ -1979,7 +1979,7 @@ async fn handle_jsm_create(
                             .to_string(),
                     })
                 }
-                Ok(JrError::InsufficientScope { message }) => {
+                Ok(JrError::InsufficientScope { message, .. }) => {
                     anyhow::anyhow!(JrError::InsufficientScope {
                         message: format!(
                             "{message} (`jr issue create --request-type` requires the \
@@ -1987,6 +1987,7 @@ async fn handle_jsm_create(
                          Run `jr auth refresh` to refresh, or `jr auth login` to re-authorize \
                          with updated scopes.)"
                         ),
+                        required_scope: Some("write:servicedesk-request".to_string()),
                     })
                 }
                 Ok(other) => anyhow::anyhow!(other),

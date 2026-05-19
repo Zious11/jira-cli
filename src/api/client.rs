@@ -699,6 +699,7 @@ impl JiraClient {
         {
             return Err(JrError::InsufficientScope {
                 message: first_401_message,
+                required_scope: None,
             }
             .into());
         }
@@ -966,7 +967,11 @@ impl JiraClient {
                 .to_ascii_lowercase()
                 .contains("scope does not match")
             {
-                return JrError::InsufficientScope { message }.into();
+                return JrError::InsufficientScope {
+                    message,
+                    required_scope: None,
+                }
+                .into();
             }
             return JrError::NotAuthenticated {
                 hint: "Run \"jr auth login\" to connect.".to_string(),
