@@ -29,7 +29,7 @@ accurate at the call-site.
 
 | BC ID | Title / Key Behavior | Classification | Reason |
 |---|---|---|---|
-| BC-1.6.042 | 401 + `scope does not match` body → InsufficientScope with 5 required substrings; scope name resolved at construction site (runtime-parameterized via `required_scope: Option<String>`) | **MODIFY** (option-a parameterize in-place; see `po-decision-bc-parameterization.md`) | PO decision (adversary-pass-01): parameterize BC-1.6.042 in-place. Behavior line updated to replace the hardcoded `write:jira-work` assertion with a parameterized-field contract (`None` falls back to `write:jira-work`; `Some("write:servicedesk-request")` for JSM path). No BC split, no new ID, no BC-INDEX or CANONICAL-COUNTS change. |
+| BC-1.6.042 — MODIFY (option-a parameterize in-place; see po-decision-bc-parameterization.md) | 401 + `scope does not match` body → InsufficientScope with 5 required substrings | **MODIFY** (option-a parameterize in-place; see `po-decision-bc-parameterization.md`) | PO decision (adversary-pass-01): parameterize BC-1.6.042 in-place. Behavior line updated to replace the hardcoded `write:jira-work` assertion with a parameterized-field contract (`None` falls back to `write:jira-work`; `Some("write:servicedesk-request")` for JSM path). No BC split, no new ID, no BC-INDEX or CANONICAL-COUNTS change. |
 | BC-X.3.005 | 401 + scope-mismatch → InsufficientScope; 403 NOT dispatched | **UNCHANGED** | The dispatch logic (401 status gate + substring match) is not being changed. Only the Display output changes. |
 | BC-1.3.023 | DEFAULT_OAUTH_SCOPES includes `write:jira-work` and `write:servicedesk-request` | **UNCHANGED** | Scope constant itself is not changing. However, this BC is the root motivation: having two required scopes exposed why the hardcoded hint is stale. No modification needed — it already documents both scopes. |
 | BC-1.6.043 | 401 without scope-mismatch substring → NotAuthenticated, NOT InsufficientScope | **UNCHANGED** | Dispatch boundary unaffected. |
@@ -81,7 +81,7 @@ All test locations asserting on InsufficientScope Display or dispatch:
 |---|---|---|---|
 | `src/error.rs` | 129-136 | Exit code = 2 | No |
 | `src/error.rs` | 170-185 | Display contains `write:jira-work` (literal) | YES — if scope becomes dynamic |
-| `tests/api_client.rs` | 100-144 | Display contains `write:jira-work` | YES — if scope becomes dynamic |
+| `tests/api_client.rs` | 100-144 | Display contains `write:jira-work` | No — None-fallback at C-2 preserves `write:jira-work` Display literal verbatim; assertion at `tests/api_client.rs:136` still satisfied |
 | `tests/api_client.rs` | 146-181 | NOT InsufficientScope for session-expired 401 | No |
 | `tests/api_client.rs` | 183-216 | InsufficientScope on mixed-case substring | No |
 | `tests/api_client.rs` | 219-255 | NOT InsufficientScope for 403 | No |
@@ -216,6 +216,9 @@ These files reference `InsufficientScope` behavior or BC-1.6.042 but require no 
 
 ## Change Log
 
+- [REVISED 2026-05-19 per F1d adversary-pass-02 H-01 + L-03]
+  - H-01: Section 4 row for `tests/api_client.rs:100-144` "Change Required?" cell corrected from "YES — if scope becomes dynamic" to "No — None-fallback at C-2 preserves `write:jira-work` Display literal verbatim; assertion at `tests/api_client.rs:136` still satisfied". The conditional was inconsistent with the rest of the artifact set's UNCHANGED classification for that test.
+  - L-03: Section 1 BC table row for BC-1.6.042 pruned. Implementation detail `(runtime-parameterized via JrError::InsufficientScope { required_scope: Option<String> })` removed from Title/Key Behavior cell — that detail belongs in the BC body, not the summary cell. BC ID cell updated to include the MODIFY classification inline per the prescribed format.
 - [REVISED 2026-05-19 per F1d adversary-pass-01 F-02 + F-04 + F-06 + F-07]
   - F-02: BC-1.6.047 candidate withdrawn. BC-1.6.042 classification updated to "MODIFY (option-a parameterize in-place; see po-decision-bc-parameterization.md)". PO decision confirms single-BC-in-place is correct; no BC-INDEX or CANONICAL-COUNTS change.
   - F-04: Added `edge-case-catalog.md:78` to "Docs/Index Surfaces Verified Unchanged" — references BC-1.6.042; coverage assertion remains accurate under parameterization (verify-only).

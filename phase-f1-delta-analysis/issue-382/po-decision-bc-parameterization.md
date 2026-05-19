@@ -37,9 +37,13 @@ Option<String> }` rather than hardcoded as `write:jira-work`.
    Adversary finding F-02 (which was contingent on a count change from option
    (b) or (c)) is moot.
 
-4. **Precedent.** The `optional_fields_parameterized` pattern already exists
-   elsewhere in this codebase (e.g., `--project` inheriting from config vs
-   flag). Parameterizing an error field follows the same established idiom.
+4. **Precedent in this codebase.** `JrError::NotAuthenticated { hint: String }`
+   (`src/error.rs:5-6`) already uses a structured-hint-field pattern interpolated
+   into thiserror Display, with multiple construction sites passing different hint
+   text per call path. Parameterizing `InsufficientScope` with `Option<String>`
+   follows the same template, with `Option<String>` (vs plain `String`) chosen to
+   preserve None-fallback for test back-compat (T-2 at `tests/api_client.rs:100-144`
+   passes unmodified under the None branch).
 
 ## Rejected Alternatives
 
@@ -54,13 +58,11 @@ that references BC-1.6.042 would all require updates. Adversary F-02
 
 ### Option (c): Add BC-1.6.047 as supplementary contract
 
-Rejected. A "supplementary BC" for a behavior that is already fully described
-by BC-1.6.042 with a parameterized field violates the "one BC per behavior"
-principle. The supplementary contract would either duplicate BC-1.6.042's
-postconditions (redundant) or describe only the JSM variant (which is
-covered by the `None`/`Some` branching in the updated Behavior line).
-Adding a new ID also requires BC-INDEX and CANONICAL-COUNTS updates with no
-reduction in specification complexity.
+Rejected. Would create two contracts with overlapping postconditions, requiring
+synchronized maintenance for no testable behavior difference. Both contracts
+would assert the same Display substring set; tests for either would satisfy the
+other. Adds BC-INDEX/CANONICAL-COUNTS propagation cost without analytical gain.
+Parameterization (option a) captures the single parameterized behavior with one BC.
 
 ## Files Modified
 

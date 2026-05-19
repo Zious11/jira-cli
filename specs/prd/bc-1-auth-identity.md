@@ -470,8 +470,11 @@ Embedded OAuth app (1.3), Token keychain (1.4), OAuth state machine (1.5), Auth 
 **Source**: `tests/api_client.rs:99-144`
 **Subject**: Auth & Identity
 **Behavior**: 401 body containing `scope does not match` (case-insensitive) → `JrError::InsufficientScope`. Display MUST contain: `Insufficient token scope`, raw gateway message, **the resolved required scope name** (`write:jira-work` when `required_scope` is `None`, otherwise the call-site-supplied scope name such as `write:servicedesk-request`), `OAuth 2.0`, `github.com/Zious11/jira-cli/issues/185`. Exit code 2.
+
+**Empty-Some policy:** Construction sites MUST pass either `None` or `Some(s)` where `s` is a non-empty ASCII scope name. To enforce this defensively, the Display impl treats `Some("")` identically to `None` — i.e., falls back to `write:jira-work`. The thiserror template MUST use `.filter(|s| !s.is_empty())` between `as_deref()` and `unwrap_or` to enforce this. A unit test MUST pin `Some("")` → fallback behavior.
+
 **Trace**: Pass 3 BC-015; BC-1085 (R4); Top-30 BC rank #1
-**Change**: [MODIFIED 2026-05-19 issue #382] Parameterized substring #3 to support runtime-resolved scope name via `JrError::InsufficientScope { required_scope: Option<String> }` field. Backward-compatible: `None` branch preserves historical literal `write:jira-work`.
+**Change**: [MODIFIED 2026-05-19 issue #382] Parameterized substring #3 to support runtime-resolved scope name via `JrError::InsufficientScope { required_scope: Option<String> }` field. Backward-compatible: `None` branch preserves historical literal `write:jira-work`. [MODIFIED 2026-05-19 issue #382 pass-02] Added Empty-Some policy: Some("") treated as None per defensive fallback.
 
 ---
 

@@ -41,7 +41,7 @@ Validates the architect's F1 Option-(a) recommendation (`add required_scope: Opt
      • Use a classic token with \"{scope_hint}\" scope instead of granular scopes, or\n  \
      • Try OAuth 2.0 (run \"jr auth login --oauth\") — may avoid this bug, not verified\n\n\
      See https://github.com/Zious11/jira-cli/issues/185 for details.",
-    scope_hint = required_scope.as_deref().unwrap_or("write:jira-work")
+    scope_hint = required_scope.as_deref().filter(|s| !s.is_empty()).unwrap_or("write:jira-work")
 )]
 InsufficientScope {
     message: String,
@@ -49,7 +49,9 @@ InsufficientScope {
 },
 ```
 
-`None` callers retain today's `"write:jira-work"` literal as the fallback (zero behavior regression for the platform-write path and for the existing `insufficient_scope_display_includes_workarounds` and `test_401_scope_mismatch_returns_insufficient_scope` tests — see Q-5). `Some("write:servicedesk-request")` callers get the JSM-correct hint.
+The `.filter(|s| !s.is_empty())` defensively treats `Some("")` identically to `None`, preventing the broken `Use a classic token with "" scope` Display output if a construction site passes empty by mistake. Pinned by a new unit test at AC-3. This aligns with the BC-1.6.042 Empty-Some policy.
+
+`None` callers (and now `Some("")` callers) retain today's `"write:jira-work"` literal as the fallback (zero behavior regression for the platform-write path and for the existing `insufficient_scope_display_includes_workarounds` and `test_401_scope_mismatch_returns_insufficient_scope` tests — see Q-5). `Some("write:servicedesk-request")` callers get the JSM-correct hint.
 
 ---
 
@@ -79,20 +81,30 @@ Two important notes from the Atlassian docs:
 
 **Scope-name lookup table (F2 input):**
 
-| Endpoint path prefix | API surface | Required classic scope (Some value) |
-|----------------------|-------------|--------------------------------------|
-| `/rest/api/3/...` (write methods: POST/PUT/DELETE) | Jira platform write | `write:jira-work` |
-| `/rest/api/3/...` (read methods: GET) | Jira platform read | `read:jira-work` (read scope — but read-401 paths today route to `NotAuthenticated`, not `InsufficientScope`) |
-| `/rest/servicedeskapi/request` (POST) | JSM create | `write:servicedesk-request` |
-| `/rest/servicedeskapi/...` (read) | JSM read | `read:servicedesk-request` |
-| `/rest/agile/1.0/...` | Agile (board/sprint) | `write:jira-work` for write, `read:jira-work` for read |
-| `/jsm/assets/...` (Assets/CMDB) | CMDB | `read:cmdb-object:jira`, `read:cmdb-schema:jira` |
+**Sub-table A — Construction sites IN SCOPE for #382 (the 3 sites we're touching):**
+
+| Site | Endpoint | required_scope value |
+|------|----------|----------------------|
+| `client.rs:700` | (any) | `None` |
+| `client.rs:969` | (any) | `None` |
+| `create.rs:1983` | `POST /rest/servicedeskapi/request` | `Some("write:servicedesk-request")` |
+
+**Sub-table B — Reference: additional endpoints that COULD use this pattern in future PRs (OUT OF SCOPE for #382; future enhancement; see issue #384 for the JSM-read case):**
+
+| Endpoint family | Path prefix | Likely scope |
+|-----------------|-------------|--------------|
+| Jira platform write | `/rest/api/3/` POST/PUT | `write:jira-work` |
+| JSM read | `/rest/servicedeskapi/` GET (e.g., `require_service_desk`) | `read:jira-work` + `read:servicedesk-request` |
+| Agile | `/rest/agile/1.0/` | `read:jira-work` / `write:jira-work` |
+| CMDB | `/jsm/assets/` | `read:cmdb-object` / `write:cmdb-object` |
 
 **Recommended construction-site mapping for F2:**
 
 - `client.rs:700` blanket-401 early-exit: pass `required_scope: None`. The dispatch happens BEFORE the call site is known to the central `send()` method; conservatively show the historical `write:jira-work` workaround. This preserves today's behavior for the platform-write path (covered by tests T-1 and T-2 in F1 impact report).
 - `client.rs:969` parse_error helper: same — pass `None`. `parse_error` has access to `response.url().path()` (signature `async fn parse_error(response: Response) -> anyhow::Error` at `src/api/client.rs:957`), but we choose not to thread endpoint inference for now — the path-based mapping is fragile (URL substring matching), maintenance-heavy (every new endpoint needs a lookup-table entry), and the `None`-fallback preserves existing behavior cheaply. See open-question (d) in `delta-analysis.md` for the explicit deferral.
 - `create.rs:1983` JSM re-wrap: pass `Some("write:servicedesk-request".to_string())`. C-3 already knows it's the JSM path and already enriches the message — the new field carries the same information into Display in a structured way.
+
+**Cost/benefit honest analysis:** Threading endpoint inference into `parse_error` would add ~10 lines of path-prefix match logic covering ~5 known prefixes (`/rest/api/3/`, `/rest/servicedeskapi/`, `/rest/agile/1.0/`, `/jsm/assets/`, `/oauth/`). The benefit would be accurate fallback for non-JSM, non-blanket-401 paths (e.g., `read:jira-work` for GET-401 cases that route to InsufficientScope). We defer because: (1) those paths are rare in practice — most 401s come from the blanket C-1 path; (2) the `None` fallback to `write:jira-work` is benign (the user can still grant the scope; the message itself reports what was rejected). If a future call-site reports a confusing fallback, the per-call-site re-wrap pattern at C-3 is precedent — apply it there without modifying central client. The deferred path-prefix table is preserved in Q-2's reference table for future PRs.
 
 Future opportunity (out of scope for #382): if more call sites want to inject endpoint-specific hints, the same pattern (match arm on `JrError::InsufficientScope` to re-wrap with the correct `required_scope`) can be reused per call site without modifying `send()` / `parse_error()` — keeps the central client free of endpoint-knowledge.
 
@@ -171,9 +183,11 @@ F2 must specify the exact `#[error(...)]` template using the expression-argument
 #[error(
     "Insufficient token scope: {message}\n\n\
      ... \"{scope_hint}\" ...",
-    scope_hint = required_scope.as_deref().unwrap_or("write:jira-work")
+    scope_hint = required_scope.as_deref().filter(|s| !s.is_empty()).unwrap_or("write:jira-work")
 )]
 ```
+
+The `.filter(|s| !s.is_empty())` defensively treats `Some("")` identically to `None`, preventing the broken `Use a classic token with "" scope` Display output if a construction site passes empty by mistake. Pinned by a new unit test at AC-3. This aligns with the BC-1.6.042 Empty-Some policy.
 
 Do NOT use the naive `{required_scope:?}` form — it renders `Some("x")` / `None` literals to end-users. Cite `NotAuthenticated { hint: String }` as the in-project precedent for the structured-hint-field pattern.
 
@@ -239,3 +253,4 @@ No PIVOT is required. No architectural change is required. The change remains a 
 ---
 
 [REVISED 2026-05-19 per F1d adversary-pass-01 F-01 + F-05]
+[REVISED 2026-05-19 per F1d adversary-pass-02 H-02 + M-05 + L-02]
