@@ -99,8 +99,22 @@ for f in "$FACTORY"/bc-*.md "$FACTORY"/cross-cutting.md; do
     ERRORS=$((ERRORS+1))
   fi
 
-  # Body-preamble prose: "N behavioral contracts" line in the bc-N.md body
-  prose_count=$(grep -m1 'behavioral contracts' "$f" | sed 's/^\([0-9]*\) behavioral.*/\1/' || true)
+  # Body-preamble prose: "N behavioral contracts" line in the bc-N.md body.
+  #
+  # M1 hazard: some files contain a SECOND "behavioral contracts" line deep in
+  # the body (e.g. bc-3-issue-write.md:553 "13 behavioral contracts covering:",
+  # cross-cutting.md:614 "8 behavioral contracts covering ..."). A bare
+  # `grep -m1` silently depends on the preamble being the file's first match,
+  # which breaks if a future edit moves a subsection summary above the preamble.
+  #
+  # Fix: extract only from the header region — lines before the first ## heading.
+  # All 8 real bc-N/cross-cutting.md files place the preamble before their first
+  # ## subdomain heading (confirmed at lines 16–21 vs first ## at lines 21–31).
+  # Body subsection prose lines are structurally excluded by this boundary.
+  #
+  # `sed '/^## /q'` reads lines until (and including) the first "## " line, so
+  # only the intro block is passed to grep; the body decoy lines never appear.
+  prose_count=$(sed '/^## /q' "$f" | grep -m1 'behavioral contracts' | sed 's/^\([0-9]*\) behavioral.*/\1/' || true)
   if [ -z "$prose_count" ]; then
     echo "ERROR: $basename_f: no \"N behavioral contracts\" preamble line found in body"
     ERRORS=$((ERRORS+1))
