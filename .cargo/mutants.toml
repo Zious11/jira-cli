@@ -11,6 +11,9 @@ examine_globs = [
     "src/api/jira/bulk.rs",
     "src/types/jira/bulk.rs",
     "src/cli/issue/create.rs",
+    "src/api/jsm/requests.rs",
+    "src/api/jsm/request_types.rs",
+    "src/cli/requesttype.rs",
 ]
 
 # Async bulk paths use tokio::time::sleep and wiremock; mutations of `.await`

@@ -13,9 +13,12 @@ high line coverage but untested assertion strength at the time of the F6 review.
 ## Scope
 
 `cargo-mutants` runs against:
-- `src/cli/issue/create.rs` — `handle_edit_bulk_labels`, `handle_edit_bulk_fields`
+- `src/cli/issue/create.rs` — `handle_edit_bulk_labels`, `handle_edit_bulk_fields`, `handle_jsm_create`, `parse_field_kv`
 - `src/api/jira/bulk.rs` — `await_bulk_task`, polling loop, deadline propagation
 - `src/types/jira/bulk.rs` — serde structs for bulk API responses
+- `src/api/jsm/requests.rs` — `JsmRequestBuilder::build` (JSM POST body construction) (added S-288-pr4)
+- `src/api/jsm/request_types.rs` — `list_request_types`, `get_request_type_fields` (added S-288-pr4)
+- `src/cli/requesttype.rs` — `handle_list`, `handle_fields`, `resolve_request_type_id` (added S-288-pr4)
 
 Configured in `.cargo/mutants.toml::examine_globs`. The CI job relies on this
 configuration alone (no `--file` CLI flags) for scope enforcement; `--in-diff` further

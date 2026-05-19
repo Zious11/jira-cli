@@ -227,7 +227,24 @@ When adding a new feature:
   the matching verb. Current callers:
   - `cli/queue.rs:32` passes `"Queue commands (\`jr queue\`) require"`
   - `cli/requesttype.rs:38` passes `` "`jr requesttype` commands require" ``
+  - `cli/issue/create.rs` passes `` "`jr issue create --request-type` requires" `` (S-288-pr4)
   See `src/api/jsm/servicedesks.rs::require_service_desk` rustdoc for the canonical contract.
+- **`jr issue create --request-type` dispatch fork (S-288-pr4):** When
+  `--request-type <NAME|ID>` is set, `handle_create` short-circuits to
+  `handle_jsm_create` and POSTs to `/rest/servicedeskapi/request` instead of
+  `/rest/api/3/issue`. The dispatch is gated solely on `request_type.is_some()`;
+  absent flag → platform path is byte-for-byte unchanged (regression-pinned by
+  `test_jsm_create_without_request_type_uses_platform_path`). `--type` is silently
+  ignored on JSM path (warning to stderr per BC-3.8.010); custom fields must use
+  `--field NAME=VALUE`. Request types are resolved via the per-profile cache (sibling
+  to `jr requesttype`); numeric IDs bypass partial_match. 401 from servicedeskapi
+  triggers a scope-mismatch hint mentioning `write:servicedesk-request`. See ADR-0014.
+- **When changing `DEFAULT_OAUTH_SCOPES`:** (1) update the embedded `jr` OAuth app's
+  permissions in the Atlassian Developer Console at
+  https://developer.atlassian.com/console/myapps/ before tagging the release, and
+  (2) add a CHANGELOG entry mentioning the re-consent prompt so users aren't surprised.
+  Existing access tokens continue working with old scopes until expiry; new logins and
+  refresh-token mints trigger re-consent.
 - **`board view` truncation hint emits to stderr:** The truncation hint ("Showing N of M
   columns — use --all to see everything") is written to stderr, consistent with the
   convention used by `issue list` and `sprint current`. This is intentional — stderr
