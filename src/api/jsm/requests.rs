@@ -275,6 +275,16 @@ mod proptests {
                     Some(account_id.as_str()),
                     "C.3: BC-3.8.009 raiseOnBehalfOf must equal accountId when Some"
                 );
+                // M-03 (adversary pass-01): negative-space pin — raiseOnBehalfOf must be at
+                // the TOP level of the body, NEVER inside requestFieldValues. BC-3.8.009.
+                let rfv = body
+                    .get("requestFieldValues")
+                    .and_then(serde_json::Value::as_object)
+                    .expect("C.3 M-03: requestFieldValues must exist");
+                prop_assert!(
+                    !rfv.contains_key("raiseOnBehalfOf"),
+                    "C.3 M-03: BC-3.8.009 raiseOnBehalfOf MUST NOT appear inside requestFieldValues; got body: {body:?}"
+                );
             } else {
                 prop_assert!(
                     body.get("raiseOnBehalfOf").is_none(),

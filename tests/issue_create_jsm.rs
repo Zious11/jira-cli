@@ -14,7 +14,7 @@
 
 use assert_cmd::Command;
 use serde_json::{Value, json};
-use wiremock::matchers::{method, path, query_param};
+use wiremock::matchers::{body_partial_json, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 // ─── Shared mock fixture helpers ──────────────────────────────────────────────
@@ -111,6 +111,37 @@ async fn mount_request_type_list(server: &MockServer) {
         .and(query_param("start", "0"))
         .and(query_param("limit", "50"))
         .respond_with(ResponseTemplate::new(200).set_body_json(two_request_types_body()))
+        .mount(server)
+        .await;
+}
+
+/// Mount the request type list for service desk 10 with a single "Password Reset" type.
+///
+/// Used by tests that only need one type to avoid ambiguous-match complications.
+async fn mount_request_types_password_reset(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk/10/requesttype"))
+        .and(query_param("start", "0"))
+        .and(query_param("limit", "50"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 1,
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "_links": {},
+            "values": [
+                {
+                    "id": "11002",
+                    "name": "Password Reset",
+                    "description": "Reset your password",
+                    "helpText": "Provide your username",
+                    "issueTypeId": "12346",
+                    "serviceDeskId": "10",
+                    "portalId": "2",
+                    "groupIds": ["12", "13"]
+                }
+            ]
+        })))
         .mount(server)
         .await;
 }
@@ -1306,10 +1337,14 @@ async fn test_jsm_create_401_hint_contains_write_servicedesk_request() {
         "BC-1.3.023 / H-NEW-JSM-RT-003: stderr must contain 'write:servicedesk-request' scope hint; got: {stderr}"
     );
 
-    // BC-1.3.023: must include an actionable recovery step (re-auth hint).
+    // BC-1.3.023: must include BOTH actionable recovery steps (L-288-pr2-02 strict split).
     assert!(
-        stderr.contains("jr auth refresh") || stderr.contains("jr auth login"),
-        "BC-1.3.023: hint must include 'jr auth refresh' or 'jr auth login' recovery step; got: {stderr}"
+        stderr.contains("jr auth refresh"),
+        "BC-1.3.023: hint must include 'jr auth refresh' actionable recovery; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("jr auth login"),
+        "BC-1.3.023: hint must include 'jr auth login' actionable recovery; got: {stderr}"
     );
 }
 
@@ -1446,4 +1481,603 @@ async fn test_jsm_create_output_json_shape_matches_platform() {
         obj.contains_key("key"),
         "AC-015: JSON output must contain 'key' field; got: {parsed}"
     );
+}
+
+// ─── C-01: OAuth InsufficientScope 401 surfaces write:servicedesk-request ────
+
+/// C-01 (adversary pass-01): OAuth scope-mismatch 401 must surface the
+/// write:servicedesk-request hint via JrError::InsufficientScope dispatch.
+///
+/// The existing `test_jsm_create_401_hint_contains_write_servicedesk_request`
+/// uses Basic auth which hits the `NotAuthenticated` branch; this test uses
+/// Bearer auth + body "scope does not match" which hits the `InsufficientScope`
+/// branch (`src/api/client.rs:696-704`). Regression guard for the C-01 fix in
+/// `src/cli/issue/create.rs handle_jsm_create map_err`.
+#[tokio::test]
+async fn test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_request_hint() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_project_meta_help(&server).await;
+    mount_service_desk_list(&server).await;
+    mount_request_types_password_reset(&server).await;
+
+    // Bearer auth (Authorization: Bearer ...) plus a 401 body containing the
+    // exact Atlassian phrase that triggers InsufficientScope dispatch.
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "errorMessages": ["Unauthorized; scope does not match"]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        // Bearer, not Basic — triggers InsufficientScope branch in client.rs.
+        .env("JR_AUTH_HEADER", "Bearer test-oauth-token")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "HELP",
+            "--request-type",
+            "Password Reset",
+            "--summary",
+            "Reset my password",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "C-01: OAuth scope mismatch must exit non-zero; stderr: {stderr}"
+    );
+    // Per L-288-pr2-02: three separate strict assertions, no `||` accept-either.
+    assert!(
+        stderr.contains("write:servicedesk-request"),
+        "C-01 / BC-X.3.005: hint must mention `write:servicedesk-request` scope; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("jr auth refresh"),
+        "C-01 / BC-X.3.005: hint must include `jr auth refresh` actionable recovery; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("jr auth login"),
+        "C-01 / BC-X.3.005: hint must include `jr auth login` actionable recovery; got: {stderr}"
+    );
+}
+
+// ─── C-02: Per-flag warnings for platform-only flags on JSM path ──────────────
+
+/// C-02 (adversary pass-01) + BC-3.8.011: `--team` is ignored with a verbatim
+/// warning when `--request-type` is set. The JSM POST must still succeed (exit 0).
+#[tokio::test]
+async fn test_jsm_create_team_flag_emits_warning_with_request_type() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_project_meta_help(&server).await;
+    mount_service_desk_list(&server).await;
+    mount_request_types_password_reset(&server).await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "HELP",
+            "--request-type",
+            "Password Reset",
+            "--summary",
+            "X",
+            "--team",
+            "some-team-name",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "C-02: --team warning must not block success; exit {:?}, stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains(
+            "warning: --team is ignored when --request-type is set; teams are managed by the request type's workflow"
+        ),
+        "C-02 / BC-3.8.011: verbatim --team warning must appear on stderr; got: {stderr}"
+    );
+}
+
+/// C-02 (adversary pass-01) + BC-3.8.011: `--points` is ignored with a verbatim
+/// warning when `--request-type` is set. The JSM POST must still succeed (exit 0).
+#[tokio::test]
+async fn test_jsm_create_points_flag_emits_warning_with_request_type() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_project_meta_help(&server).await;
+    mount_service_desk_list(&server).await;
+    mount_request_types_password_reset(&server).await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "HELP",
+            "--request-type",
+            "Password Reset",
+            "--summary",
+            "X",
+            "--points",
+            "5.0",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "C-02: --points warning must not block success; exit {:?}, stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains(
+            "warning: --points is ignored when --request-type is set; story points are not part of JSM request schema"
+        ),
+        "C-02 / BC-3.8.011: verbatim --points warning must appear on stderr; got: {stderr}"
+    );
+}
+
+/// C-02 (adversary pass-01) + BC-3.8.011: `--parent` is ignored with a verbatim
+/// warning when `--request-type` is set. The JSM POST must still succeed (exit 0).
+#[tokio::test]
+async fn test_jsm_create_parent_flag_emits_warning_with_request_type() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_project_meta_help(&server).await;
+    mount_service_desk_list(&server).await;
+    mount_request_types_password_reset(&server).await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "HELP",
+            "--request-type",
+            "Password Reset",
+            "--summary",
+            "X",
+            "--parent",
+            "HELP-1",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "C-02: --parent warning must not block success; exit {:?}, stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains(
+            "warning: --parent is ignored when --request-type is set; JSM requests cannot be sub-tasks"
+        ),
+        "C-02 / BC-3.8.011: verbatim --parent warning must appear on stderr; got: {stderr}"
+    );
+}
+
+/// C-02 (adversary pass-01) + BC-3.8.011: `--to` is ignored with a verbatim
+/// warning when `--request-type` is set. The JSM POST must still succeed (exit 0).
+#[tokio::test]
+async fn test_jsm_create_to_flag_emits_warning_with_request_type() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_project_meta_help(&server).await;
+    mount_service_desk_list(&server).await;
+    mount_request_types_password_reset(&server).await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "HELP",
+            "--request-type",
+            "Password Reset",
+            "--summary",
+            "X",
+            "--to",
+            "jsmith",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "C-02: --to warning must not block success; exit {:?}, stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains(
+            "warning: --to is ignored when --request-type is set; use --on-behalf-of to set the requester"
+        ),
+        "C-02 / BC-3.8.011: verbatim --to warning must appear on stderr; got: {stderr}"
+    );
+}
+
+/// C-02 (adversary pass-01) + BC-3.8.011: `--account-id` is ignored with a verbatim
+/// warning when `--request-type` is set. The JSM POST must still succeed (exit 0).
+#[tokio::test]
+async fn test_jsm_create_account_id_flag_emits_warning_with_request_type() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_project_meta_help(&server).await;
+    mount_service_desk_list(&server).await;
+    mount_request_types_password_reset(&server).await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "HELP",
+            "--request-type",
+            "Password Reset",
+            "--summary",
+            "X",
+            "--account-id",
+            "557058:abc123",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "C-02: --account-id warning must not block success; exit {:?}, stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains(
+            "warning: --account-id is ignored when --request-type is set; use --on-behalf-of to set the requester"
+        ),
+        "C-02 / BC-3.8.011: verbatim --account-id warning must appear on stderr; got: {stderr}"
+    );
+}
+
+// ─── H-02: Missing project on JSM path exits 64 with JSM-specific hint ────────
+
+/// H-02 (adversary pass-01) + BC-3.8.002: missing project on JSM path exits 64
+/// with the BC-mandated verbatim string "project is required for JSM request
+/// creation". Regression guard for the impl change in
+/// `src/cli/issue/create.rs handle_jsm_create`.
+#[tokio::test]
+async fn test_jsm_create_missing_project_exits_64_with_jsm_specific_hint() {
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    // Write config WITHOUT a project field so there is no fallback project.
+    let dir = config_dir.path().join("jr");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("config.toml"),
+        r#"default_profile = "default"
+[profiles.default]
+url = "https://example.atlassian.net"
+auth_method = "api_token"
+"#,
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args([
+            "issue",
+            "create",
+            "--request-type",
+            "Password Reset",
+            "--summary",
+            "X",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "H-02 / BC-3.8.002: expected exit 64 for missing project on JSM path; got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("project is required for JSM request creation"),
+        "H-02 / BC-3.8.002: verbatim missing-project hint must appear; got: {stderr}"
+    );
+}
+
+// ─── H-03: Missing summary on JSM path exits 64 ───────────────────────────────
+
+/// H-03 (adversary pass-01) + BC-3.8.005: `jr issue create --project HELP
+/// --request-type "Password Reset" --no-input` (no --summary) exits 64 and
+/// emits the BC-mandated verbatim string. The POST to /rest/servicedeskapi/request
+/// must NEVER be called.
+#[tokio::test]
+async fn test_jsm_create_missing_summary_exits_64() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_project_meta_help(&server).await;
+    mount_service_desk_list(&server).await;
+    mount_request_types_password_reset(&server).await;
+
+    // POST must never be called when summary is missing.
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "HELP",
+            "--request-type",
+            "Password Reset",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "H-03 / BC-3.8.005: expected exit 64 for missing summary; got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("summary is required for JSM request submission"),
+        "H-03 / BC-3.8.005: verbatim missing-summary hint must appear; got: {stderr}"
+    );
+    // The .expect(0) on the POST mock is enforced on server drop.
+}
+
+// ─── H-04: Request type not found exits 64 with cache-deletion hint ───────────
+
+/// H-04 (adversary pass-01): When `--request-type "Zebra"` does not match any
+/// request type in the list, exits 64 with a "not found" message + hint to
+/// list types + cache-deletion suggestion (BC-X.12.008-style pattern).
+#[tokio::test]
+async fn test_jsm_create_request_type_not_found_exits_64() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_project_meta_help(&server).await;
+    mount_service_desk_list(&server).await;
+    // Only "Password Reset" exists; "Zebra" will not match.
+    mount_request_types_password_reset(&server).await;
+
+    // POST must never be called when request type resolution fails.
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "HELP",
+            "--request-type",
+            "Zebra",
+            "--summary",
+            "test not found",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "H-04: expected exit 64 for request type not found; got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("Request type \"Zebra\" not found"),
+        "H-04: stderr must contain 'Request type \"Zebra\" not found'; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("Run `jr requesttype list --project HELP`"),
+        "H-04: stderr must contain actionable hint to list request types; got: {stderr}"
+    );
+    // Cache-deletion path hint: the path contains /jr/v1/ and request_types_10.json.
+    assert!(
+        stderr.contains("/jr/v1/"),
+        "H-04: cache-deletion hint must contain '/jr/v1/' path segment; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("request_types_10.json"),
+        "H-04: cache-deletion hint must contain 'request_types_10.json' filename; got: {stderr}"
+    );
+    // The .expect(0) on the POST mock is enforced on server drop.
+}
+
+// ─── M-02: --field summary=X overrides --summary X ───────────────────────────
+
+/// M-02 (adversary pass-01) + BC-3.8.008: when `--summary X` and `--field summary=Y`
+/// are BOTH set, `--field` wins (extra_fields override base fields per
+/// JsmRequestBuilder insertion order). Regression guard for any refactor that
+/// moves extra_fields merge before the summary insert.
+#[tokio::test]
+async fn test_jsm_create_field_summary_overrides_summary_flag() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_project_meta_help(&server).await;
+    mount_service_desk_list(&server).await;
+    mount_request_types_password_reset(&server).await;
+
+    // The POST body matcher requires summary="from-field", not "from-flag".
+    // body_partial_json fails the mock if summary is "from-flag" instead of "from-field".
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .and(body_partial_json(json!({
+            "requestFieldValues": {
+                "summary": "from-field"
+            }
+        })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "HELP",
+            "--request-type",
+            "Password Reset",
+            "--summary",
+            "from-flag",
+            "--field",
+            "summary=from-field",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "M-02 / BC-3.8.008: expected exit 0; --field summary must override --summary. exit {:?}, stderr: {stderr}",
+        output.status.code()
+    );
+    // The .expect(1) on the body_partial_json mock enforces the override semantics on server drop.
 }
