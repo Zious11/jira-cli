@@ -210,12 +210,13 @@ These files reference `InsufficientScope` behavior or BC-1.6.042 but require no 
 | Intent | enhancement |
 | Trivial / Standard | TRIVIAL (revised pass-02) |
 | Feature type | backend |
-| Architect impact | Single module + 2 call-sites; no architecture change |
+| Architect impact | Single module + 2 call-sites + 1 destructure fix; no architecture change. `src/cli/issue/create.rs:1982` destructure pattern `{ message }` → `{ message, .. }` required (compile-break E0027 per F1d adversary-pass-04 L-02). |
 
 ---
 
 ## Change Log
 
+- [REVISED 2026-05-19 per F1d adversary-pass-04 L-02] — M-2 pattern reclassified MODIFIED; F4 must add `..` to destructure. `src/cli/issue/create.rs:1982` destructure `Ok(JrError::InsufficientScope { message }) => ...` will fail E0027 when `required_scope: Option<String>` is added; fix is `{ message, .. }`. Section 9 "Architect impact" row updated to record the additional destructure fix. Previous classification as DEPENDENT (no change needed at line 1982) was incorrect — the struct-widening at `src/error.rs` propagates a compile-break to every exhaustive destructure of `InsufficientScope`.
 - [REVISED 2026-05-19 per F1d adversary-pass-03 M-01 + M-03 + L-01 + L-02 intent]
   - M-01: Propagated TRIVIAL reclassification from delta-analysis.md to 3 sites: frontmatter `trivial_classification`, Section 6 heading, Section 9 summary table row. Section 6 rationale paragraph rewritten to match delta-analysis.md line 54 TRIVIAL rationale (additive `scope_hint: Option<String>`, 3 production + 2 test sites, no arch change, LOW regression risk under None-fallback, per-story adversary 3/3 CLEAN as F4 gate).
   - M-03: Two historical superpowers docs added to Section 8 "Docs/Index Surfaces Verified Unchanged": `docs/superpowers/specs/2026-04-17-insufficient-scope-error-design.md` and `docs/superpowers/plans/2026-04-17-insufficient-scope-error.md`. Both are frozen v1 records; stale `{ message: String }` references are intentional. Verified-unchanged doc-surface count now 8 (was 6).

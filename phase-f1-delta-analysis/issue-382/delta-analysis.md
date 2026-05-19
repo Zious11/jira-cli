@@ -10,7 +10,7 @@ feature_type: "backend"
 scope: "trivial"
 severity: "N/A"
 sources:
-  - impact-boundary.md (architect, F1-Step-3; revised F1d adversary-pass-01 F-01 + F-03; revised F1d adversary-pass-02 H-01 + M-01 + L-01; revised F1d adversary-pass-03 M-02)
+  - impact-boundary.md (architect, F1-Step-3; revised F1d adversary-pass-01 F-01 + F-03; revised F1d adversary-pass-02 H-01 + M-01 + L-01; revised F1d adversary-pass-03 M-02; revised F1d adversary-pass-04 L-02 — M-2 reclassified MODIFIED)
   - affected-artifacts.md (business-analyst, F1-Step-4; revised F1d adversary-pass-01 F-02 + F-04 + F-06 + F-07; revised F1d adversary-pass-02 H-01 + L-03; revised F1d adversary-pass-03 M-01 + M-03 + L-01 + L-02 intent)
   - design-validation.md (research-agent, pre-F2 gate; revised F1d adversary-pass-01 F-01 + F-05; revised F1d adversary-pass-02 H-02 + M-05 + L-02; revised F1d adversary-pass-03 L-03 + AC-4 added)
   - po-decision-bc-parameterization.md (product-owner, F1d adversary-pass-01 F-02)
@@ -80,7 +80,7 @@ sources:
 |-----------|-------------|-------|
 | `src/error.rs` | MODIFIED | `InsufficientScope` variant gains `required_scope: Option<String>` field; `#[error]` uses expression-argument form with `.filter(|s| !s.is_empty())` per BC-1.6.042 Empty-Some policy |
 | `src/api/client.rs` | MODIFIED | 2 construction sites (lines 700 `send()` first-401-body block, 969 `parse_error()` helper) gain `required_scope: None` (back-compat fallback; preserves `"write:jira-work"` Display text for platform-write path) |
-| `src/cli/issue/create.rs` | MODIFIED | 1 construction site (line 1983) gains `required_scope: Some("write:servicedesk-request".to_string())` |
+| `src/cli/issue/create.rs` | MODIFIED | (1) Destructure pattern at line 1982: `Ok(JrError::InsufficientScope { message }) => ...` → `Ok(JrError::InsufficientScope { message, .. }) => ...` — compile-break (E0027) without this fix when `required_scope: Option<String>` is added (F1d adversary-pass-04 L-02). (2) Construction site at line 1983 gains `required_scope: Some("write:servicedesk-request".to_string())`. |
 | `src/error.rs` unit test T-1b (line 131) | MODIFIED | `insufficient_scope_exit_code`: construction call updated to add `required_scope: None`; assertion (exit_code == 2) UNCHANGED |
 | `src/error.rs` unit test T-1 (line 171) | MODIFIED | `insufficient_scope_display_includes_workarounds`: construction call updated to add `required_scope: None`; assertion text UNCHANGED (None-fallback preserves `write:jira-work` literal in Display) |
 | `tests/api_client.rs` T-2 (line 136) | UNCHANGED | Assertion passes unmodified via None-fallback at C-2; `write:jira-work` literal preserved byte-for-byte |
@@ -151,6 +151,7 @@ Note the `.filter(|s| !s.is_empty())` between `as_deref()` and `unwrap_or`. This
 | AC-4 | New unit test pins `Some("")` → Display contains `write:jira-work` (fallback, per Empty-Some policy from BC-1.6.042 pass-02) | Required for F4 — NEW from pass-02 |
 | AC-5 | T-2 (`tests/api_client.rs:136`) still passes unmodified — `None`→`"write:jira-work"` fallback preserves assertion byte-for-byte | Verified by design |
 | AC-6 | All 3 production construction sites updated per lookup table: `client.rs:700` → `None`, `client.rs:969` → `None`, `create.rs:1983` → `Some("write:servicedesk-request")` | Required for F4 |
+| AC-7 | Destructure pattern at `src/cli/issue/create.rs:1982` updated from `Ok(JrError::InsufficientScope { message }) => ...` to `Ok(JrError::InsufficientScope { message, .. }) => ...` to remain compile-compatible (E0027 prevention) after struct-widening. Subsumes the line-1982 portion of AC-6's create.rs entry. | Required for F4 — NEW from pass-04 L-02 |
 
 ### Known Cosmetic — Accepted for #382
 
@@ -207,7 +208,7 @@ These files must not be modified during implementation. All their tests must con
 
 ### Docs/Index Surfaces Verified Unchanged
 
-These spec and doc files reference `InsufficientScope` behavior or BC-1.6.042. They require no edits under option (a) parameterization but must be verified after implementation confirms accuracy. 8 surfaces enumerated (matching impact-boundary.md Section 5b and affected-artifacts.md Section 8 Docs/Index count; 2 rows added in pass-03 M-03).
+These spec and doc files reference `InsufficientScope` behavior or BC-1.6.042. They require no edits under option (a) parameterization but must be verified after implementation confirms accuracy. 8 surfaces enumerated (matching impact-boundary.md Section 5b and affected-artifacts.md Section 8 Docs/Index count; 2 rows added in pass-03 M-03; sibling count now genuinely matches at 8 — architect added the 2 frozen superpowers docs to Section 5b in pass-03, confirmed in pass-04 L-01 propagation).
 
 | File | Reference | Why Unchanged | Verify Action |
 |------|-----------|---------------|---------------|
@@ -226,7 +227,7 @@ These spec and doc files reference `InsufficientScope` behavior or BC-1.6.042. T
 
 | Risk Type | Level | Rationale |
 |-----------|-------|-----------|
-| Regression | LOW | `None` fallback preserves all existing Display text for platform-write 401 paths. Only T-1b and T-1 unit tests need construction-call updates (adding a field, assertions unchanged). T-2 (integration test) passes unmodified. Rust exhaustive match catches missed construction sites at compile time. |
+| Regression | LOW | `None` fallback preserves all existing Display text for platform-write 401 paths. Only T-1b and T-1 unit tests need construction-call updates (adding a field, assertions unchanged). T-2 (integration test) passes unmodified. Rust exhaustive match catches missed construction sites at compile time. M-2 compile-break risk (E0027 at `src/cli/issue/create.rs:1982`) is **mitigated** by AC-7: changing `{ message }` → `{ message, .. }` in the destructure pattern before any other construction site is touched. |
 | Architecture | ZERO | `error.rs` is pure-core (no I/O, no side effects). No module boundaries change. No new dependencies. Variant field widening with back-compat `None` path. |
 | Security | ZERO | No auth flow change. No secret handling. No trust boundary change. The scope name in Display is a user-facing hint, not a token or credential. |
 | Performance | ZERO | `Option<String>` allocation only on `InsufficientScope` error paths (cold path; no performance impact). |
@@ -276,6 +277,11 @@ All questions resolved. Status recorded below.
 
 ## Change Log
 
+- [REVISED 2026-05-19 per F1d adversary-pass-04 L-01 + L-02 propagation] — M-2 reclassified MODIFIED; Section 5b sibling count now genuinely matches at 8.
+  - **L-02 (M-2 destructure fix):** Component Impact Table row for `src/cli/issue/create.rs` updated to document two distinct modifications: (1) destructure pattern at line 1982 changed from `{ message }` to `{ message, .. }` to prevent E0027 compile-break after struct-widening; (2) construction site at line 1983 gains `required_scope: Some("write:servicedesk-request".to_string())` (unchanged from prior analysis). AC-7 added to pin the destructure fix as a separate acceptance criterion. Risk Assessment updated: M-2 compile-break risk is now mitigated by AC-7 (fix must be applied before other construction sites are touched). Previous DEPENDENT classification of line 1982 was incorrect — exhaustive struct destructure without `..` becomes a hard compile error (E0027) the moment the struct gains any new field.
+  - **L-01 (Section 5b count):** Docs/Index Surfaces Verified Unchanged prose updated to confirm that the "8 surfaces" count now genuinely matches impact-boundary.md Section 5b. The architect added the 2 frozen superpowers docs to Section 5b in pass-03; this pass verifies the cross-artifact count is consistent.
+  - **Sources frontmatter:** impact-boundary.md source entry updated to cite pass-04 L-02 revision.
+  - **Frontmatter preserved:** `status: under-review` and `scope: trivial` unchanged.
 - [REVISED 2026-05-19 per F1d adversary-pass-03 — all 3 MED + 3 LOW findings addressed; status remains under-review until pass-04+ CLEAN]
   - **Docs/Index count updated 6 → 8.** Two historical superpowers docs added to "Docs/Index Surfaces Verified Unchanged": `docs/superpowers/specs/2026-04-17-insufficient-scope-error-design.md` and `docs/superpowers/plans/2026-04-17-insufficient-scope-error.md`. Both are frozen v1 records; stale `{ message: String }` references are intentional; no verify action required. Propagated from affected-artifacts.md Section 8 (M-03 finding).
   - **Component Impact Table corrected.** T-1 and T-1b row notes tightened to state construction-call-only updates; assertions explicitly noted as UNCHANGED. T-2 row notes updated to cite `write:jira-work` preserved byte-for-byte. T-3 (NEW, AC-4) row added for `test_insufficient_scope_display_empty_some_falls_back` pinning Empty-Some policy.

@@ -18,7 +18,7 @@ The shared error type was not updated when JSM scope work landed in PR #381.
 |------|------|----------------|
 | `src/error.rs` | Variant definition + `#[error(...)]` Display macro | **MODIFIED** |
 | `src/api/client.rs` | Two construction sites (line 700 `send()` first-401-body block, line 969 `parse_error()` helper) | **DEPENDENT** — no structural change; `message` field stays |
-| `src/cli/issue/create.rs` | One construction site (line 1983) + one match arm (line 1982) | **DEPENDENT** — no structural change; behavior correct post-fix |
+| `src/cli/issue/create.rs` | One construction site (line 1983) + one match arm (line 1982) | **MODIFIED** — destructure pattern needs `..` added to remain compatible with widened variant signature; the named-field destructure `{ message }` triggers E0027 when `required_scope` is added. Fix: change `Ok(JrError::InsufficientScope { message }) => ...` to `Ok(JrError::InsufficientScope { message, .. }) => ...` at line 1982. Construction site at line 1983 needs `required_scope: Some("write:servicedesk-request")` under option (a). |
 | `src/error.rs` unit test `insufficient_scope_display_includes_workarounds` (line 170) | Asserts Display contains `"write:jira-work"` | **MODIFIED** — construction call adds `required_scope: None`; assertion unchanged (None-fallback preserves `write:jira-work` literal in Display) |
 | `tests/api_client.rs` `test_401_scope_mismatch_returns_insufficient_scope` (line 100) | Asserts Display contains `"write:jira-work"` (line 136) | **DEPENDENT** — assertion passes unmodified via None-fallback at C-2 (verified) |
 | `tests/oauth_flow_holdouts.rs` | AC-005 tests (lines 418, 450, 486) | **DEPENDENT** — only asserts `"Insufficient token scope"` prefix; no `write:jira-work` pin; no change needed |
@@ -45,7 +45,7 @@ All three pass only a `message: String`. No structural change is required at con
 | # | File | Line | Context |
 |---|------|------|---------|
 | M-1 | `src/error.rs` | 75 | `exit_code()` arm `JrError::InsufficientScope { .. } => 2` — wildcard; no change |
-| M-2 | `src/cli/issue/create.rs` | 1982 | `Ok(JrError::InsufficientScope { message }) =>` — destructures `message` field to re-wrap it; no change needed as long as field stays named `message` |
+| M-2 | `src/cli/issue/create.rs` | 1982 | `Ok(JrError::InsufficientScope { message }) =>` — destructures `message` field to re-wrap it; **MODIFIED** — when `required_scope: Option<String>` is added to the variant, the exhaustive named-field pattern `{ message }` triggers E0027 (`pattern does not mention field 'required_scope'`). Fix: change to `{ message, .. }` (preferred). |
 
 ---
 
@@ -88,6 +88,8 @@ These spec and doc files reference `InsufficientScope` behavior or BC-1.6.042. T
 | `.factory/specs/prd/holdout-scenarios.md` | Lines 658–682 | H-NEW-JSM-RT-003 — JSM OAuth scope hint holdout | Passes under option (a) design; verify-only |
 | `CLAUDE.md` | Gotchas section | General CLI behavior, auth flows, env-var test seams | No test-seam env-var or hidden behavior change introduced by #382; no update needed |
 | `.factory/specs/prd/CANONICAL-COUNTS.md` | BC counts | BC count source of truth | BC count stable under option (a); no propagation update needed |
+| `docs/superpowers/specs/2026-04-17-insufficient-scope-error-design.md` | Historical v1 design record | `{ message: String }` variant signature references | Deliberately frozen at 2026-04-17. Stale `{ message: String }` references reflect v1 variant signature; no update required. |
+| `docs/superpowers/plans/2026-04-17-insufficient-scope-error.md` | Historical v1 plan record | `{ message: String }` variant signature references | Deliberately frozen at 2026-04-17. Same rationale as design record; no update required. |
 
 ---
 
@@ -124,9 +126,10 @@ Option (a) is narrower, requires fewer changes, and directly addresses the issue
 | File | Change |
 |------|--------|
 | `src/error.rs` | Update `#[error(...)]` Display text (remove/update `write:jira-work`); add `required_scope: Option<String>` if option (a); add `required_scope: None` to construction calls in unit tests at lines 131 + 171 (assertions unchanged — None-fallback preserves existing `write:jira-work` literal for T-2) |
+| `src/cli/issue/create.rs` | **Two changes:** (1) Consumer M-2 at line 1982: change destructure pattern `{ message }` to `{ message, .. }` to avoid E0027 compile error when variant gains `required_scope` field. (2) Construction site C-3 at line 1983: add `required_scope: Some("write:servicedesk-request")` under option (a). |
 | `tests/api_client.rs` | No change — None-fallback preserves `write:jira-work`; assertion at line 136 still passes |
 
-All other files: no change.
+**MODIFIED files count: 2** (`src/error.rs`, `src/cli/issue/create.rs`). All other files: no change.
 
 ---
 
@@ -137,6 +140,9 @@ All other files: no change.
   - M-01: Added 2 missing rows to Section 5b: `CLAUDE.md` (no test-seam env-var or hidden behavior change) and `.factory/specs/prd/CANONICAL-COUNTS.md` (BC count stable under option (a); no propagation update needed). Section previously had 4 rows; now has 6, matching delta-analysis.md and affected-artifacts.md enumeration.
   - L-01: Added symbol-name anchors to `src/api/client.rs` line references in Section 1 Impact Boundary Table and Section 2 Construction Sites table — `:700` annotated as `send()` first-401-body block; `:969` annotated as `parse_error()` helper — for forward-stability against line-number drift from concurrent PRs.
 - [REVISED 2026-05-19 per F1d adversary-pass-03 M-02] T-1 row at line 22 corrected to match the None-fallback design — construction-call update only; assertion text preserved. Propagated same correction to Section 4 T-2 "Needs Update?" cell (assertion unchanged clarification), Section 4 summary paragraph (reworded to state no assertion updates needed anywhere, including T-2), and Section 8 `src/error.rs` change description (replaced "update unit test" with precise construction-call-only wording).
+- [REVISED 2026-05-19 per F1d adversary-pass-04 L-01 + L-02] — M-2 destructure compile-break documented; Section 5b row count reconciled to 8 (added 2 frozen-superpowers-docs rows to match siblings).
+  - L-02: Section 1 `src/cli/issue/create.rs` row reclassified from DEPENDENT to MODIFIED — named-field destructure `{ message }` at line 1982 triggers E0027 when `required_scope` is added; fix is `{ message, .. }`. Section 3 M-2 row updated with same rationale and E0027 callout. Section 8 `src/cli/issue/create.rs` row added with two-change description (pattern fix + construction-site enrichment). MODIFIED files count updated from 1 to 2.
+  - L-01: Added 2 frozen-superpowers-docs rows to Section 5b (`docs/superpowers/specs/2026-04-17-insufficient-scope-error-design.md` and `docs/superpowers/plans/2026-04-17-insufficient-scope-error.md`). Section 5b row count now 8, matching siblings delta-analysis.md and affected-artifacts.md.
 - [REVISED 2026-05-19 per F1d adversary-pass-01 F-01 + F-03]
   - F-01: Added `src/error.rs:131` (`insufficient_scope_exit_code` test) as a second construction-site in the test sites table (T-1). Updated summary to state "2 test construction-call updates needed in `src/error.rs` (lines 131 + 171)". Prior version enumerated only line 171.
   - F-03: Added section 5b "Dependent Doc/Spec Surfaces (verify-only)" enumerating `edge-case-catalog.md:78` (BC-1.6.042 reference), `BC-INDEX.md:122` (source cell), and `holdout-scenarios.md` lines 138–145 (H-012) and 658–682 (H-NEW-JSM-RT-003). All four entries are verify-only; no text changes to those files required under option (a).
