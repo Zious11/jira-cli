@@ -54,7 +54,14 @@ for f in "$FACTORY"/bc-*.md "$FACTORY"/cross-cutting.md; do
   if [ -z "$surface_b" ]; then
     echo "ERROR: $basename_f: no ## Section header found in BC-INDEX.md for this file"
     ERRORS=$((ERRORS+1))
-  elif [ "$surface_b" != "$surface_a" ]; then
+    continue
+  fi
+  if ! [[ "$surface_b" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: $BC_INDEX: Section header for $basename_f did not parse to an integer (got: '$surface_b') — heading format may have changed"
+    ERRORS=$((ERRORS+1))
+    continue
+  fi
+  if [ "$surface_b" != "$surface_a" ]; then
     echo "ERROR: $basename_f: total_bcs frontmatter=$surface_a but BC-INDEX.md Section header=$surface_b"
     ERRORS=$((ERRORS+1))
   fi
@@ -67,7 +74,14 @@ for f in "$FACTORY"/bc-*.md "$FACTORY"/cross-cutting.md; do
   if [ -z "$surface_c" ]; then
     echo "ERROR: $basename_f: no sections: entry found in BC-INDEX.md frontmatter for this file"
     ERRORS=$((ERRORS+1))
-  elif [ "$surface_c" != "$surface_a" ]; then
+    continue
+  fi
+  if ! [[ "$surface_c" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: $BC_INDEX: sections: entry for $basename_f did not parse to an integer (got: '$surface_c') — entry format may have changed"
+    ERRORS=$((ERRORS+1))
+    continue
+  fi
+  if [ "$surface_c" != "$surface_a" ]; then
     echo "ERROR: $basename_f: total_bcs frontmatter=$surface_a but BC-INDEX.md sections: line=$surface_c"
     ERRORS=$((ERRORS+1))
   fi
@@ -90,7 +104,14 @@ for f in "$FACTORY"/bc-*.md "$FACTORY"/cross-cutting.md; do
   if [ -z "$prose_count" ]; then
     echo "ERROR: $basename_f: no \"N behavioral contracts\" preamble line found in body"
     ERRORS=$((ERRORS+1))
-  elif [ "$prose_count" != "$surface_a" ]; then
+    continue
+  fi
+  if ! [[ "$prose_count" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: $basename_f: body preamble \"N behavioral contracts\" line did not parse to an integer (got: '$prose_count') — preamble format may have changed"
+    ERRORS=$((ERRORS+1))
+    continue
+  fi
+  if [ "$prose_count" != "$surface_a" ]; then
     echo "ERROR: $basename_f: total_bcs frontmatter=$surface_a but body prose=\"$prose_count behavioral contracts\""
     ERRORS=$((ERRORS+1))
   fi
@@ -114,6 +135,9 @@ surface_f=$(grep '^| \*\*Sum\*\*' "$CANONICAL" | sed 's/.*\*\*\([0-9]*\)\*\*.*/\
 if [ -z "$surface_f" ]; then
   echo "ERROR: CANONICAL-COUNTS.md: **Sum** row not found"
   ERRORS=$((ERRORS+1))
+elif ! [[ "$surface_f" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: $CANONICAL: **Sum** row did not parse to an integer (got: '$surface_f') — row format may have changed"
+  ERRORS=$((ERRORS+1))
 elif [ "$surface_f" != "$TOTAL_SUM" ]; then
   echo "ERROR: CANONICAL-COUNTS.md **Sum** row=$surface_f but computed sum of per-file total_bcs=$TOTAL_SUM"
   ERRORS=$((ERRORS+1))
@@ -123,6 +147,9 @@ fi
 surface_g=$(grep '^\*\*Canonical grand total:' "$CANONICAL" | sed 's/.*: \([0-9]*\)\*\*.*/\1/' || true)
 if [ -z "$surface_g" ]; then
   echo "ERROR: CANONICAL-COUNTS.md: **Canonical grand total:** prose line not found"
+  ERRORS=$((ERRORS+1))
+elif ! [[ "$surface_g" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: $CANONICAL: grand-total prose line did not parse to an integer (got: '$surface_g') — prose format may have changed"
   ERRORS=$((ERRORS+1))
 elif [ "$surface_g" != "$TOTAL_SUM" ]; then
   echo "ERROR: CANONICAL-COUNTS.md grand-total prose=$surface_g but computed sum of per-file total_bcs=$TOTAL_SUM"
