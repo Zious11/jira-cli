@@ -61,6 +61,40 @@ pub(super) async fn handle_create(
     // Dispatch fork: when --request-type is set, route to JSM path.
     // Platform path (when flag absent) is structurally unchanged. (BC-3.8.001, BC-3.3.001)
     if request_type.is_some() {
+        // Emit stderr warnings for platform-only flags that are silently ignored on the
+        // JSM path (BC-3.8.010, BC-3.8.011). Warnings fire BEFORE dispatch so they appear
+        // even if dispatch errors out later (e.g., missing summary, bad request type).
+        if issue_type.is_some() {
+            eprintln!(
+                "warning: --type is ignored when --request-type is set; request type encodes the issue type"
+            );
+        }
+        if team.is_some() {
+            eprintln!(
+                "warning: --team is ignored when --request-type is set; teams are managed by the request type's workflow"
+            );
+        }
+        if points.is_some() {
+            eprintln!(
+                "warning: --points is ignored when --request-type is set; story points are not part of JSM request schema"
+            );
+        }
+        if parent.is_some() {
+            eprintln!(
+                "warning: --parent is ignored when --request-type is set; JSM requests cannot be sub-tasks"
+            );
+        }
+        if to.is_some() {
+            eprintln!(
+                "warning: --to is ignored when --request-type is set; use --on-behalf-of to set the requester"
+            );
+        }
+        if account_id.is_some() {
+            eprintln!(
+                "warning: --account-id is ignored when --request-type is set; use --on-behalf-of to set the requester"
+            );
+        }
+
         return handle_jsm_create(
             client,
             config,
@@ -70,7 +104,6 @@ pub(super) async fn handle_create(
             JsmCreateArgs {
                 project,
                 request_type,
-                issue_type,
                 summary,
                 description,
                 description_stdin,
@@ -1638,10 +1671,6 @@ mod build_labels_proptests {
 /// Proptest properties for `parse_field_kv` (AC-013, BC-3.8.008).
 ///
 /// Properties A.1–A.4 cover the four invariants stated in the verification delta.
-///
-/// RED GATE: All four properties FAIL (with `todo!()` panic) until Step 4
-/// implements `parse_field_kv`. They are placed here so `cargo test --lib`
-/// exercises them on every run.
 #[cfg(test)]
 mod parse_field_kv_proptests {
     use super::parse_field_kv;
@@ -1651,8 +1680,6 @@ mod parse_field_kv_proptests {
         /// A.1 (BC-3.8.008): first `=` is the delimiter; subsequent `=` chars
         /// are part of the value. For any valid NAME and VALUE (which may contain
         /// `=` chars), round-tripping through parse_field_kv preserves the value.
-        ///
-        /// RED GATE: FAILS with todo!() until Step 4.
         #[test]
         fn prop_parse_field_kv_first_equals_split(
             name in "[a-z][a-z0-9_]{0,19}",
@@ -1672,8 +1699,6 @@ mod parse_field_kv_proptests {
         }
 
         /// A.2 (BC-3.8.008): empty value is allowed. `key=` produces `{"key": ""}`.
-        ///
-        /// RED GATE: FAILS with todo!() until Step 4.
         #[test]
         fn prop_parse_field_kv_empty_value_allowed(
             name in "[a-z][a-z0-9_]{0,19}",
@@ -1691,8 +1716,6 @@ mod parse_field_kv_proptests {
 
         /// A.3 (BC-3.8.008): duplicate key — last value wins.
         /// Two pairs with the same key must result in only the second value.
-        ///
-        /// RED GATE: FAILS with todo!() until Step 4.
         #[test]
         fn prop_parse_field_kv_last_value_wins_on_duplicates(
             name in "[a-z][a-z0-9_]{0,19}",
@@ -1719,8 +1742,6 @@ mod parse_field_kv_proptests {
 
         /// A.4 (BC-3.8.008): no panic on arbitrary input — any string that
         /// contains at least one `=` must parse without panic (may return Ok or Err).
-        ///
-        /// RED GATE: FAILS with todo!() until Step 4.
         #[test]
         fn prop_parse_field_kv_no_panic_on_arbitrary_input(
             raw in ".{0,80}",
@@ -1732,11 +1753,6 @@ mod parse_field_kv_proptests {
         }
     }
 }
-
-// ────────────────────────────────────────────────────────────────────────────
-// S-288-pr4-dispatch stubs — Step 2 (Stub Architect)
-// Bodies are todo!() per Red Gate discipline. Step 4 (Implementer) fills them.
-// ────────────────────────────────────────────────────────────────────────────
 
 /// Parse `--field NAME=VALUE` pairs into a `HashMap<String, String>`.
 ///
@@ -1765,15 +1781,37 @@ pub(crate) fn parse_field_kv(pairs: &[String]) -> Result<HashMap<String, String>
     Ok(map)
 }
 
-/// Grouped CLI inputs for the JSM create path. Reduces argument count on
-/// `handle_jsm_create` to satisfy `clippy::too_many_arguments` (CLAUDE.md policy:
-/// refactor rather than `#[allow]`).
+/// Argument bundle for `handle_jsm_create`.
+///
+/// Reduces argument count on `handle_jsm_create` to satisfy `clippy::too_many_arguments`
+/// (CLAUDE.md policy: refactor rather than `#[allow]`).
+///
+/// # Field policy
+///
+/// `IssueCommand::Create` carries 16+ flags. The JSM dispatch path uses a subset.
+/// Each `Create` flag falls into one of three categories:
+///
+/// **Pass-through to JSM (included in this struct):**
+/// - `project`, `request_type`, `summary`, `description`, `description_stdin`,
+///   `priority`, `labels`, `markdown`, `on_behalf_of`, `field_pairs`
+///
+/// **Ignored with stderr warning (handled BEFORE dispatch in `handle_create`,
+/// per BC-3.8.010 + BC-3.8.011):**
+/// - `issue_type` (`--type`): JSM request types replace it
+/// - `team` (`--team`): not in JSM request schema
+/// - `points` (`--points`): not in JSM request schema
+/// - `parent` (`--parent`): JSM requests cannot be sub-tasks
+/// - `to` (`--to`): superseded by `--on-behalf-of` (raiseOnBehalfOf)
+/// - `account_id` (`--account-id`): superseded by `--on-behalf-of`
+///
+/// **No-op on JSM (silently dropped):**
+/// - (none currently — every Create flag is either passed or warned)
+///
+/// When adding a new `Create` flag, decide which category it belongs to and add it
+/// to this list to keep future maintainers from re-discovering the matrix.
 struct JsmCreateArgs {
     project: Option<String>,
     request_type: Option<String>,
-    /// The platform `--type` flag (issue type). Ignored on JSM path; triggers a
-    /// stderr warning when set alongside `--request-type` (BC-3.8.010).
-    issue_type: Option<String>,
     summary: Option<String>,
     description: Option<String>,
     description_stdin: bool,
@@ -1812,7 +1850,6 @@ async fn handle_jsm_create(
     let JsmCreateArgs {
         project,
         request_type,
-        issue_type,
         summary,
         description,
         description_stdin,
@@ -1837,13 +1874,7 @@ async fn handle_jsm_create(
                 helpers::prompt_input("Project key").ok()
             }
         })
-        .ok_or_else(|| {
-            JrError::UserError(
-                "Project key is required. Use --project or configure .jr.toml. \
-                 Run \"jr project list\" to see available projects."
-                    .into(),
-            )
-        })?;
+        .ok_or_else(|| JrError::UserError("project is required for JSM request creation".into()))?;
 
     // Resolve service desk ID — errors with BC-X.8.004 message for non-JSM projects
     // (BC-3.8.002). Call-site label "`jr issue create --request-type` requires".
@@ -1905,15 +1936,6 @@ async fn handle_jsm_create(
     // Parse --field NAME=VALUE pairs (BC-3.8.008).
     let extra_fields = parse_field_kv(&field_pairs)?;
 
-    // BC-3.8.010: warn if --type is also set; do NOT error.
-    // Warning fires AFTER field parsing and request-type resolution succeed.
-    if issue_type.is_some() {
-        eprintln!(
-            "warning: --type is ignored when --request-type is set; \
-             request type encodes the issue type"
-        );
-    }
-
     // Build the POST body (BC-3.8.005..009).
     let body = JsmRequestBuilder {
         service_desk_id: &service_desk_id,
@@ -1931,17 +1953,34 @@ async fn handle_jsm_create(
     // POST to /rest/servicedeskapi/request (BC-3.8.001).
     // On 401: surface a scope-mismatch hint pointing at write:servicedesk-request
     // (BC-1.3.023, BC-X.3.005, H-NEW-JSM-RT-003).
-    let created = client.create_jsm_request(body).await.map_err(|e| {
-        if let Some(JrError::NotAuthenticated { .. }) = e.downcast_ref::<JrError>() {
-            return anyhow::anyhow!(JrError::NotAuthenticated {
-                hint: "The `write:servicedesk-request` OAuth scope may be missing. \
+    // Both Basic-auth 401 (`NotAuthenticated`) and OAuth scope-mismatch 401
+    // (`InsufficientScope`) must produce the write:servicedesk-request hint (C-01).
+    let created =
+        client
+            .create_jsm_request(body)
+            .await
+            .map_err(|e| match e.downcast::<JrError>() {
+                Ok(JrError::NotAuthenticated { .. }) => {
+                    anyhow::anyhow!(JrError::NotAuthenticated {
+                        hint: "The `write:servicedesk-request` OAuth scope may be missing. \
                        Run `jr auth refresh` or `jr auth login` to re-consent with \
                        the updated scope."
-                    .to_string(),
-            });
-        }
-        e
-    })?;
+                            .to_string(),
+                    })
+                }
+                Ok(JrError::InsufficientScope { message }) => {
+                    anyhow::anyhow!(JrError::InsufficientScope {
+                        message: format!(
+                            "{message} (`jr issue create --request-type` requires the \
+                         `write:servicedesk-request` OAuth scope. \
+                         Run `jr auth refresh` to refresh, or `jr auth login` to re-authorize \
+                         with updated scopes.)"
+                        ),
+                    })
+                }
+                Ok(other) => anyhow::anyhow!(other),
+                Err(other) => other,
+            })?;
 
     // Emit output (AC-015, BC-3.8.001).
     let issue_key = &created.issue_key;
@@ -1971,7 +2010,10 @@ async fn resolve_jsm_request_type_id(
         Some(cached) => cached,
         None => {
             let fetched = client.list_request_types(service_desk_id, None).await?;
-            cache::write_request_type_cache(profile, service_desk_id, &fetched)?;
+            // `write_request_type_cache` is a best-effort writer per CLAUDE.md gotcha —
+            // it swallows IO errors via eprintln and returns Ok(()). Use `let _` to make
+            // the no-propagation intent explicit (the `?` would be dead code).
+            let _ = cache::write_request_type_cache(profile, service_desk_id, &fetched);
             fetched
         }
     };
