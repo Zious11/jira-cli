@@ -36,7 +36,7 @@ activation_version: "v0.5.0-dev.7"
 | **Language** | Rust |
 | **Target Workspace** | develop → main |
 | **Started** | 2026-05-04 |
-| **Last Updated** | 2026-05-19 — Post-#288 housekeeping: docs/demo-evidence removal (PR #386 @ acdf212); BC-3.8.011 Trace fix on factory-artifacts (28e4603); history rewrite tracked as #387. |
+| **Last Updated** | 2026-05-19 — Issue #382 DELIVERED (PR #389 @ b1c863e) — quick-dev route with full VSDD rigor. |
 | **Current Phase** | Phase 3 — TDD Implementation **IN PROGRESS** — Wave 3 CLOSED (10/10). Feature Mode #110-pr2 COMPLETE. PRs #355–#364, #366–#367, #369–#373 MERGED. **0 audit-followups remain** (#331 sandbox-blocked deferred; #333 closed by PR #360; #340 closed by PR #370; #345 closed by PR #371; #346 closed by PR #373; #350 closed by PR #362; #361 closed by PR #364; #365 closed by PR #367; PG-365-1 closed by PR #369). No active cycle. |
 | **Next Phase** | Wave 3 — 10 stories (S-3.01..S-3.10) |
 | **Activation HEAD** | dea166471e22eff55974d7675593469b37048c5f (v0.5.0-dev.7) |
@@ -80,6 +80,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | 3-feature-345-label-coalesce-extract | **MERGED** — PR #371 @ bb352ea (squash, admin); closes #345; F1-F7 full cycle CONVERGED | 2026-05-16 | 2026-05-16 | MERGED — 6 adv passes (3 CLEAN); 3 Copilot cycles + 1 convergence batch; 17 threads resolved; CI 9/9 green | 0/1/6 → 0/2/3 → 0/2/2 → 0/0/0 → 0/0/0 → 0/0/0 (3 consecutive CLEAN) |
 | 3-feature-346-cargo-mutants-ci | **MERGED** — PR #373 @ d909e65 (2026-05-16); closes #346. 8 adv passes, 5 fix rounds, 3 CLEAN; trajectory 0/6/14→2/6/4→0/3/3→0/2/4→2/3/3(1 REFUTED)→0/0/3→0/0/0→0/0/0. Copilot R1=APPROVE; CI 10/10 green. Follow-up #372 filed for partial-baseline completion. | 2026-05-16 | 2026-05-16 | MERGED — 3 CLEAN convergence | 0/6/14→2/6/4→0/3/3→0/2/4→2/3/3→0/0/3→0/0/0→0/0/0 |
 | 3-feature-jsm-request-types-288 | **CLOSED — issue #288 FULLY CONVERGED (2026-05-19)** — F1d CONVERGED 3/3 at pass-10; F3 story decomposition: 3 stories (pr1-api/pr2-cli/pr4-dispatch). Wave 1 MERGED PR #379 @ 0f219eb (2026-05-18). Wave 2 MERGED PR #380 @ 9d0b72c (2026-05-19). Wave 3 MERGED PR #381 @ 95232555 (2026-05-19T12:55:29Z): 9 adv passes (1 invalid + 1 retry + 7 substantive), 3/3 CLEAN (passes 07/08/09), 28 invariants verified in final pass. Issue #288 auto-closed. Retrospective audit 2026-05-19: PASS (0 REFUTED, 11 CONFIRMED, 1 PARTIAL no-action, 1 INCONCLUSIVE already filed). 4 follow-ups filed (#382-#385). F5/F6/F7 substantively satisfied by per-wave convergence; formal epic-level reruns waived based on retrospective audit (PASS, 0 REFUTED, 11 CONFIRMED, 1 PARTIAL no-action, 1 INCONCLUSIVE already filed). Lessons L-288-pr4-01..06 codified. | 2026-05-18 | 2026-05-19 | CLOSED — retrospective audit PASS; 4 follow-ups filed (#382-#385) | pr4-dispatch adv: 9 passes, 3/3 CLEAN (passes 07/08/09), 28 invariants final pass |
+| issue-382 (quick-dev) | **MERGED — PR #389 @ b1c863e (2026-05-19)** — F1 + F1d CONVERGED 3/3 (8 passes). F4 per-story adversary CONVERGED 3/3. Copilot CLEAN (0 inline). CI 10/10 green including mutation testing (5min). Issue #382 auto-closed. | 2026-05-19 | 2026-05-19 | MERGED — PR #389 @ b1c863e; issue #382 closed | F1d: 8 passes, 3/3 CLEAN (passes 06/07/08). F4 adv: 3 passes, 3/3 CLEAN. pr-reviewer: APPROVE (0 blocking). Copilot: COMMENTED (0 inline) |
 | 4: Holdout Evaluation | not-started | | | | |
 | 5: Adversarial Refinement | not-started | | | | |
 | 6: Formal Hardening | not-started | | | | |
@@ -96,13 +97,9 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | F1d adversarial spec review pass-10 — #288 | adversary | complete | **F1d CONVERGED 3/3** — Pass-09 was CLEAN. Pass-10 final confirmation gate also CLEAN. 18 mandates verified CLEAR. Novelty zero across 3 consecutive passes. F2 spec evolution ready for human approval. |
 | F2 spec evolution — #288 | spec-evolution | complete | F1d CONVERGED 3/3; spec corpus stable. F2 human approval gate passed; incremental story decomposition authorized. |
 | F3 incremental stories — #288 | story-writer | complete | 4 stories created (issue-288-pr1-api/pr2-cli/pr3-scope/pr4-dispatch). Dependency graph acyclic: pr1+pr3 in Wave 1 (parallel), pr2 in Wave 2 (depends pr1), pr4 in Wave 3 (depends pr1+pr2+pr3). STORY-INDEX bumped 36→40. consistency-validator validation pending. |
-| F3 incremental stories — #288 — scope simplification | product-owner + story-writer | complete | Research at `.factory/research/issue-288-oauth-scope-coordination.md` validated F1d pass-01 PR-template release-gate as disproportionate. Dropped S-288-pr3-scope; absorbed scope addition + pin-test update + CLAUDE.md note + CHANGELOG re-consent entry into S-288-pr4-dispatch. Wave plan now 3 stories / 3 waves / 11 SP (pr1=3, pr2=3, pr4=5). BC-1.3.023 simplified to "maintainer coordination" + existing code comment + CLAUDE.md gotcha note. STORY-INDEX 40→39. |
-| F4 per-story adversarial — issue-288-pr1-api | adversary | complete | **CONVERGED 3/3** (passes 01-02-03 all CLEAN; 3 carried NITs non-blocking). Proceeding to Step 5 demo recording. |
-| F4 Wave 1 — issue-288-pr1-api MERGED | pr-manager | complete | **PR #379 MERGED** @ 0f219eb (2026-05-18). 6 Copilot rounds → 0 new comments. 5 fix commits absorbing Copilot feedback. CI 10/10 green. Per-story adversary 3/3 CONVERGED. Issue #288 stays OPEN; pr2 + pr4 now unblocked. |
-| F4 per-story adversarial — issue-288-pr2-cli | adversary | complete | **CONVERGED 3/3** — 11 passes (passes 09-10-11 CLEAN). 30+ findings remediated across passes 01-08. BC-X.12.001..008 + BC-X.8.004 verified. L-288-pr1-01 test-precision audit clean. 736 tests total. |
-| F4 Wave 2 — issue-288-pr2-cli MERGED | pr-manager | complete | **PR #380 MERGED** @ 9d0b72c (2026-05-19T02:02:08Z). Wave 2 of 3 complete. 12 process-gap deferrals logged. Lessons L-288-pr2-01/02 codified. Wave 3 (pr4-dispatch) pending. |
-| F4 per-story adversarial — issue-288-pr4-dispatch | adversary | complete | **CONVERGED 3/3** — 9 passes total (pass 01 invalid-path, pass 02 retry, passes 03-09 substantive). Passes 07/08/09 CLEAN. 28 invariants verified in final pass. BC-3.8.001..010, BC-3.3.001, BC-1.3.023, BC-X.3.005 all verified. Lessons L-288-pr4-01..05 codified. |
-| F4 Wave 3 — issue-288-pr4-dispatch MERGED | pr-manager | complete | **PR #381 MERGED** @ 95232555 (2026-05-19T12:55:29Z). Wave 3 of 3 complete. Issue #288 auto-closed via "closes #288" trailer. ALL 3 WAVES COMPLETE — JSM request type dispatch feature fully delivered. Drift items M-03/O-01/O-08-01..07/PG-01..04 filed for post-merge follow-up. |
+| F4 per-story adversarial — issue-382 | adversary | complete | **CONVERGED 3/3** — 3 passes total, all CLEAN. BC-1.6.042 verified. required_scope field + Display impl + Display test all verified. Lessons L-382-01..04 codified. |
+| F4 — issue-382 MERGED | pr-manager | complete | **PR #389 MERGED** @ b1c863e (2026-05-19T18:40:25Z). Issue #382 auto-closed. CI 10/10 green including mutation testing (5min). Copilot: COMMENTED with 0 inline comments. pr-reviewer: APPROVE in 1 cycle, 0 blocking findings. Pre-existing flake noted: tests/multi_cloudid_disambiguation.rs keychain contention (NOT a regression). |
+| Step 9 — S-382 state update | state-manager | complete | STORY-INDEX S-382 status → completed. STATE.md Phase Progress row added for issue-382. Convergence tracker updated. Drift item added for keychain flake. Lessons codified at .factory/code-delivery/issue-382/lessons.md. factory-artifacts commit pushed. |
 
 ## Decisions Log
 
@@ -217,6 +214,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | S-288-pr2-PG-1e | [process-gap] No CI lint for single-component use imports — `use crate::foo::bar` (single item) vs `use crate::foo::{bar}` style inconsistency unchecked. Target: codify import style in clippy or rustfmt config. | LOW | DEFER → post-S-288 self-improvement epic. Not a content defect; process-gap codification. Per S-7.02 cycle-closing-checklist. |
 | S-288-pr2-PG-1f | [process-gap] "No accept-either" assertion rule (no `||` in positive assertions) has no automated grep-lint — L-288-pr1-01 recurred 4× despite being codified. Target: grep `tests/` for `\|\|` and `.or_else(` in new test code on every adversary pass; report as MEDIUM. | LOW | DEFER → post-S-288 self-improvement epic. Not a content defect; process-gap codification. Per S-7.02 cycle-closing-checklist. |
 | S-288-pr2-PG-1g | [process-gap] CLAUDE.md `call_site_label` canonical-phrases list can drift from actual production callers — no `scripts/check-claudemd-callsite-labels.sh` checker exists. Target: create checker script. | LOW | DEFER → post-S-288 self-improvement epic. Not a content defect; process-gap codification. Per S-7.02 cycle-closing-checklist. |
+| S-382-FLAKE-01 | tests/multi_cloudid_disambiguation.rs keychain contention — macOS keychain "specified item already exists" error from concurrent test execution. Reproduces on develop without S-382 changes; pre-existing flake unrelated to #382. | LOW | PRE-EXISTING (unrelated to #382). Target: future test-infrastructure cleanup — gate keychain tests behind JR_RUN_KEYRING_TESTS=1 + #[ignore] per existing CLAUDE.md convention, or add per-test keychain namespacing. |
 
 ## Convergence Trackers
 
@@ -249,6 +247,10 @@ _9-pass retrospective audit completed 2026-05-19 by research-agent. Convergence 
 
 _Research artifacts: `.factory/research/issue-288-pr4-retrospective-audit.md` + `.factory/research/issue-288-pr4-deferred-validation.md`_
 
+### Issue #382 — Quick-Dev Convergence (2026-05-19)
+
+_F1d adversarial: 8 passes total (passes 06/07/08 CLEAN, 3/3). F4 per-story adversarial: 3 passes total (all CLEAN, 3/3). pr-reviewer: APPROVE in 1 cycle, 0 blocking findings. Copilot review: COMMENTED with 0 inline comments. CI: 10/10 green including mutation testing (5min). Pre-existing flake noted: tests/multi_cloudid_disambiguation.rs keychain contention (NOT a regression). PR #389 MERGED @ b1c863e (2026-05-19T18:40:25Z). Issue #382 auto-closed at 2026-05-19T18:40:27Z._
+
 ### Phase 5-adv — Adversarial Refinement
 _Not started._
 
@@ -258,8 +260,8 @@ _Not started._
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-19 |
-| **Position** | **Post-#288 housekeeping complete** — PR #386 MERGED (acdf212) on develop: docs/demo-evidence/ removed, 505 files deleted, ~85 MB freed at HEAD, .gitignore updated. BC-3.8.011 Trace fix pushed to factory-artifacts (28e4603): unblocked Spec Guards CI for all future PRs. Issue #387 filed (LOW) to track git history rewrite (deferred — requires force-push to protected branches). Open backlog issues: #210, #331, #372, #382, #383, #384, #385, #387. No active cycle. Next: new feature selection or Wave 4 planning. |
-| **Convergence counter** | #288 epic CLOSED. pr4-dispatch adv: 9 passes (1 invalid + 1 retry + 7 substantive), 3/3 CLEAN (passes 07/08/09). Retrospective audit: PASS. No open convergence gate. |
+| **Position** | **Issue #382 DELIVERED** — PR #389 MERGED @ b1c863e (2026-05-19T18:40:25Z). Issue #382 auto-closed. S-382 quick-dev route with full VSDD rigor: F1d CONVERGED 8 passes (3/3 CLEAN), F4 per-story adversary 3/3 CLEAN, Copilot 0 inline, CI 10/10 green. Lessons L-382-01..04 codified at .factory/code-delivery/issue-382/lessons.md. Remaining open backlog: #210, #331, #372, #383, #384, #385, #387. No active cycle. Next: new feature selection or Wave 4 planning. |
+| **Convergence counter** | #382 CLOSED. F1d: 8 passes, 3/3 CLEAN. F4 adv: 3 passes, 3/3 CLEAN. No open convergence gate. |
 
 ## Post-Cycle Housekeeping (2026-05-19)
 
@@ -280,12 +282,13 @@ Events after issue #288 epic closeout (factory-artifacts @ 7dbbfed):
 | #210 | (backlog) | OPEN | — | |
 | #331 | Sandbox-blocked defer | OPEN | DEFERRED | Requires sandbox access |
 | #372 | cargo-mutants partial baseline | OPEN | LOW | Follow-up from #346 |
-| #382 | M-03: JrError::InsufficientScope stale text | OPEN | MEDIUM | |
+| #382 | M-03: JrError::InsufficientScope stale text | **CLOSED** (auto-closed via PR #389 b1c863e) | MEDIUM | Delivered 2026-05-19 |
 | #383 | O-01: platform-path flag symmetry | OPEN | LOW | |
 | #384 | O-08-01+O-08-05 UX polish | OPEN | LOW | |
 | #385 | O-08-02/04/06/07 UX polish | OPEN | LOW | |
 | #386 | docs/demo-evidence removal | **MERGED** @ acdf212 | — | 505 files, ~85 MB freed at HEAD |
 | #387 | git history rewrite for demo-evidence blobs | OPEN | LOW | Deferred; force-push needed |
+| #389 | S-382: JrError::InsufficientScope required_scope refactor | **MERGED** @ b1c863e (2026-05-19T18:40:25Z) | — | PR merged; issue #382 auto-closed |
 
 ## Historical Content
 
