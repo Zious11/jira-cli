@@ -2274,3 +2274,477 @@ async fn test_jsm_create_markdown_without_description_exits_64_with_platform_mes
         "M-01 / BC-3.8.006: expected platform-parity validation message; got: {stderr}"
     );
 }
+
+// ─── S-383: Platform-path inverse warnings (BC-3.8.012 / BC-3.8.013) ─────────
+//
+// These tests live in `issue_create_jsm.rs` by the explicit decision in the
+// S-383 story file (`.factory/stories/S-383-platform-inverse-warnings.md`
+// §"Test File Decision").  They are PLATFORM-PATH tests — no `--request-type`
+// flag — co-located here because they cover the inverse symmetry of the
+// BC-3.8.011 forward-direction warnings already in this file.
+//
+// Red Gate: all 7 tests MUST fail against the unmodified implementation
+// in `src/cli/issue/create.rs`.  The implementation change (2 `eprintln!`
+// guards) is introduced in a subsequent commit.
+
+/// Helper: mount the two stubs the platform path needs (POST /rest/api/3/issue
+/// + GET /rest/api/3/field for CMDB discovery) and return the key "PROJ-123".
+async fn mount_platform_create_stubs(server: &wiremock::MockServer) {
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "id": "10001",
+            "key": "PROJ-123",
+            "self": format!("{}/rest/api/3/issue/10001", server.uri()),
+        })))
+        .mount(server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::Value::Array(vec![])))
+        .mount(server)
+        .await;
+}
+
+// ─── AC-1: --field on platform path emits BC-3.8.012 warning ─────────────────
+
+/// AC-1 (BC-3.8.012 postcondition 1): `jr issue create --field NAME=VALUE`
+/// WITHOUT `--request-type` emits exactly the verbatim BC-3.8.012 warning on
+/// stderr.  The platform POST to `/rest/api/3/issue` proceeds; exit code 0.
+/// The JSM endpoint is never called.
+#[tokio::test]
+async fn test_platform_create_field_flag_emits_warning_without_request_type() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_platform_create_stubs(&server).await;
+
+    // JSM endpoint must NEVER be called.
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--type",
+            "Task",
+            "--summary",
+            "test",
+            "--field",
+            "NAME=VALUE",
+            "--no-input",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "BC-3.8.012 / AC-1: expected exit 0; got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("warning: --field is ignored on the platform create path; it only applies with --request-type (JSM service-desk requests). To pass custom fields to a JSM request type, also supply --request-type."),
+        "BC-3.8.012 / AC-1: verbatim warning must appear on stderr; got: {stderr}"
+    );
+    assert!(
+        stdout.contains("PROJ-123"),
+        "BC-3.8.012 / AC-1: platform issue key must appear on stdout; got: {stdout}"
+    );
+    // Warning must NOT bleed onto stdout.
+    assert!(
+        !stdout.contains("warning: --field is ignored"),
+        "BC-3.8.012 / AC-1: warning must be on stderr only, not stdout; got: {stdout}"
+    );
+    // The .expect(0) on the JSM mock is enforced on server drop.
+}
+
+// ─── AC-2: --on-behalf-of on platform path emits BC-3.8.013 warning ──────────
+
+/// AC-2 (BC-3.8.013 postcondition 1): `jr issue create --on-behalf-of <ID>`
+/// WITHOUT `--request-type` emits exactly the verbatim BC-3.8.013 warning on
+/// stderr.  The platform POST proceeds; exit code 0.  The JSM endpoint is
+/// never called.
+#[tokio::test]
+async fn test_platform_create_on_behalf_of_flag_emits_warning_without_request_type() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_platform_create_stubs(&server).await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--type",
+            "Task",
+            "--summary",
+            "test",
+            "--on-behalf-of",
+            "fake-account-id",
+            "--no-input",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "BC-3.8.013 / AC-2: expected exit 0; got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("warning: --on-behalf-of is ignored on the platform create path; it only applies with --request-type (JSM service-desk requests). To raise a request on behalf of another user, also supply --request-type."),
+        "BC-3.8.013 / AC-2: verbatim warning must appear on stderr; got: {stderr}"
+    );
+    assert!(
+        stdout.contains("PROJ-123"),
+        "BC-3.8.013 / AC-2: platform issue key must appear on stdout; got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("warning: --on-behalf-of is ignored"),
+        "BC-3.8.013 / AC-2: warning must be on stderr only, not stdout; got: {stdout}"
+    );
+}
+
+// ─── AC-3: Both --field + --on-behalf-of emit independent warnings ────────────
+
+/// AC-3 (BC-3.8.012 postcondition 3 + BC-3.8.013 postcondition 3): When both
+/// `--field NAME=VALUE` and `--on-behalf-of <ID>` are supplied WITHOUT
+/// `--request-type`, BOTH verbatim warnings fire independently on stderr.
+/// Each appears at least once.  Ordering is not asserted.  Platform POST
+/// proceeds normally; exit code 0.
+#[tokio::test]
+async fn test_platform_create_both_inverse_flags_emit_independent_warnings() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_platform_create_stubs(&server).await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--type",
+            "Task",
+            "--summary",
+            "test",
+            "--field",
+            "A=1",
+            "--on-behalf-of",
+            "fake-id",
+            "--no-input",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "BC-3.8.012+013 / AC-3: expected exit 0; got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("warning: --field is ignored on the platform create path; it only applies with --request-type (JSM service-desk requests). To pass custom fields to a JSM request type, also supply --request-type."),
+        "BC-3.8.012 / AC-3: BC-3.8.012 warning must appear on stderr; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("warning: --on-behalf-of is ignored on the platform create path; it only applies with --request-type (JSM service-desk requests). To raise a request on behalf of another user, also supply --request-type."),
+        "BC-3.8.013 / AC-3: BC-3.8.013 warning must appear on stderr; got: {stderr}"
+    );
+}
+
+// ─── AC-4: No inverse flags → no new warnings ────────────────────────────────
+
+/// AC-4 (BC-3.8.012 postcondition 4 + BC-3.8.013 postcondition 4 — negative
+/// case): `jr issue create --project PROJ --summary "Foo"` WITHOUT `--field`
+/// AND WITHOUT `--on-behalf-of` AND WITHOUT `--request-type` must NOT emit
+/// either inverse warning.  Stderr is byte-identical to pre-issue-#383 behavior.
+#[tokio::test]
+async fn test_platform_create_without_inverse_flags_emits_no_new_warnings() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_platform_create_stubs(&server).await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--type",
+            "Task",
+            "--summary",
+            "Foo",
+            "--no-input",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "BC-3.8.012+013 / AC-4: expected exit 0; got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        !stderr.contains("--field is ignored"),
+        "BC-3.8.012 / AC-4: BC-3.8.012 warning must NOT appear when --field is absent; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("--on-behalf-of is ignored"),
+        "BC-3.8.013 / AC-4: BC-3.8.013 warning must NOT appear when --on-behalf-of is absent; got: {stderr}"
+    );
+}
+
+// ─── AC-5: Multiple --field occurrences emit exactly ONE warning ──────────────
+
+/// AC-5 (BC-3.8.012 postcondition 2 — idempotency): `--field A=1 --field A=2
+/// --field B=3` WITHOUT `--request-type` emits the BC-3.8.012 warning EXACTLY
+/// ONCE — the per-logical-flag-NAME rule means `--field` is one logical flag
+/// regardless of how many NAME=VALUE pairs are supplied.
+#[tokio::test]
+async fn test_platform_create_field_idempotent_one_warning_per_logical_flag() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_platform_create_stubs(&server).await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--type",
+            "Task",
+            "--summary",
+            "test",
+            "--field",
+            "A=1",
+            "--field",
+            "A=2",
+            "--field",
+            "B=3",
+            "--no-input",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "BC-3.8.012 / AC-5: expected exit 0; got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert_eq!(
+        stderr
+            .matches("warning: --field is ignored on the platform create path")
+            .count(),
+        1,
+        "BC-3.8.012 / AC-5: warning must appear EXACTLY ONCE regardless of --field count; got: {stderr}"
+    );
+}
+
+// ─── AC-6: JSM path + --field does NOT fire BC-3.8.012 (regression gate) ─────
+
+/// AC-6 (BC-3.8.011 invariant — forward-path regression gate): When
+/// `--request-type` IS set alongside `--field NAME=VALUE`, the command takes
+/// the JSM path and BC-3.8.012 must NOT fire.  The existing BC-3.8.011
+/// forward-direction warning tests remain unaffected by the S-383 change.
+#[tokio::test]
+async fn test_jsm_create_with_field_and_request_type_does_not_fire_bc_3_8_012() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_project_meta_help(&server).await;
+    mount_service_desk_list(&server).await;
+    mount_request_types_password_reset(&server).await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "HELP",
+            "--request-type",
+            "Password Reset",
+            "--summary",
+            "test",
+            "--field",
+            "NAME=VALUE",
+            "--no-input",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "BC-3.8.012 / AC-6: expected exit 0 on JSM path; got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        !stderr.contains("--field is ignored on the platform create path"),
+        "BC-3.8.012 / AC-6: BC-3.8.012 warning must NOT fire on JSM path; got: {stderr}"
+    );
+}
+
+// ─── AC-7: Malformed --field on platform path → one warning, no exit-64 ──────
+
+/// AC-7 (BC-3.8.012 postcondition 5 — malformed --field edge case): When
+/// `--field bare-name-no-equals` is supplied WITHOUT `--request-type`, the
+/// platform path emits the BC-3.8.012 warning EXACTLY ONCE and proceeds to
+/// the platform POST (no exit-64).  Format validation (BC-3.8.008) applies
+/// only on the JSM path, not the platform path.
+#[tokio::test]
+async fn test_platform_create_malformed_field_one_warning_no_exit_64() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_platform_create_stubs(&server).await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--type",
+            "Task",
+            "--summary",
+            "test",
+            "--field",
+            "bareflagnoequals",
+            "--no-input",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "BC-3.8.012 / AC-7: expected exit 0 (not 64) for malformed --field on platform path; got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+    assert_eq!(
+        stderr
+            .matches("warning: --field is ignored on the platform create path")
+            .count(),
+        1,
+        "BC-3.8.012 / AC-7: warning must appear EXACTLY ONCE for malformed --field; got: {stderr}"
+    );
+}

@@ -117,6 +117,20 @@ pub(super) async fn handle_create(
         .await;
     }
 
+    // Emit stderr warnings for JSM-only flags that are silently ignored on the
+    // platform path (BC-3.8.012, BC-3.8.013). Warnings fire BEFORE the platform
+    // POST so they appear even if the command later errors on missing fields.
+    if !field_pairs.is_empty() {
+        eprintln!(
+            "warning: --field is ignored on the platform create path; it only applies with --request-type (JSM service-desk requests). To pass custom fields to a JSM request type, also supply --request-type."
+        );
+    }
+    if on_behalf_of.is_some() {
+        eprintln!(
+            "warning: --on-behalf-of is ignored on the platform create path; it only applies with --request-type (JSM service-desk requests). To raise a request on behalf of another user, also supply --request-type."
+        );
+    }
+
     // Resolve project key
     let project_key = project
         .or_else(|| config.project_key(project_override))
