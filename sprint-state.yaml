@@ -509,13 +509,14 @@ cycle_3_feature_288:
 feature_followup_standalone:
   - id: S-383
     title: "Emit stderr warnings when --field/--on-behalf-of used without --request-type on platform path"
-    status: ready
-    pr: null
-    merge_sha: null
-    merged_at: null
+    status: completed
+    pr: 390
+    merge_sha: 25f7211
+    merged_at: 2026-05-19
+    merged_via: "gh pr merge --squash --admin --delete-branch"
     depends_on: []
     bc_anchors: [BC-3.8.012, BC-3.8.013]
     holdout_anchors: []
     issue: 383
     points: 2
-    notes: "F3 story. Closes issue #383. Two eprintln! guards inserted in handle_create (src/cli/issue/create.rs) before platform path. 7 new integration tests in tests/issue_create_jsm.rs (AC-1..AC-7). F2 converged 2026-05-19 (9 passes + final confirmation). BC-3.8.012/013 sealed. Ready for F4 implementation."
+    notes: "F3 story. Closes issue #383. Two eprintln! guards inserted in handle_create (src/cli/issue/create.rs) before platform path. 7 new integration tests in tests/issue_create_jsm.rs (AC-1..AC-7). F2 CONVERGED 2026-05-19 (11 adversary passes). BC-3.8.012/013 sealed. Per-story adversary CONVERGED 3/3 (pass-01 CLEAN, pass-02-retry CLEAN, pass-03 CLEAN). CI 10/10 GREEN. Copilot: COMMENTED (0 inline). pr-reviewer: APPROVE 1 cycle (3 non-blocking). PR #390 MERGED @ 25f7211 (2026-05-19). Issue #383 auto-closed. 3 deferred follow-ups: DEFER-383-1 (heading depth harmonization), DEFER-383-2 (CANONICAL-COUNTS change-attribution wording), DEFER-383-3 (check-spec-counts.sh cumulative-sum extension — process-gap)."
