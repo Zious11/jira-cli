@@ -1876,6 +1876,17 @@ async fn handle_jsm_create(
         })
         .ok_or_else(|| JrError::UserError("project is required for JSM request creation".into()))?;
 
+    // M-01 (adversary pass-02-retry) + platform-path parity: --markdown requires
+    // a description source on the JSM path, just like the platform path.
+    if markdown && description.is_none() && !description_stdin {
+        return Err(JrError::UserError(
+            "--markdown requires --description or --description-stdin to take effect. \
+             Pass a description alongside --markdown, or omit --markdown."
+                .into(),
+        )
+        .into());
+    }
+
     // Resolve service desk ID — errors with BC-X.8.004 message for non-JSM projects
     // (BC-3.8.002). Call-site label "`jr issue create --request-type` requires".
     let service_desk_id = servicedesks::require_service_desk(
