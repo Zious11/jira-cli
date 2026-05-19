@@ -34,7 +34,7 @@ if [ ! -f "$SCRIPT" ]; then
   echo "       This is the expected Red Gate state — the guard has not been implemented yet."
   echo "       Run the fixture tests again after scripts/check-bc-cumulative-counts.sh is created."
   echo ""
-  echo "Results: 0 passed, 4 failed (guard absent)"
+  echo "Results: 0 passed, 7 failed (guard absent)"
   exit 1
 fi
 
@@ -73,6 +73,7 @@ run "tests/spec-count-fixtures/bc-drift-prose"   1 "prose count drift exits 1"
 run "tests/spec-count-fixtures/bc-drift-grandtotal" 1 "grand-total drift exits 1"
 run "tests/spec-count-fixtures/bc-drift-sections-c" 1 "Surface-C sections: line drift exits 1"
 run "tests/spec-count-fixtures/bc-drift-canonical-d" 1 "Surface-D canonical table row drift exits 1"
+run "tests/spec-count-fixtures/bc-drift-decoy-prose-ok" 0 "body decoy prose ignored; guard reads preamble only exits 0"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

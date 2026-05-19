@@ -34,6 +34,12 @@ tests/spec-count-fixtures/
     .factory/specs/prd/                   bc-2 says 15 but bc-2 frontmatter total_bcs: 20
                                           (Surfaces A, B, C all agree on 20; only Surface D drifted)
                                           → guard exits 1
+  bc-drift-decoy-prose-ok/              — all count surfaces agree (bc-1: 10, bc-2: 20, total: 30),
+    .factory/specs/prd/                   but bc-2-issue-read.md body contains a DECOY line after a
+                                          `## ` heading: "999 behavioral contracts covering some
+                                          subsection ...". The guard truncates at the first `## `
+                                          heading (via `sed '/^## /q'`) so it reads only the correct
+                                          preamble (20) and never the decoy (999). → guard exits 0
 ```
 
 ## Fixture design principles
@@ -65,8 +71,9 @@ PASS: prose count drift exits 1
 PASS: grand-total drift exits 1
 PASS: Surface-C sections: line drift exits 1
 PASS: Surface-D canonical table row drift exits 1
+PASS: body decoy prose ignored; guard reads preamble only exits 0
 
-Results: 6 passed, 0 failed
+Results: 7 passed, 0 failed
 ```
 
 Expected output before guard script exists (Red Gate):
@@ -76,7 +83,7 @@ ERROR: guard script not found at scripts/check-bc-cumulative-counts.sh
        This is the expected Red Gate state — the guard has not been implemented yet.
        Run the fixture tests again after scripts/check-bc-cumulative-counts.sh is created.
 
-Results: 0 passed, 4 failed (guard absent)
+Results: 0 passed, 7 failed (guard absent)
 ```
 
 ## Adding new fixtures
