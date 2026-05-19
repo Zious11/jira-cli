@@ -26,6 +26,14 @@ tests/spec-count-fixtures/
     .factory/specs/prd/                   but frontmatter says total_bcs: 20 → guard exits 1
   bc-drift-grandtotal/                  — CANONICAL-COUNTS.md Sum row and grand-total prose say 25
     .factory/specs/prd/                   but sum of per-file values (10+20) = 30 → guard exits 1
+  bc-drift-sections-c/                  — BC-INDEX.md frontmatter sections: line for bc-2 says
+    .factory/specs/prd/                   "15 BCs cumulative" but bc-2 frontmatter total_bcs: 20
+                                          (Surfaces A and B agree on 20; only Surface C drifted)
+                                          → guard exits 1
+  bc-drift-canonical-d/                 — CANONICAL-COUNTS.md per-file total_bcs table row for
+    .factory/specs/prd/                   bc-2 says 15 but bc-2 frontmatter total_bcs: 20
+                                          (Surfaces A, B, C all agree on 20; only Surface D drifted)
+                                          → guard exits 1
 ```
 
 ## Fixture design principles
@@ -55,8 +63,10 @@ PASS: known-good exits 0
 PASS: total_bcs drift exits 1
 PASS: prose count drift exits 1
 PASS: grand-total drift exits 1
+PASS: Surface-C sections: line drift exits 1
+PASS: Surface-D canonical table row drift exits 1
 
-Results: 4 passed, 0 failed
+Results: 6 passed, 0 failed
 ```
 
 Expected output before guard script exists (Red Gate):

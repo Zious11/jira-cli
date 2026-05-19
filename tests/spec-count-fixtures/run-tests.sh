@@ -71,6 +71,8 @@ run "tests/spec-count-fixtures/known-good"       0 "known-good exits 0"
 run "tests/spec-count-fixtures/bc-drift-total"   1 "total_bcs drift exits 1"
 run "tests/spec-count-fixtures/bc-drift-prose"   1 "prose count drift exits 1"
 run "tests/spec-count-fixtures/bc-drift-grandtotal" 1 "grand-total drift exits 1"
+run "tests/spec-count-fixtures/bc-drift-sections-c" 1 "Surface-C sections: line drift exits 1"
+run "tests/spec-count-fixtures/bc-drift-canonical-d" 1 "Surface-D canonical table row drift exits 1"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
