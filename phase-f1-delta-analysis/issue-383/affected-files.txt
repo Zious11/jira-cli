@@ -1,0 +1,4 @@
+src/cli/issue/create.rs
+tests/issue_create_jsm.rs
+.factory/specs/prd/bc-3-issue-write.md
+.factory/specs/prd/CANONICAL-COUNTS.md
