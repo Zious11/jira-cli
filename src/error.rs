@@ -189,4 +189,34 @@ mod tests {
             "issue link missing: {s}"
         );
     }
+
+    #[test]
+    fn test_insufficient_scope_display_uses_required_scope_when_some() {
+        let err = JrError::InsufficientScope {
+            message: "Unauthorized; scope does not match".into(),
+            required_scope: Some("write:servicedesk-request".into()),
+        };
+        let s = format!("{err}");
+        assert!(
+            s.contains("write:servicedesk-request"),
+            "Display should contain the call-site-supplied scope name; got: {s}"
+        );
+        assert!(
+            !s.contains("write:jira-work"),
+            "Display should NOT contain the fallback scope when required_scope is Some; got: {s}"
+        );
+    }
+
+    #[test]
+    fn test_insufficient_scope_display_empty_some_falls_back() {
+        let err = JrError::InsufficientScope {
+            message: "Unauthorized; scope does not match".into(),
+            required_scope: Some(String::new()),
+        };
+        let s = format!("{err}");
+        assert!(
+            s.contains("write:jira-work"),
+            "Display should fall back to write:jira-work when required_scope is Some(empty); got: {s}"
+        );
+    }
 }
