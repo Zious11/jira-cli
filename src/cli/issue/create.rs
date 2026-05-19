@@ -7,14 +7,14 @@ use crate::adf;
 use crate::api::assets::linked::get_or_fetch_cmdb_fields;
 use crate::api::client::JiraClient;
 use crate::api::jira::bulk::{BULK_MAX_KEYS, resolve_bulk_await_timeout};
-#[allow(unused_imports)] // TODO(S-288-pr4 Step 4): remove after implementing handle_jsm_create
+use crate::api::jsm::requests::JsmRequestBuilder;
 use crate::api::jsm::servicedesks;
-#[allow(unused_imports)] // TODO(S-288-pr4 Step 4): remove after implementing handle_jsm_create
 use crate::cache;
 use crate::cli::{IssueCommand, OutputFormat};
 use crate::config::Config;
 use crate::error::JrError;
 use crate::output;
+use crate::partial_match::{self, MatchResult};
 
 use super::helpers;
 use super::json_output;
@@ -65,19 +65,21 @@ pub(super) async fn handle_create(
             client,
             config,
             output_format,
-            project,
             project_override,
             no_input,
-            request_type,
-            issue_type,
-            summary,
-            description,
-            description_stdin,
-            priority,
-            labels,
-            markdown,
-            on_behalf_of,
-            field_pairs,
+            JsmCreateArgs {
+                project,
+                request_type,
+                issue_type,
+                summary,
+                description,
+                description_stdin,
+                priority,
+                labels,
+                markdown,
+                on_behalf_of,
+                field_pairs,
+            },
         )
         .await;
     }
@@ -1746,12 +1748,40 @@ mod parse_field_kv_proptests {
 /// # Errors
 ///
 /// Returns `JrError::UserError` if any pair is missing `=`.
-///
-/// # TODO(S-288-pr4 Step 4): implement
-#[allow(unused_variables)] // TODO(S-288-pr4 Step 4): remove after implementing
-#[allow(dead_code)] // TODO(S-288-pr4 Step 4): remove after implementing — called by Step 3 tests
 pub(crate) fn parse_field_kv(pairs: &[String]) -> Result<HashMap<String, String>, JrError> {
-    todo!("S-288-pr4 Step 4")
+    let mut map = HashMap::new();
+    for pair in pairs {
+        let Some(eq_pos) = pair.find('=') else {
+            return Err(JrError::UserError(format!(
+                "--field \"{pair}\" is not a valid NAME=VALUE pair: missing '='. \
+                 Use --field NAME=VALUE (e.g., --field customfield_10200=foo)."
+            )));
+        };
+        let key = pair[..eq_pos].to_string();
+        let value = pair[eq_pos + 1..].to_string();
+        // Last-wins for duplicate keys (BC-3.8.008).
+        map.insert(key, value);
+    }
+    Ok(map)
+}
+
+/// Grouped CLI inputs for the JSM create path. Reduces argument count on
+/// `handle_jsm_create` to satisfy `clippy::too_many_arguments` (CLAUDE.md policy:
+/// refactor rather than `#[allow]`).
+struct JsmCreateArgs {
+    project: Option<String>,
+    request_type: Option<String>,
+    /// The platform `--type` flag (issue type). Ignored on JSM path; triggers a
+    /// stderr warning when set alongside `--request-type` (BC-3.8.010).
+    issue_type: Option<String>,
+    summary: Option<String>,
+    description: Option<String>,
+    description_stdin: bool,
+    priority: Option<String>,
+    labels: Vec<String>,
+    markdown: bool,
+    on_behalf_of: Option<String>,
+    field_pairs: Vec<String>,
 }
 
 /// Orchestrate a JSM customer-request creation.
@@ -1768,30 +1798,230 @@ pub(crate) fn parse_field_kv(pairs: &[String]) -> Result<HashMap<String, String>
 /// 3. Build `requestFieldValues` from `--summary`, `--description` (ADF),
 ///    `--priority`, `--label`, `--field` via [`parse_field_kv`].
 /// 4. If `--type` is also set → emit stderr warning (BC-3.8.010). Do NOT error.
-/// 5. Build body via [`crate::api::jsm::requests::build_jsm_request_body`].
+/// 5. Build body via [`JsmRequestBuilder`].
 /// 6. POST via [`JiraClient::create_jsm_request`].
 /// 7. Emit `{"key": "<issue_key>"}` on stdout (`--output json` shape per AC-015).
-///
-/// # TODO(S-288-pr4 Step 4): implement
-#[allow(clippy::too_many_arguments)] // TODO(S-288-pr4 Step 4): remove after implementing
-#[allow(unused_variables)] // TODO(S-288-pr4 Step 4): remove after implementing
 async fn handle_jsm_create(
     client: &JiraClient,
     config: &Config,
     output_format: &OutputFormat,
-    project: Option<String>,
     project_override: Option<&str>,
     no_input: bool,
-    request_type: Option<String>,
-    issue_type: Option<String>,
-    summary: Option<String>,
-    description: Option<String>,
-    description_stdin: bool,
-    priority: Option<String>,
-    labels: Vec<String>,
-    markdown: bool,
-    on_behalf_of: Option<String>,
-    field_pairs: Vec<String>,
+    args: JsmCreateArgs,
 ) -> Result<()> {
-    todo!("S-288-pr4 Step 4")
+    let JsmCreateArgs {
+        project,
+        request_type,
+        issue_type,
+        summary,
+        description,
+        description_stdin,
+        priority,
+        labels,
+        markdown,
+        on_behalf_of,
+        field_pairs,
+    } = args;
+
+    // Resolve the request_type arg — we know it's Some because this function is only
+    // called when request_type.is_some().
+    let request_type_arg = request_type.expect("handle_jsm_create called without --request-type");
+
+    // Resolve project key (BC-3.8.001).
+    let project_key = project
+        .or_else(|| config.project_key(project_override))
+        .or_else(|| {
+            if no_input {
+                None
+            } else {
+                helpers::prompt_input("Project key").ok()
+            }
+        })
+        .ok_or_else(|| {
+            JrError::UserError(
+                "Project key is required. Use --project or configure .jr.toml. \
+                 Run \"jr project list\" to see available projects."
+                    .into(),
+            )
+        })?;
+
+    // Resolve service desk ID — errors with BC-X.8.004 message for non-JSM projects
+    // (BC-3.8.002). Call-site label "`jr issue create --request-type` requires".
+    let service_desk_id = servicedesks::require_service_desk(
+        client,
+        &project_key,
+        "`jr issue create --request-type` requires",
+    )
+    .await?;
+
+    let profile = &config.active_profile_name;
+
+    // Resolve request type ID (BC-3.8.003, BC-3.8.004).
+    let request_type_id =
+        if !request_type_arg.is_empty() && request_type_arg.chars().all(|c| c.is_ascii_digit()) {
+            // Numeric bypass — use directly without list endpoint call (BC-3.8.004).
+            request_type_arg.clone()
+        } else {
+            // Name resolution: cache → API → partial_match (BC-3.8.003).
+            resolve_jsm_request_type_id(
+                &request_type_arg,
+                &service_desk_id,
+                &project_key,
+                profile,
+                client,
+            )
+            .await?
+        };
+
+    // Resolve summary (BC-3.8.005).
+    let summary_text = summary
+        .or_else(|| {
+            if no_input {
+                None
+            } else {
+                helpers::prompt_input("Summary").ok()
+            }
+        })
+        .ok_or_else(|| {
+            JrError::UserError(
+                "summary is required for JSM request submission. Use --summary.".into(),
+            )
+        })?;
+
+    // Resolve description. spawn_blocking isolates the blocking stdin read from the
+    // tokio runtime so later async work isn't starved while waiting on piped input.
+    let desc_text = if description_stdin {
+        let buf = tokio::task::spawn_blocking(|| {
+            let mut buf = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;
+            Ok::<_, std::io::Error>(buf)
+        })
+        .await??;
+        Some(buf)
+    } else {
+        description
+    };
+
+    // Parse --field NAME=VALUE pairs (BC-3.8.008).
+    let extra_fields = parse_field_kv(&field_pairs)?;
+
+    // BC-3.8.010: warn if --type is also set; do NOT error.
+    // Warning fires AFTER field parsing and request-type resolution succeed.
+    if issue_type.is_some() {
+        eprintln!(
+            "warning: --type is ignored when --request-type is set; \
+             request type encodes the issue type"
+        );
+    }
+
+    // Build the POST body (BC-3.8.005..009).
+    let body = JsmRequestBuilder {
+        service_desk_id: &service_desk_id,
+        request_type_id: &request_type_id,
+        summary: &summary_text,
+        description: desc_text.as_deref(),
+        markdown,
+        priority: priority.as_deref(),
+        labels: &labels,
+        on_behalf_of: on_behalf_of.as_deref(),
+        extra_fields: &extra_fields,
+    }
+    .build();
+
+    // POST to /rest/servicedeskapi/request (BC-3.8.001).
+    // On 401: surface a scope-mismatch hint pointing at write:servicedesk-request
+    // (BC-1.3.023, BC-X.3.005, H-NEW-JSM-RT-003).
+    let created = client.create_jsm_request(body).await.map_err(|e| {
+        if let Some(JrError::NotAuthenticated { .. }) = e.downcast_ref::<JrError>() {
+            return anyhow::anyhow!(JrError::NotAuthenticated {
+                hint: "The `write:servicedesk-request` OAuth scope may be missing. \
+                       Run `jr auth refresh` or `jr auth login` to re-consent with \
+                       the updated scope."
+                    .to_string(),
+            });
+        }
+        e
+    })?;
+
+    // Emit output (AC-015, BC-3.8.001).
+    let issue_key = &created.issue_key;
+    match output_format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::json!({"key": issue_key}));
+        }
+        OutputFormat::Table => {
+            output::print_success(&format!("Created request {issue_key}"));
+        }
+    }
+
+    Ok(())
+}
+
+/// Resolve a request type name to its ID for the JSM create path.
+///
+/// Mirrors `cli/requesttype.rs::resolve_request_type_id` — cache → fetch → `partial_match`.
+async fn resolve_jsm_request_type_id(
+    name: &str,
+    service_desk_id: &str,
+    project_key: &str,
+    profile: &str,
+    client: &JiraClient,
+) -> Result<String> {
+    let types = match cache::read_request_type_cache(profile, service_desk_id)? {
+        Some(cached) => cached,
+        None => {
+            let fetched = client.list_request_types(service_desk_id, None).await?;
+            cache::write_request_type_cache(profile, service_desk_id, &fetched)?;
+            fetched
+        }
+    };
+
+    let names: Vec<String> = types.iter().map(|t| t.name.clone()).collect();
+
+    match partial_match::partial_match(name, &names) {
+        MatchResult::Exact(matched_name) => {
+            let id = types
+                .iter()
+                .find(|t| t.name == matched_name)
+                .map(|t| t.id.clone())
+                .expect("partial_match::Exact match must exist in types");
+            Ok(id)
+        }
+        MatchResult::ExactMultiple(matched_name) => {
+            let matched_lower = matched_name.to_lowercase();
+            let ids: Vec<String> = types
+                .iter()
+                .filter(|t| t.name.to_lowercase() == matched_lower)
+                .map(|t| t.id.clone())
+                .collect();
+            Err(JrError::UserError(format!(
+                "Multiple request types named \"{matched_name}\" found (IDs: {}). \
+                 Pass the numeric ID directly.",
+                ids.join(", ")
+            ))
+            .into())
+        }
+        MatchResult::Ambiguous(matches) => Err(JrError::UserError(format!(
+            "Ambiguous request type \"{name}\" matches: {}. \
+             Run `jr requesttype list --project {project_key}` to see all request types.",
+            matches
+                .iter()
+                .map(|m| format!("\"{m}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+        .into()),
+        MatchResult::None(_) => {
+            let cache_path =
+                cache::cache_dir(profile).join(format!("request_types_{service_desk_id}.json"));
+            Err(JrError::UserError(format!(
+                "Request type \"{name}\" not found. \
+                 Run `jr requesttype list --project {project_key}` to see all request types, \
+                 or delete the cache file at {} \
+                 if a recent admin change is suspected.",
+                cache_path.display()
+            ))
+            .into())
+        }
+    }
 }
