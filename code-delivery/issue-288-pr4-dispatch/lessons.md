@@ -103,3 +103,16 @@ This lesson was reinforced during pr4-dispatch when the initial dispatch impl ac
 parameters on the JSM submission path before the refactor was applied in the same PR.
 
 **Apply to:** any function growing beyond 5 parameters; proactively refactor before clippy fires.
+
+---
+
+## L-288-pr4-06: Adversarial findings must be Perplexity/local-validated BEFORE filing as follow-up issues
+
+Adversarial findings must be Perplexity/local-validated BEFORE being filed as follow-up issues.
+The pr4-dispatch cycle ran 9 adversarial passes without per-finding validation — the retrospective
+audit caught zero REFUTED claims but one reframe (O-08-05 scope name was incorrect: should be
+`read:*` not `write:*`). Codify: research-agent dispatch as Step 9.5 between adversarial close
+and follow-up issue filing. Process-gap codification target for future cycles.
+
+**Apply to:** every adversary dispatch cycle; run research-agent validation pass before filing
+any follow-up GitHub issues from adversarial findings.
