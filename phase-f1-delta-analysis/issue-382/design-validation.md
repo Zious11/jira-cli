@@ -37,7 +37,7 @@ Validates the architect's F1 Option-(a) recommendation (`add required_scope: Opt
 #[error(
     "Insufficient token scope: {message}\n\n\
      The Atlassian API gateway rejects granular-scoped personal tokens on POST \
-     requests. Workarounds:\n  \
+     requests (while PUT/GET succeed). Workarounds:\n  \
      • Use a classic token with \"{scope_hint}\" scope instead of granular scopes, or\n  \
      • Try OAuth 2.0 (run \"jr auth login --oauth\") — may avoid this bug, not verified\n\n\
      See https://github.com/Zious11/jira-cli/issues/185 for details.",
@@ -49,7 +49,9 @@ InsufficientScope {
 },
 ```
 
-The `.filter(|s| !s.is_empty())` defensively treats `Some("")` identically to `None`, preventing the broken `Use a classic token with "" scope` Display output if a construction site passes empty by mistake. Pinned by a new unit test at AC-3. This aligns with the BC-1.6.042 Empty-Some policy.
+This is the ONLY change from the existing `#[error]` block — substituting `"write:jira-work"` with the parameterized `{scope_hint}` expression-arg. Every other character is preserved, including the parenthetical, the workaround bullets, the "may avoid this bug, not verified" hedge, and the issues/185 URL. This is what "byte-for-byte preserved" actually means. The parenthetical `(while PUT/GET succeed)` is load-bearing context — explains to users why their GET works but POST fails. Preserving the full Display text minus the one parameterized substring is the minimal-disruption refactor.
+
+The `.filter(|s| !s.is_empty())` defensively treats `Some("")` identically to `None`, preventing the broken `Use a classic token with "" scope` Display output if a construction site passes empty by mistake. Pinned by a new unit test at AC-4. This aligns with the BC-1.6.042 Empty-Some policy.
 
 `None` callers (and now `Some("")` callers) retain today's `"write:jira-work"` literal as the fallback (zero behavior regression for the platform-write path and for the existing `insufficient_scope_display_includes_workarounds` and `test_401_scope_mismatch_returns_insufficient_scope` tests — see Q-5). `Some("write:servicedesk-request")` callers get the JSM-correct hint.
 
@@ -183,12 +185,18 @@ F2 must specify the exact `#[error(...)]` template using the expression-argument
 ```rust
 #[error(
     "Insufficient token scope: {message}\n\n\
-     ... \"{scope_hint}\" ...",
+     The Atlassian API gateway rejects granular-scoped personal tokens on POST \
+     requests (while PUT/GET succeed). Workarounds:\n  \
+     • Use a classic token with \"{scope_hint}\" scope instead of granular scopes, or\n  \
+     • Try OAuth 2.0 (run \"jr auth login --oauth\") — may avoid this bug, not verified\n\n\
+     See https://github.com/Zious11/jira-cli/issues/185 for details.",
     scope_hint = required_scope.as_deref().filter(|s| !s.is_empty()).unwrap_or("write:jira-work")
 )]
 ```
 
-The `.filter(|s| !s.is_empty())` defensively treats `Some("")` identically to `None`, preventing the broken `Use a classic token with "" scope` Display output if a construction site passes empty by mistake. Pinned by a new unit test at AC-3. This aligns with the BC-1.6.042 Empty-Some policy.
+This is the ONLY change from the existing `#[error]` block — substituting `"write:jira-work"` with the parameterized `{scope_hint}` expression-arg. Every other character is preserved, including the parenthetical, the workaround bullets, the "may avoid this bug, not verified" hedge, and the issues/185 URL. This is what "byte-for-byte preserved" actually means. The parenthetical `(while PUT/GET succeed)` is load-bearing context — explains to users why their GET works but POST fails. Preserving the full Display text minus the one parameterized substring is the minimal-disruption refactor.
+
+The `.filter(|s| !s.is_empty())` defensively treats `Some("")` identically to `None`, preventing the broken `Use a classic token with "" scope` Display output if a construction site passes empty by mistake. Pinned by a new unit test at AC-4. This aligns with the BC-1.6.042 Empty-Some policy.
 
 Do NOT use the naive `{required_scope:?}` form — it renders `Some("x")` / `None` literals to end-users. Cite `NotAuthenticated { hint: String }` as the in-project precedent for the structured-hint-field pattern.
 
@@ -255,3 +263,4 @@ No PIVOT is required. No architectural change is required. The change remains a 
 
 [REVISED 2026-05-19 per F1d adversary-pass-01 F-01 + F-05]
 [REVISED 2026-05-19 per F1d adversary-pass-02 H-02 + M-05 + L-02]
+[REVISED 2026-05-19 per F1d adversary-pass-05 M-02 + L-02] — Restored "(while PUT/GET succeed)" parenthetical to Q-1/Refinement-1 template (was silently dropped, contradicted "byte-for-byte preserved" claim); 2 stale AC-3 citations fixed to AC-4.

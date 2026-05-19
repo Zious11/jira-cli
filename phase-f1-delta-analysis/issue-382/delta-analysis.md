@@ -10,9 +10,9 @@ feature_type: "backend"
 scope: "trivial"
 severity: "N/A"
 sources:
-  - impact-boundary.md (architect, F1-Step-3; revised F1d adversary-pass-01 F-01 + F-03; revised F1d adversary-pass-02 H-01 + M-01 + L-01; revised F1d adversary-pass-03 M-02; revised F1d adversary-pass-04 L-02 — M-2 reclassified MODIFIED)
+  - impact-boundary.md (architect, F1-Step-3; revised F1d adversary-pass-01 F-01 + F-03; revised F1d adversary-pass-02 H-01 + M-01 + L-01; revised F1d adversary-pass-03 M-02; revised F1d adversary-pass-04 L-02 — M-2 reclassified MODIFIED; revised F1d adversary-pass-05 M-01 + L-03)
   - affected-artifacts.md (business-analyst, F1-Step-4; revised F1d adversary-pass-01 F-02 + F-04 + F-06 + F-07; revised F1d adversary-pass-02 H-01 + L-03; revised F1d adversary-pass-03 M-01 + M-03 + L-01 + L-02 intent)
-  - design-validation.md (research-agent, pre-F2 gate; revised F1d adversary-pass-01 F-01 + F-05; revised F1d adversary-pass-02 H-02 + M-05 + L-02; revised F1d adversary-pass-03 L-03 + AC-4 added)
+  - design-validation.md (research-agent, pre-F2 gate; revised F1d adversary-pass-01 F-01 + F-05; revised F1d adversary-pass-02 H-02 + M-05 + L-02; revised F1d adversary-pass-03 L-03 + AC-4 added; revised F1d adversary-pass-05 M-02 + L-02)
   - po-decision-bc-parameterization.md (product-owner, F1d adversary-pass-01 F-02)
   - bc-1-auth-identity.md BC-1.6.042 (Empty-Some policy added in pass-02)
 ---
@@ -84,7 +84,7 @@ sources:
 | `src/error.rs` unit test T-1b (line 131) | MODIFIED | `insufficient_scope_exit_code`: construction call updated to add `required_scope: None`; assertion (exit_code == 2) UNCHANGED |
 | `src/error.rs` unit test T-1 (line 171) | MODIFIED | `insufficient_scope_display_includes_workarounds`: construction call updated to add `required_scope: None`; assertion text UNCHANGED (None-fallback preserves `write:jira-work` literal in Display) |
 | `tests/api_client.rs` T-2 (line 136) | UNCHANGED | Assertion passes unmodified via None-fallback at C-2; `write:jira-work` literal preserved byte-for-byte |
-| `src/error.rs` unit test T-3 (NEW, AC-4) | NEW | `test_insufficient_scope_display_empty_some_falls_back`: constructs with `required_scope: Some("".into())`; asserts Display contains `write:jira-work` (fallback). Pins Empty-Some policy from BC-1.6.042 pass-02. |
+| `src/error.rs` unit test (NEW, AC-4) | NEW | `test_insufficient_scope_display_empty_some_falls_back`: constructs with `required_scope: Some("".into())`; asserts Display contains `write:jira-work` (fallback). Pins Empty-Some policy from BC-1.6.042 pass-02. No T-N label assigned — T-3 through T-9 are reserved for the harmonized scheme per impact-boundary.md Section 4 pass-05. |
 | `BC-1.6.042` | MODIFY (option-a, in-place) | Behavior line parameterized + Empty-Some policy added; no new BC added; no BC-INDEX or CANONICAL-COUNTS change |
 | `BC-1.6.047` (candidate) | WITHDRAWN | PO decision: not needed |
 
@@ -121,7 +121,7 @@ Three refinements established by the research-agent validation gate (L-288-pr4-0
 #[error(
     "Insufficient token scope: {message}\n\n\
      The Atlassian API gateway rejects granular-scoped personal tokens on POST \
-     requests. Workarounds:\n  \
+     requests (while PUT/GET succeed). Workarounds:\n  \
      • Use a classic token with \"{scope_hint}\" scope instead of granular scopes, or\n  \
      • Try OAuth 2.0 (run \"jr auth login --oauth\") — may avoid this bug, not verified\n\n\
      See https://github.com/Zious11/jira-cli/issues/185 for details.",
@@ -133,7 +133,7 @@ InsufficientScope {
 },
 ```
 
-Note the `.filter(|s| !s.is_empty())` between `as_deref()` and `unwrap_or`. This is required by BC-1.6.042's Empty-Some policy (added pass-02): `Some("")` must fall back to `"write:jira-work"` identically to `None`. In-project precedent: `JrError::NotAuthenticated { hint: String }` (same structured-hint-field pattern). External precedent: gh CLI #9117 desired-pattern (runtime-resolved scope name + actionable recovery command).
+Note the `.filter(|s| !s.is_empty())` between `as_deref()` and `unwrap_or`. This is required by BC-1.6.042's Empty-Some policy (added pass-02): `Some("")` must fall back to `"write:jira-work"` identically to `None`. The parenthetical `(while PUT/GET succeed)` is load-bearing context — preserved verbatim from the existing Display block, byte-for-byte, per the design-validation.md "byte-for-byte preserved" claim (M-02 finding). In-project precedent: `JrError::NotAuthenticated { hint: String }` (same structured-hint-field pattern). External precedent: gh CLI #9117 desired-pattern (runtime-resolved scope name + actionable recovery command).
 
 **Refinement 2 — scope-name lookup table (Q-2):** Per-construction-site values confirmed against Atlassian OAuth scopes docs. Note: `parse_error()` in `client.rs:969` has access to `response.url().path()` but we do NOT thread endpoint inference here — path-based mapping is fragile and maintenance-heavy. `None`-fallback preserves existing behavior cheaply. Additional endpoints deferred.
 
@@ -147,7 +147,7 @@ Note the `.filter(|s| !s.is_empty())` between `as_deref()` and `unwrap_or`. This
 |----|-------------|--------|
 | AC-1 | Variant signature `JrError::InsufficientScope { message: String, required_scope: Option<String> }` | Required for F4 |
 | AC-2 | Display uses thiserror expression-argument form `scope_hint = required_scope.as_deref().filter(|s| !s.is_empty()).unwrap_or("write:jira-work")` | Required for F4 |
-| AC-3 | New unit test pins `Some("write:servicedesk-request")` → Display contains `write:servicedesk-request` | Required for F4 |
+| AC-3 | New unit test `test_insufficient_scope_display_uses_required_scope_when_some` constructs with `required_scope: Some("write:servicedesk-request".into())`, asserts Display contains `write:servicedesk-request` AND does NOT contain `write:jira-work` (negation pins that the Some-branch suppresses the None-fallback) | Required for F4 |
 | AC-4 | New unit test pins `Some("")` → Display contains `write:jira-work` (fallback, per Empty-Some policy from BC-1.6.042 pass-02) | Required for F4 — NEW from pass-02 |
 | AC-5 | T-2 (`tests/api_client.rs:136`) still passes unmodified — `None`→`"write:jira-work"` fallback preserves assertion byte-for-byte | Verified by design |
 | AC-6 | All 3 production construction sites updated per lookup table: `client.rs:700` → `None`, `client.rs:969` → `None`, `create.rs:1983` → `Some("write:servicedesk-request")` | Required for F4 |
@@ -168,7 +168,7 @@ Note the `.filter(|s| !s.is_empty())` between `as_deref()` and `unwrap_or`. This
 | File Path | Purpose |
 |-----------|---------|
 | _(none required)_ | All changes are in-place modifications |
-| New unit tests (inline in `src/error.rs`) | `test_insufficient_scope_display_uses_required_scope_when_some` — pins `Some("write:servicedesk-request")` Display branch (AC-3); `test_insufficient_scope_display_empty_some_falls_back` — pins `Some("")` → `write:jira-work` fallback (AC-4, Empty-Some policy) |
+| New unit tests (inline in `src/error.rs`) | `test_insufficient_scope_display_uses_required_scope_when_some` — constructs with `required_scope: Some("write:servicedesk-request".into())`, asserts Display contains `write:servicedesk-request` AND does NOT contain `write:jira-work` (two-part; AC-3); `test_insufficient_scope_display_empty_some_falls_back` — pins `Some("")` → `write:jira-work` fallback (AC-4, Empty-Some policy) |
 
 ### Modified Files
 
@@ -240,7 +240,7 @@ These spec and doc files reference `InsufficientScope` behavior or BC-1.6.042. T
 - **Tests requiring source change:** 2 (T-1b at `src/error.rs:131` — construction-call adds `required_scope: None`; assertion (exit_code == 2) UNCHANGED. T-1 at `src/error.rs:171` — construction-call adds `required_scope: None`; assertion text UNCHANGED.)
 - **Tests unaffected despite Display change:** 8 (T-2 through T-9 — all pass via `None` fallback or pin non-literal assertions)
 - **T-2 specifically:** `tests/api_client.rs:136` — UNCHANGED; assertion passes via None-fallback at C-2; `write:jira-work` literal preserved byte-for-byte
-- **New unit tests required:** 2 (AC-3 — `test_insufficient_scope_display_uses_required_scope_when_some` pins `Some("write:servicedesk-request")` Display branch; AC-4 — `test_insufficient_scope_display_empty_some_falls_back` pins `Some("")` → `write:jira-work` fallback per BC-1.6.042 Empty-Some policy)
+- **New unit tests required:** 2 (AC-3 — `test_insufficient_scope_display_uses_required_scope_when_some`: two-part assertion — Display contains `write:servicedesk-request` AND does NOT contain `write:jira-work`; AC-4 — `test_insufficient_scope_display_empty_some_falls_back` pins `Some("")` → `write:jira-work` fallback per BC-1.6.042 Empty-Some policy)
 - **MODIFIED construction-call sites:** 2 (T-1 + T-1b; both in `src/error.rs`; assertions in both are UNCHANGED)
 - **Risk zone test files:** `src/error.rs` (inline), `tests/api_client.rs`, `tests/oauth_flow_holdouts.rs`, `tests/issue_create_jsm.rs`
 
@@ -277,6 +277,13 @@ All questions resolved. Status recorded below.
 
 ## Change Log
 
+- [REVISED 2026-05-19 per F1d adversary-pass-05 — 2 MED (M-01 T-N harmonized, M-02 Display preserved verbatim) + 3 LOW (L-01 AC-3 tightened with negation, L-02 AC-3→AC-4, L-03 Section 1 T-1b row) addressed; status remains under-review until pass-06+ CLEAN.]
+  - **M-01 (T-N harmonization):** Sources frontmatter updated to cite pass-05 M-01 + L-03 for impact-boundary.md; pass-05 M-02 + L-02 for design-validation.md. Component Impact Table: "T-3 (NEW, AC-4)" label on the Empty-Some row renamed to "(NEW, AC-4)" with a note that no T-N label is assigned to this row — T-3 through T-9 are reserved for the harmonized scheme per impact-boundary.md Section 4 pass-05. Change-log pass-03 entry updated in kind.
+  - **M-02 (Display byte-for-byte):** Refinement 1 thiserror template updated to include `(while PUT/GET succeed)` parenthetical, matching the design-validation.md Q-1/Refinement-1 template restored in pass-05. Sentence added to the Note paragraph explicitly citing the M-02 finding and "byte-for-byte preserved" claim. The omission of the parenthetical in prior passes was a silent drop; the claim is now genuinely true.
+  - **L-01 (AC-3 tightened with negation):** AC-3 in Acceptance Criteria table updated to specify the two-part assertion: asserts Display contains `write:servicedesk-request` AND does NOT contain `write:jira-work`. New Files table description for `test_insufficient_scope_display_uses_required_scope_when_some` updated to match. Regression Baseline AC-3 description updated to "two-part assertion." This tightening aligns with design-validation.md Q-5 Refinement 3 recommended assertion form.
+  - **L-02 (AC-3→AC-4 stale citations):** Not applicable in delta-analysis.md (those citations were in design-validation.md); no additional changes needed here beyond the M-02/L-01 propagation above.
+  - **L-03 (Section 1 T-1b row):** Already present in delta-analysis.md Component Impact Table (line 84 — T-1b row was added in pass-03/04). No further change needed.
+  - **Frontmatter preserved:** `status: under-review` and `scope: trivial` unchanged.
 - [REVISED 2026-05-19 per F1d adversary-pass-04 L-01 + L-02 propagation] — M-2 reclassified MODIFIED; Section 5b sibling count now genuinely matches at 8.
   - **L-02 (M-2 destructure fix):** Component Impact Table row for `src/cli/issue/create.rs` updated to document two distinct modifications: (1) destructure pattern at line 1982 changed from `{ message }` to `{ message, .. }` to prevent E0027 compile-break after struct-widening; (2) construction site at line 1983 gains `required_scope: Some("write:servicedesk-request".to_string())` (unchanged from prior analysis). AC-7 added to pin the destructure fix as a separate acceptance criterion. Risk Assessment updated: M-2 compile-break risk is now mitigated by AC-7 (fix must be applied before other construction sites are touched). Previous DEPENDENT classification of line 1982 was incorrect — exhaustive struct destructure without `..` becomes a hard compile error (E0027) the moment the struct gains any new field.
   - **L-01 (Section 5b count):** Docs/Index Surfaces Verified Unchanged prose updated to confirm that the "8 surfaces" count now genuinely matches impact-boundary.md Section 5b. The architect added the 2 frozen superpowers docs to Section 5b in pass-03; this pass verifies the cross-artifact count is consistent.
@@ -284,7 +291,7 @@ All questions resolved. Status recorded below.
   - **Frontmatter preserved:** `status: under-review` and `scope: trivial` unchanged.
 - [REVISED 2026-05-19 per F1d adversary-pass-03 — all 3 MED + 3 LOW findings addressed; status remains under-review until pass-04+ CLEAN]
   - **Docs/Index count updated 6 → 8.** Two historical superpowers docs added to "Docs/Index Surfaces Verified Unchanged": `docs/superpowers/specs/2026-04-17-insufficient-scope-error-design.md` and `docs/superpowers/plans/2026-04-17-insufficient-scope-error.md`. Both are frozen v1 records; stale `{ message: String }` references are intentional; no verify action required. Propagated from affected-artifacts.md Section 8 (M-03 finding).
-  - **Component Impact Table corrected.** T-1 and T-1b row notes tightened to state construction-call-only updates; assertions explicitly noted as UNCHANGED. T-2 row notes updated to cite `write:jira-work` preserved byte-for-byte. T-3 (NEW, AC-4) row added for `test_insufficient_scope_display_empty_some_falls_back` pinning Empty-Some policy.
+  - **Component Impact Table corrected.** T-1 and T-1b row notes tightened to state construction-call-only updates; assertions explicitly noted as UNCHANGED. T-2 row notes updated to cite `write:jira-work` preserved byte-for-byte. NEW AC-4 row added for `test_insufficient_scope_display_empty_some_falls_back` pinning Empty-Some policy (no T-N label in this row — T-3 through T-9 are reserved for harmonized scheme per impact-boundary.md Section 4).
   - **Known cosmetic subsection added.** "Known Cosmetic — Accepted for #382" documents C-3 dual-rendering wart (scope name appears twice in Display for JSM path). Decision: accept for #382; follow-up if user feedback flags. Cites affected-artifacts.md Section 6 for rationale (L-01 intent).
   - **Regression Baseline counts updated.** NEW unit tests = 2 (AC-3 + AC-4); MODIFIED construction-call sites = 2 (T-1 + T-1b); UNCHANGED assertions = confirmed at all sites including T-2.
   - **Sources frontmatter updated** with pass-03 revision entries for impact-boundary.md, affected-artifacts.md, and design-validation.md.
