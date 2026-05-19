@@ -18,8 +18,8 @@ This fixture represents a fully consistent state where all count surfaces agree.
 | File | Actual `#### BC-` count | Frontmatter `definitional_count` | Match? |
 |------|------------------------|----------------------------------|--------|
 | bc-1-auth-identity.md | 8 | 8 | YES |
-| bc-2-issue-read.md | 15 | 15 | YES |
-| **Total individually-bodied** | **23** | — | — |
+| bc-2-issue-read.md | 17 | 17 | YES |
+| **Total individually-bodied** | **25** | — | — |
 
 ### Per-file total_bcs (cumulative claim: individually-bodied + range-collapsed)
 

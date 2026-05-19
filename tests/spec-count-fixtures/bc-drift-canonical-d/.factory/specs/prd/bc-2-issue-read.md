@@ -2,7 +2,7 @@
 context: bc-2
 title: "Issue Read (list/view/comments/changelog)"
 total_bcs: 20   # cumulative claim (incl. range-collapsed); definitional_count below is individually-bodied headings
-definitional_count: 15   # count of `#### BC-` headings in this file
+definitional_count: 17   # count of `#### BC-` headings in this file
 last_updated: 2026-01-01
 source_pass: 3
 ---
