@@ -99,7 +99,14 @@ for f in "$FACTORY"/bc-*.md "$FACTORY"/cross-cutting.md; do
   if [ -z "$surface_d" ]; then
     echo "ERROR: $basename_f: no row found in CANONICAL-COUNTS.md per-file total_bcs table"
     ERRORS=$((ERRORS+1))
-  elif [ "$surface_d" != "$surface_a" ]; then
+    continue
+  fi
+  if ! [[ "$surface_d" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: $CANONICAL: per-file table row for $basename_f did not parse to an integer (got: '$surface_d') — CANONICAL-COUNTS table format may have changed"
+    ERRORS=$((ERRORS+1))
+    continue
+  fi
+  if [ "$surface_d" != "$surface_a" ]; then
     echo "ERROR: $basename_f: total_bcs frontmatter=$surface_a but CANONICAL-COUNTS.md table row=$surface_d"
     ERRORS=$((ERRORS+1))
   fi
