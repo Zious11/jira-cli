@@ -1,2 +1,0 @@
-823:fn build_labels_edited_fields(adds: &[String], removes: &[String]) -> serde_json::Value {
-1497:        fn build_labels_edited_fields_invariants(

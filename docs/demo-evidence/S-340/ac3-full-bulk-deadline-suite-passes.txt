@@ -1,9 +1,0 @@
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
-     Running tests/bulk_deadline_propagation.rs (target/debug/deps/bulk_deadline_propagation-767a7afc58fbba55)
-
-running 2 tests
-test test_333_bulk_429_storm_respects_deadline_within_grace ... ok
-test test_333_b1_bulk_running_storm_respects_deadline_via_outer_clamp ... ok
-
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.74s
-

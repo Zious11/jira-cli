@@ -78,8 +78,8 @@ When the baseline reveals surviving mutants below 90%:
 1. **Whitelist clearly-defensive mutants** per the convention above with justification comments.
 2. **File one follow-up GitHub issue per uncovered-region cluster** (not per individual
    mutant). Title pattern: `chore(mutants): close surviving-mutant gap in <module> — N mutants`
-3. **Track deferred follow-ups** in `docs/demo-evidence/S-346/deferred-followups.md` with
-   issue numbers, links, and surviving mutant descriptions.
+3. **Track deferred follow-ups** via GitHub issues labeled `audit-followup` with
+   issue numbers, links, and surviving mutant descriptions in the issue body.
 4. **Subsequent PRs** incrementally close the gap by tightening assertions, adding
    targeted test cases, or whitelisting genuinely unkillable mutants.
 

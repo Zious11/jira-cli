@@ -26,3 +26,6 @@ proptest-regressions/
 # cargo-mutants artifacts (local mutation test runs) — see docs/specs/cargo-mutants-policy.md
 mutants.out/
 mutants.out.old/
+
+# Demo evidence (per-story VHS recordings + evidence reports) — local-only, not committed
+docs/demo-evidence/
