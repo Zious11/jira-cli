@@ -99,5 +99,5 @@ Results: 0 passed, 7 failed (guard absent)
 ## Adding new fixtures
 
 When adding a new drift category, create a new `<name>/` directory alongside the existing
-four with the same `.factory/specs/prd/` subpath, add a `run` call in `run-tests.sh`, and
-document the drift type in this README.
+fixture directories with the same `.factory/specs/prd/` subpath, add a `run` call in
+`run-tests.sh`, and document the drift type in this README.

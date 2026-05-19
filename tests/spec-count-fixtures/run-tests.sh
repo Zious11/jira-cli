@@ -13,11 +13,14 @@ set -euo pipefail
 #   PASS: total_bcs drift exits 1
 #   PASS: prose count drift exits 1
 #   PASS: grand-total drift exits 1
-#   Results: 4 passed, 0 failed
+#   PASS: Surface-C sections: line drift exits 1
+#   PASS: Surface-D canonical table row drift exits 1
+#   PASS: body decoy prose ignored; guard reads preamble only exits 0
+#   Results: 7 passed, 0 failed
 #
 # Red Gate state (before guard script exists):
-#   All 4 fixtures will show FAIL or ERROR.
-#   Results: 0 passed, 4 failed
+#   All 7 fixtures will show FAIL or ERROR.
+#   Results: 0 passed, 7 failed
 #   (This is the correct state for TDD Red Gate.)
 
 # Repo-root guard: must be run from the directory that contains scripts/ and tests/
