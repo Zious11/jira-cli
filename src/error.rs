@@ -9,9 +9,10 @@ pub enum JrError {
         "Insufficient token scope: {message}\n\n\
          The Atlassian API gateway rejects granular-scoped personal tokens on POST \
          requests (while PUT/GET succeed). Workarounds:\n  \
-         • Use a classic token with \"write:jira-work\" scope instead of granular scopes, or\n  \
+         • Use a classic token with \"{scope_hint}\" scope instead of granular scopes, or\n  \
          • Try OAuth 2.0 (run \"jr auth login --oauth\") — may avoid this bug, not verified\n\n\
-         See https://github.com/Zious11/jira-cli/issues/185 for details."
+         See https://github.com/Zious11/jira-cli/issues/185 for details.",
+        scope_hint = required_scope.as_deref().filter(|s| !s.is_empty()).unwrap_or("write:jira-work")
     )]
     InsufficientScope {
         message: String,
