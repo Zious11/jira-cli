@@ -244,6 +244,47 @@ mod proptests {
             }
         }
 
+        /// C.4 (adversary pass-03 M-02): BC-3.8.001 — serviceDeskId and requestTypeId
+        /// MUST be top-level string fields in the request body, NOT inside requestFieldValues.
+        /// Regression guard for any refactor that relocates either field to requestFieldValues
+        /// (which would cause Atlassian to reject the request with a 4xx).
+        #[test]
+        fn prop_build_jsm_request_body_top_level_ids(
+            sid in "[0-9]{1,6}",
+            rtid in "[0-9]{1,6}",
+            summary in "[a-zA-Z0-9 ]{1,40}",
+        ) {
+            let extra = std::collections::HashMap::new();
+            let body = JsmRequestBuilder {
+                service_desk_id: &sid,
+                request_type_id: &rtid,
+                summary: &summary,
+                description: None,
+                markdown: false,
+                priority: None,
+                labels: &[],
+                on_behalf_of: None,
+                extra_fields: &extra,
+            }
+            .build();
+
+            // Top-level pin
+            prop_assert_eq!(body.get("serviceDeskId").and_then(serde_json::Value::as_str), Some(sid.as_str()));
+            prop_assert_eq!(body.get("requestTypeId").and_then(serde_json::Value::as_str), Some(rtid.as_str()));
+
+            // Negative-space pin: must NOT appear inside requestFieldValues
+            let rfv = body.get("requestFieldValues").and_then(serde_json::Value::as_object)
+                .expect("requestFieldValues must exist");
+            prop_assert!(
+                !rfv.contains_key("serviceDeskId"),
+                "BC-3.8.001: serviceDeskId MUST NOT appear inside requestFieldValues; got body: {body}"
+            );
+            prop_assert!(
+                !rfv.contains_key("requestTypeId"),
+                "BC-3.8.001: requestTypeId MUST NOT appear inside requestFieldValues; got body: {body}"
+            );
+        }
+
         /// C.3 (BC-3.8.009): When `on_behalf_of` is `Some`, `raiseOnBehalfOf` is
         /// present at the top level of the body. When `None`, the key is completely
         /// absent (NOT null).

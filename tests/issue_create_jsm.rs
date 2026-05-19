@@ -518,8 +518,14 @@ async fn test_jsm_create_numeric_id_bypasses_name_lookup() {
         .await;
 
     // JSM create endpoint must be called exactly once with the numeric request type ID.
+    // M-02a (adversary pass-03): pin top-level serviceDeskId and requestTypeId in the
+    // POST body — they must NOT be inside requestFieldValues (BC-3.8.001).
     Mock::given(method("POST"))
         .and(path("/rest/servicedeskapi/request"))
+        .and(body_partial_json(json!({
+            "serviceDeskId": "10",       // top-level, NOT in requestFieldValues
+            "requestTypeId": "11002",    // top-level, NOT in requestFieldValues (the literal --request-type arg)
+        })))
         .respond_with(ResponseTemplate::new(201).set_body_json(json!({
             "issueId": "107002",
             "issueKey": "HELP-55",
