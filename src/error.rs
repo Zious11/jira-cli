@@ -9,7 +9,7 @@ use thiserror::Error;
 /// Verbatim from F2 PRD delta CANONICAL block (adversary-pass-4 F-04).
 /// Must NOT contain OAuth-scope language, `write:servicedesk-request`,
 /// or `jr auth refresh`.
-pub const API_TOKEN_EXPIRY_HINT: &str = "Your API token may be expired or revoked. Regenerate it at\n\
+pub(crate) const API_TOKEN_EXPIRY_HINT: &str = "Your API token may be expired or revoked. Regenerate it at\n\
 https://id.atlassian.com/manage-profile/security/api-tokens\n\
 then run `jr auth login` to re-store the credentials.";
 
