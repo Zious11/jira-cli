@@ -1315,7 +1315,7 @@ async fn test_jsm_create_type_flag_ignored_with_warning() {
 /// Assertions flipped from `write:servicedesk-request` (pre-S-384 behavior) to
 /// API-token-expiry hint — the pre-S-384 behavior was the bug (O-08-01 CONFIRMED).
 #[tokio::test]
-async fn test_jsm_create_401_hint_contains_write_servicedesk_request() {
+async fn test_jsm_create_basic_auth_generic_401_surfaces_api_token_hint() {
     let server = MockServer::start().await;
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
@@ -1365,6 +1365,11 @@ async fn test_jsm_create_401_hint_contains_write_servicedesk_request() {
     assert!(
         !output.status.success(),
         "BC-3.8.014: expected non-zero exit for Basic-auth 401, got exit 0. stderr: {stderr}"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "BC-3.8.014: expected exit code 2 (NotAuthenticated) for Basic-auth 401; stderr: {stderr}"
     );
 
     // BC-3.8.014 postcondition 1: API-token-expiry hint must be present.
@@ -1529,7 +1534,7 @@ async fn test_jsm_create_output_json_shape_matches_platform() {
 /// C-01 (adversary pass-01): OAuth scope-mismatch 401 must surface the
 /// write:servicedesk-request hint via JrError::InsufficientScope dispatch.
 ///
-/// The existing `test_jsm_create_401_hint_contains_write_servicedesk_request`
+/// The existing `test_jsm_create_basic_auth_generic_401_surfaces_api_token_hint`
 /// uses Basic auth which hits the `NotAuthenticated` branch; this test uses
 /// Bearer auth + body "scope does not match" which hits the `InsufficientScope`
 /// branch (`src/api/client.rs:696-704`). Regression guard for the C-01 fix in
@@ -2828,10 +2833,15 @@ async fn test_jsm_create_basic_auth_401_surfaces_api_token_hint() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    // Must exit non-zero.
+    // Must exit non-zero with exit code 2 (NotAuthenticated).
     assert!(
         !output.status.success(),
         "BC-3.8.014 AC-3: expected non-zero exit for Basic-auth generic 401; got exit 0. stderr: {stderr}"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "BC-3.8.014 AC-3: expected exit code 2 (NotAuthenticated) for Basic-auth generic 401; stderr: {stderr}"
     );
 
     // BC-3.8.014 postcondition 1: API-token-expiry hint present (L-288-pr2-02 strict).
@@ -2920,10 +2930,15 @@ async fn test_jsm_create_basic_auth_scope_mismatch_401_rewrites_to_api_token_hin
 
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    // Must exit non-zero.
+    // Must exit non-zero with exit code 2 (NotAuthenticated after rewrite).
     assert!(
         !output.status.success(),
         "BC-3.8.014 AC-4: expected non-zero exit for Basic-auth scope-mismatch 401; got exit 0. stderr: {stderr}"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "BC-3.8.014 AC-4: expected exit code 2 (NotAuthenticated after InsufficientScope rewrite); stderr: {stderr}"
     );
 
     // BC-3.8.014 postcondition 2: InsufficientScope is rewritten → API-token hint present.
@@ -3010,10 +3025,15 @@ async fn test_require_service_desk_basic_auth_401_surfaces_api_token_hint() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    // Must exit non-zero (require_service_desk errors out before JSM POST).
+    // Must exit non-zero with exit code 2 (NotAuthenticated — require_service_desk errors before JSM POST).
     assert!(
         !output.status.success(),
         "BC-X.8.006 AC-7: expected non-zero exit for Basic-auth project GET 401; got exit 0. stderr: {stderr}"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "BC-X.8.006 AC-7: expected exit code 2 (NotAuthenticated) for Basic-auth project GET 401; stderr: {stderr}"
     );
 
     // BC-X.8.006 postcondition 1: API-token-expiry hint present (L-288-pr2-02 strict).
@@ -3098,10 +3118,15 @@ async fn test_require_service_desk_oauth_401_surfaces_read_scope_hint() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    // Must exit non-zero (require_service_desk errors before JSM POST).
+    // Must exit non-zero with exit code 2 (NotAuthenticated — require_service_desk errors before JSM POST).
     assert!(
         !output.status.success(),
         "BC-X.8.007 AC-8: expected non-zero exit for Bearer scope-mismatch project GET 401; got exit 0. stderr: {stderr}"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "BC-X.8.007 AC-8: expected exit code 2 (NotAuthenticated) for Bearer scope-mismatch project GET 401; stderr: {stderr}"
     );
 
     // BC-X.8.007 postcondition 1: read-side scope hint present (L-288-pr2-02 strict).

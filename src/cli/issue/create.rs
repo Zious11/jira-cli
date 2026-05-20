@@ -1982,9 +1982,10 @@ async fn handle_jsm_create(
     //   Basic-auth (is_oauth_auth() == false): REWRITE any incoming variant
     //     (NotAuthenticated or InsufficientScope) to NotAuthenticated with the
     //     API-token-expiry hint. The InsufficientScope rewrite is required because
-    //     the body check at client.rs:696-704 fires BEFORE the Bearer guard at :718,
-    //     so a Basic-auth 401 with a scope-mismatch body lands as InsufficientScope
-    //     without the rewrite — exposing misleading OAuth language to Basic users.
+    //     the `"scope does not match"` body check in `send_inner` fires BEFORE the
+    //     Bearer-scheme guard, so a Basic-auth 401 with a scope-mismatch body lands
+    //     as InsufficientScope without the rewrite — exposing misleading OAuth language
+    //     to Basic users.
     //
     //   OAuth (is_oauth_auth() == true): preserve existing pre-#384 behavior
     //     unchanged for both arms — BOTH produce the write:servicedesk-request hint
@@ -2028,9 +2029,10 @@ async fn handle_jsm_create(
                     } else {
                         // Basic: rewrite InsufficientScope → NotAuthenticated with
                         // API-token-expiry hint (BC-3.8.014 postcondition 2).
-                        // The body check at client.rs:696-704 fires before the Bearer guard,
-                        // so a Basic-auth scope-mismatch body arrives as InsufficientScope;
-                        // rewriting here prevents misleading OAuth language for Basic users.
+                        // The `"scope does not match"` body check in `send_inner` fires before
+                        // the Bearer-scheme guard, so a Basic-auth scope-mismatch body arrives
+                        // as InsufficientScope; rewriting here prevents misleading OAuth language
+                        // for Basic users.
                         anyhow::anyhow!(JrError::NotAuthenticated {
                             hint: API_TOKEN_EXPIRY_HINT.to_string(),
                         })
