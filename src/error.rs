@@ -1,5 +1,15 @@
 use thiserror::Error;
 
+/// Placeholder hint for Basic-auth (API-token) users who receive a 401.
+///
+/// Used by `handle_jsm_create` (BC-3.8.014) and `require_service_desk`
+/// (BC-X.8.006) when `client.is_oauth_auth() == false`. Single source of
+/// truth — both sites reference this constant; never duplicate the string.
+///
+/// Placeholder empty string — deliberately wrong until implementation lands
+/// (Red Gate stub: S-384 Step A). Real value from F2 PRD delta CANONICAL block.
+pub const API_TOKEN_EXPIRY_HINT: &str = "";
+
 #[derive(Error, Debug)]
 pub enum JrError {
     #[error("Not authenticated. {hint}")]

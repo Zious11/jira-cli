@@ -216,6 +216,18 @@ impl JiraClient {
         self.verbose
     }
 
+    /// Returns `true` when the active auth header uses OAuth (Bearer scheme).
+    ///
+    /// This is the SINGLE predicate gating auth-scheme detection in error-hint
+    /// dispatch (BC-3.8.014 / BC-3.8.015 / BC-X.8.006 / BC-X.8.007). Uses the
+    /// same discriminant already trusted at `src/api/client.rs:718` and `:802`.
+    ///
+    /// Placeholder body `false` — deliberately wrong for Bearer until
+    /// implementation is written (Red Gate stub: S-384 Step A).
+    pub fn is_oauth_auth(&self) -> bool {
+        false
+    }
+
     /// Read a response body as raw bytes, optionally printing it to stderr
     /// when `--verbose-bodies` is enabled. Returns the bytes for deserialization.
     ///
