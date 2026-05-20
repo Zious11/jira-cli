@@ -213,8 +213,8 @@ when impl is already correct per BC.
 When `POST /rest/servicedeskapi/request` returns 401, the error path surfaces a hint
 containing `write:servicedesk-request` (via `BC-X.3.005` `InsufficientScope` dispatch +
 `BC-1.6.042` 401 substring match). Pinned by:
-`tests/issue_create_jsm.rs::test_jsm_create_401_hint_contains_write_servicedesk_request`
-(holdout H-NEW-JSM-RT-003 completion)
+`tests/issue_create_jsm.rs::test_jsm_create_basic_auth_generic_401_surfaces_api_token_hint`
+(repurposed in place (renamed from its pre-#384 name by S-384 F4); at S-288 delivery time this test asserted `write:servicedesk-request`; holdout H-NEW-JSM-RT-003 was subsequently re-bound to `test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_request_hint` by S-384 adversary-pass-9 C-01)
 
 **AC-013** (traces to BC-3.8.008 + verification-delta proptest A.1–A.4 — `parse_field_kv` extracted).
 `parse_field_kv(args: &[String]) -> Result<HashMap<String, serde_json::Value>, JrError>` is

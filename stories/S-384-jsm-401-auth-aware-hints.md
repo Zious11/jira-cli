@@ -62,9 +62,9 @@ Two 401-hint surfaces in the JSM path produce misleading guidance for Basic-auth
 **Problem 1 (O-08-01 CONFIRMED):** `handle_jsm_create` in `src/cli/issue/create.rs` maps BOTH
 `JrError::NotAuthenticated` AND `JrError::InsufficientScope` to the `write:servicedesk-request`
 OAuth scope hint, regardless of auth scheme. Basic-auth users do not have OAuth scopes — the hint
-is irrelevant and misleading. The existing test
-`test_jsm_create_401_hint_contains_write_servicedesk_request` uses `JR_AUTH_HEADER=Basic ...`,
-proving the bug is live on `develop`.
+is irrelevant and misleading. The pre-fix test (now renamed `test_jsm_create_basic_auth_generic_401_surfaces_api_token_hint`,
+formerly `test_jsm_create_basic_auth_generic_401_surfaces_api_token_hint`) used `JR_AUTH_HEADER=Basic ...`,
+proving the bug was live on `develop`; the test has been repurposed in place with flipped assertions.
 
 **Problem 2 (O-08-05 CONFIRMED):** `require_service_desk` in `src/api/jsm/servicedesks.rs`
 propagates 401 from `get_or_fetch_project_meta` (via `?`) with no JSM-specific scope guidance.
@@ -156,11 +156,12 @@ Assertions: same as AC-3 — API-token hint present, `write:servicedesk-request`
 **New test required:** `test_jsm_create_basic_auth_scope_mismatch_401_rewrites_to_api_token_hint`
 File: `tests/issue_create_jsm.rs`. This test MUST NOT be skipped.
 
-### AC-5 — `test_jsm_create_401_hint_contains_write_servicedesk_request` repurposed in place as BC-3.8.014 pin
+### AC-5 — `test_jsm_create_basic_auth_generic_401_surfaces_api_token_hint` repurposed in place as BC-3.8.014 pin
 (traces to BC-3.8.014 postcondition 3)
 
-The EXISTING test `test_jsm_create_401_hint_contains_write_servicedesk_request` in
-`tests/issue_create_jsm.rs` MUST be repurposed in place with flipped assertions:
+The EXISTING pre-#384 Basic-auth 401 test in
+`tests/issue_create_jsm.rs` has been repurposed in place and renamed to
+`test_jsm_create_basic_auth_generic_401_surfaces_api_token_hint` with flipped assertions:
 
 - Fixture STAYS: `JR_AUTH_HEADER=Basic dGVzdDp0ZXN0` (do NOT switch to Bearer)
 - New assertions: (a) `contains` "expired or revoked", (b) `contains` "id.atlassian.com/manage-profile/security/api-tokens", (c) `contains` "jr auth login", (d) does NOT contain "write:servicedesk-request"
@@ -243,7 +244,7 @@ File: `tests/issue_create_jsm.rs`.
 |---|--------------|------|--------|--------|
 | 1 | `test_jsm_create_basic_auth_401_surfaces_api_token_hint` | NEW | BC-3.8.014 | AC-3 |
 | 2 | `test_jsm_create_basic_auth_scope_mismatch_401_rewrites_to_api_token_hint` | NEW | BC-3.8.014 (highest-risk) | AC-4 |
-| 3 | `test_jsm_create_401_hint_contains_write_servicedesk_request` | REPURPOSE in place | BC-3.8.014 (assertions flipped) | AC-5 |
+| 3 | `test_jsm_create_basic_auth_generic_401_surfaces_api_token_hint` (repurposed and renamed by F4 from pre-#384 name) | REPURPOSED in place | BC-3.8.014 (assertions flipped, asserts API-token hint, `write:servicedesk-request` ABSENT) | AC-5 |
 | 4 | `test_require_service_desk_basic_auth_401_surfaces_api_token_hint` | NEW | BC-X.8.006 | AC-7 |
 | 5 | `test_require_service_desk_oauth_401_surfaces_read_scope_hint` | NEW | BC-X.8.007 | AC-8 |
 | 6 | `test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_request_hint` | EXISTING — must stay GREEN unmodified | BC-3.8.015 / H-NEW-JSM-RT-003 | AC-6 |
@@ -306,7 +307,7 @@ LOC delta estimate: ~5 lines in `client.rs`, ~4 lines in `error.rs`, ~15 lines i
 - [ ] Add `pub const API_TOKEN_EXPIRY_HINT: &str` to `src/error.rs` with EXACT verbatim text from CANONICAL block
 - [ ] Gate `handle_jsm_create` map_err: Basic (`is_oauth_auth()==false`) → rewrite any variant to `NotAuthenticated { hint: API_TOKEN_EXPIRY_HINT }`; OAuth (`is_oauth_auth()==true`) → preserve existing behavior unchanged
 - [ ] Introduce new `map_err` on `get_or_fetch_project_meta(...)` in `require_service_desk`: Basic → `NotAuthenticated { hint: API_TOKEN_EXPIRY_HINT }`; OAuth → `NotAuthenticated { hint: <read-scope-hint verbatim> }`
-- [ ] Repurpose `test_jsm_create_401_hint_contains_write_servicedesk_request` in place: flip assertions to API-token-expiry hint; update stale section banner/rustdoc (AC-5)
+- [x] Repurpose the pre-#384 Basic-auth 401 test in place → renamed to `test_jsm_create_basic_auth_generic_401_surfaces_api_token_hint`: fixture stays Basic, assertions flipped to API-token-expiry hint, `write:servicedesk-request` absent, stale section banner/rustdoc updated (AC-5)
 - [ ] Add anchor comment `// H-NEW-JSM-RT-003 + BC-3.8.015 anchor` to `test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_request_hint` rustdoc (AC-6 comment-only)
 - [ ] Add `test_jsm_create_basic_auth_401_surfaces_api_token_hint` (AC-3)
 - [ ] Add `test_jsm_create_basic_auth_scope_mismatch_401_rewrites_to_api_token_hint` (AC-4)

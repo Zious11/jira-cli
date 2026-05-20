@@ -201,7 +201,7 @@ graph LR
 | `test_jsm_create_on_behalf_of_injected_at_top_level` | AC-010 | 1094 | `raiseOnBehalfOf` top-level; not in `requestFieldValues` |
 | `test_jsm_create_on_behalf_of_absent_when_not_set` | AC-010 | 1173 | key completely absent (not null) |
 | `test_jsm_create_type_flag_ignored_with_warning` | AC-011 | 1242 | stderr warning + exit 0 + correct JSON output (H-NEW-JSM-RT-004) |
-| `test_jsm_create_401_hint_contains_write_servicedesk_request` | AC-012 | 1309 | hint text contains `write:servicedesk-request` (H-NEW-JSM-RT-003) |
+| `test_jsm_create_basic_auth_generic_401_surfaces_api_token_hint` (repurposed in place (renamed from its pre-#384 name by S-384 F4); pre-rename: hint asserted `write:servicedesk-request`; post-rename: asserts API-token-expiry hint, `write:servicedesk-request` ABSENT) | AC-012 | 1309 | pre-rename: hint text contained `write:servicedesk-request` (H-NEW-JSM-RT-003 at S-288 time; H-NEW-JSM-RT-003 was subsequently re-bound to `test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_request_hint` by S-384 adversary-pass-9 C-01) |
 | `test_jsm_create_output_json_shape_matches_platform` | AC-015 | 1441 | stdout `{"key":"HELP-42"}` only |
 | `test_jsm_create_team_flag_emits_warning_with_request_type` | AC-019 | 1590 | BC-3.8.011 verbatim warning for `--team` |
 | `test_jsm_create_points_flag_emits_warning_with_request_type` | AC-019 | 1646 | BC-3.8.011 verbatim warning for `--points` |
@@ -406,7 +406,7 @@ Before tagging the release, update the embedded `jr` OAuth app's permissions in 
 | BC-3.8.008 | AC-009 | `test_jsm_create_field_first_equals_split_and_duplicate_last_wins` + A.1–A.4 proptests | PASS |
 | BC-3.8.009 | AC-010 | `test_jsm_create_on_behalf_of_injected_at_top_level` + C.3 proptest | PASS |
 | BC-3.8.010 | AC-011 | `test_jsm_create_type_flag_ignored_with_warning` (H-NEW-JSM-RT-004) | PASS |
-| BC-1.3.023 | AC-012 | `test_jsm_create_401_hint_contains_write_servicedesk_request` (H-NEW-JSM-RT-003) | PASS |
+| BC-1.3.023 | AC-012 | `test_jsm_create_basic_auth_generic_401_surfaces_api_token_hint` (repurposed in place (renamed from its pre-#384 name by S-384 F4); test was green at S-288 time with old assertions; S-384 F4 repurposed in place) | PASS (at S-288 delivery time; subsequently repurposed by S-384) |
 | BC-3.8.008 | AC-013 | `parse_field_kv_proptests` (A.1–A.4) | PASS |
 | BC-3.8.001 | AC-014 | `JsmRequestBuilder::build` proptests (C.1–C.4) | PASS |
 | BC-3.8.001 | AC-015 | `test_jsm_create_output_json_shape_matches_platform` | PASS |

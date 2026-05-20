@@ -29,7 +29,7 @@ severity: N/A
 
 Two distinct 401-hint surfaces in the JSM path produce misleading or missing guidance:
 
-**Problem 1 (O-08-01):** `handle_jsm_create` in `src/cli/issue/create.rs` (lines ~1983-2009) maps BOTH `JrError::NotAuthenticated` (Basic-auth API-token expiry 401) AND `JrError::InsufficientScope` (OAuth scope-mismatch 401) to the same `write:servicedesk-request` OAuth-scope hint. Basic-auth users do not have OAuth scopes; the hint misleads them. The existing test `test_jsm_create_401_hint_contains_write_servicedesk_request` (line 1309, BC-1.3.023) uses `JR_AUTH_HEADER=Basic ...`, which hits the `NotAuthenticated` branch — proving the bug is live in the currently merged code. The separate test `test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_request_hint` (line 1523, C-01) uses `Bearer` auth to cover the `InsufficientScope` branch.
+**Problem 1 (O-08-01):** `handle_jsm_create` in `src/cli/issue/create.rs` (lines ~1983-2009) maps BOTH `JrError::NotAuthenticated` (Basic-auth API-token expiry 401) AND `JrError::InsufficientScope` (OAuth scope-mismatch 401) to the same `write:servicedesk-request` OAuth-scope hint. Basic-auth users do not have OAuth scopes; the hint misleads them. The existing test `test_jsm_create_basic_auth_generic_401_surfaces_api_token_hint` (line 1309, BC-1.3.023; repurposed and renamed by S-384 F4) uses `JR_AUTH_HEADER=Basic ...`, which hits the `NotAuthenticated` branch — proving the bug was live in the currently merged code. The separate test `test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_request_hint` (line 1523, C-01) uses `Bearer` auth to cover the `InsufficientScope` branch.
 
 **Problem 2 (O-08-05):** `require_service_desk` in `src/api/jsm/servicedesks.rs` (lines 112-141) calls `get_or_fetch_project_meta` which performs `GET /rest/api/3/project/{key}`. A 401 there propagates through `parse_error` to `NotAuthenticated { hint: "Run jr auth login to connect." }` with no JSM-specific scope guidance. The needed read-side scopes are `read:jira-work` (platform project GET) + `read:servicedesk-request` (JSM context), NOT `write:servicedesk-request`.
 
@@ -61,7 +61,7 @@ A change is trivial when ALL of the following are true:
 
 **Classified scope:** `standard`
 
-**Rationale:** Multi-file change, 4 new BCs, new integration test coverage for 4 acceptance paths, and existing test `test_jsm_create_401_hint_contains_write_servicedesk_request` (BC-1.3.023 pin) must be updated to assert the new Basic-auth-specific hint text. Quick dev routing does not apply.
+**Rationale:** Multi-file change, 4 new BCs, new integration test coverage for 4 acceptance paths, and existing test `test_jsm_create_basic_auth_generic_401_surfaces_api_token_hint` (BC-1.3.023 pin; repurposed and renamed by S-384 F4) must be updated to assert the new Basic-auth-specific hint text. Quick dev routing does not apply.
 
 ## Impact Assessment
 
@@ -71,7 +71,7 @@ A change is trivial when ALL of the following are true:
 | Architecture | 0 new components; 1 method added (MODIFIED) | `JiraClient::is_oauth_auth() -> bool` added to `src/api/client.rs` |
 | UX Screens | None | Pure error-message quality improvement; no new user flows |
 | Stories | 1 new story estimated | Single story: implement `is_oauth_auth` predicate + gate both hint sites + add 4 integration test paths |
-| Existing Tests | 3 tests in regression risk zone | `test_jsm_create_401_hint_contains_write_servicedesk_request` (BC-1.3.023 pin — must be UPDATED to assert Basic-specific hint); `test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_request_hint` (C-01 — must remain green, asserts Bearer + InsufficientScope path); H-NEW-JSM-RT-003 holdout (must remain green) |
+| Existing Tests | 3 tests in regression risk zone | `test_jsm_create_basic_auth_generic_401_surfaces_api_token_hint` (BC-1.3.023 pin — updated by S-384 F4 to assert Basic-specific hint; repurposed and renamed); `test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_request_hint` (C-01 — must remain green, asserts Bearer + InsufficientScope path); H-NEW-JSM-RT-003 holdout (re-bound to `test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_request_hint` by S-384 adversary-pass-9 C-01) |
 | Verification Properties | None — no VP directory in use; BC-level anchoring sufficient | No proptest candidates; all 4 paths are boolean dispatch gates |
 
 ## Affected BC Mapping
@@ -109,7 +109,7 @@ A change is trivial when ALL of the following are true:
 | `src/api/client.rs` | Additive: new `pub fn is_oauth_auth(&self) -> bool` method | LOW — additive public method; checks existing field `self.auth_header`; no behavior change to any existing code path |
 | `src/cli/issue/create.rs` | Logic change: gate `NotAuthenticated` arm in `handle_jsm_create` map_err (lines ~1988-1994) behind `client.is_oauth_auth()` | MEDIUM — modifies error-path dispatch; existing Basic-auth 401 test (`BC-1.3.023` pin) currently asserts the OAuth hint string and will fail after the fix, confirming the change is correct |
 | `src/api/jsm/servicedesks.rs` | Additive: add `map_err` to `get_or_fetch_project_meta` call inside `require_service_desk` (or at call site in `handle_jsm_create`) with auth-conditional scope hints | MEDIUM — modifies the error path of a shared function called by 4+ call sites: `handle_jsm_create`, `cli/queue.rs`, `cli/requesttype.rs`; must not change non-401 error paths |
-| `tests/issue_create_jsm.rs` | MODIFIED + new tests: (1) update `test_jsm_create_401_hint_contains_write_servicedesk_request` to assert Basic-auth-specific hint; (2) add 3 new integration test functions pinning: Basic-auth 401 on require_service_desk, OAuth 401 on require_service_desk, OAuth-scope 401 on JSM dispatch (verify unchanged) | MEDIUM — modifies an existing regression pin; new tests cover all 4 AC paths |
+| `tests/issue_create_jsm.rs` | MODIFIED + new tests: (1) repurpose and rename the pre-#384 Basic-auth 401 test → `test_jsm_create_basic_auth_generic_401_surfaces_api_token_hint` (fixture stays Basic; assertions flipped to API-token-expiry hint); (2) add 3 new integration test functions pinning: Basic-auth 401 on require_service_desk, OAuth 401 on require_service_desk, OAuth-scope 401 on JSM dispatch (verify unchanged) | MEDIUM — modifies an existing regression pin; new tests cover all 4 AC paths |
 
 ### Dependent Files (unchanged but depend on modified files)
 
@@ -146,7 +146,7 @@ These files must not be modified during implementation. All their tests must con
 
 | Risk Type | Level | Rationale |
 |-----------|-------|-----------|
-| Regression | MEDIUM | The existing BC-1.3.023 pin (`test_jsm_create_401_hint_contains_write_servicedesk_request`) currently asserts `stderr.contains("write:servicedesk-request")` using Basic auth. After the fix, this assertion will fail intentionally — the test must be updated. Any implementation that passes the old test without updating it is broken. The C-01 test (`test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_request_hint`) covers the Bearer-auth InsufficientScope path and must remain green unmodified. Risk is manageable because both tests exist and clearly delineate the two paths. |
+| Regression | MEDIUM | The existing BC-1.3.023 pin (`test_jsm_create_basic_auth_generic_401_surfaces_api_token_hint`, repurposed and renamed by S-384 F4) previously asserted `stderr.contains("write:servicedesk-request")` using Basic auth. After the fix, that assertion was intentionally flipped — the test was repurposed in place. The C-01 test (`test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_request_hint`) covers the Bearer-auth InsufficientScope path and must remain green unmodified. Risk is manageable because both tests exist and clearly delineate the two paths. |
 | Architecture | LOW | `is_oauth_auth()` is a pure predicate reading an already-existing private field. No trait change, no interface breaking, no new crate dependency. Adding a `map_err` to `require_service_desk` is purely additive to the error path. |
 | Security | LOW | The change is on the error-hint surface, not on authentication itself. `is_oauth_auth()` is read-only. The guard cannot be used to bypass authentication. The fix improves hint accuracy; it does not change which error variant is returned or what exit code fires. |
 | Performance | NONE | `auth_header.starts_with("Bearer ")` is O(7) string comparison at error-path time. Zero impact on hot paths. |
@@ -155,10 +155,10 @@ These files must not be modified during implementation. All their tests must con
 
 - **Total tests in `tests/issue_create_jsm.rs`:** 45 test functions (2,750 LOC)
 - **Tests in risk zone (require update or close monitoring):**
-  1. `test_jsm_create_401_hint_contains_write_servicedesk_request` — MUST BE UPDATED (currently asserts `write:servicedesk-request` on Basic-auth 401; after fix, Basic-auth 401 should NOT contain this string)
+  1. `test_jsm_create_basic_auth_generic_401_surfaces_api_token_hint` (repurposed in place (renamed from its pre-#384 name by S-384 F4)) — WAS UPDATED (at F1 analysis time: asserted `write:servicedesk-request` on Basic-auth 401; after S-384 fix: asserts API-token-expiry hint, `write:servicedesk-request` ABSENT)
   2. `test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_request_hint` — MUST REMAIN GREEN (Bearer auth + InsufficientScope; hint unchanged)
   3. `test_platform_create_401_no_jsm_scope_hint` — MUST REMAIN GREEN (platform Basic-auth 401 must not contain JSM scope; unaffected)
-  4. H-NEW-JSM-RT-003 in `tests/issue_write_holdouts.rs` — MUST BE REVISED: scenario uses Basic auth to assert `write:servicedesk-request`; must switch to Bearer auth to remain a valid holdout; or create two companion holdouts
+  4. H-NEW-JSM-RT-003 — WAS REVISED: re-bound to `test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_request_hint` (Bearer + scope-mismatch body; existing test, green on `develop`) by S-384 adversary-pass-9 C-01. (F1 analysis suggested `tests/issue_write_holdouts.rs` — corrected by adversary-pass-5 F-01: holdout was in `tests/issue_create_jsm.rs`.)
 - **Risk zone test files:** `tests/issue_create_jsm.rs`, `tests/issue_write_holdouts.rs`
 - **Unchanged test files that must stay green:** all 42 remaining tests in `tests/issue_create_jsm.rs`, plus `tests/queue.rs`, `tests/requesttype_commands.rs`, `tests/api_client.rs`, `tests/issue_create_json.rs`, `tests/issue_commands.rs`
 
@@ -167,7 +167,7 @@ These files must not be modified during implementation. All their tests must con
 - **Mode:** Feature Mode — standard single-cycle delivery
 - **Estimated new BCs:** 4 new (`BC-3.8.014`, `BC-3.8.015`, `BC-X.8.006`, `BC-X.8.007`); 2 BCs modified (`BC-3.8.009`, `BC-X.3.002`); H-NEW-JSM-RT-003 holdout definition revised
 - **Estimated new stories:** 1 story (all 4 acceptance paths share a single fix substrate — the `is_oauth_auth` predicate — and can be delivered in a single atomic commit group)
-- **Story scope:** Implement `JiaClient::is_oauth_auth()` → gate `handle_jsm_create` `NotAuthenticated` arm → add `map_err` to `require_service_desk` call → update `test_jsm_create_401_hint_contains_write_servicedesk_request` → add 3 new integration tests for the remaining AC paths → revise H-NEW-JSM-RT-003 holdout (or add companion)
+- **Story scope:** Implement `JiraClient::is_oauth_auth()` → gate `handle_jsm_create` `NotAuthenticated` arm → add `map_err` to `require_service_desk` call → repurpose the pre-#384 Basic-auth 401 test → `test_jsm_create_basic_auth_generic_401_surfaces_api_token_hint` → add 3 new integration tests for the remaining AC paths → revise H-NEW-JSM-RT-003 holdout (re-bound to `test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_request_hint`)
 - **Can parallelize:** No — the single predicate method is the substrate for both fix sites; implement it first, then both hint sites can be coded in the same pass
 
 ## Open Questions
