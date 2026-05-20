@@ -1361,7 +1361,7 @@ async fn test_jsm_create_401_hint_contains_write_servicedesk_request() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    // Must exit non-zero (exit code 1 for NotAuthenticated).
+    // Must exit non-zero (exit code 2 for NotAuthenticated).
     assert!(
         !output.status.success(),
         "BC-3.8.014: expected non-zero exit for Basic-auth 401, got exit 0. stderr: {stderr}"
@@ -2780,7 +2780,7 @@ async fn test_platform_create_malformed_field_one_warning_no_exit_64() {
 ///
 /// Stderr MUST: contain "expired or revoked", contain the api-tokens URL,
 /// contain "jr auth login", and NOT contain "write:servicedesk-request".
-/// Exit code: 1 (NotAuthenticated).
+/// Exit code: 2 (NotAuthenticated).
 #[tokio::test]
 async fn test_jsm_create_basic_auth_401_surfaces_api_token_hint() {
     let server = MockServer::start().await;
