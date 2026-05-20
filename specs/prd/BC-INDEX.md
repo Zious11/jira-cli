@@ -1,13 +1,13 @@
 ---
 context: bc-index
 title: "BC Master Index"
-total_bcs: 573  # cumulative claim (incl. range-collapsed) — see preamble below; +4 added 2026-05-08 (BC-7.4.013-016, Fix-PR A); +1 added 2026-05-13 (BC-2.6.050, issue #350); +1 added 2026-05-14 (BC-2.6.051, issue #365); +1 added 2026-05-15 (BC-3.4.009, issue #340 F2); +18 added 2026-05-18 (BC-3.8.001..010 + BC-X.12.001..008, issue #288 F2+F1d); +3 added 2026-05-19 (BC-3.8.011..013, issue #288 F1d + issue #383 F2); +4 added 2026-05-19 (BC-3.8.014..015 + BC-X.8.006..007, issue #384 F2); BC-1.3.023, BC-3.3.001, BC-X.8.004, BC-3.8.009, BC-X.3.002 modified
-last_updated: 2026-05-19
+total_bcs: 575  # cumulative claim (incl. range-collapsed) — see preamble below; +4 added 2026-05-08 (BC-7.4.013-016, Fix-PR A); +1 added 2026-05-13 (BC-2.6.050, issue #350); +1 added 2026-05-14 (BC-2.6.051, issue #365); +1 added 2026-05-15 (BC-3.4.009, issue #340 F2); +18 added 2026-05-18 (BC-3.8.001..010 + BC-X.12.001..008, issue #288 F2+F1d); +3 added 2026-05-19 (BC-3.8.011..013, issue #288 F1d + issue #383 F2); +4 added 2026-05-19 (BC-3.8.014..015 + BC-X.8.006..007, issue #384 F2); +2 added 2026-05-20 (BC-3.8.016..017, issue #385 F2); BC-1.3.023, BC-3.3.001, BC-X.8.004, BC-3.8.009, BC-X.3.002, BC-3.8.002, BC-3.8.010, BC-3.8.011 modified
+last_updated: 2026-05-20
 source_pass: 3
 sections:
   - bc-1-auth-identity.md (57 BCs cumulative; 46 individually-bodied)
   - bc-2-issue-read.md (93 BCs cumulative; 51 individually-bodied)
-  - bc-3-issue-write.md (93 BCs cumulative; 64 individually-bodied)
+  - bc-3-issue-write.md (95 BCs cumulative; 66 individually-bodied)
   - bc-4-assets-cmdb.md (32 BCs cumulative; 22 individually-bodied)
   - bc-5-boards-sprints.md (35 BCs cumulative; 17 individually-bodied)
   - bc-6-config-cache.md (39 BCs cumulative; 29 individually-bodied)
@@ -212,7 +212,7 @@ R1/R4 prefix = deepening round that introduced it.
 
 ---
 
-## Section 3: Issue Write (bc-3-issue-write.md) — 93 BCs cumulative; 64 individually-bodied
+## Section 3: Issue Write (bc-3-issue-write.md) — 95 BCs cumulative; 66 individually-bodied
 
 ### 3.1 Assign (9 BCs: BC-3.1.001..009)
 
@@ -298,7 +298,7 @@ R1/R4 prefix = deepening round that introduced it.
 | BC-3.7.003 | `issue remote-link --url not-a-url` → exit 64 + `"--url"` + `"not a valid url"`; ZERO HTTP | BC-1130 (R4) | tests/issue_remote_link.rs:259-301 | HIGH |
 | BC-3.7.004 | `issue remote-link --url ftp://example.com` → exit 64 + `"http or https"` + `"ftp"` | BC-1131 (R4) | tests/issue_remote_link.rs:309-348 | HIGH |
 
-### 3.8 JSM Request Create + Platform-Path Inverse Warnings + Auth-Conditional 401 Hints (15 BCs: BC-3.8.001..015) [Added 2026-05-18 issue #288; BC-3.8.010 added F1d pass-01; BC-3.8.011 added F1d pass-01; BC-3.8.012..013 added 2026-05-19 issue #383 F2; BC-3.8.014..015 added 2026-05-19 issue #384 F2]
+### 3.8 JSM Request Create + Platform-Path Inverse Warnings + Auth-Conditional 401 Hints (17 BCs: BC-3.8.001..017) [Added 2026-05-18 issue #288; BC-3.8.010 added F1d pass-01; BC-3.8.011 added F1d pass-01; BC-3.8.012..013 added 2026-05-19 issue #383 F2; BC-3.8.014..015 added 2026-05-19 issue #384 F2; BC-3.8.016..017 added 2026-05-20 issue #385 F2; BC-3.8.002/010/011 modified 2026-05-20 issue #385 F2]
 
 | L3 BC ID | Summary | Pass 3 BC ID | Source | Confidence |
 |---|---|---|---|---|
@@ -317,6 +317,8 @@ R1/R4 prefix = deepening round that introduced it.
 | BC-3.8.013 | `--on-behalf-of` on platform path (without `--request-type`) emits one stderr warning; platform POST proceeds unchanged | — (issue #383 F2) | tests/issue_create_jsm.rs | HIGH |
 | BC-3.8.014 | Basic-auth 401 on JSM POST (`handle_jsm_create`) → API-token-expiry hint (no OAuth-scope language); any `InsufficientScope` variant rewritten to `NotAuthenticated`; gated by `client.is_oauth_auth() == false` | — (issue #384 F2) | tests/issue_create_jsm.rs | HIGH |
 | BC-3.8.015 | OAuth 401 on JSM POST (`handle_jsm_create`) → `write:servicedesk-request` hint via `InsufficientScope` scope-mismatch path (deterministic); `NotAuthenticated` post-refresh path is pre-existing, out of #384 test scope; gated on `client.is_oauth_auth() == true` | — (issue #384 F2) | tests/issue_create_jsm.rs | HIGH |
+| BC-3.8.016 | `--request-type ""` (empty string or whitespace-only after trim) exits 64 with "request type cannot be empty" before `partial_match` or numeric bypass; no HTTP issued | — (issue #385 F2) | tests/issue_create_jsm.rs; src/cli/issue/create.rs | HIGH |
+| BC-3.8.017 | `--markdown` + `--field description=<value>` combination rejected at parse-time in `handle_jsm_create`; exit 64; no HTTP; desync rationale: "may result in a JSM 400 error or silently dropped ADF formatting" (NOT asserted as certain) | — (issue #385 F2) | tests/issue_create_jsm.rs; src/cli/issue/create.rs | HIGH |
 
 ---
 
@@ -679,17 +681,17 @@ R1/R4 prefix = deepening round that introduced it.
 |---|---|---|
 | 1: Auth & Identity | 57 | 46 |
 | 2: Issue Read | 93 | 51 |
-| 3: Issue Write | 93 | 64 |
+| 3: Issue Write | 95 | 66 |
 | 4: Assets & CMDB | 32 | 22 |
 | 5: Boards & Sprints | 35 | 17 |
 | 6: Config & Cache | 39 | 29 |
 | 7: Output Rendering | 84 | 38 |
 | X: Cross-Cutting | 140 | 74 |
-| **Total** | **573** | **341** |
+| **Total** | **575** | **343** |
 
-**Note**: BC-X.4.009 (ADV-P1-029) is included in cross-cutting's `total_bcs` and in the sum above. Canonical total is **573** (+4 BC-7.4.013-016 added 2026-05-08 via Fix-PR A; +1 BC-2.6.050 added 2026-05-13 via issue #350; +1 BC-2.6.051 added 2026-05-14 via issue #365; +1 BC-3.4.009 added 2026-05-15 via issue #340 F2; +18 BC-3.8.001..010 + BC-X.12.001..008 added 2026-05-18 via issue #288 F2+F1d; +3 BC-3.8.011..013 added 2026-05-19 via issue #288 F1d + issue #383 F2; +4 BC-3.8.014..015 + BC-X.8.006..007 added 2026-05-19 via issue #384 F2).
+**Note**: BC-X.4.009 (ADV-P1-029) is included in cross-cutting's `total_bcs` and in the sum above. Canonical total is **575** (+4 BC-7.4.013-016 added 2026-05-08 via Fix-PR A; +1 BC-2.6.050 added 2026-05-13 via issue #350; +1 BC-2.6.051 added 2026-05-14 via issue #365; +1 BC-3.4.009 added 2026-05-15 via issue #340 F2; +18 BC-3.8.001..010 + BC-X.12.001..008 added 2026-05-18 via issue #288 F2+F1d; +3 BC-3.8.011..013 added 2026-05-19 via issue #288 F1d + issue #383 F2; +4 BC-3.8.014..015 + BC-X.8.006..007 added 2026-05-19 via issue #384 F2; +2 BC-3.8.016..017 added 2026-05-20 via issue #385 F2).
 
-Cumulative total (573) ≠ individually-bodied count (341). The difference (232) comprises range-collapsed BCs that exist in the cumulative claim but are not individually headlined in body files. This is by design — range-collapsed BCs trace to Pass 3 source material but were not individually expanded. The 4 MUST-FIX BCs are included in the individually-bodied count.
+Cumulative total (575) ≠ individually-bodied count (343). The difference (232) comprises range-collapsed BCs that exist in the cumulative claim but are not individually headlined in body files. This is by design — range-collapsed BCs trace to Pass 3 source material but were not individually expanded. The 4 MUST-FIX BCs are included in the individually-bodied count.
 
 ---
 

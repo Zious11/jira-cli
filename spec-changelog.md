@@ -7,6 +7,55 @@ project: "jr (jira-cli)"
 
 Track all spec version changes. Most recent version first.
 
+## [1.2.0] - 2026-05-20
+
+### Type: MINOR
+
+### Summary
+
+Issue #385: JSM create UX polish — harmonize project-required error (O-08-02), guard empty `--request-type` (O-08-04), reject `--markdown` + `--field description=` conflict (O-08-06), clarify warning position post-`require_service_desk` (O-08-07). Adds 2 new BCs (BC-3.8.016, BC-3.8.017) and modifies 3 BCs (BC-3.8.002, BC-3.8.010, BC-3.8.011). Grand total: 573 → 575.
+
+### New Requirements
+
+| ID | Description |
+|----|-------------|
+| BC-3.8.016 | `--request-type ""` (empty string or whitespace-only after trim) exits 64 with "request type cannot be empty" before `partial_match` or numeric bypass; no HTTP issued |
+| BC-3.8.017 | `--markdown` + `--field description=<value>` combination rejected at parse-time in `handle_jsm_create`; exit 64; rationale: desync of `isAdfRequest: true` with plain-string description "may result in a JSM 400 error or silently dropped ADF formatting" (NOT asserted as certain) |
+
+### Modified Requirements
+
+| ID | Nature |
+|----|--------|
+| BC-3.8.002 | "No project resolvable AND `no_input` effective (explicit `--no-input` OR auto-enabled on non-TTY stdin) OR `prompt_input` errors" error string harmonized: `"Project key is required for JSM request creation. Use --project or configure .jr.toml. Run \"jr project list\" to see available JSM projects."` — adds `--project`/`.jr.toml`/`jr project list` affordances matching platform path, preserves "for JSM request creation" context. The code checks `no_input` only; non-TTY auto-enables it (CLAUDE.md). Previous string: `"project is required for JSM request creation"`. |
+| BC-3.8.010 | Warning position clarified: `--type` warning fires INSIDE `handle_jsm_create` AFTER `require_service_desk` returns `Ok`, NOT pre-`handle_jsm_create`. Non-JSM project: ONLY the non-JSM error is emitted (no spurious warning). New companion test required: `test_jsm_create_type_flag_warning_suppressed_on_non_jsm_project`. |
+| BC-3.8.011 | Same warning-position constraint applied: all six warnings (the `--type` warning of BC-3.8.010 plus the five platform-only flag warnings of BC-3.8.011: --team, --points, --parent, --to, --account-id) move to post-`require_service_desk` position in `handle_jsm_create`. |
+
+### New Holdout Scenarios
+
+| ID | Description |
+|----|-------------|
+| H-NEW-JSM-RT-006 | `--request-type ""` exits 64 with explicit empty-string message; no HTTP (pins BC-3.8.016) |
+| H-NEW-JSM-RT-007 | `--markdown` + `--field description=plain` exits 64 at parse-time; no HTTP (pins BC-3.8.017) |
+
+**O-08-02 holdout-exempt note**: BC-3.8.002 (O-08-02: project-required error string) is DELIBERATELY holdout-exempt. Unlike O-08-04 (→H-NEW-JSM-RT-006) and O-08-06 (→H-NEW-JSM-RT-007), this is a string-only error-message change with no control-flow impact. The existing unit test `test_jsm_create_missing_project_exits_64_with_jsm_specific_hint` (updated to assert the new verbatim string) provides complete regression coverage. See prd-delta-385.md §BC-3.8.002 for the canonical statement.
+
+### Impact Assessment
+
+| Dimension | Before | After | Delta |
+|-----------|--------|-------|-------|
+| bc-3-issue-write.md individually-bodied | 64 | 66 | +2 |
+| bc-3-issue-write.md total_bcs | 93 | 95 | +2 |
+| BC-INDEX.md total_bcs (grand total) | 573 | 575 | +2 |
+| CANONICAL-COUNTS.md Sum | 573 | 575 | +2 |
+| holdout-scenarios.md total_holdouts | 55 | 57 | +2 |
+| BCs modified (no count change) | — | BC-3.8.002, BC-3.8.010, BC-3.8.011 | — |
+
+### Required Test Deliverables
+
+Required test deliverables: see `.factory/phase-f2-spec-evolution/prd-delta-385.md §Required Test Deliverables` (canonical copy — do not duplicate here).
+
+---
+
 ## [1.1.0] - 2026-05-19
 
 ### Type: MINOR

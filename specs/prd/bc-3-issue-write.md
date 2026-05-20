@@ -1,9 +1,9 @@
 ---
 context: bc-3
 title: "Issue Write (create/edit/move/assign/comment/link/open/remote-link)"
-total_bcs: 93   # cumulative claim (incl. range-collapsed); definitional_count below is individually-bodied headings
-definitional_count: 64   # count of `#### BC-` headings in this file
-last_updated: 2026-05-19
+total_bcs: 95   # cumulative claim (incl. range-collapsed); definitional_count below is individually-bodied headings
+definitional_count: 66   # count of `#### BC-` headings in this file
+last_updated: 2026-05-20
 source_pass: 3
 trace: |
   - L2: .factory/specs/domain-spec/bc-03-issue-write.md
@@ -15,11 +15,16 @@ trace: |
   - F1d addition (2026-05-19): BC-3.8.011 — platform-only flags emit stderr warnings on JSM path (issue #288 adversary-pass-01 C-02); H-01 BC-3.8.003 verb aligned "Use"→"Run"
   - F2 addition (2026-05-19): BC-3.8.012..013 — inverse warning symmetry: --field and --on-behalf-of silent-drop on platform path (issue #383)
   - F2 addition (2026-05-19): BC-3.8.014..015 — JSM 401 auth-conditional hints on handle_jsm_create: Basic-auth (is_oauth_auth==false) → API-token hint with InsufficientScope rewrite; OAuth (is_oauth_auth==true) → existing behavior preserved (issue #384; corrected model: gate is is_oauth_auth() alone)
+  - F2 addition (2026-05-20): BC-3.8.016 — --request-type "" (empty) exits 64 before partial_match (issue #385)
+  - F2 addition (2026-05-20): BC-3.8.017 — --markdown + --field description= conflict rejected at parse-time exit 64 (issue #385)
+  - F2 modified (2026-05-20): BC-3.8.002 — JSM project-required error harmonized with platform affordances (issue #385 O-08-02)
+  - F2 modified (2026-05-20): BC-3.8.010 — warning position clarified: fires post-require_service_desk only (issue #385 O-08-07)
+  - F2 modified (2026-05-20): BC-3.8.011 — same warning-position constraint applied (issue #385 O-08-07)
 ---
 
 # BC-3 — Issue Write
 
-93 behavioral contracts across 8 subdomains: Assign (3.1), Move/Transition (3.2),
+95 behavioral contracts across 8 subdomains: Assign (3.1), Move/Transition (3.2),
 Create (3.3), Edit+Open (3.4), Comment (3.5), Links (3.6), Remote links (3.7),
 JSM Request Create + Platform-Path Inverse Warnings + Auth-Conditional 401 Hints (3.8).
 
@@ -547,12 +552,13 @@ existing wall-clock bound and `"deadline"` substring assertions.
 
 ### 3.8 JSM Request Create + Platform-Path Inverse Warnings + Auth-Conditional 401 Hints
 
-15 behavioral contracts covering: (a) `jr issue create --request-type` dispatch to the JSM service desk API
+17 behavioral contracts covering: (a) `jr issue create --request-type` dispatch to the JSM service desk API
 (BC-3.8.001..009), (b) forward-direction cross-flag warnings when platform-only flags are passed alongside
 `--request-type` (BC-3.8.010..011), (c) inverse-direction cross-flag warnings when JSM-only flags are
-passed on the platform path (BC-3.8.012..013), and (d) auth-conditional 401 error hints on the JSM POST
+passed on the platform path (BC-3.8.012..013), (d) auth-conditional 401 error hints on the JSM POST
 path: Basic-auth API-token-expiry hint (BC-3.8.014) and OAuth write-scope hint (BC-3.8.015), gated solely
-by `JiraClient::is_oauth_auth()`.
+by `JiraClient::is_oauth_auth()`, and (e) JSM-path input guards: empty `--request-type` early-exit
+(BC-3.8.016) and `--markdown` + `--field description=` conflict rejection (BC-3.8.017).
 BCs 001..011 require `--request-type` to be set. The platform path (BC-3.3.001) — its POST body,
 JSON response, and exit code — is unchanged when `--request-type` is absent. BCs 012..013 add
 inverse-direction stderr warnings on the platform path (when `--field` / `--on-behalf-of` are
@@ -583,10 +589,16 @@ passed without `--request-type`) without altering POST behavior, response, or ex
 **Behavior**: Before POSTing, `handle_create` calls `require_service_desk(client, project_key)` to resolve the numeric `serviceDeskId` string. The JSM request body uses `requestFieldValues` (a `Map<String, serde_json::Value>`) for all field values, NOT the platform `fields` map. `serviceDeskId` is a required top-level field (string, NOT integer). If `--project` is absent and no active-profile project is configured, exits 64 with actionable message before any HTTP.
 **Inputs**: `--project <KEY>` (or config active project); resolved `serviceDeskId`
 **Outputs/Effects**: Body shape: `{serviceDeskId: "3", requestTypeId: "5", requestFieldValues: {...}}`. `serviceDeskId` is the string representation of the integer ID returned by the service desk list API.
-**Errors**: Non-JSM project → `require_service_desk` returns `JrError::UserError`; exit 64; no HTTP to servicedeskapi. Error message MUST be call-site-specific: 'Project "<KEY>" is a <type> project. `--request-type` requires a Jira Service Management project. Run "jr project list" to find a JSM project.' (NOT the legacy "Queue commands require…" string from BC-X.8.004 — that string is reserved for queue commands only; see BC-3.8.002 and BC-X.8.004 [UPDATED 2026-05-18 issue #288].) No project configured → exit 64 with "project is required for JSM request creation" hint.
-**Trace**: `tests/issue_create_jsm.rs` (service desk ID resolution, non-JSM project error path); `src/api/jsm/servicedesks.rs::require_service_desk`
+**Errors**: Non-JSM project → `require_service_desk` returns `JrError::UserError`; exit 64; no HTTP to servicedeskapi. Error message MUST be call-site-specific: 'Project "<KEY>" is a <type> project. `--request-type` requires a Jira Service Management project. Run "jr project list" to find a JSM project.' (NOT the legacy "Queue commands require…" string from BC-X.8.004 — that string is reserved for queue commands only; see BC-3.8.002 and BC-X.8.004 [UPDATED 2026-05-18 issue #288].) No project resolvable AND (`no_input` is effective OR `prompt_input` itself errors) → exit 64 with the harmonized message: "Project key is required for JSM request creation. Use --project or configure .jr.toml. Run \"jr project list\" to see available JSM projects." — carries the same `--project` / `.jr.toml` / `jr project list` affordances as the platform path (see BC-3.3.001) while preserving the "for JSM request creation" context. Note: `no_input` is effective when set explicitly via `--no-input` OR when stdin is not a TTY (`--no-input` is auto-enabled on non-TTY stdin per CLAUDE.md). The code site (`create.rs:1882-1891`) checks `no_input` only — the non-TTY case is already covered by that single flag. When `no_input` is NOT effective, the handler attempts `helpers::prompt_input("Project key")` first; the harmonized error surfaces only if the prompt itself errors.
+**Trace**: `tests/issue_create_jsm.rs` (service desk ID resolution, non-JSM project error path, missing-project error string); `src/api/jsm/servicedesks.rs::require_service_desk`
 **Source**: API-verified: `serviceDeskId` is a required string in request body
 **Confidence**: HIGH
+
+> **[UPDATED 2026-05-20 issue #385 O-08-02]** The "no project configured" error string harmonized. Previous verbatim: `"project is required for JSM request creation"` (terse, lowercase, no affordances). New verbatim: `"Project key is required for JSM request creation. Use --project or configure .jr.toml. Run \"jr project list\" to see available JSM projects."` — adds `--project`/`.jr.toml`/`jr project list` affordances, sentence-cases the opening, and preserves the JSM-specific context label. The implementing story MUST update `test_jsm_create_missing_project_exits_64_with_jsm_specific_hint` (in `tests/issue_create_jsm.rs`) to assert the new string. The previous error string was: `"project is required for JSM request creation"`.
+
+> **[UPDATED 2026-05-20 issue #385 adversary pass-8 M-01]** Precondition for the harmonized error qualified: the error fires only when no project is resolvable AND `no_input` is effective (OR `prompt_input` itself errors). `no_input` is effective when set explicitly via `--no-input` OR when stdin is not a TTY (auto-enabled per CLAUDE.md) — the code site checks `no_input` only; the non-TTY path is not a separate trigger. When `no_input` is not effective, the handler attempts `helpers::prompt_input` first. "No project configured" alone (without the `no_input`-effective qualifier) is an incomplete precondition.
+
+> **[UPDATED 2026-05-20 issue #385 adversary pass-13 H-1]** Reframed from three independent triggers (`--no-input` / non-TTY / `prompt_input` failure) to TWO conditions: (1) `no_input` is effective (covering both explicit `--no-input` and auto-enabled non-TTY as a single flag check), (2) `prompt_input` itself errors. Resolves the apparent contradiction between "three triggers" in the BC and "one check (`no_input`)" in the code.
 
 ---
 
@@ -701,13 +713,21 @@ verb fits jr CLI ergonomics. Wave 2 pass-02 M-2 precedent applied.
 
 **Confidence**: HIGH
 **Subject**: Issue write (JSM path)
-**Behavior**: When `--request-type` is present, the `--type` flag (if also supplied) is silently ignored at the JSM-dispatch site EXCEPT for emitting a single stderr line: "warning: --type is ignored when --request-type is set; request type encodes the issue type". Exit code unchanged (still 0 on success, or 64/1/2 on applicable error paths). JSON output shape is unchanged from BC-3.8.001. The warning is emitted in the success path before the POST is issued (after flag parsing and request-type resolution succeed). If the command early-exits on `--summary`-missing (BC-3.8.005) or partial-match failure (BC-3.8.003), the warning need not fire — the user's `--type` was not silently consumed because the command did not proceed. On the success path, the warning fires regardless of `--no-input` or `--output json` settings.
+**Behavior**: When `--request-type` is present, the `--type` flag (if also supplied) is silently ignored at the JSM-dispatch site EXCEPT for emitting a single stderr line: "warning: --type is ignored when --request-type is set; request type encodes the issue type". Exit code unchanged (still 0 on success, or 64/1/2 on applicable error paths). JSON output shape is unchanged from BC-3.8.001. **Warning position (O-08-07):** the warning is emitted at step 5 of the Canonical Guard Ordering (see BC-3.8.016) — INSIDE `handle_jsm_create` AFTER `require_service_desk` returns `Ok`, and BEFORE request-type resolution (step 6: numeric-bypass check, `resolve_jsm_request_type_id`, `parse_field_kv`, POST). NOT before `handle_jsm_create` is called and NOT before `require_service_desk` is called. Consequence: on a non-JSM project (assuming `--request-type` is non-empty — an empty/whitespace-only `--request-type` exits at step 1 per BC-3.8.016 regardless of project type), the user sees ONLY the non-JSM project error (from `require_service_desk`), NOT both the warning and the error. The warning is suppressed on early-exit paths where `require_service_desk` fails. Because the warning fires at step 5 — before request-type resolution at step 6 — on a JSM project with an unresolvable `--request-type` name, the `--type` warning WILL have fired (step 5) and the partial-match error from BC-3.8.003 follows at step 6; both appear on stderr. This is acceptable because the project IS a valid service desk so the "type ignored" warning is genuinely informative. On the success path, the warning fires regardless of `--no-input` or `--output json` settings.
 **Inputs**: `--request-type <X>` AND `--type <Y>` (both set simultaneously)
 **Outputs/Effects**: Same JSM POST behavior as BC-3.8.001 with the `--type` value unused. One stderr line emitted: "warning: --type is ignored when --request-type is set; request type encodes the issue type". No change to stdout JSON shape. No change to exit code.
 **Errors**: None — this is a warning path, not an error path. The presence of `--type` alongside `--request-type` is not an error.
-**Trace**: `tests/issue_create_jsm.rs` (warning_on_type_with_request_type integration test)
+**Trace**: `tests/issue_create_jsm.rs` (warning_on_type_with_request_type integration test; non-JSM project warning-suppression test)
 **Source**: ADR-0014 §"Dispatch fork: --type interaction" — `--type` is meaningless in the JSM path because `requestTypeId` encodes the issue type server-side; emitting a warning rather than erroring preserves backward compatibility for scripts that habitually pass `--type`.
 **Confidence**: HIGH
+
+> **[UPDATED 2026-05-20 issue #385 O-08-07]** Warning position clarified: the `--type` warning MUST fire inside `handle_jsm_create` AFTER `require_service_desk` returns `Ok`, not before `handle_jsm_create` is entered. Previous behavior (warning firing pre-`require_service_desk` in `handle_create`) produced spurious dual output on non-JSM projects. The implementing story MUST add `test_jsm_create_type_flag_warning_suppressed_on_non_jsm_project` asserting that when `--request-type` is set (non-empty) + project is non-JSM, the `--type` warning is ABSENT from stderr and only the non-JSM project error is emitted. The existing test `test_jsm_create_type_flag_ignored_with_warning` (JSM path) MUST remain green — warnings still fire on the JSM success path.
+
+> **[UPDATED 2026-05-20 issue #385 adversary pass-7 M-01]** Step placement made explicit: warning fires at step 5 (Canonical Guard Ordering), BEFORE request-type resolution at step 6 — not after. Removed stale "after flag parsing and request-type resolution succeed" wording. Removed stale "need not fire" clause for partial-match failure (BC-3.8.003): because the warning fires at step 5 BEFORE step-6 resolution, the warning WILL have appeared by the time partial-match failure surfaces — both messages appear on stderr on a JSM project with an unresolvable request type.
+
+> **[UPDATED 2026-05-20 issue #385 adversary pass-8 H-03]** Threading note: achieving step-5 placement requires the `--type` (`issue_type`) flag value to be in scope inside `handle_jsm_create` at the warning site. Pre-#385, `JsmCreateArgs` does not carry `issue_type`. The implementer MUST thread it in — by extending `JsmCreateArgs`, passing it as an additional parameter, or an equivalent mechanism. The BC constrains WHEN the warning fires (step 5), not HOW the value is threaded. See prd-delta-385.md §O-08-07 Implementation Note for the full threading discussion covering all six flags.
+
+> **[UPDATED 2026-05-20 issue #385 adversary pass-12 F-02]** Single-site requirement: the existing pre-dispatch warning emission block in `handle_create` (which currently fires these warnings before `handle_jsm_create` is called) MUST be REMOVED as part of implementing O-08-07. The `--type` warning must exist at exactly ONE site — canonical step 5 inside `handle_jsm_create`. Double-emission from two code sites is a defect. The new `test_jsm_create_platform_flag_warnings_emit_once_on_success` (Required Test Deliverable item 7) pins this constraint. This is distinct from BC-3.8.011's idempotency contract (one warning per repeated logical flag) — that covers duplicate flag occurrences, not duplicate code sites.
 
 ---
 
@@ -728,7 +748,7 @@ JSM dispatch normally. Flags covered:
 - `--account-id <id>`: warning `"warning: --account-id is ignored when --request-type is set; use --on-behalf-of to set the requester"`
 
 Generalizes the existing `--type` warning pattern from BC-3.8.010. Idempotent — passing
-the same flag twice still emits ONE warning per logical flag.
+the same flag twice still emits ONE warning per logical flag. **Warning position (O-08-07):** all six warnings (the `--type` warning of BC-3.8.010 plus the five platform-only flag warnings of BC-3.8.011) are emitted INSIDE `handle_jsm_create` AFTER `require_service_desk` returns `Ok` — mirroring the BC-3.8.010 position constraint. On a non-JSM project, NONE of these warnings fire; only the non-JSM project error is emitted.
 
 **Inputs**: any combination of `--team`, `--points`, `--parent`, `--to`, `--account-id`
 with `--request-type`
@@ -742,6 +762,12 @@ normally; exit 0 on success.
 [NEW 2026-05-19 issue #288 pr4 adversary-pass-01 C-02] Added to codify the cross-flag
 warning policy after adversary pass-01 found silent-drop of 5 platform-only flags on
 the JSM dispatch path.
+
+> **[UPDATED 2026-05-20 issue #385 O-08-07]** Warning position constraint applied: all six warnings (the `--type` warning of BC-3.8.010 plus the five platform-only flag warnings of BC-3.8.011) move inside `handle_jsm_create` AFTER `require_service_desk` succeeds — co-located so that on a non-JSM project, NONE of these warnings fire; only the non-JSM project error is emitted. All existing per-flag integration tests MUST remain green — warnings still fire on the JSM success path.
+
+> **[UPDATED 2026-05-20 issue #385 adversary pass-8 H-03]** Threading note: achieving step-5 placement for the five platform-only flag warnings (`--team`, `--points`, `--parent`, `--to`, `--account-id`) requires those flag values to be in scope inside `handle_jsm_create` at the warning site. Pre-#385, `JsmCreateArgs` does not carry these fields. The implementer MUST thread them in — by extending `JsmCreateArgs`, passing them as additional parameters, or an equivalent mechanism. This BC constrains WHEN the warnings fire (step 5), not HOW the values are threaded. See prd-delta-385.md §O-08-07 Implementation Note for the full threading discussion.
+
+> **[UPDATED 2026-05-20 issue #385 adversary pass-12 F-02]** Single-site requirement: the existing pre-dispatch warning emission block in `handle_create` (which currently fires these warnings before `handle_jsm_create` is called) MUST be REMOVED as part of implementing O-08-07. All five platform-only flag warnings must exist at exactly ONE site — canonical step 5 inside `handle_jsm_create`. Double-emission from two code sites is a defect. The new `test_jsm_create_platform_flag_warnings_emit_once_on_success` (Required Test Deliverable item 7) pins this. Note: this is distinct from the existing idempotency contract ("one warning per logical flag regardless of how many times that flag is repeated by the caller") — idempotency concerns duplicate flag occurrences, not duplicate code sites emitting warnings.
 
 ---
 
@@ -934,6 +960,84 @@ H-NEW-JSM-RT-003 is re-bound to `test_jsm_create_oauth_scope_mismatch_401_surfac
 
 ---
 
+#### Canonical Guard Ordering — `handle_jsm_create`
+
+**SINGLE SOURCE OF TRUTH** for the complete guard/HTTP ordering in `handle_jsm_create`. BC-3.8.016 (step 1) and BC-3.8.017 (step 2) reference this block rather than embedding copies. `prd-delta-385.md §Canonical Guard Ordering` is a pointer to this block. When changing any step, update ONLY this block.
+
+The following is the complete, implementer-authoritative ordering of input guards, warnings, and HTTP calls in `handle_jsm_create`. Every BC and holdout in this delta is specified against this ordering:
+
+0. Project-key resolution (BC-3.8.002; `create.rs:1882-1891`) — may exit 64 when no project is resolvable AND `no_input` is effective (set explicitly via `--no-input` or auto-enabled on non-TTY stdin) OR `prompt_input` errors. NO HTTP. (O-08-02/BC-3.8.002 harmonizes the error string emitted by this block; see BC-3.8.002)
+1. **BC-3.8.016** — Empty/whitespace-only `--request-type` guard — exit 64, NO HTTP. Guard evaluates `request_type_arg.trim().is_empty()`; the inline numeric-bypass check and `partial_match` (both inside step 6) occur much later.
+2. **BC-3.8.017** — `--markdown` + `--field description=<value>` conflict guard — exit 64, NO HTTP. Fires when any raw `--field` token's key (substring before first `=`, NO trim, NO case-fold) is exactly `"description"` — case-SENSITIVE exact match mirroring `parse_field_kv`.
+3. Existing `--markdown`-requires-`--description` guard — exit 64, NO HTTP.
+4. `require_service_desk` — FIRST HTTP call in `handle_jsm_create`.
+5. BC-3.8.010/BC-3.8.011 platform-only flag warnings — all six warnings (the `--type` warning of BC-3.8.010 plus the five platform-only flag warnings of BC-3.8.011) fire only AFTER `require_service_desk` returns `Ok`. The existing pre-dispatch warning block in `handle_create` MUST be removed — warnings exist at exactly ONE site (this step).
+6. Numeric-bypass check → `resolve_jsm_request_type_id` (non-numeric input) → summary resolution, then description resolution (both in `handle_jsm_create`, after request-type resolution) → `parse_field_kv` → POST.
+
+Guards 1 and 2 fire after project-key resolution (step 0) and before `require_service_desk` (step 4) — zero HTTP when either fires.
+
+---
+
+#### BC-3.8.016: `--request-type ""` or whitespace-only value exits 64 before `require_service_desk` with explicit message
+
+**Confidence**: HIGH
+**Subject**: Issue write (JSM path — input guard)
+**Behavior**: When `--request-type` is set to the empty string or a whitespace-only string (i.e., the user passes `--request-type ""` or `--request-type "   "`), `handle_jsm_create` MUST detect the empty-or-whitespace-only input AFTER project-key resolution (step 0) but BEFORE `require_service_desk` (step 4). Guard ordering: see the Canonical Guard Ordering for subdomain 3.8 above (this guard is step 1).
+
+Exit code: 64. Stderr contains: `"request type cannot be empty"` (**CANONICAL SOURCE — all duplicate occurrences in prd-delta-385.md, holdout-scenarios.md, and spec-changelog.md MUST be updated together with this copy; cf. JR_* doc-fallout pattern in CLAUDE.md**) (assert via `contains`). No HTTP calls are issued. The guard evaluates `request_type_arg.trim().is_empty()` — it rejects empty-or-whitespace-only values. The un-trimmed value is passed downstream UNCHANGED if the guard does NOT fire; this BC does NOT normalize or trim the value for downstream use. Consequently, non-empty whitespace-padded values (e.g. `--request-type " 5 "`) are OUT OF SCOPE for this BC and are EXPLICITLY DEFERRED out of #385 scope — they pass this guard and the un-trimmed value proceeds to step 6, where `" 5 "` fails the numeric-bypass check (not all-digits) and falls into `partial_match`. The current outcome is a potentially confusing "request type not found" error (because `" 5 "` is unlikely to substring-match any request type name), not a clean exit. This is a KNOWN RESIDUAL edge case — deferred, not benign.
+**Inputs**: `--request-type ""` or `--request-type "   "` (empty or whitespace-only after trim); whitespace-padded non-empty values are out of scope for this BC.
+**Outputs/Effects**: exit 64; stderr contains "request type cannot be empty" (substring match via `contains` — duplicated from the CANONICAL copy above; update together); stdout empty; no HTTP.
+**Errors**: This BC IS the error contract. No downstream resolution attempted.
+**Trace**: `tests/issue_create_jsm.rs::test_jsm_create_empty_request_type_exits_64` (integration test — H-NEW-JSM-RT-006 realized_by binding); `src/cli/issue/create.rs::handle_jsm_create` (guard at very top, before `require_service_desk`)
+**Source**: O-08-04 CONFIRMED in `.factory/research/issue-288-pr4-deferred-validation.md`. Without this guard, `--request-type ""` falls through to `resolve_jsm_request_type_id` → `partial_match("", &names)` → returns `Ambiguous` for any NON-EMPTY candidate list (and `None` for an empty one) — either outcome produces a misleading message. See `src/partial_match.rs::partial_match` (substring-match branch): `"<anything>".contains("")` is `true` for all candidates, so every name in a non-empty list matches the empty string.
+**Confidence**: HIGH
+
+[NEW 2026-05-20 issue #385 F2] Closes O-08-04: empty `--request-type` guard. Guard fires at top of `handle_jsm_create` before `require_service_desk` — no HTTP can be issued.
+
+[UPDATED 2026-05-20 issue #385 adversary pass-1 F-01/F-03/F-08] Placement strengthened from "before `resolve_jsm_request_type_id`" to "at the VERY TOP of `handle_jsm_create`, before `require_service_desk`" — ensuring zero HTTP on this path. Canonical guard ordering list added. Assertion mode made explicit: stderr asserted via `contains` of substring "request type cannot be empty".
+
+[UPDATED 2026-05-20 issue #385 adversary pass-2 F-01] Scope clarified: guard tests `trim().is_empty()` only; it does NOT normalize the value for downstream use. Non-empty whitespace-padded values (e.g. `" 5 "`) are OUT OF SCOPE — they pass the guard and follow existing pre-#385 resolution behavior.
+
+[UPDATED 2026-05-20 issue #385 adversary pass-3 H-01/H-05] Wording corrected: guard fires at step 1, before `require_service_desk` (step 4); numeric-bypass check and `partial_match` occur at step 6, not near the handler top — removed any phrasing implying otherwise. CANONICAL SOURCE designation added to the "request type cannot be empty" message string.
+
+---
+
+#### BC-3.8.017: `--markdown` + `--field description=<value>` combination rejected at the top of `handle_jsm_create`; exit 64
+
+**Confidence**: HIGH
+**Subject**: Issue write (JSM path — input guard)
+**Behavior**: When `handle_jsm_create` detects both (a) `--markdown` is set AND (b) the raw `--field` arg list contains an entry whose key (first `=`-delimited token) is `"description"`, the handler MUST reject the combination AFTER project-key resolution (step 0) but BEFORE `require_service_desk`. Guard ordering: see the Canonical Guard Ordering for subdomain 3.8 above (this guard is step 2).
+
+Guard 2 (this BC) uses a RAW first-`=`-split on each `--field` token — full `parse_field_kv` is not required for the conflict check. The key check is: any `--field` token where the raw substring before the first `=` (NO trimming, NO case-folding) is EXACTLY `"description"` — case-SENSITIVE, no-trim match, identical to how `parse_field_kv` extracts the key. This check is performed BEFORE `require_service_desk` so that NO HTTP is issued when the conflict is present. The guard fires if and only if the raw key equals `"description"` exactly — so `--field Description=X` (key `Description`) and `--field " description"=X` (key `" description"`) do NOT trigger the guard and are not a desync (HashMap key `Description` does not overwrite `requestFieldValues["description"]`).
+
+The guard fires whenever `--markdown` is set AND a `--field description=…` is present — regardless of whether `--description` is also present. (The guard sits at step 2 above, BEFORE the existing `--markdown`-requires-`--description` guard at step 3. So `--markdown --field description=X` with NO `--description` flag correctly triggers THIS guard's conflict message, not the "requires --description" message.)
+
+Exit code: 64. Stderr message (verbatim — **CANONICAL SOURCE; all duplicate occurrences in prd-delta-385.md, holdout-scenarios.md, and spec-changelog.md MUST be updated together with this copy; cf. JR_* doc-fallout pattern in CLAUDE.md**):
+"`--field description=...` cannot be combined with `--markdown`: it would overwrite the ADF description with plain text, desyncing `isAdfRequest: true` with a plain-string description value (may result in a JSM 400 error or silently dropped ADF formatting). Pass `--description` with `--markdown`, or omit `--markdown`."
+No HTTP calls are issued on this path.
+
+When `--markdown` is absent, the guard does NOT fire — `--field description=value` without `--markdown` is permitted (it populates `requestFieldValues["description"]` as a plain string with `isAdfRequest: false` or omitted, which is coherent). When no `--field` token has a raw key exactly equal to `"description"`, the guard does NOT fire — `--markdown` alone (with `--description` or `--description-stdin`) is the normal ADF path. The guard does not inspect the description source (`--description` vs `--description-stdin`): if `--markdown` is set and a `--field` token has the raw key exactly `"description"`, the guard fires regardless of which description-source flag was used (EC-3.8.017-4). `--field Description=X` (capital D) + `--markdown` does NOT trigger the guard — raw key `Description` does not equal `"description"`; no desync occurs because HashMap key `Description` does not overwrite `requestFieldValues["description"]` (EC-3.8.017-3). A `--field` token with NO `=` character at all (e.g. `--field description`) does NOT trigger this guard — the raw first-`=`-split check requires a `=`-present form to extract a key; a no-`=` token has no extractable key and therefore never satisfies the conflict condition (EC-3.8.017-5). The downstream outcome depends on other flags: if a description source (`--description` or `--description-stdin`) is also present (e.g. `--markdown --description "X" --field description`), step 3 is satisfied and the no-`=` token reaches `parse_field_kv` at step 6, which surfaces the existing malformed-pair error; if NO description source is present alongside `--markdown`, the step-3 `--markdown`-requires-`--description` guard fires first. In both cases, BC-3.8.017's step-2 guard does not fire.
+
+**Rationale**: `JsmRequestBuilder::build()` populates `requestFieldValues["description"]` with the ADF object during description handling and computes `is_adf_request = true`; it then iterates `extra_fields`, and an `extra_fields` entry keyed exactly `"description"` overwrites the ADF value with a plain string; `isAdfRequest: true` is still emitted in the final body — producing the desync. This desync may produce a JSM 400 error OR silently drop ADF formatting — the exact Atlassian behavior is not documented and must not be asserted. Parse-time rejection is the correct fix.
+**Inputs**: `--markdown` flag set AND `--field <key>=<any value>` where the raw `<key>` (substring before first `=`, NO trimming, NO case-folding) is exactly `"description"` — case-SENSITIVE, no-trim match. `--field Description=X` (key `Description`) does NOT trigger this guard.
+**Outputs/Effects**: exit 64; stderr contains the conflict message (assert via `contains`); stdout empty; no HTTP.
+**Errors**: This BC IS the error contract. The rejection happens at the top of `handle_jsm_create` before `require_service_desk`.
+**Trace**: `tests/issue_create_jsm.rs::test_jsm_create_markdown_field_description_conflict_exits_64` (integration test — H-NEW-JSM-RT-007 realized_by binding); `src/cli/issue/create.rs::handle_jsm_create` (guard at top, before `require_service_desk`)
+**Source**: O-08-06 PARTIAL in `.factory/research/issue-288-pr4-deferred-validation.md`. The "may produce a JSM 400 OR silently drop ADF" phrasing is intentional per CLAUDE.md citation discipline — this spec MUST NOT assert "Atlassian returns 400" because the exact server behavior is undocumented. The guard rationale is the desync, not a confirmed 400.
+**Confidence**: HIGH
+
+[NEW 2026-05-20 issue #385 F2] Closes O-08-06: `--markdown` + `--field description=` conflict guard. Guard is in `handle_jsm_create` (not in `JsmRequestBuilder::build()`), preserving `JsmRequestBuilder` as a pure builder with no validation responsibility. Conflict guard in `build()` would require extending `tests/jsm_request_api.rs` proptest suite — caller-side placement keeps that suite unchanged.
+
+[UPDATED 2026-05-20 issue #385 adversary pass-1 F-01/F-03/F-04] Placement strengthened: guard sits at the VERY TOP of `handle_jsm_create` before `require_service_desk` (no HTTP). Guard ordering listed explicitly. Guard fires whenever `--markdown` + `--field description=…` is present regardless of whether `--description` is also set (guard precedes the `--markdown`-requires-`--description` guard). Raw first-`=`-split is sufficient — full `parse_field_kv` not required for the conflict check. EC-3.8.017-1 updated accordingly.
+
+[UPDATED 2026-05-20 issue #385 adversary pass-3 H-02/H-03] Key matching changed from case-SENSITIVE literal `"description"` to case-INSENSITIVE (`key.trim().to_ascii_lowercase() == "description"`). Removed the uncited claim that JSM field names are case-sensitive. EC-3.8.017-3 updated: `--field Description=X` now DOES trigger the guard. EC-3.8.017-4 added: `--markdown --description-stdin --field description=X` → guard fires; guard does not inspect `--description`/`--description-stdin` source.
+
+[UPDATED 2026-05-20 issue #385 adversary pass-5 M-03] EC-3.8.017-5 added: a `--field` token with NO `=` character does NOT trigger this guard — no extractable key means the conflict condition is never satisfied. Non-triggering-cases paragraph updated to reference EC-3.8.017-5 and describe two possible downstream outcomes (step-6 malformed-pair error when a description source is present; step-3 markdown-requires-description guard when no description source is present).
+
+[UPDATED 2026-05-20 issue #385 adversary pass-11 H-1] Key matching REVERSED from case-INSENSITIVE (pass-3 H-02) to case-SENSITIVE, no-trim — the guard MUST mirror `parse_field_kv`'s raw key extraction (`pair[..eq_pos]`, no `.trim()`, no case-folding) and HashMap exact-overwrite semantics. The desync (`extra_fields["description"]` overwrites `requestFieldValues["description"]`) occurs ONLY when the raw key is exactly `"description"`. `--field Description=X` produces HashMap key `Description`, which does NOT overwrite `requestFieldValues["description"]` — no desync, guard does NOT fire. The pass-3 H-02 case-insensitive framing was based on the incorrect premise that a differently-cased key could produce the desync. EC-3.8.017-3 updated: `--field Description=X` does NOT trigger the guard. Inputs field, non-triggering-cases paragraph, and all guard-match descriptions updated to remove "case-insensitive"/"trim" wording.
+
+---
+
 ## JSON Output Shape Contracts (all confirmed by insta snapshots)
 
 | Operation | JSON shape | Key field note |
@@ -951,6 +1055,6 @@ H-NEW-JSM-RT-003 is re-bound to `test_jsm_create_oauth_scope_mismatch_401_surfac
 
 Sources: `src/cli/issue/snapshots/jr__cli__issue__json_output__tests__*.snap`; BC-1104..BC-1112 (R4)
 
-## Total BCs in this file: 64 individually-bodied (cumulative 93 incl. range-collapsed; see BC-INDEX.md)
+## Total BCs in this file: 66 individually-bodied (cumulative 95 incl. range-collapsed; see BC-INDEX.md)
 
-_Last updated 2026-05-19: +2 BCs (BC-3.8.014..015): BC-3.8.014 (Basic-auth 401 API-token hint, with InsufficientScope→NotAuthenticated rewrite) and BC-3.8.015 (OAuth 401 existing behavior now explicitly gated) added in F2 delta (issue #384) to close JSM 401 auth-conditional hint gap (O-08-01). Corrected model: gate is `is_oauth_auth()` alone, not error variant. BC-3.8.001 errors cross-reference refreshed (auth-conditional 401 → BC-3.8.009/014/015; no behavioral change). BC-3.8.009 errors section updated (auth-conditional). BC-3.8 section header updated to 15 contracts, clause (d) added._
+_Last updated 2026-05-20: +2 BCs (BC-3.8.016..017): BC-3.8.016 (empty --request-type guard, exit 64 before partial_match) and BC-3.8.017 (--markdown + --field description= conflict rejection, exit 64 at parse-time) added in F2 delta (issue #385) to close O-08-04 and O-08-06. BC-3.8.002 error string harmonized (O-08-02: added --project/.jr.toml/jr-project-list affordances). BC-3.8.010 and BC-3.8.011 postconditions updated: warnings fire post-require_service_desk only (O-08-07 warning-position fix). BC-3.8 section header updated to 17 contracts, clause (e) added._

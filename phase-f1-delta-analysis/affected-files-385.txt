@@ -1,0 +1,14 @@
+# Affected files for issue #385
+# Format: <change-type> <file-path>
+# Change types: NEW, MODIFIED, DEPENDENT
+
+MODIFIED src/cli/issue/create.rs
+MODIFIED tests/issue_create_jsm.rs
+
+DEPENDENT src/api/jsm/requests.rs
+DEPENDENT src/api/jsm/servicedesks.rs
+DEPENDENT src/cli/queue.rs
+DEPENDENT src/cli/requesttype.rs
+DEPENDENT src/partial_match.rs
+DEPENDENT tests/issue_write_holdouts.rs
+DEPENDENT tests/jsm_request_api.rs

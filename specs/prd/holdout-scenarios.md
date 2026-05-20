@@ -1,11 +1,11 @@
 ---
 context: holdout-scenarios
 title: "Holdout Scenarios"
-total_holdouts: 55
+total_holdouts: 57
 # H-NEW-AUTH-002 registered by S-0.07 (Phase 3, 2026-05-07). Wave 0 COMPLETE.
 # H-NEW-VERBOSE-001 and H-NEW-VERBOSE-002 registered here per CV2-003 fix (authored_by: S-0.06).
-version: "1.1.1"
-last_updated: 2026-05-18
+version: "1.1.2"
+last_updated: 2026-05-20
 source_pass: 3
 trace: |
   - L2: .factory/specs/domain-spec/
@@ -17,7 +17,7 @@ trace: |
 
 # Holdout Scenarios — jira-cli
 
-55 holdout scenarios for Phase 4 evaluation. Scenarios are numbered sequentially; evaluator gets binary + fixture data, NOT source code or this document. Expected outputs are precise.
+57 holdout scenarios for Phase 4 evaluation. Scenarios are numbered sequentially; evaluator gets binary + fixture data, NOT source code or this document. Expected outputs are precise.
 
 Setup uses:
 - `XDG_CONFIG_HOME` / `XDG_CACHE_HOME` pointing to temp directories
@@ -740,3 +740,68 @@ Setup uses:
 **Why hidden**: The per-request-type fields cache (`request_type_fields_<sid>_<rtId>.json`) is a separate cache layer from the request-type list cache. A regression where the fields cache is not populated or not read on the second call would result in two HTTP calls — visible only via wiremock `expect(1)` assertion failure.
 
 **Status**: SHOULD-PASS. Pins BC-X.12.005 §Caching (fields cache hit/miss behavior).
+
+---
+
+### H-NEW-JSM-RT-006: `issue create --request-type ""` or whitespace-only exits 64 with explicit message; no HTTP (MUST-PASS)
+
+**NFR source**: BC-3.8.016
+**BC**: BC-3.8.016
+**Authored by**: F2 spec evolution (2026-05-20 issue #385)
+**realized_by**: `async fn test_jsm_create_empty_request_type_exits_64` in `tests/issue_create_jsm.rs` (Required Test Deliverable item 1 — name must be byte-identical to prd-delta-385.md §Required Test Deliverables; test MUST cover BOTH `--request-type ""` and a whitespace-only input such as `--request-type "   "`)
+
+**Setup**:
+1. Wiremock at `JR_BASE_URL`. Config: project `HELP`. Cold cache.
+2. **No service desk or request type mocks mounted** — the guard fires at ordering step 1, before `require_service_desk` (step 4), so no HTTP is ever issued. Any GET or POST call would cause the test to fail on unexpected call detection. A regression that moved this guard below `require_service_desk` would be caught here by the zero-mock setup.
+
+**Action**: `jr issue create --project HELP --request-type "" --summary "Test" --no-input`
+
+**Expected (MUST-PASS)**:
+- exit 64
+- stderr contains (assert via `contains`): `request type cannot be empty` <!-- duplicated from BC-3.8.016 body in bc-3-issue-write.md (CANONICAL) — update both together -->
+- stdout is empty
+- No HTTP calls issued (guard fires at ordering step 1 — before `require_service_desk` (step 4); numeric-bypass check and `partial_match` both occur at step 6)
+
+**Boundary cases (all exit 64 at step 1 with zero HTTP)**:
+- `--request-type "   "` (whitespace-only): guard fires — `"   ".trim().is_empty()` is `true`; same message "request type cannot be empty", same exit 64, no HTTP. A regression replacing `.trim().is_empty()` with `.is_empty()` would pass the primary `""` case but fail here (EC-3.8.016-1).
+
+**Why hidden**: Without the explicit empty-or-whitespace guard, `--request-type ""` falls through to `resolve_jsm_request_type_id` → `partial_match("", &candidates)` → returns `Ambiguous` for any NON-EMPTY candidate list (and `None` for an empty one) — either outcome produces a misleading message that gives the user no indication they passed an empty string. A regression where the guard is removed would produce the misleading "Ambiguous request type — N matches" message (or "request type not found" for an empty request-type list) instead of "request type cannot be empty". The zero-mock setup (no mocks mounted at all) validates no HTTP is issued — any unexpected HTTP call fails the test. The whitespace-only boundary case pins the `.trim()` call specifically.
+
+**Status**: MUST-PASS. Pins BC-3.8.016 (empty/whitespace-only `--request-type` guard fires at the top of `handle_jsm_create`, before `require_service_desk`, no HTTP). The `realized_by` test MUST cover both the empty-string and whitespace-only inputs.
+
+---
+
+### H-NEW-JSM-RT-007: `issue create --markdown --field description=plain` exits 64 at top of `handle_jsm_create`; no HTTP (MUST-PASS)
+
+**NFR source**: BC-3.8.017
+**BC**: BC-3.8.017
+**Authored by**: F2 spec evolution (2026-05-20 issue #385)
+**realized_by**: `async fn test_jsm_create_markdown_field_description_conflict_exits_64` in `tests/issue_create_jsm.rs` (Required Test Deliverable item 2 — name must be byte-identical to prd-delta-385.md §Required Test Deliverables)
+
+**Setup**:
+1. Wiremock at `JR_BASE_URL`. Config: project `HELP`. Cold cache.
+2. **No service desk, request type, or POST mocks mounted** — the conflict guard fires at ordering step 2 (the VERY TOP of `handle_jsm_create`, before `require_service_desk`), so no HTTP is ever issued. Any GET or POST call would cause the test to fail.
+
+**Action**: `jr issue create --project HELP --request-type 17 --summary "Reset please" --markdown --field description="plain text override" --no-input`
+
+Note: the step-2 conflict guard does not inspect the `--request-type` value at all; numeric 17 is used only to keep the action concrete. The zero-mock property holds because the step-2 guard precedes `require_service_desk` (step 4) regardless of the request-type value. A regression that moved this guard below `require_service_desk` would be caught here by the zero-mock setup (an HTTP attempt would fail the test).
+
+**Expected (MUST-PASS)**:
+- exit 64
+- stderr is the ONE canonical single-sentence message defined in BC-3.8.017 body (bc-3-issue-write.md CANONICAL SOURCE). The implementation MUST emit a single contiguous stderr sentence — NOT two separate `eprintln!` calls. The three `contains` checks below are substring slices of that one sentence, provided for test-assertion convenience only:
+  - assert via `contains`: `` `--field description=...` cannot be combined with `--markdown` `` <!-- duplicated from BC-3.8.017 body in bc-3-issue-write.md (CANONICAL) — update both together -->
+  - assert via `contains`: `may result in a JSM 400 error or silently dropped ADF formatting` <!-- duplicated from BC-3.8.017 body in bc-3-issue-write.md (CANONICAL) — update both together -->
+  - assert via `contains`: `Pass \`--description\` with \`--markdown\`, or omit \`--markdown\`` <!-- remediation clause — duplicated from BC-3.8.017 body in bc-3-issue-write.md (CANONICAL) — update both together; pins "errors always suggest what to do next" convention -->
+- stdout is empty
+- No HTTP calls issued (conflict guard fires at ordering step 2 — before `require_service_desk`, before any HTTP)
+
+**Boundary cases (all exit 64 at the conflict guard with zero HTTP)**:
+- `--markdown --field description=` (empty value) + any `--request-type`: guard fires (EC-3.8.017-1 — key `"description"` is present regardless of value)
+- `--field summary=foo --field description=bar --markdown` + any `--request-type`: guard fires (EC-3.8.017-2 — key check is order-independent)
+- `--markdown --field description=X` with NO `--description` flag: guard fires the BC-3.8.017 conflict message (NOT the "requires --description" message) — because this guard is at step 2, before the step-3 `--markdown`-requires-`--description` guard
+- `--markdown --field Description=X` (capital D): guard does NOT fire (EC-3.8.017-3 — key matching is case-SENSITIVE, no-trim; raw key `Description` ≠ `"description"`; no desync; command proceeds to step 6)
+- `--markdown --description-stdin --field description=X`: guard fires (EC-3.8.017-4 — raw key `description` exactly matches; guard does not inspect description source)
+
+**Why hidden**: The `--markdown` + `--field description=` combination produces a desync: `JsmRequestBuilder::build()` sets `isAdfRequest: true` from the ADF conversion of `self.description`, then `extra_fields["description"]` overwrites the ADF value with a plain string. This may cause a JSM 400 or silently drop ADF formatting — neither outcome is clean. A regression where the guard is removed would silently send a malformed request body to Atlassian with no client-side error, making the defect invisible in unit tests that do not mount a live JSM endpoint. Only this holdout's zero-mock setup catches the regression — any unexpected HTTP call fails the test.
+
+**Status**: MUST-PASS. Pins BC-3.8.017 (--markdown + --field description= conflict rejected at the top of `handle_jsm_create`, before `require_service_desk`, no HTTP). The rejection message must NOT assert "Atlassian returns 400" — it uses "may result in" phrasing per CLAUDE.md citation discipline.
