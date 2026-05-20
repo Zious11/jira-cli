@@ -1308,7 +1308,7 @@ async fn test_jsm_create_type_flag_ignored_with_warning() {
 /// incoming variant to `JrError::NotAuthenticated { hint: API_TOKEN_EXPIRY_HINT }`.
 ///
 /// Fixture stays Basic per adversary-pass-9 C-01 correction: a Bearer + generic-expiry
-/// 401 routes through the refresh coordinator (client.rs:727+), fails with raw anyhow
+/// 401 routes through the auto-refresh coordinator in `send_inner`, fails with raw anyhow
 /// via `JR_AUTH_HEADER` seam, and the hint is never injected — making a Bearer test
 /// non-deterministic. This test is a BC-3.8.014 (Basic-auth API-token expiry) pin.
 ///
@@ -1537,7 +1537,7 @@ async fn test_jsm_create_output_json_shape_matches_platform() {
 /// The existing `test_jsm_create_basic_auth_generic_401_surfaces_api_token_hint`
 /// uses Basic auth which hits the `NotAuthenticated` branch; this test uses
 /// Bearer auth + body "scope does not match" which hits the `InsufficientScope`
-/// branch (`src/api/client.rs:696-704`). Regression guard for the C-01 fix in
+/// branch (the `"scope does not match"` body check in `send_inner`). Regression guard for the C-01 fix in
 /// `src/cli/issue/create.rs handle_jsm_create map_err`.
 ///
 /// // H-NEW-JSM-RT-003 + BC-3.8.015 anchor
@@ -1545,7 +1545,8 @@ async fn test_jsm_create_output_json_shape_matches_platform() {
 /// Logic, fixture, and assertions MUST remain unmodified — this test pins
 /// the only deterministic OAuth→JrError→write:servicedesk-request path via
 /// the JR_AUTH_HEADER seam (Bearer + scope-mismatch body short-circuits to
-/// InsufficientScope at client.rs:696-704 BEFORE the refresh coordinator).
+/// InsufficientScope via the `"scope does not match"` body check in `send_inner`
+/// BEFORE the auto-refresh coordinator).
 #[tokio::test]
 async fn test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_request_hint() {
     let server = MockServer::start().await;
@@ -2874,11 +2875,11 @@ async fn test_jsm_create_basic_auth_401_surfaces_api_token_hint() {
 /// incoming `JrError::InsufficientScope` to
 /// `JrError::NotAuthenticated { hint: API_TOKEN_EXPIRY_HINT }`.
 ///
-/// This pins the non-obvious ordering at `client.rs:696-718`: the body check
-/// fires BEFORE the Bearer guard, so a Basic-auth 401 with a scope-mismatch
-/// body lands as `InsufficientScope` in the `map_err` WITHOUT the rewrite,
-/// exposing misleading OAuth language to Basic-auth users. The rewrite suppresses
-/// this. This test MUST NOT be skipped.
+/// This pins the non-obvious ordering in `send_inner`: the `"scope does not match"`
+/// body check fires BEFORE the `Bearer`-scheme guard, so a Basic-auth 401 with a
+/// scope-mismatch body lands as `InsufficientScope` in the `map_err` WITHOUT the
+/// rewrite, exposing misleading OAuth language to Basic-auth users. The rewrite
+/// suppresses this. This test MUST NOT be skipped.
 ///
 /// Assertions: same as AC-3 — API-token hint present, "write:servicedesk-request"
 /// absent, "Insufficient token scope" preamble absent (variant rewritten).
@@ -2893,8 +2894,8 @@ async fn test_jsm_create_basic_auth_scope_mismatch_401_rewrites_to_api_token_hin
     mount_service_desk_list(&server).await;
     mount_request_types_password_reset(&server).await;
 
-    // JSM POST returns 401 with scope-mismatch body — the body check at
-    // client.rs:696-704 fires BEFORE the Bearer guard at :718, so this body
+    // JSM POST returns 401 with scope-mismatch body — the `"scope does not match"`
+    // body check in `send_inner` fires BEFORE the `Bearer`-scheme guard, so this body
     // produces `InsufficientScope` even for Basic-auth clients. The map_err
     // rewrite MUST convert it to `NotAuthenticated { hint: API_TOKEN_EXPIRY_HINT }`.
     Mock::given(method("POST"))
@@ -3067,11 +3068,11 @@ async fn test_require_service_desk_basic_auth_401_surfaces_api_token_hint() {
 /// clients (`read:jira-work` + `read:servicedesk-request`).
 ///
 /// WHY scope-mismatch body required (BC-X.8.007 Setup): A Bearer client with a
-/// generic-expiry 401 body enters the refresh coordinator (client.rs:727+), fails
+/// generic-expiry 401 body enters the auto-refresh coordinator in `send_inner`, fails
 /// with raw anyhow (not a `JrError`) via the `JR_AUTH_HEADER` seam — the map_err
-/// never fires. Scope-mismatch body short-circuits to `InsufficientScope` at
-/// client.rs:696-704 BEFORE the refresh coordinator, deterministically reaching
-/// the map_err.
+/// never fires. Scope-mismatch body short-circuits to `InsufficientScope` via the
+/// `"scope does not match"` body check in `send_inner` BEFORE the auto-refresh
+/// coordinator, deterministically reaching the map_err.
 ///
 /// Assertions: stderr contains `read:jira-work` AND `read:servicedesk-request`;
 /// does NOT contain `write:servicedesk-request`.
@@ -3084,7 +3085,8 @@ async fn test_require_service_desk_oauth_401_surfaces_read_scope_hint() {
     write_minimal_config(config_dir.path(), &server.uri());
 
     // Project GET returns 401 with scope-mismatch body — the only deterministic
-    // Bearer→JrError path via JR_AUTH_HEADER seam (client.rs:696-704 short-circuit).
+    // Bearer→JrError path via JR_AUTH_HEADER seam (the `"scope does not match"`
+    // body check in `send_inner` short-circuits before the auto-refresh coordinator).
     Mock::given(method("GET"))
         .and(path("/rest/api/3/project/HELP"))
         .respond_with(ResponseTemplate::new(401).set_body_json(json!({
