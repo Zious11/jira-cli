@@ -216,19 +216,14 @@ impl JiraClient {
         self.verbose
     }
 
-    /// Returns `true` when the active auth header uses OAuth (Bearer scheme).
-    ///
-    /// This is the SINGLE predicate gating auth-scheme detection in error-hint
-    /// dispatch (BC-3.8.014 / BC-3.8.015 / BC-X.8.006 / BC-X.8.007). Uses the
-    /// same discriminant already trusted at `src/api/client.rs:718` and `:802`.
-    /// Returns `true` when the active auth scheme is OAuth (Bearer token);
+    /// Returns `true` when the active auth scheme is OAuth (Bearer token),
     /// `false` for Basic/API-token auth.
     ///
     /// Implementation: `self.auth_header.starts_with("Bearer ")` — case-sensitive,
-    /// single space after `Bearer`. This is the same discriminant production code
-    /// already trusts at `src/api/client.rs:718` and `:802`.
+    /// single space after `Bearer`. This is the same `Bearer`-scheme discriminant
+    /// used by the auto-refresh guard in `send_inner`.
     ///
-    /// Used as the single predicate gating auth-scheme-specific error-hint dispatch
+    /// This is the single predicate gating auth-scheme-specific error-hint dispatch
     /// in `handle_jsm_create` (BC-3.8.014/015) and `require_service_desk`
     /// (BC-X.8.006/007). No other predicate or ad-hoc check should be introduced
     /// at either call site.
