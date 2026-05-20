@@ -1894,10 +1894,15 @@ async fn test_jsm_create_account_id_flag_emits_warning_with_request_type() {
 
 // ─── H-02: Missing project on JSM path exits 64 with JSM-specific hint ────────
 
-/// H-02 (adversary pass-01) + BC-3.8.002: missing project on JSM path exits 64
-/// with the BC-mandated verbatim string "project is required for JSM request
-/// creation". Regression guard for the impl change in
+/// H-02 (adversary pass-01) + BC-3.8.002 (O-08-02 harmonized string): missing project
+/// on JSM path exits 64 with the harmonized verbatim string carrying --project /
+/// .jr.toml / jr project list affordances. Regression guard for the impl change in
 /// `src/cli/issue/create.rs handle_jsm_create`.
+///
+/// UPDATED by S-385 (O-08-02): assertion updated from the terse pre-#385 string
+/// ("project is required for JSM request creation") to the harmonized form
+/// (BC-3.8.002 CANONICAL SOURCE — same affordances as the platform path while
+/// preserving the JSM-specific context label).
 #[tokio::test]
 async fn test_jsm_create_missing_project_exits_64_with_jsm_specific_hint() {
     let cache_dir = tempfile::tempdir().unwrap();
@@ -1939,9 +1944,16 @@ auth_method = "api_token"
         "H-02 / BC-3.8.002: expected exit 64 for missing project on JSM path; got {:?}. stderr: {stderr}",
         output.status.code()
     );
+    // BC-3.8.002 (O-08-02 harmonized string — CANONICAL SOURCE in bc-3-issue-write.md).
+    // The terse pre-#385 string "project is required for JSM request creation" is REPLACED
+    // by the harmonized form below. Copy verbatim; any deviation causes adversarial failure.
     assert!(
-        stderr.contains("project is required for JSM request creation"),
-        "H-02 / BC-3.8.002: verbatim missing-project hint must appear; got: {stderr}"
+        stderr.contains(
+            "Project key is required for JSM request creation. \
+             Use --project or configure .jr.toml. \
+             Run \"jr project list\" to see available JSM projects."
+        ),
+        "H-02 / BC-3.8.002: harmonized verbatim missing-project hint must appear; got: {stderr}"
     );
 }
 
@@ -3058,4 +3070,524 @@ async fn test_require_service_desk_oauth_401_surfaces_read_scope_hint() {
         !stderr.contains("write:servicedesk-request"),
         "BC-X.8.007 AC-8: read-scope hint must NOT contain 'write:servicedesk-request'; got: {stderr}"
     );
+}
+
+// ─── S-385 O-08-04: BC-3.8.016 — empty/whitespace --request-type exits 64 ────
+
+/// BC-3.8.016 / H-NEW-JSM-RT-006 (Required Test Deliverable item 1 — S-385):
+/// `jr issue create --request-type ""` (empty string) and `--request-type "   "`
+/// (whitespace-only) both exit 64 with "request type cannot be empty" on stderr.
+///
+/// Zero HTTP mocks are mounted. The guard fires at Canonical Guard Ordering step 1,
+/// BEFORE `require_service_desk` (step 4). Any unexpected HTTP call would fail the
+/// test on wiremock server drop, detecting a regression that moved the guard below
+/// `require_service_desk`.
+///
+/// Both the empty-string and whitespace-only inputs are MANDATORY in this test —
+/// the whitespace-only case specifically pins the `.trim().is_empty()` guard
+/// implementation (EC-3.8.016-1). A guard using `.is_empty()` alone would pass
+/// `""` but fail `"   "`.
+#[tokio::test]
+async fn test_jsm_create_empty_request_type_exits_64() {
+    // ── Sub-case A: --request-type "" (empty string) ─────────────────────────
+    {
+        let server = MockServer::start().await;
+        let cache_dir = tempfile::tempdir().unwrap();
+        let config_dir = tempfile::tempdir().unwrap();
+        write_minimal_config(config_dir.path(), &server.uri());
+
+        // ZERO HTTP mocks mounted. The step-1 guard fires before any HTTP.
+        // If any HTTP is attempted, wiremock will detect an unexpected request
+        // and the test will fail on server drop.
+
+        let output = Command::cargo_bin("jr")
+            .unwrap()
+            .env("JR_BASE_URL", server.uri())
+            .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+            .env("XDG_CACHE_HOME", cache_dir.path())
+            .env("XDG_CONFIG_HOME", config_dir.path())
+            .args([
+                "issue",
+                "create",
+                "--project",
+                "HELP",
+                "--request-type",
+                "",
+                "--summary",
+                "Test",
+                "--no-input",
+            ])
+            .output()
+            .unwrap();
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        // Exit-code precondition (BC-3.8.016 postcondition 2).
+        assert_eq!(
+            output.status.code(),
+            Some(64),
+            "BC-3.8.016 (empty string): expected exit 64; got {:?}. stderr: {stderr}",
+            output.status.code()
+        );
+
+        // Stderr must contain the CANONICAL message (BC-3.8.016 CANONICAL SOURCE).
+        assert!(
+            stderr.contains("request type cannot be empty"),
+            "BC-3.8.016 (empty string): stderr must contain 'request type cannot be empty'; got: {stderr}"
+        );
+
+        // Stdout must be empty (BC-3.8.016 postcondition 3).
+        assert!(
+            stdout.is_empty(),
+            "BC-3.8.016 (empty string): stdout must be empty; got: {stdout}"
+        );
+    }
+
+    // ── Sub-case B: --request-type "   " (whitespace-only) ───────────────────
+    // Pins the .trim() call specifically (EC-3.8.016-1). A guard using only
+    // .is_empty() would pass sub-case A but fail here.
+    {
+        let server = MockServer::start().await;
+        let cache_dir = tempfile::tempdir().unwrap();
+        let config_dir = tempfile::tempdir().unwrap();
+        write_minimal_config(config_dir.path(), &server.uri());
+
+        // ZERO HTTP mocks mounted. Guard fires at step 1 before any HTTP.
+
+        let output = Command::cargo_bin("jr")
+            .unwrap()
+            .env("JR_BASE_URL", server.uri())
+            .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+            .env("XDG_CACHE_HOME", cache_dir.path())
+            .env("XDG_CONFIG_HOME", config_dir.path())
+            .args([
+                "issue",
+                "create",
+                "--project",
+                "HELP",
+                "--request-type",
+                "   ",
+                "--summary",
+                "Test",
+                "--no-input",
+            ])
+            .output()
+            .unwrap();
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        // Exit-code precondition (BC-3.8.016 postcondition 2).
+        assert_eq!(
+            output.status.code(),
+            Some(64),
+            "BC-3.8.016 (whitespace-only): expected exit 64; got {:?}. stderr: {stderr}",
+            output.status.code()
+        );
+
+        // Stderr must contain the CANONICAL message (BC-3.8.016 postcondition 1).
+        assert!(
+            stderr.contains("request type cannot be empty"),
+            "BC-3.8.016 (whitespace-only): stderr must contain 'request type cannot be empty'; got: {stderr}"
+        );
+
+        // Stdout must be empty (BC-3.8.016 postcondition 3).
+        assert!(
+            stdout.is_empty(),
+            "BC-3.8.016 (whitespace-only): stdout must be empty; got: {stdout}"
+        );
+    }
+}
+
+// ─── S-385 O-08-06: BC-3.8.017 — --markdown + --field description= conflict ──
+
+/// BC-3.8.017 / H-NEW-JSM-RT-007 (Required Test Deliverable item 2 — S-385):
+/// `jr issue create --markdown --field description=<value>` exits 64 with the
+/// canonical single-sentence conflict message BEFORE `require_service_desk` (step 4).
+///
+/// Three `contains` checks are performed — they are substring slices of the ONE
+/// canonical sentence emitted by the implementation, NOT three separate messages.
+/// The full canonical sentence lives in bc-3-issue-write.md BC-3.8.017 body
+/// (CANONICAL SOURCE).
+///
+/// Zero HTTP mocks are mounted. Guard fires at Canonical Guard Ordering step 2,
+/// before `require_service_desk`. Any unexpected HTTP call would fail the test
+/// on wiremock drop.
+///
+/// The guard uses a case-SENSITIVE, no-trim raw-key match: the key substring before
+/// the first `=` must be exactly `"description"`. `--field Description=X` does NOT
+/// trigger it (EC-3.8.017-3).
+#[tokio::test]
+async fn test_jsm_create_markdown_field_description_conflict_exits_64() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    // ZERO HTTP mocks mounted. Guard fires at step 2 before any HTTP.
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "HELP",
+            "--request-type",
+            "17",
+            "--summary",
+            "Reset please",
+            "--markdown",
+            "--field",
+            "description=plain text override",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Exit-code precondition (BC-3.8.017 postcondition 1).
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "BC-3.8.017: expected exit 64 for --markdown + --field description= conflict; got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+
+    // Three `contains` assertions covering the ONE canonical sentence from BC-3.8.017
+    // body CANONICAL SOURCE. These are test-assertion slices — do NOT assemble the
+    // implementation string from these fragments.
+
+    // Slice (a) — identifies the conflicting flag pair.
+    assert!(
+        stderr.contains("`--field description=...` cannot be combined with `--markdown`"),
+        "BC-3.8.017 (slice a): stderr must contain conflict identification; got: {stderr}"
+    );
+
+    // Slice (b) — explains the potential harm (may result in desync).
+    assert!(
+        stderr.contains(
+            "may result in a JSM 400 error or silently dropped ADF formatting"
+        ),
+        "BC-3.8.017 (slice b): stderr must contain desync-harm explanation; got: {stderr}"
+    );
+
+    // Slice (c) — remediation clause (pins "errors always suggest what to do next").
+    assert!(
+        stderr.contains("Pass `--description` with `--markdown`, or omit `--markdown`"),
+        "BC-3.8.017 (slice c): stderr must contain remediation clause; got: {stderr}"
+    );
+
+    // Stdout must be empty (BC-3.8.017 postcondition 3).
+    assert!(
+        stdout.is_empty(),
+        "BC-3.8.017: stdout must be empty; got: {stdout}"
+    );
+}
+
+// ─── S-385 O-08-07: BC-3.8.010/011 — platform-flag warning suppressed on non-JSM ─
+
+/// BC-3.8.010 / BC-3.8.011 (O-08-07 warning-position) / Required Test Deliverable
+/// item 3 — S-385: When a non-JSM project is used with `--request-type <non-empty>`
+/// and the `--type` platform-only flag, the warning MUST NOT appear on stderr.
+/// Only the `require_service_desk` non-JSM project error is emitted (exit 64).
+///
+/// Mock topology: H-NEW-JSM-RT-002 (non-JSM project meta, software typeKey, service
+/// desk list NOT called because project meta check short-circuits first).
+///
+/// Exit-code precondition: assert exit 64 FIRST. This verifies the test reached
+/// `require_service_desk` (step 4) and failed there — not at step 1 (empty RT)
+/// or step 2/3 (other guards). If the test exits at step 1, the warning-suppression
+/// assertion would be trivially true for the wrong reason.
+///
+/// A non-empty `--request-type` value is used ("Get IT Help") so the BC-3.8.016
+/// step-1 guard does NOT fire. The step-4 `require_service_desk` guard fires on
+/// the non-JSM project check.
+///
+/// After O-08-07: the entire pre-dispatch warning block (lines ~64-96 in pre-#385
+/// code) is removed. Warnings exist at exactly ONE site — step 5 inside
+/// `handle_jsm_create` AFTER `require_service_desk` returns Ok. On a non-JSM
+/// project, `require_service_desk` returns Err at step 4, so step 5 is never
+/// reached — warnings are suppressed.
+#[tokio::test]
+async fn test_jsm_create_type_flag_warning_suppressed_on_non_jsm_project() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    // H-NEW-JSM-RT-002 mock topology: non-JSM project (software typeKey).
+    // require_service_desk checks projectTypeKey first and returns UserError immediately
+    // for non-service_desk projects — no service desk list GET is issued.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/PROJ"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "100",
+            "key": "PROJ",
+            "projectTypeKey": "software",
+            "simplified": false
+        })))
+        .mount(&server)
+        .await;
+
+    // POST endpoints MUST NOT be called (expect(0)).
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--request-type",
+            "Get IT Help",
+            "--type",
+            "Bug",
+            "--summary",
+            "VPN broken",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Exit-code precondition (MUST assert exit 64 FIRST — verifies step-4 was reached).
+    // This precondition ensures the warning-suppression assertion is non-trivial.
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "BC-3.8.010 O-08-07: expected exit 64 from require_service_desk on non-JSM project; \
+         got {:?}. stderr: {stderr}",
+        output.status.code()
+    );
+
+    // Non-JSM project error MUST appear on stderr (verifies the correct failure site).
+    assert!(
+        stderr.contains("`jr issue create --request-type` requires a Jira Service Management project"),
+        "BC-3.8.010 O-08-07: stderr must contain the non-JSM project error; got: {stderr}"
+    );
+
+    // Platform-flag warning MUST NOT appear (warning-suppression pin).
+    // After O-08-07: warnings fire at step 5 (AFTER require_service_desk succeeds).
+    // On a non-JSM project, require_service_desk fails at step 4 → step 5 never reached.
+    let warning_count = stderr.matches("warning: --type is ignored").count();
+    assert_eq!(
+        warning_count,
+        0,
+        "BC-3.8.010 O-08-07: --type warning must NOT appear on stderr for non-JSM project \
+         (warning-suppression pin); found {warning_count} occurrence(s). stderr: {stderr}"
+    );
+}
+
+// ─── S-385 O-08-07: BC-3.8.010/011 single-site — no double-emission on success ─
+
+/// BC-3.8.010 / BC-3.8.011 single-site requirement (F-02) / Required Test
+/// Deliverable item 7 — S-385: On a successful JSM create path, each platform-only
+/// flag warning MUST appear EXACTLY ONCE on stderr. Double-emission from two code
+/// sites is a defect pinned here.
+///
+/// `--to` and `--account-id` are clap-mutually-exclusive on `issue create`, so all
+/// six flags cannot appear in a single invocation. Two invocations are required:
+///
+/// Invocation A: carries --type --team --points --parent --to (5 flags)
+///   → assert exit 0, then assert each of the 5 warning substrings count == 1
+/// Invocation B: carries --account-id (1 flag)
+///   → assert exit 0, then assert --account-id warning count == 1
+///
+/// CRITICAL: exit-code precondition (exit 0) MUST be asserted BEFORE warning counts.
+/// A non-zero exit means step 5 (warnings) was never reached — the count assertions
+/// would then be trivially 0 and silently void the double-emission pin.
+///
+/// CRITICAL: assertion mechanism is occurrence COUNT, NOT plain `contains`.
+/// A plain `contains` passes whether a warning appears once or twice, making it
+/// unable to detect the double-emission defect this test exists to catch.
+///
+/// Full JSM success-path mock set is required for both invocations (same topology
+/// as H-NEW-JSM-RT-004 / test_jsm_create_type_flag_ignored_with_warning).
+#[tokio::test]
+async fn test_jsm_create_platform_flag_warnings_emit_once_on_success() {
+    // ── Invocation A: --type --team --points --parent --to (5 flags) ──────────
+    {
+        let server = MockServer::start().await;
+        let cache_dir = tempfile::tempdir().unwrap();
+        let config_dir = tempfile::tempdir().unwrap();
+        write_minimal_config(config_dir.path(), &server.uri());
+
+        // Full JSM success-path mocks (same topology as H-NEW-JSM-RT-004).
+        mount_project_meta_help(&server).await;
+        mount_service_desk_list(&server).await;
+        mount_request_type_list(&server).await;
+
+        Mock::given(method("POST"))
+            .and(path("/rest/servicedeskapi/request"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let output = Command::cargo_bin("jr")
+            .unwrap()
+            .env("JR_BASE_URL", server.uri())
+            .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+            .env("XDG_CACHE_HOME", cache_dir.path())
+            .env("XDG_CONFIG_HOME", config_dir.path())
+            .args([
+                "issue",
+                "create",
+                "--project",
+                "HELP",
+                "--request-type",
+                "Password Reset",
+                "--summary",
+                "test",
+                "--no-input",
+                "--output",
+                "json",
+                "--type",
+                "Bug",
+                "--team",
+                "team-abc",
+                "--points",
+                "3",
+                "--parent",
+                "HELP-1",
+                "--to",
+                "account-id-xyz",
+            ])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        // Exit-code precondition: MUST assert exit 0 BEFORE warning counts.
+        // Non-zero exit means step 5 never reached → counts would be trivially 0.
+        assert!(
+            output.status.success(),
+            "BC-3.8.010/011 F-02 invocation-A: expected exit 0 (success path); \
+             got {:?}. stderr: {stderr}",
+            output.status.code()
+        );
+
+        // Occurrence count assertions — NOT plain `contains`.
+        // Each warning MUST appear EXACTLY ONCE (single-site requirement F-02).
+
+        let count_type = stderr.matches("warning: --type is ignored when --request-type is set").count();
+        assert_eq!(
+            count_type, 1,
+            "BC-3.8.010 F-02 invocation-A: expected exactly 1 --type warning; got {count_type}. stderr: {stderr}"
+        );
+
+        let count_team = stderr.matches("warning: --team is ignored when --request-type is set").count();
+        assert_eq!(
+            count_team, 1,
+            "BC-3.8.011 F-02 invocation-A: expected exactly 1 --team warning; got {count_team}. stderr: {stderr}"
+        );
+
+        let count_points = stderr.matches("warning: --points is ignored when --request-type is set").count();
+        assert_eq!(
+            count_points, 1,
+            "BC-3.8.011 F-02 invocation-A: expected exactly 1 --points warning; got {count_points}. stderr: {stderr}"
+        );
+
+        let count_parent = stderr.matches("warning: --parent is ignored when --request-type is set").count();
+        assert_eq!(
+            count_parent, 1,
+            "BC-3.8.011 F-02 invocation-A: expected exactly 1 --parent warning; got {count_parent}. stderr: {stderr}"
+        );
+
+        let count_to = stderr.matches("warning: --to is ignored when --request-type is set").count();
+        assert_eq!(
+            count_to, 1,
+            "BC-3.8.011 F-02 invocation-A: expected exactly 1 --to warning; got {count_to}. stderr: {stderr}"
+        );
+    }
+
+    // ── Invocation B: --account-id (1 flag, clap-exclusive with --to) ─────────
+    {
+        let server = MockServer::start().await;
+        let cache_dir = tempfile::tempdir().unwrap();
+        let config_dir = tempfile::tempdir().unwrap();
+        write_minimal_config(config_dir.path(), &server.uri());
+
+        // Full JSM success-path mocks.
+        mount_project_meta_help(&server).await;
+        mount_service_desk_list(&server).await;
+        mount_request_type_list(&server).await;
+
+        Mock::given(method("POST"))
+            .and(path("/rest/servicedeskapi/request"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(jsm_created_response()))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let output = Command::cargo_bin("jr")
+            .unwrap()
+            .env("JR_BASE_URL", server.uri())
+            .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+            .env("XDG_CACHE_HOME", cache_dir.path())
+            .env("XDG_CONFIG_HOME", config_dir.path())
+            .args([
+                "issue",
+                "create",
+                "--project",
+                "HELP",
+                "--request-type",
+                "Password Reset",
+                "--summary",
+                "test",
+                "--no-input",
+                "--output",
+                "json",
+                "--account-id",
+                "account-id-xyz",
+            ])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        // Exit-code precondition: MUST assert exit 0 BEFORE warning count.
+        assert!(
+            output.status.success(),
+            "BC-3.8.011 F-02 invocation-B: expected exit 0 (success path); \
+             got {:?}. stderr: {stderr}",
+            output.status.code()
+        );
+
+        // --account-id warning MUST appear EXACTLY ONCE (single-site requirement F-02).
+        let count_account_id = stderr
+            .matches("warning: --account-id is ignored when --request-type is set")
+            .count();
+        assert_eq!(
+            count_account_id, 1,
+            "BC-3.8.011 F-02 invocation-B: expected exactly 1 --account-id warning; \
+             got {count_account_id}. stderr: {stderr}"
+        );
+    }
 }
