@@ -3,7 +3,7 @@ use anyhow::Result;
 use crate::api::client::JiraClient;
 use crate::api::pagination::ServiceDeskPage;
 use crate::cache::{self, ProjectMeta};
-use crate::error::JrError;
+use crate::error::{API_TOKEN_EXPIRY_HINT, JrError};
 use crate::types::jsm::ServiceDesk;
 use chrono::Utc;
 
@@ -114,7 +114,37 @@ pub async fn require_service_desk(
     project_key: &str,
     call_site_label: &'static str,
 ) -> Result<String> {
-    let meta = get_or_fetch_project_meta(client, project_key).await?;
+    // Introduce a new map_err on get_or_fetch_project_meta to provide auth-aware
+    // 401 hints (BC-X.8.006 / BC-X.8.007). The map_err wraps the ENTIRE future so
+    // it catches 401 from either live GET (project GET or service-desk list GET)
+    // issued on a cache miss.
+    //
+    // Only rewrite 401-derived errors (NotAuthenticated / InsufficientScope);
+    // all other error variants pass through unchanged.
+    let meta = get_or_fetch_project_meta(client, project_key)
+        .await
+        .map_err(|e| match e.downcast::<JrError>() {
+            Ok(JrError::NotAuthenticated { .. }) | Ok(JrError::InsufficientScope { .. }) => {
+                // Auth-conditional hint dispatch (BC-X.8.006 / BC-X.8.007).
+                let hint = if client.is_oauth_auth() {
+                    // OAuth: read-side scope hint naming read:jira-work and
+                    // read:servicedesk-request. Both arms produce the same hint
+                    // (BC-X.8.007 postcondition 1 / pass-3 H-04 one canonical hint).
+                    // NOT InsufficientScope — that template is POST-specific (#185).
+                    "Your OAuth token may be expired. Run `jr auth refresh` to renew the token, or\n\
+                    `jr auth login` to re-authorize. If using a custom OAuth app, run `jr auth login`\n\
+                    to re-consent with read:jira-work and read:servicedesk-request — `jr auth refresh`\n\
+                    alone cannot add missing scopes (it re-mints with the same granted scope set)."
+                        .to_string()
+                } else {
+                    // Basic: API-token-expiry hint (BC-X.8.006 postcondition 1).
+                    API_TOKEN_EXPIRY_HINT.to_string()
+                };
+                anyhow::anyhow!(JrError::NotAuthenticated { hint })
+            }
+            Ok(other) => anyhow::anyhow!(other),
+            Err(other) => other,
+        })?;
 
     if meta.project_type != "service_desk" {
         let type_label = match meta.project_type.as_str() {

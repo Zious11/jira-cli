@@ -12,7 +12,7 @@ use crate::api::jsm::servicedesks;
 use crate::cache;
 use crate::cli::{IssueCommand, OutputFormat};
 use crate::config::Config;
-use crate::error::JrError;
+use crate::error::{API_TOKEN_EXPIRY_HINT, JrError};
 use crate::output;
 use crate::partial_match::{self, MatchResult};
 
@@ -1976,33 +1976,65 @@ async fn handle_jsm_create(
     .build();
 
     // POST to /rest/servicedeskapi/request (BC-3.8.001).
-    // On 401: surface a scope-mismatch hint pointing at write:servicedesk-request
-    // (BC-1.3.023, BC-X.3.005, H-NEW-JSM-RT-003).
-    // Both Basic-auth 401 (`NotAuthenticated`) and OAuth scope-mismatch 401
-    // (`InsufficientScope`) must produce the write:servicedesk-request hint (C-01).
+    //
+    // On 401, gate error-hint dispatch on auth scheme (BC-3.8.014 / BC-3.8.015):
+    //
+    //   Basic-auth (is_oauth_auth() == false): REWRITE any incoming variant
+    //     (NotAuthenticated or InsufficientScope) to NotAuthenticated with the
+    //     API-token-expiry hint. The InsufficientScope rewrite is required because
+    //     the body check at client.rs:696-704 fires BEFORE the Bearer guard at :718,
+    //     so a Basic-auth 401 with a scope-mismatch body lands as InsufficientScope
+    //     without the rewrite — exposing misleading OAuth language to Basic users.
+    //
+    //   OAuth (is_oauth_auth() == true): preserve existing pre-#384 behavior
+    //     unchanged for both arms — BOTH produce the write:servicedesk-request hint
+    //     (BC-3.8.015 / H-NEW-JSM-RT-003). The NotAuthenticated arm already rewrites
+    //     to inject the hint; the InsufficientScope arm augments the message with
+    //     scope-specific guidance.
+    let is_oauth = client.is_oauth_auth();
     let created =
         client
             .create_jsm_request(body)
             .await
             .map_err(|e| match e.downcast::<JrError>() {
                 Ok(JrError::NotAuthenticated { .. }) => {
-                    anyhow::anyhow!(JrError::NotAuthenticated {
-                        hint: "The `write:servicedesk-request` OAuth scope may be missing. \
-                       Run `jr auth refresh` or `jr auth login` to re-consent with \
-                       the updated scope."
-                            .to_string(),
-                    })
+                    if is_oauth {
+                        // OAuth: preserve existing behavior (write:servicedesk-request hint).
+                        anyhow::anyhow!(JrError::NotAuthenticated {
+                            hint: "The `write:servicedesk-request` OAuth scope may be missing. \
+                           Run `jr auth refresh` or `jr auth login` to re-consent with \
+                           the updated scope."
+                                .to_string(),
+                        })
+                    } else {
+                        // Basic: API-token-expiry hint (BC-3.8.014 postcondition 1).
+                        anyhow::anyhow!(JrError::NotAuthenticated {
+                            hint: API_TOKEN_EXPIRY_HINT.to_string(),
+                        })
+                    }
                 }
                 Ok(JrError::InsufficientScope { message, .. }) => {
-                    anyhow::anyhow!(JrError::InsufficientScope {
-                        message: format!(
-                            "{message} (`jr issue create --request-type` requires the \
-                         `write:servicedesk-request` OAuth scope. \
-                         Run `jr auth refresh` to refresh, or `jr auth login` to re-authorize \
-                         with updated scopes.)"
-                        ),
-                        required_scope: Some("write:servicedesk-request".to_string()),
-                    })
+                    if is_oauth {
+                        // OAuth: augment with scope-specific guidance (BC-3.8.015 / C-01).
+                        anyhow::anyhow!(JrError::InsufficientScope {
+                            message: format!(
+                                "{message} (`jr issue create --request-type` requires the \
+                             `write:servicedesk-request` OAuth scope. \
+                             Run `jr auth refresh` to refresh, or `jr auth login` to re-authorize \
+                             with updated scopes.)"
+                            ),
+                            required_scope: Some("write:servicedesk-request".to_string()),
+                        })
+                    } else {
+                        // Basic: rewrite InsufficientScope → NotAuthenticated with
+                        // API-token-expiry hint (BC-3.8.014 postcondition 2).
+                        // The body check at client.rs:696-704 fires before the Bearer guard,
+                        // so a Basic-auth scope-mismatch body arrives as InsufficientScope;
+                        // rewriting here prevents misleading OAuth language for Basic users.
+                        anyhow::anyhow!(JrError::NotAuthenticated {
+                            hint: API_TOKEN_EXPIRY_HINT.to_string(),
+                        })
+                    }
                 }
                 Ok(other) => anyhow::anyhow!(other),
                 Err(other) => other,
