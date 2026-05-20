@@ -22,10 +22,6 @@ trace: |
 Create (3.3), Edit+Open (3.4), Comment (3.5), Links (3.6), Remote links (3.7),
 JSM Request Create + Platform-Path Inverse Warnings (3.8).
 
-Note: subdomain 3.8 currently uses `## BC-3.8:` heading depth while subdomains
-3.1..3.7 use `### 3.N <name>`. Heading-depth harmonization is deferred to a future
-cleanup (see followup-tracking: MEDIUM #1 from issue #383 F2 adversary pass-05).
-
 ---
 
 ## Subdomains
@@ -548,7 +544,7 @@ existing wall-clock bound and `"deadline"` substring assertions.
 
 ---
 
-## BC-3.8: JSM Request Create + Platform-Path Inverse Warnings
+### 3.8 JSM Request Create + Platform-Path Inverse Warnings
 
 13 behavioral contracts covering: (a) `jr issue create --request-type` dispatch to the JSM service desk API
 (BC-3.8.001..009), (b) forward-direction cross-flag warnings when platform-only flags are passed alongside
