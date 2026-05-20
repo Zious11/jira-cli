@@ -20,6 +20,10 @@ Thumbs.db
 .factory/
 .reference/
 
+# Fixture trees for spec-count tests contain .factory/ subdirs — allow them
+!tests/spec-count-fixtures/*/.factory/
+!tests/spec-count-fixtures/*/.factory/**
+
 # Proptest persisted regression seeds (local cache, never commit)
 proptest-regressions/
 

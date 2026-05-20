@@ -88,6 +88,10 @@ jobs:
         run: bash scripts/check-spec-counts.sh
       - name: check-bc-no-numeric-test-counts (PG-365-1)
         run: bash scripts/check-bc-no-numeric-test-counts.sh
+      - name: check-bc-cumulative-counts self-test (fixture suite)
+        run: bash tests/spec-count-fixtures/run-tests.sh
+      - name: check-bc-cumulative-counts (DRIFT-002)
+        run: bash scripts/check-bc-cumulative-counts.sh
 
   security:
     name: Secret Scan (gitleaks)
