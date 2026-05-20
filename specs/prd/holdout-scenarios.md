@@ -655,30 +655,37 @@ Setup uses:
 
 ---
 
-### H-NEW-JSM-RT-003: `issue create --request-type` 401 with scope-mismatch surfaces `write:servicedesk-request` recovery hint (MUST-PASS)
+### H-NEW-JSM-RT-003: `issue create --request-type` OAuth scope-mismatch 401 surfaces `write:servicedesk-request` recovery hint (MUST-PASS)
 
-**NFR source**: BC-3.8.009, BC-X.3.005, BC-1.6.042
-**BC**: BC-3.8.009, BC-X.3.005, BC-1.6.042, BC-1.3.023
+**NFR source**: BC-3.8.015, BC-X.3.005, BC-1.6.042
+**BC**: BC-3.8.015, BC-X.3.005, BC-1.6.042, BC-1.3.023
+**Note**: BC-X.8.006 and BC-X.8.007 are intentionally NOT in the BC list. BC-3.8.014 is also intentionally NOT in the BC list — this holdout exercises the OAuth InsufficientScope arm only (scope-mismatch body routes through client.rs:696-704 short-circuit); BC-3.8.014's positive path (Basic-auth 401 → API-token-expiry hint) is pinned by `test_jsm_create_basic_auth_401_surfaces_api_token_hint` and `test_jsm_create_401_hint_contains_write_servicedesk_request` (post-F4 repurpose), so BC-3.8.014 is intentionally absent from the `BC:` list above.
 **Authored by**: F2 spec evolution (2026-05-18)
+**Test file**: `tests/issue_create_jsm.rs` — realized AS `async fn test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_request_hint`. The holdout and this test are the SAME artifact; there is no separate file. This test is already GREEN on `develop` unmodified and MUST remain unmodified.
 
-**Setup**:
-1. Wiremock at `JR_BASE_URL`. Config: project `HELPDESK` with `typeKey = "service_desk"`.
-2. Mock `GET /rest/servicedeskapi/servicedesk` returning service desk ID `"3"` for HELPDESK.
-3. Mock `GET /rest/servicedeskapi/servicedesk/3/requesttype` returning request type `{id: "5", name: "Get IT Help"}`.
-4. Mock `POST /rest/servicedeskapi/request` returning 401 with body `{"message": "Unauthorized; scope does not match"}`.
+> **[REVISED 2026-05-19 issue #384 adversary-pass-9 C-01]** Re-bound from `test_jsm_create_401_hint_contains_write_servicedesk_request` (Basic + generic-expiry — now a BC-3.8.014 pin) to `test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_request_hint` (Bearer + scope-mismatch body — the ONLY deterministic OAuth→`JrError`→`write:servicedesk-request` path via the `JR_AUTH_HEADER` seam). All prior revision-note blockquotes referencing the earlier binding are superseded by this note. Title updated to reflect scope-mismatch framing.
 
-**Action**: `jr issue create --project HELPDESK --request-type "Get IT Help" --summary "VPN broken" --no-input`
+**Setup** (faithfully describes the bound test `async fn test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_request_hint`):
+0. **Cache dir is empty** (isolated `tempfile::tempdir()` for `XDG_CACHE_HOME`) — all GET mocks are reached on a cold cache.
+1. Wiremock at `JR_BASE_URL`. Auth: `JR_AUTH_HEADER=Bearer test-oauth-token` (OAuth/Bearer fixture).
+2. Project-meta GET for `HELP` returns a service-desk-type project (via the `mount_project_meta_help` helper — project `HELP`, id `99`, service-desk type). The helper is authoritative for the exact mock body.
+3. Service-desk list GET returns service desk matched to project `HELP` (via `mount_service_desk_list` helper). The `projectId` field must match the project `id` from step 2 for `require_service_desk` to succeed.
+4. Request-type list GET for the service desk returns a **single-element list** via the `mount_request_types_password_reset` helper: `"Password Reset"` only (one entry, no ambiguity in partial_match resolution). NOTE: this helper is distinct from `mount_request_type_list` (two-element list used by the sibling `test_jsm_create_401_hint_contains_write_servicedesk_request`); do NOT consolidate the two helpers.
+5. `POST /rest/servicedeskapi/request` returns HTTP 401 with a **scope-mismatch body**: `{"errorMessages": ["Unauthorized; scope does not match"]}`. This body triggers the short-circuit at `src/api/client.rs:696-704` BEFORE the Bearer guard and BEFORE the refresh coordinator, landing as `JrError::InsufficientScope` in `handle_jsm_create`'s `map_err`. The OAuth arm (`is_oauth_auth() == true`) preserves `InsufficientScope` and surfaces the `write:servicedesk-request` hint. **WHY scope-mismatch body is required:** a generic-expiry body on a Bearer client routes through the refresh coordinator (client.rs:727+), which deterministically fails with a raw anyhow error (not a `JrError`) via the `JR_AUTH_HEADER` seam — the `write:servicedesk-request` hint is never injected and the test would not be a valid pin.
 
-**Expected (MUST-PASS)**:
-- exit 2
-- stderr contains `Insufficient token scope`
+**Action**: `jr issue create --project HELP --request-type "Password Reset" --summary "Reset my password" --no-input`
+
+**Expected (MUST-PASS)** — exactly the four assertions made by `test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_request_hint` (read from `tests/issue_create_jsm.rs` lines 1566-1582):
+- exit non-zero
 - stderr contains `write:servicedesk-request`
-- stderr contains an OAuth re-authorization hint (e.g., references to `jr auth refresh` or `jr auth login`)
-- Mirrors H-012 behavior for the new write scope
+- stderr contains `jr auth refresh`
+- stderr contains `jr auth login`
 
-**Why hidden**: The 401-scope-mismatch dispatch (BC-X.3.005) must pick up the new `write:servicedesk-request` scope name in its hint text. Without an explicit test, a copy-paste of the existing hint that names only `write:jira-work` would be invisible to users — they would see a generic scope error with no actionable path specific to the new permission.
+**Note**: The negative boundary "OAuth path does NOT leak the Basic-auth API-token hint" is NOT pinned by this holdout — it is covered positively by BC-3.8.014's dedicated Basic-auth tests (`test_jsm_create_basic_auth_401_surfaces_api_token_hint` and the repurposed `test_jsm_create_401_hint_contains_write_servicedesk_request`), which assert the Basic path produces the API-token-expiry hint, making the negative boundary implicit and structurally enforced.
 
-**Status**: MUST-PASS. Verifies that BC-1.3.023's `write:servicedesk-request` addition is surfaced in the user-facing error recovery path.
+**Why hidden**: The OAuth `InsufficientScope` 401 path (scope-mismatch body → client.rs:696-704 short-circuit → `InsufficientScope` → `map_err` OAuth arm) must surface `write:servicedesk-request`. This is the only deterministic Bearer→`JrError`→hint path via the `JR_AUTH_HEADER` seam. A regression where the OAuth `InsufficientScope` arm loses the `write:servicedesk-request` hint would be invisible without this pin.
+
+**Status**: MUST-PASS. Verifies that BC-3.8.015's `write:servicedesk-request` addition is surfaced in the user-facing error recovery path for OAuth auth via the `InsufficientScope` arm (the only deterministic testable path).
 
 ---
 

@@ -1,0 +1,14 @@
+# Affected files for issue #384
+# Format: <change-type> <file-path>
+# Change types: NEW, MODIFIED, DEPENDENT
+
+MODIFIED src/api/client.rs
+MODIFIED src/cli/issue/create.rs
+MODIFIED src/api/jsm/servicedesks.rs
+MODIFIED tests/issue_create_jsm.rs
+
+DEPENDENT src/cli/queue.rs
+DEPENDENT src/cli/requesttype.rs
+DEPENDENT tests/jsm_request_api.rs
+DEPENDENT tests/api_client.rs
+DEPENDENT tests/issue_write_holdouts.rs

@@ -36,8 +36,8 @@ activation_version: "v0.5.0-dev.7"
 | **Language** | Rust |
 | **Target Workspace** | develop → main |
 | **Started** | 2026-05-04 |
-| **Last Updated** | 2026-05-20 — Issue #391 delivered (bc-3 heading harmonization). factory-artifacts edit. |
-| **Current Phase** | Phase 3 — TDD Implementation **IN PROGRESS** — Wave 3 CLOSED (10/10). Feature Mode #110-pr2 COMPLETE. PRs #355–#364, #366–#367, #369–#373 MERGED. **0 audit-followups remain** (#331 sandbox-blocked deferred; #333 closed by PR #360; #340 closed by PR #370; #345 closed by PR #371; #346 closed by PR #373; #350 closed by PR #362; #361 closed by PR #364; #365 closed by PR #367; PG-365-1 closed by PR #369). **#383 DELIVERED PR #390 @ 25f7211 (2026-05-19)**. **#392 DELIVERED PR #393 @ 0be2e3a (2026-05-20)**: cumulative spec-count CI guard (DRIFT-002) live; DEFER-383-3 + DRIFT-BC2-PROSE resolved. No new BCs (infrastructure work). |
+| **Last Updated** | 2026-05-20 — Issue #384 F1+F2 spec evolution committed (4 new BCs, spec v1.1.0). factory-artifacts commit. |
+| **Current Phase** | Phase 3 — TDD Implementation **IN PROGRESS** — Wave 3 CLOSED (10/10). Feature Mode #110-pr2 COMPLETE. PRs #355–#364, #366–#367, #369–#373 MERGED. **0 audit-followups remain** (#331 sandbox-blocked deferred; #333 closed by PR #360; #340 closed by PR #370; #345 closed by PR #371; #346 closed by PR #373; #350 closed by PR #362; #361 closed by PR #364; #365 closed by PR #367; PG-365-1 closed by PR #369). **#383 DELIVERED PR #390 @ 25f7211 (2026-05-19)**. **#392 DELIVERED PR #393 @ 0be2e3a (2026-05-20)**. **#384 F2 COMPLETE (2026-05-20)**: 4 new BCs (BC-3.8.014/015, BC-X.8.006/007), 3 modified (BC-3.8.001, BC-3.8.009, BC-X.3.002), H-NEW-JSM-RT-003 revised, spec v1.1.0. F2 adversarial convergence 3/3 CLEAN. CRITICAL control-flow defect caught + corrected (OAuth 401 routes through refresh coordinator, not NotAuthenticated arm). Awaiting F3 implementation. |
 | **Next Phase** | Wave 3 — 10 stories (S-3.01..S-3.10) |
 | **Activation HEAD** | dea166471e22eff55974d7675593469b37048c5f (v0.5.0-dev.7) |
 | **factory-artifacts SHA** | 0b01262 (Phase 1 gate APPROVE; phase-1-converged tag) |
@@ -83,6 +83,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | issue-382 (quick-dev) | **MERGED — PR #389 @ b1c863e (2026-05-19)** — F1 + F1d CONVERGED 3/3 (8 passes). F4 per-story adversary CONVERGED 3/3. Copilot CLEAN (0 inline). CI 10/10 green including mutation testing (5min). Issue #382 auto-closed. | 2026-05-19 | 2026-05-19 | MERGED — PR #389 @ b1c863e; issue #382 closed | F1d: 8 passes, 3/3 CLEAN (passes 06/07/08). F4 adv: 3 passes, 3/3 CLEAN. pr-reviewer: APPROVE (0 blocking). Copilot: COMMENTED (0 inline) |
 | issue-383 (F3 standalone) | **MERGED — PR #390 @ 25f7211 (2026-05-19)** — F2 CONVERGED 11 adversary passes. F4 per-story adversary CONVERGED 3/3 (pass-01 CLEAN, pass-02-retry CLEAN, pass-03 CLEAN). Copilot COMMENTED (0 inline). CI 10/10 GREEN. pr-reviewer APPROVE 1 cycle (3 non-blocking). Issue #383 auto-closed. 3 deferred follow-up items logged (DEFER-383-1/2/3). | 2026-05-19 | 2026-05-19 | MERGED — PR #390 @ 25f7211; issue #383 closed | F2 adv: 11 passes, 3/3 CLEAN (passes 09/10/11). F4 adv: 3 passes, 3/3 CLEAN. pr-reviewer: APPROVE (0 blocking). Copilot: COMMENTED (0 inline) |
 | issue-392 (F3 standalone) | **DELIVERED — PR #393 MERGED @ 0be2e3a (2026-05-20)** — `scripts/check-bc-cumulative-counts.sh` (DRIFT-002) live in CI. 7-fixture self-test harness. DRIFT-BC2-PROSE fixed (bc-2 prose 92→93). DEFER-383-3 resolved. Per-story adversary CONVERGED 3/3. Copilot 4 rounds (19 round-1 comments → 0 round 4). CI 10/10 GREEN. Issue #392 auto-closed. Lessons L-392-01..05 codified. | 2026-05-19 | 2026-05-20 | DELIVERED — PR #393 @ 0be2e3a | adv: 3/3 CLEAN |
+| issue-384 (F2 spec evolution) | **F1 COMPLETE + F2 COMPLETE (2026-05-20)** — JSM 401 auth-aware error hints. F1 delta analysis: 4 affected files, BC-3.8.001/009 modified, 2 new BCs (BC-3.8.014/015) in bc-3-issue-write.md, 2 new BCs (BC-X.8.006/007) + BC-X.3.002 modified in cross-cutting.md. F2 spec evolution: 3/3 CLEAN adversarial convergence. CRITICAL control-flow defect caught — OAuth Bearer + generic-expiry 401 routes through refresh coordinator, NOT NotAuthenticated arm; corrected + OAuth test path scope-mismatch bodies pinned. H-NEW-JSM-RT-003 revised. Spec v1.1.0 (grand total 573 BCs). DRIFT-002 guard (check-bc-cumulative-counts.sh) exits 0. Awaiting human gate → F3 implementation. | 2026-05-20 | 2026-05-20 | F2 CONVERGED — 3/3 CLEAN; human gate pending | F2 adv: 3 passes, 3/3 CLEAN |
 | 4: Holdout Evaluation | not-started | | | | |
 | 5: Adversarial Refinement | not-started | | | | |
 | 6: Formal Hardening | not-started | | | | |
@@ -94,14 +95,11 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 
 | Step | Agent | Status | Output |
 |------|-------|--------|--------|
-| F1d adversarial spec review pass-08 — #288 | adversary | complete | **FIRST CLEAN-PASS** — 0B/0C/0N. Pass-07 F48 ADDRESSED. All 18 mandates CLEAR. Counter 1/3. Pass-09 pending. |
-| F1d adversarial spec review pass-09 — #288 | adversary | complete | **SECOND CONSECUTIVE CLEAN-PASS** — 0B/0C/0N. Independent re-derivation of all 18 mandates confirmed CLEAR. Subtle pattern observation: monotonic decay no oscillation — genuine convergence. Counter 2/3. Pass-10 required (final confirmation gate). |
-| F1d adversarial spec review pass-10 — #288 | adversary | complete | **F1d CONVERGED 3/3** — Pass-09 was CLEAN. Pass-10 final confirmation gate also CLEAN. 18 mandates verified CLEAR. Novelty zero across 3 consecutive passes. F2 spec evolution ready for human approval. |
-| F2 spec evolution — #288 | spec-evolution | complete | F1d CONVERGED 3/3; spec corpus stable. F2 human approval gate passed; incremental story decomposition authorized. |
-| F3 incremental stories — #288 | story-writer | complete | 4 stories created (issue-288-pr1-api/pr2-cli/pr3-scope/pr4-dispatch). Dependency graph acyclic: pr1+pr3 in Wave 1 (parallel), pr2 in Wave 2 (depends pr1), pr4 in Wave 3 (depends pr1+pr2+pr3). STORY-INDEX bumped 36→40. consistency-validator validation pending. |
 | F4 per-story adversarial — issue-382 | adversary | complete | **CONVERGED 3/3** — 3 passes total, all CLEAN. BC-1.6.042 verified. required_scope field + Display impl + Display test all verified. Lessons L-382-01..04 codified. |
 | F4 — issue-382 MERGED | pr-manager | complete | **PR #389 MERGED** @ b1c863e (2026-05-19T18:40:25Z). Issue #382 auto-closed. CI 10/10 green including mutation testing (5min). Copilot: COMMENTED with 0 inline comments. pr-reviewer: APPROVE in 1 cycle, 0 blocking findings. Pre-existing flake noted: tests/multi_cloudid_disambiguation.rs keychain contention (NOT a regression). |
 | Step 9 — S-392 state update | state-manager | complete | sprint-state.yaml S-392 → completed (PR #393 / 0be2e3a). STORY-INDEX S-392 → completed. STATE.md Phase Progress row updated. DEFER-383-3 + DRIFT-BC2-PROSE → RESOLVED. Open Issues Tracker #392 → CLOSED. Lessons codified at .factory/code-delivery/S-392/lessons.md. factory-artifacts commit pushed. |
+| #391 heading harmonization | state-manager | complete | bc-3 subdomain 3.8 heading harmonized to `### 3.8` format. factory-artifacts commit `22cdfe9` pushed. DEFER-383-1 resolved. |
+| #384 F1+F2 spec evolution | state-manager | complete | **F2 CONVERGED 3/3 CLEAN.** 4 new BCs (BC-3.8.014/015, BC-X.8.006/007). 3 modified (BC-3.8.001/009, BC-X.3.002). H-NEW-JSM-RT-003 revised. Spec v1.1.0 (573 BCs). CRITICAL control-flow defect caught + corrected (OAuth 401 routing). factory-artifacts committed + pushed. Open Issues Tracker updated. Awaiting human gate → F3. |
 
 ## Decisions Log
 
@@ -257,6 +255,10 @@ _Research artifacts: `.factory/research/issue-288-pr4-retrospective-audit.md` + 
 
 _F1d adversarial: 8 passes total (passes 06/07/08 CLEAN, 3/3). F4 per-story adversarial: 3 passes total (all CLEAN, 3/3). pr-reviewer: APPROVE in 1 cycle, 0 blocking findings. Copilot review: COMMENTED with 0 inline comments. CI: 10/10 green including mutation testing (5min). Pre-existing flake noted: tests/multi_cloudid_disambiguation.rs keychain contention (NOT a regression). PR #389 MERGED @ b1c863e (2026-05-19T18:40:25Z). Issue #382 auto-closed at 2026-05-19T18:40:27Z._
 
+### Issue #384 — F2 Spec Evolution Convergence (2026-05-20)
+
+_F2 adversarial spec review: 3 passes, 3/3 CLEAN. CRITICAL control-flow defect caught at pass 1: OAuth Bearer + generic-expiry 401 must route through the refresh coordinator (blanket-401 trigger per BC-X.3.002 + DEC-013), NOT the NotAuthenticated arm; corrected in bc-3-issue-write.md BC-3.8.014/015 scoping language + OAuth test paths pinned via scope-mismatch request bodies. Spec corpus at convergence: 573 BCs total (+4: BC-3.8.014, BC-3.8.015, BC-X.8.006, BC-X.8.007; modified: BC-3.8.001, BC-3.8.009, BC-X.3.002). H-NEW-JSM-RT-003 revised to reflect final PR4-dispatch scope. Spec version 1.1.0. DRIFT-002 guard (`scripts/check-bc-cumulative-counts.sh`) exits 0. F3 awaiting human gate._
+
 ### Phase 5-adv — Adversarial Refinement
 _Not started._
 
@@ -266,8 +268,8 @@ _Not started._
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-20 |
-| **Position** | **Issue #392 DELIVERED.** PR #393 MERGED @ 0be2e3a (2026-05-20). DRIFT-002 guard (`scripts/check-bc-cumulative-counts.sh`) live in CI. DEFER-383-3 resolved. DRIFT-BC2-PROSE resolved. sprint-state.yaml + STORY-INDEX + STATE.md updated. Lessons L-392-01..05 codified at `.factory/code-delivery/S-392/lessons.md`. Remaining open backlog: #210, #331, #372, #384, #385, #387, #391. Next: issue-288-pr4-dispatch (Wave 3 pending), or next open backlog item per orchestrator. |
-| **Convergence counter** | #392 CLOSED. No open convergence gate. |
+| **Position** | **Issue #384 F2 COMPLETE.** F1 delta analysis done. F2 spec evolution CONVERGED 3/3 CLEAN. 4 new BCs (BC-3.8.014/015, BC-X.8.006/007). 3 modified (BC-3.8.001/009, BC-X.3.002). H-NEW-JSM-RT-003 revised. Spec v1.1.0 (573 BCs). CRITICAL control-flow defect caught + corrected (OAuth Bearer + generic-expiry 401 routes through refresh coordinator, not NotAuthenticated arm; OAuth test paths pinned via scope-mismatch bodies). DRIFT-002 guard exits 0. factory-artifacts committed + pushed. Remaining open backlog: #210, #331, #372, #384 (F3 next), #385, #387. Next: human gate on #384 F2 → F3 implementation (story decomposition + TDD). |
+| **Convergence counter** | #384 F2 CONVERGED 3/3 CLEAN. Awaiting human gate → F3. |
 
 ## Post-Cycle Housekeeping (2026-05-19)
 
@@ -290,7 +292,7 @@ Events after issue #288 epic closeout (factory-artifacts @ 7dbbfed):
 | #372 | cargo-mutants partial baseline | OPEN | LOW | Follow-up from #346 |
 | #382 | M-03: JrError::InsufficientScope stale text | **CLOSED** (auto-closed via PR #389 b1c863e) | MEDIUM | Delivered 2026-05-19 |
 | #383 | O-01: platform-path flag symmetry | **CLOSED** (auto-closed via PR #390 25f7211) | LOW | Delivered 2026-05-19 |
-| #384 | O-08-01+O-08-05 UX polish | OPEN | LOW | |
+| #384 | O-08-01+O-08-05 JSM 401 auth-aware error hints | **IN PROGRESS — F1 COMPLETE, F2 COMPLETE (3/3 CLEAN); awaiting human gate → F3** | LOW | 4 new BCs (BC-3.8.014/015, BC-X.8.006/007); spec v1.1.0; CRITICAL OAuth control-flow defect caught + corrected |
 | #385 | O-08-02/04/06/07 UX polish | OPEN | LOW | |
 | #386 | docs/demo-evidence removal | **MERGED** @ acdf212 | — | 505 files, ~85 MB freed at HEAD |
 | #387 | git history rewrite for demo-evidence blobs | OPEN | LOW | Deferred; force-push needed |

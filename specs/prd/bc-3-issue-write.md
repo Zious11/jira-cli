@@ -1,8 +1,8 @@
 ---
 context: bc-3
 title: "Issue Write (create/edit/move/assign/comment/link/open/remote-link)"
-total_bcs: 91   # cumulative claim (incl. range-collapsed); definitional_count below is individually-bodied headings
-definitional_count: 62   # count of `#### BC-` headings in this file
+total_bcs: 93   # cumulative claim (incl. range-collapsed); definitional_count below is individually-bodied headings
+definitional_count: 64   # count of `#### BC-` headings in this file
 last_updated: 2026-05-19
 source_pass: 3
 trace: |
@@ -14,13 +14,14 @@ trace: |
   - F1d addition (2026-05-18): BC-3.8.010 — --type ignored with warning when --request-type is set (issue #288 adversary pass-01)
   - F1d addition (2026-05-19): BC-3.8.011 — platform-only flags emit stderr warnings on JSM path (issue #288 adversary-pass-01 C-02); H-01 BC-3.8.003 verb aligned "Use"→"Run"
   - F2 addition (2026-05-19): BC-3.8.012..013 — inverse warning symmetry: --field and --on-behalf-of silent-drop on platform path (issue #383)
+  - F2 addition (2026-05-19): BC-3.8.014..015 — JSM 401 auth-conditional hints on handle_jsm_create: Basic-auth (is_oauth_auth==false) → API-token hint with InsufficientScope rewrite; OAuth (is_oauth_auth==true) → existing behavior preserved (issue #384; corrected model: gate is is_oauth_auth() alone)
 ---
 
 # BC-3 — Issue Write
 
-91 behavioral contracts across 8 subdomains: Assign (3.1), Move/Transition (3.2),
+93 behavioral contracts across 8 subdomains: Assign (3.1), Move/Transition (3.2),
 Create (3.3), Edit+Open (3.4), Comment (3.5), Links (3.6), Remote links (3.7),
-JSM Request Create + Platform-Path Inverse Warnings (3.8).
+JSM Request Create + Platform-Path Inverse Warnings + Auth-Conditional 401 Hints (3.8).
 
 ---
 
@@ -544,12 +545,14 @@ existing wall-clock bound and `"deadline"` substring assertions.
 
 ---
 
-### 3.8 JSM Request Create + Platform-Path Inverse Warnings
+### 3.8 JSM Request Create + Platform-Path Inverse Warnings + Auth-Conditional 401 Hints
 
-13 behavioral contracts covering: (a) `jr issue create --request-type` dispatch to the JSM service desk API
+15 behavioral contracts covering: (a) `jr issue create --request-type` dispatch to the JSM service desk API
 (BC-3.8.001..009), (b) forward-direction cross-flag warnings when platform-only flags are passed alongside
-`--request-type` (BC-3.8.010..011), and (c) inverse-direction cross-flag warnings when JSM-only flags are
-passed on the platform path (BC-3.8.012..013).
+`--request-type` (BC-3.8.010..011), (c) inverse-direction cross-flag warnings when JSM-only flags are
+passed on the platform path (BC-3.8.012..013), and (d) auth-conditional 401 error hints on the JSM POST
+path: Basic-auth API-token-expiry hint (BC-3.8.014) and OAuth write-scope hint (BC-3.8.015), gated solely
+by `JiraClient::is_oauth_auth()`.
 BCs 001..011 require `--request-type` to be set. The platform path (BC-3.3.001) — its POST body,
 JSON response, and exit code — is unchanged when `--request-type` is absent. BCs 012..013 add
 inverse-direction stderr warnings on the platform path (when `--field` / `--on-behalf-of` are
@@ -564,10 +567,12 @@ passed without `--request-type`) without altering POST behavior, response, or ex
 **Behavior**: When `--request-type` is present, `handle_create` dispatches to `JiraClient::create_jsm_request` which POSTs to `/rest/servicedeskapi/request`. Body: `{serviceDeskId (string), requestTypeId (string), requestFieldValues (map), isAdfRequest (bool)}`. Response 201 includes `issueKey`. Output JSON (both table and `--output json`): `{"key": "<issueKey>"}` — identical shape to platform create. When `--request-type` is absent, the `POST /rest/servicedeskapi/request` endpoint is not called (validated by `expect(0)` mock pattern).
 **Inputs**: `--request-type <NAME|ID>`, `--project <KEY>` (or active profile), `--summary <text>`
 **Outputs/Effects**: HTTP POST to `/rest/servicedeskapi/request`; stdout `{"key": "HELP-42"}` on success; exit 0.
-**Errors**: Non-JSM project (via `require_service_desk`) → exit 64 before any HTTP; see BC-3.8.002. 401 scope error → BC-3.8.009.
+**Errors**: Non-JSM project (via `require_service_desk`) → exit 64 before any HTTP; see BC-3.8.002. 401 → BC-3.8.009 (auth-conditional: Basic-auth API-token hint → BC-3.8.014; OAuth → BC-3.8.015).
 **Trace**: `tests/issue_create_jsm.rs` (integration tests — dispatch path, routing guard); `src/cli/issue/create.rs` (conditional dispatch branch)
 **Source**: API-verified: `POST /rest/servicedeskapi/request` returns 201 with `{issueId, issueKey, currentStatus, _links}`
 **Confidence**: HIGH
+
+> **[UPDATED 2026-05-19 issue #384]** Errors cross-reference updated: 401 on the JSM POST is auth-conditional; see BC-3.8.009 (auth-conditional gate), which cross-references BC-3.8.014 (Basic-auth: API-token-expiry hint) and BC-3.8.015 (OAuth: existing write-scope hint behavior). No behavioral change — cross-reference refresh only.
 
 ---
 
@@ -681,10 +686,14 @@ verb fits jr CLI ergonomics. Wave 2 pass-02 M-2 precedent applied.
 **Behavior**: When `--on-behalf-of <accountId>` is set, the value is placed as `raiseOnBehalfOf: "<accountId>"` in the JSM request body top level (NOT inside `requestFieldValues`). When absent, `raiseOnBehalfOf` is omitted from the body entirely (NOT null). `--on-behalf-of` accepts the raw value as-is and passes through to JSM API as `raiseOnBehalfOf` field. No client-side regex format validation is performed — this matches `--account-id` pass-through behavior (see BC-3.1.001); client-side format validation would false-negative legacy accountIds (Atlassian accountIds are not documented as a fixed format; migrated accountIds may use colon-separated forms like `557058:abc...`). Invalid accountIds are rejected server-side by JSM with a 400 — surface that error with a hint to use `jr user search <query>` to look up accountIds. No email-to-accountId lookup is performed (consistent with `--account-id` convention elsewhere in `jr`).
 **Inputs**: `--on-behalf-of <accountId>` (optional)
 **Outputs/Effects**: `raiseOnBehalfOf: "<accountId>"` in body when set; omitted when absent.
-**Errors**: JSM 400 on invalid accountId → exit 1 with API error message + hint "Use `jr user search <query>` to look up accountIds". Scope error for `write:servicedesk-request` → BC-X.3.005 (InsufficientScope dispatch) + BC-1.6.042 (401 substring match) + H-NEW-JSM-RT-003 (regression pin).
+**Errors**: JSM 400 on invalid accountId → exit 1 with API error message + hint "Use `jr user search <query>` to look up accountIds". 401 on the JSM POST is auth-conditional — see BC-3.8.014 (Basic-auth: API-token-expiry hint) and BC-3.8.015 (OAuth: `write:servicedesk-request` hint). See also BC-X.3.005 (InsufficientScope dispatch) + BC-1.6.042 (401 substring match) + H-NEW-JSM-RT-003 (OAuth scope-mismatch regression pin).
 **Trace**: `tests/issue_create_jsm.rs` (raiseOnBehalfOf injection, absence omission); `src/cli/issue/create.rs`
 **Source**: BC-3.1.001 (`issue assign --account-id` pass-through precedent); BC-X.3.005 (server-rejected accountId error path). Pass-through behavior is the documented Atlassian recommendation; client-side format validation would false-negative legacy accountIds.
 **Confidence**: HIGH
+
+> **[UPDATED 2026-05-19 issue #384]** Errors section revised: the monolithic "Scope error for `write:servicedesk-request`" wording replaced with auth-conditional phrasing. The gate is `client.is_oauth_auth()` alone — not error variant. Basic-auth 401s (any body shape, including "scope does not match") route to BC-3.8.014 (API-token-expiry hint; any `InsufficientScope` is rewritten to `NotAuthenticated`). OAuth 401s route to BC-3.8.015 (existing behavior, now explicitly gated: for OAuth, BOTH the `InsufficientScope` arm AND the `NotAuthenticated` arm produce the `write:servicedesk-request` hint — the pre-#384 `map_err` at `src/cli/issue/create.rs:1988-1995` already rewrites `NotAuthenticated` to inject this hint for all auth schemes). The prior single-hint behavior is superseded by the auth-gate introduced in BC-3.8.014/015.
+>
+> **[REVISED 2026-05-19 issue #384 adversary-pass-2 H-05/H-06]** Corrected false claim: previous text stated OAuth `NotAuthenticated` gives "generic `jr auth login` hint" — this is FALSE. The existing pre-#384 `map_err` (`src/cli/issue/create.rs:1988-1995`) already rewrites the `NotAuthenticated` arm to inject `write:servicedesk-request` for all auth schemes. Post-#384, that rewrite is preserved unchanged for OAuth. Both arms produce `write:servicedesk-request` for OAuth.
 
 ---
 
@@ -848,6 +857,83 @@ path with no user feedback.
 
 ---
 
+#### BC-3.8.014: Basic-auth 401 on JSM POST (`handle_jsm_create`) → API-token-expiry hint; no OAuth-scope language
+
+**Confidence**: HIGH
+**Subject**: Issue write (JSM path — auth-conditional error hint)
+**Behavior**: When `POST /rest/servicedeskapi/request` returns 401 AND the active auth scheme is Basic (i.e., `JiraClient::is_oauth_auth()` returns `false`), the `handle_jsm_create` `map_err` MUST surface an API-token-expiry hint and exit 2. The gate is `is_oauth_auth() == false` ALONE — the incoming error variant is irrelevant.
+
+Implementation: the `map_err` must inspect `client.is_oauth_auth()`. If `false`, REWRITE any incoming error (whether `JrError::NotAuthenticated` or `JrError::InsufficientScope`) to `JrError::NotAuthenticated { hint: <API_TOKEN_HINT> }`. This rewrite is mandatory: a Basic-auth 401 whose response body contains "scope does not match" would otherwise propagate as `InsufficientScope` (per `src/api/client.rs:696-704`), causing the user to see OAuth scope language that is actionably wrong for Basic-auth users. The rewrite suppresses that path.
+
+The `hint` field value (stored in `JrError::NotAuthenticated { hint }`) MUST be the shared constant `API_TOKEN_EXPIRY_HINT` (defined once in **`src/error.rs`** — NOT in `src/api/client.rs` or any new module — referenced identically by the `handle_jsm_create` site and the `require_service_desk` site — see BC-X.8.006). `src/error.rs` is imported by both the `api` and `cli` layers with no layering inversion, and it keeps "no new modules / no architecture delta" true. This shared constant prevents hint-text divergence between the two call sites.
+
+The rendered stderr line prepends `"Not authenticated. "` (from `src/error.rs:5`); the `hint` field contains only the body text after that prefix. Tests MUST assert via `contains`, not `==`, to tolerate the rendered prefix. The hint field value is:
+
+<!-- This block is duplicated from the CANONICAL copy in prd-delta-384.md §BC-3.8.014 — all copies MUST be updated together; cf. the JR_* doc-fallout pattern in CLAUDE.md (adversary-pass-4 F-04). -->
+```
+Your API token may be expired or revoked. Regenerate it at
+https://id.atlassian.com/manage-profile/security/api-tokens
+then run `jr auth login` to re-store the credentials.
+```
+
+The hint MUST NOT contain any OAuth-scope language (e.g., `write:servicedesk-request`, `OAuth`, `scope`). Basic-auth users have API tokens with implicit permissions, not OAuth granular scopes; surfacing a scope hint is misleading and actionably wrong. The hint MUST NOT say `jr auth refresh` (meaningless for Basic auth — no OAuth refresh token).
+
+Gate: `client.is_oauth_auth() == false` — predicate is `self.auth_header.starts_with("Bearer ")`. **Value-space precision**: `JiraClient::load_auth_from_keychain` produces exactly `"Bearer {access_token}"` for OAuth or `"Basic {base64_encoded}"` for Basic/API-token. The `JR_AUTH_HEADER` debug-only test seam (CLAUDE.md SD-002, `#[cfg(debug_assertions)]`) can inject either form in tests. `auth_header` is never empty at call time — the constructor errors via `?` if the keychain yields nothing. `is_oauth_auth()` is `self.auth_header.starts_with("Bearer ")` — the SAME discriminant the production code already trusts at `src/api/client.rs:718` and `:802`. No other predicate or ad-hoc string check should be introduced. This is 100% reliable for the value-space produced by `load_auth_from_keychain`.
+
+**Inputs**: Active auth = Basic; JSM POST returns HTTP 401 (any body shape — including generic expiry and "scope does not match" bodies)
+**Outputs/Effects**: exit 2; stderr contains the API-token-expiry hint (assert via `contains`); stdout empty; any `InsufficientScope` from the 401 is rewritten to `NotAuthenticated` before surfacing.
+**Errors**: None beyond the 401 itself — this BC IS the error-handling contract.
+**Trace**: `tests/issue_create_jsm.rs` (Basic-auth 401 integration tests): (a) `test_jsm_create_basic_auth_401_surfaces_api_token_hint` (NEW) — asserts stderr `contains` "expired or revoked" and `contains` `id.atlassian.com/manage-profile/security/api-tokens` and `contains` `jr auth login`; asserts stderr does NOT contain `write:servicedesk-request`; (b) `test_jsm_create_basic_auth_scope_mismatch_401_rewrites_to_api_token_hint` (NEW) — pins the `InsufficientScope`→`NotAuthenticated` rewrite path with a "scope does not match" body fixture; (c) `test_jsm_create_401_hint_contains_write_servicedesk_request` (REPURPOSED in place by F4 — fixture stays Basic `JR_AUTH_HEADER=Basic dGVzdDp0ZXN0`, generic-expiry 401 body; F4 MUST flip assertions from `write:servicedesk-request` to API-token-expiry hint and add negative assertion that `write:servicedesk-request` is ABSENT; F4 may rename at discretion; per adversary-pass-9 C-01 correction — this test is a BC-3.8.014 pin, NOT a BC-3.8.015 pin).
+**Source**: Issue #384 F2 corrected model; O-08-01 CONFIRMED in `.factory/research/issue-288-pr4-deferred-validation.md`; `src/api/client.rs:696-704` (scope-mismatch body check fires before Bearer guard at line 718 — body content, not auth scheme, decides variant before map_err); CLAUDE.md gotcha "Atlassian's expired-access-token 401 response shape".
+**Confidence**: HIGH
+
+[NEW 2026-05-19 issue #384 F2] Closes O-08-01: Basic-auth API-token-expiry 401 was incorrectly surfacing the OAuth `write:servicedesk-request` scope hint. The gate is `is_oauth_auth() == false` alone; the map_err must REWRITE any incoming 401-derived error variant to `NotAuthenticated` with the API-token hint, because a Basic-auth 401 with a "scope does not match" body arrives as `InsufficientScope` (body check at client.rs:696 fires before Bearer guard at line 718).
+
+[REVISED 2026-05-19 issue #384 F2 adversary correction] Previous version incorrectly stated "Basic-auth 401s land in `JrError::NotAuthenticated`, not `InsufficientScope`." This is FALSE. The 401 handler in `src/api/client.rs` checks the response BODY for "scope does not match" at line 696 BEFORE checking the `Bearer` guard at line 718. So a Basic-auth 401 with a scope-mismatch-flavored body lands in `InsufficientScope`. The corrected model: gate is `is_oauth_auth() == false` alone; `map_err` must rewrite both `NotAuthenticated` and `InsufficientScope` arms to the API-token hint.
+
+---
+
+#### BC-3.8.015: OAuth 401 on JSM POST (`handle_jsm_create`) → `write:servicedesk-request` hint via `InsufficientScope` scope-mismatch path (deterministic); `NotAuthenticated` post-refresh path is pre-existing, out of #384 test scope
+
+**Confidence**: HIGH
+**Subject**: Issue write (JSM path — auth-conditional error hint)
+**Behavior**: When `POST /rest/servicedeskapi/request` returns 401 AND the active auth scheme is OAuth/Bearer (i.e., `JiraClient::is_oauth_auth()` returns `true`), the observable behavior depends on the 401 response body:
+
+- **`JrError::InsufficientScope` (body contains "scope does not match" — client.rs:696-704 short-circuit, DETERMINISTIC):** The scope-mismatch body check at `src/api/client.rs:696-704` fires BEFORE the Bearer guard at `src/api/client.rs:718` AND before the refresh coordinator. This means for a Bearer client, a scope-mismatch 401 short-circuits directly to `InsufficientScope` and lands in `handle_jsm_create`'s `map_err` as a genuine `JrError`. The `map_err` on the `is_oauth_auth() == true` branch preserves `InsufficientScope` and its hint names `write:servicedesk-request` + `required_scope: Some("write:servicedesk-request")`; exit 2. **This is the ONLY deterministically testable OAuth→`JrError`→`write:servicedesk-request` path via the `JR_AUTH_HEADER` test seam.** The EXISTING test `async fn test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_request_hint` (under the `// ─── C-01: OAuth InsufficientScope 401 surfaces write:servicedesk-request ────` section banner in `tests/issue_create_jsm.rs`) is the BC-3.8.015 regression pin. It uses `JR_AUTH_HEADER=Bearer test-oauth-token` + body `{"errorMessages": ["Unauthorized; scope does not match"]}` and asserts `write:servicedesk-request`, `jr auth refresh`, `jr auth login`. This test is GREEN on `develop` UNMODIFIED — it is the BC-3.8.015 pin. It MUST remain green unmodified.
+
+- **`JrError::NotAuthenticated` (non-scope-mismatch Bearer 401, post-refresh path — NOT deterministically testable via `JR_AUTH_HEADER` seam):** A Bearer client with a generic-expiry 401 body (no "scope does not match") does NOT short-circuit at client.rs:696-704. Instead, it enters the auto-refresh coordinator at line 727+. In any test using the `JR_AUTH_HEADER=Bearer ...` seam (no keychain OAuth tokens, no `JR_OAUTH_TOKEN_URL` mock), the refresh call deterministically fails with a raw `anyhow::bail!` error from `refresh_oauth_token_with_url` — NOT a `JrError`. That raw anyhow error propagates to `handle_jsm_create`'s `map_err`, where `e.downcast::<JrError>()` hits the `Err(other) => other` arm — no `JrError` branch fires, and the `write:servicedesk-request` hint is NEVER injected. **Consequence:** BC-3.8.015 must NOT claim a Bearer + generic-expiry 401 surfaces `write:servicedesk-request`. The pre-existing `NotAuthenticated` arm rewrite at `src/cli/issue/create.rs:1988-1995` injects `write:servicedesk-request` for OAuth only after a SUCCESSFUL token refresh followed by a 401 retry — this path is real and pre-existing but is NOT reliably reachable via the `JR_AUTH_HEADER` test seam. It is pre-existing behavior, unchanged by #384, and is out of #384's deterministic-test scope. No test for this path is mandated by this delta.
+
+The gate is `is_oauth_auth() == true` ALONE for the `map_err` branch decision. This BC documents what was previously implicit and makes it explicitly gated by the `is_oauth_auth()` check.
+
+Gate: `client.is_oauth_auth() == true` (predicate returns true when `Authorization` header starts with `Bearer `).
+
+**Test instruction (adversary-pass-9 C-01 corrected design):**
+
+`test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_request_hint` is the BC-3.8.015 regression pin. It is already green on `develop` and MUST remain green unmodified. F4 must NOT alter this test. Confirmed by reading `async fn test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_request_hint` in `tests/issue_create_jsm.rs`: Bearer fixture (`JR_AUTH_HEADER=Bearer test-oauth-token`), scope-mismatch body (`{"errorMessages": ["Unauthorized; scope does not match"]}`), asserts `write:servicedesk-request` + `jr auth refresh` + `jr auth login`. Uses `mount_project_meta_help`, `mount_service_desk_list`, `mount_request_types_password_reset` helpers, project `HELP`, `--request-type "Password Reset"`, `--summary "Reset my password"`.
+
+H-NEW-JSM-RT-003 is re-bound to `test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_request_hint` — see the Revised Holdout Scenarios section in `prd-delta-384.md`.
+
+`test_jsm_create_401_hint_contains_write_servicedesk_request` (currently `JR_AUTH_HEADER=Basic dGVzdDp0ZXN0`, generic 401 body, asserting `write:servicedesk-request`) is a **BC-3.8.014 pin** post-F4 — NOT a BC-3.8.015 pin. After BC-3.8.014 lands, Basic + generic-401 produces the API-token-expiry hint. F4 MUST repurpose this test in place: keep the Basic fixture, flip the assertions from `write:servicedesk-request` to the BC-3.8.014 API-token-expiry hint, and add a negative assertion that `write:servicedesk-request` is ABSENT. F4 may rename the test at its discretion. The fixture MUST remain Basic — do NOT migrate to Bearer.
+
+**Inputs**: Active auth = Bearer/OAuth; JSM POST returns HTTP 401 with scope-mismatch body (`{"errorMessages": ["Unauthorized; scope does not match"]}`)
+**Outputs/Effects**: exit 2; stderr contains `write:servicedesk-request`; stdout empty.
+**Errors**: None beyond the 401 itself — this BC IS the error-handling contract.
+**Trace**: `tests/issue_create_jsm.rs` — `async fn test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_request_hint` (under the `// ─── C-01: OAuth InsufficientScope 401 surfaces write:servicedesk-request ────` section banner; existing test, green on `develop`; logic/fixture/assertions MUST remain unmodified; F4 SHOULD add `// H-NEW-JSM-RT-003 + BC-3.8.015 anchor` to its rustdoc comment — comment-only, no behavior impact; this IS the BC-3.8.015 pin and IS H-NEW-JSM-RT-003 per re-bind in adversary-pass-9 C-01).
+**Source**: Issue #384 F2 adversary-pass-9 C-01 corrected design; BC-1.3.023; H-NEW-JSM-RT-003; `src/api/client.rs:696-704` (scope-mismatch short-circuit fires BEFORE refresh coordinator — the ONLY deterministic Bearer→`JrError` path); `src/api/client.rs:718` (Bearer guard — NOT reached for scope-mismatch bodies); `src/api/client.rs:727+` (refresh coordinator — entered by generic-expiry Bearer 401; deterministically fails with raw anyhow error via `JR_AUTH_HEADER` seam, not a `JrError`).
+**Confidence**: HIGH
+
+[NEW 2026-05-19 issue #384 F2] Formally pins the OAuth path as the surviving branch after the Basic/OAuth split. Pre-#384, both Basic and OAuth 401s shared the same hint logic; post-#384, the Basic-auth arm is intercepted by BC-3.8.014 before it reaches the OAuth behavior.
+
+[REVISED 2026-05-19 issue #384 F2 adversary-pass-2 C-02/H-05/H-06] (C-02) Renderer prefix corrected: `"Insufficient token scope: "` (colon) not `"Insufficient token scope. "` (period) — per `src/error.rs:8-16`. (H-05/H-06) Corrected false claim about pre-#384 map_err behavior; both arms produce `write:servicedesk-request` for OAuth — exactly as pre-#384.
+
+[REVISED 2026-05-19 issue #384 adversary-pass-5 F-01/F-02/F-03] (F-01) Clarified H-NEW-JSM-RT-003 artifact identity. (F-02) Added explicit warning about mandatory Bearer fixture migration. (F-03) Confirmed test function by reading its body; symbol-relative anchor used.
+
+[REVISED 2026-05-19 issue #384 adversary-pass-8 F-02] Replaced hardcoded line citations with symbol-relative anchors per CLAUDE.md anti-drift convention.
+
+[REVISED 2026-05-19 issue #384 adversary-pass-9 C-01 CRITICAL design correction] Complete rewrite of testable contract. The F2 passes 1-8 plan ("migrate `test_jsm_create_401_hint_contains_write_servicedesk_request` to Bearer + generic-expiry body") was unworkable: a Bearer + generic-expiry 401 routes through the refresh coordinator (client.rs:727+), which deterministically fails with a raw anyhow error (not a `JrError`) via the `JR_AUTH_HEADER` seam, so the `write:servicedesk-request` hint is never injected. The ONLY deterministic Bearer→`JrError`→`write:servicedesk-request` path is the scope-mismatch short-circuit (client.rs:696-704). BC-3.8.015 is now re-specified to its true testable contract: the scope-mismatch path, pinned by the EXISTING `async fn test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_request_hint` (already green on `develop`, unmodified). H-NEW-JSM-RT-003 re-bound to this test. `test_jsm_create_401_hint_contains_write_servicedesk_request` stays Basic and becomes a BC-3.8.014 pin with flipped assertions. BC-X.8.007 Setup corrected to scope-mismatch body.
+
+---
+
 ## JSON Output Shape Contracts (all confirmed by insta snapshots)
 
 | Operation | JSON shape | Key field note |
@@ -865,6 +951,6 @@ path with no user feedback.
 
 Sources: `src/cli/issue/snapshots/jr__cli__issue__json_output__tests__*.snap`; BC-1104..BC-1112 (R4)
 
-## Total BCs in this file: 62 individually-bodied (cumulative 91 incl. range-collapsed; see BC-INDEX.md)
+## Total BCs in this file: 64 individually-bodied (cumulative 93 incl. range-collapsed; see BC-INDEX.md)
 
-_Last updated 2026-05-19: +3 BCs (BC-3.8.011..013): BC-3.8.011 added in F1d adversary-pass-01 (issue #288 C-02); BC-3.8.012..013 added in F2 delta (issue #383) to close platform-path inverse-warning symmetry gap. BC-3.8 section header range updated to 001..013._
+_Last updated 2026-05-19: +2 BCs (BC-3.8.014..015): BC-3.8.014 (Basic-auth 401 API-token hint, with InsufficientScope→NotAuthenticated rewrite) and BC-3.8.015 (OAuth 401 existing behavior now explicitly gated) added in F2 delta (issue #384) to close JSM 401 auth-conditional hint gap (O-08-01). Corrected model: gate is `is_oauth_auth()` alone, not error variant. BC-3.8.001 errors cross-reference refreshed (auth-conditional 401 → BC-3.8.009/014/015; no behavioral change). BC-3.8.009 errors section updated (auth-conditional). BC-3.8 section header updated to 15 contracts, clause (d) added._

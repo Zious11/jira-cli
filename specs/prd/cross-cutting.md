@@ -1,9 +1,9 @@
 ---
 context: bc-x
 title: "Cross-cutting (HTTP client, Runtime, Users, Teams, Worklogs, Projects, Queues, JQL, Partial-match, JSM Request Types)"
-total_bcs: 138   # cumulative claim (incl. range-collapsed); definitional_count below is individually-bodied headings
-definitional_count: 72   # count of `#### BC-` headings in this file
-last_updated: 2026-05-18
+total_bcs: 140   # cumulative claim (incl. range-collapsed); definitional_count below is individually-bodied headings
+definitional_count: 74   # count of `#### BC-` headings in this file
+last_updated: 2026-05-19
 source_pass: 3
 trace: |
   - L2: .factory/specs/domain-spec/cross-cutting.md
@@ -11,11 +11,12 @@ trace: |
   - Source R1: .factory/semport/jira-cli/jira-cli-pass-3-deep-r1.md §3.6-3.8
   - Source R4: .factory/semport/jira-cli/jira-cli-pass-3-deep-r4.md §3.2-3.4
   - F2 addition (2026-05-18): BC-X.12.001..008 — JSM request type discovery (issue #288)
+  - F2 addition (2026-05-19): BC-X.8.006..007 — auth-conditional 401 hints on require_service_desk path (cache miss only): Basic-auth (is_oauth_auth==false) → API-token hint with InsufficientScope rewrite; OAuth (is_oauth_auth==true) → read:jira-work + read:servicedesk-request hint (issue #384; corrected model: gate is is_oauth_auth() alone)
 ---
 
 # BC-X — Cross-cutting
 
-138 behavioral contracts covering: HTTP client (X.1), Pagination (X.2), Error handling (X.3),
+140 behavioral contracts covering: HTTP client (X.1), Pagination (X.2), Error handling (X.3),
 Rate limiting (X.4), Worklogs & duration (X.5), Teams (X.6), Users (X.7), Projects & Queues (X.8),
 JQL utilities (X.9), Partial-match (X.10), Build-time (X.11), JSM Request Types (X.12).
 
@@ -186,6 +187,8 @@ JQL utilities (X.9), Partial-match (X.10), Build-time (X.11), JSM Request Types 
 **Confidence**: HIGH
 **Source**: 6+ test files; `tests/issue_list_errors.rs`, `tests/issue_view_errors.rs`, `tests/comments.rs`, `tests/worklog_commands.rs`, `tests/team_commands.rs`, `tests/assets_errors.rs`
 **Trace**: Pass 3 BC-1207
+
+> **[UPDATED 2026-05-19 issue #384]** JSM auth-conditional footnote: For JSM dispatch paths (both `handle_jsm_create` and `require_service_desk`), 401 behavior is auth-conditional — see BC-3.8.014 / BC-X.8.006 (Basic-auth: `is_oauth_auth() == false` → API-token-expiry hint; any `InsufficientScope` is REWRITTEN to `NotAuthenticated` before surfacing) and BC-3.8.015 / BC-X.8.007 (OAuth: `is_oauth_auth() == true` → existing error-variant behavior preserved). The gate is `is_oauth_auth()` alone, not error variant. The Base contract BC-X.3.002 applies to all non-JSM paths and to any JSM path that does not trigger the auth-conditional map_err.
 
 ---
 
@@ -499,6 +502,109 @@ JQL utilities (X.9), Partial-match (X.10), Build-time (X.11), JSM Request Types 
 **Confidence**: HIGH
 **Source**: `tests/project_commands.rs:1-323`
 **Trace**: Pass 3 BC-1133d, BC-1133e (R4)
+
+---
+
+#### BC-X.8.006: Basic-auth 401 from `require_service_desk` (cache miss) → API-token-expiry hint; no OAuth-scope language
+
+**Confidence**: HIGH
+**Subject**: X.8 Projects & Queues (JSM auth-conditional error hint — require_service_desk path)
+**Behavior**: `require_service_desk` in `src/api/jsm/servicedesks.rs` calls `get_or_fetch_project_meta` which is cache-first (7-day TTL). The 401 hint described here fires ONLY on a cache MISS — when live HTTP calls are actually issued. **Trigger clarification (C-01):** `get_or_fetch_project_meta` issues TWO live GETs on a cache miss for a `service_desk`-type project: (1) `GET /rest/api/3/project/{key}` to fetch project details, and (2) `GET /rest/servicedeskapi/servicedesk` (via `client.list_service_desks()`) to match service desk by `projectId`. The new `map_err` wraps the entire `get_or_fetch_project_meta(...)` future, so it catches a 401 from EITHER GET. Both are JSM-read operations; the API-token-expiry hint applies uniformly to both. **User-facing behavioral boundary**: a warm `(profile, project_key)` project-meta cache entry suppresses this hint at the `require_service_desk` step; the 401 then surfaces at the next live HTTP call (e.g., the JSM POST → BC-3.8.014/015). Any test exercising this BC MUST force a cache miss (e.g., by not pre-populating the project-meta cache).
+
+When a live GET inside `get_or_fetch_project_meta` returns 401 AND the active auth scheme is Basic (i.e., `JiraClient::is_oauth_auth()` returns `false`), the implementation MUST **introduce a NEW `map_err`** on the `get_or_fetch_project_meta(...)` call inside `require_service_desk` (line 117 of `src/api/jsm/servicedesks.rs`). The current code at line 117 is `let meta = get_or_fetch_project_meta(client, project_key).await?;` — the `?` propagates raw with no hint. The new `map_err` must surface an API-token-expiry hint. The gate is `is_oauth_auth() == false` ALONE — the incoming error variant is irrelevant.
+
+**Dual exit codes on `require_service_desk`:** After this BC is implemented, `require_service_desk` has TWO failure exit codes: exit 64 (`JrError::UserError`, the existing non-JSM-project path, BC-X.8.004) and exit 2 (`JrError::NotAuthenticated`, the new 401 path). The implementer MUST NOT normalize them — they are distinct error categories.
+
+Implementation: the new `map_err` must REWRITE any incoming error (whether `JrError::NotAuthenticated` or `JrError::InsufficientScope`) to `JrError::NotAuthenticated { hint: API_TOKEN_EXPIRY_HINT }`. The shared constant `API_TOKEN_EXPIRY_HINT` (defined once in **`src/error.rs`** — NOT in `src/api/client.rs` or any new module) is referenced identically by both the `handle_jsm_create` site (BC-3.8.014) and this `require_service_desk` site. `src/error.rs` is imported by both the `api` and `cli` layers with no layering inversion. This prevents hint-text divergence between the two call sites and adds no new modules.
+
+The `hint` field value (stored in `JrError::NotAuthenticated { hint }`) MUST be identical to BC-3.8.014's hint (shared constant). The rendered stderr line prepends `"Not authenticated. "`; the `hint` field contains only the body text. Tests MUST assert via `contains`, not `==`. The hint field value is:
+
+<!-- This block is duplicated from the CANONICAL copy in prd-delta-384.md §BC-3.8.014 — all copies MUST be updated together; cf. the JR_* doc-fallout pattern in CLAUDE.md (adversary-pass-4 F-04). -->
+```
+Your API token may be expired or revoked. Regenerate it at
+https://id.atlassian.com/manage-profile/security/api-tokens
+then run `jr auth login` to re-store the credentials.
+```
+
+This hint MUST NOT contain any OAuth-scope language. The hint MUST NOT say `jr auth refresh` (meaningless for Basic auth). The `require_service_desk` function is shared across all JSM callers: `handle_jsm_create` (`jr issue create --request-type`), `jr queue list/view`, and `jr requesttype list/fields`. All callers benefit from this contract.
+
+Gate: `client.is_oauth_auth() == false` at the new `map_err` site on the `get_or_fetch_project_meta` call inside `require_service_desk` (per orchestrator decision 1: the contract is on `require_service_desk` itself, not on individual callers).
+
+**Inputs**: Active auth = Basic; `GET /rest/api/3/project/{key}` returns HTTP 401 (any body shape); project-meta cache is empty (cache miss — the live GET is issued).
+**Outputs/Effects**: exit 2; stderr contains the API-token-expiry hint (assert via `contains`); stdout empty; any `InsufficientScope` from the 401 is rewritten to `NotAuthenticated` before surfacing.
+**Errors**: None beyond the 401 itself — this BC IS the error-handling contract.
+**Setup** (for `test_require_service_desk_basic_auth_401_surfaces_api_token_hint`):
+0. **Isolated `XDG_CACHE_HOME` tempdir** (e.g., `tempfile::tempdir()`) — forces a project-meta cache miss so the live GET inside `get_or_fetch_project_meta` actually fires. A warm cache would bypass the HTTP call and the 401 would never be seen.
+1. Auth fixture: `JR_AUTH_HEADER=Basic <b64>` (capital B, single space — any valid Base64 value; e.g., `Basic dGVzdDp0ZXN0`).
+2. Mount `GET /rest/api/3/project/{KEY}` to return HTTP 401 with a verbatim generic-expiry body: `{"errorMessages": ["The access token provided is expired, revoked, malformed, or invalid for other reasons."], "errors": {}}`. This is the **canonical pinned 401 path** for this named test — the project GET is triggered first by `get_or_fetch_project_meta` on a cache miss. **URL-encoding note (adversary-pass-8 LOW):** the project key is URL-encoded by `get_or_fetch_project_meta` via `urlencoding::encode`, so a wiremock `path()` matcher is exact for plain-alphanumeric keys (the named test uses `HELP`); a project key containing special characters would require an encoded mock path.
+3. The second GET arm (`list_service_desks()` → `GET /rest/servicedeskapi/servicedesk`) is covered **structurally** because the `map_err` wraps the entire `get_or_fetch_project_meta` future — it is NOT separately pinned by this test. A dedicated test for the service-desk-list 401 arm is not required; the `map_err` wraps both GETs uniformly. The canonical-vs-structural distinction is explicit: this test pins the project-GET arm; the service-desk-list arm is covered by the shared `map_err` on `get_or_fetch_project_meta`.
+4. Drive via: `jr issue create --project <KEY> --request-type <NAME> --summary "..." --no-input` (which calls `require_service_desk` first, triggering the 401 before reaching the JSM POST).
+**Trace**: `tests/issue_create_jsm.rs` (integration test `test_require_service_desk_basic_auth_401_surfaces_api_token_hint` — NEW; Basic-auth fixture, cache miss forced; asserts stderr `contains` "expired or revoked" and `contains` `id.atlassian.com/manage-profile/security/api-tokens` and `contains` `jr auth login`; asserts stderr does NOT contain `write:servicedesk-request`). The new `map_err` is placed inside `require_service_desk` (shared by `jr issue create`, `jr queue`, `jr requesttype`), so all three callers structurally benefit; this test pins the `create` caller path; existing `queue`/`requesttype` integration tests cover regression for those callers.
+**Source**: Issue #384 F2; O-08-05 CONFIRMED in `.factory/research/issue-288-pr4-deferred-validation.md` (lines 342-381); `src/api/client.rs:696-704` (body check before Bearer guard — same issue as BC-3.8.014); `src/api/jsm/servicedesks.rs:52-85` (get_or_fetch_project_meta issues TWO live GETs on a service_desk-type cache miss: GET /rest/api/3/project/{key} AND GET /rest/servicedeskapi/servicedesk; the new map_err must wrap the entire future, catching 401 from either GET); `src/api/jsm/servicedesks.rs:117` (raw `?` propagation — no existing map_err on get_or_fetch_project_meta call; the new map_err MUST be introduced here).
+**Confidence**: HIGH
+
+[NEW 2026-05-19 issue #384 F2] Closes O-08-05: `require_service_desk` 401 on the project-GET/service-desk-list path had no JSM-specific hint. The auth-conditional `map_err` is placed inside `require_service_desk` itself (not at call sites), so all three JSM caller paths benefit. Gate is `is_oauth_auth() == false` alone; map_err must rewrite both `NotAuthenticated` and `InsufficientScope` to the API-token hint (shared constant with BC-3.8.014 site).
+
+[REVISED 2026-05-19 issue #384 F2 adversary correction] Previous version incorrectly stated `src/api/client.rs:711-722 (Basic-auth 401 → NotAuthenticated)` as the explanation. This is incomplete: a Basic-auth 401 with a "scope does not match" body lands in `InsufficientScope` (body check at line 696 fires before Bearer guard at line 718). The corrected model: gate is `is_oauth_auth() == false` alone; `map_err` rewrites any incoming variant.
+
+[REVISED 2026-05-19 issue #384 F2 adversary-pass-2 C-01/H-01/H-04/M-02/M-03] (C-01) Changed "map_err inside require_service_desk" to "MUST introduce a NEW map_err" — no existing map_err exists at line 117; the implementation must add one. (H-01) Dual exit codes documented explicitly: exit 64 (UserError, non-JSM) vs exit 2 (NotAuthenticated, 401). (M-02) Cache-warm suppression stated as user-facing behavioral boundary, not just a test-setup note. (M-03) API_TOKEN_EXPIRY_HINT constant location pinned to src/error.rs.
+
+[REVISED 2026-05-19 issue #384 F2 adversary-pass-3 C-01/H-05] (C-01) Trigger broadened: `get_or_fetch_project_meta` issues TWO live GETs for service_desk-type projects — the project GET AND the service-desk list GET. The new map_err catches 401 from either. (H-05) Named acceptance test function added: `test_require_service_desk_basic_auth_401_surfaces_api_token_hint`; cross-caller coverage clarified (map_err is in require_service_desk; test pins create path; queue/requesttype existing tests cover regression).
+
+---
+
+#### BC-X.8.007: OAuth 401 from `require_service_desk` (cache miss) → read-side scope hint (`read:jira-work` + `read:servicedesk-request`)
+
+**Confidence**: HIGH
+**Subject**: X.8 Projects & Queues (JSM auth-conditional error hint — require_service_desk path)
+**Behavior**: `require_service_desk` calls `get_or_fetch_project_meta` which is cache-first (7-day TTL). This BC fires ONLY on a cache MISS — when live HTTP calls are actually issued. **Trigger clarification (C-01):** `get_or_fetch_project_meta` issues TWO live GETs on a cache miss for a `service_desk`-type project: (1) `GET /rest/api/3/project/{key}` to fetch project details, and (2) `GET /rest/servicedeskapi/servicedesk` (via `client.list_service_desks()`) to match service desk by `projectId`. The new `map_err` wraps the entire `get_or_fetch_project_meta(...)` future, so it catches a 401 from EITHER GET. Both are JSM-read operations; the read-side scope hint applies uniformly to both. **User-facing behavioral boundary**: a warm `(profile, project_key)` project-meta cache entry suppresses this hint at the `require_service_desk` step; the 401 then surfaces at the next live HTTP call (e.g., the JSM POST → BC-3.8.014/015). Any test exercising this BC MUST force a cache miss.
+
+When a live GET inside `get_or_fetch_project_meta` returns 401 AND the active auth scheme is OAuth/Bearer (i.e., `JiraClient::is_oauth_auth()` returns `true`), the NEW `map_err` introduced inside `require_service_desk` (see BC-X.8.006 — same new `map_err` on line 117) MUST surface a read-side scope hint for BOTH sub-cases, via `JrError::NotAuthenticated { hint }`. The gate is `is_oauth_auth() == true` ALONE.
+
+**Dual exit codes on `require_service_desk`:** After BC-X.8.006/007 are implemented, `require_service_desk` has TWO failure exit codes: exit 64 (`JrError::UserError`, the existing non-JSM-project path, BC-X.8.004) and exit 2 (`JrError::NotAuthenticated`, the new 401 path from this BC and BC-X.8.006). The implementer MUST NOT normalize them — they are distinct error categories.
+
+For both sub-cases of OAuth 401, the implementation rewrites to `JrError::NotAuthenticated { hint }` (NOT `InsufficientScope` — the `InsufficientScope` Display is a fixed template purpose-built for the issue-#185 POST scenario; for a read GET it produces irrelevant POST-specific noise). Both arms of the `map_err` emit the SAME single canonical hint string — there is ONE pinnable hint text, not two. This makes the acceptance test unambiguous: both the `InsufficientScope` arm and the `NotAuthenticated` arm produce identical output.
+
+Rationale for hint content: `GET /rest/api/3/project/{key}` is a platform endpoint requiring `read:jira-work`; JSM service-desk context discovery additionally requires `read:servicedesk-request`. Both scopes are in `DEFAULT_OAUTH_SCOPES` (verified: `src/api/auth.rs:60-61`), so re-consent via `jr auth login` genuinely obtains them — the hint IS actionable. Because jr's default OAuth app already grants these scopes, expiry is the more common cause for default-scoped users. The hint therefore LEADS with session-expiry recovery (`jr auth refresh` / `jr auth login`) and SECOND mentions, for BYO-OAuth users, that `jr auth login` must be used to re-consent with `read:jira-work` and `read:servicedesk-request` — `jr auth refresh` alone cannot add missing scopes (it re-mints with the same granted scope set) (H-03: expiry-recovery leads; BYO-scope sentence is secondary and explicitly connects `jr auth login` to scope acquisition).
+
+NOTE: this does NOT change BC-3.8.015 — the JSM POST OAuth `InsufficientScope` arm is genuinely the #185 POST scenario, so keeping `InsufficientScope` there is correct and unchanged. Scopes are `read:jira-work` + `read:servicedesk-request` (NOT `write:servicedesk-request` — that applies to the subsequent POST, which `require_service_desk` never reaches).
+
+Gate: `client.is_oauth_auth() == true` at the new `map_err` site inside `require_service_desk` (same `map_err` as BC-X.8.006, branching on the predicate result).
+
+The `hint` field value (body text after the `"Not authenticated. "` renderer prefix from `src/error.rs`). Tests MUST assert via `contains`, not `==`. Both arms of the `require_service_desk` OAuth 401 `map_err` emit this identical hint:
+
+<!-- This block is duplicated from the CANONICAL copy in prd-delta-384.md §BC-X.8.007 — all copies MUST be updated together; cf. the JR_* doc-fallout pattern in CLAUDE.md (adversary-pass-4 F-04). -->
+```
+Your OAuth token may be expired. Run `jr auth refresh` to renew the token, or
+`jr auth login` to re-authorize. If using a custom OAuth app, run `jr auth login`
+to re-consent with read:jira-work and read:servicedesk-request — `jr auth refresh`
+alone cannot add missing scopes (it re-mints with the same granted scope set).
+```
+
+This is the canonical pinnable string for `test_require_service_desk_oauth_401_surfaces_read_scope_hint`. Acceptance tests assert `contains` `read:jira-work` AND `contains` `read:servicedesk-request`; assert does NOT contain `write:servicedesk-request`.
+
+**Inputs**: Active auth = Bearer/OAuth; a live GET inside `get_or_fetch_project_meta` returns HTTP 401 (any body — project GET or service-desk list GET); project-meta cache is empty (cache miss — the live GETs are issued).
+**Outputs/Effects**: exit 2; stderr contains `"Not authenticated. "` prefix and read-scope hint (assert `contains` `read:jira-work` AND `contains` `read:servicedesk-request`; assert does NOT contain `write:servicedesk-request`); stdout empty.
+**Errors**: None beyond the 401 itself — this BC IS the error-handling contract.
+**Setup** (for `test_require_service_desk_oauth_401_surfaces_read_scope_hint`):
+0. **Isolated `XDG_CACHE_HOME` tempdir** (e.g., `tempfile::tempdir()`) — forces a project-meta cache miss so the live GET inside `get_or_fetch_project_meta` actually fires. A warm cache would bypass the HTTP call and the 401 would never be seen.
+1. Auth fixture: `JR_AUTH_HEADER=Bearer test-oauth-token` (capital B, single space — the established OAuth/Bearer fixture string used throughout `tests/issue_create_jsm.rs`).
+2. Mount `GET /rest/api/3/project/{KEY}` to return HTTP 401 with a **scope-mismatch body**: `{"errorMessages": ["Unauthorized; scope does not match"]}`. **WHY scope-mismatch body is required:** A Bearer client receiving a generic-expiry 401 body on this GET does NOT short-circuit to `JrError::InsufficientScope` — it enters the auto-refresh coordinator (client.rs:727+), which deterministically fails with a raw `anyhow::bail!` error (not a `JrError`) via the `JR_AUTH_HEADER` seam (no keychain tokens). That raw error propagates without entering the `map_err`'s `JrError` match arms, so the read-scope hint is never injected. The scope-mismatch body (`"scope does not match"` substring) triggers the short-circuit at client.rs:696-704 BEFORE the refresh coordinator, landing as `JrError::InsufficientScope` in the `map_err`, which then rewrites to `JrError::NotAuthenticated { hint }` with the read-scope hint. A generic-expiry body would produce a non-deterministic, non-`JrError` failure path — not a valid pin for this BC. **BC-X.8.006 (Basic) is NOT affected** by this constraint: a Basic 401 never enters the refresh path (gated on `Bearer` at client.rs:718), so any body deterministically yields a `JrError`; BC-X.8.006's Setup may use a generic-expiry body (as specified). This is the **canonical pinned 401 path** for this named test — the project GET is triggered first by `get_or_fetch_project_meta` on a cache miss. **URL-encoding note (adversary-pass-8 LOW):** the project key is URL-encoded by `get_or_fetch_project_meta` via `urlencoding::encode`, so a wiremock `path()` matcher is exact for plain-alphanumeric keys (the named test uses `HELP`); a project key containing special characters would require an encoded mock path.
+3. The second GET arm (`list_service_desks()` → `GET /rest/servicedeskapi/servicedesk`) is covered **structurally** because the `map_err` wraps the entire `get_or_fetch_project_meta` future — it is NOT separately pinned by this test. The canonical-vs-structural distinction is explicit: this test pins the project-GET arm; the service-desk-list arm is covered by the shared `map_err` on `get_or_fetch_project_meta`. No dedicated test for the service-desk-list 401 arm is required; both arms emit the identical hint (as established in BC-X.8.007 body above).
+4. Drive via: `jr issue create --project <KEY> --request-type <NAME> --summary "..." --no-input` (which calls `require_service_desk` first, triggering the 401 before reaching the JSM POST). The test mounts only the 401 project-GET mock; no request-type resolution mock is needed because the command exits at the `require_service_desk` step.
+**Trace**: `tests/issue_create_jsm.rs` (integration test `test_require_service_desk_oauth_401_surfaces_read_scope_hint` — NEW; OAuth/Bearer fixture, cache miss forced; asserts stderr `contains` `read:jira-work` AND `contains` `read:servicedesk-request`; asserts stderr does NOT contain `write:servicedesk-request`). The new `map_err` is placed inside `require_service_desk` (shared by `jr issue create`, `jr queue`, `jr requesttype`), so all three callers structurally benefit; this test pins the `create` caller path; existing `queue`/`requesttype` integration tests cover regression for those callers.
+**Source**: Issue #384 F2; O-08-05 CONFIRMED; `src/api/auth.rs:60-61` (both `read:jira-work` and `read:servicedesk-request` in DEFAULT_OAUTH_SCOPES — hint IS actionable for default-scoped users); `src/api/client.rs:696-704` (scope-mismatch body detection → InsufficientScope); `src/api/jsm/servicedesks.rs:52-85` (get_or_fetch_project_meta issues TWO live GETs on a service_desk-type cache miss: GET /rest/api/3/project/{key} AND GET /rest/servicedeskapi/servicedesk; the new map_err must wrap the entire future); orchestrator decision: read-side scopes for this path, NOT write-scope; `src/api/jsm/servicedesks.rs:117` (new map_err must be introduced here — see BC-X.8.006).
+**Confidence**: HIGH
+
+[NEW 2026-05-19 issue #384 F2] Pins the OAuth read-scope hint for the require_service_desk 401 path. Prior to issue #384, no hint existed for this path. The read-side scope names differ from BC-3.8.015's write-scope name — a user whose token has `write:servicedesk-request` but not `read:jira-work` would fail at require_service_desk before ever reaching the POST. Both scopes are in DEFAULT_OAUTH_SCOPES, making `jr auth login` genuinely actionable for session-expiry cases.
+
+[REVISED 2026-05-19 issue #384 F2 adversary-pass-2 C-02/C-03/H-01/M-02] (C-02) Removed incorrect "Insufficient token scope. " (period) renderer-prefix citation — the actual `InsufficientScope` Display renders with a colon: "Insufficient token scope: {message}". (C-03) Both sub-case arms of the OAuth 401 now rewrite to `JrError::NotAuthenticated { hint }` — NOT `InsufficientScope`. The `InsufficientScope` Display is purpose-built for the issue-#185 POST scenario and always appends irrelevant POST-specific guidance when applied to a read GET. (H-01) Dual exit codes documented explicitly. (M-02) Cache-warm suppression stated as user-facing behavioral boundary.
+
+[REVISED 2026-05-19 issue #384 F2 adversary-pass-3 C-01/H-03/H-04/H-05] (C-01) Trigger broadened: get_or_fetch_project_meta issues TWO live GETs for service_desk-type projects; map_err wraps the entire future and catches 401 from either. (H-03) Hint ordering corrected: leads with session-expiry recovery (jr auth refresh / jr auth login), BYO-scope sentence is SECONDARY. (H-04) Both arms of the map_err emit ONE canonical verbatim hint — no sub-case difference; single pinnable string documented; hint block relabeled "both arms emit this identical hint". (H-05) Named acceptance test function added: `test_require_service_desk_oauth_401_surfaces_read_scope_hint`; cross-caller coverage clarified.
+
+[REVISED 2026-05-19 issue #384 adversary-pass-6 F-07] BYO-OAuth sentence in hint reworded: for a BYO-OAuth user with genuinely missing scopes, `jr auth refresh` re-mints a token with the SAME deficient scope set — it cannot add scopes. Only `jr auth login` re-consents and can acquire `read:jira-work` + `read:servicedesk-request`. Hint text updated to connect `jr auth login` explicitly to scope acquisition; `jr auth refresh` positioned as expiry-recovery only. Rationale paragraph in BC body aligned.
+
+[REVISED 2026-05-19 issue #384 adversary-pass-9 C-01 CRITICAL design correction] Setup block corrected: the project-GET 401 mock body changed from generic-expiry to **scope-mismatch** (`{"errorMessages": ["Unauthorized; scope does not match"]}`). A Bearer client receiving a generic-expiry 401 on this GET routes through the refresh coordinator (client.rs:727+), which fails with a raw anyhow error (not a `JrError`) via the `JR_AUTH_HEADER` seam — the read-scope hint is never injected, making the test non-deterministic. The scope-mismatch body short-circuits to `JrError::InsufficientScope` at client.rs:696-704 BEFORE the refresh coordinator, deterministically reaching the `map_err`. BC-X.8.006 (Basic) is UNAFFECTED — Basic 401s never enter the refresh path and any body yields a `JrError` deterministically; BC-X.8.006's generic-expiry Setup remains as-is.
 
 ---
 
