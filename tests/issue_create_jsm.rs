@@ -3218,8 +3218,10 @@ async fn test_jsm_create_empty_request_type_exits_64() {
 /// (CANONICAL SOURCE).
 ///
 /// Zero HTTP mocks are mounted. Guard fires at Canonical Guard Ordering step 2,
-/// before `require_service_desk`. Any unexpected HTTP call would fail the test
-/// on wiremock drop.
+/// before `require_service_desk`. Because the binary exits before any HTTP call,
+/// the mock server is never contacted. Ordering regressions (guard moved below step 4)
+/// are detected by the exit-code and stderr message assertions: a regression would
+/// produce a 404 or require_service_desk error instead of the conflict message.
 ///
 /// The guard uses a case-SENSITIVE, no-trim raw-key match: the key substring before
 /// the first `=` must be exactly `"description"`. `--field Description=X` does NOT
