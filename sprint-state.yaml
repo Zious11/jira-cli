@@ -545,3 +545,16 @@ feature_followup_standalone:
     issue: 384
     points: 5
     notes: "Feature mode F3 story. Closes issue #384. Adds is_oauth_auth() predicate to JiraClient (client.rs), API_TOKEN_EXPIRY_HINT const to error.rs, gates handle_jsm_create map_err on is_oauth_auth() (create.rs), introduces new map_err on get_or_fetch_project_meta in require_service_desk (servicedesks.rs). 4 new integration tests + 1 repurposed existing test + 1 anchor comment in tests/issue_create_jsm.rs. F2 CONVERGED 2026-05-19 (9 passes). F3 story produced 2026-05-20. BC count post-F2: 573 (+4: BC-3.8.014/015/X.8.006/X.8.007). F3 IMPLEMENTED + F4 per-story adversary CONVERGED 3/3 CLEAN. Copilot 3 cycles →0. PR #394 squash-merged @ b36b291 (2026-05-20). Issue #384 auto-closed."
+
+  - id: S-385
+    title: "JSM input validation UX polish: harmonize project-required error, guard empty --request-type, reject --markdown+--field description= conflict, move platform-flag warnings post-require_service_desk (closes #385)"
+    status: completed
+    pr: 395
+    merge_sha: f7fc8c3
+    merged_at: "2026-05-20"
+    depends_on: [S-384]
+    bc_anchors: [BC-3.8.016, BC-3.8.017, BC-3.8.002, BC-3.8.010, BC-3.8.011]
+    holdout_anchors: [H-NEW-JSM-RT-006, H-NEW-JSM-RT-007]
+    issue: 385
+    points: 5
+    notes: "Feature mode F4 story (closes issue #385). All 4 O-08 fixes: O-08-02 (BC-3.8.002 harmonized project-required error string), O-08-04 (BC-3.8.016 empty --request-type guard, exits 64 'request type cannot be empty'), O-08-06 (BC-3.8.017 --markdown+--field description= conflict guard, exits 64), O-08-07 (BC-3.8.010/011 platform-flag warnings moved post-require_service_desk). F1+F2+F3 COMPLETE (F2 adv 3/3 CLEAN 19 passes; F3 adv 3/3 CLEAN 12 passes). F4 per-story adversary CONVERGED 3/3 CLEAN. Copilot 3 rounds →0. CI 10/10 GREEN. PR #395 squash-merged @ f7fc8c3 (2026-05-20). Issue #385 auto-closed. F7 traceability: 5 BCs (BC-3.8.002/010/011/016/017) ↔ 7 required test deliverables ↔ handle_jsm_create locus in src/cli/issue/create.rs. 7 process-gaps PG-385-1..7 recorded as justified deferrals. Cycle CLOSED 2026-05-20."

@@ -6,7 +6,7 @@ version: "1.4.15"
 total_stories: 43
 total_waves: 4
 status: complete-pending-adv-review
-last_updated: 2026-05-20 (S-385 added; JSM input validation UX polish; issue #385 F3 story)
+last_updated: 2026-05-20 (S-385 completed PR #395 / f7fc8c3; issue #385 F1–F7 CLOSED)
 activation_head: dea1664
 ---
 
@@ -186,7 +186,7 @@ They have `wave: feature-followup` in frontmatter and live under `.factory/code-
 | S-383 | Emit stderr warnings when --field/--on-behalf-of used without --request-type on platform path (closes #383) | BC-3.8.012, BC-3.8.013 | — | completed (PR #390 / 25f7211; merged 2026-05-19) | small (2 SP) |
 | S-392 | Add cumulative BC-count CI guard: check-bc-cumulative-counts.sh + DRIFT-002 (closes #392) | N/A — CI tooling | — | completed (PR #393 / 0be2e3a; merged 2026-05-20) | medium (4 SP) |
 | S-384 | JSM 401 auth-aware hints: gate is_oauth_auth() in handle_jsm_create + require_service_desk (closes #384) | BC-3.8.014, BC-3.8.015, BC-X.8.006, BC-X.8.007 | H-NEW-JSM-RT-003 | **completed** — PR #394 / b36b291 (2026-05-20) | medium (5 SP) |
-| S-385 | JSM input validation UX polish: harmonize project-required error, guard empty --request-type, reject --markdown+--field description= conflict, move platform-flag warnings post-require_service_desk (closes #385) | BC-3.8.016, BC-3.8.017, BC-3.8.002, BC-3.8.010, BC-3.8.011, BC-3.8.003 (regression-pin) | H-NEW-JSM-RT-006, H-NEW-JSM-RT-007 | **ready** | medium (5 SP) |
+| S-385 | JSM input validation UX polish: harmonize project-required error, guard empty --request-type, reject --markdown+--field description= conflict, move platform-flag warnings post-require_service_desk (closes #385) | BC-3.8.016, BC-3.8.017, BC-3.8.002, BC-3.8.010, BC-3.8.011, BC-3.8.003 (regression-pin) | H-NEW-JSM-RT-006, H-NEW-JSM-RT-007 | **completed** — PR #395 / f7fc8c3 (2026-05-20) | medium (5 SP) |
 
 Feature-followup story files: `.factory/code-delivery/issue-NNN/story.md`
 
@@ -276,7 +276,7 @@ gaps that are not blocking for v0.5 but should be tracked.
 ## Story Manifest
 
 Complete mapping of every `story_id` to its absolute file path. Generated 2026-05-07; updated 2026-05-08 (S-3.10 added).
-Total rows: 43 (matches `total_stories: 43` in frontmatter). Updated 2026-05-15 (S-340 added). Updated 2026-05-16 (S-345 added). Updated 2026-05-16 (S-346 added). Updated 2026-05-18 (issue-288-pr1..pr4 added). Updated 2026-05-18 (issue-288-pr3-scope dropped; 40→39). Updated 2026-05-19 (S-382 added; quick-dev F4; 39→40). Updated 2026-05-19 (S-382 completed PR #389 / b1c863e). Updated 2026-05-19 (S-383 added; F3; 40→41). Updated 2026-05-19 (S-383 completed PR #390 / 25f7211). Updated 2026-05-19 (S-392 added; infrastructure; 41→42). Updated 2026-05-20 (S-392 completed PR #393 / 0be2e3a). Updated 2026-05-20 (S-384 added; feature mode F3; 42→43). Updated 2026-05-20 (S-384 completed PR #394 / b36b291). Updated 2026-05-20 (S-385 added; feature mode F3; 43→43; count held at 43). Updated 2026-05-20 (corrected pre-existing off-by-one overcount: total_stories 44→43 to match actual 43 manifest rows; overcount accumulated across S-382..S-384 additions — PG-385-6).
+Total rows: 43 (matches `total_stories: 43` in frontmatter). Updated 2026-05-15 (S-340 added). Updated 2026-05-16 (S-345 added). Updated 2026-05-16 (S-346 added). Updated 2026-05-18 (issue-288-pr1..pr4 added). Updated 2026-05-18 (issue-288-pr3-scope dropped; 40→39). Updated 2026-05-19 (S-382 added; quick-dev F4; 39→40). Updated 2026-05-19 (S-382 completed PR #389 / b1c863e). Updated 2026-05-19 (S-383 added; F3; 40→41). Updated 2026-05-19 (S-383 completed PR #390 / 25f7211). Updated 2026-05-19 (S-392 added; infrastructure; 41→42). Updated 2026-05-20 (S-392 completed PR #393 / 0be2e3a). Updated 2026-05-20 (S-384 added; feature mode F3; 42→43). Updated 2026-05-20 (S-384 completed PR #394 / b36b291). Updated 2026-05-20 (S-385 added; feature mode F3; 43→43; count held at 43). Updated 2026-05-20 (corrected pre-existing off-by-one overcount: total_stories 44→43 to match actual 43 manifest rows; overcount accumulated across S-382..S-384 additions — PG-385-6). Updated 2026-05-20 (S-385 completed PR #395 / f7fc8c3; issue #385 F1–F7 CLOSED; cycle CLOSED).
 
 ### Wave 0
 
@@ -344,4 +344,4 @@ Total rows: 43 (matches `total_stories: 43` in frontmatter). Updated 2026-05-15 
 | S-383 | feature-followup (F3) | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/S-383-platform-inverse-warnings.md |
 | S-392 | feature-followup (infrastructure) | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/S-392-cumulative-spec-count-guard.md |
 | S-384 | feature-followup (feature mode F3) | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/S-384-jsm-401-auth-aware-hints.md |
-| S-385 | feature-followup (feature mode F3) | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/S-385-jsm-input-validation-ux-polish.md |
+| S-385 | feature-followup (feature mode F4 → F7) | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/S-385-jsm-input-validation-ux-polish.md |

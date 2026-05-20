@@ -1299,4 +1299,165 @@ No code change needed. The guard already exists. The gap was not running it. Fut
 
 _Discovered: #384 F3 implementation → CI failure on PR #394 Spec Guards job; recorded at F7 close-out, 2026-05-20_
 _Tagged: [codified] — dispatch instructions must include all three guards_
+
+---
+
+## 2026-05-20 — Issue #385 Cycle Close-Out: 7 Process-Gap Deferred Items
+
+Issue #385 (JSM input validation + UX polish) was delivered via PR #395 (squash-merge f7fc8c3,
+2026-05-20). F1–F4 COMPLETE; F7 convergence CLOSED. The cycle surfaced 7 process-gap findings
+(PG-385-1 through PG-385-7). All 7 are recorded as **JUSTIFIED DEFERRALS** in STATE.md Drift
+Items. None are content defects; all are process/tooling improvement opportunities.
+
+### Cycle Verdict: CLOSED
+
+- F4 per-story adversarial: CONVERGED 3/3 CLEAN.
+- Copilot: 3 rounds, converged to 0.
+- CI: 10/10 green (Format, Clippy, Test ubuntu, Test macos, MSRV, Deny, Coverage, Secret Scan,
+  Spec Guards, Mutation Testing).
+- Security review: CLEAN.
+- Issue #385: CLOSED / stateReason COMPLETED.
+
+### PG-385-1 [deferred] F2 holdout template lacks mandatory `realized_by:` stub
+
+**Finding:** M-02 class (missing `realized_by:` on new holdout entries) recurred for the third
+time — first seen in #284 F2, first codified from #384 F2 pass 5, recurred in #385 F2. The
+prd-delta-385.md template's NEW_HOLDOUT block does not include a required `realized_by:` stub,
+so the field is omitted by the product-owner and must be added retroactively at F3.
+
+**Justification for deferral:** Engine template gap, not solvable from the jira-cli repo.
+No recurrence risk within jira-cli — the gap can only be fixed in the factory engine templates.
+The impact is bounded: adds at most one F2 adversary pass per cycle where new holdouts are
+created. No content correctness defect in any shipped spec.
+
+**Target:** Next engine maintenance pass — add `realized_by: [TBD — to be filled at F3
+story-creation time]` as a required stub to the F2 delta template NEW_HOLDOUT block.
+
+_Discovered: #385 F2 adversarial review. Status: [deferred] — engine template gap._
+
+---
+
+### PG-385-2 [deferred] No CI guard for canonical-ordering or multi-copy-text consistency in BC files
+
+**Finding:** During #385 F2, duplicate/inconsistently-ordered text across holdout-scenarios.md
+required structural de-duplication. A future author could re-introduce out-of-order or duplicate
+text without any CI failure catching it.
+
+**Justification for deferral:** Scripts-improvement gap; no blocking impact. Not a content
+defect. Should be bundled with the pre-existing spec-guard hardening follow-ups from issue #383
+(DEFER-383-3, now resolved by #392) into a "spec-guard hardening phase 2" issue. The sandbox
+classifier blocks autonomous GitHub issue creation; the human should file this when scheduling
+the next maintenance sweep.
+
+**Target:** Next scripts-maintenance PR — extend `check-spec-counts.sh` or add a new script
+to lint for duplicate heading IDs and canonical ordering of holdout entries.
+
+_Discovered: #385 F2 structural cleanup. Status: [deferred] — scripts improvement candidate for
+future "spec-guard hardening" bundle (with PG-385-3/4/6)._
+
+---
+
+### PG-385-3 [deferred] No lint for `src/*.rs:NN-MM` micro-range citations in BC Source/Trace fields
+
+**Finding:** BC Source/Trace fields that cite specific line-number ranges (e.g.,
+`src/cli/issue/create.rs:45-67`) drift quickly as code evolves. No CI guard exists to detect
+these micro-range citations and warn that they need updating.
+
+**Justification for deferral:** Scripts-improvement gap. Not a content defect; the cited ranges
+are informational and their staleness is low-impact. Should be bundled with PG-385-2/4/6 into
+a single "spec-guard hardening phase 2" follow-up issue.
+
+**Target:** Next scripts-maintenance PR — add `scripts/check-bc-no-line-range-citations.sh`
+that errors on patterns like `src/*.rs:\d+-\d+` in BC Source/Trace fields.
+
+_Discovered: #385 F2 adversarial review. Status: [deferred] — scripts improvement candidate for
+future "spec-guard hardening" bundle._
+
+---
+
+### PG-385-4 [deferred] `check-spec-counts.sh` does not validate holdout prose count vs frontmatter
+
+**Finding:** Adding H-NEW-JSM-RT-006/007 in #385 F2 required a manual prose update to the
+holdout-scenarios.md "N holdout scenarios" body preamble line. The guard would not have caught
+a missed prose update. Parallel to DEFER-383-3 (now resolved by #392 for BCs; same gap class
+now for holdouts).
+
+**Justification for deferral:** Scripts-improvement gap. Not a content defect. Should be bundled
+with PG-385-2/3/6 into a single "spec-guard hardening phase 2" follow-up issue.
+
+**Target:** Next scripts-maintenance PR — extend `check-spec-counts.sh` to grep
+holdout-scenarios.md body preamble for the "N holdout scenarios" prose line and assert it
+equals `total_holdouts` frontmatter. Analogous to DEFER-383-3 resolution.
+
+_Discovered: #385 F2 manual prose update required. Status: [deferred] — scripts improvement
+candidate for future "spec-guard hardening" bundle._
+
+---
+
+### PG-385-5 [deferred] Story-writer template lacks `bc_anchors` completeness rule
+
+**Finding:** During #385 F3 adversarial story review, BCs referenced in story ACs were not
+consistently mirrored in `bc_anchors`, creating traceability gaps detectable only by manual
+review.
+
+**Justification for deferral:** Engine template gap, not solvable from the jira-cli repo. No
+recurrence risk within jira-cli. Impact is bounded to a single adversary pass per cycle where
+BC anchors are incomplete.
+
+**Target:** Next engine maintenance pass — add a mandatory rule to the story-writer template:
+every BC cited in an AC Trace or test-deliverable table MUST appear in `bc_anchors` OR carry
+an explicit `regression-only: true` annotation.
+
+_Discovered: #385 F3 adversarial story review. Status: [deferred] — engine template gap._
+
+---
+
+### PG-385-6 [deferred] No STORY-INDEX count guard script
+
+**Finding:** A pre-existing off-by-one (`total_stories: 44` when actual count is 43) survived
+4+ feature-followup additions because no CI script validates the STORY-INDEX frontmatter count
+against actual manifest rows. Corrected this cycle (44→43), but the guard is still missing.
+
+**Justification for deferral:** Scripts-improvement gap. Should be bundled with PG-385-2/3/4
+into a single "spec-guard hardening phase 2" follow-up issue. No blocking impact; off-by-one
+cosmetic (only the frontmatter row count was wrong; all actual story rows were present).
+
+**Target:** Next scripts-maintenance PR — add `scripts/check-story-index-counts.sh` to validate
+`total_stories` frontmatter against actual story manifest rows + sprint-state.yaml story count.
+
+_Discovered: #385 F3 story-index correction (44→43). Status: [deferred] — scripts improvement
+candidate for future "spec-guard hardening" bundle._
+
+---
+
+### PG-385-7 [deferred] Story-writer line-range instructions under-scope governing comments
+
+**Finding:** During #385 F3 story drafting, implementation line ranges for target functions were
+specified without including the governing `///` rustdoc or `//` block-comment header. When
+test-writers use those ranges to write assertion strings, missing the comment means missing
+the contract statement.
+
+**Justification for deferral:** Engine template / story-writer prompt gap, not solvable from
+the jira-cli repo. No recurrence risk within jira-cli.
+
+**Target:** Next engine maintenance pass — update story-writer instructions to specify that a
+line range for a function MUST include the governing comment/rustdoc block (typically 1–10
+lines above the `fn` keyword).
+
+_Discovered: #385 F3 story drafting. Status: [deferred] — engine story-writer prompt gap._
+
+---
+
+### Cycle Summary: #385
+
+- All 7 PG-385-1..7 findings are process/tooling improvements, not content defects.
+- No finding has recurred 3+ times from within this cycle alone (PG-385-1 is the third
+  instance of the M-02 class across the entire cycle-001 span, not within #385 alone).
+- PG-385-2/3/4/6 should be bundled with the pre-existing deferred items from issue #383
+  (DEFER-383-3, now RESOLVED) into a single future "spec-guard hardening phase 2" issue
+  that the human should file (sandbox classifier blocks autonomous GitHub issue creation).
+- PG-385-1/5/7 are engine template improvements for a future self-improvement cycle.
+- Issue #385 F1–F7: COMPLETE. PR #395 squash-merged @ f7fc8c3, 2026-05-20. Cycle CLOSED.
+
+_Recorded: F7 close-out, 2026-05-20_
 _Tagged: [codified] [policy] — elevates accept-either classification from LOW to MEDIUM; mandates grep audit on every adversary pass_
