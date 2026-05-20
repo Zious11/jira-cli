@@ -532,3 +532,16 @@ feature_followup_standalone:
     issue: 392
     points: 4
     notes: "Infrastructure story. Closes issue #392 (DEFER-383-3). Adds sibling script scripts/check-bc-cumulative-counts.sh (DRIFT-002 mitigation): validates 7 must-agree surfaces (bc-N.md total_bcs frontmatter A vs BC-INDEX Section header B vs BC-INDEX sections: frontmatter C vs CANONICAL-COUNTS.md table row D vs body prose; grand total sum vs BC-INDEX total_bcs E vs CANONICAL-COUNTS **Sum** F vs CANONICAL-COUNTS grand-total prose G). PENDING carve-out skips L2-vs-L3 alignment table in CANONICAL-COUNTS.md. Fixture suite (4 trees + 7-fixture self-test harness) in tests/spec-count-fixtures/ + run-tests.sh. 2 new CI steps in spec-guard job (fixture self-test first, then real-repo DRIFT-002). One-line prose fix in bc-2-issue-read.md: '92 behavioral contracts' -> '93 behavioral contracts' (DRIFT-BC2-PROSE). CLAUDE.md updated with DRIFT-002 reference. TDD: fixtures written before script (Red Gate applies). Per-story adversary CONVERGED 3/3. Copilot: 4 rounds (19→5 root issues→0 round 4), all 22 threads resolved. CI: 10/10 GREEN. PR #393 MERGED @ 0be2e3a (2026-05-20). Issue #392 auto-closed. Lessons L-392-01..05 codified."
+
+  - id: S-384
+    title: "JSM 401 auth-aware hints: gate is_oauth_auth() in handle_jsm_create + require_service_desk (closes #384)"
+    status: ready
+    pr: null
+    merge_sha: null
+    merged_at: null
+    depends_on: []
+    bc_anchors: [BC-3.8.014, BC-3.8.015, BC-X.8.006, BC-X.8.007, BC-3.8.001, BC-3.8.009, BC-X.3.002]
+    holdout_anchors: [H-NEW-JSM-RT-003]
+    issue: 384
+    points: 5
+    notes: "Feature mode F3 story. Closes issue #384. Adds is_oauth_auth() predicate to JiraClient (client.rs), API_TOKEN_EXPIRY_HINT const to error.rs, gates handle_jsm_create map_err on is_oauth_auth() (create.rs), introduces new map_err on get_or_fetch_project_meta in require_service_desk (servicedesks.rs). 4 new integration tests + 1 repurposed existing test + 1 anchor comment in tests/issue_create_jsm.rs. F2 CONVERGED 2026-05-19 (9 passes). F3 story produced 2026-05-20. BC count post-F2: 573 (+4: BC-3.8.014/015/X.8.006/X.8.007)."
