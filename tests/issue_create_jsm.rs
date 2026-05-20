@@ -3290,6 +3290,123 @@ async fn test_jsm_create_markdown_field_description_conflict_exits_64() {
     );
 }
 
+// ─── S-385 BC-3.8.017 negative cases: EC-3.8.017-5 (no-= token) and EC-3.8.017-3 (capital-D) ──
+
+/// BC-3.8.017 EC-3.8.017-5 / EC-3.8.017-3 negative-case regression pins (adversary pass-1 H-1).
+///
+/// The step-2 conflict guard uses `pair.find('=').is_some_and(|pos| &pair[..pos] == "description")`.
+/// Two sub-cases pin the non-triggering boundaries:
+///
+/// Sub-case A — EC-3.8.017-5: `--field description` (NO `=` in token). The guard must
+/// NOT fire because there is no extractable key. The command will exit with a different
+/// error (malformed-field from parse_field_kv at step 6, once require_service_desk
+/// succeeds). Assert that stderr does NOT contain the BC-3.8.017 conflict-identification
+/// slice — this is the only assertion needed to pin that the guard did not fire.
+/// Zero HTTP mocks mounted so that if the guard fires the test still terminates quickly.
+/// NOTE: because the no-= token is only validated by parse_field_kv (step 6, after
+/// require_service_desk at step 4), and require_service_desk needs HTTP, we mount
+/// the minimal HELP project mocks. The test asserts absence of the conflict slice;
+/// it does NOT assert a specific exit code (the actual exit depends on which other
+/// guard fires first with the description flag present vs absent).
+///
+/// Sub-case B — EC-3.8.017-3: `--field Description=X` (capital D). Guard must NOT fire
+/// (case-SENSITIVE exact match — raw key `Description` != `description`). The command
+/// will proceed past step 2 and fail elsewhere. Assert stderr does NOT contain the
+/// conflict-identification slice.
+#[tokio::test]
+async fn test_jsm_create_markdown_field_description_conflict_negative_cases() {
+    // ── Sub-case A: EC-3.8.017-5 — --field description (no =) must NOT trigger guard ─
+    {
+        let server = MockServer::start().await;
+        let cache_dir = tempfile::tempdir().unwrap();
+        let config_dir = tempfile::tempdir().unwrap();
+        write_minimal_config(config_dir.path(), &server.uri());
+
+        // No HTTP mocks. The guard fires at step 2 (before require_service_desk).
+        // If the guard WRONGLY fires for a no-= token, the test will still exit 64
+        // with the conflict message on stderr — which the assertion below will catch.
+
+        let output = Command::cargo_bin("jr")
+            .unwrap()
+            .env("JR_BASE_URL", server.uri())
+            .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+            .env("XDG_CACHE_HOME", cache_dir.path())
+            .env("XDG_CONFIG_HOME", config_dir.path())
+            .args([
+                "issue",
+                "create",
+                "--project",
+                "HELP",
+                "--request-type",
+                "17",
+                "--summary",
+                "Reset please",
+                "--markdown",
+                "--description",
+                "some description",
+                "--field",
+                "description",
+                "--no-input",
+            ])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        // The BC-3.8.017 conflict guard MUST NOT fire for a no-= token (EC-3.8.017-5).
+        // The conflict-identification slice must be absent from stderr.
+        assert!(
+            !stderr.contains("`--field description=...` cannot be combined with `--markdown`"),
+            "EC-3.8.017-5: guard must NOT fire for --field token with no '='; \
+             conflict message wrongly appeared. stderr: {stderr}"
+        );
+    }
+
+    // ── Sub-case B: EC-3.8.017-3 — --field Description=X (capital D) must NOT trigger ─
+    {
+        let server = MockServer::start().await;
+        let cache_dir = tempfile::tempdir().unwrap();
+        let config_dir = tempfile::tempdir().unwrap();
+        write_minimal_config(config_dir.path(), &server.uri());
+
+        // No HTTP mocks. Guard fires at step 2 if it triggers; assert it does not.
+
+        let output = Command::cargo_bin("jr")
+            .unwrap()
+            .env("JR_BASE_URL", server.uri())
+            .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+            .env("XDG_CACHE_HOME", cache_dir.path())
+            .env("XDG_CONFIG_HOME", config_dir.path())
+            .args([
+                "issue",
+                "create",
+                "--project",
+                "HELP",
+                "--request-type",
+                "17",
+                "--summary",
+                "Reset please",
+                "--markdown",
+                "--description",
+                "some description",
+                "--field",
+                "Description=some value",
+                "--no-input",
+            ])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        // The BC-3.8.017 conflict guard MUST NOT fire for capital-D key (EC-3.8.017-3).
+        assert!(
+            !stderr.contains("`--field description=...` cannot be combined with `--markdown`"),
+            "EC-3.8.017-3: guard must NOT fire for --field Description=X (capital D); \
+             conflict message wrongly appeared. stderr: {stderr}"
+        );
+    }
+}
+
 // ─── S-385 O-08-07: BC-3.8.010/011 — platform-flag warning suppressed on non-JSM ─
 
 /// BC-3.8.010 / BC-3.8.011 (O-08-07 warning-position) / Required Test Deliverable
