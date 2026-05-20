@@ -123,7 +123,7 @@ JQL utilities (X.9), Partial-match (X.10), Build-time (X.11), JSM Request Types 
 #### BC-X.2.001: Offset pagination: `startAt`/`maxResults` + `total` for issue comments, projects, worklogs
 
 **Confidence**: HIGH
-**Source**: `src/api/pagination.rs`; 14 unit tests; `tests/comments.rs:104-158`
+**Source**: `src/api/pagination.rs`; unit test suite (pagination module); `tests/comments.rs:104-158`
 **Trace**: Pass 3 BC-1406, BC-1407-R (R1)
 
 ---
@@ -253,7 +253,7 @@ JQL utilities (X.9), Partial-match (X.10), Build-time (X.11), JSM Request Types 
 #### BC-X.4.002: `Retry-After` header parsed as u64 INTEGER ONLY — HTTP-date format NOT supported
 
 **Confidence**: HIGH
-**Source**: `src/api/rate_limit.rs:14-18`; 2 unit tests
+**Source**: `src/api/rate_limit.rs:14-18`; unit test suite (rate_limit module)
 **Subject**: Rate limiting
 **Behavior**: `header.parse::<u64>()`. HTTP-date format → `None` → falls back to `DEFAULT_RETRY_SECS = 1`. No upper bound — `Retry-After: 86400` is honored as 24h (NFR-R-NEW-1, LOW). CONV-ABS-001 correction.
 **Trace**: Pass 3 BC-1403-R (R1)
@@ -650,7 +650,7 @@ This is the canonical pinnable string for `test_require_service_desk_oauth_401_s
 #### BC-X.10.001: `partial_match` with single-substring → `Ambiguous` (NOT Exact); never auto-resolves
 
 **Confidence**: HIGH
-**Source**: `src/partial_match.rs::tests`; 12 unit tests; property tests
+**Source**: `src/partial_match.rs::tests`; unit test suite (partial_match module); property tests
 **Subject**: Partial-match
 **Behavior**: Single-substring match returns `MatchResult::Ambiguous(matches)`. Callers must reject this under `--no-input`. This is the fail-closed invariant.
 **Trace**: Pass 3 BC-105 context
