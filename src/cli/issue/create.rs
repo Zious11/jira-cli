@@ -1838,10 +1838,10 @@ struct JsmCreateArgs {
 /// 6. Resolve `request_type_arg`: if all-digits → use as-is (numeric bypass,
 ///    BC-3.8.004); else → read cache / fetch via `list_request_types` /
 ///    `partial_match`. Ambiguous or missing → exit 64.
-///    Build `requestFieldValues` from `--summary`, `--description` (ADF),
+/// 7. Build `requestFieldValues` from `--summary`, `--description` (ADF),
 ///    `--priority`, `--label`, `--field` via [`parse_field_kv`].
-///    Build body via [`JsmRequestBuilder`].
-///    POST via [`JiraClient::create_jsm_request`].
+/// 8. Build body via [`JsmRequestBuilder`].
+/// 9. POST via [`JiraClient::create_jsm_request`].
 ///    Emit `{"key": "<issue_key>"}` on stdout (`--output json` shape per AC-015).
 async fn handle_jsm_create(
     client: &JiraClient,

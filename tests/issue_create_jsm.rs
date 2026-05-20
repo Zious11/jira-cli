@@ -3079,9 +3079,11 @@ async fn test_require_service_desk_oauth_401_surfaces_read_scope_hint() {
 /// (whitespace-only) both exit 64 with "request type cannot be empty" on stderr.
 ///
 /// Zero HTTP mocks are mounted. The guard fires at Canonical Guard Ordering step 1,
-/// BEFORE `require_service_desk` (step 4). Any unexpected HTTP call would fail the
-/// test on wiremock server drop, detecting a regression that moved the guard below
-/// `require_service_desk`.
+/// BEFORE `require_service_desk` (step 4). Because `handle_jsm_create` returns before
+/// issuing any HTTP call, the binary never contacts the mock server. Ordering regressions
+/// (guard moved below step 4) are detected by the exit-code and stderr message assertions:
+/// a regression would produce a 404 error or a "requires a Jira Service Management
+/// project" message instead of "request type cannot be empty".
 ///
 /// Both the empty-string and whitespace-only inputs are MANDATORY in this test —
 /// the whitespace-only case specifically pins the `.trim().is_empty()` guard
@@ -3097,8 +3099,10 @@ async fn test_jsm_create_empty_request_type_exits_64() {
         write_minimal_config(config_dir.path(), &server.uri());
 
         // ZERO HTTP mocks mounted. The step-1 guard fires before any HTTP.
-        // If any HTTP is attempted, wiremock will detect an unexpected request
-        // and the test will fail on server drop.
+        // A regression moving the guard below require_service_desk (step 4) would cause
+        // the binary to issue a GET to the mock server; wiremock returns 404, and the
+        // test would then fail on the exit-code or stderr message assertions rather than
+        // silently passing — so those assertions are the regression detectors here.
 
         let output = Command::cargo_bin("jr")
             .unwrap()
@@ -3153,7 +3157,9 @@ async fn test_jsm_create_empty_request_type_exits_64() {
         let config_dir = tempfile::tempdir().unwrap();
         write_minimal_config(config_dir.path(), &server.uri());
 
-        // ZERO HTTP mocks mounted. Guard fires at step 1 before any HTTP.
+        // ZERO HTTP mocks mounted. Guard fires at step 1 before any HTTP. A regression
+        // moving the guard below step 4 would produce a 404 from the unmatched HTTP call,
+        // which the exit-code and message assertions would catch.
 
         let output = Command::cargo_bin("jr")
             .unwrap()
@@ -3298,16 +3304,14 @@ async fn test_jsm_create_markdown_field_description_conflict_exits_64() {
 /// Two sub-cases pin the non-triggering boundaries:
 ///
 /// Sub-case A — EC-3.8.017-5: `--field description` (NO `=` in token). The guard must
-/// NOT fire because there is no extractable key. The command will exit with a different
-/// error (malformed-field from parse_field_kv at step 6, once require_service_desk
-/// succeeds). Assert that stderr does NOT contain the BC-3.8.017 conflict-identification
-/// slice — this is the only assertion needed to pin that the guard did not fire.
-/// Zero HTTP mocks mounted so that if the guard fires the test still terminates quickly.
-/// NOTE: because the no-= token is only validated by parse_field_kv (step 6, after
-/// require_service_desk at step 4), and require_service_desk needs HTTP, we mount
-/// the minimal HELP project mocks. The test asserts absence of the conflict slice;
-/// it does NOT assert a specific exit code (the actual exit depends on which other
-/// guard fires first with the description flag present vs absent).
+/// NOT fire because there is no extractable key. No HTTP mocks are mounted; if the
+/// step-2 guard wrongly fires, the binary returns exit 64 with the conflict message
+/// before issuing any HTTP — which the assertion below will catch. If the guard correctly
+/// does NOT fire, the binary proceeds to step 4 (`require_service_desk`) which issues a
+/// GET to the mock server; wiremock returns 404, causing the binary to exit with a
+/// non-conflict error. The test only asserts absence of the conflict-identification slice,
+/// so it passes in either the 404 or later-step-error case. No specific exit code is
+/// asserted here (the actual error depends on which step fails first).
 ///
 /// Sub-case B — EC-3.8.017-3: `--field Description=X` (capital D). Guard must NOT fire
 /// (case-SENSITIVE exact match — raw key `Description` != `description`). The command
@@ -3322,9 +3326,11 @@ async fn test_jsm_create_markdown_field_description_conflict_negative_cases() {
         let config_dir = tempfile::tempdir().unwrap();
         write_minimal_config(config_dir.path(), &server.uri());
 
-        // No HTTP mocks. The guard fires at step 2 (before require_service_desk).
-        // If the guard WRONGLY fires for a no-= token, the test will still exit 64
-        // with the conflict message on stderr — which the assertion below will catch.
+        // No HTTP mocks. If the step-2 conflict guard WRONGLY fires for a no-= token,
+        // the binary exits 64 with the conflict message before any HTTP — the assertion
+        // below catches this. If the guard correctly does NOT fire, the binary issues
+        // a GET to the mock server which returns 404; the binary exits with a different
+        // error and the absence assertion still passes.
 
         let output = Command::cargo_bin("jr")
             .unwrap()
