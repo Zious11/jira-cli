@@ -1906,8 +1906,8 @@ async fn handle_jsm_create(
     // (case-SENSITIVE, no trim — mirrors parse_field_kv extraction).
     if markdown {
         let has_description_field = field_pairs.iter().any(|pair| {
-            let raw_key = pair.find('=').map_or(pair.as_str(), |pos| &pair[..pos]);
-            raw_key == "description"
+            pair.find('=')
+                .is_some_and(|pos| &pair[..pos] == "description")
         });
         if has_description_field {
             return Err(JrError::UserError(
@@ -1980,21 +1980,20 @@ async fn handle_jsm_create(
     let profile = &config.active_profile_name;
 
     // Resolve request type ID (BC-3.8.003, BC-3.8.004).
-    let request_type_id =
-        if !request_type_arg.is_empty() && request_type_arg.chars().all(|c| c.is_ascii_digit()) {
-            // Numeric bypass — use directly without list endpoint call (BC-3.8.004).
-            request_type_arg.clone()
-        } else {
-            // Name resolution: cache → API → partial_match (BC-3.8.003).
-            resolve_jsm_request_type_id(
-                &request_type_arg,
-                &service_desk_id,
-                &project_key,
-                profile,
-                client,
-            )
-            .await?
-        };
+    let request_type_id = if request_type_arg.chars().all(|c| c.is_ascii_digit()) {
+        // Numeric bypass — use directly without list endpoint call (BC-3.8.004).
+        request_type_arg.clone()
+    } else {
+        // Name resolution: cache → API → partial_match (BC-3.8.003).
+        resolve_jsm_request_type_id(
+            &request_type_arg,
+            &service_desk_id,
+            &project_key,
+            profile,
+            client,
+        )
+        .await?
+    };
 
     // Resolve summary (BC-3.8.005).
     let summary_text = summary
