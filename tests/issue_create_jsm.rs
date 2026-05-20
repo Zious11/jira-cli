@@ -3273,9 +3273,7 @@ async fn test_jsm_create_markdown_field_description_conflict_exits_64() {
 
     // Slice (b) — explains the potential harm (may result in desync).
     assert!(
-        stderr.contains(
-            "may result in a JSM 400 error or silently dropped ADF formatting"
-        ),
+        stderr.contains("may result in a JSM 400 error or silently dropped ADF formatting"),
         "BC-3.8.017 (slice b): stderr must contain desync-harm explanation; got: {stderr}"
     );
 
@@ -3388,7 +3386,9 @@ async fn test_jsm_create_type_flag_warning_suppressed_on_non_jsm_project() {
 
     // Non-JSM project error MUST appear on stderr (verifies the correct failure site).
     assert!(
-        stderr.contains("`jr issue create --request-type` requires a Jira Service Management project"),
+        stderr.contains(
+            "`jr issue create --request-type` requires a Jira Service Management project"
+        ),
         "BC-3.8.010 O-08-07: stderr must contain the non-JSM project error; got: {stderr}"
     );
 
@@ -3397,8 +3397,7 @@ async fn test_jsm_create_type_flag_warning_suppressed_on_non_jsm_project() {
     // On a non-JSM project, require_service_desk fails at step 4 → step 5 never reached.
     let warning_count = stderr.matches("warning: --type is ignored").count();
     assert_eq!(
-        warning_count,
-        0,
+        warning_count, 0,
         "BC-3.8.010 O-08-07: --type warning must NOT appear on stderr for non-JSM project \
          (warning-suppression pin); found {warning_count} occurrence(s). stderr: {stderr}"
     );
@@ -3496,31 +3495,41 @@ async fn test_jsm_create_platform_flag_warnings_emit_once_on_success() {
         // Occurrence count assertions — NOT plain `contains`.
         // Each warning MUST appear EXACTLY ONCE (single-site requirement F-02).
 
-        let count_type = stderr.matches("warning: --type is ignored when --request-type is set").count();
+        let count_type = stderr
+            .matches("warning: --type is ignored when --request-type is set")
+            .count();
         assert_eq!(
             count_type, 1,
             "BC-3.8.010 F-02 invocation-A: expected exactly 1 --type warning; got {count_type}. stderr: {stderr}"
         );
 
-        let count_team = stderr.matches("warning: --team is ignored when --request-type is set").count();
+        let count_team = stderr
+            .matches("warning: --team is ignored when --request-type is set")
+            .count();
         assert_eq!(
             count_team, 1,
             "BC-3.8.011 F-02 invocation-A: expected exactly 1 --team warning; got {count_team}. stderr: {stderr}"
         );
 
-        let count_points = stderr.matches("warning: --points is ignored when --request-type is set").count();
+        let count_points = stderr
+            .matches("warning: --points is ignored when --request-type is set")
+            .count();
         assert_eq!(
             count_points, 1,
             "BC-3.8.011 F-02 invocation-A: expected exactly 1 --points warning; got {count_points}. stderr: {stderr}"
         );
 
-        let count_parent = stderr.matches("warning: --parent is ignored when --request-type is set").count();
+        let count_parent = stderr
+            .matches("warning: --parent is ignored when --request-type is set")
+            .count();
         assert_eq!(
             count_parent, 1,
             "BC-3.8.011 F-02 invocation-A: expected exactly 1 --parent warning; got {count_parent}. stderr: {stderr}"
         );
 
-        let count_to = stderr.matches("warning: --to is ignored when --request-type is set").count();
+        let count_to = stderr
+            .matches("warning: --to is ignored when --request-type is set")
+            .count();
         assert_eq!(
             count_to, 1,
             "BC-3.8.011 F-02 invocation-A: expected exactly 1 --to warning; got {count_to}. stderr: {stderr}"

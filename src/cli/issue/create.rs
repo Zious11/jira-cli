@@ -61,40 +61,6 @@ pub(super) async fn handle_create(
     // Dispatch fork: when --request-type is set, route to JSM path.
     // Platform path (when flag absent) is structurally unchanged. (BC-3.8.001, BC-3.3.001)
     if request_type.is_some() {
-        // Emit stderr warnings for platform-only flags that are silently ignored on the
-        // JSM path (BC-3.8.010, BC-3.8.011). Warnings fire BEFORE dispatch so they appear
-        // even if dispatch errors out later (e.g., missing summary, bad request type).
-        if issue_type.is_some() {
-            eprintln!(
-                "warning: --type is ignored when --request-type is set; request type encodes the issue type"
-            );
-        }
-        if team.is_some() {
-            eprintln!(
-                "warning: --team is ignored when --request-type is set; teams are managed by the request type's workflow"
-            );
-        }
-        if points.is_some() {
-            eprintln!(
-                "warning: --points is ignored when --request-type is set; story points are not part of JSM request schema"
-            );
-        }
-        if parent.is_some() {
-            eprintln!(
-                "warning: --parent is ignored when --request-type is set; JSM requests cannot be sub-tasks"
-            );
-        }
-        if to.is_some() {
-            eprintln!(
-                "warning: --to is ignored when --request-type is set; use --on-behalf-of to set the requester"
-            );
-        }
-        if account_id.is_some() {
-            eprintln!(
-                "warning: --account-id is ignored when --request-type is set; use --on-behalf-of to set the requester"
-            );
-        }
-
         return handle_jsm_create(
             client,
             config,
@@ -112,6 +78,12 @@ pub(super) async fn handle_create(
                 markdown,
                 on_behalf_of,
                 field_pairs,
+                issue_type,
+                team,
+                points,
+                parent,
+                to,
+                account_id,
             },
         )
         .await;
@@ -1805,12 +1777,13 @@ pub(crate) fn parse_field_kv(pairs: &[String]) -> Result<HashMap<String, String>
 /// `IssueCommand::Create` carries 16+ flags. The JSM dispatch path uses a subset.
 /// Each `Create` flag falls into one of three categories:
 ///
-/// **Pass-through to JSM (included in this struct):**
+/// **Pass-through to JSM (used in request body):**
 /// - `project`, `request_type`, `summary`, `description`, `description_stdin`,
 ///   `priority`, `labels`, `markdown`, `on_behalf_of`, `field_pairs`
 ///
-/// **Ignored with stderr warning (handled BEFORE dispatch in `handle_create`,
-/// per BC-3.8.010 + BC-3.8.011):**
+/// **Ignored with stderr warning (carried for step-5 warning-emission at
+/// canonical step 5 inside `handle_jsm_create` — AFTER `require_service_desk`
+/// returns `Ok`, before request-type resolution — per BC-3.8.010 + BC-3.8.011):**
 /// - `issue_type` (`--type`): JSM request types replace it
 /// - `team` (`--team`): not in JSM request schema
 /// - `points` (`--points`): not in JSM request schema
@@ -1824,6 +1797,7 @@ pub(crate) fn parse_field_kv(pairs: &[String]) -> Result<HashMap<String, String>
 /// When adding a new `Create` flag, decide which category it belongs to and add it
 /// to this list to keep future maintainers from re-discovering the matrix.
 struct JsmCreateArgs {
+    // Pass-through to JSM request body
     project: Option<String>,
     request_type: Option<String>,
     summary: Option<String>,
@@ -1834,6 +1808,14 @@ struct JsmCreateArgs {
     markdown: bool,
     on_behalf_of: Option<String>,
     field_pairs: Vec<String>,
+    // Platform-only flags carried for step-5 warning emission (BC-3.8.010, BC-3.8.011).
+    // Warnings fire AFTER `require_service_desk` returns Ok — suppressed on non-JSM projects.
+    issue_type: Option<String>,
+    team: Option<String>,
+    points: Option<f64>,
+    parent: Option<String>,
+    to: Option<String>,
+    account_id: Option<String>,
 }
 
 /// Orchestrate a JSM customer-request creation.
@@ -1841,18 +1823,26 @@ struct JsmCreateArgs {
 /// Called by [`handle_create`] when `--request-type` is present. Never called
 /// when `--request-type` is absent (platform path is the fall-through).
 ///
-/// Steps (BC-3.8.001..010):
-/// 1. Resolve the service desk ID via [`servicedesks::require_service_desk`]
-///    with label `` "`jr issue create --request-type` requires" ``.
-/// 2. Resolve `request_type_arg`: if all-digits → use as-is (numeric bypass,
+/// Steps (BC-3.8.001..017) — Canonical Guard Ordering:
+/// 0. Resolve project key (BC-3.8.002) — may exit 64, no HTTP.
+/// 1. Empty/whitespace-only `--request-type` guard (BC-3.8.016) — exit 64, no HTTP.
+/// 2. `--markdown` + `--field description=` conflict guard (BC-3.8.017) — exit 64, no HTTP.
+/// 3. `--markdown`-requires-`--description` guard — exit 64, no HTTP.
+/// 4. Resolve service desk ID via [`servicedesks::require_service_desk`]
+///    (label `` "`jr issue create --request-type` requires" ``) — FIRST HTTP call.
+/// 5. Emit stderr warnings for platform-only flags (`--type`, `--team`, `--points`,
+///    `--parent`, `--to`, `--account-id`) — AFTER `require_service_desk` returns `Ok`,
+///    before request-type resolution (BC-3.8.010, BC-3.8.011, single-site F-02).
+///    On a non-JSM project, `require_service_desk` fails at step 4 → step 5 is never
+///    reached → warnings are suppressed (not emitted for non-JSM projects).
+/// 6. Resolve `request_type_arg`: if all-digits → use as-is (numeric bypass,
 ///    BC-3.8.004); else → read cache / fetch via `list_request_types` /
 ///    `partial_match`. Ambiguous or missing → exit 64.
-/// 3. Build `requestFieldValues` from `--summary`, `--description` (ADF),
+///    Build `requestFieldValues` from `--summary`, `--description` (ADF),
 ///    `--priority`, `--label`, `--field` via [`parse_field_kv`].
-/// 4. If `--type` is also set → emit stderr warning (BC-3.8.010). Do NOT error.
-/// 5. Build body via [`JsmRequestBuilder`].
-/// 6. POST via [`JiraClient::create_jsm_request`].
-/// 7. Emit `{"key": "<issue_key>"}` on stdout (`--output json` shape per AC-015).
+///    Build body via [`JsmRequestBuilder`].
+///    POST via [`JiraClient::create_jsm_request`].
+///    Emit `{"key": "<issue_key>"}` on stdout (`--output json` shape per AC-015).
 async fn handle_jsm_create(
     client: &JiraClient,
     config: &Config,
@@ -1872,13 +1862,19 @@ async fn handle_jsm_create(
         markdown,
         on_behalf_of,
         field_pairs,
+        issue_type,
+        team,
+        points,
+        parent,
+        to,
+        account_id,
     } = args;
 
     // Resolve the request_type arg — we know it's Some because this function is only
     // called when request_type.is_some().
     let request_type_arg = request_type.expect("handle_jsm_create called without --request-type");
 
-    // Resolve project key (BC-3.8.001).
+    // Step 0: Resolve project key (BC-3.8.002).
     let project_key = project
         .or_else(|| config.project_key(project_override))
         .or_else(|| {
@@ -1888,9 +1884,45 @@ async fn handle_jsm_create(
                 helpers::prompt_input("Project key").ok()
             }
         })
-        .ok_or_else(|| JrError::UserError("project is required for JSM request creation".into()))?;
+        .ok_or_else(|| {
+            JrError::UserError(
+                "Project key is required for JSM request creation. \
+                 Use --project or configure .jr.toml. \
+                 Run \"jr project list\" to see available JSM projects."
+                    .into(),
+            )
+        })?;
 
-    // M-01 (adversary pass-02-retry) + platform-path parity: --markdown requires
+    // Step 1: Empty/whitespace-only --request-type guard (BC-3.8.016).
+    // Fires before require_service_desk (step 4) — zero HTTP on this path.
+    // Guard evaluates trim().is_empty() to cover both "" and "   " inputs (EC-3.8.016-1).
+    if request_type_arg.trim().is_empty() {
+        return Err(JrError::UserError("request type cannot be empty".into()).into());
+    }
+
+    // Step 2: --markdown + --field description= conflict guard (BC-3.8.017).
+    // Fires before require_service_desk (step 4) — zero HTTP on this path.
+    // Key match: raw substring before the first '=' must be EXACTLY "description"
+    // (case-SENSITIVE, no trim — mirrors parse_field_kv extraction).
+    if markdown {
+        let has_description_field = field_pairs.iter().any(|pair| {
+            let raw_key = pair.find('=').map_or(pair.as_str(), |pos| &pair[..pos]);
+            raw_key == "description"
+        });
+        if has_description_field {
+            return Err(JrError::UserError(
+                "`--field description=...` cannot be combined with `--markdown`: \
+                 it would overwrite the ADF description with plain text, \
+                 desyncing `isAdfRequest: true` with a plain-string description value \
+                 (may result in a JSM 400 error or silently dropped ADF formatting). \
+                 Pass `--description` with `--markdown`, or omit `--markdown`."
+                    .into(),
+            )
+            .into());
+        }
+    }
+
+    // Step 3: M-01 (adversary pass-02-retry) + platform-path parity: --markdown requires
     // a description source on the JSM path, just like the platform path.
     if markdown && description.is_none() && !description_stdin {
         return Err(JrError::UserError(
@@ -1901,14 +1933,49 @@ async fn handle_jsm_create(
         .into());
     }
 
-    // Resolve service desk ID — errors with BC-X.8.004 message for non-JSM projects
-    // (BC-3.8.002). Call-site label "`jr issue create --request-type` requires".
+    // Step 4: Resolve service desk ID — errors with BC-X.8.004 message for non-JSM
+    // projects (BC-3.8.002). Call-site label "`jr issue create --request-type` requires".
     let service_desk_id = servicedesks::require_service_desk(
         client,
         &project_key,
         "`jr issue create --request-type` requires",
     )
     .await?;
+
+    // Step 5: Emit stderr warnings for platform-only flags (BC-3.8.010, BC-3.8.011).
+    // Fires AFTER require_service_desk returns Ok (single-site F-02).
+    // On a non-JSM project, require_service_desk fails at step 4 — this step is never
+    // reached, so warnings are suppressed for non-JSM projects.
+    if issue_type.is_some() {
+        eprintln!(
+            "warning: --type is ignored when --request-type is set; request type encodes the issue type"
+        );
+    }
+    if team.is_some() {
+        eprintln!(
+            "warning: --team is ignored when --request-type is set; teams are managed by the request type's workflow"
+        );
+    }
+    if points.is_some() {
+        eprintln!(
+            "warning: --points is ignored when --request-type is set; story points are not part of JSM request schema"
+        );
+    }
+    if parent.is_some() {
+        eprintln!(
+            "warning: --parent is ignored when --request-type is set; JSM requests cannot be sub-tasks"
+        );
+    }
+    if to.is_some() {
+        eprintln!(
+            "warning: --to is ignored when --request-type is set; use --on-behalf-of to set the requester"
+        );
+    }
+    if account_id.is_some() {
+        eprintln!(
+            "warning: --account-id is ignored when --request-type is set; use --on-behalf-of to set the requester"
+        );
+    }
 
     let profile = &config.active_profile_name;
 
