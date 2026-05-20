@@ -36,8 +36,8 @@ activation_version: "v0.5.0-dev.7"
 | **Language** | Rust |
 | **Target Workspace** | develop → main |
 | **Started** | 2026-05-04 |
-| **Last Updated** | 2026-05-19 — Issue #392 design + S-392 story ready. CI cumulative-count guard. F4 delivery pending. |
-| **Current Phase** | Phase 3 — TDD Implementation **IN PROGRESS** — Wave 3 CLOSED (10/10). Feature Mode #110-pr2 COMPLETE. PRs #355–#364, #366–#367, #369–#373 MERGED. **0 audit-followups remain** (#331 sandbox-blocked deferred; #333 closed by PR #360; #340 closed by PR #370; #345 closed by PR #371; #346 closed by PR #373; #350 closed by PR #362; #361 closed by PR #364; #365 closed by PR #367; PG-365-1 closed by PR #369). **#383 DELIVERED PR #390 @ 25f7211 (2026-05-19)**. **Issue #392**: F1 design COMPLETE (`.factory/phase-f1-delta-analysis/issue-392/design.md`); S-392 story created; F3 DONE. F4 delivery pending. No new BCs (infrastructure work). |
+| **Last Updated** | 2026-05-20 — Issue #392 DELIVERED (PR #393 @ 0be2e3a). Cumulative spec-count CI guard (DRIFT-002) live. |
+| **Current Phase** | Phase 3 — TDD Implementation **IN PROGRESS** — Wave 3 CLOSED (10/10). Feature Mode #110-pr2 COMPLETE. PRs #355–#364, #366–#367, #369–#373 MERGED. **0 audit-followups remain** (#331 sandbox-blocked deferred; #333 closed by PR #360; #340 closed by PR #370; #345 closed by PR #371; #346 closed by PR #373; #350 closed by PR #362; #361 closed by PR #364; #365 closed by PR #367; PG-365-1 closed by PR #369). **#383 DELIVERED PR #390 @ 25f7211 (2026-05-19)**. **#392 DELIVERED PR #393 @ 0be2e3a (2026-05-20)**: cumulative spec-count CI guard (DRIFT-002) live; DEFER-383-3 + DRIFT-BC2-PROSE resolved. No new BCs (infrastructure work). |
 | **Next Phase** | Wave 3 — 10 stories (S-3.01..S-3.10) |
 | **Activation HEAD** | dea166471e22eff55974d7675593469b37048c5f (v0.5.0-dev.7) |
 | **factory-artifacts SHA** | 0b01262 (Phase 1 gate APPROVE; phase-1-converged tag) |
@@ -82,7 +82,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | 3-feature-jsm-request-types-288 | **CLOSED — issue #288 FULLY CONVERGED (2026-05-19)** — F1d CONVERGED 3/3 at pass-10; F3 story decomposition: 3 stories (pr1-api/pr2-cli/pr4-dispatch). Wave 1 MERGED PR #379 @ 0f219eb (2026-05-18). Wave 2 MERGED PR #380 @ 9d0b72c (2026-05-19). Wave 3 MERGED PR #381 @ 95232555 (2026-05-19T12:55:29Z): 9 adv passes (1 invalid + 1 retry + 7 substantive), 3/3 CLEAN (passes 07/08/09), 28 invariants verified in final pass. Issue #288 auto-closed. Retrospective audit 2026-05-19: PASS (0 REFUTED, 11 CONFIRMED, 1 PARTIAL no-action, 1 INCONCLUSIVE already filed). 4 follow-ups filed (#382-#385). F5/F6/F7 substantively satisfied by per-wave convergence; formal epic-level reruns waived based on retrospective audit (PASS, 0 REFUTED, 11 CONFIRMED, 1 PARTIAL no-action, 1 INCONCLUSIVE already filed). Lessons L-288-pr4-01..06 codified. | 2026-05-18 | 2026-05-19 | CLOSED — retrospective audit PASS; 4 follow-ups filed (#382-#385) | pr4-dispatch adv: 9 passes, 3/3 CLEAN (passes 07/08/09), 28 invariants final pass |
 | issue-382 (quick-dev) | **MERGED — PR #389 @ b1c863e (2026-05-19)** — F1 + F1d CONVERGED 3/3 (8 passes). F4 per-story adversary CONVERGED 3/3. Copilot CLEAN (0 inline). CI 10/10 green including mutation testing (5min). Issue #382 auto-closed. | 2026-05-19 | 2026-05-19 | MERGED — PR #389 @ b1c863e; issue #382 closed | F1d: 8 passes, 3/3 CLEAN (passes 06/07/08). F4 adv: 3 passes, 3/3 CLEAN. pr-reviewer: APPROVE (0 blocking). Copilot: COMMENTED (0 inline) |
 | issue-383 (F3 standalone) | **MERGED — PR #390 @ 25f7211 (2026-05-19)** — F2 CONVERGED 11 adversary passes. F4 per-story adversary CONVERGED 3/3 (pass-01 CLEAN, pass-02-retry CLEAN, pass-03 CLEAN). Copilot COMMENTED (0 inline). CI 10/10 GREEN. pr-reviewer APPROVE 1 cycle (3 non-blocking). Issue #383 auto-closed. 3 deferred follow-up items logged (DEFER-383-1/2/3). | 2026-05-19 | 2026-05-19 | MERGED — PR #390 @ 25f7211; issue #383 closed | F2 adv: 11 passes, 3/3 CLEAN (passes 09/10/11). F4 adv: 3 passes, 3/3 CLEAN. pr-reviewer: APPROVE (0 blocking). Copilot: COMMENTED (0 inline) |
-| issue-392 (F3 standalone) | **F3 DONE — F4 PENDING** — F1 design: `.factory/phase-f1-delta-analysis/issue-392/design.md`. No new BCs (infrastructure). S-392 story: `.factory/stories/S-392-cumulative-spec-count-guard.md`. AC-5 includes `DRIFT-BC2-PROSE` fix. F4 delivery pending. | 2026-05-19 | — | F4 PENDING | — |
+| issue-392 (F3 standalone) | **DELIVERED — PR #393 MERGED @ 0be2e3a (2026-05-20)** — `scripts/check-bc-cumulative-counts.sh` (DRIFT-002) live in CI. 7-fixture self-test harness. DRIFT-BC2-PROSE fixed (bc-2 prose 92→93). DEFER-383-3 resolved. Per-story adversary CONVERGED 3/3. Copilot 4 rounds (19 round-1 comments → 0 round 4). CI 10/10 GREEN. Issue #392 auto-closed. Lessons L-392-01..05 codified. | 2026-05-19 | 2026-05-20 | DELIVERED — PR #393 @ 0be2e3a | adv: 3/3 CLEAN |
 | 4: Holdout Evaluation | not-started | | | | |
 | 5: Adversarial Refinement | not-started | | | | |
 | 6: Formal Hardening | not-started | | | | |
@@ -101,7 +101,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | F3 incremental stories — #288 | story-writer | complete | 4 stories created (issue-288-pr1-api/pr2-cli/pr3-scope/pr4-dispatch). Dependency graph acyclic: pr1+pr3 in Wave 1 (parallel), pr2 in Wave 2 (depends pr1), pr4 in Wave 3 (depends pr1+pr2+pr3). STORY-INDEX bumped 36→40. consistency-validator validation pending. |
 | F4 per-story adversarial — issue-382 | adversary | complete | **CONVERGED 3/3** — 3 passes total, all CLEAN. BC-1.6.042 verified. required_scope field + Display impl + Display test all verified. Lessons L-382-01..04 codified. |
 | F4 — issue-382 MERGED | pr-manager | complete | **PR #389 MERGED** @ b1c863e (2026-05-19T18:40:25Z). Issue #382 auto-closed. CI 10/10 green including mutation testing (5min). Copilot: COMMENTED with 0 inline comments. pr-reviewer: APPROVE in 1 cycle, 0 blocking findings. Pre-existing flake noted: tests/multi_cloudid_disambiguation.rs keychain contention (NOT a regression). |
-| Step 9 — S-382 state update | state-manager | complete | STORY-INDEX S-382 status → completed. STATE.md Phase Progress row added for issue-382. Convergence tracker updated. Drift item added for keychain flake. Lessons codified at .factory/code-delivery/issue-382/lessons.md. factory-artifacts commit pushed. |
+| Step 9 — S-392 state update | state-manager | complete | sprint-state.yaml S-392 → completed (PR #393 / 0be2e3a). STORY-INDEX S-392 → completed. STATE.md Phase Progress row updated. DEFER-383-3 + DRIFT-BC2-PROSE → RESOLVED. Open Issues Tracker #392 → CLOSED. Lessons codified at .factory/code-delivery/S-392/lessons.md. factory-artifacts commit pushed. |
 
 ## Decisions Log
 
@@ -219,8 +219,8 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | S-382-FLAKE-01 | tests/multi_cloudid_disambiguation.rs keychain contention — macOS keychain "specified item already exists" error from concurrent test execution. Reproduces on develop without S-382 changes; pre-existing flake unrelated to #382. | LOW | PRE-EXISTING (unrelated to #382). Target: future test-infrastructure cleanup — gate keychain tests behind JR_RUN_KEYRING_TESTS=1 + #[ignore] per existing CLAUDE.md convention, or add per-test keychain namespacing. |
 | DEFER-383-1 | docs-cleanup — Subdomain heading depth `## BC-3.8:` vs `### 3.N` harmonization in `bc-3-issue-write.md`. Pre-existing from #288; requires file-wide TOC restructure; out of #383 scope. | LOW | **FILED #391 (2026-05-19)** — `docs: harmonize bc-3 subdomain 3.8 heading to ### N.M format` |
 | DEFER-383-2 | docs-cleanup — CANONICAL-COUNTS.md line-5 change-attribution wording — cosmetic only, arithmetic correct. | LOW | **DROPPED — premise refuted by validation; attribution already present at CANONICAL-COUNTS.md:55/57. Filing would create a 3rd sync point.** Research: `.factory/research/issue-383-deferred-followups-validation.md` |
-| DEFER-383-3 | process-gap — `scripts/check-spec-counts.sh` validates only `definitional_count`, not cumulative `total_bcs`. Extension would catch Section-header drift at CI time. Would have prevented ~80% of the 11 F2 adversary passes on #383. | LOW | **FILED #392 (2026-05-19)** — `ci: extend spec-count guard to validate cumulative total_bcs + BC-INDEX section headers`; body includes PENDING-row carve-out revision + bc-2 93-vs-92 live-drift example surfaced during validation |
-| DRIFT-BC2-PROSE | docs — `bc-2-issue-read.md` frontmatter `total_bcs: 93` (line 4) vs body preamble "92 behavioral contracts" (line 17). 1-line prose drift unrelated to #383; surfaced by validation-agent during DEFER-383-3 research. | LOW | CANDIDATE — quick direct fix OR covered by #392 guard once built (AC-5). When S-392 merges, this row can be marked RESOLVED-BY-S-392. Do NOT fix inline; track here. |
+| DEFER-383-3 | process-gap — `scripts/check-spec-counts.sh` validates only `definitional_count`, not cumulative `total_bcs`. Extension would catch Section-header drift at CI time. Would have prevented ~80% of the 11 F2 adversary passes on #383. | LOW | **RESOLVED — delivered as S-392 / PR #393 / issue #392 closed 2026-05-20** |
+| DRIFT-BC2-PROSE | docs — `bc-2-issue-read.md` frontmatter `total_bcs: 93` (line 4) vs body preamble "92 behavioral contracts" (line 17). 1-line prose drift unrelated to #383; surfaced by validation-agent during DEFER-383-3 research. | LOW | **RESOLVED-BY-S-392 — bc-2-issue-read.md body preamble corrected 92→93 (AC-5, factory-artifacts 5852a4a); the new DRIFT-002 guard now prevents recurrence of this drift class** |
 
 ## Convergence Trackers
 
@@ -265,9 +265,9 @@ _Not started._
 <!-- Keep ONLY the latest checkpoint. Archive prior checkpoints to cycles/cycle-001/session-checkpoints.md. -->
 | Field | Value |
 |-------|-------|
-| **Date** | 2026-05-19 |
-| **Position** | **Issue #392 design + S-392 story committed to factory-artifacts.** F1 design at `.factory/phase-f1-delta-analysis/issue-392/design.md`. S-392 at `.factory/stories/S-392-cumulative-spec-count-guard.md`. STORY-INDEX bumped. sprint-state.yaml updated. No new BCs (infrastructure work). AC-5 covers `DRIFT-BC2-PROSE` fix — when S-392 merges that row resolves to RESOLVED-BY-S-392. Remaining open backlog: #210, #331, #372, #384, #385, #387, #391, #392. Next: F4 delivery of S-392 (implement `scripts/check-spec-counts.sh` cumulative-count extension). |
-| **Convergence counter** | #383 CLOSED. #392 F4 PENDING (no adversary pass yet). No open convergence gate. |
+| **Date** | 2026-05-20 |
+| **Position** | **Issue #392 DELIVERED.** PR #393 MERGED @ 0be2e3a (2026-05-20). DRIFT-002 guard (`scripts/check-bc-cumulative-counts.sh`) live in CI. DEFER-383-3 resolved. DRIFT-BC2-PROSE resolved. sprint-state.yaml + STORY-INDEX + STATE.md updated. Lessons L-392-01..05 codified at `.factory/code-delivery/S-392/lessons.md`. Remaining open backlog: #210, #331, #372, #384, #385, #387, #391. Next: issue-288-pr4-dispatch (Wave 3 pending), or next open backlog item per orchestrator. |
+| **Convergence counter** | #392 CLOSED. No open convergence gate. |
 
 ## Post-Cycle Housekeeping (2026-05-19)
 
@@ -297,7 +297,7 @@ Events after issue #288 epic closeout (factory-artifacts @ 7dbbfed):
 | #389 | S-382: JrError::InsufficientScope required_scope refactor | **MERGED** @ b1c863e (2026-05-19T18:40:25Z) | — | PR merged; issue #382 auto-closed |
 | #390 | S-383: platform-path inverse warnings (--field/--on-behalf-of) | **MERGED** @ 25f7211 (2026-05-19) | — | PR merged; issue #383 auto-closed |
 | #391 | docs: harmonize bc-3 subdomain 3.8 heading to ### N.M format | OPEN | LOW | tech-debt / docs-cleanup; DEFER-383-1 resolved |
-| #392 | ci: extend spec-count guard to validate cumulative total_bcs + BC-INDEX section headers | OPEN | LOW | tech-debt / process-gap; DEFER-383-3 resolved; body includes PENDING-row carve-out + bc-2 93-vs-92 live-drift example |
+| #392 | ci: extend spec-count guard to validate cumulative total_bcs + BC-INDEX section headers | **CLOSED** (auto-closed via PR #393 0be2e3a) | LOW | DRIFT-002 guard live; DEFER-383-3 + DRIFT-BC2-PROSE resolved |
 
 ## Historical Content
 

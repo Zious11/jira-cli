@@ -6,7 +6,7 @@ version: "1.4.12"
 total_stories: 42
 total_waves: 4
 status: complete-pending-adv-review
-last_updated: 2026-05-19 (S-392 added; cumulative BC-count guard DRIFT-002)
+last_updated: 2026-05-20 (S-392 completed; PR #393 / 0be2e3a; cumulative BC-count guard DRIFT-002 live)
 activation_head: dea1664
 ---
 
@@ -184,7 +184,7 @@ They have `wave: feature-followup` in frontmatter and live under `.factory/code-
 | S-346 | Add cargo-mutants CI job + whitelist policy for bulk + create modules | — | — | MERGED — PR #373 @ d909e65 (2026-05-16) | small |
 | S-382 | Refactor JrError::InsufficientScope Display to use structured required_scope field (closes #382) | BC-1.6.042 | — | completed (PR #389 / b1c863e; merged 2026-05-19) | small (2 SP) |
 | S-383 | Emit stderr warnings when --field/--on-behalf-of used without --request-type on platform path (closes #383) | BC-3.8.012, BC-3.8.013 | — | completed (PR #390 / 25f7211; merged 2026-05-19) | small (2 SP) |
-| S-392 | Add cumulative BC-count CI guard: check-bc-cumulative-counts.sh + DRIFT-002 (closes #392) | N/A — CI tooling | — | ready | medium (4 SP) |
+| S-392 | Add cumulative BC-count CI guard: check-bc-cumulative-counts.sh + DRIFT-002 (closes #392) | N/A — CI tooling | — | completed (PR #393 / 0be2e3a; merged 2026-05-20) | medium (4 SP) |
 
 Feature-followup story files: `.factory/code-delivery/issue-NNN/story.md`
 
@@ -274,7 +274,7 @@ gaps that are not blocking for v0.5 but should be tracked.
 ## Story Manifest
 
 Complete mapping of every `story_id` to its absolute file path. Generated 2026-05-07; updated 2026-05-08 (S-3.10 added).
-Total rows: 41 (matches `total_stories: 41` in frontmatter). Updated 2026-05-15 (S-340 added). Updated 2026-05-16 (S-345 added). Updated 2026-05-16 (S-346 added). Updated 2026-05-18 (issue-288-pr1..pr4 added). Updated 2026-05-18 (issue-288-pr3-scope dropped; 40→39). Updated 2026-05-19 (S-382 added; quick-dev F4; 39→40). Updated 2026-05-19 (S-382 completed PR #389 / b1c863e). Updated 2026-05-19 (S-383 added; F3; 40→41). Updated 2026-05-19 (S-383 completed PR #390 / 25f7211).
+Total rows: 42 (matches `total_stories: 42` in frontmatter). Updated 2026-05-15 (S-340 added). Updated 2026-05-16 (S-345 added). Updated 2026-05-16 (S-346 added). Updated 2026-05-18 (issue-288-pr1..pr4 added). Updated 2026-05-18 (issue-288-pr3-scope dropped; 40→39). Updated 2026-05-19 (S-382 added; quick-dev F4; 39→40). Updated 2026-05-19 (S-382 completed PR #389 / b1c863e). Updated 2026-05-19 (S-383 added; F3; 40→41). Updated 2026-05-19 (S-383 completed PR #390 / 25f7211). Updated 2026-05-19 (S-392 added; infrastructure; 41→42). Updated 2026-05-20 (S-392 completed PR #393 / 0be2e3a).
 
 ### Wave 0
 
