@@ -123,7 +123,7 @@ this SAME constant — never a duplicated string literal. The hint must NOT cont
 `jr auth refresh`, or any OAuth-scope language.
 
 ### AC-3 — `handle_jsm_create` Basic-auth 401 (generic body) → API-token-expiry hint
-(traces to BC-3.8.014 postcondition 1 — test: `test_jsm_create_basic_auth_401_surfaces_api_token_hint`)
+(traces to BC-3.8.014 postcondition 1 — test: `test_jsm_create_basic_auth_generic_401_surfaces_api_token_hint`)
 
 When `POST /rest/servicedeskapi/request` returns HTTP 401 with a generic-expiry body and the active
 auth is Basic (`JR_AUTH_HEADER=Basic <b64>`), the `handle_jsm_create` map_err MUST rewrite any incoming
@@ -135,7 +135,7 @@ variant to `JrError::NotAuthenticated { hint: API_TOKEN_EXPIRY_HINT }`. Stderr M
 
 Exit code: 2.
 
-**New test required:** `test_jsm_create_basic_auth_401_surfaces_api_token_hint`
+**Test:** `test_jsm_create_basic_auth_generic_401_surfaces_api_token_hint` (repurposed in place by F4 from pre-#384 name; duplicate `test_jsm_create_basic_auth_401_surfaces_api_token_hint` deleted by Copilot dedup — both AC-3 and AC-5 share this test as the generic-expiry pin).
 File: `tests/issue_create_jsm.rs`.
 
 ### AC-4 — `handle_jsm_create` Basic-auth 401 (scope-mismatch body) → API-token-expiry hint (InsufficientScope rewritten)
@@ -242,7 +242,7 @@ File: `tests/issue_create_jsm.rs`.
 
 | # | Test Function | Type | BC Pin | Status |
 |---|--------------|------|--------|--------|
-| 1 | `test_jsm_create_basic_auth_401_surfaces_api_token_hint` | NEW | BC-3.8.014 | AC-3 |
+| 1 | ~~`test_jsm_create_basic_auth_401_surfaces_api_token_hint`~~ DELETED (duplicate of row 3; Basic-auth generic-expiry path pinned by `test_jsm_create_basic_auth_generic_401_surfaces_api_token_hint`) | ~~NEW~~ | BC-3.8.014 | AC-3 (shares test with AC-5) |
 | 2 | `test_jsm_create_basic_auth_scope_mismatch_401_rewrites_to_api_token_hint` | NEW | BC-3.8.014 (highest-risk) | AC-4 |
 | 3 | `test_jsm_create_basic_auth_generic_401_surfaces_api_token_hint` (repurposed and renamed by F4 from pre-#384 name) | REPURPOSED in place | BC-3.8.014 (assertions flipped, asserts API-token hint, `write:servicedesk-request` ABSENT) | AC-5 |
 | 4 | `test_require_service_desk_basic_auth_401_surfaces_api_token_hint` | NEW | BC-X.8.006 | AC-7 |
@@ -309,7 +309,7 @@ LOC delta estimate: ~5 lines in `client.rs`, ~4 lines in `error.rs`, ~15 lines i
 - [ ] Introduce new `map_err` on `get_or_fetch_project_meta(...)` in `require_service_desk`: Basic → `NotAuthenticated { hint: API_TOKEN_EXPIRY_HINT }`; OAuth → `NotAuthenticated { hint: <read-scope-hint verbatim> }`
 - [x] Repurpose the pre-#384 Basic-auth 401 test in place → renamed to `test_jsm_create_basic_auth_generic_401_surfaces_api_token_hint`: fixture stays Basic, assertions flipped to API-token-expiry hint, `write:servicedesk-request` absent, stale section banner/rustdoc updated (AC-5)
 - [ ] Add anchor comment `// H-NEW-JSM-RT-003 + BC-3.8.015 anchor` to `test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_request_hint` rustdoc (AC-6 comment-only)
-- [ ] Add `test_jsm_create_basic_auth_401_surfaces_api_token_hint` (AC-3)
+- [x] ~~Add `test_jsm_create_basic_auth_401_surfaces_api_token_hint` (AC-3)~~ DELETED (Copilot dedup — duplicate of `test_jsm_create_basic_auth_generic_401_surfaces_api_token_hint`; AC-3 + AC-5 share the repurposed test)
 - [ ] Add `test_jsm_create_basic_auth_scope_mismatch_401_rewrites_to_api_token_hint` (AC-4)
 - [ ] Add `test_require_service_desk_basic_auth_401_surfaces_api_token_hint` with isolated `XDG_CACHE_HOME` tempdir + Basic fixture (AC-7)
 - [ ] Add `test_require_service_desk_oauth_401_surfaces_read_scope_hint` with isolated `XDG_CACHE_HOME` tempdir + Bearer fixture + scope-mismatch 401 body (AC-8)
