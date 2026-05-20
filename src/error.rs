@@ -1,14 +1,17 @@
 use thiserror::Error;
 
-/// Placeholder hint for Basic-auth (API-token) users who receive a 401.
+/// Hint for Basic-auth (API-token) users who receive a 401 on a JSM path.
 ///
 /// Used by `handle_jsm_create` (BC-3.8.014) and `require_service_desk`
 /// (BC-X.8.006) when `client.is_oauth_auth() == false`. Single source of
 /// truth — both sites reference this constant; never duplicate the string.
 ///
-/// Placeholder empty string — deliberately wrong until implementation lands
-/// (Red Gate stub: S-384 Step A). Real value from F2 PRD delta CANONICAL block.
-pub const API_TOKEN_EXPIRY_HINT: &str = "";
+/// Verbatim from F2 PRD delta CANONICAL block (adversary-pass-4 F-04).
+/// Must NOT contain OAuth-scope language, `write:servicedesk-request`,
+/// or `jr auth refresh`.
+pub const API_TOKEN_EXPIRY_HINT: &str = "Your API token may be expired or revoked. Regenerate it at\n\
+https://id.atlassian.com/manage-profile/security/api-tokens\n\
+then run `jr auth login` to re-store the credentials.";
 
 #[derive(Error, Debug)]
 pub enum JrError {
