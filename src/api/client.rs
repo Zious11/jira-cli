@@ -2512,3 +2512,54 @@ mod clamp_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod is_oauth_auth_tests {
+    use super::JiraClient;
+
+    /// AC-1 (BC-3.8.014 / BC-3.8.015 / BC-X.8.006 / BC-X.8.007 precondition 1):
+    /// `is_oauth_auth()` returns `true` when the auth header starts with "Bearer ".
+    ///
+    /// This is the SINGLE predicate gating auth-scheme detection in error-hint
+    /// dispatch. Uses `new_for_test` which populates `auth_header` directly.
+    #[test]
+    fn test_is_oauth_auth_bearer_header_returns_true() {
+        let client = JiraClient::new_for_test(
+            "http://localhost:1234".to_string(),
+            "Bearer test-oauth-token".to_string(),
+        );
+        assert!(
+            client.is_oauth_auth(),
+            "is_oauth_auth() must return true for 'Bearer ...' auth header"
+        );
+    }
+
+    /// AC-1 (BC-3.8.014 / BC-X.8.006 precondition 1):
+    /// `is_oauth_auth()` returns `false` when the auth header starts with "Basic ".
+    #[test]
+    fn test_is_oauth_auth_basic_header_returns_false() {
+        let client = JiraClient::new_for_test(
+            "http://localhost:1234".to_string(),
+            "Basic dGVzdDp0ZXN0".to_string(),
+        );
+        assert!(
+            !client.is_oauth_auth(),
+            "is_oauth_auth() must return false for 'Basic ...' auth header"
+        );
+    }
+
+    /// AC-1 edge case: lowercase "bearer" is NOT treated as OAuth (predicate is
+    /// case-sensitive per F2 PRD delta §Interface Contract). Malformed seam values
+    /// silently classify as Basic — consistent with starts_with("Bearer ") semantics.
+    #[test]
+    fn test_is_oauth_auth_lowercase_bearer_returns_false() {
+        let client = JiraClient::new_for_test(
+            "http://localhost:1234".to_string(),
+            "bearer test-token".to_string(),
+        );
+        assert!(
+            !client.is_oauth_auth(),
+            "is_oauth_auth() is case-sensitive: lowercase 'bearer' must return false"
+        );
+    }
+}

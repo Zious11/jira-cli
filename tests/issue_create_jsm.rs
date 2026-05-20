@@ -1300,11 +1300,20 @@ async fn test_jsm_create_type_flag_ignored_with_warning() {
     );
 }
 
-// ─── AC-012: 401 scope-mismatch hint contains write:servicedesk-request ──────
+// ─── AC-012 / AC-5 (BC-3.8.014): Basic-auth 401 on JSM POST → API-token-expiry hint ─
 
-/// AC-012 (BC-1.3.023, BC-X.3.005, H-NEW-JSM-RT-003): When the JSM POST returns
-/// 401, the error surfaces a hint containing `write:servicedesk-request` and an
-/// actionable recovery step.
+/// AC-012 / AC-5 (BC-3.8.014, repurposed in place from S-384): When the JSM POST
+/// returns HTTP 401 with a generic-expiry body and the active auth is Basic
+/// (`JR_AUTH_HEADER=Basic ...`), the `handle_jsm_create` map_err MUST rewrite any
+/// incoming variant to `JrError::NotAuthenticated { hint: API_TOKEN_EXPIRY_HINT }`.
+///
+/// Fixture stays Basic per adversary-pass-9 C-01 correction: a Bearer + generic-expiry
+/// 401 routes through the refresh coordinator (client.rs:727+), fails with raw anyhow
+/// via `JR_AUTH_HEADER` seam, and the hint is never injected — making a Bearer test
+/// non-deterministic. This test is a BC-3.8.014 (Basic-auth API-token expiry) pin.
+///
+/// Assertions flipped from `write:servicedesk-request` (pre-S-384 behavior) to
+/// API-token-expiry hint — the pre-S-384 behavior was the bug (O-08-01 CONFIRMED).
 #[tokio::test]
 async fn test_jsm_create_401_hint_contains_write_servicedesk_request() {
     let server = MockServer::start().await;
@@ -1316,7 +1325,7 @@ async fn test_jsm_create_401_hint_contains_write_servicedesk_request() {
     mount_service_desk_list(&server).await;
     mount_request_type_list(&server).await;
 
-    // JSM POST returns 401 — plausible Atlassian shape.
+    // JSM POST returns 401 with generic-expiry body (plausible Atlassian shape).
     Mock::given(method("POST"))
         .and(path("/rest/servicedeskapi/request"))
         .respond_with(ResponseTemplate::new(401).set_body_json(json!({
@@ -1332,6 +1341,7 @@ async fn test_jsm_create_401_hint_contains_write_servicedesk_request() {
     let output = Command::cargo_bin("jr")
         .unwrap()
         .env("JR_BASE_URL", server.uri())
+        // Basic auth fixture — stays Basic per BC-3.8.014 / adversary-pass-9 C-01.
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
         .env("XDG_CONFIG_HOME", config_dir.path())
@@ -1351,26 +1361,31 @@ async fn test_jsm_create_401_hint_contains_write_servicedesk_request() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    // Must exit non-zero.
+    // Must exit non-zero (exit code 1 for NotAuthenticated).
     assert!(
         !output.status.success(),
-        "BC-1.3.023: expected non-zero exit for 401 response, got exit 0. stderr: {stderr}"
+        "BC-3.8.014: expected non-zero exit for Basic-auth 401, got exit 0. stderr: {stderr}"
     );
 
-    // BC-1.3.023 / H-NEW-JSM-RT-003: hint must mention the required scope.
+    // BC-3.8.014 postcondition 1: API-token-expiry hint must be present.
+    // (L-288-pr2-02 strict split: three separate assertions, no `||`.)
     assert!(
-        stderr.contains("write:servicedesk-request"),
-        "BC-1.3.023 / H-NEW-JSM-RT-003: stderr must contain 'write:servicedesk-request' scope hint; got: {stderr}"
+        stderr.contains("expired or revoked"),
+        "BC-3.8.014: stderr must contain 'expired or revoked' from API_TOKEN_EXPIRY_HINT; got: {stderr}"
     );
-
-    // BC-1.3.023: must include BOTH actionable recovery steps (L-288-pr2-02 strict split).
     assert!(
-        stderr.contains("jr auth refresh"),
-        "BC-1.3.023: hint must include 'jr auth refresh' actionable recovery; got: {stderr}"
+        stderr.contains("id.atlassian.com/manage-profile/security/api-tokens"),
+        "BC-3.8.014: stderr must contain the api-tokens URL; got: {stderr}"
     );
     assert!(
         stderr.contains("jr auth login"),
-        "BC-1.3.023: hint must include 'jr auth login' actionable recovery; got: {stderr}"
+        "BC-3.8.014: stderr must contain 'jr auth login' actionable recovery; got: {stderr}"
+    );
+
+    // BC-3.8.014 postcondition 3: OAuth scope hint must NOT appear for Basic-auth users.
+    assert!(
+        !stderr.contains("write:servicedesk-request"),
+        "BC-3.8.014: Basic-auth 401 hint must NOT mention 'write:servicedesk-request'; got: {stderr}"
     );
 }
 
@@ -1519,6 +1534,13 @@ async fn test_jsm_create_output_json_shape_matches_platform() {
 /// Bearer auth + body "scope does not match" which hits the `InsufficientScope`
 /// branch (`src/api/client.rs:696-704`). Regression guard for the C-01 fix in
 /// `src/cli/issue/create.rs handle_jsm_create map_err`.
+///
+/// // H-NEW-JSM-RT-003 + BC-3.8.015 anchor
+/// This test IS H-NEW-JSM-RT-003 (re-bound per F2 adversary-pass-9 C-01).
+/// Logic, fixture, and assertions MUST remain unmodified — this test pins
+/// the only deterministic OAuth→JrError→write:servicedesk-request path via
+/// the JR_AUTH_HEADER seam (Bearer + scope-mismatch body short-circuits to
+/// InsufficientScope at client.rs:696-704 BEFORE the refresh coordinator).
 #[tokio::test]
 async fn test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_request_hint() {
     let server = MockServer::start().await;
@@ -2746,5 +2768,356 @@ async fn test_platform_create_malformed_field_one_warning_no_exit_64() {
             .count(),
         1,
         "BC-3.8.012 / AC-7: warning must appear EXACTLY ONCE for malformed --field; got: {stderr}"
+    );
+}
+
+// ─── S-384 AC-3: Basic-auth generic-401 on JSM POST → API-token-expiry hint ──
+
+/// AC-3 (BC-3.8.014 postcondition 1): When `POST /rest/servicedeskapi/request`
+/// returns HTTP 401 with a generic-expiry body and the active auth is Basic
+/// (`JR_AUTH_HEADER=Basic <b64>`), the `handle_jsm_create` map_err MUST rewrite
+/// any incoming variant to `JrError::NotAuthenticated { hint: API_TOKEN_EXPIRY_HINT }`.
+///
+/// Stderr MUST: contain "expired or revoked", contain the api-tokens URL,
+/// contain "jr auth login", and NOT contain "write:servicedesk-request".
+/// Exit code: 1 (NotAuthenticated).
+#[tokio::test]
+async fn test_jsm_create_basic_auth_401_surfaces_api_token_hint() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_project_meta_help(&server).await;
+    mount_service_desk_list(&server).await;
+    mount_request_types_password_reset(&server).await;
+
+    // JSM POST returns generic-expiry 401 (Atlassian standard shape).
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "errorMessages": [
+                "The access token provided is expired, revoked, malformed, or invalid for other reasons."
+            ],
+            "errors": {}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        // Basic auth fixture — deterministic path (never enters refresh coordinator).
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "HELP",
+            "--request-type",
+            "Password Reset",
+            "--summary",
+            "test api-token expiry hint",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Must exit non-zero.
+    assert!(
+        !output.status.success(),
+        "BC-3.8.014 AC-3: expected non-zero exit for Basic-auth generic 401; got exit 0. stderr: {stderr}"
+    );
+
+    // BC-3.8.014 postcondition 1: API-token-expiry hint present (L-288-pr2-02 strict).
+    assert!(
+        stderr.contains("expired or revoked"),
+        "BC-3.8.014 AC-3: stderr must contain 'expired or revoked'; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("id.atlassian.com/manage-profile/security/api-tokens"),
+        "BC-3.8.014 AC-3: stderr must contain the api-tokens management URL; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("jr auth login"),
+        "BC-3.8.014 AC-3: stderr must contain 'jr auth login' recovery step; got: {stderr}"
+    );
+
+    // BC-3.8.014: OAuth scope language must NOT appear for Basic-auth users.
+    assert!(
+        !stderr.contains("write:servicedesk-request"),
+        "BC-3.8.014 AC-3: Basic-auth 401 must NOT surface 'write:servicedesk-request'; got: {stderr}"
+    );
+}
+
+// ─── S-384 AC-4: Basic-auth scope-mismatch-body 401 on JSM POST → API-token hint ─
+
+/// AC-4 (BC-3.8.014 postcondition 2 — HIGHEST regression risk): When
+/// `POST /rest/servicedeskapi/request` returns HTTP 401 with a scope-mismatch
+/// body (`{"errorMessages": ["Unauthorized; scope does not match"]}`) and the
+/// active auth is Basic, the `handle_jsm_create` map_err MUST REWRITE the
+/// incoming `JrError::InsufficientScope` to
+/// `JrError::NotAuthenticated { hint: API_TOKEN_EXPIRY_HINT }`.
+///
+/// This pins the non-obvious ordering at `client.rs:696-718`: the body check
+/// fires BEFORE the Bearer guard, so a Basic-auth 401 with a scope-mismatch
+/// body lands as `InsufficientScope` in the `map_err` WITHOUT the rewrite,
+/// exposing misleading OAuth language to Basic-auth users. The rewrite suppresses
+/// this. This test MUST NOT be skipped.
+///
+/// Assertions: same as AC-3 — API-token hint present, "write:servicedesk-request"
+/// absent, "Insufficient token scope" preamble absent (variant rewritten).
+#[tokio::test]
+async fn test_jsm_create_basic_auth_scope_mismatch_401_rewrites_to_api_token_hint() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    mount_project_meta_help(&server).await;
+    mount_service_desk_list(&server).await;
+    mount_request_types_password_reset(&server).await;
+
+    // JSM POST returns 401 with scope-mismatch body — the body check at
+    // client.rs:696-704 fires BEFORE the Bearer guard at :718, so this body
+    // produces `InsufficientScope` even for Basic-auth clients. The map_err
+    // rewrite MUST convert it to `NotAuthenticated { hint: API_TOKEN_EXPIRY_HINT }`.
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "errorMessages": ["Unauthorized; scope does not match"]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        // Basic auth — NOT Bearer. Scope-mismatch body + Basic auth = InsufficientScope
+        // in the client, which must be REWRITTEN to NotAuthenticated by the map_err.
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "HELP",
+            "--request-type",
+            "Password Reset",
+            "--summary",
+            "test scope-mismatch rewrite",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Must exit non-zero.
+    assert!(
+        !output.status.success(),
+        "BC-3.8.014 AC-4: expected non-zero exit for Basic-auth scope-mismatch 401; got exit 0. stderr: {stderr}"
+    );
+
+    // BC-3.8.014 postcondition 2: InsufficientScope is rewritten → API-token hint present.
+    assert!(
+        stderr.contains("expired or revoked"),
+        "BC-3.8.014 AC-4: rewritten hint must contain 'expired or revoked'; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("id.atlassian.com/manage-profile/security/api-tokens"),
+        "BC-3.8.014 AC-4: rewritten hint must contain the api-tokens URL; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("jr auth login"),
+        "BC-3.8.014 AC-4: rewritten hint must contain 'jr auth login'; got: {stderr}"
+    );
+
+    // BC-3.8.014 postcondition 2: OAuth scope language must be absent after rewrite.
+    assert!(
+        !stderr.contains("write:servicedesk-request"),
+        "BC-3.8.014 AC-4: rewritten Basic-auth hint must NOT contain 'write:servicedesk-request'; got: {stderr}"
+    );
+    // The InsufficientScope Display preamble must be absent (variant was rewritten).
+    assert!(
+        !stderr.contains("Insufficient token scope"),
+        "BC-3.8.014 AC-4: InsufficientScope preamble must be absent after rewrite to NotAuthenticated; got: {stderr}"
+    );
+}
+
+// ─── S-384 AC-7: require_service_desk Basic-auth 401 (cache miss) → API-token hint ─
+
+/// AC-7 (BC-X.8.006 postconditions 1-3): When `require_service_desk` calls
+/// `get_or_fetch_project_meta` on a cache miss and the project GET returns HTTP 401,
+/// a NEW `map_err` in `require_service_desk` MUST rewrite any incoming variant to
+/// `JrError::NotAuthenticated { hint: API_TOKEN_EXPIRY_HINT }` for Basic-auth clients.
+///
+/// Test setup: isolated `XDG_CACHE_HOME` tempdir (forces cache miss so the live
+/// project GET fires); `JR_AUTH_HEADER=Basic <b64>`; project GET returns HTTP 401
+/// with the standard expired-token body.
+///
+/// All three JSM callers (handle_jsm_create, jr queue, jr requesttype) benefit from
+/// the map_err in require_service_desk; this test pins the `create` caller path.
+#[tokio::test]
+async fn test_require_service_desk_basic_auth_401_surfaces_api_token_hint() {
+    let server = MockServer::start().await;
+    // Isolated XDG_CACHE_HOME — forces cache miss so the live project GET fires.
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    // Project GET returns 401 — the canonical pinned arm per BC-X.8.006 Setup.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/HELP"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "errorMessages": [
+                "The access token provided is expired, revoked, malformed, or invalid for other reasons."
+            ],
+            "errors": {}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        // Basic auth — deterministic, never enters refresh coordinator.
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        // Fresh isolated cache dir — ensures cache miss and live project GET fires.
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "HELP",
+            "--request-type",
+            "Password Reset",
+            "--summary",
+            "test require_service_desk basic 401",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Must exit non-zero (require_service_desk errors out before JSM POST).
+    assert!(
+        !output.status.success(),
+        "BC-X.8.006 AC-7: expected non-zero exit for Basic-auth project GET 401; got exit 0. stderr: {stderr}"
+    );
+
+    // BC-X.8.006 postcondition 1: API-token-expiry hint present (L-288-pr2-02 strict).
+    assert!(
+        stderr.contains("expired or revoked"),
+        "BC-X.8.006 AC-7: stderr must contain 'expired or revoked'; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("id.atlassian.com/manage-profile/security/api-tokens"),
+        "BC-X.8.006 AC-7: stderr must contain the api-tokens management URL; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("jr auth login"),
+        "BC-X.8.006 AC-7: stderr must contain 'jr auth login' recovery step; got: {stderr}"
+    );
+
+    // BC-X.8.006 postcondition 3: OAuth scope language must NOT appear.
+    assert!(
+        !stderr.contains("write:servicedesk-request"),
+        "BC-X.8.006 AC-7: Basic-auth 401 from require_service_desk must NOT surface 'write:servicedesk-request'; got: {stderr}"
+    );
+}
+
+// ─── S-384 AC-8: require_service_desk OAuth 401 (cache miss, scope-mismatch) → read-scope hint ─
+
+/// AC-8 (BC-X.8.007 postconditions 1-2): When `require_service_desk` calls
+/// `get_or_fetch_project_meta` on a cache miss and the project GET returns HTTP 401
+/// with a scope-mismatch body, a NEW `map_err` in `require_service_desk` MUST
+/// rewrite BOTH `InsufficientScope` and `NotAuthenticated` arms to
+/// `JrError::NotAuthenticated { hint }` with the read-side scope hint for OAuth
+/// clients (`read:jira-work` + `read:servicedesk-request`).
+///
+/// WHY scope-mismatch body required (BC-X.8.007 Setup): A Bearer client with a
+/// generic-expiry 401 body enters the refresh coordinator (client.rs:727+), fails
+/// with raw anyhow (not a `JrError`) via the `JR_AUTH_HEADER` seam — the map_err
+/// never fires. Scope-mismatch body short-circuits to `InsufficientScope` at
+/// client.rs:696-704 BEFORE the refresh coordinator, deterministically reaching
+/// the map_err.
+///
+/// Assertions: stderr contains `read:jira-work` AND `read:servicedesk-request`;
+/// does NOT contain `write:servicedesk-request`.
+#[tokio::test]
+async fn test_require_service_desk_oauth_401_surfaces_read_scope_hint() {
+    let server = MockServer::start().await;
+    // Isolated XDG_CACHE_HOME — forces cache miss so the live project GET fires.
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    // Project GET returns 401 with scope-mismatch body — the only deterministic
+    // Bearer→JrError path via JR_AUTH_HEADER seam (client.rs:696-704 short-circuit).
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/HELP"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "errorMessages": ["Unauthorized; scope does not match"]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        // Bearer auth — triggers InsufficientScope via scope-mismatch body check.
+        .env("JR_AUTH_HEADER", "Bearer test-oauth-token")
+        // Fresh isolated cache dir — ensures cache miss and live project GET fires.
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args([
+            "issue",
+            "create",
+            "--project",
+            "HELP",
+            "--request-type",
+            "Password Reset",
+            "--summary",
+            "test require_service_desk oauth read-scope hint",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Must exit non-zero (require_service_desk errors before JSM POST).
+    assert!(
+        !output.status.success(),
+        "BC-X.8.007 AC-8: expected non-zero exit for Bearer scope-mismatch project GET 401; got exit 0. stderr: {stderr}"
+    );
+
+    // BC-X.8.007 postcondition 1: read-side scope hint present (L-288-pr2-02 strict).
+    assert!(
+        stderr.contains("read:jira-work"),
+        "BC-X.8.007 AC-8: stderr must contain 'read:jira-work' scope hint; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("read:servicedesk-request"),
+        "BC-X.8.007 AC-8: stderr must contain 'read:servicedesk-request' scope hint; got: {stderr}"
+    );
+
+    // BC-X.8.007 postcondition 2: write scope must NOT appear (write applies to the
+    // subsequent POST, not the require_service_desk GET path).
+    assert!(
+        !stderr.contains("write:servicedesk-request"),
+        "BC-X.8.007 AC-8: read-scope hint must NOT contain 'write:servicedesk-request'; got: {stderr}"
     );
 }

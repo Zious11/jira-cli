@@ -230,4 +230,38 @@ mod tests {
             "Display should fall back to write:jira-work when required_scope is Some(empty); got: {s}"
         );
     }
+
+    /// AC-2 (BC-3.8.014 postcondition 1 / BC-X.8.006 postcondition 1):
+    /// `API_TOKEN_EXPIRY_HINT` must contain expiry/revocation language, the
+    /// api-tokens management URL, and `jr auth login`; must NOT contain any
+    /// OAuth scope name (no `write:servicedesk-request`, no `jr auth refresh`).
+    #[test]
+    fn test_api_token_expiry_hint_contains_required_text() {
+        assert!(
+            API_TOKEN_EXPIRY_HINT.contains("expired or revoked"),
+            "API_TOKEN_EXPIRY_HINT must contain 'expired or revoked'; got: {API_TOKEN_EXPIRY_HINT:?}"
+        );
+        assert!(
+            API_TOKEN_EXPIRY_HINT.contains("id.atlassian.com/manage-profile/security/api-tokens"),
+            "API_TOKEN_EXPIRY_HINT must contain the api-tokens management URL; got: {API_TOKEN_EXPIRY_HINT:?}"
+        );
+        assert!(
+            API_TOKEN_EXPIRY_HINT.contains("jr auth login"),
+            "API_TOKEN_EXPIRY_HINT must contain 'jr auth login'; got: {API_TOKEN_EXPIRY_HINT:?}"
+        );
+    }
+
+    /// AC-2 negative assertion: `API_TOKEN_EXPIRY_HINT` must NOT contain OAuth
+    /// scope language — it is the Basic-auth hint, not an OAuth hint.
+    #[test]
+    fn test_api_token_expiry_hint_excludes_oauth_scope_language() {
+        assert!(
+            !API_TOKEN_EXPIRY_HINT.contains("write:servicedesk-request"),
+            "API_TOKEN_EXPIRY_HINT must NOT contain OAuth scope 'write:servicedesk-request'; got: {API_TOKEN_EXPIRY_HINT:?}"
+        );
+        assert!(
+            !API_TOKEN_EXPIRY_HINT.contains("jr auth refresh"),
+            "API_TOKEN_EXPIRY_HINT must NOT contain 'jr auth refresh'; got: {API_TOKEN_EXPIRY_HINT:?}"
+        );
+    }
 }
