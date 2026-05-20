@@ -227,7 +227,7 @@ impl JiraClient {
     /// in `handle_jsm_create` (BC-3.8.014/015) and `require_service_desk`
     /// (BC-X.8.006/007). No other predicate or ad-hoc check should be introduced
     /// at either call site.
-    pub fn is_oauth_auth(&self) -> bool {
+    pub(crate) fn is_oauth_auth(&self) -> bool {
         self.auth_header.starts_with("Bearer ")
     }
 
