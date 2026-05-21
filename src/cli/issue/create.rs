@@ -849,8 +849,7 @@ pub(super) async fn handle_edit(
                 // correctly trigger Indeterminate (BC-3.4.010 invariant 3).
                 let issue_res = client.get_issue(key, &[]).await;
                 if let Ok(issue) = issue_res {
-                    let src_subtask =
-                        issue.fields.issue_type.as_ref().and_then(|t| t.subtask);
+                    let src_subtask = issue.fields.issue_type.as_ref().and_then(|t| t.subtask);
                     let project_key = issue
                         .fields
                         .project
@@ -865,11 +864,8 @@ pub(super) async fn handle_edit(
                             .find(|t| t.name.to_ascii_lowercase() == type_name_lower)
                         {
                             let tgt_subtask = target.subtask;
-                            match is_cross_hierarchy_type_error(
-                                src_subtask,
-                                tgt_subtask,
-                                &api_msg,
-                            ) {
+                            match is_cross_hierarchy_type_error(src_subtask, tgt_subtask, &api_msg)
+                            {
                                 Classification::CrossHierarchy => {
                                     eprintln!("{CROSS_HIERARCHY_HINT}");
                                     bail!("{api_msg}");
@@ -1231,19 +1227,16 @@ fn is_subtask_parent_error(err: &anyhow::Error) -> bool {
 
 /// Context sentence prepended before `CROSS_HIERARCHY_HINT` on the `--no-parent` path only.
 /// NOT emitted on the `edit --type` error path.
-const NO_PARENT_CONTEXT_SENTENCE: &str =
-    "Sub-tasks are structurally bound to a parent; clearing it requires converting the sub-task to a standard issue.";
+const NO_PARENT_CONTEXT_SENTENCE: &str = "Sub-tasks are structurally bound to a parent; clearing it requires converting the sub-task to a standard issue.";
 
 /// Verbatim hint emitted when a cross-hierarchy `edit --type` 400 is detected,
 /// and as the second line on the `--no-parent` clear-parent 400 path.
 /// Shared constant — both call sites reference this exact text (BC-3.4.010 invariant 2).
-const CROSS_HIERARCHY_HINT: &str =
-    "The Jira Cloud REST API does not support changing the standard / sub-task hierarchy level via this endpoint (see JRACLOUD-27893). To convert it, open the issue in the Jira web UI and use the action menu to find the Convert option.";
+const CROSS_HIERARCHY_HINT: &str = "The Jira Cloud REST API does not support changing the standard / sub-task hierarchy level via this endpoint (see JRACLOUD-27893). To convert it, open the issue in the Jira web UI and use the action menu to find the Convert option.";
 
 /// Typo hint emitted on SameCategory and unresolvable-name sub-paths.
 /// Verbatim from BC-3.4.011 (adversary-sealed, do not paraphrase).
-const TYPO_HINT: &str =
-    "Jira rejected the type change. If the type name is wrong, run `jr project types` to list valid types; the change may also be blocked by workflow or scheme constraints.";
+const TYPO_HINT: &str = "Jira rejected the type change. If the type name is wrong, run `jr project types` to list valid types; the change may also be blocked by workflow or scheme constraints.";
 
 /// Classification result for `is_cross_hierarchy_type_error`.
 ///

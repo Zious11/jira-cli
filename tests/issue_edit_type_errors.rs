@@ -258,7 +258,14 @@ async fn test_edit_type_cross_hierarchy_std_to_subtask_surfaces_conversion_hint(
         .await;
 
     let output = jr_cmd(&server.uri())
-        .args(["--no-input", "issue", "edit", "TEST-1", "--type", "Sub-task"])
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--type",
+            "Sub-task",
+        ])
         .output()
         .unwrap();
 
@@ -306,18 +313,14 @@ async fn test_edit_type_cross_hierarchy_subtask_to_std_surfaces_conversion_hint(
     // GET /rest/api/3/issue/SUB-1 → 200 with subtask: true (sub-task)
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/SUB-1"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(get_issue_subtask("SUB-1", "TEST")),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(get_issue_subtask("SUB-1", "TEST")))
         .mount(&server)
         .await;
 
     // GET /rest/api/3/project/TEST → 200 with standard types (target "Task" has subtask: false)
     Mock::given(method("GET"))
         .and(path("/rest/api/3/project/TEST"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(get_project_types_standard_only()),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(get_project_types_standard_only()))
         .mount(&server)
         .await;
 
@@ -376,9 +379,7 @@ async fn test_edit_type_same_hierarchy_400_surfaces_typo_hint() {
     // Target type "Task" has subtask: false → same hierarchy as source → SameCategory.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/project/TEST"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(get_project_types_standard_only()),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(get_project_types_standard_only()))
         .mount(&server)
         .await;
 
@@ -532,7 +533,14 @@ async fn test_edit_type_cross_hierarchy_hint_no_fake_endpoint_literal() {
         .await;
 
     let output = jr_cmd(&server.uri())
-        .args(["--no-input", "issue", "edit", "TEST-5", "--type", "Sub-task"])
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-5",
+            "--type",
+            "Sub-task",
+        ])
         .output()
         .unwrap();
 
@@ -579,8 +587,7 @@ async fn test_edit_type_indeterminate_absent_subtask_flag_surfaces_raw_error() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/TEST-6"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(get_issue_no_subtask_field("TEST-6", "TEST")),
+            ResponseTemplate::new(200).set_body_json(get_issue_no_subtask_field("TEST-6", "TEST")),
         )
         .expect(1)
         .mount(&server)
@@ -593,9 +600,7 @@ async fn test_edit_type_indeterminate_absent_subtask_flag_surfaces_raw_error() {
     // verify fails on drop.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/project/TEST"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(get_project_types_standard_only()),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(get_project_types_standard_only()))
         .expect(1)
         .mount(&server)
         .await;
@@ -667,8 +672,7 @@ async fn test_edit_type_indeterminate_absent_target_subtask_flag_surfaces_raw_er
     Mock::given(method("GET"))
         .and(path("/rest/api/3/project/TEST"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(get_project_types_target_no_subtask_field()),
+            ResponseTemplate::new(200).set_body_json(get_project_types_target_no_subtask_field()),
         )
         .expect(1)
         .mount(&server)
@@ -735,9 +739,7 @@ async fn test_edit_type_unresolved_type_name_surfaces_typo_hint() {
     // Project types list contains "Story", "Bug", "Task" — does NOT contain "Taks".
     Mock::given(method("GET"))
         .and(path("/rest/api/3/project/TEST"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(get_project_types_no_target_match()),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(get_project_types_no_target_match()))
         .mount(&server)
         .await;
 
@@ -885,7 +887,9 @@ async fn test_edit_type_non_400_edit_error_surfaces_raw_error_no_enrichment() {
     // over-fire and call the enrichment path on 403.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/TEST-10"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(get_issue_standard("TEST-10", "TEST")))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(get_issue_standard("TEST-10", "TEST")),
+        )
         .expect(0)
         .mount(&server)
         .await;
@@ -893,9 +897,7 @@ async fn test_edit_type_non_400_edit_error_surfaces_raw_error_no_enrichment() {
     // GET project types enrichment MUST NOT be called for a non-400 response.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/project/TEST"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(get_project_types_standard_only()),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(get_project_types_standard_only()))
         .expect(0)
         .mount(&server)
         .await;
