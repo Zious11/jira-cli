@@ -826,15 +826,83 @@ pub(super) async fn handle_edit(
 
     let edit_result = client.edit_issue(key, fields).await;
     if let Err(ref e) = edit_result {
+        // --type arm: evaluated FIRST (dual-gate precedence, BC-3.4.010 invariant).
+        // HTTP-400 gate: downcast to JrError::ApiError { status: 400, .. }.
+        // Non-400 (401, 403, 5xx, network) → R0b: no enrichment, fall through.
+        if let Some(ref type_name) = issue_type {
+            if let Some(JrError::ApiError {
+                status: 400,
+                message: api_msg,
+            }) = e.downcast_ref::<JrError>()
+            {
+                let api_msg = api_msg.clone();
+                let type_name_lower = type_name.to_ascii_lowercase();
+
+                // Call ordering (BC-3.4.010 precondition):
+                // 1. get_issue first; on Err → Indeterminate immediately (no project-types call).
+                // 2. get_project_issue_types next; on Err → Indeterminate.
+                // 3. Case-insensitive exact name match; not found → typo hint.
+                // 4. Found → classify with is_cross_hierarchy_type_error.
+                //
+                // Fetch failure gate uses Result::is_err() (not a status downcast) so
+                // JrError::NotAuthenticated, InsufficientScope, and all other Err variants
+                // correctly trigger Indeterminate (BC-3.4.010 invariant 3).
+                let issue_res = client.get_issue(key, &[]).await;
+                if let Ok(issue) = issue_res {
+                    let src_subtask =
+                        issue.fields.issue_type.as_ref().and_then(|t| t.subtask);
+                    let project_key = issue
+                        .fields
+                        .project
+                        .as_ref()
+                        .map(|p| p.key.clone())
+                        .unwrap_or_default();
+
+                    let types_res = client.get_project_issue_types(&project_key).await;
+                    if let Ok(project_types) = types_res {
+                        if let Some(target) = project_types
+                            .iter()
+                            .find(|t| t.name.to_ascii_lowercase() == type_name_lower)
+                        {
+                            let tgt_subtask = target.subtask;
+                            match is_cross_hierarchy_type_error(
+                                src_subtask,
+                                tgt_subtask,
+                                &api_msg,
+                            ) {
+                                Classification::CrossHierarchy => {
+                                    eprintln!("{CROSS_HIERARCHY_HINT}");
+                                    bail!("{api_msg}");
+                                }
+                                Classification::SameCategory => {
+                                    eprintln!("{TYPO_HINT}");
+                                    bail!("{api_msg}");
+                                }
+                                Classification::Indeterminate => {
+                                    // src or tgt subtask field absent; surface raw
+                                    // 400 unchanged — fall through to edit_result?.
+                                }
+                            }
+                        } else {
+                            // Type name not in project's list → unresolvable-name
+                            // sub-path: typo hint (classifier is NOT invoked).
+                            eprintln!("{TYPO_HINT}");
+                            bail!("{api_msg}");
+                        }
+                    }
+                    // types_res.is_err() → Indeterminate Cause-1 R2: fall through.
+                }
+                // issue_res.is_err() → Indeterminate Cause-1 R1: fall through.
+            }
+            // Non-400 → R0b: fall through.
+        }
+
+        // --no-parent arm: only reached when --type arm emitted no hint
+        // (dual-gate first-hint-wins: if --type arm bailed, we never reach here).
         if no_parent && is_subtask_parent_error(e) {
-            let hint = format!(
-                "{e}\n\n\
-                 Tip: subtasks are structurally bound to a parent. \
-                 To clear the parent, first convert the subtask to a standard issue:\n  \
-                 jr api /rest/api/3/issue/{key}/convert -X put -d '{{\"type\":{{\"name\":\"Task\"}}}}'\n\
-                 (then re-run with --no-parent if needed.)"
-            );
-            bail!("{hint}");
+            eprintln!("{NO_PARENT_CONTEXT_SENTENCE}");
+            eprintln!("{CROSS_HIERARCHY_HINT}");
+            bail!("Subtasks must have a parent.");
         }
     }
     edit_result?;
@@ -1163,7 +1231,7 @@ fn is_subtask_parent_error(err: &anyhow::Error) -> bool {
 
 /// Context sentence prepended before `CROSS_HIERARCHY_HINT` on the `--no-parent` path only.
 /// NOT emitted on the `edit --type` error path.
-const _NO_PARENT_CONTEXT_SENTENCE: &str =
+const NO_PARENT_CONTEXT_SENTENCE: &str =
     "Sub-tasks are structurally bound to a parent; clearing it requires converting the sub-task to a standard issue.";
 
 /// Verbatim hint emitted when a cross-hierarchy `edit --type` 400 is detected,
@@ -1171,6 +1239,11 @@ const _NO_PARENT_CONTEXT_SENTENCE: &str =
 /// Shared constant — both call sites reference this exact text (BC-3.4.010 invariant 2).
 const CROSS_HIERARCHY_HINT: &str =
     "The Jira Cloud REST API does not support changing the standard / sub-task hierarchy level via this endpoint (see JRACLOUD-27893). To convert it, open the issue in the Jira web UI and use the action menu to find the Convert option.";
+
+/// Typo hint emitted on SameCategory and unresolvable-name sub-paths.
+/// Verbatim from BC-3.4.011 (adversary-sealed, do not paraphrase).
+const TYPO_HINT: &str =
+    "Jira rejected the type change. If the type name is wrong, run `jr project types` to list valid types; the change may also be blocked by workflow or scheme constraints.";
 
 /// Classification result for `is_cross_hierarchy_type_error`.
 ///
