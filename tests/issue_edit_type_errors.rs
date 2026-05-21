@@ -8,9 +8,8 @@
 //!   BC-3.4.011 — same-hierarchy OR indeterminate → exit 1 + typo hint or raw error;
 //!                `JRACLOUD-27893` MUST NOT appear on stderr.
 //!
-//! All ten tests are RED before implementation: `is_cross_hierarchy_type_error` has a
-//! `todo!()` body and `handle_edit` does not yet dispatch on `Classification`.
-//! Every test is expected to fail with an assertion error (not a build error).
+//! All ten tests exercise the fully-implemented `is_cross_hierarchy_type_error` and
+//! `handle_edit` dispatch on `Classification`. They are GREEN after implementation.
 //!
 //! Wiremock topology summary:
 //!   PUT /rest/api/3/issue/{key}         — edit call (400 or 403 depending on test)

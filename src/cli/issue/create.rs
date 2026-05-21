@@ -898,7 +898,7 @@ pub(super) async fn handle_edit(
         if no_parent && is_subtask_parent_error(e) {
             eprintln!("{NO_PARENT_CONTEXT_SENTENCE}");
             eprintln!("{CROSS_HIERARCHY_HINT}");
-            bail!("Subtasks must have a parent.");
+            bail!("{e}");
         }
     }
     edit_result?;
