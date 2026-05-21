@@ -1161,6 +1161,48 @@ fn is_subtask_parent_error(err: &anyhow::Error) -> bool {
     msg.contains("subtask") || (msg.contains("parent") && msg.contains("400"))
 }
 
+/// Context sentence prepended before `CROSS_HIERARCHY_HINT` on the `--no-parent` path only.
+/// NOT emitted on the `edit --type` error path.
+const _NO_PARENT_CONTEXT_SENTENCE: &str =
+    "Sub-tasks are structurally bound to a parent; clearing it requires converting the sub-task to a standard issue.";
+
+/// Verbatim hint emitted when a cross-hierarchy `edit --type` 400 is detected,
+/// and as the second line on the `--no-parent` clear-parent 400 path.
+/// Shared constant — both call sites reference this exact text (BC-3.4.010 invariant 2).
+const CROSS_HIERARCHY_HINT: &str =
+    "The Jira Cloud REST API does not support changing the standard / sub-task hierarchy level via this endpoint (see JRACLOUD-27893). To convert it, open the issue in the Jira web UI and use the action menu to find the Convert option.";
+
+/// Classification result for `is_cross_hierarchy_type_error`.
+///
+/// Derives `PartialEq + Debug` so `prop_assert_eq!` compiles in the proptest module.
+#[derive(Debug, PartialEq)]
+enum Classification {
+    /// Source and target types are on opposite hierarchy levels (standard ↔ sub-task).
+    CrossHierarchy,
+    /// Source and target types are on the same hierarchy level; 400 is likely a typo or
+    /// workflow/scheme constraint.
+    SameCategory,
+    /// One or both `subtask` flags could not be resolved; no confident classification.
+    Indeterminate,
+}
+
+/// Pure classifier for cross-hierarchy `edit --type` 400 errors.
+///
+/// Rules (locale-independent, based solely on the `subtask` flag):
+/// - Both flags `Some(a)` and `Some(b)` with `a != b` → `CrossHierarchy`
+/// - Both flags `Some(a)` and `Some(b)` with `a == b` → `SameCategory`
+/// - Either flag `None`                               → `Indeterminate`
+///
+/// The `err` argument MUST NOT influence the return value (BC-3.4.010 invariant 1 / P4).
+/// It exists for potential future hint-composition use only.
+fn is_cross_hierarchy_type_error(
+    src_subtask: Option<bool>,
+    tgt_subtask: Option<bool>,
+    _err: &str,
+) -> Classification {
+    todo!("S-388: implement classification logic")
+}
+
 #[cfg(test)]
 mod tests {
     use crate::error::JrError;

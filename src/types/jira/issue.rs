@@ -158,6 +158,8 @@ pub struct StatusCategory {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct IssueType {
     pub name: String,
+    #[serde(default)]
+    pub subtask: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
