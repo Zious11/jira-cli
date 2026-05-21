@@ -270,6 +270,32 @@ async fn test_subtask_parent_clear_surfaces_400_with_convert_hint() {
             || stderr.contains("standard issue"),
         "Expected convert hint in stderr; stderr={stderr}"
     );
+
+    // AC-4 strengthening (S-388): three new literal-pin assertions.
+
+    // Pin 1: JRACLOUD-27893 citation MUST appear in stderr.
+    assert!(
+        stderr.contains("JRACLOUD-27893"),
+        "Expected JRACLOUD-27893 citation in stderr (--no-parent cross-hierarchy hint); stderr={stderr}"
+    );
+
+    // Pin 2: regression guard — the removed fake-endpoint hint MUST NOT appear.
+    // The prior hint contained `jr api /rest/api/3/issue/{key}/convert -X put -d ...`;
+    // this substring uniquely identifies the removed text without over-matching
+    // legitimate content (see BC-3.4.010 postcondition note and prd-delta-388.md T-06 note).
+    assert!(
+        !stderr.contains("jr api /rest/api/3/issue"),
+        "Fake-endpoint hint must not appear in stderr; stderr={stderr}"
+    );
+
+    // Pin 3: full verbatim context sentence that MUST be prepended before CROSS_HIERARCHY_HINT
+    // on the --no-parent path only (PINNED STRING — exact bytes required per BC-3.4.010).
+    assert!(
+        stderr.contains(
+            "Sub-tasks are structurally bound to a parent; clearing it requires converting the sub-task to a standard issue."
+        ),
+        "Expected full verbatim context sentence in stderr (--no-parent path); stderr={stderr}"
+    );
 }
 
 // ---------------------------------------------------------------------------

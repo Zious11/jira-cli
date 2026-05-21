@@ -1782,6 +1782,59 @@ mod parse_field_kv_proptests {
     }
 }
 
+/// Proptest suite for `is_cross_hierarchy_type_error` (AC-7, BC-3.4.010 invariant 1,
+/// BC-3.4.011 invariants 1–3, verification-delta-388.md §2 P1–P4).
+///
+/// Mirrors the `build_labels_proptests` / `parse_field_kv_proptests` pattern.
+/// NOT added to the existing `mod tests` block to avoid name collisions.
+#[cfg(test)]
+mod is_cross_hierarchy_type_error_proptests {
+    use super::{Classification, is_cross_hierarchy_type_error};
+    use proptest::prelude::*;
+
+    fn opt_bool() -> impl Strategy<Value = Option<bool>> {
+        prop_oneof![Just(None), Just(Some(true)), Just(Some(false))]
+    }
+
+    proptest! {
+        #[test]
+        fn prop_cross_hierarchy_decided_by_subtask_flag_mismatch(
+            src in opt_bool(),
+            tgt in opt_bool(),
+            // Arbitrary message; includes the locale-fragile substring with
+            // non-zero probability so P4 actively exercises the no-influence claim.
+            err in prop_oneof![
+                ".*",
+                Just("issue type selected is invalid".to_string()),
+                Just(String::new()),
+            ],
+        ) {
+            let result = is_cross_hierarchy_type_error(src, tgt, &err);
+
+            match (src, tgt) {
+                (Some(a), Some(b)) if a != b => {
+                    prop_assert_eq!(result, Classification::CrossHierarchy);  // P1
+                }
+                (Some(a), Some(b)) => {
+                    let _ = (a, b);
+                    prop_assert_eq!(result, Classification::SameCategory);    // P2
+                }
+                _ => {
+                    prop_assert_eq!(result, Classification::Indeterminate);   // P3
+                }
+            }
+
+            // P4: err must not change the verdict — re-run with a fixed
+            // contrasting message and assert equality.
+            let baseline = is_cross_hierarchy_type_error(src, tgt, "");
+            prop_assert_eq!(
+                is_cross_hierarchy_type_error(src, tgt, &err),
+                baseline,
+            );
+        }
+    }
+}
+
 /// Parse `--field NAME=VALUE` pairs into a `HashMap<String, String>`.
 ///
 /// Splitting rule (BC-3.8.008): the FIRST `=` in each pair separates name from
