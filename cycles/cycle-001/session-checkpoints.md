@@ -82,3 +82,13 @@ _Archived 2026-05-20. Was the active checkpoint entering #388 F2 (Spec Evolution
 | **Date** | 2026-05-20 |
 | **Position** | **Issue #388 Feature Mode — F1 COMPLETE, entering F2 (Spec Evolution).** F1 gate APPROVED by human 2026-05-20. Delta: 2 new BCs (BC-3.4.010, BC-3.4.011) in bc-3-issue-write.md; BC-3.4.003 annotation-only update; BC-INDEX 575→577. 1 new story to be created in F3. New test file tests/issue_edit_type_errors.rs; T-06 in tests/issue_edit_no_parent.rs to be strengthened. Next: F2 Spec Evolution (product-owner updates bc-3-issue-write.md with BC-3.4.010/011 full bodies + BC-3.4.003 annotation; PRD delta document). Remaining open backlog: #210, #331, #372, #387, #388. Open PRs: #327, #368. |
 | **Convergence counter** | #388 F1 COMPLETE (prior #385 F7 CONVERGED). BC corpus: 575 BCs (spec v1.2.0; will become 577 after F2). Story corpus: 43 stories. |
+
+---
+
+_Archived 2026-05-20. Was the active checkpoint entering #388 F3 (Incremental Story)._
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-20 |
+| **Position** | **Issue #388 Feature Mode — F2 COMPLETE, entering F3 (Incremental Story).** F2 gate APPROVED by human 2026-05-20. 2 new BCs authored: BC-3.4.010 (cross-hierarchy 400 → CROSS_HIERARCHY_HINT, JRACLOUD-27893) + BC-3.4.011 (same-hierarchy/unresolvable/indeterminate 400 → typo hint or raw error). BC-3.4.003 annotated with Errors cross-ref. BC-INDEX 575→577. Spec v1.2.0→v1.3.0 (MINOR; changelog written). Adversarial spec review CONVERGED: 10 passes total, 3 consecutive CLEAN (passes 8/9/10); 2 CRITICAL + ~15 MAJOR + many MINOR fixed in passes 1–7. Fresh-context consistency-validator PASS (6/6 checks). Inline proptest for `is_cross_hierarchy_type_error` pure classifier (no VP-NNN artifacts). Test plan: 10 integration tests (tests/issue_edit_type_errors.rs) + T-06 strengthening (tests/issue_edit_no_parent.rs). 3 F2 process-gaps (PG-388-1/2/3) logged to lessons.md. Next: F3 — Incremental Story decomposition (1 story covering BC-3.4.010/011 + test deliverables). Remaining open backlog: #210, #331, #372, #387, #388. Open PRs: #327, #368. |
+| **Convergence counter** | #388 F2 COMPLETE. BC corpus: 577 BCs (spec v1.3.0). Story corpus: 43 stories (1 new story to be created in F3). |
