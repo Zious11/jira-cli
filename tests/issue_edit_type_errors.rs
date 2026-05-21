@@ -442,21 +442,26 @@ async fn test_edit_type_indeterminate_project_types_5xx_surfaces_raw_error() {
         .await;
 
     // GET issue succeeds with subtask: Some(false).
+    // `.expect(1)` — pre-impl this is never called (handle_edit does not
+    // dispatch to the enrichment path) → wiremock verify fails on server drop.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/TEST-3"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(get_issue_standard("TEST-3", "TEST")),
         )
+        .expect(1)
         .mount(&server)
         .await;
 
     // GET project types → 5xx → Indeterminate (Cause-1 R2).
+    // `.expect(1)` — pre-impl this is never called → verify fails on drop.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/project/TEST"))
         .respond_with(ResponseTemplate::new(503).set_body_json(serde_json::json!({
             "errorMessages": ["Service temporarily unavailable."],
             "errors": {}
         })))
+        .expect(1)
         .mount(&server)
         .await;
 
@@ -569,22 +574,29 @@ async fn test_edit_type_indeterminate_absent_subtask_flag_surfaces_raw_error() {
         .await;
 
     // GET issue: issuetype present but `subtask` key omitted → subtask: None.
+    // `.expect(1)` — pre-impl this is never called (no enrichment dispatch)
+    // → wiremock verify fails on server drop, making the test genuinely red.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/TEST-6"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(get_issue_no_subtask_field("TEST-6", "TEST")),
         )
+        .expect(1)
         .mount(&server)
         .await;
 
-    // GET project types is optionally mounted — may or may not be reached if
-    // Indeterminate fires early from src_subtask: None in the classifier.
+    // GET project types is mounted with `.expect(1)`.
+    // The classifier MUST call this even when src_subtask is None (the spec
+    // requires fetching project types first, then determining Indeterminate
+    // from the combination of src/tgt flags). Pre-impl: never called →
+    // verify fails on drop.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/project/TEST"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(get_project_types_standard_only()),
         )
+        .expect(1)
         .mount(&server)
         .await;
 
@@ -639,21 +651,26 @@ async fn test_edit_type_indeterminate_absent_target_subtask_flag_surfaces_raw_er
         .await;
 
     // GET issue: source subtask: Some(false).
+    // `.expect(1)` — pre-impl this is never called (no enrichment dispatch)
+    // → wiremock verify fails on server drop, making the test genuinely red.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/TEST-7"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(get_issue_standard("TEST-7", "TEST")),
         )
+        .expect(1)
         .mount(&server)
         .await;
 
     // GET project types: target type's `subtask` key OMITTED → tgt_subtask: None.
+    // `.expect(1)` — pre-impl this is never called → verify fails on drop.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/project/TEST"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(get_project_types_target_no_subtask_field()),
         )
+        .expect(1)
         .mount(&server)
         .await;
 
@@ -776,16 +793,31 @@ async fn test_edit_type_indeterminate_get_issue_fails_surfaces_raw_error() {
         .await;
 
     // GET issue → 5xx → `is_err()` → Indeterminate; get_project_issue_types NOT called.
+    // `.expect(1)` — pre-impl this is never called (no enrichment dispatch)
+    // → wiremock verify fails on server drop, making the test genuinely red.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/TEST-9"))
         .respond_with(ResponseTemplate::new(503).set_body_json(serde_json::json!({
             "errorMessages": ["Service unavailable."],
             "errors": {}
         })))
+        .expect(1)
         .mount(&server)
         .await;
 
-    // Intentionally NO mock for GET /rest/api/3/project/TEST — verify it is never called.
+    // GET project types MUST NOT be called once GET issue fails — this asserts
+    // the get_issue-first ordering invariant. `.expect(0)` verifies it is never
+    // reached both pre-impl (correct) and post-impl (must stay correct).
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/TEST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "key": "TEST",
+            "name": "Test Project",
+            "issueTypes": []
+        })))
+        .expect(0)
+        .mount(&server)
+        .await;
 
     let output = jr_cmd(&server.uri())
         .args(["--no-input", "issue", "edit", "TEST-9", "--type", "Task"])
@@ -831,17 +863,42 @@ async fn test_edit_type_indeterminate_get_issue_fails_surfaces_raw_error() {
 async fn test_edit_type_non_400_edit_error_surfaces_raw_error_no_enrichment() {
     let server = start_server().await;
 
+    // REGRESSION-GUARD TEST — deliberate Red Gate exception.
+    //
+    // This test verifies that the new `if is_400` gate added by the implementer
+    // does NOT accidentally enrich non-400 errors. The baseline already satisfies
+    // the behavioural assertion (no enrichment for 403), so this test is green
+    // pre- and post-implementation. The `.expect(0)` mocks below provide the
+    // guard: if an implementer accidentally broadens the gate to cover 403, the
+    // enrichment calls fire and the `.expect(0)` verification fails at server drop.
+
     // PUT → 403 (non-400 error → R0b routing row).
     Mock::given(method("PUT"))
         .and(path("/rest/api/3/issue/TEST-10"))
         .respond_with(ResponseTemplate::new(403).set_body_json(edit_403_body()))
-        .expect(1) // exactly one PUT, no other calls expected
+        .expect(1) // exactly one PUT
         .mount(&server)
         .await;
 
-    // Intentionally NO mocks for GET /rest/api/3/issue/TEST-10 or GET /rest/api/3/project/TEST.
-    // If either is called, wiremock will return 404 (not matched) which would panic/fail the test,
-    // acting as an implicit `expect(0)` for those endpoints.
+    // GET issue enrichment MUST NOT be called for a non-400 response.
+    // `.expect(0)` guards that the implementer's `if is_400` gate does not
+    // over-fire and call the enrichment path on 403.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-10"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(get_issue_standard("TEST-10", "TEST")))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    // GET project types enrichment MUST NOT be called for a non-400 response.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/TEST"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(get_project_types_standard_only()),
+        )
+        .expect(0)
+        .mount(&server)
+        .await;
 
     let output = jr_cmd(&server.uri())
         .args(["--no-input", "issue", "edit", "TEST-10", "--type", "Task"])
