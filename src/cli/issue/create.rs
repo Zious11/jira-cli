@@ -1200,7 +1200,11 @@ fn is_cross_hierarchy_type_error(
     tgt_subtask: Option<bool>,
     _err: &str,
 ) -> Classification {
-    todo!("S-388: implement classification logic")
+    match (src_subtask, tgt_subtask) {
+        (Some(a), Some(b)) if a != b => Classification::CrossHierarchy,
+        (Some(_), Some(_)) => Classification::SameCategory,
+        _ => Classification::Indeterminate,
+    }
 }
 
 #[cfg(test)]
