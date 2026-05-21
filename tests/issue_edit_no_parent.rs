@@ -270,6 +270,32 @@ async fn test_subtask_parent_clear_surfaces_400_with_convert_hint() {
             || stderr.contains("standard issue"),
         "Expected convert hint in stderr; stderr={stderr}"
     );
+
+    // AC-4 strengthening (S-388): three new literal-pin assertions.
+
+    // Pin 1: JRACLOUD-27893 citation MUST appear in stderr.
+    assert!(
+        stderr.contains("JRACLOUD-27893"),
+        "Expected JRACLOUD-27893 citation in stderr (--no-parent cross-hierarchy hint); stderr={stderr}"
+    );
+
+    // Pin 2: regression guard — the removed fake-endpoint hint MUST NOT appear.
+    // The prior hint contained `jr api /rest/api/3/issue/{key}/convert -X put -d ...`;
+    // this substring uniquely identifies the removed text without over-matching
+    // legitimate content (see BC-3.4.010 postcondition note and prd-delta-388.md T-06 note).
+    assert!(
+        !stderr.contains("jr api /rest/api/3/issue"),
+        "Fake-endpoint hint must not appear in stderr; stderr={stderr}"
+    );
+
+    // Pin 3: full verbatim context sentence that MUST be prepended before CROSS_HIERARCHY_HINT
+    // on the --no-parent path only (PINNED STRING — exact bytes required per BC-3.4.010).
+    assert!(
+        stderr.contains(
+            "Sub-tasks are structurally bound to a parent; clearing it requires converting the sub-task to a standard issue."
+        ),
+        "Expected full verbatim context sentence in stderr (--no-parent path); stderr={stderr}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -368,5 +394,71 @@ async fn test_no_parent_output_json_emits_key_on_success() {
         parsed["key"].as_str(),
         Some("FOO-100"),
         r#"Expected {{"key":"FOO-100"}} in stdout; got {stdout}"#
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Mutation kill: --no-parent gate negative — non-subtask-parent 400 MUST NOT
+// emit the cross-hierarchy hint.
+// ---------------------------------------------------------------------------
+//
+// This test pins the `&&` in `if no_parent && is_subtask_parent_error(e)`.
+// If the operator were replaced with `||`, this test would fail because:
+//   - `no_parent` is true, `is_subtask_parent_error(e)` is false (error has
+//     no "subtask" / "parent+400" substring) → with `||` the block fires
+//     incorrectly and `CROSS_HIERARCHY_HINT` appears on stderr.
+//
+// The test asserts that when `--no-parent` is set but the 400 response body
+// does NOT look like a subtask-parent error, NO cross-hierarchy hint is emitted.
+// The raw API error is still propagated (exit 1, error text on stderr).
+//
+// Kill target: `src/cli/issue/create.rs:898:22 replace && with ||`
+
+#[tokio::test]
+async fn test_no_parent_non_subtask_400_does_not_surface_cross_hierarchy_hint() {
+    let server = start_server().await;
+
+    // PUT → 400 with a generic "field required" error, NOT a subtask-parent error.
+    // `is_subtask_parent_error` checks for "subtask" or ("parent" AND "400") in the
+    // message text — this body contains neither, so the predicate returns false.
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/PROJ-99"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "errorMessages": ["The summary field is required."],
+            "errors": {}
+        })))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args(["--no-input", "issue", "edit", "PROJ-99", "--no-parent"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Must still exit non-zero (raw API error propagated).
+    assert!(
+        !output.status.success(),
+        "Expected non-zero exit for non-subtask-parent 400; stderr={stderr}"
+    );
+
+    // CROSS_HIERARCHY_HINT MUST NOT appear — the --no-parent gate must not fire
+    // when is_subtask_parent_error returns false (pins &&, not ||).
+    assert!(
+        !stderr.contains("JRACLOUD-27893"),
+        "CROSS_HIERARCHY_HINT must NOT appear when error is not a subtask-parent error; stderr={stderr}"
+    );
+
+    // Regression pin on the removed fake-endpoint hint.
+    assert!(
+        !stderr.contains("jr api /rest/api/3/issue"),
+        "Fake-endpoint hint must not appear in stderr; stderr={stderr}"
+    );
+
+    // The raw error text MUST appear so users see why the edit failed.
+    assert!(
+        stderr.contains("summary") || stderr.contains("required") || stderr.contains("400"),
+        "Expected raw API error text in stderr; stderr={stderr}"
     );
 }
