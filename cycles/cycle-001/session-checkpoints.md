@@ -85,6 +85,16 @@ _Archived 2026-05-20. Was the active checkpoint entering #388 F2 (Spec Evolution
 
 ---
 
+_Archived 2026-05-21. Was the active checkpoint entering #388 F4 (Delta Implementation)._
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-20 |
+| **Position** | **Issue #388 Feature Mode — F3 COMPLETE, entering F4 (Delta Implementation).** F3 gate APPROVED by human 2026-05-20. S-388 created: `.factory/stories/S-388-cross-hierarchy-type-change-error-and-fake-endpoint-fix.md` — 7 ACs, single story, single wave, no dependencies, implementation_strategy: tdd. STORY-INDEX 43→44 (v1.4.16). BC corpus: 577 BCs (spec v1.3.0). Test plan: 10 integration tests (tests/issue_edit_type_errors.rs) + T-06 strengthening (tests/issue_edit_no_parent.rs). F2 recap: 2 new BCs (BC-3.4.010 CROSS_HIERARCHY_HINT/JRACLOUD-27893, BC-3.4.011 typo-hint-or-raw); BC-3.4.003 annotated; BC-INDEX 575→577; spec v1.2.0→v1.3.0; adv CONVERGED 10 passes (3 CLEAN P8/P9/P10); CV PASS 6/6; 3 PG-388 process-gaps recorded. Next: F4 — per-story TDD delivery of S-388. Remaining open backlog: #210, #331, #372, #387, #388. Open PRs: #327, #368. |
+| **Convergence counter** | #388 F3 COMPLETE. BC corpus: 577 BCs (spec v1.3.0). Story corpus: 44 stories (S-388 in F4 — implementation in progress). |
+
+---
+
 _Archived 2026-05-20. Was the active checkpoint entering #388 F3 (Incremental Story)._
 
 | Field | Value |

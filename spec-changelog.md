@@ -7,6 +7,64 @@ project: "jr (jira-cli)"
 
 Track all spec version changes. Most recent version first.
 
+## [1.3.0] - 2026-05-20
+
+### Type: MINOR
+
+### Summary
+
+Issue #388: Accurate cross-hierarchy type-change error + fix fake-endpoint hint (Option A). Adds 2 new BCs (BC-3.4.010, BC-3.4.011) defining the enriched error behaviour for `jr issue edit KEY --type X` HTTP 400 responses. Annotates BC-3.4.003 with an Errors cross-reference (no behavioral change). The `CROSS_HIERARCHY_HINT` constant (citing JRACLOUD-27893, no fake endpoint) also replaces the misleading `PUT /rest/api/3/issue/{key}/convert` hint at `src/cli/issue/create.rs:834`. Grand total: 575 → 577.
+
+### New Requirements
+
+| ID | Description |
+|----|-------------|
+| BC-3.4.010 | `jr issue edit KEY --type X` HTTP 400 + source `issuetype.subtask` differs from target type's `subtask` (cross-hierarchy mismatch) → exit 1, `CROSS_HIERARCHY_HINT` on stderr. Hint wording pinned verbatim: cites JRACLOUD-27893, directs user to Jira web UI action menu (`...`), avoids exact UI label (locale-resilient). Subtask-flag mismatch is the primary classifier; English substring `"issue type selected is invalid"` is NOT the sole gate. `CROSS_HIERARCHY_HINT` constant also replaces the fake `/rest/api/3/issue/{key}/convert` hint at `create.rs:834` (`--no-parent` subtask-bound 400 path). |
+| BC-3.4.011 | `jr issue edit KEY --type X` HTTP 400 + same-hierarchy flags (`src_subtask == tgt_subtask`) → exit 1, typo hint referencing `jr project types` + raw Atlassian error body. OR indeterminate (source-issue fetch or project-types fetch fails) → exit 1, raw error body only; NO enrichment hint. `CROSS_HIERARCHY_HINT` (JRACLOUD-27893) MUST NOT appear on either sub-path (prevents false positives on typos and workflow-incompatibility 400s). |
+
+### Modified Requirements
+
+| ID | Nature |
+|----|--------|
+| BC-3.4.003 | Errors cross-reference added: when `edit --type X` returns HTTP 400, see BC-3.4.010 (cross-hierarchy → CROSS_HIERARCHY_HINT) and BC-3.4.011 (same-hierarchy/indeterminate → typo hint or raw error). Primary success path (PUT 204) and ADF description behavior are byte-for-byte unchanged. |
+
+### Impact Assessment
+
+| Dimension | Before | After | Delta |
+|-----------|--------|-------|-------|
+| bc-3-issue-write.md individually-bodied | 66 | 68 | +2 |
+| bc-3-issue-write.md total_bcs | 95 | 97 | +2 |
+| BC-INDEX.md total_bcs (grand total) | 575 | 577 | +2 |
+| CANONICAL-COUNTS.md Sum | 575 | 577 | +2 |
+| BCs modified (no count change) | — | BC-3.4.003 (annotation only) | — |
+
+### New Holdout Scenarios
+
+None. The ten (10) integration tests in `tests/issue_edit_type_errors.rs` provide complete regression coverage for the new BC paths. No holdout-level coverage is required for this delta (error-path enrichment only; no new user-visible flows or success paths).
+
+### Required Test Deliverables
+
+Required test deliverables (to be mandated by the implementing story in F3). Authoritative count: **TEN (10)** integration tests in `tests/issue_edit_type_errors.rs` (the delta-analysis.md figure of five is superseded by this F2 spec delta):
+
+1. `test_edit_type_cross_hierarchy_std_to_subtask_surfaces_conversion_hint` — GET issue (`subtask: Some(false)`), GET project types (target `subtask: Some(true)`), PUT returns 400 → exit 1, stderr contains `JRACLOUD-27893`, stderr does NOT contain `jr api /rest/api/3/issue` (regression pin)
+2. `test_edit_type_cross_hierarchy_subtask_to_std_surfaces_conversion_hint` — reverse direction (`subtask: Some(true)` → `Some(false)`), same assertions
+3. `test_edit_type_same_hierarchy_400_surfaces_typo_hint` — both flags `subtask: Some(false)` → exit 1, stderr contains `` `jr project types` ``, stderr does NOT contain `JRACLOUD-27893` (negative pin), stderr does NOT contain `jr api /rest/api/3/issue` (fake-endpoint regression pin)
+4. `test_edit_type_indeterminate_project_types_5xx_surfaces_raw_error` — GET issue succeeds (`subtask: Some(false)`), GET project types returns 5xx → exit 1, extracted 400 message on stderr, no hint, stderr does NOT contain `JRACLOUD-27893`, stderr does NOT contain `jr api /rest/api/3/issue`
+5. `test_edit_type_cross_hierarchy_hint_no_fake_endpoint_literal` — regression pin: CrossHierarchy 400 path → stderr does NOT contain `jr api /rest/api/3/issue`
+6. `test_edit_type_indeterminate_absent_subtask_flag_surfaces_raw_error` — `get_issue` returns HTTP 200 with `subtask` key OMITTED from issuetype object → `src_subtask: None` → `Indeterminate` → exit 1, extracted 400 message on stderr, no hint, `JRACLOUD-27893` absent, `jr api /rest/api/3/issue` absent (tests Indeterminate Cause-2, source-side)
+7. `test_edit_type_indeterminate_absent_target_subtask_flag_surfaces_raw_error` — source `subtask: Some(false)` present; `get_project_issue_types` returns HTTP 200 with target type's `subtask` key OMITTED → `tgt_subtask: None` → `Indeterminate` → exit 1, same negative assertions (tests Indeterminate Cause-2, target-side)
+8. `test_edit_type_unresolved_type_name_surfaces_typo_hint` — `get_issue` returns HTTP 200 with source `subtask: Some(false)`; `get_project_issue_types` returns HTTP 200 with a list that does NOT contain the `--type` value → unresolvable-name sub-path → typo hint, stderr contains `` `jr project types` ``, `JRACLOUD-27893` absent, `jr api /rest/api/3/issue` absent
+9. `test_edit_type_indeterminate_get_issue_fails_surfaces_raw_error` — `edit_issue` returns HTTP 400; `get_issue` returns 5xx → `Indeterminate` immediately (R1 routing row; `get_project_issue_types` never called); exit nonzero, raw error on stderr, no hint, `JRACLOUD-27893` absent, `jr api /rest/api/3/issue` absent
+10. `test_edit_type_non_400_edit_error_surfaces_raw_error_no_enrichment` — `edit_issue` returns HTTP 403 (non-400, R0b routing row) → enrichment block bypassed entirely; exit nonzero, raw error on stderr, no hint, `JRACLOUD-27893` absent, `jr api /rest/api/3/issue` absent; no wiremock stubs for `get_issue` or `get_project_issue_types`
+
+Additionally: strengthen T-06 in `tests/issue_edit_no_parent.rs` (`test_subtask_parent_clear_surfaces_400_with_convert_hint`): add `assert!(stderr.contains("JRACLOUD-27893"))` literal-pin, `assert!(!stderr.contains("jr api /rest/api/3/issue"))` negative regression guard, and `assert!(stderr.contains("Sub-tasks are structurally bound to a parent; clearing it requires converting the sub-task to a standard issue."))` (pins the verbatim normative context sentence). The regression-pin substring `jr api /rest/api/3/issue` supersedes the broader form `/rest/api/3/issue/` from the F1 delta-analysis — the broader form is over-broad and false-positive-prone against legitimate diagnostic output.
+
+### Feature Request Link
+
+- https://github.com/Zious11/jira-cli/issues/388
+
+---
+
 ## [1.2.0] - 2026-05-20
 
 ### Type: MINOR

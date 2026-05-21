@@ -3097,3 +3097,35 @@ Archived Current Phase Steps rows displaced by 5-row window enforcement.
 | F1d adversarial spec review pass-01 — #288 | adversary | complete | 13 findings (4B/6C/3N). Product-owner remediated all BLOCKING+CONCERN in same burst; F13 [process-gap] deferred to DRIFT-008. Spec at +18 BCs (+10 in BC-3.8.*, +8 in BC-X.12.*), 54 holdouts, BC-2.6.051 propagation fix to CANONICAL-COUNTS. |
 | F1d adversarial spec review pass-02 — #288 | adversary | complete | All 13 pass-01 findings ADDRESSED. 7 net-new (0B/3C/4N): remediation propagation drift in prd-delta count tables (F14), CANONICAL-COUNTS internal prose (F15), fields cache spec gap (F16), plus NITs. Product-owner remediated all in same burst. Counter 0/3. Pass-03 pending. |
 | S-384 DELIVERED — state update | state-manager | complete | sprint-state.yaml S-384 → completed (PR #394 / b36b291). STORY-INDEX S-384 → completed. STATE.md Phase Progress row + Open Issues Tracker #384 → CLOSED. Session checkpoint updated. Remaining open backlog: #210, #331, #372, #385, #387. factory-artifacts commit pushed. |
+
+---
+
+## Burst: #388 F4 COMPLETE — Issue #388 CLOSED (2026-05-21)
+
+### Summary
+
+Feature Mode Phase F4 (Delta Implementation) for story S-388 (cross-hierarchy `edit --type` 400 enrichment + `--no-parent` fake-endpoint fix) completed and closed.
+
+**Red Gate:** VERIFIED — 9/10 integration tests (tests/issue_edit_type_errors.rs) + proptest + T-06 (tests/issue_edit_no_parent.rs) correctly red before implementation. Test #10 was a documented `.expect(0)` regression-guard exception.
+
+**Per-story adversarial convergence:**
+- Pass 1: 1 MAJOR finding — `--no-parent` arm fabricated an English error message instead of surfacing the real Jira 400 body. Fixed in commit fd0cdd5.
+- Passes 2, 3, 4: CLEAN. 3 consecutive clean = CONVERGED.
+
+**Demos:** 5 VHS scenarios written + evidence-report.md at `docs/demo-evidence/S-388/`. All 7 ACs covered across scenarios.
+
+**PR #397:** Squash-merged to `develop` at e0ea24b (2026-05-21). CI: first run caught a mutation-testing gap (85% coverage, 1 surviving mutant at create.rs:898) — resolved by adding `test_no_parent_non_subtask_400_does_not_surface_cross_hierarchy_hint`; second CI run all 10 checks green. pr-reviewer APPROVE in cycle 1 (0 blocking). Security review CLEAN.
+
+**Issue #388:** Auto-closed on PR merge.
+
+**Cleanup:** Worktree `.worktrees/S-388` and feature branch removed.
+
+### State updates applied
+
+- STATE.md: `current_step` → `issue-388-F4-COMPLETE-entering-F5`; Last Updated bumped; Phase Progress row for issue-388 → F4 COMPLETE / DELIVERED; Open Issues Tracker #388 → CLOSED; Session Resume Checkpoint replaced.
+- STORY-INDEX.md: S-388 row → `completed (PR #397 / e0ea24b; 2026-05-21)`.
+- Session checkpoint archived to cycles/cycle-001/session-checkpoints.md.
+
+| Step | Agent | Status | Output |
+|------|-------|--------|--------|
+| #388 F4 COMPLETE — state update | state-manager | complete | STORY-INDEX S-388 → completed. STATE.md Phase Progress row + Open Issues Tracker #388 → CLOSED. Session checkpoint archived + replaced. factory-artifacts committed + pushed. |

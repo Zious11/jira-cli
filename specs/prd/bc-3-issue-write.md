@@ -1,8 +1,8 @@
 ---
 context: bc-3
 title: "Issue Write (create/edit/move/assign/comment/link/open/remote-link)"
-total_bcs: 95   # cumulative claim (incl. range-collapsed); definitional_count below is individually-bodied headings
-definitional_count: 66   # count of `#### BC-` headings in this file
+total_bcs: 97   # cumulative claim (incl. range-collapsed); definitional_count below is individually-bodied headings
+definitional_count: 68   # count of `#### BC-` headings in this file
 last_updated: 2026-05-20
 source_pass: 3
 trace: |
@@ -20,11 +20,14 @@ trace: |
   - F2 modified (2026-05-20): BC-3.8.002 — JSM project-required error harmonized with platform affordances (issue #385 O-08-02)
   - F2 modified (2026-05-20): BC-3.8.010 — warning position clarified: fires post-require_service_desk only (issue #385 O-08-07)
   - F2 modified (2026-05-20): BC-3.8.011 — same warning-position constraint applied (issue #385 O-08-07)
+  - F2 addition (2026-05-20): BC-3.4.010 — `edit --type` cross-hierarchy 400 → CROSS_HIERARCHY_HINT (JRACLOUD-27893) (issue #388)
+  - F2 addition (2026-05-20): BC-3.4.011 — `edit --type` same-hierarchy/indeterminate 400 → typo hint or raw error (issue #388)
+  - F2 modified (2026-05-20): BC-3.4.003 — Errors cross-reference added for BC-3.4.010 and BC-3.4.011 (issue #388 annotation only)
 ---
 
 # BC-3 — Issue Write
 
-95 behavioral contracts across 8 subdomains: Assign (3.1), Move/Transition (3.2),
+97 behavioral contracts across 8 subdomains: Assign (3.1), Move/Transition (3.2),
 Create (3.3), Edit+Open (3.4), Comment (3.5), Links (3.6), Remote links (3.7),
 JSM Request Create + Platform-Path Inverse Warnings + Auth-Conditional 401 Hints (3.8).
 
@@ -345,7 +348,10 @@ URL is composed as `format!("{}/browse/{}", client.instance_url(), key)`. `clien
 **Confidence**: HIGH
 **Source**: `tests/issue_commands.rs:609-645`
 **Behavior**: Body partial-match pins full ADF doc shape: `{fields: {description: {version:1, type:"doc", content[0]: {type:"paragraph", ...}}}}`.
+**Errors**: When `edit --type X` returns HTTP 400, the error path is further classified — see BC-3.4.010 (cross-hierarchy mismatch → `CROSS_HIERARCHY_HINT`) and BC-3.4.011 (same-hierarchy or indeterminate → typo hint or raw error). The primary success path (PUT 204) and ADF description behavior are byte-for-byte unchanged.
 **Trace**: Pass 3 BC-1055 (R4)
+
+> **[UPDATED 2026-05-20 issue #388]** Errors cross-reference added for `edit --type` 400 enrichment paths (BC-3.4.010, BC-3.4.011). No behavioral change to this contract.
 
 ---
 
@@ -457,6 +463,163 @@ log-injection guard — audited in PR #355).
 adds the requirement that `task_id` appears in the stderr output in addition to the
 existing wall-clock bound and `"deadline"` substring assertions.
 **Trace**: issue #340 AC #1; `src/api/jira/bulk.rs::await_bulk_task_inner` (`[deadline:bulk-outer]` site)
+
+---
+
+#### BC-3.4.010: `issue edit KEY --type X` HTTP 400 + cross-hierarchy subtask-flag mismatch → exit 1, `CROSS_HIERARCHY_HINT` on stderr (JRACLOUD-27893)
+
+**Confidence**: HIGH
+**Source**: `tests/issue_edit_type_errors.rs` (integration tests — cross-hierarchy direction paths); `src/cli/issue/create.rs::is_cross_hierarchy_type_error` (pure classifier helper); `src/cli/issue/create.rs::CROSS_HIERARCHY_HINT` (shared constant); `src/cli/issue/create.rs` inline `#[cfg(test)] mod is_cross_hierarchy_type_error_proptests` proptest for `is_cross_hierarchy_type_error`
+**Subject**: Issue write
+**Behavior**: When `edit_issue` returns HTTP 400 AND `is_cross_hierarchy_type_error(src_subtask, tgt_subtask, err)` returns `CrossHierarchy` (i.e., both `src_subtask` and `tgt_subtask` are `Some(a)` and `Some(b)` with `a != b`, covering both standard→sub-task and sub-task→standard directions), the CLI exits 1 and emits `CROSS_HIERARCHY_HINT` on stderr. The hint wording is pinned verbatim:
+
+```
+The Jira Cloud REST API does not support changing the standard / sub-task hierarchy level via this endpoint (see JRACLOUD-27893). To convert it, open the issue in the Jira web UI and use the action menu to find the Convert option.
+```
+
+This shared constant is also emitted on the `--no-parent` subtask-bound 400 path (gated by `no_parent && is_subtask_parent_error` in `handle_edit`). On the `--no-parent` path, the caller MUST prepend the following verbatim context sentence before the shared constant:
+
+```
+Sub-tasks are structurally bound to a parent; clearing it requires converting the sub-task to a standard issue.
+```
+
+On the `edit --type` path, the constant is emitted directly with no prepended sentence. The neutral framing ("does not support changing the...hierarchy level via this endpoint") accurately describes both call sites — neither requires the word "Converting" which would mis-describe the `--no-parent` case.
+
+**Preconditions**:
+- Single-key `jr issue edit KEY --type X` is issued (multi-key bulk path is unaffected by this contract).
+- `edit_issue` (PUT `/rest/api/3/issue/<key>`) returns HTTP 400. **HTTP-400 gate**: the caller (`handle_edit`) observes this by downcasting `edit_issue`'s `anyhow::Error` to `JrError::ApiError { status: 400, .. }` (constructed at `src/api/client.rs::parse_error` ~lines 973-997, defined in `src/error.rs`). If `edit_issue` fails with a non-400 error (401, 403, 5xx, network error, etc.), NO enrichment occurs — the raw error is surfaced unchanged and neither BC-3.4.010 nor BC-3.4.011 enrichment applies. The error-enrichment block is entered only on `status == 400`. Note: a non-400 `edit_issue` error (R0b routing row) bypasses both BC-3.4.010 and BC-3.4.011 entirely; see test #10 (`test_edit_type_non_400_edit_error_surfaces_raw_error_no_enrichment`).
+- **Call ordering**: `handle_edit` calls `get_issue` FIRST (it supplies both the source `issuetype.subtask` flag and `fields.project.key`). Only if `get_issue` succeeds is `get_project_issue_types(project_key)` called. Therefore: a `get_issue` failure → Indeterminate immediately (the second call never executes); the unresolvable-name sub-path is reachable only when `get_issue` already succeeded and returned HTTP 200.
+- `get_issue` uses the full `BASE_ISSUE_FIELDS` projection (which includes `"issuetype"`). The Atlassian Jira Cloud REST API v3 returns the complete `IssueType` object — including the `subtask` boolean and `hierarchyLevel` — as a nested field within any projected `issuetype` field. The `fields=` query parameter filters top-level issue fields, NOT nested properties of a returned field. Therefore `get_issue` (with `issuetype` in `BASE_ISSUE_FIELDS`) returns the `subtask` sub-field reliably. The `subtask` field is carried in `IssueType` (the struct at `fields.issuetype` in the `Issue` response from `get_issue`); this is the struct that receives the additive `subtask: Option<bool>` field in issue #388 (F4 implementation, not yet in the codebase at F2 spec time).
+- **`Option<IssueType>` outer-layer flatten**: `issue.fields.issuetype` in `src/types/jira/issue.rs:62` is `Option<IssueType>` (the whole issuetype object may be absent from the response). `IssueType.subtask` is itself `Option<bool>`. The caller MUST flatten both layers: `issue.fields.issuetype.as_ref().and_then(|t| t.subtask)`. Two distinct sources of `src_subtask: None` exist: (a) the `issuetype` object is wholly absent from the response `fields` — `Option<IssueType>` is `None`; (b) `issuetype` is present but its `subtask` key is omitted from the JSON — `IssueType.subtask` is `None`. Both (a) and (b) collapse to `src_subtask: None` → Indeterminate via the and_then flatten.
+- **`get_project_issue_types` deserialization behavior (net-new lookup)**: The type-name lookup against `get_project_issue_types` is **net-new F4 logic** built inside `handle_edit`'s error path — it does not pre-exist. `get_project_issue_types` calls `GET /rest/api/3/project/{key}`, extracts `issueTypes`, and deserializes via `.and_then(|v| from_value::<Vec<IssueTypeMetadata>>(v).ok()).unwrap_or_default()` (live code, `src/api/jira/projects.rs:47-51`). A 200 response with a malformed or missing `issueTypes` key returns `Ok(vec![])` — NOT an `Err`. Therefore deserialization failure is NOT an Indeterminate-trigger; only an HTTP error or network error causes `get_project_issue_types` to return `Err` (→ Indeterminate). A 200 with an unparseable body yields `Ok([])` → the target name is absent from an empty list → the **unresolvable-name sub-path** (typo hint), NOT Indeterminate. This graceful outcome is acceptable: a malformed project-metadata response is rare and the typo hint is not harmful. The client-side name lookup uses **case-insensitive exact match** on the `name` field — this is a deliberate choice for the error-enrichment path and may not perfectly mirror Jira's server-side resolution, but divergence only affects which hint is shown, never edit correctness.
+- `is_cross_hierarchy_type_error(src_subtask, tgt_subtask, err)` returns `CrossHierarchy`: both arguments are `Some(_)` and the inner boolean values differ (`src != tgt`).
+
+**Postconditions**:
+- Exit code 1.
+- Stderr contains the verbatim `CROSS_HIERARCHY_HINT` string:
+  ```
+  The Jira Cloud REST API does not support changing the standard / sub-task hierarchy level via this endpoint (see JRACLOUD-27893). To convert it, open the issue in the Jira web UI and use the action menu to find the Convert option.
+  ```
+- Stderr contains the literal `JRACLOUD-27893`.
+- Stderr does NOT contain the substring `jr api /rest/api/3/issue` (regression pin unique to the removed fake `PUT /rest/api/3/issue/{key}/convert` hint at `src/cli/issue/create.rs:834`; the exact prior hint text was `jr api /rest/api/3/issue/{key}/convert -X put -d '{"type":{"name":"Task"}}'`; the pin substring `jr api /rest/api/3/issue` uniquely identifies this removed fake-endpoint hint without over-matching the broader `/rest/api/3/issue/` path fragment which may legitimately appear in other diagnostics).
+- Stdout is empty (no JSON output for this error path).
+
+**Invariants**:
+1. The subtask-flag mismatch via `is_cross_hierarchy_type_error(src_subtask: Option<bool>, tgt_subtask: Option<bool>, err: &str) -> Classification` is the PRIMARY classifier — locale-independent. The pure function returns `CrossHierarchy` only when both arguments are `Some(_)` and differ. The English substring `"issue type selected is invalid"` MUST NOT be used as the sole gate (it fires on plain typos; see research addendum A1).
+2. `CROSS_HIERARCHY_HINT` is a shared named constant referenced identically from this path and from the `--no-parent` subtask-bound 400 path (gated by `no_parent && is_subtask_parent_error` in `src/cli/issue/create.rs`, call-site symbol `handle_edit`). Bug fix: replaces the prior fake `PUT /rest/api/3/issue/{key}/convert` hint. On the `--no-parent` path, the caller MUST prepend the following verbatim context sentence before the shared constant:
+
+```
+Sub-tasks are structurally bound to a parent; clearing it requires converting the sub-task to a standard issue.
+```
+
+On the `edit --type` path, the constant is emitted directly with no prepended sentence. The context sentence frames conversion as the means to clear the parent and leads directly into the shared `CROSS_HIERARCHY_HINT`.
+3. This contract applies to SINGLE-KEY edit only. The bulk `--type` path (`handle_edit_bulk_fields`) does NOT include this enrichment and must not be modified.
+
+> **Wording note (not a runtime contract):** The word "sub-task" is spelled with a hyphen throughout all hint strings in this BC (not "subtask" without hyphen). This is a spec-drafting convention for the pinned hint strings above; it is not enforced by any test and does not produce observable CLI behavior distinct from a non-hyphenated spelling.
+
+**Deliberate gate asymmetry (m-4)**: The `edit --type` arm enters the enrichment block via a structured downcast: `edit_issue`'s `anyhow::Error` downcasts to `JrError::ApiError { status: 400, .. }` (per `src/error.rs`). The `--no-parent` arm uses the legacy string-based gate `is_subtask_parent_error(&anyhow::Error)` to decide whether to emit the prepended context sentence + `CROSS_HIERARCHY_HINT`. This asymmetry is deliberate: migrating `is_subtask_parent_error` to a structured downcast is explicitly out of #388 scope per KL-3.4.010-1 below — both gates reach the same shared constant, but via distinct mechanisms that were intentionally left unchanged.
+
+**`--no-parent` hint replacement scope (CRITICAL)**: The ENTIRE prior `--no-parent` hint block at `src/cli/issue/create.rs:830-837` is replaced. The multi-line `format!` that composed the prior hint spans lines 830-836; line 837 is the separate `bail!` statement. The prior `format!` contained FOUR sentences: "Tip: subtasks are structurally bound…", "To clear the parent, first convert…", the fake `jr api /rest/api/3/issue/{key}/convert -X put -d '{"type":{"name":"Task"}}'` line, and "(then re-run with --no-parent if needed.)". NONE of these four old sentences are retained. The new block is exactly: the verbatim context sentence below (prepended first), followed immediately by `CROSS_HIERARCHY_HINT` — and nothing else.
+
+**`--no-parent` path postcondition (M-1)**: When `no_parent && is_subtask_parent_error` fires (the `--no-parent` subtask-bound 400 path), stderr MUST contain:
+1. The verbatim context sentence `Sub-tasks are structurally bound to a parent; clearing it requires converting the sub-task to a standard issue.` (prepended before the shared constant).
+2. The verbatim `CROSS_HIERARCHY_HINT` string (containing `JRACLOUD-27893`).
+3. The literal `JRACLOUD-27893`.
+4. NOT the substring `jr api /rest/api/3/issue` (regression pin on removed fake-endpoint hint; the removed fake hint was `jr api /rest/api/3/issue/{key}/convert -X put -d '{"type":{"name":"Task"}}'` — the pin substring uniquely identifies this removed text).
+
+This postcondition is verified by **T-06 in `tests/issue_edit_no_parent.rs`** (`test_subtask_parent_clear_surfaces_400_with_convert_hint`), NOT by the `issue_edit_type_errors.rs` test set (tests #1/#2/#5 in that file cover the `edit --type` path only).
+
+**`--type` + `--no-parent` dual-gate precedence**: `--type` and `--no-parent` are NOT mutually exclusive in clap — there is NO `conflicts_with` annotation between `issue_type` and `no_parent` on the `IssueCommand::Edit` variant (confirmed in `src/cli/mod.rs` lines 437-459). Both flags can be supplied simultaneously. If both are set and `edit_issue` returns HTTP 400, both the `--type` cross-hierarchy enrichment arm and the `--no-parent` arm could have satisfied preconditions. The deterministic evaluation order in `handle_edit`'s `if let Err(ref e) = edit_result` block MUST be: the `--type` cross-hierarchy enrichment is evaluated FIRST (invoking `get_issue` → `get_project_issue_types` → `is_cross_hierarchy_type_error`); only if it does NOT emit a hint (i.e., the classification is SameCategory or Indeterminate and no hint was shown) does the `--no-parent` arm evaluate. This ordering ensures the more-specific cross-hierarchy diagnosis takes precedence over the legacy string-match gate.
+
+**Known Limitations**:
+- KL-3.4.010-1: The `--no-parent` arm's hint emission is gated by `is_subtask_parent_error`, which is a disjunctive English-substring matcher: `msg.contains("subtask") || (msg.contains("parent") && msg.contains("400"))`. The locale-fragility risk differs by disjunct: the first disjunct (`"subtask"`) is an English word and will miss the error on non-English Jira instances; the second disjunct (`"parent"` + `"400"`) is partially locale-robust because `"400"` is a locale-independent HTTP status token, but `"parent"` is still English and may not appear in non-English error messages. Both disjuncts are inherited from the pre-#388 `is_subtask_parent_error` implementation. This is a deliberate scope boundary for issue #388 — modifying `is_subtask_parent_error`'s locale resilience is not part of this delta and is not a regression introduced here.
+
+**Edge Cases**:
+- EC-3.4.010-1: standard→sub-task direction (source `subtask: false`, target `subtask: true`) → same hint, same exit code.
+- EC-3.4.010-2: sub-task→standard direction (source `subtask: true`, target `subtask: false`) → same hint, same exit code.
+- EC-3.4.010-3: The English error substring `"issue type selected is invalid"` is present in the 400 body but the flags DO match (same hierarchy, typo scenario) → hint MUST NOT fire; this is the BC-3.4.011 SameCategory path.
+
+**Trace**: issue #388 F2; `src/cli/issue/create.rs::is_cross_hierarchy_type_error`; `src/cli/issue/create.rs::CROSS_HIERARCHY_HINT`; `src/cli/issue/create.rs` inline `#[cfg(test)] mod is_cross_hierarchy_type_error_proptests` proptest for `is_cross_hierarchy_type_error`; `tests/issue_edit_type_errors.rs` (integration — cross-hierarchy direction paths)
+
+---
+
+#### BC-3.4.011: `issue edit KEY --type X` HTTP 400 + same-hierarchy flags OR indeterminate resolution → exit 1, typo hint or raw error (no JRACLOUD-27893 hint)
+
+**Confidence**: HIGH
+**Source**: `tests/issue_edit_type_errors.rs` (integration tests — same-hierarchy typo path, indeterminate paths); `src/cli/issue/create.rs::is_cross_hierarchy_type_error` (pure classifier — `SameCategory` and `Indeterminate` return paths); `src/cli/issue/create.rs` inline `#[cfg(test)] mod is_cross_hierarchy_type_error_proptests` proptest for `is_cross_hierarchy_type_error` (primary verification for classifier properties); `src/cli/issue/create.rs::handle_edit` (caller: unresolvable name → typo hint; fetch-failure → `Indeterminate`)
+**Subject**: Issue write
+**Behavior**: When `edit_issue` returns HTTP 400 (observed by downcasting to `JrError::ApiError { status: 400, .. }` — constructed at `src/api/client.rs::parse_error` ~lines 973-997, defined in `src/error.rs`) AND `is_cross_hierarchy_type_error(src_subtask, tgt_subtask, err)` does NOT return `CrossHierarchy`, the CLI exits 1 without emitting `CROSS_HIERARCHY_HINT`. If `edit_issue` fails with a non-400 error (401, 403, 5xx, network error, etc.), NO enrichment occurs — the raw error is surfaced unchanged and neither BC-3.4.010 nor BC-3.4.011 enrichment applies; this is the R0b routing row tested by test #10. Three distinct sub-paths apply (all require the HTTP-400 gate to have fired):
+
+**Indeterminate fetch-failure detection — `is_err()` gate, NOT a status downcast**: The `handle_edit` enrichment-fetch failure gate is `Result::is_err()` on the `get_issue` / `get_project_issue_types` call — ANY `Err` variant triggers Indeterminate, regardless of the underlying error variant. This is deliberately distinct from the HTTP-400 gate on `edit_issue`'s error, which IS a structured downcast to `JrError::ApiError { status: 400, .. }` (because `edit_issue`'s 400 does become `ApiError` via `parse_error`). An implementer who detects the Indeterminate fetch-failure by "downcast the enrichment-fetch error to `JrError::ApiError` and check status" would MISS 401s and other non-ApiError variants. Specifically: `get_issue` returning HTTP 401 does NOT produce `JrError::ApiError` — it produces `JrError::NotAuthenticated` or `JrError::InsufficientScope` (per `src/api/client.rs::parse_error` ~lines 973-997 which dispatches 401 to these variants, not `ApiError`). The `is_err()` gate catches all `Err` variants uniformly. The two gate mechanisms are deliberately different and must not be conflated.
+
+**Unresolvable-name sub-path (SameCategory outcome, caller-side)** — `handle_edit` resolves the target type name `X` against the project's issue-type list BEFORE invoking the pure classifier. If `get_project_issue_types` returns HTTP 200 with a non-empty list that simply does not contain the requested name `X` (i.e., a typo'd or wrong type name), `handle_edit` emits the typo hint directly and never calls the classifier:
+- Emit the pinned typo hint on stderr:
+
+```
+Jira rejected the type change. If the type name is wrong, run `jr project types` to list valid types; the change may also be blocked by workflow or scheme constraints.
+```
+
+- Surface the `extract_error_message`-processed 400 message text carried in `JrError::ApiError.message` on stderr (this is the extracted message only — e.g., `issuetype: The issue type selected is invalid.`; the raw JSON envelope such as `{"errors": {...}}` is NOT surfaced because `JiraClient::parse_error` in `src/api/client.rs` runs `extract_error_message()` on the response bytes before constructing `JrError::ApiError.message`; `extract_error_message` is `sanitize_for_stderr(extract_error_message_raw(body))` per `src/api/client.rs:1481` — for plain-ASCII message text, `sanitize_for_stderr` is a no-op, so test substrings from plain-ASCII extracted text are safe; test assertions MUST use plain-ASCII substrings, not control characters or multibyte sequences). When asserting this in tests (#3), choose a substring from the EXTRACTED message (e.g., `The issue type selected is invalid` survives extraction; `{"errors"` or `"issuetype":` as raw JSON keys do not).
+- `CROSS_HIERARCHY_HINT` (containing `JRACLOUD-27893`) MUST NOT appear on stderr.
+- The pure classifier (`is_cross_hierarchy_type_error`) is NOT invoked on this path.
+
+**SameCategory sub-path (classifier-side)** — `get_project_issue_types` succeeds and the target name IS found; `is_cross_hierarchy_type_error` returns `SameCategory`: both `src_subtask` and `tgt_subtask` are `Some(_)` and the inner boolean values are equal. This covers valid type names rejected by workflow or scheme constraints (a valid type name rejected because the target workflow lacks the issue's current status). The enrichment lookup that determines whether the name IS found uses **case-insensitive exact match on the issue-type `name` field** (so the enrichment verdict agrees with how Jira server-side resolves the type name; partial_match substring matching MUST NOT be used, which could mis-resolve ambiguous type names):
+- Emit the same pinned typo hint on stderr (verbatim above).
+- Surface the `extract_error_message`-processed 400 message text carried in `JrError::ApiError.message` on stderr (same extraction semantics as the unresolvable-name sub-path above — `sanitize_for_stderr(extract_error_message_raw(body))` is effectively a no-op for plain-ASCII text; assert a plain-ASCII substring from the extracted message in tests (#4), not raw JSON envelope keys).
+- `CROSS_HIERARCHY_HINT` (containing `JRACLOUD-27893`) MUST NOT appear on stderr.
+
+**Indeterminate sub-path** — `is_cross_hierarchy_type_error` returns `Indeterminate`. This occurs in two distinct ways:
+1. **Either enrichment fetch fails** (Cause-1): `get_issue` OR `get_project_issue_types` returns `Err` — detected by `Result::is_err()` on the call result. ANY `Err` variant triggers Indeterminate: `JrError::NotAuthenticated` (e.g., a `get_issue` 401), `JrError::InsufficientScope` (a `get_issue` 403 scope failure), `JrError::ApiError { status: 5xx, .. }`, network errors, and all other `Err` variants. The `handle_edit` caller does NOT downcast or inspect the error variant — `is_err()` is the gate. NOTE: a 200 response with a malformed `issueTypes` body is NOT a fetch failure — `get_project_issue_types` returns `Ok(vec![])` in that case (due to `.and_then(|v| from_value::<Vec<IssueTypeMetadata>>(v).ok()).unwrap_or_default()` in `src/api/jira/projects.rs:47-51`), which routes to the unresolvable-name sub-path (typo hint), NOT Indeterminate. Indeterminate via Cause-1 requires an actual `Err`, not a 200 with malformed body.
+2. **A fetch succeeds but the `subtask` field is absent** (Cause-2): `get_issue` or `get_project_issue_types` returns HTTP 200, but the `issuetype.subtask` field is missing (`None`) after deserialization (field omitted by Jira). The pure classifier `is_cross_hierarchy_type_error(None, _, _)` or `is_cross_hierarchy_type_error(_, None, _)` returns `Indeterminate`. Note: for the source-issue side, Cause-2 also covers the case where the `issuetype` object is wholly absent (`Option<IssueType>` is `None`), because `issue.fields.issuetype.as_ref().and_then(|t| t.subtask)` produces `None` for both a missing issuetype and a present-but-subtask-absent issuetype.
+
+On either Indeterminate cause:
+- Surface the `extract_error_message`-processed 400 message text carried in `JrError::ApiError.message` on stderr with NO enrichment hint. When asserting this in tests (#6, #7), choose a substring from the extracted message, not raw JSON envelope keys.
+- Neither the cross-hierarchy hint (`CROSS_HIERARCHY_HINT`) nor the typo/workflow hint is emitted.
+- Exit code 1.
+
+**Preconditions**:
+- Single-key `jr issue edit KEY --type X` is issued.
+- `edit_issue` returns HTTP 400. (If `edit_issue` fails with a non-400 error, no enrichment occurs — see R0b routing row / test #10.)
+- **Call ordering**: `handle_edit` calls `get_issue` FIRST. Only if `get_issue` succeeds (HTTP 200) is `get_project_issue_types(project_key)` called. A `get_issue` failure — detected by `Result::is_err()` (ANY `Err` variant, not a downcast) → Indeterminate immediately (the second call never executes). The unresolvable-name sub-path is reachable only when `get_issue` already succeeded. This ordering ensures the caller-side routing is provably total with no input matching two branches simultaneously.
+- **`Option<IssueType>` outer-layer flatten**: `issue.fields.issuetype` (`src/types/jira/issue.rs:62`) is `Option<IssueType>`; `IssueType.subtask` is `Option<bool>`. The caller MUST read `src_subtask` via `issue.fields.issuetype.as_ref().and_then(|t| t.subtask)`. Two distinct sources of `src_subtask: None` exist: (a) the `issuetype` object is wholly absent from the response — `Option<IssueType>` is `None`; (b) `issuetype` is present but its `subtask` key is omitted from the JSON — `IssueType.subtask` is `None`. Both (a) and (b) collapse to `src_subtask: None` → Indeterminate. Test #6 covers case (b) (source-side subtask key omitted); it also covers case (a) via the same `and_then` flatten path — both produce `src_subtask: None` and route identically.
+- ONE OF three routing conditions applies:
+  - (Unresolvable-name) `get_project_issue_types` returns HTTP 200 with a non-empty list that does not contain the target name `X` → caller emits typo hint without invoking classifier.
+  - (SameCategory) Both `get_issue` and `get_project_issue_types` succeed, the target name IS found, and the deserialized `subtask` values are both `Some(_)` AND equal → classifier returns `SameCategory` → typo hint emitted.
+  - (Indeterminate) At least one of `get_issue` or `get_project_issue_types` returns an `Err` (ANY 4xx, 5xx, or network error — NOT a 200 with malformed body, which routes to unresolvable-name instead), OR both fetches return 200 but at least one `subtask` field is `None` → raw error only.
+
+**Postconditions**:
+- Exit code 1.
+- `CROSS_HIERARCHY_HINT` is absent from stderr on ALL sub-paths (prevents false positives on plain typos and workflow-incompatibility 400s).
+- Unresolvable-name and SameCategory: stderr contains the pinned typo hint (verbatim above) plus the `extract_error_message`-processed 400 message text carried in `JrError::ApiError.message`.
+- Indeterminate: stderr contains the `extract_error_message`-processed 400 message text carried in `JrError::ApiError.message`; no enrichment hint of any kind.
+
+**Invariants**:
+1. `JRACLOUD-27893` MUST NOT appear on stderr on any of the three sub-paths. This prevents the cross-hierarchy hint from misleading users experiencing typos or workflow-incompatibility rejections.
+2. Indeterminate degrades gracefully: a fetch failure on the error-enrichment path never supersedes the original 400 error body.
+3. The unresolvable-name case routes to the typo hint (not Indeterminate) because the 200 response confirms the API is reachable and the name is definitively wrong — no ambiguity warrants degrading to raw error.
+
+**Edge Cases**:
+- EC-3.4.011-1: Both flags are `subtask: false` (two standard issue types, different names — target name found) → SameCategory → typo/workflow hint; no JRACLOUD-27893.
+- EC-3.4.011-2: `get_project_issue_types` returns HTTP 5xx → Indeterminate (Cause-1, `is_err()` gate) → `extract_error_message`-processed 400 message only; no hint. Tested by `test_edit_type_indeterminate_project_types_5xx_surfaces_raw_error` (test #4 — covers the R2 routing row: `get_issue` succeeds, project-types call returns 5xx).
+- EC-3.4.011-3: `get_project_issue_types` returns HTTP 200 with a non-empty list that does NOT contain the target name `X` (typo'd or wrong type name) → unresolvable-name sub-path → typo hint; NOT Indeterminate. The caller `handle_edit` emits the typo hint directly without invoking the pure classifier (because the name is definitively absent from a successful 200 response, not an API error). Tested by `test_edit_type_unresolved_type_name_surfaces_typo_hint` (test #8).
+- EC-3.4.011-4: `get_issue` returns HTTP 401 (auth failure on enrichment fetch — surfaces as `JrError::NotAuthenticated` or `JrError::InsufficientScope`, NOT `JrError::ApiError{401}`, per `src/api/client.rs::parse_error`) → Indeterminate (Cause-1, caught by `is_err()` gate on the `get_issue` call) → `extract_error_message`-processed 400 message only; no hint; `JRACLOUD-27893` absent. This is the R1 routing row (`get_issue` itself fails): `get_issue` returns 5xx or any error → Indeterminate immediately (project-types never called). Tested by `test_edit_type_indeterminate_get_issue_fails_surfaces_raw_error` (test #9 — distinct from test #4 which covers R2 where `get_issue` succeeds but project-types fails).
+- EC-3.4.011-5: `get_issue` returns HTTP 200 but Jira omits the `subtask` field from the issuetype object → `subtask: None` after deserialization → `is_cross_hierarchy_type_error(None, _, _)` returns `Indeterminate` → `extract_error_message`-processed 400 message only; no hint. Tested by `test_edit_type_indeterminate_absent_subtask_flag_surfaces_raw_error` (test #6 — source-side absent subtask flag).
+- EC-3.4.011-6: `get_issue` returns HTTP 200 (source `subtask` field present), `get_project_issue_types` returns HTTP 200, but the matched target type's `subtask` key is OMITTED from the response object → `tgt_subtask: None` after deserialization → `is_cross_hierarchy_type_error(_, None, _)` returns `Indeterminate` → `extract_error_message`-processed 400 message only; no enrichment hint; `JRACLOUD-27893` absent. Tested by `test_edit_type_indeterminate_absent_target_subtask_flag_surfaces_raw_error` (test #7 — target-side absent subtask flag; symmetric to EC-3.4.011-5).
+- EC-3.4.011-7: `get_project_issue_types` returns HTTP 200 with a list that does NOT contain the target name `X` (unresolvable-name path) → typo hint → exit 1; `JRACLOUD-27893` absent; `jr api /rest/api/3/issue` absent. Tested by `test_edit_type_unresolved_type_name_surfaces_typo_hint` (test #8 — the eighth integration test added to cover this previously-untested sub-path).
+
+**Test sub-path mapping** (authoritative — tests in `tests/issue_edit_type_errors.rs`):
+- Test #1 (`test_edit_type_cross_hierarchy_std_to_subtask_surfaces_conversion_hint`): CrossHierarchy standard→subtask direction — exercises BC-3.4.010.
+- Test #2 (`test_edit_type_cross_hierarchy_subtask_to_std_surfaces_conversion_hint`): CrossHierarchy subtask→standard direction — exercises BC-3.4.010.
+- Test #3 (`test_edit_type_same_hierarchy_400_surfaces_typo_hint`): SameCategory classifier-side (both flags `Some(false)`, target name found, hierarchy equal) — exercises BC-3.4.011 SameCategory classifier-side sub-path. `JRACLOUD-27893` MUST NOT appear.
+- Test #4 (`test_edit_type_indeterminate_project_types_5xx_surfaces_raw_error`): Indeterminate Cause-1 (GET project types returns 5xx) — exercises BC-3.4.011 Indeterminate sub-path. `JRACLOUD-27893` MUST NOT appear.
+- Test #5 (`test_edit_type_cross_hierarchy_hint_no_fake_endpoint_literal`): Regression pin — CrossHierarchy path does NOT emit `jr api /rest/api/3/issue` — exercises BC-3.4.010 postcondition.
+- Test #6 (`test_edit_type_indeterminate_absent_subtask_flag_surfaces_raw_error`): Indeterminate Cause-2 source-side (subtask field absent on GET issue) — exercises BC-3.4.011 Indeterminate sub-path EC-3.4.011-5.
+- Test #7 (`test_edit_type_indeterminate_absent_target_subtask_flag_surfaces_raw_error`): Indeterminate Cause-2 target-side (subtask field absent on GET project types) — exercises BC-3.4.011 Indeterminate sub-path EC-3.4.011-6.
+- Test #8 (`test_edit_type_unresolved_type_name_surfaces_typo_hint`): Unresolvable-name sub-path (200 response, name NOT in list) — exercises BC-3.4.011 unresolvable-name sub-path. `get_project_issue_types` returns 200 with a list that does NOT contain the `--type` value → typo hint, exit 1, `JRACLOUD-27893` absent, `jr api /rest/api/3/issue` absent.
+- Test #9 (`test_edit_type_indeterminate_get_issue_fails_surfaces_raw_error`): R1 routing row — `edit_issue` 400, then `get_issue` returns 5xx → Indeterminate (detected by `is_err()` on the `get_issue` call; project-types never called) → exit nonzero, raw error on stderr, no hint, `JRACLOUD-27893` absent, `jr api /rest/api/3/issue` absent. Distinct wiremock topology from test #4 (R2): test #9 has `get_issue` fail; test #4 has `get_issue` succeed then project-types fail. Exercises EC-3.4.011-4.
+- Test #10 (`test_edit_type_non_400_edit_error_surfaces_raw_error_no_enrichment`): R0b routing row — `edit_issue` returns e.g. HTTP 403 (a non-400 error) → exit nonzero, raw error on stderr, NEITHER the cross-hierarchy hint NOR the typo hint, `JRACLOUD-27893` absent, `jr api /rest/api/3/issue` absent. No enrichment fetch occurs (`get_issue` and `get_project_issue_types` mocks NOT mounted). Exercises BC-3.4.010 and BC-3.4.011 negative constraint: the enrichment block is entered ONLY on `status == 400`.
+
+**Trace**: issue #388 F2; `src/cli/issue/create.rs::is_cross_hierarchy_type_error` (pure classifier, `SameCategory` and `Indeterminate` variants); `src/cli/issue/create.rs` inline `#[cfg(test)] mod is_cross_hierarchy_type_error_proptests` proptest for `is_cross_hierarchy_type_error`; `src/cli/issue/create.rs::handle_edit` (unresolvable name → typo hint; fetch-failure → `Indeterminate` caller dispatch); `tests/issue_edit_type_errors.rs` (integration — same-hierarchy, indeterminate, absent-subtask-flag, and unresolvable-name paths, tests #3–#8)
 
 ---
 
@@ -1055,6 +1218,6 @@ When `--markdown` is absent, the guard does NOT fire — `--field description=va
 
 Sources: `src/cli/issue/snapshots/jr__cli__issue__json_output__tests__*.snap`; BC-1104..BC-1112 (R4)
 
-## Total BCs in this file: 66 individually-bodied (cumulative 95 incl. range-collapsed; see BC-INDEX.md)
+## Total BCs in this file: 68 individually-bodied (cumulative 97 incl. range-collapsed; see BC-INDEX.md)
 
-_Last updated 2026-05-20: +2 BCs (BC-3.8.016..017): BC-3.8.016 (empty --request-type guard, exit 64 before partial_match) and BC-3.8.017 (--markdown + --field description= conflict rejection, exit 64 at parse-time) added in F2 delta (issue #385) to close O-08-04 and O-08-06. BC-3.8.002 error string harmonized (O-08-02: added --project/.jr.toml/jr-project-list affordances). BC-3.8.010 and BC-3.8.011 postconditions updated: warnings fire post-require_service_desk only (O-08-07 warning-position fix). BC-3.8 section header updated to 17 contracts, clause (e) added._
+_Last updated 2026-05-20: +2 BCs (BC-3.4.010..011): BC-3.4.010 (cross-hierarchy `edit --type` 400 → CROSS_HIERARCHY_HINT citing JRACLOUD-27893) and BC-3.4.011 (same-hierarchy/indeterminate `edit --type` 400 → typo hint or raw error, no JRACLOUD-27893 hint) added in F2 delta (issue #388). BC-3.4.003 Errors cross-reference updated (annotation only, no behavioral change). Section 3.4 header updated to 11 contracts. Previous update (2026-05-20 issue #385): +2 BCs (BC-3.8.016..017); BC-3.8.002/010/011 modified._

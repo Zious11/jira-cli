@@ -1,0 +1,78 @@
+# Affected files — Issue #388 (Option A: accurate error + fix fake-endpoint bug)
+# Format: STATUS path/to/file  [reason]
+# STATUS: MODIFIED | NEW | DEPENDENT (read/verified but not changed)
+
+MODIFIED  src/cli/issue/create.rs
+# - Add CROSS_HIERARCHY_HINT const (shared hint replacing fake endpoint)
+# - Replace fake-endpoint hint in --no-parent error block (~line 834) with const
+# - Add is_cross_hierarchy_type_error() pure helper near is_subtask_parent_error()
+# - Add --type 400 detection block after edit_result? in single-key path
+# Error path only; happy path bytes unchanged.
+
+MODIFIED  src/types/jira/issue.rs
+# - Add `subtask: Option<bool>` with `#[serde(default)]` to IssueType struct
+# Additive; no existing deserialization breaks.
+
+MODIFIED  tests/issue_edit_no_parent.rs
+# - Tighten T-06 assertions: pin absence of /rest/api/3/issue/{key}/convert literal
+# - Update hint-presence checks to match new shared CROSS_HIERARCHY_HINT wording
+
+NEW       tests/issue_edit_type_change.rs
+# (or appended to tests/issue_commands.rs)
+# - test_edit_type_std_to_subtask_400_emits_cross_hierarchy_hint
+# - test_edit_type_subtask_to_std_400_emits_cross_hierarchy_hint
+# - test_edit_type_same_category_400_emits_typo_hint
+# - test_edit_type_400_indeterminate_emits_raw_error
+# - test_edit_type_cross_hierarchy_hint_contains_JRACLOUD_27893_literal (regression pin)
+# - test_edit_type_cross_hierarchy_hint_no_fake_endpoint_literal (negative pin)
+
+MODIFIED  .factory/specs/prd/bc-3-issue-write.md
+# - Add new BC(s) under subdomain 3.4 for cross-hierarchy --type 400 hint
+# - Amend or supersede --no-parent hint BC with corrected wording
+# - Update total_bcs, definitional_count
+
+MODIFIED  .factory/specs/prd/BC-INDEX.md
+# - Register new BC(s)
+
+MODIFIED  .factory/specs/prd/CANONICAL-COUNTS.md
+# - Bump BC count by number of new BCs
+
+MODIFIED  CLAUDE.md
+# - Gotchas: note corrected --no-parent hint (cite #388, JRACLOUD-27893)
+# - Gotchas: note --type 400 detection (structural gate, not substring; locale-safe)
+# - Gotchas: note is_subtask_parent_error is NOT replaced (only supplemented)
+
+# ---- DEPENDENT (verified, no edit) ----
+
+DEPENDENT src/api/jira/issues.rs
+# get_issue already exists; issuetype in BASE_ISSUE_FIELDS; no change.
+
+DEPENDENT src/api/jira/projects.rs
+# get_project_issue_types already exists with subtask: Option<bool> in IssueTypeMetadata; no change.
+
+DEPENDENT src/api/client.rs
+# JiraClient HTTP layer unchanged.
+
+DEPENDENT src/error.rs
+# JrError::ApiError { status: 400 } is the downcast target; no variant change.
+
+DEPENDENT src/cli/mod.rs
+# No new CLI flags; no clap change.
+
+# ---- NOT CHANGED (regression baseline) ----
+
+BASELINE  src/cli/issue/create.rs (lines 267-736 field-building and bulk-routing)
+BASELINE  src/cli/issue/create.rs handle_create / handle_jsm_create
+BASELINE  src/cli/issue/workflow.rs
+BASELINE  src/cli/issue/list.rs
+BASELINE  src/cli/issue/view.rs
+BASELINE  tests/issue_create_jsm.rs
+BASELINE  tests/issue_bulk_pr2.rs
+BASELINE  tests/issue_bulk.rs
+BASELINE  tests/bulk_deadline_propagation.rs
+BASELINE  tests/cli_handler.rs
+BASELINE  src/cache.rs
+BASELINE  src/config.rs
+BASELINE  src/adf.rs
+BASELINE  src/jql.rs
+BASELINE  src/duration.rs
