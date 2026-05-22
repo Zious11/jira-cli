@@ -38,7 +38,7 @@ pub(super) async fn resolve_team_field(
     client: &JiraClient,
     team_name: &str,
     no_input: bool,
-) -> Result<(String, String)> {
+) -> Result<(String, String, String)> {
     // 1. Resolve team_field_id
     let field_id = if let Some(id) = config.active_profile().team_field_id {
         id
@@ -61,7 +61,8 @@ pub(super) async fn resolve_team_field(
         if client.verbose() {
             eprintln!("[verbose] team resolved via UUID pass-through: {team_name}");
         }
-        return Ok((field_id, team_name.to_string()));
+        // UUID-bypass: team_name (3rd element) is the raw UUID — no lookup occurred
+        return Ok((field_id, team_name.to_string(), team_name.to_string()));
     }
 
     // 3. Load teams from cache (or fetch if missing/expired). `cache_was_fresh`
@@ -109,7 +110,7 @@ pub(super) async fn resolve_team_field(
                 .iter()
                 .position(|t| t.name == matched_name)
                 .expect("matched name must exist in teams");
-            Ok((field_id, teams[idx].id.clone()))
+            Ok((field_id, teams[idx].id.clone(), matched_name))
         }
         crate::partial_match::MatchResult::ExactMultiple(_) => {
             let name_lower = team_name.to_lowercase();
@@ -140,7 +141,11 @@ pub(super) async fn resolve_team_field(
                 .items(&labels)
                 .interact()
                 .context("failed to prompt for team selection")?;
-            Ok((field_id, duplicates[selection].id.clone()))
+            Ok((
+                field_id,
+                duplicates[selection].id.clone(),
+                duplicates[selection].name.clone(),
+            ))
         }
         crate::partial_match::MatchResult::Ambiguous(matches) => {
             if no_input {
@@ -162,7 +167,7 @@ pub(super) async fn resolve_team_field(
                 .iter()
                 .position(|t| t.name == *selected_name)
                 .expect("selected name must exist in teams");
-            Ok((field_id, teams[idx].id.clone()))
+            Ok((field_id, teams[idx].id.clone(), teams[idx].name.clone()))
         }
         crate::partial_match::MatchResult::None(_) => {
             // Any fresh fetch this call (cold-cache or retry) means advising

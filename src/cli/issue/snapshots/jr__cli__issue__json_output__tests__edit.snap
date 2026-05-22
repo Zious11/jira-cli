@@ -1,8 +1,11 @@
 ---
 source: src/cli/issue/json_output.rs
-expression: "edit_response(\"TEST-1\")"
+expression: "edit_response(\"TEST-1\", &map)"
 ---
 {
+  "changed_fields": {
+    "summary": "New title"
+  },
   "key": "TEST-1",
   "updated": true
 }

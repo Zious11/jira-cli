@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde_json::{Value, json};
 
 /// JSON response for `issue move` — both changed and idempotent cases.
@@ -39,8 +41,16 @@ pub(crate) fn unassign_response(key: &str, changed: bool) -> Value {
 }
 
 /// JSON response for `issue edit`.
-pub(crate) fn edit_response(key: &str) -> Value {
+///
+/// `changed_fields` is a `BTreeMap<String, String>` so JSON key order within
+/// the object is deterministic (alphabetical). BC-3.4.013: `updated: true` is
+/// retained for backward compatibility; `changed_fields` is always present
+/// (empty object when no fields were changed).
+pub(crate) fn edit_response(key: &str, changed_fields: &BTreeMap<String, String>) -> Value {
+    // `json!(changed_fields)` serializes BTreeMap<String, String> directly;
+    // key order is alphabetical because BTreeMap iterates in sorted order.
     json!({
+        "changed_fields": changed_fields,
         "key": key,
         "updated": true
     })
@@ -118,7 +128,30 @@ mod tests {
 
     #[test]
     fn test_edit() {
-        assert_json_snapshot!(edit_response("TEST-1"));
+        let mut map = BTreeMap::new();
+        map.insert("summary".to_string(), "New title".to_string());
+        assert_json_snapshot!(edit_response("TEST-1", &map));
+    }
+
+    #[test]
+    fn test_edit_response_empty_changed_fields() {
+        let map: BTreeMap<String, String> = BTreeMap::new();
+        let output = edit_response("TEST-1", &map);
+        // BC-3.4.013 invariant 4 + VP-398-003: `updated: true` must always be
+        // present regardless of whether changed_fields is empty or non-empty.
+        assert_eq!(
+            output["updated"],
+            serde_json::json!(true),
+            "updated must be true even when changed_fields is empty"
+        );
+        // BC-3.4.013 invariant 4: `changed_fields` must be present and must be
+        // an empty object (not null, not absent) when no fields were changed.
+        assert_eq!(
+            output["changed_fields"],
+            serde_json::json!({}),
+            "changed_fields must be {{}} (empty object) when map is empty; got: {}",
+            output
+        );
     }
 
     #[test]
