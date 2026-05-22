@@ -558,3 +558,18 @@ feature_followup_standalone:
     issue: 385
     points: 5
     notes: "Feature mode F4 story (closes issue #385). All 4 O-08 fixes: O-08-02 (BC-3.8.002 harmonized project-required error string), O-08-04 (BC-3.8.016 empty --request-type guard, exits 64 'request type cannot be empty'), O-08-06 (BC-3.8.017 --markdown+--field description= conflict guard, exits 64), O-08-07 (BC-3.8.010/011 platform-flag warnings moved post-require_service_desk). F1+F2+F3 COMPLETE (F2 adv 3/3 CLEAN 19 passes; F3 adv 3/3 CLEAN 12 passes). F4 per-story adversary CONVERGED 3/3 CLEAN. Copilot 3 rounds →0. CI 10/10 GREEN. PR #395 squash-merged @ f7fc8c3 (2026-05-20). Issue #385 auto-closed. F7 traceability: 5 BCs (BC-3.8.002/010/011/016/017) ↔ 7 required test deliverables ↔ handle_jsm_create locus in src/cli/issue/create.rs. 7 process-gaps PG-385-1..7 recorded as justified deferrals. Cycle CLOSED 2026-05-20."
+
+  - id: S-398
+    title: "issue edit / issue create — changed-fields echo on success (closes #398)"
+    status: completed
+    pr: 399
+    merge_sha: b49f2fd
+    merged_at: "2026-05-22"
+    merged_via: "gh pr merge --squash (Zious11; issue #398 auto-closed)"
+    depends_on: []
+    bc_anchors: [BC-3.4.012, BC-3.4.013, BC-3.4.014]
+    verification_properties: [VP-398-001, VP-398-002, VP-398-003, VP-398-004, VP-398-005, VP-398-006]
+    holdout_anchors: []
+    issue: 398
+    points: 5
+    notes: "Feature mode F4 story (DELIVERED). Closes issue #398. PR #399 squash-merged @ b49f2fd (2026-05-22). Delivery: stubs → 27 failing tests (Red Gate verified) → TDD implementation (5 micro-commits) → per-story adversarial convergence (3 consecutive CLEAN passes; 1 false-alarm pass discarded — PG-398-4, adversary mis-resolved worktree path) → 7 demo recordings → PR #399 → 10/10 CI green → AI review APPROVE → Copilot review (1 finding, REFUTED via research-agent as deliberate spec carve-out) → merged. Phase F4 Delta Implementation: COMPLETE. Entering F5 Scoped Adversarial Review."
