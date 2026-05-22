@@ -702,7 +702,74 @@ async fn test_bc_3_4_014_create_points_integer_value_echo() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 20 — AC-014: JSM `--request-type` path never emits field echo lines
+// Test 20 (OBS-4) — AC-012 clause 2: `--account-id` assignee echo shows raw ID
+// BC-3.4.014 postcondition: `assignee → <account_id_string>` (no name resolution).
+//
+// The `--account-id` arm in create.rs (~line 219-222) inserts the raw account ID
+// string directly into the echo map without any display-name lookup. This test
+// pins that contract — the implementation already handles this path, so the test
+// passes on first run. A failure here indicates a real implementation regression.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_014_create_assignee_account_id_echo() {
+    let server = MockServer::start().await;
+    mount_post_201(&server, "PROJ-2").await;
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path());
+
+    // Placeholder account-id — realistic format but NOT a real Jira account ID.
+    let account_id = "5b10a2844c20165700ede21g";
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--type",
+            "Task",
+            "--summary",
+            "Account-id assignee echo test",
+            "--account-id",
+            account_id,
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0; stderr={stderr} stdout={stdout}"
+    );
+
+    // stdout must be empty in table mode
+    assert!(
+        stdout.is_empty(),
+        "stdout must be empty in table mode; stdout={stdout}"
+    );
+
+    // Confirmation line must be present
+    assert!(
+        stderr.contains("Created issue PROJ-2"),
+        "Expected 'Created issue PROJ-2' in stderr; stderr={stderr}"
+    );
+
+    // AC-012 clause 2: --account-id path echoes the raw account-id string, not a
+    // display name (no user lookup is performed on this code path).
+    assert!(
+        stderr.contains(&format!("  assignee \u{2192} {account_id}")),
+        "Expected '  assignee → {account_id}' in stderr; stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 21 — AC-014: JSM `--request-type` path never emits field echo lines
 // BC-3.4.014 EC-014; VP-398-AC-014.
 //
 // `handle_jsm_create` is entered when `--request-type` is set. The `create_echo`
