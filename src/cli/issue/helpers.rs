@@ -662,18 +662,6 @@ pub(crate) async fn resolve_edit_fields(
     // This happens BEFORE get_editmeta so that name-resolution failures exit 64
     // without making the editmeta HTTP call.
     let mut field_list: Option<Vec<(String, String)>> = None;
-    // Number of entries in the on-disk cache at the time we read it.
-    // Used to decide whether a fresh API response is worth writing back:
-    // we only overwrite the cache when the new list is STRICTLY LARGER than
-    // the existing one. This prevents test invocations (whose mocked API
-    // returns a single synthetic field) from permanently polluting the real
-    // `~/.cache/jr/v1/default/fields.json` with partial data that would cause
-    // subsequent test runs to find fields in cache and skip the API call,
-    // breaking `.expect(1)` mock expectations. In production, `list_fields()`
-    // returns hundreds of fields so the write always triggers after a cold
-    // cache starts empty (0). In tests, the mock returns 1 field and the
-    // existing real cache has ≥1 field → no write → real cache preserved.
-    let mut cached_len: usize = 0;
 
     // Track whether we've already fetched a fresh list from the API this
     // invocation. Once true, any further miss is definitively "not found" — we
@@ -705,7 +693,6 @@ pub(crate) async fn resolve_edit_fields(
             if field_list.is_none() {
                 let disk = read_fields_cache(profile).ok().flatten();
                 if let Some(fc) = disk {
-                    cached_len = fc.fields.len();
                     field_list = Some(fc.fields);
                 }
                 // If still None, we'll fetch from API when needed below.
@@ -781,15 +768,10 @@ pub(crate) async fn resolve_edit_fields(
                     .iter()
                     .map(|f| (f.id.clone(), f.name.clone()))
                     .collect();
-                // Only write the cache when the fresh list is strictly larger
-                // than the existing one. This prevents partial mock responses in
-                // tests from overwriting the real cache with synthetic data that
-                // would make subsequent test runs find fields in cache and skip
-                // the expected API call. In production, list_fields() returns
-                // 100+ fields, so the write triggers for any cold cache (cached_len=0).
-                if fresh.len() > cached_len {
-                    write_fields_cache(profile, &fresh)?;
-                }
+                // Unconditional best-effort write: mirrors the cmdb_fields pattern.
+                // write_fields_cache swallows I/O errors (returns Ok(())); the caller
+                // is not penalized for a failed cache write (tests 18/19 pin this).
+                write_fields_cache(profile, &fresh)?;
                 field_list = Some(fresh);
                 api_fetched = true;
                 let fl = field_list.as_ref().unwrap();

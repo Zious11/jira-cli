@@ -125,12 +125,14 @@ fn write_fields_cache_file(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_bc_3_4_015_field_string_value_appears_in_table_echo() {
     let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
 
     mount_list_fields(&server, "customfield_10001", "Severity").await;
     mount_editmeta_string(&server, "TEST-1", "customfield_10001", "Severity").await;
     mount_put_204(&server, "TEST-1").await;
 
-    let output = jr_cmd(&server.uri())
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
             "--no-input",
             "issue",
@@ -165,12 +167,14 @@ async fn test_bc_3_4_015_field_string_value_appears_in_table_echo() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_bc_3_4_015_field_string_value_appears_in_json_changed_fields() {
     let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
 
     mount_list_fields(&server, "customfield_10001", "Severity").await;
     mount_editmeta_string(&server, "TEST-1", "customfield_10001", "Severity").await;
     mount_put_204(&server, "TEST-1").await;
 
-    let output = jr_cmd(&server.uri())
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
             "--no-input",
             "--output",
@@ -285,6 +289,8 @@ async fn mock_put_with_body_check(server: &MockServer, key: &str, body: serde_js
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_bc_3_4_016_option_field_resolves_to_id_on_wire_and_label_in_echo() {
     let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
 
     // list_fields
     Mock::given(method("GET"))
@@ -326,7 +332,7 @@ async fn test_bc_3_4_016_option_field_resolves_to_id_on_wire_and_label_in_echo()
         .mount(&server)
         .await;
 
-    let output = jr_cmd(&server.uri())
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
             "--no-input",
             "--output",
@@ -368,6 +374,8 @@ async fn test_bc_3_4_016_option_field_resolves_to_id_on_wire_and_label_in_echo()
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_bc_3_4_016_option_field_case_insensitive_resolution() {
     let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/field"))
@@ -406,7 +414,7 @@ async fn test_bc_3_4_016_option_field_case_insensitive_resolution() {
         .mount(&server)
         .await;
 
-    let output = jr_cmd(&server.uri())
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
             "--no-input",
             "--output",
@@ -448,6 +456,8 @@ async fn test_bc_3_4_016_option_field_case_insensitive_resolution() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_bc_3_4_016_option_field_id_bypass() {
     let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/field"))
@@ -486,7 +496,7 @@ async fn test_bc_3_4_016_option_field_id_bypass() {
         .mount(&server)
         .await;
 
-    let output = jr_cmd(&server.uri())
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
             "--no-input",
             "--output",
@@ -528,6 +538,8 @@ async fn test_bc_3_4_016_option_field_id_bypass() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_bc_3_4_015_field_absent_from_editmeta_exits_64_with_hint() {
     let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
 
     // list_fields returns the field
     Mock::given(method("GET"))
@@ -549,7 +561,7 @@ async fn test_bc_3_4_015_field_absent_from_editmeta_exits_64_with_hint() {
 
     // PUT must NOT be called — no mock mounted
 
-    let output = jr_cmd(&server.uri())
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
             "--no-input",
             "issue",
@@ -636,6 +648,8 @@ async fn test_bc_3_4_015_customfield_literal_absent_from_editmeta_exits_64() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_bc_3_4_015_array_type_field_exits_64_with_hint() {
     let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/field"))
@@ -661,7 +675,7 @@ async fn test_bc_3_4_015_array_type_field_exits_64_with_hint() {
         .mount(&server)
         .await;
 
-    let output = jr_cmd(&server.uri())
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
             "--no-input",
             "issue",
@@ -696,6 +710,8 @@ async fn test_bc_3_4_015_array_type_field_exits_64_with_hint() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_bc_3_4_015_any_type_field_exits_64_with_hint() {
     let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/field"))
@@ -721,7 +737,7 @@ async fn test_bc_3_4_015_any_type_field_exits_64_with_hint() {
         .mount(&server)
         .await;
 
-    let output = jr_cmd(&server.uri())
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
             "--no-input",
             "issue",
@@ -1279,12 +1295,14 @@ fn test_write_fields_cache_swallows_io_error_and_returns_ok() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_bc_3_4_015_field_dry_run_exits_0_no_put() {
     let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
 
     mount_list_fields(&server, "customfield_10001", "Severity").await;
     mount_editmeta_string(&server, "TEST-1", "customfield_10001", "Severity").await;
     // Deliberately mount NO PUT — it must not be called under --dry-run
 
-    let output = jr_cmd(&server.uri())
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
             "--no-input",
             "issue",
@@ -1321,6 +1339,8 @@ async fn test_bc_3_4_015_field_dry_run_exits_0_no_put() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_bc_3_4_015_field_dry_run_resolution_failure_exits_64() {
     let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
 
     // list_fields does NOT contain "UnknownField"
     Mock::given(method("GET"))
@@ -1333,7 +1353,7 @@ async fn test_bc_3_4_015_field_dry_run_resolution_failure_exits_64() {
 
     // No PUT mounted
 
-    let output = jr_cmd(&server.uri())
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
             "--no-input",
             "issue",
@@ -1440,6 +1460,8 @@ async fn test_bc_3_4_017_gate_a_fires_under_dry_run() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_bc_3_4_015_field_partial_resolution_failure_no_put() {
     let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
 
     // list_fields MUST be called exactly once — resolution starts for the field
     // batch before any individual failure aborts the batch. The stub never calls
@@ -1473,7 +1495,7 @@ async fn test_bc_3_4_015_field_partial_resolution_failure_no_put() {
 
     // No PUT mock — zero PUT must be issued (all-or-nothing batch abort)
 
-    let output = jr_cmd(&server.uri())
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
             "--no-input",
             "issue",
@@ -1531,6 +1553,8 @@ async fn test_bc_3_4_015_field_partial_resolution_failure_no_put() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_bc_3_4_015_field_put_failure_discards_changed_fields() {
     let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
 
     // list_fields MUST be called — resolution runs before PUT
     Mock::given(method("GET"))
@@ -1571,7 +1595,7 @@ async fn test_bc_3_4_015_field_put_failure_discards_changed_fields() {
         .mount(&server)
         .await;
 
-    let output = jr_cmd(&server.uri())
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
             "--no-input",
             "--output",
@@ -1608,6 +1632,8 @@ async fn test_bc_3_4_015_field_put_failure_discards_changed_fields() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_bc_3_4_015_number_field_integer_wire_form() {
     let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
 
     mock_list_fields_exact(&server, "customfield_20001", "StoryPoints").await;
 
@@ -1638,7 +1664,7 @@ async fn test_bc_3_4_015_number_field_integer_wire_form() {
         .mount(&server)
         .await;
 
-    let output = jr_cmd(&server.uri())
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
             "--no-input",
             "issue",
@@ -1668,6 +1694,8 @@ async fn test_bc_3_4_015_number_field_integer_wire_form() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_bc_3_4_015_number_field_scientific_notation_wire_form() {
     let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
 
     mount_list_fields(&server, "customfield_20001", "StoryPoints").await;
 
@@ -1698,7 +1726,7 @@ async fn test_bc_3_4_015_number_field_scientific_notation_wire_form() {
         .mount(&server)
         .await;
 
-    let output = jr_cmd(&server.uri())
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
             "--no-input",
             "issue",
@@ -1728,6 +1756,8 @@ async fn test_bc_3_4_015_number_field_scientific_notation_wire_form() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_bc_3_4_015_number_field_nan_rejected_exit_64() {
     let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
 
     mount_list_fields(&server, "customfield_20001", "StoryPoints").await;
 
@@ -1749,7 +1779,7 @@ async fn test_bc_3_4_015_number_field_nan_rejected_exit_64() {
 
     // No PUT mock — must not be called
 
-    let output = jr_cmd(&server.uri())
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
             "--no-input",
             "issue",
@@ -1784,6 +1814,8 @@ async fn test_bc_3_4_015_number_field_nan_rejected_exit_64() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_bc_3_4_015_user_field_wire_shape_account_id() {
     let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
 
     mock_list_fields_exact(&server, "customfield_10050", "Reporter").await;
 
@@ -1814,7 +1846,7 @@ async fn test_bc_3_4_015_user_field_wire_shape_account_id() {
         .mount(&server)
         .await;
 
-    let output = jr_cmd(&server.uri())
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
             "--no-input",
             "--output",
@@ -1855,6 +1887,8 @@ async fn test_bc_3_4_015_user_field_wire_shape_account_id() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_bc_3_4_015_date_field_bare_string_pass_through() {
     let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
 
     mock_list_fields_exact(&server, "customfield_10060", "DueDate").await;
 
@@ -1885,7 +1919,7 @@ async fn test_bc_3_4_015_date_field_bare_string_pass_through() {
         .mount(&server)
         .await;
 
-    let output = jr_cmd(&server.uri())
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
             "--no-input",
             "issue",
@@ -1916,6 +1950,8 @@ async fn test_bc_3_4_015_date_field_bare_string_pass_through() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_bc_3_4_015_datetime_field_bare_string_pass_through() {
     let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
 
     mock_list_fields_exact(&server, "customfield_10070", "DueDatetime").await;
 
@@ -1946,7 +1982,7 @@ async fn test_bc_3_4_015_datetime_field_bare_string_pass_through() {
         .mount(&server)
         .await;
 
-    let output = jr_cmd(&server.uri())
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
             "--no-input",
             "issue",
@@ -1977,6 +2013,8 @@ async fn test_bc_3_4_015_datetime_field_bare_string_pass_through() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_bc_3_4_015_operations_lacks_set_exits_64() {
     let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
 
     mount_list_fields(&server, "customfield_10070", "ComputedScore").await;
 
@@ -1998,7 +2036,7 @@ async fn test_bc_3_4_015_operations_lacks_set_exits_64() {
 
     // No PUT mock
 
-    let output = jr_cmd(&server.uri())
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
             "--no-input",
             "issue",
@@ -2034,6 +2072,8 @@ async fn test_bc_3_4_015_operations_lacks_set_exits_64() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_bc_3_4_015_empty_operations_exits_64() {
     let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
 
     mount_list_fields(&server, "customfield_10070", "ComputedScore").await;
 
@@ -2055,7 +2095,7 @@ async fn test_bc_3_4_015_empty_operations_exits_64() {
 
     // No PUT mock
 
-    let output = jr_cmd(&server.uri())
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
             "--no-input",
             "issue",

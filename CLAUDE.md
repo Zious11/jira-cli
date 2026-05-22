@@ -323,13 +323,11 @@ When adding a new feature:
   Edit screen first (`Project settings → Screens`). (4) `--field` uses `GET .../editmeta` to
   validate field presence and resolve `allowedValues`; this adds one HTTP round-trip per
   `issue edit` call that includes `--field`. The call is skipped when `--field` is absent.
-  (5) **fields.json cache write guard:** `write_fields_cache` in `resolve_edit_fields` only
-  writes when `fresh.len() > cached_len` (strictly larger). This prevents single-field mock
-  responses in integration tests from overwriting the real `~/.cache/jr/v1/default/fields.json`
-  with synthetic data that would break subsequent test runs. In production, `list_fields()`
-  returns 100+ fields, so the write always fires on a cold cache (cached_len=0). In a fresh
-  dev environment (no `jr init`, empty cache), run `jr init` first or delete `fields.json`
-  before consecutive `cargo test` runs to avoid `.expect(1)` failures in tests 24/25/27/29/30/31.
+  (5) **fields.json cache write:** `write_fields_cache` in `resolve_edit_fields` is
+  UNCONDITIONAL on cache miss/stale — it mirrors the `write_cmdb_fields_cache` pattern.
+  All `--field` integration tests use `jr_cmd_with_xdg` with a per-test `tempfile::TempDir`
+  for both `XDG_CACHE_HOME` and `XDG_CONFIG_HOME`, so they never touch the real
+  `~/.cache/jr/v1/default/fields.json` and are fully order-independent.
 
 ## AI Agent Notes
 
