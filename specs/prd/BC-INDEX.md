@@ -1,13 +1,13 @@
 ---
 context: bc-index
 title: "BC Master Index"
-total_bcs: 577  # cumulative claim (incl. range-collapsed) — see preamble below; +4 added 2026-05-08 (BC-7.4.013-016, Fix-PR A); +1 added 2026-05-13 (BC-2.6.050, issue #350); +1 added 2026-05-14 (BC-2.6.051, issue #365); +1 added 2026-05-15 (BC-3.4.009, issue #340 F2); +18 added 2026-05-18 (BC-3.8.001..010 + BC-X.12.001..008, issue #288 F2+F1d); +3 added 2026-05-19 (BC-3.8.011..013, issue #288 F1d + issue #383 F2); +4 added 2026-05-19 (BC-3.8.014..015 + BC-X.8.006..007, issue #384 F2); +2 added 2026-05-20 (BC-3.8.016..017, issue #385 F2); +2 added 2026-05-20 (BC-3.4.010..011, issue #388 F2); BC-1.3.023, BC-3.3.001, BC-X.8.004, BC-3.8.009, BC-X.3.002, BC-3.8.002, BC-3.8.010, BC-3.8.011, BC-3.4.003 modified
-last_updated: 2026-05-20
+total_bcs: 580  # cumulative claim (incl. range-collapsed) — see preamble below; +4 added 2026-05-08 (BC-7.4.013-016, Fix-PR A); +1 added 2026-05-13 (BC-2.6.050, issue #350); +1 added 2026-05-14 (BC-2.6.051, issue #365); +1 added 2026-05-15 (BC-3.4.009, issue #340 F2); +18 added 2026-05-18 (BC-3.8.001..010 + BC-X.12.001..008, issue #288 F2+F1d); +3 added 2026-05-19 (BC-3.8.011..013, issue #288 F1d + issue #383 F2); +4 added 2026-05-19 (BC-3.8.014..015 + BC-X.8.006..007, issue #384 F2); +2 added 2026-05-20 (BC-3.8.016..017, issue #385 F2); +2 added 2026-05-20 (BC-3.4.010..011, issue #388 F2); +3 added 2026-05-21 (BC-3.4.012..014, issue #398 F2); BC-1.3.023, BC-3.3.001, BC-X.8.004, BC-3.8.009, BC-X.3.002, BC-3.8.002, BC-3.8.010, BC-3.8.011, BC-3.4.003 modified
+last_updated: 2026-05-21
 source_pass: 3
 sections:
   - bc-1-auth-identity.md (57 BCs cumulative; 46 individually-bodied)
   - bc-2-issue-read.md (93 BCs cumulative; 51 individually-bodied)
-  - bc-3-issue-write.md (97 BCs cumulative; 68 individually-bodied)
+  - bc-3-issue-write.md (100 BCs cumulative; 71 individually-bodied)
   - bc-4-assets-cmdb.md (32 BCs cumulative; 22 individually-bodied)
   - bc-5-boards-sprints.md (35 BCs cumulative; 17 individually-bodied)
   - bc-6-config-cache.md (39 BCs cumulative; 29 individually-bodied)
@@ -212,7 +212,7 @@ R1/R4 prefix = deepening round that introduced it.
 
 ---
 
-## Section 3: Issue Write (bc-3-issue-write.md) — 97 BCs cumulative; 68 individually-bodied
+## Section 3: Issue Write (bc-3-issue-write.md) — 100 BCs cumulative; 71 individually-bodied
 
 ### 3.1 Assign (9 BCs: BC-3.1.001..009)
 
@@ -259,13 +259,13 @@ R1/R4 prefix = deepening round that introduced it.
 | BC-3.3.008 | `issue create --markdown -d '...'` converts markdown to ADF before POST | BC-212 | tests/issue_create_json.rs | MEDIUM |
 | BC-3.3.009 | `create_issue` browse URL uses `client.instance_url()` (NOT `client.base_url()`) | BC-1076 (R4) | tests/issue_commands.rs:1606-1644 | HIGH |
 
-### 3.4 Edit and Open (11 BCs: BC-3.4.001..011) [BC-3.4.010..011 added 2026-05-20 issue #388 F2; BC-3.4.003 modified 2026-05-20 issue #388 F2 annotation only]
+### 3.4 Edit and Open (14 BCs: BC-3.4.001..014) [BC-3.4.010..011 added 2026-05-20 issue #388 F2; BC-3.4.012..014 added 2026-05-21 issue #398 F2; BC-3.4.003 modified 2026-05-20 issue #388 F2 annotation; BC-3.4.003 modified 2026-05-21 issue #398 F2 annotation]
 
 | L3 BC ID | Summary | Pass 3 BC ID | Source | Confidence |
 |---|---|---|---|---|
 | BC-3.4.001 | `handle_open` MUST compose URL as `<instance_url>/browse/<key>` using `client.instance_url()` [MUST-FIX: NFR-R-B] | BC-220; NFR-R-B; BC-1010 (R4) | src/cli/issue/workflow.rs:636 | HIGH |
 | BC-3.4.002 | `issue open --url-only` prints URL to stdout (no browser launch) | BC-221 | Pass 2 §2b.1 | MEDIUM |
-| BC-3.4.003 | `issue edit` PUTs `/rest/api/3/issue/<key>` with ADF description; accepts 204 | BC-1055 (R4) | tests/issue_commands.rs:609-645 | HIGH |
+| BC-3.4.003 | `issue edit` PUTs `/rest/api/3/issue/<key>` with ADF description; accepts 204; success output see BC-3.4.012 (table) and BC-3.4.013 (JSON) | BC-1055 (R4) | tests/issue_commands.rs:609-645 | HIGH |
 | BC-3.4.004 | `issue edit` with `markdown_to_adf("**bold text**")` → ADF marks `[{type: "strong"}]` on wire | BC-1056 (R4) | tests/issue_commands.rs:647-687 | HIGH |
 | BC-3.4.005 | `issue edit` with multiple fields sends both in body simultaneously | BC-1057 (R4) | tests/issue_commands.rs:689-727 | HIGH |
 | BC-3.4.006 | `issue edit --label add:foo --label remove:bar` interprets prefix and emits correct JSON wire shape | BC-213; issue #345; S-345 | tests/issue_create_json.rs; tests/issue_bulk.rs; tests/issue_bulk_pr2.rs; src/cli/issue/create.rs::build_labels_edited_fields; src/cli/issue/create.rs inline proptests | HIGH |
@@ -274,6 +274,9 @@ R1/R4 prefix = deepening round that introduced it.
 | BC-3.4.009 | `await_bulk_task` timeout error MUST include `task_id` literal in stderr message | — (issue #340) | tests/bulk_deadline_propagation.rs; src/api/jira/bulk.rs | HIGH |
 | BC-3.4.010 | `edit --type X` HTTP 400 + source `issuetype.subtask` differs from target type's `subtask` (cross-hierarchy) → exit 1, `CROSS_HIERARCHY_HINT` on stderr citing JRACLOUD-27893; same constant fixes `--no-parent` fake-endpoint hint at `create.rs:834` | — (issue #388 F2) | tests/issue_edit_type_errors.rs; src/cli/issue/create.rs::is_cross_hierarchy_type_error | HIGH |
 | BC-3.4.011 | `edit --type X` HTTP 400 + same-hierarchy flags (`src_subtask == tgt_subtask`) → exit 1, typo hint referencing `jr project types` + raw Atlassian error; OR indeterminate (fetch fails) → exit 1, raw error only; `CROSS_HIERARCHY_HINT` (JRACLOUD-27893) MUST NOT appear on either sub-path | — (issue #388 F2) | tests/issue_edit_type_errors.rs; src/cli/issue/create.rs::is_cross_hierarchy_type_error | HIGH |
+| BC-3.4.012 | `issue edit KEY` single-key success (table mode) echoes one stderr line per changed field (`  field → value`); `--team` shows RESOLVED team name (not UUID); `--description` / `--description-stdin` shows literal marker `(updated)` — not content | — (issue #398 F2) | src/cli/issue/create.rs::handle_edit; src/cli/issue/helpers.rs::resolve_team_field (3-tuple return) | HIGH |
+| BC-3.4.013 | `issue edit KEY` single-key success (JSON mode) — `edit_response` extended with `changed_fields` object; `"updated": true` retained (backward-compat); `changed_fields.description` carries the raw user-supplied `--description`/`--description-stdin` input string (NOT `(updated)` marker, NOT an ADF→text round-trip); `changed_fields.team` is resolved display name | — (issue #398 F2) | src/cli/issue/json_output.rs::edit_response; src/cli/issue/create.rs::handle_edit (desc_text capture) | HIGH |
+| BC-3.4.014 | `issue create` table-mode success echoes `  team → <resolved_name>` to stderr (between "Created issue" and browse URL) when `--team` is set; no echo when `--team` absent; JSON output path unchanged | — (issue #398 F2) | src/cli/issue/create.rs::handle_create; src/cli/issue/helpers.rs::resolve_team_field (3-tuple return) | HIGH |
 
 ### 3.5 Comments (1 BC: BC-3.5.001)
 
@@ -683,17 +686,19 @@ R1/R4 prefix = deepening round that introduced it.
 |---|---|---|
 | 1: Auth & Identity | 57 | 46 |
 | 2: Issue Read | 93 | 51 |
-| 3: Issue Write | 97 | 68 |
+| 3: Issue Write | 100 | 71 |
 | 4: Assets & CMDB | 32 | 22 |
 | 5: Boards & Sprints | 35 | 17 |
 | 6: Config & Cache | 39 | 29 |
 | 7: Output Rendering | 84 | 38 |
 | X: Cross-Cutting | 140 | 74 |
-| **Total** | **577** | **345** |
+| **Total** | **580** | **348** |
 
-**Note**: BC-X.4.009 (ADV-P1-029) is included in cross-cutting's `total_bcs` and in the sum above. Canonical total is **577** (+4 BC-7.4.013-016 added 2026-05-08 via Fix-PR A; +1 BC-2.6.050 added 2026-05-13 via issue #350; +1 BC-2.6.051 added 2026-05-14 via issue #365; +1 BC-3.4.009 added 2026-05-15 via issue #340 F2; +18 BC-3.8.001..010 + BC-X.12.001..008 added 2026-05-18 via issue #288 F2+F1d; +3 BC-3.8.011..013 added 2026-05-19 via issue #288 F1d + issue #383 F2; +4 BC-3.8.014..015 + BC-X.8.006..007 added 2026-05-19 via issue #384 F2; +2 BC-3.8.016..017 added 2026-05-20 via issue #385 F2; +2 BC-3.4.010..011 added 2026-05-20 via issue #388 F2).
+**Note**: BC-X.4.009 (ADV-P1-029) is included in cross-cutting's `total_bcs` and in the sum above. Canonical total is **580** (+4 BC-7.4.013-016 added 2026-05-08 via Fix-PR A; +1 BC-2.6.050 added 2026-05-13 via issue #350; +1 BC-2.6.051 added 2026-05-14 via issue #365; +1 BC-3.4.009 added 2026-05-15 via issue #340 F2; +18 BC-3.8.001..010 + BC-X.12.001..008 added 2026-05-18 via issue #288 F2+F1d; +3 BC-3.8.011..013 added 2026-05-19 via issue #288 F1d + issue #383 F2; +4 BC-3.8.014..015 + BC-X.8.006..007 added 2026-05-19 via issue #384 F2; +2 BC-3.8.016..017 added 2026-05-20 via issue #385 F2; +2 BC-3.4.010..011 added 2026-05-20 via issue #388 F2; +3 BC-3.4.012..014 added 2026-05-21 via issue #398 F2).
 
-Cumulative total (577) ≠ individually-bodied count (345). The difference (232) comprises range-collapsed BCs that exist in the cumulative claim but are not individually headlined in body files. This is by design — range-collapsed BCs trace to Pass 3 source material but were not individually expanded. The 4 MUST-FIX BCs are included in the individually-bodied count.
+Cumulative total (580) ≠ individually-bodied count (348). The difference (232) comprises range-collapsed BCs that exist in the cumulative claim but are not individually headlined in body files. This is by design — range-collapsed BCs trace to Pass 3 source material but were not individually expanded. The 4 MUST-FIX BCs are included in the individually-bodied count.
+
+**Process gap [process-gap]**: `scripts/check-bc-cumulative-counts.sh` currently guards 8 surfaces (per-file frontmatter, BC-INDEX headers, BC-INDEX section lines, CANONICAL-COUNTS per-file table, body preamble prose, BC-INDEX frontmatter total_bcs, CANONICAL-COUNTS Sum row, grand-total prose). The BC-INDEX Coverage Statistics body table (this section) is a 9th surface with no automated guard. Manual update required whenever BC counts change. Tracked for future script extension.
 
 ---
 

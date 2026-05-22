@@ -1,0 +1,8 @@
+src/cli/issue/helpers.rs
+src/cli/issue/create.rs
+src/cli/issue/json_output.rs
+src/cli/issue/snapshots/jr__cli__issue__json_output__tests__edit.snap
+tests/issue_edit_no_parent.rs
+.factory/specs/prd/bc-3-issue-write.md
+.factory/specs/prd/BC-INDEX.md
+.factory/specs/prd/CANONICAL-COUNTS.md

@@ -1,9 +1,9 @@
 ---
 context: bc-3
 title: "Issue Write (create/edit/move/assign/comment/link/open/remote-link)"
-total_bcs: 97   # cumulative claim (incl. range-collapsed); definitional_count below is individually-bodied headings
-definitional_count: 68   # count of `#### BC-` headings in this file
-last_updated: 2026-05-20
+total_bcs: 100   # cumulative claim (incl. range-collapsed); definitional_count below is individually-bodied headings
+definitional_count: 71   # count of `#### BC-` headings in this file
+last_updated: 2026-05-21
 source_pass: 3
 trace: |
   - L2: .factory/specs/domain-spec/bc-03-issue-write.md
@@ -23,11 +23,37 @@ trace: |
   - F2 addition (2026-05-20): BC-3.4.010 — `edit --type` cross-hierarchy 400 → CROSS_HIERARCHY_HINT (JRACLOUD-27893) (issue #388)
   - F2 addition (2026-05-20): BC-3.4.011 — `edit --type` same-hierarchy/indeterminate 400 → typo hint or raw error (issue #388)
   - F2 modified (2026-05-20): BC-3.4.003 — Errors cross-reference added for BC-3.4.010 and BC-3.4.011 (issue #388 annotation only)
+  - F2 addition (2026-05-21): BC-3.4.012 — `issue edit` table-mode success echoes one stderr line per changed field (issue #398)
+  - F2 addition (2026-05-21): BC-3.4.013 — `issue edit` JSON-mode success includes `changed_fields` object; description carries the RAW user-supplied input string (NOT an adf.rs round-trip); `updated:true` retained (issue #398)
+  - F2 addition (2026-05-21): BC-3.4.014 — `issue create` table-mode success echoes resolved team name when `--team` is set (issue #398)
+  - F2 modified (2026-05-21): BC-3.4.003 — cross-reference to BC-3.4.012 and BC-3.4.013 added (issue #398 annotation only)
+  - F2 modified (2026-05-21, adversary round 3): BC-3.4.012 — EC-13 (--description+--summary alphabetical sort pin) and EC-14 (--markdown table-mode still shows (updated)) added (M-1, MED-1, MED-2)
+  - F2 modified (2026-05-21, adversary round 3): BC-3.4.013 — EC-11 (--markdown raw Markdown in changed_fields) added; frontmatter trace corrected to raw-input-string model (MED-2, M-1)
+  - F2 modified (2026-05-21, adversary round 3): BC-3.4.014 — H1 title KEY token dropped; output channel profile reclassified to profile 4 (Symmetric) (COS-1, MED-4)
+  - F2 modified (2026-05-21, adversary round 4): BC-3.4.014 — profile-4 carve-out paragraph added; EC-3.4.014-3 exit code pinned to 64; VP-398-001 fixture constraint added (F-1, O-2, F-3)
+  - F2 modified (2026-05-21, adversary round 4): BC-3.4.012 — EC-3.4.012-10 stored-casing clause; VP-398-001 fixture constraint (F-2, F-3)
+  - F2 modified (2026-05-21, adversary round 4): BC-3.4.013 — EC-3.4.013-8 stored-casing clause; VP-398-001 fixture constraint (F-2, F-3)
+  - F2 modified (2026-05-21, adversary round 5): BC-3.4.012 — VP-398-001 negative case rewritten as direct unit-level is_team_uuid assertion; EC-3.4.012-15 added (MatchResult::None) (F-1, F-3)
+  - F2 modified (2026-05-21, adversary round 5): BC-3.4.013 — VP-398-001 negative case rewritten as direct unit-level is_team_uuid assertion; EC-3.4.013-12 added (MatchResult::None) (F-1, F-3)
+  - F2 modified (2026-05-21, adversary round 5): BC-3.4.014 — VP-398-001 negative case rewritten as direct unit-level is_team_uuid assertion; EC-3.4.014-5 added (MatchResult::None) (F-1, F-3)
+  - F2 modified (2026-05-21, adversary round 7): BC-3.4.012 — VP-398-001 module-private placement sentence added; EC-3.4.012-12 test name pinned; EC-3.4.012-2 clap-conflict wording; VP-398-004 added (F-1, F-2, F-4, F-5)
+  - F2 modified (2026-05-21, adversary round 7): BC-3.4.013 — VP-398-001 module-private placement sentence added; EC-3.4.013-10 test name pinned; EC-3.4.013-3 clap-conflict wording; VP-398-002 stdin trailing-newline sub-case inline; VP-398-004 added (F-1, F-2, F-4, F-5, F-6)
+  - F2 modified (2026-05-21, adversary round 7): BC-3.4.014 — VP-398-001 module-private placement sentence added (F-1)
+  - F2 modified (2026-05-21, adversary round 8): BC-3.4.012 — two-site insertion enumeration for points/parent; f64 .to_string() invariant scoped to --points branch; concrete assertion values for points; EC-3.4.012-12 pinned as integration test (wiremock); EC-3.4.012-16 added (empty-stdin edge case) (MAJOR-1, IMP-3, OBS-2, OBS-4)
+  - F2 modified (2026-05-21, adversary round 8): BC-3.4.013 — two-site insertion enumeration for points/parent; f64 .to_string() invariant scoped to --points branch; invariant 4 + VP-398-003 body add test_edit_response_empty_changed_fields; EC-3.4.013-13 added (empty-stdin edge case) (MAJOR-1, MAJOR-2, IMP-3)
+  - F2 modified (2026-05-21, adversary round 9): BC-3.4.012 — EC-3.4.012-12 wiremock-only note added (IMPORTANT-1)
+  - F2 modified (2026-05-21, adversary round 9): BC-3.4.013 — EC-3.4.013-10 wiremock-only note added (IMPORTANT-1)
+  - F2 modified (2026-05-21, adversary round 10): BC-3.4.012 — invariant 6 added (map construction vs emission timing; map discarded on PUT error, emitted only post-204); EC-3.4.012-16 has_any_field_change→has_updates [NOTE: this rename was an over-correction; corrected back in round 12] (IMPORTANT-3, IMPORTANT-2)
+  - F2 modified (2026-05-21, adversary round 10): BC-3.4.013 — invariant 4 pinned regenerated snapshot body + top-level key order note; invariant 6 added (map construction vs emission timing); EC-3.4.013-13 has_any_field_change→has_updates [NOTE: this rename was an over-correction; corrected back in round 12]; top-level key order note added to signature paragraph (MAJOR-1, IMPORTANT-1, IMPORTANT-2, IMPORTANT-3)
+  - F2 modified (2026-05-21, adversary round 12): BC-3.4.012 — EC-3.4.012-16 reverted to has_any_field_change (pre-HTTP guard at create.rs:341); two-guard clarifying parenthetical added (MAJOR-2)
+  - F2 modified (2026-05-21, adversary round 12): BC-3.4.013 — EC-3.4.013-13 reverted to has_any_field_change (pre-HTTP guard at create.rs:341); two-guard clarifying parenthetical added; serde_json top-level key order rationale corrected from insertion-order to alphabetical-by-default (MAJOR-1, MAJOR-2)
+  - F2 modified (2026-05-21, adversary round 12): BC-3.4.013 — signature paragraph top-level key order rationale corrected from insertion-order to alphabetical-by-default (MAJOR-1)
+  - F2 modified (2026-05-21, adversary round 12): BC-3.4.013 — invariant 4 top-level key order rationale corrected from insertion-order to alphabetical-by-default (MAJOR-1)
 ---
 
 # BC-3 — Issue Write
 
-97 behavioral contracts across 8 subdomains: Assign (3.1), Move/Transition (3.2),
+100 behavioral contracts across 8 subdomains: Assign (3.1), Move/Transition (3.2),
 Create (3.3), Edit+Open (3.4), Comment (3.5), Links (3.6), Remote links (3.7),
 JSM Request Create + Platform-Path Inverse Warnings + Auth-Conditional 401 Hints (3.8).
 
@@ -349,9 +375,12 @@ URL is composed as `format!("{}/browse/{}", client.instance_url(), key)`. `clien
 **Source**: `tests/issue_commands.rs:609-645`
 **Behavior**: Body partial-match pins full ADF doc shape: `{fields: {description: {version:1, type:"doc", content[0]: {type:"paragraph", ...}}}}`.
 **Errors**: When `edit --type X` returns HTTP 400, the error path is further classified — see BC-3.4.010 (cross-hierarchy mismatch → `CROSS_HIERARCHY_HINT`) and BC-3.4.011 (same-hierarchy or indeterminate → typo hint or raw error). The primary success path (PUT 204) and ADF description behavior are byte-for-byte unchanged.
+**Success output**: On the single-key success path (PUT 204), see BC-3.4.012 (table-mode success: one stderr line per changed field in `field → value` format) and BC-3.4.013 (JSON-mode success: `edit_response` extended with `changed_fields` map). This contract specifies only the PUT wire contract; BC-3.4.012 and BC-3.4.013 govern the confirmation output layer.
 **Trace**: Pass 3 BC-1055 (R4)
 
 > **[UPDATED 2026-05-20 issue #388]** Errors cross-reference added for `edit --type` 400 enrichment paths (BC-3.4.010, BC-3.4.011). No behavioral change to this contract.
+
+> **[UPDATED 2026-05-21 issue #398]** Success output cross-reference added for changed-fields echo (BC-3.4.012, BC-3.4.013). No behavioral change to the PUT wire contract.
 
 ---
 
@@ -620,6 +649,268 @@ On either Indeterminate cause:
 - Test #10 (`test_edit_type_non_400_edit_error_surfaces_raw_error_no_enrichment`): R0b routing row — `edit_issue` returns e.g. HTTP 403 (a non-400 error) → exit nonzero, raw error on stderr, NEITHER the cross-hierarchy hint NOR the typo hint, `JRACLOUD-27893` absent, `jr api /rest/api/3/issue` absent. No enrichment fetch occurs (`get_issue` and `get_project_issue_types` mocks NOT mounted). Exercises BC-3.4.010 and BC-3.4.011 negative constraint: the enrichment block is entered ONLY on `status == 400`.
 
 **Trace**: issue #388 F2; `src/cli/issue/create.rs::is_cross_hierarchy_type_error` (pure classifier, `SameCategory` and `Indeterminate` variants); `src/cli/issue/create.rs` inline `#[cfg(test)] mod is_cross_hierarchy_type_error_proptests` proptest for `is_cross_hierarchy_type_error`; `src/cli/issue/create.rs::handle_edit` (unresolvable name → typo hint; fetch-failure → `Indeterminate` caller dispatch); `tests/issue_edit_type_errors.rs` (integration — same-hierarchy, indeterminate, absent-subtask-flag, and unresolvable-name paths, tests #3–#8)
+
+---
+
+#### BC-3.4.012: `issue edit KEY` single-key success (table mode) echoes one stderr line per changed field in `field → value` format; resolved team name for `--team`; `(updated)` marker for description
+
+**Confidence**: HIGH
+**Source**: issue #398 F2 spec evolution; `src/cli/issue/create.rs::handle_edit` (single-key success path); `output::print_success` (existing stderr channel)
+**Subject**: Issue write
+**Behavior**: On the single-key `issue edit KEY` success path (PUT 204), AFTER printing `"Updated <key>"` to stderr via `output::print_success`, the handler emits one additional stderr line per field that was changed in this invocation. Format is `  <field> → <value>` (two leading spaces, unicode arrow). Fields and their echo values:
+
+- `summary` → the literal string value passed to `--summary`
+- `issue_type` → the literal string value passed to `--type`
+- `priority` → the literal string value passed to `--priority`
+- `parent`:
+  - **`--parent <key>` branch** (`if let Some(parent_key) = parent`): `changed_fields` receives an insertion `"parent" → parent_key_string` at the `if let Some(parent_key) = parent` site.
+  - **`--no-parent` branch** (`if no_parent`): `changed_fields` receives an insertion `"parent" → "(cleared)"` at the `if no_parent` site. Key is always `parent` in both cases; no separate `no_parent` key is ever inserted.
+- `points`:
+  - **`--points <n>` branch** (`if let Some(pts) = points`): `changed_fields` receives an insertion `"points" → pts.to_string()` at the `if let Some(pts) = points` site. The value is Rust's default `f64::to_string()` (e.g., `"5"` for `5.0`, `"2.5"` for `2.5`). This `.to_string()` formatting applies ONLY to this branch.
+  - **`--no-points` branch** (`if no_points`): `changed_fields` receives an insertion `"points" → "(cleared)"` at the `if no_points` site. No numeric formatting applies here — the value is the literal string `"(cleared)"`. Key is always `points` in both cases; no separate `no_points` key is ever inserted.
+- `team` → the RESOLVED team name (not the user's partial-match query, not the UUID); sourced from the third element of the updated `resolve_team_field` return tuple `(field_id, team_id, team_name)`. When `--team` value was passed as a raw UUID and the UUID-bypass path fires, `team_name` is the UUID itself (echo of the raw value the caller supplied). The UUID-bypass predicate (`is_team_uuid`) checks exactly 36 chars in 8-4-4-4-12 hyphen-separated groups of ASCII hex digits (case-insensitive). A team name that resembles a UUID but fails this predicate still resolves via partial-match.
+- `description` → the literal marker `(updated)` — the content is an ADF blob and is NEVER echoed inline. This asymmetry is intentional: the `(updated)` marker tells the user that description changed without flooding the terminal. See the research rationale in `.factory/research/issue-398-field-echo-conventions.md §4` (table/human channel: marker; JSON channel: raw user-supplied input string).
+
+Map keys are always the literal lowercase identifiers in the key table (`summary`, `issue_type`, `priority`, `parent`, `points`, `team`, `description`) — never `customfield_*` IDs. The issue-type key is the literal `issue_type` (matching the Rust field identifier), NOT `type` and NOT `issuetype`.
+
+`--label` edits (single OR multi key) route through `handle_edit_bulk_labels` and are NOT covered by this contract; no `label` key appears in `changed_fields`.
+
+Only fields that were actually changed in the invocation are echoed. The field-echo lines all go to **stderr** (Symmetric profile 4, same channel as the existing confirmation message). Stdout is empty (no JSON in table mode). Exit code 0.
+
+**Scope**: Single-key `handle_edit` path ONLY. The bulk `handle_edit_bulk_fields` and `handle_edit_bulk_labels` paths are unaffected by this contract. Single-key means `effective_keys.len() == 1` after resolution — including a `--jql` query matching exactly one issue. Multi-key (2+ positional, or `--jql` matching 2+) routes to the bulk path and is out of scope.
+
+**Preconditions**:
+- `jr issue edit <key> [field flags...]` issued without `--output json` (table mode).
+- At least one field flag is supplied. When no field flags are given, `handle_edit` bails with `"No fields specified to update..."` before reaching the PUT — exit 1, no echo fires.
+- `--dry-run` is NOT set. `--dry-run` short-circuits before the PUT and emits its own planned-changes preview; the changed-fields echo of this contract does not fire on `--dry-run`.
+- Single key (not a bulk path).
+- When `--points` or `--no-points` is used, `story_points_field_id` must be configured; otherwise `handle_edit` errors via `resolve_story_points_field_id` (`JrError::ConfigError`, exit 1) before the PUT and the echo does not fire.
+- PUT 204 received from Jira API.
+
+**Postconditions**:
+- Exit code 0.
+- Stderr contains `"Updated <key>"` (via `output::print_success`).
+- Stderr contains one `  <field> → <value>` line per changed field, in **alphabetical field-name order**, matching the JSON `changed_fields` BTreeMap key order. Both table-mode echo and JSON-mode `changed_fields` iterate the same `BTreeMap`, guaranteeing identical ordering.
+- Stdout is empty.
+
+**Invariants**:
+1. The `team` echo value is the RESOLVED name, never a UUID or the user's raw partial-match query (unless the caller supplied a raw UUID, in which case the UUID is echoed). VP-398-001 verifies this invariant.
+2. The `description` echo value is always exactly `(updated)`, never the content or a truncated preview. VP-398-002 verifies the asymmetry invariant.
+3. The field-echo lines are on stderr, NOT stdout. They are not visible in `--output json` mode (which is governed by BC-3.4.013).
+4. Points value uses Rust's default `.to_string()` for `f64` on the **`--points <n>` branch only** (`if let Some(pts) = points`). The `--no-points` branch inserts the literal string `"(cleared)"` — `.to_string()` is not involved. The snapshot test MUST pin both values.
+5. All `changed_fields` keys are human-readable field names (never `customfield_*` IDs).
+6. **Map construction vs emission timing**: the `changed_fields` BTreeMap MAY be constructed during field resolution (before the PUT), but it is EMITTED (table-mode stderr echo lines) ONLY AFTER `edit_result?` succeeds — i.e., after the PUT returns 204 and passes the BC-3.4.010/011 dual-gate error block. On a 400 or any other error response, the constructed map is discarded and never emitted. The echo lines in this contract are always post-PUT.
+
+**Edge Cases**:
+- EC-3.4.012-1: `--team` supplied as a UUID directly (UUID-pass-through path, predicate: 36-char 8-4-4-4-12 ASCII hex groups) → team echo shows the UUID (the raw caller-supplied value, since no name resolution occurred). A team name that resembles a UUID but does not satisfy the exact predicate (e.g., wrong length, non-hex char) still resolves via partial-match.
+- EC-3.4.012-2: `--description` and `--description-stdin` are mutually exclusive (BC-3.4.007 clap conflict); whichever one is supplied populates the single `description` key in `changed_fields`. The table-mode echo always shows `  description → (updated)` regardless of which flag was used. The raw string is captured verbatim from the supplied source, including any trailing newline — no normalization is applied before the ADF conversion.
+- EC-3.4.012-3: `--no-parent` → map key is `parent`, echo is `  parent → (cleared)`.
+- EC-3.4.012-4: `--no-points` → map key is `points`, echo is `  points → (cleared)`.
+- EC-3.4.012-5: `--points 5.0` → echo depends on Rust `f64::to_string()` (may produce `"5"` not `"5.0"`); pinned by snapshot test. Concrete assertions (NOT snapshot-only): `--points 5` → stderr contains `  points → 5`; `--points 2.5` → stderr contains `  points → 2.5`. Snapshot pins the full line; assertion pins the exact string to catch a wrong-but-stable snapshot value.
+- EC-3.4.012-6: Multiple fields changed simultaneously → one echo line per changed field in **alphabetical field-name order** (BTreeMap iteration order), same ordering as JSON `changed_fields`.
+- EC-3.4.012-7: No field flags supplied → `handle_edit` bails with exit 1 before PUT; this contract does not fire.
+- EC-3.4.012-8: `--label` flag supplied → routes through `handle_edit_bulk_labels`; this contract does not fire.
+- EC-3.4.012-9: `--dry-run` set → `handle_edit` emits planned-changes preview and exits; this contract does not fire.
+- EC-3.4.012-10: `--team` triggers interactive disambiguation (`ExactMultiple` or `Ambiguous` match result, `--no-input` absent) → user selects a team from the prompt → the echoed team name is the SELECTED team's display name (not the original query string). The echoed name is the cached team's STORED display-name casing: `duplicates[selection].name` for the `ExactMultiple` path and `teams[idx].name` for the `Ambiguous` path — NOT the user's query-string casing.
+- EC-3.4.012-11: `--points/--no-points` used when `story_points_field_id` is not configured → `resolve_story_points_field_id` errors with `JrError::ConfigError` (exit 1) before the PUT; the echo does not fire.
+- EC-3.4.012-12: `--summary ""` (empty-string value) → echo is `  summary → ` with nothing after the arrow. This is correct behavior — the empty string is a valid value, not a rendering bug. Pinned by test `test_BC_3_4_012_empty_summary_echoes_empty_value` (integration test (wiremock) — `handle_edit` needs a wiremock PUT 204, so this MUST be an integration test; it cannot be a unit test). Note: this is a wiremock-only test scenario — real Jira rejects an empty `summary` with HTTP 400 (`summary` is a system-required field), so the success-path echo is not reachable against live Jira; the test exercises the echo formatting via a mocked 204 response only.
+- EC-3.4.012-13: `jr issue edit KEY --description "x" --summary "y"` → stderr emits, in alphabetical field-name order: `  description → (updated)` first, then `  summary → y` second. This pins that the `description` marker participates in the same BTreeMap alphabetical sort as all other keys — it is NOT moved to the end, and the `(updated)` literal is the value used in the sort position for `description`.
+- EC-3.4.012-14: `jr issue edit KEY --markdown --description "**bold**"` → table-mode echo is still `  description → (updated)` regardless of `--markdown`. The Markdown content is never surfaced in table mode; the `(updated)` marker applies uniformly to all description-change paths.
+- EC-3.4.012-15: `--team` value matches no team at all (`MatchResult::None(_)`) → `resolve_team_field` errors via `JrError::UserError` before the PUT (exit code per `src/error.rs::exit_code()`, currently 64); no team echo line is emitted and the changed-fields echo does not fire. The error text contains the stable substring `No team matching` (exact wording varies by `fetched_fresh` cache state; assert only the substring). Note: the `None` variant carries a `Vec<String>` of candidate names, unused by this contract.
+- EC-3.4.012-16: `jr issue edit KEY --description-stdin < /dev/null` → `desc_text = Some("")`. The edit proceeds — `--description-stdin` is itself a field flag so the no-fields-specified bail (the `has_any_field_change` guard, the pre-HTTP guard at `create.rs:341`) does not fire regardless of stdin content; an empty description is a valid change. (Note: there are two distinct no-fields guards in `handle_edit` — `has_any_field_change` at line 341 bails before any HTTP/JQL, and `has_updates` at line 821 bails inside the field-resolution block. The bail described in this EC is the FORMER — `has_any_field_change` — because `--description-stdin` is an unconditional flag predicate in that `let` binding.) Table-mode echo is `  description → (updated)` (same as any non-empty description). The empty description string is still converted to ADF for the PUT body. Exit code 0.
+
+**Verification Properties**:
+- VP-398-001: Resolved team name in `edit` table output is the display name, not a UUID substring. Negative case (DECISION LOCKED — round 5 F-1): write a **direct unit-level assertion on `is_team_uuid`** — call `is_team_uuid("36885b3c-1bf0-4f85-a357-c5b858c31de")` (35 chars, one short of UUID length) and assert the return value is `false`. Reuse or cite the existing `is_team_uuid_rejects_wrong_length` test at `src/cli/issue/helpers.rs` (~line 617). Do NOT write an integration test routing this probe through `partial_match` — that tests `partial_match` fallback behavior, not the `is_team_uuid` predicate boundary. **PLACEMENT (DECISION LOCKED — round 7 F-1): `is_team_uuid` has no `pub` visibility — it is module-private. The `is_team_uuid` negative-case assertion is a UNIT test that MUST be placed in the `#[cfg(test)] mod tests` block inside `src/cli/issue/helpers.rs` (because `is_team_uuid` is module-private and not exported via lib.rs). Do NOT place it in `tests/`. The team-echo positive cases (verifying that a resolved display name, not a UUID, appears in stderr or JSON) remain wiremock integration tests in `tests/`.**
+- VP-398-002: Description echo is exactly `(updated)` in table output (not a content preview, not a length, not empty).
+- VP-398-004: `--no-parent` produces exactly one `changed_fields` key named `parent` with value `(cleared)` — no `no_parent` key is ever present; identically for `--no-points` → key `points` value `(cleared)`, no `no_points` key. This is verified by asserting the JSON `changed_fields` object (in `--output json` mode) contains exactly the key `parent` (not `no_parent`) with value `"(cleared)"` when `--no-parent` is used, and contains exactly the key `points` (not `no_points`) with value `"(cleared)"` when `--no-points` is used. The table-mode echo uses the same keys (`parent →`, `points →`), verified by asserting stderr does not contain `no_parent` or `no_points` as field labels.
+
+**Trace**: issue #398 F2; `src/cli/issue/create.rs::handle_edit`; `src/cli/issue/helpers.rs::resolve_team_field` (signature change to return 3-tuple; `is_team_uuid` predicate: 36-char, 8-4-4-4-12 ASCII hex groups, case-insensitive); `.factory/research/issue-398-field-echo-conventions.md`; `.factory/phase-f2-spec-evolution/prd-delta-398.md §2`
+
+[NEW 2026-05-21 issue #398 F2]
+[UPDATED 2026-05-21 adversarial review round 1: C-2 no-flags is pre-PUT exit-1; M-1 --label exclusion; MED-1 single-key cleared-field model; MED-2 BTreeMap/alphabetical ordering noted; MED-3 --dry-run precondition; MED-4 --jql single-match scope; MIN-2 UUID predicate pinned]
+[UPDATED 2026-05-21 adversarial review round 2: F-2 alphabetical ordering pinned in postconditions+EC-6; F-2 stdin verbatim capture clarified in EC-2; F-3 points precondition added EC-11; F-8 interactive disambiguation EC-10; F-9 VP-398-001 negative case rewritten; F-10 key naming clarified; F-13 empty-string EC-12]
+[UPDATED 2026-05-21 adversarial review round 3: MED-1 EC-13 added (concrete --description+--summary alphabetical ordering pin with description marker in sort); MED-2 EC-14 added (--markdown table mode still shows (updated) marker); M-1 plain-text reference in description field corrected to raw-user-supplied-input-string]
+[UPDATED 2026-05-21 adversarial review round 4: F-2 EC-3.4.012-10 stored-casing clause added (duplicates[selection].name / teams[idx].name, NOT query-string casing); F-3 VP-398-001 fixture constraint + No-team-matching substring assertion]
+[UPDATED 2026-05-21 adversarial review round 5: F-1 VP-398-001 negative case rewritten as direct unit-level is_team_uuid assertion (cite is_team_uuid_rejects_wrong_length); F-3 EC-3.4.012-15 added (MatchResult::None → JrError::UserError exit 64, no echo)]
+[UPDATED 2026-05-21 adversarial review round 7: F-1 VP-398-001 + explicit module-private placement sentence (UNIT test in helpers.rs #[cfg(test)] block, NOT tests/); F-2 EC-3.4.012-12 test name pinned; F-4 VP-398-004 added (cleared-field single-key model); F-5 EC-3.4.012-2 reworded (clap conflict, not co-occurrence)]
+[UPDATED 2026-05-21 adversarial review round 8: MAJOR-1 points/parent bullet split into two-site insertion enumeration; invariant 4 f64 .to_string() scoped to --points branch only; OBS-2 concrete assertion values added to EC-3.4.012-5; OBS-4 EC-3.4.012-12 pinned as integration test (wiremock); IMP-3 EC-3.4.012-16 added (empty-stdin edge case)]
+[UPDATED 2026-05-21 adversarial review round 9: IMPORTANT-1 EC-3.4.012-12 wiremock-only note added (real Jira rejects empty summary with HTTP 400)]
+[UPDATED 2026-05-21 adversarial review round 10: IMPORTANT-3 invariant 6 added (map construction vs emission timing — map discarded on PUT error, emitted only post-204); IMPORTANT-2 EC-3.4.012-16 has_any_field_change replaced with has_updates]
+[UPDATED 2026-05-21 adversarial review round 12: EC-3.4.012-16 reverted to `has_any_field_change` — the round-10 rename to `has_updates` was an over-correction; `has_any_field_change` (create.rs:341) is the pre-HTTP no-fields guard the EC reasons about]
+
+---
+
+#### BC-3.4.013: `issue edit KEY` single-key success (JSON mode) includes `changed_fields` object in `edit_response`; `updated: true` retained; description carries the RAW user-supplied input string
+
+**Confidence**: HIGH
+**Source**: issue #398 F2 spec evolution; `src/cli/issue/json_output.rs::edit_response` (signature change); `src/cli/issue/create.rs::handle_edit` (field-resolution block where `desc_text` is captured as the raw user input — `src/adf.rs` ADF→text converter is NOT used for this field)
+**Subject**: Issue write
+**Behavior**: On the single-key `jr issue edit KEY --output json` success path (PUT 204), the JSON payload on stdout is extended from the prior `{"key": "<key>", "updated": true}` shape to include a `changed_fields` object:
+
+```json
+{
+  "key": "<key>",
+  "updated": true,
+  "changed_fields": {
+    "<field_name>": "<string_value>"
+  }
+}
+```
+
+`"updated": true` is RETAINED for backward compatibility. Downstream consumers using `.key` or `.updated` in `jq` expressions are unaffected.
+
+`changed_fields` maps literal lowercase field identifiers to JSON string values (never `customfield_*` IDs). JSON key order is deterministic (alphabetical) because `edit_response` uses `BTreeMap<String, String>` internally. All values are JSON strings, including numeric fields (e.g., `"5"` not `5`). The issue-type key is the literal `"issue_type"` (matching the Rust field identifier), NOT `"type"` and NOT `"issuetype"`. Keys and value semantics:
+
+| Key | Value |
+|-----|-------|
+| `"description"` | The **raw user-supplied input string** from `--description` or `--description-stdin`. NOT the `(updated)` marker. NOT an ADF→text round-trip. The raw string is lossless — it is exactly what the caller sent, before any `markdown_to_adf` conversion. |
+| `"issue_type"` | Verbatim string passed to `--type` |
+| `"parent"` | **`--parent <key>` branch** (`if let Some(parent_key) = parent`): `changed_fields` receives insertion `"parent" → parent_key_string` at the `if let Some(parent_key) = parent` site. **`--no-parent` branch** (`if no_parent`): `changed_fields` receives insertion `"parent" → "(cleared)"` at the `if no_parent` site. Key is always `"parent"` in both cases; no separate `"no_parent"` key is ever inserted. |
+| `"points"` | **`--points <n>` branch** (`if let Some(pts) = points`): `changed_fields` receives insertion `"points" → pts.to_string()` at the `if let Some(pts) = points` site. Value is Rust's default `f64::to_string()` (e.g., `"5"` for `5.0`, `"2.5"` for `2.5`). This `.to_string()` formatting applies ONLY to this branch. **`--no-points` branch** (`if no_points`): `changed_fields` receives insertion `"points" → "(cleared)"` at the `if no_points` site — no numeric formatting. Key is always `"points"` in both cases; no separate `"no_points"` key. |
+| `"priority"` | Verbatim string passed to `--priority` |
+| `"summary"` | Verbatim string passed to `--summary` |
+| `"team"` | RESOLVED team display name (not UUID, not partial-match query); from the `team_name` element of the updated `resolve_team_field` return tuple |
+
+`--label` edits (single OR multi key) route through `handle_edit_bulk_labels` and are NOT covered by this contract; no `"label"` key appears in `changed_fields`.
+
+The deliberate asymmetry between BC-3.4.012 (table: `(updated)` marker for description) and BC-3.4.013 (JSON: raw input string for description) is intentional: the human channel optimizes for scannability; the machine channel must be complete and faithful. This asymmetry MUST NOT be "fixed" to make them match. A CLAUDE.md Gotcha entry should accompany the implementation.
+
+`changed_fields` contains only the fields that were changed in this invocation (same map construction as BC-3.4.012). The JSON output is on stdout. No stderr output in JSON mode (Symmetric profile 4). Exit code 0.
+
+`edit_response` signature changes to: `pub(crate) fn edit_response(key: &str, changed_fields: &BTreeMap<String, String>) -> Value`. The `BTreeMap` is passed from `handle_edit` after it is constructed during field resolution. Alphabetical key order within `changed_fields` is guaranteed by `BTreeMap`. The top-level object key order (the relative position of `"key"`, `"updated"`, and `"changed_fields"`) is determined by `serde_json::Map`'s default alphabetical key ordering (`preserve_order` feature is NOT enabled in this crate — confirmed in Cargo.toml). The top-level keys `changed_fields`, `key`, `updated` are already in alphabetical order, so the pinned snapshot body is `{"changed_fields": {...}, "key": "TEST-1", "updated": true}` regardless of the order they are written in the `json!{}` literal. The top-level key order is NOT contractually pinned beyond whatever the regenerated insta snapshot records; only the INNER `changed_fields` key order is contractually alphabetical.
+
+**Preconditions**:
+- `jr issue edit <key> [field flags...] --output json` issued.
+- At least one field flag is supplied. When no field flags are given, `handle_edit` bails with `"No fields specified to update..."` before reaching the PUT — exit 1, no JSON emitted.
+- `--dry-run` is NOT set. `--dry-run` short-circuits before the PUT and emits its own planned-changes preview; the changed-fields echo of this contract does not fire on `--dry-run`.
+- Single key (not a bulk path). Single-key means `effective_keys.len() == 1` after resolution — including a `--jql` query matching exactly one issue. Multi-key (2+ positional, or `--jql` matching 2+) routes to the bulk path and is out of scope.
+- When `--points` or `--no-points` is used, `story_points_field_id` must be configured; otherwise `handle_edit` errors via `resolve_story_points_field_id` (`JrError::ConfigError`, exit 1) before the PUT and no JSON is emitted.
+- PUT 204 received from Jira API.
+
+**Postconditions**:
+- Exit code 0.
+- Stdout is valid JSON with keys: `"key"` (string), `"updated"` (boolean `true`), `"changed_fields"` (object with string values in alphabetical key order).
+- `"updated": true` is present (backward-compat invariant).
+- `changed_fields["team"]` is the resolved display name, never a UUID (unless the caller supplied a raw UUID directly).
+- `changed_fields["description"]` is the raw user-supplied input string, never `"(updated)"`.
+- Stderr is empty.
+
+**Invariants**:
+1. `"updated": true` MUST remain in the payload. Its removal is a breaking change. VP-398-003 verifies this invariant.
+2. `changed_fields["description"]` MUST be the raw user input string (lossless; no ADF→text round-trip). VP-398-002 verifies the asymmetry holds (JSON gets raw string; table gets `(updated)` marker).
+3. `changed_fields["team"]` MUST be the resolved display name. VP-398-001 verifies.
+4. `changed_fields` JSON key order is alphabetical (guaranteed by `BTreeMap`). The insta snapshot `jr__cli__issue__json_output__tests__edit.snap` MUST be updated to reflect the new shape. The `test_edit` unit test in `src/cli/issue/json_output.rs` MUST be updated to pass a non-empty `BTreeMap` for `changed_fields` — specifically `BTreeMap` with `"summary" → "New title"`. **Pinned expected regenerated snapshot body (DECISION LOCKED — round 10 MAJOR-1)**: the regenerated snapshot content MUST be exactly `{"changed_fields": {"summary": "New title"}, "key": "TEST-1", "updated": true}` (with `changed_fields` before `key` before `updated`). The top-level key order is alphabetical because `serde_json::Map` serializes keys in alphabetical order by default — the `preserve_order` feature is NOT enabled in this crate (confirmed in Cargo.toml). The top-level keys `changed_fields`, `key`, `updated` are already in alphabetical order, so the pinned snapshot body is correct regardless of the order they are written in the `json!{}` literal. Additionally, a new test `test_edit_response_empty_changed_fields` MUST be added (applying the new-test `test_<verb>_<subject>_<expected_outcome>` naming convention): this test calls `edit_response` with an empty `BTreeMap<String, String>` and asserts the resulting JSON has `"updated": true` and `"changed_fields": {}`. It does NOT use an insta snapshot (see VP-398-003 snapshot test split). **Top-level key order note**: the top-level `edit_response` object key order follows `serde_json::Map`'s default alphabetical key ordering (`preserve_order` NOT enabled) and is NOT contractually pinned beyond whatever the regenerated snapshot records. Only the INNER `changed_fields` key order is contractually alphabetical.
+5. All `changed_fields` keys are the literal lowercase identifiers (`summary`, `issue_type`, `priority`, `parent`, `points`, `team`, `description`) — never `customfield_*` IDs. The issue-type key is the literal `issue_type` (matching the Rust field identifier), NOT `type` and NOT `issuetype`.
+6. **Map construction vs emission timing**: the `changed_fields` BTreeMap MAY be constructed during field resolution (before the PUT), but it is EMITTED (included in the JSON payload on stdout) ONLY AFTER `edit_result?` succeeds — i.e., after the PUT returns 204 and passes the BC-3.4.010/011 dual-gate error block. On a 400 or any other error response, the constructed map is discarded and the JSON payload of this contract is never written to stdout.
+
+**Edge Cases**:
+- EC-3.4.013-1: No field flags supplied → `handle_edit` bails with exit 1 before PUT; no JSON emitted.
+- EC-3.4.013-2: `--team` value was a raw UUID (UUID-bypass path) → `changed_fields["team"]` is the UUID (the raw value supplied, since no name lookup occurred).
+- EC-3.4.013-3: `--description` and `--description-stdin` are mutually exclusive (BC-3.4.007 clap conflict); whichever one is supplied populates the single `description` key. When `--description-stdin` is used, `changed_fields["description"]` is the raw piped content string (same lossless path as `--description`). The raw string is captured verbatim as read from stdin, including any trailing newline — no trailing-newline normalization is applied.
+- EC-3.4.013-4: `--no-parent` set → `changed_fields["parent"] = "(cleared)"`. No separate `"no_parent"` key.
+- EC-3.4.013-5: `--no-points` set → `changed_fields["points"] = "(cleared)"`. No separate `"no_points"` key.
+- EC-3.4.013-6: `--label` flag supplied → routes through `handle_edit_bulk_labels`; this contract does not fire.
+- EC-3.4.013-7: `--dry-run` set → `handle_edit` emits planned-changes preview and exits; this contract does not fire.
+- EC-3.4.013-8: `--team` triggers interactive disambiguation (`ExactMultiple` or `Ambiguous` match result, `--no-input` absent) → user selects a team from the prompt → `changed_fields["team"]` is the SELECTED team's display name (not the original query string). The echoed name is the cached team's STORED display-name casing: `duplicates[selection].name` for the `ExactMultiple` path and `teams[idx].name` for the `Ambiguous` path — NOT the user's query-string casing.
+- EC-3.4.013-9: `--points/--no-points` used when `story_points_field_id` is not configured → `resolve_story_points_field_id` errors with `JrError::ConfigError` (exit 1) before the PUT; no JSON is emitted.
+- EC-3.4.013-10: `--summary ""` (empty-string value) → `changed_fields["summary"] = ""`. The empty string is a valid value; the key is present in the output. Pinned by test `test_BC_3_4_013_empty_summary_in_changed_fields` (asserting the JSON `changed_fields` object contains `"summary": ""` — the key is present with an empty string value, not absent). Note: this is a wiremock-only test scenario — real Jira rejects an empty `summary` with HTTP 400 (`summary` is a system-required field), so the success-path echo is not reachable against live Jira; the test exercises the echo formatting via a mocked 204 response only.
+- EC-3.4.013-11: `jr issue edit KEY --markdown --description "**bold**"` → `changed_fields["description"]` is the literal raw string `**bold**` (raw Markdown), NOT ADF JSON and NOT plain-text-rendered. The `--markdown` flag causes `markdown_to_adf("**bold**")` to be invoked for the PUT body sent to Jira, but the raw input string `"**bold**"` is captured BEFORE that conversion and stored in `changed_fields`. The `src/adf.rs` converter is not involved in populating `changed_fields["description"]` in any way.
+- EC-3.4.013-12: `--team` value matches no team at all (`MatchResult::None(_)`) → `resolve_team_field` errors via `JrError::UserError` before the PUT (exit code per `src/error.rs::exit_code()`, currently 64); no JSON is emitted and the changed-fields echo does not fire. The error text contains the stable substring `No team matching` (exact wording varies by `fetched_fresh` cache state; assert only the substring). Note: the `None` variant carries a `Vec<String>` of candidate names, unused by this contract.
+- EC-3.4.013-13: `jr issue edit KEY --description-stdin < /dev/null` → `desc_text = Some("")`. The edit proceeds — `--description-stdin` is itself a field flag so the no-fields-specified bail (the `has_any_field_change` guard, the pre-HTTP guard at `create.rs:341`) does not fire regardless of stdin content; an empty description is a valid change. (Note: there are two distinct no-fields guards in `handle_edit` — `has_any_field_change` at line 341 bails before any HTTP/JQL, and `has_updates` at line 821 bails inside the field-resolution block. The bail described in this EC is the FORMER — `has_any_field_change` — because `--description-stdin` is an unconditional flag predicate in that `let` binding.) JSON output: `changed_fields["description"]` is `""` (empty string). The `"description"` key IS present in `changed_fields`. Exit code 0.
+
+**Verification Properties**:
+- VP-398-001: Resolved team name in `edit` JSON `changed_fields.team` is the display name, not a UUID substring. Negative case (DECISION LOCKED — round 5 F-1): write a **direct unit-level assertion on `is_team_uuid`** — call `is_team_uuid("36885b3c-1bf0-4f85-a357-c5b858c31de")` (35 chars, one short of UUID length) and assert the return value is `false`. Reuse or cite the existing `is_team_uuid_rejects_wrong_length` test at `src/cli/issue/helpers.rs` (~line 617). Do NOT write an integration test routing this probe through `partial_match` — that tests `partial_match` fallback behavior, not the `is_team_uuid` predicate boundary. **PLACEMENT (DECISION LOCKED — round 7 F-1): `is_team_uuid` has no `pub` visibility — it is module-private. The `is_team_uuid` negative-case assertion is a UNIT test that MUST be placed in the `#[cfg(test)] mod tests` block inside `src/cli/issue/helpers.rs` (because `is_team_uuid` is module-private and not exported via lib.rs). Do NOT place it in `tests/`. The team-echo positive cases (verifying that a resolved display name, not a UUID, appears in JSON `changed_fields.team`) remain wiremock integration tests in `tests/`.**
+- VP-398-002: `changed_fields.description` in JSON output is NOT `"(updated)"` (it is the raw user input string). In table output, description echo IS `(updated)` (asymmetry pinned by two separate assertions). **Sub-case — stdin trailing-newline not normalized**: When `--description-stdin` is used and the piped content ends with a trailing newline, `changed_fields["description"]` MUST be exactly `"My description\n"` — the trailing `\n` must be present and must not be silently stripped. Test: `printf 'My description\n' | jr issue edit KEY --description-stdin --output json`; parse JSON; assert `changed_fields.description == "My description\n"` (not `"My description"`). Suggested test name: `test_BC_3_4_013_description_stdin_trailing_newline_preserved_in_changed_fields`. Applies to BC-3.4.013 (JSON mode); table mode always shows `(updated)` regardless of content.
+- VP-398-003: `"updated": true` is present in `edit_response` JSON payload (backward-compat invariant). Test strategy: pass a single-field edit (e.g., `--summary "New title"`) in `--output json` mode; parse JSON; assert `output["updated"] == true` and `output["changed_fields"]` is non-empty. Also assert `"updated": true` in the updated insta snapshot. **Snapshot test split (DECISION LOCKED — round 7 F-3; see also invariant 4 above)**: the existing `test_edit` MUST be updated to pass a non-empty `BTreeMap`; the NEW `test_edit_response_empty_changed_fields` test covers the empty-map case and asserts `"updated": true` AND `"changed_fields": {}` directly (no snapshot). Both tests together verify that `"updated": true` is always present regardless of whether `changed_fields` is empty or non-empty.
+- VP-398-004: `--no-parent` produces exactly one `changed_fields` key named `parent` with value `(cleared)` — no `no_parent` key is ever present; identically for `--no-points` → key `points` value `(cleared)`, no `no_points` key. Assert: `changed_fields` in JSON output contains `"parent": "(cleared)"` (not `"no_parent"`) when `--no-parent` is used; and `"points": "(cleared)"` (not `"no_points"`) when `--no-points` is used.
+
+**Trace**: issue #398 F2; `src/cli/issue/json_output.rs::edit_response`; `.factory/research/issue-398-field-echo-conventions.md §4`; `.factory/phase-f2-spec-evolution/prd-delta-398.md §2`
+
+[NEW 2026-05-21 issue #398 F2]
+[UPDATED 2026-05-21 adversarial review round 1: C-2 no-flags is pre-PUT exit-1; M-1 --label exclusion; M-2 description is raw input string not ADF→text; MED-1 single-key cleared-field model (parent/points); MED-2 BTreeMap alphabetical ordering; MED-3 --dry-run precondition; MED-4 --jql single-match scope]
+[UPDATED 2026-05-21 adversarial review round 2: F-2 stdin verbatim capture clarified in EC-3; F-3 points precondition added EC-9; F-8 interactive disambiguation EC-8; F-9 VP-398-001 negative case rewritten; F-10 key naming clarified; F-13 empty-string EC-10]
+[UPDATED 2026-05-21 adversarial review round 3: MED-2 EC-11 added (--markdown --description raw Markdown string in changed_fields; src/adf.rs not used for changed_fields population)]
+[UPDATED 2026-05-21 adversarial review round 4: F-2 EC-3.4.013-8 stored-casing clause added (duplicates[selection].name / teams[idx].name, NOT query-string casing); F-3 VP-398-001 fixture constraint + No-team-matching substring assertion]
+[UPDATED 2026-05-21 adversarial review round 5: F-1 VP-398-001 negative case rewritten as direct unit-level is_team_uuid assertion (cite is_team_uuid_rejects_wrong_length); F-3 EC-3.4.013-12 added (MatchResult::None → JrError::UserError exit 64, no JSON emitted)]
+[UPDATED 2026-05-21 adversarial review round 7: F-1 VP-398-001 + explicit module-private placement sentence (UNIT test in helpers.rs #[cfg(test)] block, NOT tests/); F-2 EC-3.4.013-10 test name pinned; F-4 VP-398-004 added (cleared-field single-key model); F-5 EC-3.4.013-3 reworded (clap conflict, not co-occurrence); F-6 VP-398-002 stdin trailing-newline sub-case added inline]
+[UPDATED 2026-05-21 adversarial review round 8: MAJOR-1 parent/points table rows split into two-site insertion enumeration; f64 .to_string() scoped to --points branch only (not --no-points); MAJOR-2 invariant 4 + VP-398-003 body add test_edit_response_empty_changed_fields; IMP-3 EC-3.4.013-13 added (empty-stdin edge case, changed_fields["description"]=="")]
+[UPDATED 2026-05-21 adversarial review round 9: IMPORTANT-1 EC-3.4.013-10 wiremock-only note added (real Jira rejects empty summary with HTTP 400)]
+[UPDATED 2026-05-21 adversarial review round 10: MAJOR-1 invariant 4 pinned regenerated snapshot body ({"changed_fields": {"summary": "New title"}, "key": "TEST-1", "updated": true}); IMPORTANT-1 top-level key order note added to invariant 4 and signature paragraph; IMPORTANT-2 EC-3.4.013-13 has_any_field_change replaced with has_updates; IMPORTANT-3 invariant 6 added (map construction vs emission timing — map discarded on PUT error, emitted only post-204)]
+[UPDATED 2026-05-21 adversarial review round 12: EC-3.4.013-13 reverted to `has_any_field_change` — the round-10 rename to `has_updates` was an over-correction; `has_any_field_change` (create.rs:341) is the pre-HTTP no-fields guard the EC reasons about]
+
+---
+
+#### BC-3.4.014: `issue create` table-mode success echoes resolved team name to stderr when `--team` is set
+
+**Confidence**: HIGH
+**Source**: issue #398 F2 spec evolution; `src/cli/issue/create.rs::handle_create` (table-mode success path); `src/cli/issue/helpers.rs::resolve_team_field` (signature change to return 3-tuple)
+**Subject**: Issue write
+**Behavior**: On the `jr issue create` success path (table mode, no `--output json`), when `--team <name_or_uuid>` is supplied, the existing output:
+
+```
+Created issue FOO-123
+https://example.atlassian.net/browse/FOO-123
+```
+
+gains a third stderr line showing the resolved team name:
+
+```
+Created issue FOO-123
+  team → Platform Core
+https://example.atlassian.net/browse/FOO-123
+```
+
+The team echo line (`  team → <resolved_name>`) is emitted to **stderr** between the `"Created issue <key>"` line and the browse URL line. Format matches BC-3.4.012 (`  team → <value>` with two leading spaces and a unicode arrow).
+
+The resolved team name is the third element from `resolve_team_field`'s updated return tuple `(field_id, team_id, team_name)`. When the caller passed a raw UUID (UUID-bypass path in `resolve_team_field`), `team_name` is the UUID — it is echoed as-is.
+
+When `--team` is NOT supplied, no team echo line is emitted. The existing browse URL line is unaffected.
+
+**Output channel profile**: All three output lines (`Created issue <key>`, `  team → <name>`, browse URL) are emitted to **stderr**. Stdout is empty in `issue create` table mode. The browse URL line was already on stderr pre-#398 (emitted via `eprintln!`). This contract is **output channel profile 4 (Symmetric)**: stdout is empty in table mode; all confirmation and diagnostics go to stderr — consistent with BC-3.4.012 and BC-3.4.013 and the Symmetric profile classification used throughout the delta-analysis.
+
+> **Profile-4 carve-out — success lines on stderr**: CLAUDE.md profile 4 ("Symmetric") describes "stderr for human-readable errors" as a distinguishing trait, but `issue create` (and `issue edit`) also route **success confirmation lines** to stderr — specifically `output::print_success` (`"Created issue <key>"`, `"Updated <key>"`) and the browse URL `eprintln!`. This is **pre-existing behavior predating #398**; it is NOT an error path. #398 only inserts the `  team → <name>` line into that same pre-existing stderr stream. The profile-4 label is correct: in `--output json` mode stdout carries the full JSON payload while stderr is empty (true symmetric channel split); in table mode stdout is empty and all human-readable output (success confirmations, field-echo lines, browse URL) goes to stderr. A reader must not interpret "stderr for errors" as prohibiting success text on stderr — profile 4 makes no such restriction for state-changing commands.
+
+**Scope**: `issue create` table-mode output ONLY. The `issue create` JSON output path (`--output json`) is unchanged — it already returns the full issue object via a follow-up GET and contains the team field as part of that object. This BC addresses only the table/human output gap where partial-match team resolution was previously silent. Unlike `issue edit` (BC-3.4.012), `issue create` echoes ONLY the resolved team name, not other changed fields — this is a deliberate scope decision (prd-delta-398.md §2), not an incomplete implementation.
+
+**Preconditions**:
+- `jr issue create [flags] --team <name_or_uuid>` issued without `--output json`.
+- The `--request-type` flag is absent (platform create path; JSM path is governed by BC-3.8.011).
+- `resolve_team_field` returns successfully (no error).
+- POST 201 received; `issueKey` extracted.
+
+**Postconditions**:
+- Exit code 0.
+- Stderr contains `"Created issue <key>"` (via `output::print_success`).
+- Stderr contains `  team → <resolved_team_name>` on the line immediately following the "Created issue" line.
+- Stderr contains the browse URL (same `eprintln!` path as pre-#398).
+- Stdout is empty (table mode; no JSON, no diagnostic text).
+
+**Invariants**:
+1. The team echo value is the RESOLVED display name, never a UUID (unless the caller supplied a UUID directly, in which case the UUID is echoed as the "resolved name"). VP-398-001 covers both `edit` and `create` table-mode team echo.
+2. The team echo line appears between the "Created issue" confirmation and the browse URL — not after the browse URL.
+3. When `--team` is absent, the output is byte-for-byte identical to pre-#398 behavior.
+
+**Edge Cases**:
+- EC-3.4.014-1: `--team` supplied as a UUID directly → team echo shows the UUID (UUID-bypass path; no name resolution occurred).
+- EC-3.4.014-2: `--team` triggers disambiguation prompt (interactive, `--no-input` absent) → user selects a team → resolved name is echoed.
+- EC-3.4.014-3: `--no-input` with an ambiguous team name → `resolve_team_field` errors via `JrError::UserError` before POST (exit code per `src/error.rs::exit_code()`, currently 64); no team echo line emitted.
+- EC-3.4.014-4: JSM create path (`--request-type` set) → this BC does NOT apply; the team warning is governed by BC-3.8.011 (`--team` is ignored on JSM path).
+- EC-3.4.014-5: `--team` value matches no team at all (`MatchResult::None(_)`) → `resolve_team_field` errors via `JrError::UserError` before POST (exit code per `src/error.rs::exit_code()`, currently 64); no team echo line emitted and the create does not proceed. The error text contains the stable substring `No team matching` (exact wording varies by `fetched_fresh` cache state; assert only the substring). Note: the `None` variant carries a `Vec<String>` of candidate names, unused by this contract.
+
+**Verification Properties**:
+- VP-398-001: Resolved team name in `create` table output is the display name, not a UUID substring (shared VP with BC-3.4.012 and BC-3.4.013). Negative case (DECISION LOCKED — round 5 F-1): write a **direct unit-level assertion on `is_team_uuid`** — call `is_team_uuid("36885b3c-1bf0-4f85-a357-c5b858c31de")` (35 chars, one short of UUID length) and assert the return value is `false`. Reuse or cite the existing `is_team_uuid_rejects_wrong_length` test at `src/cli/issue/helpers.rs` (~line 617). Do NOT write an integration test routing this probe through `partial_match` — that tests `partial_match` fallback behavior, not the `is_team_uuid` predicate boundary. **PLACEMENT (DECISION LOCKED — round 7 F-1): `is_team_uuid` has no `pub` visibility — it is module-private. The `is_team_uuid` negative-case assertion is a UNIT test that MUST be placed in the `#[cfg(test)] mod tests` block inside `src/cli/issue/helpers.rs` (because `is_team_uuid` is module-private and not exported via lib.rs). Do NOT place it in `tests/`. The team-echo positive cases (verifying that a resolved display name, not a UUID, appears in stderr for `issue create` table output) remain wiremock integration tests in `tests/`.**
+- VP-398-005: `issue create` team-resolution-error exits with code 64. Integration test (wiremock) verifies that `jr issue create --team <unresolvable_name> --no-input` exits with code 64, stdout is empty, and no POST was issued. Suggested test name: `test_BC_3_4_014_create_unresolvable_team_no_input_exits_64`. See verification-delta-398.md §VP-398-005 for full test strategy.
+
+**Trace**: issue #398 F2; `src/cli/issue/create.rs::handle_create`; `src/cli/issue/helpers.rs::resolve_team_field`; `.factory/phase-f2-spec-evolution/prd-delta-398.md §2`
+
+[NEW 2026-05-21 issue #398 F2]
+[UPDATED 2026-05-21 adversarial review round 1: MIN-3 Trace repointed to prd-delta-398.md §2 (locked decisions)]
+[UPDATED 2026-05-21 adversarial review round 2: F-7 output channel profile explicit (all three lines to stderr; stdout empty)]
+[UPDATED 2026-05-21 adversarial review round 3: COS-1 H1 title drops erroneous KEY token; MED-4 output channel profile reclassified from profile 5 (No-log facade) to profile 4 (Symmetric)]
+[UPDATED 2026-05-21 adversarial review round 4: F-1 profile-4 carve-out paragraph added (success lines on stderr is pre-existing behavior, not error path); F-3 VP-398-001 fixture constraint + No-team-matching substring assertion; O-2 EC-3.4.014-3 exit code pinned to 64 (JrError::UserError)]
+[UPDATED 2026-05-21 adversarial review round 5: F-1 VP-398-001 negative case rewritten as direct unit-level is_team_uuid assertion (cite is_team_uuid_rejects_wrong_length); F-3 EC-3.4.014-5 added (MatchResult::None → JrError::UserError exit 64, no echo, no POST)]
+[UPDATED 2026-05-21 adversarial review round 7: F-1 VP-398-001 + explicit module-private placement sentence (UNIT test in helpers.rs #[cfg(test)] block, NOT tests/)]
+[UPDATED 2026-05-21 adversarial review round 8: IMP-5 EC-3.4.014-3 / EC-3.4.014-5 wording softened to "errors via JrError::UserError before POST (exit code per src/error.rs::exit_code(), currently 64)"; IMP-5 VP-398-005 added (create-path team exit-64 integration test)]
 
 ---
 
@@ -918,6 +1209,7 @@ with `--request-type`
 **Outputs/Effects**: One stderr warning line per dropped flag; JSM dispatch continues
 normally; exit 0 on success.
 **Errors**: None — these are warnings, not errors. Dispatch proceeds.
+**Related BCs**: BC-3.4.014 — on the JSM path, the `--team` flag is ignored (this contract applies instead); BC-3.4.014's team echo does NOT fire on the JSM path. BC-3.4.014 EC-3.4.014-4 records this exclusion reciprocally.
 **Trace**: `tests/issue_create_jsm.rs` (per-flag warning-emission integration tests, one assertion per platform-only flag)
 **Source**: Adversary pass-01 C-02 codification; mirrors BC-3.8.010 pattern
 **Confidence**: HIGH
@@ -1210,7 +1502,7 @@ When `--markdown` is absent, the guard does NOT fire — `--field description=va
 | `assign` (changed) | `{"assignee": "Jane Doe", "assignee_account_id": "abc123", "changed": true, "key": "TEST-1"}` | `assignee_account_id` snake_case |
 | `assign` (unchanged) | identical with `changed: false` | |
 | `unassign` | `{"assignee": null, "changed": true, "key": "TEST-1"}` | `assignee` is EXPLICIT null |
-| `edit` | `{"key": "TEST-1", "updated": true}` | 2 keys |
+| `edit` | `{"changed_fields": {...}, "key": "TEST-1", "updated": true}` | 3 keys; `changed_fields` is a BTreeMap-ordered object |
 | `link` | `{"key1": "TEST-1", "key2": "TEST-2", "linked": true, "type": "Blocks"}` | symmetric key1/key2 |
 | `unlink` | `{"count": 2, "unlinked": true}` | `count: 0` when no match |
 | `remote-link` | `{"id": 10000, "key": "TEST-1", "self": <url>, "title": <title>, "url": <url>}` | 5 keys |
@@ -1218,6 +1510,6 @@ When `--markdown` is absent, the guard does NOT fire — `--field description=va
 
 Sources: `src/cli/issue/snapshots/jr__cli__issue__json_output__tests__*.snap`; BC-1104..BC-1112 (R4)
 
-## Total BCs in this file: 68 individually-bodied (cumulative 97 incl. range-collapsed; see BC-INDEX.md)
+## Total BCs in this file: 71 individually-bodied (cumulative 100 incl. range-collapsed; see BC-INDEX.md)
 
-_Last updated 2026-05-20: +2 BCs (BC-3.4.010..011): BC-3.4.010 (cross-hierarchy `edit --type` 400 → CROSS_HIERARCHY_HINT citing JRACLOUD-27893) and BC-3.4.011 (same-hierarchy/indeterminate `edit --type` 400 → typo hint or raw error, no JRACLOUD-27893 hint) added in F2 delta (issue #388). BC-3.4.003 Errors cross-reference updated (annotation only, no behavioral change). Section 3.4 header updated to 11 contracts. Previous update (2026-05-20 issue #385): +2 BCs (BC-3.8.016..017); BC-3.8.002/010/011 modified._
+_Last updated 2026-05-21: +3 BCs (BC-3.4.012..014) — BC-3.4.012 (issue edit table-mode success echo), BC-3.4.013 (issue edit JSON-mode success echo with changed_fields), BC-3.4.014 (issue create table-mode team echo); BC-3.4.003 Success output cross-reference added; Section 3.4 header updated to 14 contracts. Previous update (2026-05-20 issue #388): +2 BCs (BC-3.4.010..011): BC-3.4.010 (cross-hierarchy `edit --type` 400 → CROSS_HIERARCHY_HINT citing JRACLOUD-27893) and BC-3.4.011 (same-hierarchy/indeterminate `edit --type` 400 → typo hint or raw error, no JRACLOUD-27893 hint) added in F2 delta (issue #388). BC-3.4.003 Errors cross-reference updated (annotation only, no behavioral change). Section 3.4 header updated to 11 contracts. Previous update (2026-05-20 issue #385): +2 BCs (BC-3.8.016..017); BC-3.8.002/010/011 modified._
