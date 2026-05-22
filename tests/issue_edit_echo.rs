@@ -1,24 +1,14 @@
-//! Red-gate integration tests for `issue edit` changed-fields echo (S-398).
+//! Integration tests for `issue edit` changed-fields echo (S-398).
 //!
 //! BC-3.4.012: table-mode success echoes one stderr line per changed field in
 //!   `  field → value` format; resolved team name; `(updated)` marker for description.
 //!
-//! BC-3.4.013: JSON-mode success includes `changed_fields` BTreeMap in `edit_response`;
+//! BC-3.4.013: JSON-mode success includes `changed_fields` BTreeMap in the response;
 //!   description carries the RAW user-supplied input string; `updated: true` retained.
 //!
-//! Every test in this file is expected to FAIL before the implementation because
-//! the `changed_fields` echo is not yet wired in `handle_edit` and `edit_response`
-//! still ignores the `changed_fields` parameter (the stub discards it).
-//!
-//! Failure mode per test:
-//! - Table-mode echo tests: `assert!(stderr.contains("→"))` or specific field
-//!   assertions fail because the binary does not emit field-echo lines yet.
-//! - JSON-mode tests: `output["changed_fields"]` is absent → JSON assertions fail.
-//! - PUT-error suppression test (AC-021): passes correctly only if echo is
-//!   actually wired (currently passes vacuously — but the assertion is written
-//!   to catch any future regression where echo fires on non-204 responses).
-//!   This test is carefully structured to catch the WRONG behavior: if the
-//!   implementation fires echo on a 400 response, this test detects it.
+//! Coverage includes single-field, multi-field, description-only, and empty
+//! (no-op) edits in both table and JSON output modes, plus echo-suppression on
+//! non-204 PUT responses (AC-021).
 
 #[allow(dead_code)]
 mod common;

@@ -47,17 +47,10 @@ pub(crate) fn unassign_response(key: &str, changed: bool) -> Value {
 /// retained for backward compatibility; `changed_fields` is always present
 /// (empty object when no fields were changed).
 pub(crate) fn edit_response(key: &str, changed_fields: &BTreeMap<String, String>) -> Value {
-    // Convert BTreeMap to serde_json::Value so the JSON key order is
-    // alphabetical (BTreeMap iteration order). All values are strings.
-    let cf_value: serde_json::Value = changed_fields
-        .iter()
-        .fold(serde_json::Map::new(), |mut m, (k, v)| {
-            m.insert(k.clone(), json!(v));
-            m
-        })
-        .into();
+    // `json!(changed_fields)` serializes BTreeMap<String, String> directly;
+    // key order is alphabetical because BTreeMap iterates in sorted order.
     json!({
-        "changed_fields": cf_value,
+        "changed_fields": changed_fields,
         "key": key,
         "updated": true
     })
