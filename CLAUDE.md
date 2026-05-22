@@ -310,8 +310,8 @@ When adding a new feature:
   not `"(updated)"` and not an ADF→text round-trip. The two channels intentionally differ:
   the human channel optimizes for scannability; the machine channel must be lossless. Do NOT
   "fix" them to match — this asymmetry is load-bearing. Tested by VP-398-002
-  (`test_BC_3_4_012_description_echo_is_updated_marker_not_content` and
-  `test_BC_3_4_013_description_echo_is_raw_input_string_not_marker`).
+  (`test_bc_3_4_012_description_echo_is_updated_marker_not_content` and
+  `test_bc_3_4_013_description_echo_is_raw_input_string_not_marker`).
 
 ## AI Agent Notes
 
