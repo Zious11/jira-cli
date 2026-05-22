@@ -264,6 +264,53 @@ pub fn write_cmdb_fields_cache(profile: &str, fields: &[(String, String)]) -> Re
     )
 }
 
+/// Per-profile cache of `GET /rest/api/3/field` results (all Jira fields).
+///
+/// Mirrors `CmdbFieldsCache` exactly in struct layout and TTL behaviour.
+/// Path: `~/.cache/jr/v1/<profile>/fields.json`. TTL: 7 days.
+///
+/// Content: `(id, name)` tuples — same tuple format as `CmdbFieldsCache`.
+/// Old format (if ever changed) fails serde and self-heals as a cache miss;
+/// no special migration needed. To break compatibility cleanly, bump the
+/// cache root from `v1/` to `v2/` — old files orphan harmlessly.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FieldsCache {
+    pub fields: Vec<(String, String)>,
+    pub fetched_at: DateTime<Utc>,
+}
+
+impl Expiring for FieldsCache {
+    fn fetched_at(&self) -> DateTime<Utc> {
+        self.fetched_at
+    }
+}
+
+pub fn read_fields_cache(profile: &str) -> Result<Option<FieldsCache>> {
+    read_cache(profile, "fields.json")
+}
+
+/// Best-effort writer: swallows disk-write errors with `eprintln!` and returns
+/// `Ok(())`. A missed write costs at most one extra HTTP call on the next
+/// invocation. Cache write failures MUST NOT break a successful API call.
+///
+/// See "best-effort writer" pattern in CLAUDE.md Gotchas (request-type cache
+/// writers). Chosen model: (b) swallow + warn — this cache is a read-
+/// acceleration shortcut, not a correctness-critical store.
+pub fn write_fields_cache(profile: &str, fields: &[(String, String)]) -> Result<()> {
+    let result = write_cache(
+        profile,
+        "fields.json",
+        &FieldsCache {
+            fields: fields.to_vec(),
+            fetched_at: Utc::now(),
+        },
+    );
+    if let Err(e) = result {
+        eprintln!("warning: failed to write fields cache: {e}");
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachedObjectTypeAttr {
     pub id: String,

@@ -319,10 +319,15 @@ pub(super) async fn handle_edit(
         description,
         description_stdin,
         markdown,
+        field: field_raw,
     } = command
     else {
         unreachable!()
     };
+
+    // Parse --field NAME=VALUE pairs into a HashMap (last-wins on duplicate keys).
+    // Per EC-3.4.017-10: duplicate keys are collapsed here before resolve_edit_fields sees them.
+    let field_pairs = parse_field_kv(&field_raw)?;
 
     // Validate: at least one selector must be present (keys or --jql).
     // clap doesn't enforce this natively since both are optional — we validate here.
@@ -378,13 +383,52 @@ pub(super) async fn handle_edit(
             || parent.is_some()
             || no_parent
             || description.is_some()
-            || description_stdin;
+            || description_stdin
+            || !field_pairs.is_empty(); // S-396: --field NAME=VALUE pairs
         if !has_any_field_change {
             return Err(JrError::UserError(
                 "No fields specified to update. Use --summary, --type, --priority, --label, \
-                 --team, --points, --no-points, --parent, --no-parent, --description, or \
-                 --description-stdin."
+                 --team, --points, --no-points, --parent, --no-parent, --description, \
+                 --description-stdin, or --field NAME=VALUE."
                     .into(),
+            )
+            .into());
+        }
+    }
+
+    // --- Gate B: flag-overlap detection (BC-3.4.017). ---
+    // Fires before any HTTP call when a dedicated flag AND --field target the same
+    // system field. Covers exactly 4 first-party flags: summary, description,
+    // issuetype (--type flag), priority. Team and points use dynamically-resolved
+    // IDs; overlap detection for those is deferred to v2 (requires an API call,
+    // breaking the "no HTTP before the guard" invariant).
+    if !field_pairs.is_empty() {
+        let field_keys_lower: std::collections::HashSet<String> =
+            field_pairs.keys().map(|k| k.to_lowercase()).collect();
+        if summary.is_some() && field_keys_lower.contains("summary") {
+            return Err(JrError::UserError(
+                "summary is set by both --summary and --field; use only one.".into(),
+            )
+            .into());
+        }
+        if (description.is_some() || description_stdin) && field_keys_lower.contains("description")
+        {
+            return Err(JrError::UserError(
+                "description is set by both --description / --description-stdin and --field; \
+                 use only one."
+                    .into(),
+            )
+            .into());
+        }
+        if issue_type.is_some() && field_keys_lower.contains("issuetype") {
+            return Err(JrError::UserError(
+                "issuetype is set by both --type and --field; use only one.".into(),
+            )
+            .into());
+        }
+        if priority.is_some() && field_keys_lower.contains("priority") {
+            return Err(JrError::UserError(
+                "priority is set by both --priority and --field; use only one.".into(),
             )
             .into());
         }
@@ -536,6 +580,9 @@ pub(super) async fn handle_edit(
         }
         if markdown {
             unsupported.push("--markdown");
+        }
+        if !field_pairs.is_empty() {
+            unsupported.push("--field");
         }
         if !unsupported.is_empty() {
             return Err(JrError::UserError(format!(
@@ -704,6 +751,37 @@ pub(super) async fn handle_edit(
                 }
             }
         }
+        // BC-3.4.015 invariant 10: resolve_edit_fields MUST be called inside the
+        // dry-run block. Resolution errors exit 64 (NOT suppressed by --dry-run).
+        // Gate A already rejected multi-key + --field, so effective_keys has 1 element here
+        // when field_pairs is non-empty.
+        if !field_pairs.is_empty() {
+            let dr_key = &effective_keys[0];
+            let mut dr_fields = json!({});
+            let mut dr_changed: BTreeMap<String, String> = BTreeMap::new();
+            helpers::resolve_edit_fields(
+                client,
+                &config.active_profile_name,
+                dr_key,
+                &field_pairs,
+                &mut dr_fields,
+                &mut dr_changed,
+            )
+            .await?;
+            // Emit resolved --field entries in the planned-changes preview.
+            match output_format {
+                OutputFormat::Table => {
+                    for (field, value) in &dr_changed {
+                        eprintln!("  {} \u{2192} {}", field, value);
+                    }
+                }
+                OutputFormat::Json => {
+                    // JSON dry-run already printed; this is a no-op for now — the
+                    // dry-run JSON shape is a human preview and --field entries are
+                    // captured in dr_changed for future extension.
+                }
+            }
+        }
         return Ok(());
     }
 
@@ -869,9 +947,25 @@ pub(super) async fn handle_edit(
         changed_fields.insert("parent".into(), "(cleared)".into());
     }
 
+    // BC-3.4.015 invariant 10 (live path): resolve_edit_fields on the live path.
+    // Errors here (field not found, absent from editmeta, bad type, etc.) exit 64
+    // BEFORE the PUT is issued (all-or-nothing semantics per EC-3.4.015-12).
+    if !field_pairs.is_empty() {
+        helpers::resolve_edit_fields(
+            client,
+            &config.active_profile_name,
+            key,
+            &field_pairs,
+            &mut fields,
+            &mut changed_fields,
+        )
+        .await?;
+        has_updates = true;
+    }
+
     if !has_updates {
         bail!(
-            "No fields specified to update. Use --summary, --type, --priority, --label, --team, --points, --no-points, --parent, --no-parent, --description, or --description-stdin."
+            "No fields specified to update. Use --summary, --type, --priority, --label, --team, --points, --no-points, --parent, --no-parent, --description, --description-stdin, or --field NAME=VALUE."
         );
     }
 
@@ -1460,6 +1554,7 @@ mod tests {
             "description",
             "description_stdin",
             "markdown",
+            "field", // --field NAME=VALUE (S-396): single-key only (BC-3.4.017 Gate A)
         ]
         .into_iter()
         .collect();
