@@ -122,7 +122,7 @@ async fn mount_post_201(server: &MockServer, key: &str) {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_BC_3_4_014_create_all_fields_echo_alphabetical_order() {
+async fn test_bc_3_4_014_create_all_fields_echo_alphabetical_order() {
     let server = MockServer::start().await;
     mount_post_201(&server, "PROJ-1").await;
 
@@ -237,7 +237,7 @@ async fn test_BC_3_4_014_create_all_fields_echo_alphabetical_order() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_BC_3_4_014_create_team_echo_is_resolved_name_not_uuid() {
+async fn test_bc_3_4_014_create_team_echo_is_resolved_name_not_uuid() {
     let server = MockServer::start().await;
     mount_post_201(&server, "PROJ-1").await;
 
@@ -267,10 +267,7 @@ async fn test_BC_3_4_014_create_team_echo_is_resolved_name_not_uuid() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert!(
-        output.status.success(),
-        "Expected exit 0; stderr={stderr}"
-    );
+    assert!(output.status.success(), "Expected exit 0; stderr={stderr}");
 
     // Must echo resolved display name — VP-398-001 positive case on create path
     assert!(
@@ -293,7 +290,7 @@ async fn test_BC_3_4_014_create_team_echo_is_resolved_name_not_uuid() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_BC_3_4_014_create_description_echo_is_updated_marker() {
+async fn test_bc_3_4_014_create_description_echo_is_updated_marker() {
     let server = MockServer::start().await;
     mount_post_201(&server, "PROJ-1").await;
 
@@ -321,10 +318,7 @@ async fn test_BC_3_4_014_create_description_echo_is_updated_marker() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    assert!(
-        output.status.success(),
-        "Expected exit 0; stderr={stderr}"
-    );
+    assert!(output.status.success(), "Expected exit 0; stderr={stderr}");
 
     // Must echo the (updated) marker — BC-3.4.014 invariant 2
     assert!(
@@ -353,7 +347,7 @@ async fn test_BC_3_4_014_create_description_echo_is_updated_marker() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_BC_3_4_014_create_label_echo_comma_space_joined() {
+async fn test_bc_3_4_014_create_label_echo_comma_space_joined() {
     let server = MockServer::start().await;
     mount_post_201(&server, "PROJ-1").await;
 
@@ -382,10 +376,7 @@ async fn test_BC_3_4_014_create_label_echo_comma_space_joined() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert!(
-        output.status.success(),
-        "Expected exit 0; stderr={stderr}"
-    );
+    assert!(output.status.success(), "Expected exit 0; stderr={stderr}");
 
     // Labels joined with ", " in command-line order — BC-3.4.014 invariant 5
     assert!(
@@ -402,7 +393,7 @@ async fn test_BC_3_4_014_create_label_echo_comma_space_joined() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_BC_3_4_014_create_assignee_echo_display_name() {
+async fn test_bc_3_4_014_create_assignee_echo_display_name() {
     let server = MockServer::start().await;
     mount_post_201(&server, "PROJ-1").await;
 
@@ -443,10 +434,7 @@ async fn test_BC_3_4_014_create_assignee_echo_display_name() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert!(
-        output.status.success(),
-        "Expected exit 0; stderr={stderr}"
-    );
+    assert!(output.status.success(), "Expected exit 0; stderr={stderr}");
 
     // Echo must show the display name, not the account ID
     assert!(
@@ -472,7 +460,7 @@ async fn test_BC_3_4_014_create_assignee_echo_display_name() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_BC_3_4_014_create_unresolvable_team_no_input_exits_64() {
+async fn test_bc_3_4_014_create_unresolvable_team_no_input_exits_64() {
     let server = MockServer::start().await;
 
     // POST must NOT be called — unresolvable team should abort before POST
@@ -560,7 +548,7 @@ async fn test_BC_3_4_014_create_unresolvable_team_no_input_exits_64() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_BC_3_4_014_create_json_output_unchanged_no_changed_fields_key() {
+async fn test_bc_3_4_014_create_json_output_unchanged_no_changed_fields_key() {
     let server = MockServer::start().await;
 
     // POST 201
@@ -595,9 +583,7 @@ async fn test_BC_3_4_014_create_json_output_unchanged_no_changed_fields_key() {
     // GET /rest/api/3/field — for CMDB field discovery on JSON path
     Mock::given(method("GET"))
         .and(path("/rest/api/3/field"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(serde_json::json!([])),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
         .mount(&server)
         .await;
 
@@ -625,10 +611,7 @@ async fn test_BC_3_4_014_create_json_output_unchanged_no_changed_fields_key() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    assert!(
-        output.status.success(),
-        "Expected exit 0; stderr={stderr}"
-    );
+    assert!(output.status.success(), "Expected exit 0; stderr={stderr}");
 
     let parsed: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("stdout is not valid JSON: {e}; stdout={stdout}"));

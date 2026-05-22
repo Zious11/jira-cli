@@ -111,7 +111,7 @@ async fn mount_put_204(server: &MockServer, issue_key: &str) {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_BC_3_4_012_edit_table_echo_summary_and_priority() {
+async fn test_bc_3_4_012_edit_table_echo_summary_and_priority() {
     let server = MockServer::start().await;
     mount_put_204(&server, "TEST-1").await;
 
@@ -181,7 +181,7 @@ async fn test_BC_3_4_012_edit_table_echo_summary_and_priority() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_BC_3_4_012_team_echo_is_resolved_name_not_uuid() {
+async fn test_bc_3_4_012_team_echo_is_resolved_name_not_uuid() {
     let server = MockServer::start().await;
 
     // Mount PUT 204
@@ -216,10 +216,7 @@ async fn test_BC_3_4_012_team_echo_is_resolved_name_not_uuid() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert!(
-        output.status.success(),
-        "Expected exit 0; stderr={stderr}"
-    );
+    assert!(output.status.success(), "Expected exit 0; stderr={stderr}");
 
     // Must echo resolved display name — BC-3.4.012 invariant 1
     assert!(
@@ -243,7 +240,7 @@ async fn test_BC_3_4_012_team_echo_is_resolved_name_not_uuid() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_BC_3_4_012_description_echo_is_updated_marker_not_content() {
+async fn test_bc_3_4_012_description_echo_is_updated_marker_not_content() {
     let server = MockServer::start().await;
     mount_put_204(&server, "TEST-1").await;
 
@@ -262,10 +259,7 @@ async fn test_BC_3_4_012_description_echo_is_updated_marker_not_content() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    assert!(
-        output.status.success(),
-        "Expected exit 0; stderr={stderr}"
-    );
+    assert!(output.status.success(), "Expected exit 0; stderr={stderr}");
 
     // Must echo the marker
     assert!(
@@ -295,7 +289,7 @@ async fn test_BC_3_4_012_description_echo_is_updated_marker_not_content() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_BC_3_4_012_no_parent_table_echo_uses_parent_key() {
+async fn test_bc_3_4_012_no_parent_table_echo_uses_parent_key() {
     let server = MockServer::start().await;
     mount_put_204(&server, "TEST-1").await;
 
@@ -306,10 +300,7 @@ async fn test_BC_3_4_012_no_parent_table_echo_uses_parent_key() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert!(
-        output.status.success(),
-        "Expected exit 0; stderr={stderr}"
-    );
+    assert!(output.status.success(), "Expected exit 0; stderr={stderr}");
 
     // Must use key "parent" not "no_parent"
     assert!(
@@ -382,7 +373,7 @@ fn write_config_with_story_points(config_home: &std::path::Path) {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_BC_3_4_013_updated_true_present_with_summary_changed_fields() {
+async fn test_bc_3_4_013_updated_true_present_with_summary_changed_fields() {
     let server = MockServer::start().await;
     mount_put_204(&server, "TEST-1").await;
 
@@ -403,10 +394,7 @@ async fn test_BC_3_4_013_updated_true_present_with_summary_changed_fields() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    assert!(
-        output.status.success(),
-        "Expected exit 0; stderr={stderr}"
-    );
+    assert!(output.status.success(), "Expected exit 0; stderr={stderr}");
 
     // stderr must be empty in JSON mode
     assert!(
@@ -447,7 +435,7 @@ async fn test_BC_3_4_013_updated_true_present_with_summary_changed_fields() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_BC_3_4_013_description_echo_is_raw_input_string_not_marker() {
+async fn test_bc_3_4_013_description_echo_is_raw_input_string_not_marker() {
     let server = MockServer::start().await;
     mount_put_204(&server, "TEST-1").await;
 
@@ -468,10 +456,7 @@ async fn test_BC_3_4_013_description_echo_is_raw_input_string_not_marker() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    assert!(
-        output.status.success(),
-        "Expected exit 0; stderr={stderr}"
-    );
+    assert!(output.status.success(), "Expected exit 0; stderr={stderr}");
 
     let parsed: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("stdout is not valid JSON: {e}; stdout={stdout}"));
@@ -499,7 +484,7 @@ async fn test_BC_3_4_013_description_echo_is_raw_input_string_not_marker() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_BC_3_4_013_description_stdin_trailing_newline_preserved_in_changed_fields() {
+async fn test_bc_3_4_013_description_stdin_trailing_newline_preserved_in_changed_fields() {
     let server = MockServer::start().await;
     mount_put_204(&server, "TEST-1").await;
 
@@ -520,10 +505,7 @@ async fn test_BC_3_4_013_description_stdin_trailing_newline_preserved_in_changed
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    assert!(
-        output.status.success(),
-        "Expected exit 0; stderr={stderr}"
-    );
+    assert!(output.status.success(), "Expected exit 0; stderr={stderr}");
 
     let parsed: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("stdout is not valid JSON: {e}; stdout={stdout}"));
@@ -544,7 +526,7 @@ async fn test_BC_3_4_013_description_stdin_trailing_newline_preserved_in_changed
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_BC_3_4_013_no_parent_key_is_parent_not_no_parent() {
+async fn test_bc_3_4_013_no_parent_key_is_parent_not_no_parent() {
     let server = MockServer::start().await;
     mount_put_204(&server, "TEST-1").await;
 
@@ -564,10 +546,7 @@ async fn test_BC_3_4_013_no_parent_key_is_parent_not_no_parent() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    assert!(
-        output.status.success(),
-        "Expected exit 0; stderr={stderr}"
-    );
+    assert!(output.status.success(), "Expected exit 0; stderr={stderr}");
 
     let parsed: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("stdout is not valid JSON: {e}; stdout={stdout}"));
@@ -604,7 +583,7 @@ async fn test_BC_3_4_013_no_parent_key_is_parent_not_no_parent() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_BC_3_4_013_no_points_key_is_points_not_no_points() {
+async fn test_bc_3_4_013_no_points_key_is_points_not_no_points() {
     let server = MockServer::start().await;
 
     Mock::given(method("PUT"))
@@ -634,10 +613,7 @@ async fn test_BC_3_4_013_no_points_key_is_points_not_no_points() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    assert!(
-        output.status.success(),
-        "Expected exit 0; stderr={stderr}"
-    );
+    assert!(output.status.success(), "Expected exit 0; stderr={stderr}");
 
     let parsed: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("stdout is not valid JSON: {e}; stdout={stdout}"));
@@ -666,7 +642,7 @@ async fn test_BC_3_4_013_no_points_key_is_points_not_no_points() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_BC_3_4_012_edit_echo_does_not_fire_on_dry_run() {
+fn test_bc_3_4_012_edit_echo_does_not_fire_on_dry_run() {
     let output = Command::cargo_bin("jr")
         .unwrap()
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
@@ -705,7 +681,7 @@ fn test_BC_3_4_012_edit_echo_does_not_fire_on_dry_run() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_BC_3_4_012_edit_echo_excluded_for_bulk_multi_key() {
+async fn test_bc_3_4_012_edit_echo_excluded_for_bulk_multi_key() {
     let server = MockServer::start().await;
 
     // Bulk edit issues two or more keys — the bulk path is used
@@ -750,7 +726,7 @@ async fn test_BC_3_4_012_edit_echo_excluded_for_bulk_multi_key() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_BC_3_4_012_empty_summary_echoes_empty_value() {
+async fn test_bc_3_4_012_empty_summary_echoes_empty_value() {
     let server = MockServer::start().await;
     // Real Jira rejects empty summary with 400 but wiremock returns 204.
     // This tests the echo FORMATTING of an empty-string value.
@@ -784,7 +760,7 @@ async fn test_BC_3_4_012_empty_summary_echoes_empty_value() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_BC_3_4_013_empty_summary_in_changed_fields() {
+async fn test_bc_3_4_013_empty_summary_in_changed_fields() {
     let server = MockServer::start().await;
     mount_put_204(&server, "TEST-1").await;
 
@@ -836,7 +812,7 @@ async fn test_BC_3_4_013_empty_summary_in_changed_fields() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_BC_3_4_012_echo_suppressed_on_put_error() {
+async fn test_bc_3_4_012_echo_suppressed_on_put_error() {
     let server = MockServer::start().await;
 
     // PUT → 400 Bad Request

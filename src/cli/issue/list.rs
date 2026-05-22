@@ -164,9 +164,11 @@ pub(super) async fn handle_list(
     };
 
     // Build pre-formatted team clause for build_filter_clauses
-    let team_clause = resolved_team.as_ref().map(|(field_id, team_uuid, _resolved_team_name)| {
-        format!("{} = \"{}\"", field_id, crate::jql::escape_value(team_uuid))
-    });
+    let team_clause = resolved_team
+        .as_ref()
+        .map(|(field_id, team_uuid, _resolved_team_name)| {
+            format!("{} = \"{}\"", field_id, crate::jql::escape_value(team_uuid))
+        });
 
     // Resolve CMDB fields for --asset filter (needs field names for aqlFunction)
     let (asset_clause, asset_cmdb_fields) = if let Some(ref key) = asset_key {
