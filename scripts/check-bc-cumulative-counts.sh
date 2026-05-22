@@ -3,8 +3,8 @@ set -euo pipefail
 
 # check-bc-cumulative-counts.sh — DRIFT-002 mitigation
 #
-# Validates that cumulative total_bcs count claims agree across 8 surfaces
-# (4 per-file surfaces + body-preamble prose, plus 3 grand-total surfaces):
+# Validates that cumulative total_bcs count claims agree across 9 surfaces
+# (5 per-file surfaces + body-preamble prose, plus 3 grand-total surfaces):
 #
 # Per-file surfaces (checked for each bc-N.md / cross-cutting.md):
 #   Surface A: bc-N.md frontmatter total_bcs:
@@ -12,6 +12,9 @@ set -euo pipefail
 #   Surface C: BC-INDEX.md frontmatter sections: line for each file
 #   Surface D: CANONICAL-COUNTS.md per-file total_bcs table row
 #   Body prose: "N behavioral contracts" preamble line in each bc-N.md
+#   Surface H: end-of-file footer "## Total BCs in this file: N individually-bodied
+#              (cumulative M ...)" — asserts N == definitional_count AND M == total_bcs
+#              (added by P2-002 adversarial pass 2, 2026-05-22)
 #
 # Grand-total surfaces (must equal sum of per-file Surface A values):
 #   Surface E: BC-INDEX.md frontmatter total_bcs:
@@ -153,6 +156,47 @@ for f in "$FACTORY"/bc-*.md "$FACTORY"/cross-cutting.md; do
     ERRORS=$((ERRORS+1))
   fi
 
+  # Surface H: end-of-file footer "## Total BCs in this file: N individually-bodied (cumulative M ...)"
+  # Added P2-002 (adversary pass 2, 2026-05-22): the footer was previously unchecked,
+  # creating a silent-drift vector.
+  # This check is CONDITIONAL — it only fires when the footer is present AND uses the
+  # standard "individually-bodied (cumulative M ...)" format (bc-3 onwards). Files
+  # without the footer (bc-1, bc-4..7, cross-cutting) are silently skipped. Files with
+  # a non-standard footer format (e.g., bc-2's "N (representative set; ...)") are also
+  # skipped (footer_n will not parse to an integer).
+  # When present in standard form, asserts:
+  #   footer individually-bodied N == definitional_count frontmatter
+  #   footer cumulative M          == total_bcs frontmatter (Surface A)
+  footer_line=$(grep '^## Total BCs in this file:' "$f" || true)
+  if [ -n "$footer_line" ]; then
+    # Extract N (individually-bodied) — pattern: "N individually-bodied"
+    footer_n=$(echo "$footer_line" | sed 's/^## Total BCs in this file: \([0-9]*\) individually.*/\1/' || true)
+    # Extract M (cumulative) — pattern: "(cumulative M "
+    footer_m=$(echo "$footer_line" | sed 's/.*(cumulative \([0-9]*\) .*/\1/' || true)
+
+    # Only validate when both parse as integers (standard format)
+    if [[ "$footer_n" =~ ^[0-9]+$ ]] && [[ "$footer_m" =~ ^[0-9]+$ ]]; then
+      # Get definitional_count from frontmatter for comparison
+      def_count=$(grep '^definitional_count:' "$f" | awk '{print $2}' || true)
+
+      if [ -z "$def_count" ] || ! [[ "$def_count" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: $basename_f: Surface H: definitional_count frontmatter not found or not an integer (got: '$def_count')"
+        ERRORS=$((ERRORS+1))
+      else
+        if [ "$footer_n" != "$def_count" ]; then
+          echo "ERROR: $basename_f: Surface H: footer individually-bodied=$footer_n but definitional_count frontmatter=$def_count"
+          ERRORS=$((ERRORS+1))
+        fi
+        if [ "$footer_m" != "$surface_a" ]; then
+          echo "ERROR: $basename_f: Surface H: footer cumulative=$footer_m but total_bcs frontmatter=$surface_a"
+          ERRORS=$((ERRORS+1))
+        fi
+      fi
+    fi
+    # Non-standard footer format: silently skip (no error — other bc-N files use different footers)
+  fi
+  # Footer absent: silently skip — not all bc-N files have this footer yet
+
 done
 
 # ── Grand-total surface checks ───────────────────────────────────────────────
@@ -204,4 +248,4 @@ if [ "$ERRORS" -gt 0 ]; then
   exit 1
 fi
 
-echo "OK: all cumulative BC counts verified ($TOTAL_SUM total across $FILE_COUNT files)."
+echo "OK: all cumulative BC counts verified ($TOTAL_SUM total across $FILE_COUNT files; Surface H footer checked where present)."
