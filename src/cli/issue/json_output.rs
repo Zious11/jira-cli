@@ -139,8 +139,21 @@ mod tests {
     fn test_edit_response_empty_changed_fields() {
         let map: BTreeMap<String, String> = BTreeMap::new();
         let output = edit_response("TEST-1", &map);
-        assert_eq!(output["updated"], true);
-        assert!(output["changed_fields"].is_null() || output.get("changed_fields").is_none() || output["changed_fields"] == serde_json::json!({}));
+        // BC-3.4.013 invariant 4 + VP-398-003: `updated: true` must always be
+        // present regardless of whether changed_fields is empty or non-empty.
+        assert_eq!(
+            output["updated"],
+            serde_json::json!(true),
+            "updated must be true even when changed_fields is empty"
+        );
+        // BC-3.4.013 invariant 4: `changed_fields` must be present and must be
+        // an empty object (not null, not absent) when no fields were changed.
+        assert_eq!(
+            output["changed_fields"],
+            serde_json::json!({}),
+            "changed_fields must be {{}} (empty object) when map is empty; got: {}",
+            output
+        );
     }
 
     #[test]
