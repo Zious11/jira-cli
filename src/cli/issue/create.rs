@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use anyhow::{Result, bail};
 use serde_json::json;
@@ -183,7 +183,7 @@ pub(super) async fn handle_create(
     }
 
     if let Some(ref team_name) = team {
-        let (field_id, team_id) =
+        let (field_id, team_id, _resolved_team_name) =
             helpers::resolve_team_field(config, client, team_name, no_input).await?;
         fields[&field_id] = json!(team_id);
     }
@@ -790,7 +790,7 @@ pub(super) async fn handle_edit(
     }
 
     if let Some(ref team_name) = team {
-        let (field_id, team_id) =
+        let (field_id, team_id, _resolved_team_name) =
             helpers::resolve_team_field(config, client, team_name, no_input).await?;
         fields[&field_id] = json!(team_id);
         has_updates = true;
@@ -907,7 +907,7 @@ pub(super) async fn handle_edit(
         OutputFormat::Json => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&json_output::edit_response(key))?
+                serde_json::to_string_pretty(&json_output::edit_response(key, &BTreeMap::new()))?
             );
         }
         OutputFormat::Table => {

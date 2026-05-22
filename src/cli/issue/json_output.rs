@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde_json::{Value, json};
 
 /// JSON response for `issue move` — both changed and idempotent cases.
@@ -39,7 +41,17 @@ pub(crate) fn unassign_response(key: &str, changed: bool) -> Value {
 }
 
 /// JSON response for `issue edit`.
-pub(crate) fn edit_response(key: &str) -> Value {
+///
+/// `changed_fields` is a `BTreeMap<String, String>` so JSON key order within
+/// the object is deterministic (alphabetical). STUB: the `changed_fields`
+/// parameter is accepted but not yet embedded in the output — the implementer
+/// will wire it in step 4. Existing behavior (`{"key":..., "updated": true}`)
+/// is preserved so all pre-S-398 tests remain green.
+pub(crate) fn edit_response(key: &str, changed_fields: &BTreeMap<String, String>) -> Value {
+    // STUB: changed_fields is intentionally unused here — the implementer adds
+    // the echo wiring in step 4. The `_` prefix on the variable avoids
+    // an unused-variable warning while keeping the parameter in the signature.
+    let _ = changed_fields;
     json!({
         "key": key,
         "updated": true
@@ -118,7 +130,17 @@ mod tests {
 
     #[test]
     fn test_edit() {
-        assert_json_snapshot!(edit_response("TEST-1"));
+        let mut map = BTreeMap::new();
+        map.insert("summary".to_string(), "New title".to_string());
+        assert_json_snapshot!(edit_response("TEST-1", &map));
+    }
+
+    #[test]
+    fn test_edit_response_empty_changed_fields() {
+        let map: BTreeMap<String, String> = BTreeMap::new();
+        let output = edit_response("TEST-1", &map);
+        assert_eq!(output["updated"], true);
+        assert!(output["changed_fields"].is_null() || output.get("changed_fields").is_none() || output["changed_fields"] == serde_json::json!({}));
     }
 
     #[test]
