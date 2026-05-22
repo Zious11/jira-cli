@@ -98,6 +98,18 @@ fn write_minimal_config(config_home: &std::path::Path) {
     std::fs::write(conf_dir.join("config.toml"), "").unwrap();
 }
 
+/// Write a config.toml with an instance URL (used where the JSM path needs the URL
+/// while JR_BASE_URL / JR_AUTH_HEADER override the actual credentials).
+fn write_config_with_instance(config_home: &std::path::Path, url: &str) {
+    let conf_dir = config_home.join("jr");
+    std::fs::create_dir_all(&conf_dir).unwrap();
+    std::fs::write(
+        conf_dir.join("config.toml"),
+        format!("[instance]\nurl = \"{url}\"\n"),
+    )
+    .unwrap();
+}
+
 /// Write a config.toml with story_points_field_id set.
 fn write_config_with_story_points(config_home: &std::path::Path) {
     let conf_dir = config_home.join("jr");
@@ -686,5 +698,151 @@ async fn test_bc_3_4_014_create_points_integer_value_echo() {
     assert!(
         stderr.contains("  points \u{2192} 5"),
         "Expected '  points → 5' in stderr; stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 20 — AC-014: JSM `--request-type` path never emits field echo lines
+// BC-3.4.014 EC-014; VP-398-AC-014.
+//
+// `handle_jsm_create` is entered when `--request-type` is set. The `create_echo`
+// BTreeMap is declared structurally AFTER the dispatch fork, so `handle_jsm_create`
+// can never build or emit it. This test pins that guarantee: a JSM create with
+// `--summary`, `--description`, and `--priority` set must exit 0 and emit NO
+// `  field → value` echo lines on stderr.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_014_create_jsm_request_type_path_no_field_echo() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_config_with_instance(config_dir.path(), &server.uri());
+
+    // GET /rest/api/3/project/HELP — service_desk type, project id "99"
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/HELP"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "99",
+            "key": "HELP",
+            "projectTypeKey": "service_desk",
+            "simplified": false
+        })))
+        .mount(&server)
+        .await;
+
+    // GET /rest/servicedeskapi/servicedesk — maps project id "99" to service desk "10"
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "size": 1,
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "_links": {},
+            "values": [
+                {
+                    "id": "10",
+                    "projectId": "99",
+                    "projectKey": "HELP",
+                    "projectName": "Help Desk"
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    // GET /rest/servicedeskapi/servicedesk/10/requesttype — single "Password Reset" type
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk/10/requesttype"))
+        .and(query_param("start", "0"))
+        .and(query_param("limit", "50"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "size": 1,
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "_links": {},
+            "values": [
+                {
+                    "id": "11002",
+                    "name": "Password Reset",
+                    "description": "Reset your password",
+                    "helpText": "Provide your username",
+                    "issueTypeId": "12346",
+                    "serviceDeskId": "10",
+                    "portalId": "2",
+                    "groupIds": ["12"]
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    // POST /rest/servicedeskapi/request — must succeed (201)
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+            "issueId": "107001",
+            "issueKey": "HELP-42",
+            "requestTypeId": "11002",
+            "serviceDeskId": "10",
+            "_links": {
+                "self": "https://example.atlassian.net/rest/servicedeskapi/request/107001",
+                "web": "https://example.atlassian.net/servicedesk/customer/portal/10/HELP-42"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "create",
+            "--project",
+            "HELP",
+            "--request-type",
+            "Password Reset",
+            "--summary",
+            "Reset my account password",
+            "--description",
+            "I cannot log in to my account.",
+            "--priority",
+            "High",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // AC-014 precondition: command must succeed (exit 0)
+    assert!(
+        output.status.success(),
+        "AC-014: expected exit 0 on JSM --request-type path; stderr={stderr} stdout={stdout}"
+    );
+
+    // AC-014 primary assertion: NO `  field → value` echo lines on stderr.
+    // The echo map is never built on the JSM dispatch path.
+    assert!(
+        !stderr.contains(" \u{2192} "),
+        "AC-014: JSM --request-type path must emit NO field echo lines; stderr={stderr}"
+    );
+
+    // Negative guards: specific fields that WOULD appear on the platform echo path
+    // must be absent here.
+    assert!(
+        !stderr.contains("  summary \u{2192}"),
+        "AC-014: 'summary →' must not appear on JSM path; stderr={stderr}"
+    );
+    assert!(
+        !stderr.contains("  description \u{2192}"),
+        "AC-014: 'description →' must not appear on JSM path; stderr={stderr}"
+    );
+    assert!(
+        !stderr.contains("  priority \u{2192}"),
+        "AC-014: 'priority →' must not appear on JSM path; stderr={stderr}"
     );
 }
