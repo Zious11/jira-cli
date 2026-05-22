@@ -1,0 +1,3 @@
+Found 3 mutants to test
+ WARN An explicit test timeout is recommended when using --baseline=skip; using 300 seconds by default
+3 mutants tested in 3m: 3 caught

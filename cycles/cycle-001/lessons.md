@@ -1572,3 +1572,139 @@ audits that verify specific file contents.
 
 _Discovered: #388 F5 scoped adversarial review, 2026-05-21. Status: [codified] — process
 discipline; no follow-up story needed. Rule applies to orchestrator dispatch protocol._
+
+---
+
+## Lessons from Issue #398 — Changed-Fields Confirmation Echo (2026-05-22)
+
+### L-398-01 [codified] BC scope-broadening discovered mid-convergence requires full re-convergence
+
+**Finding (F2 — 2026-05-22):** During F2 Spec Evolution for #398, the human gate applied
+a scope change after 13 adversary passes had already converged: BC-3.4.014 (confirmation-echo
+`--output json` shape) was broadened from team-only to ALL-set-fields echo, mirroring BC-3.4.012.
+This required resetting the convergence counter and running 3 additional re-convergence passes
+(passes 14/15/16 CLEAN) before the F2 gate could be approved.
+
+**Rule:** Any scope change to a BC that adds new required behavior — even if it "just mirrors"
+an existing BC — must be treated as a substantive finding and reset the adversary convergence
+counter. Do not attempt to approve the F2 gate while the counter is mid-reset.
+
+**Impact:** +3 passes, +10 product-owner fix rounds. VP-398-005 scope broadened; VP-398-006 added.
+
+_Discovered: #398 F2 adversarial review, passes 13-16. Status: [codified] — process discipline.
+No follow-up story needed._
+
+---
+
+### L-398-02 [codified] Run ALL THREE guard scripts after any BC file edit (not just two)
+
+**Finding (F2/F3 — 2026-05-22):** During #398 F2/F3, the product-owner was instructed to run
+only `check-spec-counts.sh` and `check-bc-cumulative-counts.sh` — NOT the third guard
+`check-bc-no-numeric-test-counts.sh`. This allowed a phrase containing numeric test counts to
+reach CI and fail the Spec Guards job on PR #394. The same gap was recorded as PG-384-2 during
+#384; it recurred in #398.
+
+**Rule (repeat codification from PG-384-2):** After ANY edit to `.factory/specs/prd/` BC files,
+ALL THREE guard scripts must be run locally before creating or updating a PR:
+1. `scripts/check-spec-counts.sh`
+2. `scripts/check-bc-cumulative-counts.sh`
+3. `scripts/check-bc-no-numeric-test-counts.sh`
+
+**Impact:** PG-384-2 recurred as PG-398-2 variant. Root cause: orchestrator dispatch prompt
+omits the third script. Fix: orchestrator dispatch must explicitly list all three.
+
+_Discovered: #398 F2/F3, recurrence of PG-384-2. Status: [codified] — orchestrator dispatch
+prompt must be updated. Tracked in #400 (TH-398-3)._
+
+---
+
+### PG-398-4 [codified] Worktree-path mis-resolution is a recurring class (2 occurrences) — warrants sanity-gate
+
+**Finding (F4 — 2026-05-22):** The F4 per-story adversary pass 3 for #398 returned a false
+NOT-CLEAN because the adversary mis-resolved the worktree path and reviewed the develop
+baseline instead of the `feature/issue-398-changed-fields-echo` worktree. Mitigated by
+re-dispatch with an explicit sanity-gate (`git log` + `grep` for target commit) before review.
+
+This is the SECOND occurrence of this class (first: PG-388-4, #388 F5 adversarial review,
+2026-05-21). Two occurrences in consecutive cycles elevates this from a one-off to a
+**recurring class** warranting a codified mandatory worktree sanity-gate.
+
+**Rule (reinforced from PG-388-4):** Before dispatching any post-branch reviewer (F4 per-story
+adversary, F5 scoped adversarial, F6 hardening verifier, traceability auditor), the orchestrator
+MUST:
+1. Run `git -C <repo> log --oneline -1` to confirm the working tree HEAD is the expected
+   feature-branch or merge commit SHA.
+2. Record the confirmed SHA in the reviewer dispatch prompt so the reviewer can self-validate.
+3. If using a worktree, run `git -C <worktree> log -1 --format='%H'` and confirm HEAD before
+   dispatch — do NOT assume the worktree reflects the expected state.
+
+**Impact of violation:** False-absent findings waste one adversary pass per violation and
+reduce convergence signal fidelity.
+
+**Recurrence tracking:** 2 occurrences (PG-388-4 → PG-398-4). Codified worktree-sanity-gate
+protocol tracked in follow-up #400 for engine-level codification in FACTORY.md / adversary
+dispatch prompt.
+
+_Discovered: #398 F4 per-story adversarial review, 2026-05-22. Recurring class from PG-388-4
+(2026-05-21). Status: [codified] — process discipline. Tracked in #400._
+
+---
+
+### L-398-03 [codified] F6 mutation scope should cover only new/changed code paths, not full-codebase
+
+**Finding (F6 — 2026-05-22):** For #398, F6 mutation testing was scoped to the delta (3/3
+viable mutants caught in the confirmation-echo code path; 0 surviving). Full-codebase mutation
+was not re-run (consistent with the per-PR diff-scoped `cargo mutants --in-diff` CI policy
+established by #346). Kani + fuzz were JUSTIFIED-SKIP: no new unsafe code, no new numeric
+boundary operations requiring formal proof.
+
+**Rule:** For Feature Mode F6, mutation testing scope is always the PR diff (`cargo mutants
+--in-diff`), not a full-codebase re-run. Formal verification tools (Kani, fuzz) require
+explicit justification when skipped: acceptable skip reasons are (a) no new unsafe code, (b)
+no new numeric overflow boundary operations, (c) no new cryptographic operations.
+
+_Discovered: #398 F6 hardening, 2026-05-22. Status: [codified] — already implicit in
+docs/specs/cargo-mutants-policy.md; surfaced explicitly here for F6 skip-justification
+discipline._
+
+---
+
+### L-398-04 [codified] MAXIMUM_VIABLE_REFINEMENT declaration requires explicit human authorization
+
+**Finding (F7 — 2026-05-22):** At F7 Delta Convergence for #398, MAXIMUM_VIABLE_REFINEMENT
+was reached after all 5 dimensions PASS and the human explicitly authorized cycle-close.
+The human authorization step is mandatory — the orchestrator cannot self-declare
+MAXIMUM_VIABLE_REFINEMENT without human sign-off at the F7 gate.
+
+**Rule:** F7 cycle-close requires explicit human authorization. The state-manager records the
+authorization date and authorizing party (e.g., "human-authorized 2026-05-22") in STATE.md,
+the Phase Progress row, and the cycle manifest. This creates an auditable record of the human
+gate for every completed cycle.
+
+_Discovered: #398 F7 Delta Convergence, 2026-05-22. Status: [codified] — applies to all
+Feature Mode F7 cycle-close events._
+
+---
+
+### L-398-05 [codified] Process-gap findings must be tracked in a filed GitHub issue at cycle-close
+
+**Finding (F7 cycle-closing checklist S-7.02 — 2026-05-22):** At #398 cycle-close, 5
+process-gap findings (PG-398-1..5) and 4 test-hardening items (TH-398-1..4) were identified
+via the S-7.02 cycle-closing checklist. These were filed as GitHub issue #400 (non-blocking
+maintenance sweep, 2026-05-22) and recorded in the Drift Items table with disposition
+"tracked in #400".
+
+**Rule:** At every F7 cycle-close, the orchestrator must:
+1. Run the S-7.02 cycle-closing checklist.
+2. Collect all process-gap (PG-*) and test-hardening (TH-*) items surfaced.
+3. File a GitHub issue for the collection before declaring the cycle closed.
+4. Record each item in STATE.md Drift Items with disposition "tracked in #NNN".
+5. Tag lessons as [codified] with the GitHub issue reference.
+
+The issue may be non-blocking (future maintenance sweep). The cycle is not blocked on
+resolving the items — only on filing them.
+
+_Discovered: #398 F7 cycle-close, 2026-05-22. Recurrence check: #384 (PG-384-1/2 recorded
+but no issue filed at cycle-close), #385 (PG-385-1..7 recorded), #388 (PG-388-1..4 recorded).
+#398 is the first cycle where a dedicated follow-up issue (#400) was explicitly filed at
+cycle-close per S-7.02 discipline. Status: [codified]._
