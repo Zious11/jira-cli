@@ -1,0 +1,7 @@
+src/cli/issue/create.rs:274:5: replace handle_edit -> Result<()> with Ok(())
+src/cli/issue/create.rs:898:22: replace && with || in handle_edit
+src/cli/issue/create.rs:864:67: replace == with != in handle_edit
+src/cli/issue/create.rs:1271:9: delete match arm (Some(_), Some(_)) in is_cross_hierarchy_type_error
+src/cli/issue/create.rs:1270:31: replace match guard a != b with true in is_cross_hierarchy_type_error
+src/cli/issue/create.rs:1270:31: replace match guard a != b with false in is_cross_hierarchy_type_error
+src/cli/issue/create.rs:1270:33: replace != with == in is_cross_hierarchy_type_error

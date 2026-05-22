@@ -102,3 +102,13 @@ _Archived 2026-05-20. Was the active checkpoint entering #388 F3 (Incremental St
 | **Date** | 2026-05-20 |
 | **Position** | **Issue #388 Feature Mode — F2 COMPLETE, entering F3 (Incremental Story).** F2 gate APPROVED by human 2026-05-20. 2 new BCs authored: BC-3.4.010 (cross-hierarchy 400 → CROSS_HIERARCHY_HINT, JRACLOUD-27893) + BC-3.4.011 (same-hierarchy/unresolvable/indeterminate 400 → typo hint or raw error). BC-3.4.003 annotated with Errors cross-ref. BC-INDEX 575→577. Spec v1.2.0→v1.3.0 (MINOR; changelog written). Adversarial spec review CONVERGED: 10 passes total, 3 consecutive CLEAN (passes 8/9/10); 2 CRITICAL + ~15 MAJOR + many MINOR fixed in passes 1–7. Fresh-context consistency-validator PASS (6/6 checks). Inline proptest for `is_cross_hierarchy_type_error` pure classifier (no VP-NNN artifacts). Test plan: 10 integration tests (tests/issue_edit_type_errors.rs) + T-06 strengthening (tests/issue_edit_no_parent.rs). 3 F2 process-gaps (PG-388-1/2/3) logged to lessons.md. Next: F3 — Incremental Story decomposition (1 story covering BC-3.4.010/011 + test deliverables). Remaining open backlog: #210, #331, #372, #387, #388. Open PRs: #327, #368. |
 | **Convergence counter** | #388 F2 COMPLETE. BC corpus: 577 BCs (spec v1.3.0). Story corpus: 43 stories (1 new story to be created in F3). |
+
+---
+
+_Archived 2026-05-21. Was the active checkpoint at issue #388 F4 COMPLETE. Superseded by F7 CONVERGED checkpoint._
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-21 |
+| **Position** | **Issue #388 Feature Mode — F4 COMPLETE. Issue #388 CLOSED.** PR #397 squash-merged @ e0ea24b (2026-05-21). Red Gate VERIFIED (9/10 integration tests + proptest + T-06 correctly red pre-impl; test #10 `.expect(0)` regression-guard exception documented). Per-story adversary CONVERGED: 4 passes (pass 1 found 1 MAJOR — `--no-parent` arm surfaced fabricated English error instead of real Jira error, fixed fd0cdd5; passes 2/3/4 CLEAN). 5 VHS demo scenarios + evidence-report.md at docs/demo-evidence/S-388/ covering all 7 ACs. CI: first run caught mutation-testing gap (85%, 1 surviving mutant at create.rs:898) — fixed by `test_no_parent_non_subtask_400_does_not_surface_cross_hierarchy_hint`; second run 10/10 green. pr-reviewer APPROVE cycle 1 (0 blocking). Security review CLEAN. Worktree `.worktrees/S-388` and branch removed. STORY-INDEX S-388 → completed. BC corpus: 577 BCs (spec v1.3.0). Remaining open backlog: #210, #331, #372, #387. Open PRs: #327, #368. Next: next feature from open backlog (human directs). |
+| **Convergence counter** | #388 F4 COMPLETE (cycle CLOSED). BC corpus: 577 BCs (spec v1.3.0). Story corpus: 44 stories (all delivered). |

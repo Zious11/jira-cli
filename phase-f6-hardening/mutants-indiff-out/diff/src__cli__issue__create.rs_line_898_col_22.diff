@@ -1,0 +1,21 @@
+--- src/cli/issue/create.rs
++++ replace && with || in handle_edit
+@@ -890,17 +890,17 @@
+                 }
+                 // issue_res.is_err() → Indeterminate Cause-1 R1: fall through.
+             }
+             // Non-400 → R0b: fall through.
+         }
+ 
+         // --no-parent arm: only reached when --type arm emitted no hint
+         // (dual-gate first-hint-wins: if --type arm bailed, we never reach here).
+-        if no_parent && is_subtask_parent_error(e) {
++        if no_parent || /* ~ changed by cargo-mutants ~ */ is_subtask_parent_error(e) {
+             eprintln!("{NO_PARENT_CONTEXT_SENTENCE}");
+             eprintln!("{CROSS_HIERARCHY_HINT}");
+             bail!("{e}");
+         }
+     }
+     edit_result?;
+ 
+     match output_format {

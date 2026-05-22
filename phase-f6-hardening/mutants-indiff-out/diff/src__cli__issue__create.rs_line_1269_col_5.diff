@@ -1,0 +1,25 @@
+--- src/cli/issue/create.rs
++++ replace is_cross_hierarchy_type_error -> Classification with Default::default()
+@@ -1261,21 +1261,17 @@
+ ///
+ /// The `err` argument MUST NOT influence the return value (BC-3.4.010 invariant 1 / P4).
+ /// It exists for potential future hint-composition use only.
+ fn is_cross_hierarchy_type_error(
+     src_subtask: Option<bool>,
+     tgt_subtask: Option<bool>,
+     _err: &str,
+ ) -> Classification {
+-    match (src_subtask, tgt_subtask) {
+-        (Some(a), Some(b)) if a != b => Classification::CrossHierarchy,
+-        (Some(_), Some(_)) => Classification::SameCategory,
+-        _ => Classification::Indeterminate,
+-    }
++    Default::default() /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+     use crate::error::JrError;
+     use std::collections::BTreeSet;
+ 
+     #[test]

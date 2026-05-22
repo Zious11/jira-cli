@@ -1,0 +1,1 @@
+src/cli/issue/create.rs:1269:5: replace is_cross_hierarchy_type_error -> Classification with Default::default()

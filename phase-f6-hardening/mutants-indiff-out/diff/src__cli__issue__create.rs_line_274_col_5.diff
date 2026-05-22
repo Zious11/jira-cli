@@ -1,0 +1,665 @@
+--- src/cli/issue/create.rs
++++ replace handle_edit -> Result<()> with Ok(())
+@@ -266,661 +266,17 @@
+ 
+ pub(super) async fn handle_edit(
+     command: IssueCommand,
+     output_format: &OutputFormat,
+     config: &Config,
+     client: &JiraClient,
+     no_input: bool,
+ ) -> Result<()> {
+-    let IssueCommand::Edit {
+-        keys,
+-        jql,
+-        max,
+-        yes,
+-        dry_run,
+-        summary,
+-        issue_type,
+-        priority,
+-        label: labels,
+-        team,
+-        points,
+-        no_points,
+-        parent,
+-        no_parent,
+-        description,
+-        description_stdin,
+-        markdown,
+-    } = command
+-    else {
+-        unreachable!()
+-    };
+-
+-    // Validate: at least one selector must be present (keys or --jql).
+-    // clap doesn't enforce this natively since both are optional — we validate here.
+-    if keys.is_empty() && jql.is_none() {
+-        return Err(
+-            JrError::UserError("Specify at least one issue key or --jql <query>.".into()).into(),
+-        );
+-    }
+-
+-    // Validate: --max is only meaningful with --jql.  clap's `requires` attribute cannot
+-    // enforce this when positional keys are also present (because `keys` and `jql` have
+-    // `conflicts_with` between them, which causes clap to skip the `requires` check).
+-    // We enforce it here instead, before any HTTP calls.
+-    if max.is_some() && jql.is_none() {
+-        return Err(JrError::UserError(
+-            "--max requires --jql. It cannot be used with positional keys because \
+-             it only limits the number of issues matched by a JQL query. \
+-             Remove --max or switch to --jql <query>."
+-                .into(),
+-        )
+-        .into());
+-    }
+-
+-    // Validate: --markdown is a modifier on --description/--description-stdin, NOT a
+-    // standalone field change.  Reject it early (before any HTTP calls) so the user
+-    // gets a clear error instead of a wasted JQL search followed by "No fields specified".
+-    if markdown && description.is_none() && !description_stdin {
+-        return Err(JrError::UserError(
+-            "--markdown requires --description or --description-stdin to take effect. \
+-             Pass a description alongside --markdown, or omit --markdown."
+-                .into(),
+-        )
+-        .into());
+-    }
+-
+-    // Pre-HTTP guard: if no field-change flags are specified, error here BEFORE running
+-    // any JQL search or making any HTTP calls.  This is the single source of truth for
+-    // the "no fields" check — both the JQL path and the dry-run path rely on this guard;
+-    // there is no duplicate check inside the dry-run block.
+-    //
+-    // NOTE: `markdown` is intentionally NOT included here — it is a modifier on
+-    // --description, not an independent field change. The validation above already
+-    // rejects `--markdown` without a description, so if we reach this point with
+-    // `markdown == true`, a description must also be set.
+-    {
+-        let has_any_field_change = summary.is_some()
+-            || priority.is_some()
+-            || issue_type.is_some()
+-            || !labels.is_empty()
+-            || team.is_some()
+-            || points.is_some()
+-            || no_points
+-            || parent.is_some()
+-            || no_parent
+-            || description.is_some()
+-            || description_stdin;
+-        if !has_any_field_change {
+-            return Err(JrError::UserError(
+-                "No fields specified to update. Use --summary, --type, --priority, --label, \
+-                 --team, --points, --no-points, --parent, --no-parent, --description, or \
+-                 --description-stdin."
+-                    .into(),
+-            )
+-            .into());
+-        }
+-    }
+-
+-    // --- Reject --label combined with non-label field flags. ---
+-    // --label is routed through a labels-only bulk path (handle_edit_bulk_labels) that
+-    // does not honour concurrent --summary/--priority/--type flags.  Combining them
+-    // would silently drop the non-label fields (exit 0, data loss).  Reject the
+-    // combination HERE, before any HTTP call (including the JQL search), rather than
+-    // silently discard the fields.
+-    // Mixed label + field bulk edits require the schema-correct combined payload tracked
+-    // at #331; until that lands, keep --label and field flags mutually exclusive.
+-    if !labels.is_empty() {
+-        let mut conflicting: Vec<&str> = Vec::new();
+-        if summary.is_some() {
+-            conflicting.push("--summary");
+-        }
+-        if priority.is_some() {
+-            conflicting.push("--priority");
+-        }
+-        if issue_type.is_some() {
+-            conflicting.push("--type");
+-        }
+-        if team.is_some() {
+-            conflicting.push("--team");
+-        }
+-        if points.is_some() {
+-            conflicting.push("--points");
+-        }
+-        if no_points {
+-            conflicting.push("--no-points");
+-        }
+-        if parent.is_some() {
+-            conflicting.push("--parent");
+-        }
+-        if no_parent {
+-            conflicting.push("--no-parent");
+-        }
+-        if description.is_some() {
+-            conflicting.push("--description");
+-        }
+-        if description_stdin {
+-            conflicting.push("--description-stdin");
+-        }
+-        if markdown {
+-            conflicting.push("--markdown");
+-        }
+-        if !conflicting.is_empty() {
+-            return Err(JrError::UserError(format!(
+-                "--label cannot be combined with {} in the same call. \
+-                 Run separate `jr issue edit` commands, or open an issue to track \
+-                 combined label + field bulk edits (see #331).",
+-                conflicting.join(", ")
+-            ))
+-            .into());
+-        }
+-    }
+-
+-    // --max is meaningless without --jql (positional keys use the existing 1001-key
+-    // hard cap, not --max). The handler-level guard earlier in this function already
+-    // rejects `--max` without `--jql` with JrError::UserError (exit 64) because
+-    // clap's `requires` attribute interacts poorly with the keys/jql `conflicts_with`
+-    // relationship. By the time we reach this branch we know jql.is_some() so the
+-    // unwrap_or(50) default is the right behavior.
+-    let effective_max = max.unwrap_or(50).min(BULK_MAX_KEYS as u32);
+-
+-    // Resolve the working set of keys.
+-    // For --jql: execute the search (read-only), then enforce --max cap.
+-    // For positional keys: use them directly (no HTTP read needed).
+-    let effective_keys: Vec<String> = if let Some(ref jql_str) = jql {
+-        if jql_str.trim().is_empty() {
+-            return Err(JrError::UserError(
+-                "--jql query cannot be empty. Provide a JQL expression like \
+-                 'project = FOO AND status = \"To Do\"', or pass keys positionally."
+-                    .into(),
+-            )
+-            .into());
+-        }
+-
+-        // --dry-run with --jql: search is read-only, allowed.
+-        let search_result = client
+-            .search_issue_keys(jql_str, Some(effective_max + 1))
+-            .await?;
+-        let matched_keys = search_result.keys;
+-
+-        if matched_keys.is_empty() {
+-            return Err(JrError::UserError(format!(
+-                "JQL '{}' matched 0 issues. Refine your query or pass keys directly.",
+-                jql_str,
+-            ))
+-            .into());
+-        }
+-
+-        if matched_keys.len() > effective_max as usize {
+-            return Err(JrError::UserError(format!(
+-                "JQL matched at least {} issues, which exceeds --max {}. \
+-                 Use --max <N> to allow up to {} issues, or refine your JQL.",
+-                matched_keys.len(),
+-                effective_max,
+-                BULK_MAX_KEYS,
+-            ))
+-            .into());
+-        }
+-
+-        matched_keys
+-    } else {
+-        // Positional keys: enforce the Atlassian hard ceiling.
+-        if keys.len() > BULK_MAX_KEYS {
+-            return Err(JrError::UserError(format!(
+-                "Too many issue keys: {} provided, maximum is {}. \
+-                 Split into batches of {} or fewer and run multiple times.",
+-                keys.len(),
+-                BULK_MAX_KEYS,
+-                BULK_MAX_KEYS,
+-            ))
+-            .into());
+-        }
+-        keys.clone()
+-    };
+-
+-    // --- C-1: Reject multi-key edits that include flags unsupported in bulk context. ---
+-    // These flags (parent, team, points, description, markdown) are only implemented
+-    // on the single-key path. Passing them with multiple keys previously caused silent
+-    // data loss: the flag was forwarded to handle_edit_bulk_fields which ignored it,
+-    // then returned Ok(). We now reject early with a clear error so users aren't surprised.
+-    //
+-    // This check runs BEFORE the dry-run block so that `--dry-run --no-parent` also
+-    // reports the unsupported-flag error consistently with the live path.
+-    if effective_keys.len() > 1 {
+-        let mut unsupported: Vec<&str> = Vec::new();
+-        if parent.is_some() {
+-            unsupported.push("--parent");
+-        }
+-        if no_parent {
+-            unsupported.push("--no-parent");
+-        }
+-        if team.is_some() {
+-            unsupported.push("--team");
+-        }
+-        if points.is_some() {
+-            unsupported.push("--points");
+-        }
+-        if no_points {
+-            unsupported.push("--no-points");
+-        }
+-        if description.is_some() || description_stdin {
+-            unsupported.push("--description / --description-stdin");
+-        }
+-        if markdown {
+-            unsupported.push("--markdown");
+-        }
+-        if !unsupported.is_empty() {
+-            return Err(JrError::UserError(format!(
+-                "Multi-key bulk edit doesn't yet support: {}. \
+-                 Use a single key, or open an issue if this matters for your workflow.",
+-                unsupported.join(", ")
+-            ))
+-            .into());
+-        }
+-    }
+-
+-    // --- Dry-run short-circuit: render diff, no HTTP mutations. ---
+-    if dry_run {
+-        // NOTE: The "no fields specified" guard already fired unconditionally above
+-        // (pre-HTTP guard, lines ~276-294) before execution reaches here.  No
+-        // duplicate check needed — any invocation with zero field flags exits before
+-        // this block is entered.
+-        match output_format {
+-            OutputFormat::Json => {
+-                // C-3: --output json must produce machine-readable JSON on stdout,
+-                // not prose. Build a planned-changes object containing only the
+-                // fields the user actually requested.
+-                let mut planned = serde_json::Map::new();
+-                if let Some(ref s) = summary {
+-                    planned.insert("summary".into(), json!(s));
+-                }
+-                if let Some(ref p) = priority {
+-                    planned.insert("priority".into(), json!(p));
+-                }
+-                if !labels.is_empty() {
+-                    // NOTE: This entire dry-run preview block (labels here, plus
+-                    // `priority` and `issueType` below) emits INTENTIONALLY simplified
+-                    // shapes that DO NOT match the POST body shapes sent to Atlassian:
+-                    //   - `labels`: dry-run emits `[{"action": "ADD", "name": "foo"}]`
+-                    //     (flat array). POST body emits
+-                    //     `{"labelsAction": "ADD", "labels": [{"name": "foo"}]}` (nested,
+-                    //     or an array of those objects when ADD+REMOVE coalesce).
+-                    //   - `priority`: dry-run emits a bare string. POST body wraps as
+-                    //     `{"name": "..."}` (best-guess; Atlassian docs document
+-                    //     `{"priorityId": <int>}`).
+-                    //   - `issueType`: dry-run emits a bare string. POST body wraps as
+-                    //     `{"issuetype": {"name": "..."}}` (best-guess; Atlassian docs
+-                    //     document `{"issueTypeId": "..."}`).
+-                    // The dry-run JSON is a human-and-tool-friendly preview, NOT a
+-                    // byte-for-byte snapshot of the wire request. Rationale: all three
+-                    // POST shapes are best-guesses pending #331 empirical verification.
+-                    // Locking dry-run consumers to unverified canonical Atlassian
+-                    // shapes now would force a second breaking change once #331
+-                    // confirms the true shapes. Once #331 verifies the wire shapes,
+-                    // this dry-run builder can be unified with
+-                    // `handle_edit_bulk_labels` / `handle_edit_bulk_fields` to
+-                    // emit byte-identical JSON.
+-                    let label_entries: Vec<serde_json::Value> = labels
+-                        .iter()
+-                        .map(|l| {
+-                            if let Some(name) = l.strip_prefix("add:") {
+-                                json!({"action": "ADD", "name": name})
+-                            } else if let Some(name) = l.strip_prefix("remove:") {
+-                                json!({"action": "REMOVE", "name": name})
+-                            } else {
+-                                json!({"action": "ADD", "name": l})
+-                            }
+-                        })
+-                        .collect();
+-                    planned.insert("labels".into(), json!(label_entries));
+-                }
+-                if let Some(ref t) = issue_type {
+-                    planned.insert("issueType".into(), json!(t));
+-                }
+-                if let Some(ref par) = parent {
+-                    planned.insert("parent".into(), json!(par));
+-                }
+-                if no_parent {
+-                    planned.insert("parent".into(), serde_json::Value::Null);
+-                }
+-                if let Some(pts) = points {
+-                    planned.insert("points".into(), json!(pts));
+-                }
+-                if no_points {
+-                    planned.insert("points".into(), serde_json::Value::Null);
+-                }
+-                // Single-key-only fields: team, description, description_stdin, markdown.
+-                // Multi-key bulk rejects these flags upstream (C-1 guard), so reaching
+-                // here with effective_keys.len() > 1 and these flags set is impossible.
+-                if let Some(ref t) = team {
+-                    planned.insert("team".into(), json!(t));
+-                }
+-                if let Some(ref d) = description {
+-                    planned.insert("description".into(), json!(d));
+-                } else if description_stdin {
+-                    // --dry-run does NOT read stdin; document this as a known limitation.
+-                    planned.insert(
+-                        "description".into(),
+-                        json!("<from stdin — not yet read in dry-run>"),
+-                    );
+-                }
+-                if markdown {
+-                    planned.insert("markdown".into(), json!(true));
+-                }
+-                let payload = json!({
+-                    "dryRun": true,
+-                    "issues": &effective_keys,
+-                    "plannedChanges": planned,
+-                });
+-                println!("{}", serde_json::to_string_pretty(&payload)?);
+-            }
+-            OutputFormat::Table => {
+-                // Human-readable prose on stdout (profile-1 for dry-run: data on stdout is fine).
+-                println!("DRY RUN — no changes will be made.");
+-                println!("Issues affected ({}):", effective_keys.len());
+-                for k in &effective_keys {
+-                    println!("  {k}");
+-                }
+-                println!("Planned changes:");
+-                if let Some(ref s) = summary {
+-                    println!("  summary → {s}");
+-                }
+-                if let Some(ref p) = priority {
+-                    println!("  priority → {p}");
+-                }
+-                if !labels.is_empty() {
+-                    println!("  labels → {}", labels.join(", "));
+-                }
+-                if let Some(ref t) = issue_type {
+-                    println!("  type → {t}");
+-                }
+-                if let Some(ref par) = parent {
+-                    println!("  parent → {par}");
+-                }
+-                if no_parent {
+-                    println!("  parent → (clear)");
+-                }
+-                if let Some(pts) = points {
+-                    println!("  points → {pts}");
+-                }
+-                if no_points {
+-                    println!("  points → (clear)");
+-                }
+-                // Single-key-only fields: team, description, description_stdin, markdown.
+-                // Multi-key bulk rejects these flags upstream (C-1 guard), so reaching
+-                // here with effective_keys.len() > 1 and these flags set is impossible.
+-                if let Some(ref t) = team {
+-                    println!("  team → {t}");
+-                }
+-                if let Some(ref d) = description {
+-                    // Truncate long descriptions to 60 codepoints for readability.
+-                    // Use chars().count() / chars().take(60) — NOT byte slicing —
+-                    // to avoid panics on multi-byte UTF-8 codepoints (Cyrillic,
+-                    // CJK, emoji, accented chars). Codepoint-aware is the correct
+-                    // Rust-stdlib idiom; grapheme clusters (unicode_segmentation)
+-                    // would be overkill for a display truncation.
+-                    let char_count = d.chars().count();
+-                    let preview = if char_count > 60 {
+-                        let truncated: String = d.chars().take(60).collect();
+-                        format!("{truncated}...")
+-                    } else {
+-                        d.clone()
+-                    };
+-                    println!("  description → {preview}");
+-                } else if description_stdin {
+-                    // --dry-run does NOT read stdin; document this as a known limitation.
+-                    println!("  description → (read from stdin — not yet read in dry-run)");
+-                }
+-                if markdown {
+-                    println!("  markdown rendering: enabled");
+-                }
+-            }
+-        }
+-        return Ok(());
+-    }
+-
+-    // --- Confirmation for large JQL match sets. ---
+-    // Safety-net: when --jql is used AND match count > threshold (JQL_CONFIRM_THRESHOLD),
+-    // require explicit --yes or interactive confirmation.
+-    // --no-input without --yes on a large set emits a hint but proceeds
+-    // (implicit-yes policy for non-interactive mode on any size set).
+-    if jql.is_some() && effective_keys.len() > JQL_CONFIRM_THRESHOLD {
+-        if !yes && !no_input {
+-            // Interactive confirmation via dialoguer.
+-            let prompt = format!(
+-                "This will bulk-edit {} issues. Proceed?",
+-                effective_keys.len()
+-            );
+-            let confirmed =
+-                dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
+-                    .with_prompt(prompt)
+-                    .default(false)
+-                    .interact()
+-                    .map_err(|e| {
+-                        JrError::UserError(format!(
+-                            "Confirmation prompt failed: {e}. Use --yes to skip the prompt or \
+-                             --no-input to disable interactive confirmation."
+-                        ))
+-                    })?;
+-            if !confirmed {
+-                return Err(JrError::UserError(
+-                    "Bulk edit declined at confirmation prompt. No changes made.".into(),
+-                )
+-                .into());
+-            }
+-        } else if !yes && no_input {
+-            // Safety-net hint for --no-input without --yes on a large set.
+-            eprintln!(
+-                "Warning: bulk edit will affect {} issues (matched by --jql). \
+-                 Use --yes to skip this hint, or --dry-run to preview. Proceeding.",
+-                effective_keys.len()
+-            );
+-        }
+-        // --yes: skip prompt entirely.
+-    }
+-
+-    // --- Route: labels → bulk API. ---
+-    if !labels.is_empty() {
+-        return handle_edit_bulk_labels(&effective_keys, labels, output_format, client, no_input)
+-            .await;
+-    }
+-
+-    // Routing for non-label edits:
+-    // - 2+ keys (positional or --jql-resolved) → POST /rest/api/3/bulk/issues/fields (bulk API)
+-    // - 1 key (positional or single-match --jql) → PUT /rest/api/3/issue/{key} (legacy single-key)
+-    //
+-    // The single-match --jql case intentionally uses the legacy path because it's
+-    // per-issue more efficient (no taskId polling) and the bulk API has no advantage
+-    // for a single issue. Users mental-modeling "JQL → always bulk" should be aware
+-    // of this asymmetry; it's documented rather than enforced.
+-
+-    // --- Multi-key non-label: route through bulk_edit_fields. ---
+-    if effective_keys.len() > 1 {
+-        return handle_edit_bulk_fields(
+-            &effective_keys,
+-            summary.as_deref(),
+-            priority.as_deref(),
+-            issue_type.as_deref(),
+-            output_format,
+-            client,
+-        )
+-        .await;
+-    }
+-
+-    // --- Single-key non-label path (unchanged from before) ---
+-    let key = &effective_keys[0];
+-
+-    let mut fields = json!({});
+-    let mut has_updates = false;
+-
+-    // Resolve description (see handle_create for rationale on spawn_blocking).
+-    let desc_text = if description_stdin {
+-        let buf = tokio::task::spawn_blocking(|| {
+-            let mut buf = String::new();
+-            std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;
+-            Ok::<_, std::io::Error>(buf)
+-        })
+-        .await??;
+-        Some(buf)
+-    } else {
+-        description
+-    };
+-
+-    if let Some(ref text) = desc_text {
+-        let adf_body = if markdown {
+-            adf::markdown_to_adf(text)
+-        } else {
+-            adf::text_to_adf(text)
+-        };
+-        fields["description"] = adf_body;
+-        has_updates = true;
+-    }
+-
+-    if let Some(ref s) = summary {
+-        fields["summary"] = json!(s);
+-        has_updates = true;
+-    }
+-
+-    if let Some(ref t) = issue_type {
+-        fields["issuetype"] = json!({ "name": t });
+-        has_updates = true;
+-    }
+-
+-    if let Some(ref p) = priority {
+-        fields["priority"] = json!({ "name": p });
+-        has_updates = true;
+-    }
+-
+-    if let Some(ref team_name) = team {
+-        let (field_id, team_id) =
+-            helpers::resolve_team_field(config, client, team_name, no_input).await?;
+-        fields[&field_id] = json!(team_id);
+-        has_updates = true;
+-    }
+-
+-    if let Some(pts) = points {
+-        let field_id = helpers::resolve_story_points_field_id(config)?;
+-        fields[&field_id] = json!(pts);
+-        has_updates = true;
+-    }
+-
+-    if no_points {
+-        let field_id = helpers::resolve_story_points_field_id(config)?;
+-        fields[&field_id] = json!(null);
+-        has_updates = true;
+-    }
+-
+-    if let Some(ref parent_key) = parent {
+-        fields["parent"] = json!({"key": parent_key});
+-        has_updates = true;
+-    }
+-
+-    if no_parent {
+-        fields["parent"] = serde_json::Value::Null;
+-        has_updates = true;
+-    }
+-
+-    if !has_updates {
+-        bail!(
+-            "No fields specified to update. Use --summary, --type, --priority, --label, --team, --points, --no-points, --parent, --no-parent, --description, or --description-stdin."
+-        );
+-    }
+-
+-    let edit_result = client.edit_issue(key, fields).await;
+-    if let Err(ref e) = edit_result {
+-        // --type arm: evaluated FIRST (dual-gate precedence, BC-3.4.010 invariant).
+-        // HTTP-400 gate: downcast to JrError::ApiError { status: 400, .. }.
+-        // Non-400 (401, 403, 5xx, network) → R0b: no enrichment, fall through.
+-        if let Some(ref type_name) = issue_type {
+-            if let Some(JrError::ApiError {
+-                status: 400,
+-                message: api_msg,
+-            }) = e.downcast_ref::<JrError>()
+-            {
+-                let api_msg = api_msg.clone();
+-                let type_name_lower = type_name.to_ascii_lowercase();
+-
+-                // Call ordering (BC-3.4.010 precondition):
+-                // 1. get_issue first; on Err → Indeterminate immediately (no project-types call).
+-                // 2. get_project_issue_types next; on Err → Indeterminate.
+-                // 3. Case-insensitive exact name match; not found → typo hint.
+-                // 4. Found → classify with is_cross_hierarchy_type_error.
+-                //
+-                // Fetch failure gate uses Result::is_err() (not a status downcast) so
+-                // JrError::NotAuthenticated, InsufficientScope, and all other Err variants
+-                // correctly trigger Indeterminate (BC-3.4.010 invariant 3).
+-                let issue_res = client.get_issue(key, &[]).await;
+-                if let Ok(issue) = issue_res {
+-                    let src_subtask = issue.fields.issue_type.as_ref().and_then(|t| t.subtask);
+-                    let project_key = issue
+-                        .fields
+-                        .project
+-                        .as_ref()
+-                        .map(|p| p.key.clone())
+-                        .unwrap_or_default();
+-
+-                    let types_res = client.get_project_issue_types(&project_key).await;
+-                    if let Ok(project_types) = types_res {
+-                        if let Some(target) = project_types
+-                            .iter()
+-                            .find(|t| t.name.to_ascii_lowercase() == type_name_lower)
+-                        {
+-                            let tgt_subtask = target.subtask;
+-                            match is_cross_hierarchy_type_error(src_subtask, tgt_subtask, &api_msg)
+-                            {
+-                                Classification::CrossHierarchy => {
+-                                    eprintln!("{CROSS_HIERARCHY_HINT}");
+-                                    bail!("{api_msg}");
+-                                }
+-                                Classification::SameCategory => {
+-                                    eprintln!("{TYPO_HINT}");
+-                                    bail!("{api_msg}");
+-                                }
+-                                Classification::Indeterminate => {
+-                                    // src or tgt subtask field absent; surface raw
+-                                    // 400 unchanged — fall through to edit_result?.
+-                                }
+-                            }
+-                        } else {
+-                            // Type name not in project's list → unresolvable-name
+-                            // sub-path: typo hint (classifier is NOT invoked).
+-                            eprintln!("{TYPO_HINT}");
+-                            bail!("{api_msg}");
+-                        }
+-                    }
+-                    // types_res.is_err() → Indeterminate Cause-1 R2: fall through.
+-                }
+-                // issue_res.is_err() → Indeterminate Cause-1 R1: fall through.
+-            }
+-            // Non-400 → R0b: fall through.
+-        }
+-
+-        // --no-parent arm: only reached when --type arm emitted no hint
+-        // (dual-gate first-hint-wins: if --type arm bailed, we never reach here).
+-        if no_parent && is_subtask_parent_error(e) {
+-            eprintln!("{NO_PARENT_CONTEXT_SENTENCE}");
+-            eprintln!("{CROSS_HIERARCHY_HINT}");
+-            bail!("{e}");
+-        }
+-    }
+-    edit_result?;
+-
+-    match output_format {
+-        OutputFormat::Json => {
+-            println!(
+-                "{}",
+-                serde_json::to_string_pretty(&json_output::edit_response(key))?
+-            );
+-        }
+-        OutputFormat::Table => {
+-            output::print_success(&format!("Updated {}", key));
+-        }
+-    }
+-
+-    Ok(())
++    Ok(()) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Build the edited-fields JSON object for a bulk-labels edit.
+ ///
+ /// Returns the complete `editedFieldsInput` object (with a top-level `"labels"` key)
+ /// to be passed directly to `bulk_edit_fields`. JSON shapes per BC-3.4.006:
+ /// - Single-action ADD: object-form
+ ///   `{"labels": {"labelsAction": "ADD", "labels": [{"name": "foo"}]}}`

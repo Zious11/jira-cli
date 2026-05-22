@@ -1537,3 +1537,38 @@ until L2 propagation policy is decided.
 
 _Discovered: #388 F2 adversarial review pass 6. Pre-existing: DRIFT-009. Status: [deferred] —
 L2 propagation policy required first; DRIFT-009 owner: orchestrator._
+
+---
+
+### PG-388-4 [codified] Pull target branch to merged commit before dispatching any post-merge reviewer
+
+**Finding (F5 — 2026-05-21):** The F5 scoped adversarial reviewer for S-388 was dispatched
+against a stale local `develop` checkout — the orchestrator did not pull `develop` to the
+merge commit (`e0ea24b`) before invoking the post-merge reviewer. This produced a false
+"implementation absent" finding in the reviewer's first pass, because the reviewer saw a
+pre-merge state of `src/cli/issue/create.rs` that lacked `is_cross_hierarchy_type_error` and
+the `Classification` enum.
+
+**Root cause:** The orchestrator dispatched the F5 reviewer immediately after PR #397 was
+merged, without first confirming that the reviewer's working tree was on develop at `e0ea24b`.
+Since the reviewer operates against the filesystem (not a remote fetch), any worktree or
+branch checked out at an earlier SHA will produce false-absent findings for all new symbols.
+
+**Rule:** Before dispatching any post-merge reviewer (F5 adversarial, F6 hardening verifier,
+traceability auditor, or code-reviewer), the orchestrator MUST:
+1. Run `git -C <repo> log --oneline -1` to confirm `develop` HEAD is the expected merge SHA.
+2. If the reviewer uses a worktree or separate checkout, run `git -C <worktree> pull origin develop`
+   (or `git -C <worktree> checkout <merge-sha>`) and confirm HEAD matches before dispatch.
+3. Record the confirmed SHA in the reviewer dispatch prompt so the reviewer can self-validate
+   ("I am reviewing develop @ e0ea24b — confirm this matches your working tree").
+
+**Impact of violation:** False-absent findings cause one or more wasted adversary passes
+(reviewer finds "not implemented" for already-shipped code), inflating pass count and
+reducing convergence signal fidelity.
+
+**Scope:** Applies to all post-merge reviewer dispatches in all VSDD Feature Mode phases.
+Particularly important for F5 (which runs post-merge in Feature Mode) and for F7 traceability
+audits that verify specific file contents.
+
+_Discovered: #388 F5 scoped adversarial review, 2026-05-21. Status: [codified] — process
+discipline; no follow-up story needed. Rule applies to orchestrator dispatch protocol._

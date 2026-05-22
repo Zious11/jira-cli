@@ -1,0 +1,593 @@
+{
+  "outcomes": [
+    {
+      "scenario": "Baseline",
+      "summary": "Success",
+      "log_path": "log/baseline.log",
+      "diff_path": null,
+      "phase_results": [
+        {
+          "phase": "Build",
+          "duration": 35.155552375,
+          "process_status": "Success",
+          "argv": [
+            "/Users/zious/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo",
+            "test",
+            "--no-run",
+            "--verbose",
+            "--package=jr@0.5.0-dev.9"
+          ]
+        },
+        {
+          "phase": "Test",
+          "duration": 3.227740333,
+          "process_status": "Success",
+          "argv": [
+            "/Users/zious/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo",
+            "test",
+            "--verbose",
+            "--package=jr@0.5.0-dev.9",
+            "--lib",
+            "--test",
+            "issue_edit_type_errors",
+            "--test",
+            "issue_edit_no_parent"
+          ]
+        }
+      ]
+    },
+    {
+      "scenario": {
+        "Mutant": {
+          "name": "src/cli/issue/create.rs:274:5: replace handle_edit -> Result<()> with Ok(())",
+          "package": "jr",
+          "file": "src/cli/issue/create.rs",
+          "function": {
+            "function_name": "handle_edit",
+            "return_type": "-> Result<()>",
+            "span": {
+              "start": {
+                "line": 267,
+                "column": 1
+              },
+              "end": {
+                "line": 919,
+                "column": 2
+              }
+            }
+          },
+          "span": {
+            "start": {
+              "line": 274,
+              "column": 5
+            },
+            "end": {
+              "line": 918,
+              "column": 11
+            }
+          },
+          "replacement": "Ok(())",
+          "genre": "FnValue"
+        }
+      },
+      "summary": "CaughtMutant",
+      "log_path": "log/src__cli__issue__create.rs_line_274_col_5.log",
+      "diff_path": "diff/src__cli__issue__create.rs_line_274_col_5.diff",
+      "phase_results": [
+        {
+          "phase": "Build",
+          "duration": 17.583175957999998,
+          "process_status": "Success",
+          "argv": [
+            "/Users/zious/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo",
+            "test",
+            "--no-run",
+            "--verbose",
+            "--package=jr@0.5.0-dev.9"
+          ]
+        },
+        {
+          "phase": "Test",
+          "duration": 2.948560541,
+          "process_status": {
+            "Failure": 101
+          },
+          "argv": [
+            "/Users/zious/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo",
+            "test",
+            "--verbose",
+            "--package=jr@0.5.0-dev.9",
+            "--lib",
+            "--test",
+            "issue_edit_type_errors",
+            "--test",
+            "issue_edit_no_parent"
+          ]
+        }
+      ]
+    },
+    {
+      "scenario": {
+        "Mutant": {
+          "name": "src/cli/issue/create.rs:898:22: replace && with || in handle_edit",
+          "package": "jr",
+          "file": "src/cli/issue/create.rs",
+          "function": {
+            "function_name": "handle_edit",
+            "return_type": "-> Result<()>",
+            "span": {
+              "start": {
+                "line": 267,
+                "column": 1
+              },
+              "end": {
+                "line": 919,
+                "column": 2
+              }
+            }
+          },
+          "span": {
+            "start": {
+              "line": 898,
+              "column": 22
+            },
+            "end": {
+              "line": 898,
+              "column": 24
+            }
+          },
+          "replacement": "||",
+          "genre": "BinaryOperator"
+        }
+      },
+      "summary": "CaughtMutant",
+      "log_path": "log/src__cli__issue__create.rs_line_898_col_22.log",
+      "diff_path": "diff/src__cli__issue__create.rs_line_898_col_22.diff",
+      "phase_results": [
+        {
+          "phase": "Build",
+          "duration": 13.45794,
+          "process_status": "Success",
+          "argv": [
+            "/Users/zious/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo",
+            "test",
+            "--no-run",
+            "--verbose",
+            "--package=jr@0.5.0-dev.9"
+          ]
+        },
+        {
+          "phase": "Test",
+          "duration": 3.088131,
+          "process_status": {
+            "Failure": 101
+          },
+          "argv": [
+            "/Users/zious/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo",
+            "test",
+            "--verbose",
+            "--package=jr@0.5.0-dev.9",
+            "--lib",
+            "--test",
+            "issue_edit_type_errors",
+            "--test",
+            "issue_edit_no_parent"
+          ]
+        }
+      ]
+    },
+    {
+      "scenario": {
+        "Mutant": {
+          "name": "src/cli/issue/create.rs:1269:5: replace is_cross_hierarchy_type_error -> Classification with Default::default()",
+          "package": "jr",
+          "file": "src/cli/issue/create.rs",
+          "function": {
+            "function_name": "is_cross_hierarchy_type_error",
+            "return_type": "-> Classification",
+            "span": {
+              "start": {
+                "line": 1255,
+                "column": 1
+              },
+              "end": {
+                "line": 1274,
+                "column": 2
+              }
+            }
+          },
+          "span": {
+            "start": {
+              "line": 1269,
+              "column": 5
+            },
+            "end": {
+              "line": 1273,
+              "column": 6
+            }
+          },
+          "replacement": "Default::default()",
+          "genre": "FnValue"
+        }
+      },
+      "summary": "Unviable",
+      "log_path": "log/src__cli__issue__create.rs_line_1269_col_5.log",
+      "diff_path": "diff/src__cli__issue__create.rs_line_1269_col_5.diff",
+      "phase_results": [
+        {
+          "phase": "Build",
+          "duration": 1.595504208,
+          "process_status": {
+            "Failure": 101
+          },
+          "argv": [
+            "/Users/zious/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo",
+            "test",
+            "--no-run",
+            "--verbose",
+            "--package=jr@0.5.0-dev.9"
+          ]
+        }
+      ]
+    },
+    {
+      "scenario": {
+        "Mutant": {
+          "name": "src/cli/issue/create.rs:864:67: replace == with != in handle_edit",
+          "package": "jr",
+          "file": "src/cli/issue/create.rs",
+          "function": {
+            "function_name": "handle_edit",
+            "return_type": "-> Result<()>",
+            "span": {
+              "start": {
+                "line": 267,
+                "column": 1
+              },
+              "end": {
+                "line": 919,
+                "column": 2
+              }
+            }
+          },
+          "span": {
+            "start": {
+              "line": 864,
+              "column": 67
+            },
+            "end": {
+              "line": 864,
+              "column": 69
+            }
+          },
+          "replacement": "!=",
+          "genre": "BinaryOperator"
+        }
+      },
+      "summary": "CaughtMutant",
+      "log_path": "log/src__cli__issue__create.rs_line_864_col_67.log",
+      "diff_path": "diff/src__cli__issue__create.rs_line_864_col_67.diff",
+      "phase_results": [
+        {
+          "phase": "Build",
+          "duration": 54.792867542,
+          "process_status": "Success",
+          "argv": [
+            "/Users/zious/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo",
+            "test",
+            "--no-run",
+            "--verbose",
+            "--package=jr@0.5.0-dev.9"
+          ]
+        },
+        {
+          "phase": "Test",
+          "duration": 3.657360125,
+          "process_status": {
+            "Failure": 101
+          },
+          "argv": [
+            "/Users/zious/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo",
+            "test",
+            "--verbose",
+            "--package=jr@0.5.0-dev.9",
+            "--lib",
+            "--test",
+            "issue_edit_type_errors",
+            "--test",
+            "issue_edit_no_parent"
+          ]
+        }
+      ]
+    },
+    {
+      "scenario": {
+        "Mutant": {
+          "name": "src/cli/issue/create.rs:1271:9: delete match arm (Some(_), Some(_)) in is_cross_hierarchy_type_error",
+          "package": "jr",
+          "file": "src/cli/issue/create.rs",
+          "function": {
+            "function_name": "is_cross_hierarchy_type_error",
+            "return_type": "-> Classification",
+            "span": {
+              "start": {
+                "line": 1255,
+                "column": 1
+              },
+              "end": {
+                "line": 1274,
+                "column": 2
+              }
+            }
+          },
+          "span": {
+            "start": {
+              "line": 1271,
+              "column": 9
+            },
+            "end": {
+              "line": 1271,
+              "column": 60
+            }
+          },
+          "replacement": "",
+          "genre": "MatchArm"
+        }
+      },
+      "summary": "CaughtMutant",
+      "log_path": "log/src__cli__issue__create.rs_line_1271_col_9.log",
+      "diff_path": "diff/src__cli__issue__create.rs_line_1271_col_9.diff",
+      "phase_results": [
+        {
+          "phase": "Build",
+          "duration": 20.36216875,
+          "process_status": "Success",
+          "argv": [
+            "/Users/zious/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo",
+            "test",
+            "--no-run",
+            "--verbose",
+            "--package=jr@0.5.0-dev.9"
+          ]
+        },
+        {
+          "phase": "Test",
+          "duration": 1.833567167,
+          "process_status": {
+            "Failure": 101
+          },
+          "argv": [
+            "/Users/zious/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo",
+            "test",
+            "--verbose",
+            "--package=jr@0.5.0-dev.9",
+            "--lib",
+            "--test",
+            "issue_edit_type_errors",
+            "--test",
+            "issue_edit_no_parent"
+          ]
+        }
+      ]
+    },
+    {
+      "scenario": {
+        "Mutant": {
+          "name": "src/cli/issue/create.rs:1270:31: replace match guard a != b with true in is_cross_hierarchy_type_error",
+          "package": "jr",
+          "file": "src/cli/issue/create.rs",
+          "function": {
+            "function_name": "is_cross_hierarchy_type_error",
+            "return_type": "-> Classification",
+            "span": {
+              "start": {
+                "line": 1255,
+                "column": 1
+              },
+              "end": {
+                "line": 1274,
+                "column": 2
+              }
+            }
+          },
+          "span": {
+            "start": {
+              "line": 1270,
+              "column": 31
+            },
+            "end": {
+              "line": 1270,
+              "column": 37
+            }
+          },
+          "replacement": "true",
+          "genre": "MatchArmGuard"
+        }
+      },
+      "summary": "CaughtMutant",
+      "log_path": "log/src__cli__issue__create.rs_line_1270_col_31.log",
+      "diff_path": "diff/src__cli__issue__create.rs_line_1270_col_31.diff",
+      "phase_results": [
+        {
+          "phase": "Build",
+          "duration": 12.85566475,
+          "process_status": "Success",
+          "argv": [
+            "/Users/zious/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo",
+            "test",
+            "--no-run",
+            "--verbose",
+            "--package=jr@0.5.0-dev.9"
+          ]
+        },
+        {
+          "phase": "Test",
+          "duration": 1.8556063329999999,
+          "process_status": {
+            "Failure": 101
+          },
+          "argv": [
+            "/Users/zious/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo",
+            "test",
+            "--verbose",
+            "--package=jr@0.5.0-dev.9",
+            "--lib",
+            "--test",
+            "issue_edit_type_errors",
+            "--test",
+            "issue_edit_no_parent"
+          ]
+        }
+      ]
+    },
+    {
+      "scenario": {
+        "Mutant": {
+          "name": "src/cli/issue/create.rs:1270:31: replace match guard a != b with false in is_cross_hierarchy_type_error",
+          "package": "jr",
+          "file": "src/cli/issue/create.rs",
+          "function": {
+            "function_name": "is_cross_hierarchy_type_error",
+            "return_type": "-> Classification",
+            "span": {
+              "start": {
+                "line": 1255,
+                "column": 1
+              },
+              "end": {
+                "line": 1274,
+                "column": 2
+              }
+            }
+          },
+          "span": {
+            "start": {
+              "line": 1270,
+              "column": 31
+            },
+            "end": {
+              "line": 1270,
+              "column": 37
+            }
+          },
+          "replacement": "false",
+          "genre": "MatchArmGuard"
+        }
+      },
+      "summary": "CaughtMutant",
+      "log_path": "log/src__cli__issue__create.rs_line_1270_col_31_001.log",
+      "diff_path": "diff/src__cli__issue__create.rs_line_1270_col_31_001.diff",
+      "phase_results": [
+        {
+          "phase": "Build",
+          "duration": 24.006247334,
+          "process_status": "Success",
+          "argv": [
+            "/Users/zious/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo",
+            "test",
+            "--no-run",
+            "--verbose",
+            "--package=jr@0.5.0-dev.9"
+          ]
+        },
+        {
+          "phase": "Test",
+          "duration": 1.987673709,
+          "process_status": {
+            "Failure": 101
+          },
+          "argv": [
+            "/Users/zious/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo",
+            "test",
+            "--verbose",
+            "--package=jr@0.5.0-dev.9",
+            "--lib",
+            "--test",
+            "issue_edit_type_errors",
+            "--test",
+            "issue_edit_no_parent"
+          ]
+        }
+      ]
+    },
+    {
+      "scenario": {
+        "Mutant": {
+          "name": "src/cli/issue/create.rs:1270:33: replace != with == in is_cross_hierarchy_type_error",
+          "package": "jr",
+          "file": "src/cli/issue/create.rs",
+          "function": {
+            "function_name": "is_cross_hierarchy_type_error",
+            "return_type": "-> Classification",
+            "span": {
+              "start": {
+                "line": 1255,
+                "column": 1
+              },
+              "end": {
+                "line": 1274,
+                "column": 2
+              }
+            }
+          },
+          "span": {
+            "start": {
+              "line": 1270,
+              "column": 33
+            },
+            "end": {
+              "line": 1270,
+              "column": 35
+            }
+          },
+          "replacement": "==",
+          "genre": "BinaryOperator"
+        }
+      },
+      "summary": "CaughtMutant",
+      "log_path": "log/src__cli__issue__create.rs_line_1270_col_33.log",
+      "diff_path": "diff/src__cli__issue__create.rs_line_1270_col_33.diff",
+      "phase_results": [
+        {
+          "phase": "Build",
+          "duration": 17.837338875,
+          "process_status": "Success",
+          "argv": [
+            "/Users/zious/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo",
+            "test",
+            "--no-run",
+            "--verbose",
+            "--package=jr@0.5.0-dev.9"
+          ]
+        },
+        {
+          "phase": "Test",
+          "duration": 1.72645975,
+          "process_status": {
+            "Failure": 101
+          },
+          "argv": [
+            "/Users/zious/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo",
+            "test",
+            "--verbose",
+            "--package=jr@0.5.0-dev.9",
+            "--lib",
+            "--test",
+            "issue_edit_type_errors",
+            "--test",
+            "issue_edit_no_parent"
+          ]
+        }
+      ]
+    }
+  ],
+  "total_mutants": 8,
+  "missed": 0,
+  "caught": 7,
+  "timeout": 0,
+  "unviable": 1,
+  "success": 0,
+  "start_time": "2026-05-22T01:13:14.70803Z",
+  "end_time": "2026-05-22T01:15:34.925176Z",
+  "cargo_mutants_version": "27.0.0"
+}

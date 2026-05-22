@@ -1,0 +1,258 @@
+[
+  {
+    "diff": "--- src/cli/issue/create.rs\n+++ replace handle_edit -> Result<()> with Ok(())\n@@ -266,661 +266,17 @@\n \n pub(super) async fn handle_edit(\n     command: IssueCommand,\n     output_format: &OutputFormat,\n     config: &Config,\n     client: &JiraClient,\n     no_input: bool,\n ) -> Result<()> {\n-    let IssueCommand::Edit {\n-        keys,\n-        jql,\n-        max,\n-        yes,\n-        dry_run,\n-        summary,\n-        issue_type,\n-        priority,\n-        label: labels,\n-        team,\n-        points,\n-        no_points,\n-        parent,\n-        no_parent,\n-        description,\n-        description_stdin,\n-        markdown,\n-    } = command\n-    else {\n-        unreachable!()\n-    };\n-\n-    // Validate: at least one selector must be present (keys or --jql).\n-    // clap doesn't enforce this natively since both are optional — we validate here.\n-    if keys.is_empty() && jql.is_none() {\n-        return Err(\n-            JrError::UserError(\"Specify at least one issue key or --jql <query>.\".into()).into(),\n-        );\n-    }\n-\n-    // Validate: --max is only meaningful with --jql.  clap's `requires` attribute cannot\n-    // enforce this when positional keys are also present (because `keys` and `jql` have\n-    // `conflicts_with` between them, which causes clap to skip the `requires` check).\n-    // We enforce it here instead, before any HTTP calls.\n-    if max.is_some() && jql.is_none() {\n-        return Err(JrError::UserError(\n-            \"--max requires --jql. It cannot be used with positional keys because \\\n-             it only limits the number of issues matched by a JQL query. \\\n-             Remove --max or switch to --jql <query>.\"\n-                .into(),\n-        )\n-        .into());\n-    }\n-\n-    // Validate: --markdown is a modifier on --description/--description-stdin, NOT a\n-    // standalone field change.  Reject it early (before any HTTP calls) so the user\n-    // gets a clear error instead of a wasted JQL search followed by \"No fields specified\".\n-    if markdown && description.is_none() && !description_stdin {\n-        return Err(JrError::UserError(\n-            \"--markdown requires --description or --description-stdin to take effect. \\\n-             Pass a description alongside --markdown, or omit --markdown.\"\n-                .into(),\n-        )\n-        .into());\n-    }\n-\n-    // Pre-HTTP guard: if no field-change flags are specified, error here BEFORE running\n-    // any JQL search or making any HTTP calls.  This is the single source of truth for\n-    // the \"no fields\" check — both the JQL path and the dry-run path rely on this guard;\n-    // there is no duplicate check inside the dry-run block.\n-    //\n-    // NOTE: `markdown` is intentionally NOT included here — it is a modifier on\n-    // --description, not an independent field change. The validation above already\n-    // rejects `--markdown` without a description, so if we reach this point with\n-    // `markdown == true`, a description must also be set.\n-    {\n-        let has_any_field_change = summary.is_some()\n-            || priority.is_some()\n-            || issue_type.is_some()\n-            || !labels.is_empty()\n-            || team.is_some()\n-            || points.is_some()\n-            || no_points\n-            || parent.is_some()\n-            || no_parent\n-            || description.is_some()\n-            || description_stdin;\n-        if !has_any_field_change {\n-            return Err(JrError::UserError(\n-                \"No fields specified to update. Use --summary, --type, --priority, --label, \\\n-                 --team, --points, --no-points, --parent, --no-parent, --description, or \\\n-                 --description-stdin.\"\n-                    .into(),\n-            )\n-            .into());\n-        }\n-    }\n-\n-    // --- Reject --label combined with non-label field flags. ---\n-    // --label is routed through a labels-only bulk path (handle_edit_bulk_labels) that\n-    // does not honour concurrent --summary/--priority/--type flags.  Combining them\n-    // would silently drop the non-label fields (exit 0, data loss).  Reject the\n-    // combination HERE, before any HTTP call (including the JQL search), rather than\n-    // silently discard the fields.\n-    // Mixed label + field bulk edits require the schema-correct combined payload tracked\n-    // at #331; until that lands, keep --label and field flags mutually exclusive.\n-    if !labels.is_empty() {\n-        let mut conflicting: Vec<&str> = Vec::new();\n-        if summary.is_some() {\n-            conflicting.push(\"--summary\");\n-        }\n-        if priority.is_some() {\n-            conflicting.push(\"--priority\");\n-        }\n-        if issue_type.is_some() {\n-            conflicting.push(\"--type\");\n-        }\n-        if team.is_some() {\n-            conflicting.push(\"--team\");\n-        }\n-        if points.is_some() {\n-            conflicting.push(\"--points\");\n-        }\n-        if no_points {\n-            conflicting.push(\"--no-points\");\n-        }\n-        if parent.is_some() {\n-            conflicting.push(\"--parent\");\n-        }\n-        if no_parent {\n-            conflicting.push(\"--no-parent\");\n-        }\n-        if description.is_some() {\n-            conflicting.push(\"--description\");\n-        }\n-        if description_stdin {\n-            conflicting.push(\"--description-stdin\");\n-        }\n-        if markdown {\n-            conflicting.push(\"--markdown\");\n-        }\n-        if !conflicting.is_empty() {\n-            return Err(JrError::UserError(format!(\n-                \"--label cannot be combined with {} in the same call. \\\n-                 Run separate `jr issue edit` commands, or open an issue to track \\\n-                 combined label + field bulk edits (see #331).\",\n-                conflicting.join(\", \")\n-            ))\n-            .into());\n-        }\n-    }\n-\n-    // --max is meaningless without --jql (positional keys use the existing 1001-key\n-    // hard cap, not --max). The handler-level guard earlier in this function already\n-    // rejects `--max` without `--jql` with JrError::UserError (exit 64) because\n-    // clap's `requires` attribute interacts poorly with the keys/jql `conflicts_with`\n-    // relationship. By the time we reach this branch we know jql.is_some() so the\n-    // unwrap_or(50) default is the right behavior.\n-    let effective_max = max.unwrap_or(50).min(BULK_MAX_KEYS as u32);\n-\n-    // Resolve the working set of keys.\n-    // For --jql: execute the search (read-only), then enforce --max cap.\n-    // For positional keys: use them directly (no HTTP read needed).\n-    let effective_keys: Vec<String> = if let Some(ref jql_str) = jql {\n-        if jql_str.trim().is_empty() {\n-            return Err(JrError::UserError(\n-                \"--jql query cannot be empty. Provide a JQL expression like \\\n-                 'project = FOO AND status = \\\"To Do\\\"', or pass keys positionally.\"\n-                    .into(),\n-            )\n-            .into());\n-        }\n-\n-        // --dry-run with --jql: search is read-only, allowed.\n-        let search_result = client\n-            .search_issue_keys(jql_str, Some(effective_max + 1))\n-            .await?;\n-        let matched_keys = search_result.keys;\n-\n-        if matched_keys.is_empty() {\n-            return Err(JrError::UserError(format!(\n-                \"JQL '{}' matched 0 issues. Refine your query or pass keys directly.\",\n-                jql_str,\n-            ))\n-            .into());\n-        }\n-\n-        if matched_keys.len() > effective_max as usize {\n-            return Err(JrError::UserError(format!(\n-                \"JQL matched at least {} issues, which exceeds --max {}. \\\n-                 Use --max <N> to allow up to {} issues, or refine your JQL.\",\n-                matched_keys.len(),\n-                effective_max,\n-                BULK_MAX_KEYS,\n-            ))\n-            .into());\n-        }\n-\n-        matched_keys\n-    } else {\n-        // Positional keys: enforce the Atlassian hard ceiling.\n-        if keys.len() > BULK_MAX_KEYS {\n-            return Err(JrError::UserError(format!(\n-                \"Too many issue keys: {} provided, maximum is {}. \\\n-                 Split into batches of {} or fewer and run multiple times.\",\n-                keys.len(),\n-                BULK_MAX_KEYS,\n-                BULK_MAX_KEYS,\n-            ))\n-            .into());\n-        }\n-        keys.clone()\n-    };\n-\n-    // --- C-1: Reject multi-key edits that include flags unsupported in bulk context. ---\n-    // These flags (parent, team, points, description, markdown) are only implemented\n-    // on the single-key path. Passing them with multiple keys previously caused silent\n-    // data loss: the flag was forwarded to handle_edit_bulk_fields which ignored it,\n-    // then returned Ok(). We now reject early with a clear error so users aren't surprised.\n-    //\n-    // This check runs BEFORE the dry-run block so that `--dry-run --no-parent` also\n-    // reports the unsupported-flag error consistently with the live path.\n-    if effective_keys.len() > 1 {\n-        let mut unsupported: Vec<&str> = Vec::new();\n-        if parent.is_some() {\n-            unsupported.push(\"--parent\");\n-        }\n-        if no_parent {\n-            unsupported.push(\"--no-parent\");\n-        }\n-        if team.is_some() {\n-            unsupported.push(\"--team\");\n-        }\n-        if points.is_some() {\n-            unsupported.push(\"--points\");\n-        }\n-        if no_points {\n-            unsupported.push(\"--no-points\");\n-        }\n-        if description.is_some() || description_stdin {\n-            unsupported.push(\"--description / --description-stdin\");\n-        }\n-        if markdown {\n-            unsupported.push(\"--markdown\");\n-        }\n-        if !unsupported.is_empty() {\n-            return Err(JrError::UserError(format!(\n-                \"Multi-key bulk edit doesn't yet support: {}. \\\n-                 Use a single key, or open an issue if this matters for your workflow.\",\n-                unsupported.join(\", \")\n-            ))\n-            .into());\n-        }\n-    }\n-\n-    // --- Dry-run short-circuit: render diff, no HTTP mutations. ---\n-    if dry_run {\n-        // NOTE: The \"no fields specified\" guard already fired unconditionally above\n-        // (pre-HTTP guard, lines ~276-294) before execution reaches here.  No\n-        // duplicate check needed — any invocation with zero field flags exits before\n-        // this block is entered.\n-        match output_format {\n-            OutputFormat::Json => {\n-                // C-3: --output json must produce machine-readable JSON on stdout,\n-                // not prose. Build a planned-changes object containing only the\n-                // fields the user actually requested.\n-                let mut planned = serde_json::Map::new();\n-                if let Some(ref s) = summary {\n-                    planned.insert(\"summary\".into(), json!(s));\n-                }\n-                if let Some(ref p) = priority {\n-                    planned.insert(\"priority\".into(), json!(p));\n-                }\n-                if !labels.is_empty() {\n-                    // NOTE: This entire dry-run preview block (labels here, plus\n-                    // `priority` and `issueType` below) emits INTENTIONALLY simplified\n-                    // shapes that DO NOT match the POST body shapes sent to Atlassian:\n-                    //   - `labels`: dry-run emits `[{\"action\": \"ADD\", \"name\": \"foo\"}]`\n-                    //     (flat array). POST body emits\n-                    //     `{\"labelsAction\": \"ADD\", \"labels\": [{\"name\": \"foo\"}]}` (nested,\n-                    //     or an array of those objects when ADD+REMOVE coalesce).\n-                    //   - `priority`: dry-run emits a bare string. POST body wraps as\n-                    //     `{\"name\": \"...\"}` (best-guess; Atlassian docs document\n-                    //     `{\"priorityId\": <int>}`).\n-                    //   - `issueType`: dry-run emits a bare string. POST body wraps as\n-                    //     `{\"issuetype\": {\"name\": \"...\"}}` (best-guess; Atlassian docs\n-                    //     document `{\"issueTypeId\": \"...\"}`).\n-                    // The dry-run JSON is a human-and-tool-friendly preview, NOT a\n-                    // byte-for-byte snapshot of the wire request. Rationale: all three\n-                    // POST shapes are best-guesses pending #331 empirical verification.\n-                    // Locking dry-run consumers to unverified canonical Atlassian\n-                    // shapes now would force a second breaking change once #331\n-                    // confirms the true shapes. Once #331 verifies the wire shapes,\n-                    // this dry-run builder can be unified with\n-                    // `handle_edit_bulk_labels` / `handle_edit_bulk_fields` to\n-                    // emit byte-identical JSON.\n-                    let label_entries: Vec<serde_json::Value> = labels\n-                        .iter()\n-                        .map(|l| {\n-                            if let Some(name) = l.strip_prefix(\"add:\") {\n-                                json!({\"action\": \"ADD\", \"name\": name})\n-                            } else if let Some(name) = l.strip_prefix(\"remove:\") {\n-                                json!({\"action\": \"REMOVE\", \"name\": name})\n-                            } else {\n-                                json!({\"action\": \"ADD\", \"name\": l})\n-                            }\n-                        })\n-                        .collect();\n-                    planned.insert(\"labels\".into(), json!(label_entries));\n-                }\n-                if let Some(ref t) = issue_type {\n-                    planned.insert(\"issueType\".into(), json!(t));\n-                }\n-                if let Some(ref par) = parent {\n-                    planned.insert(\"parent\".into(), json!(par));\n-                }\n-                if no_parent {\n-                    planned.insert(\"parent\".into(), serde_json::Value::Null);\n-                }\n-                if let Some(pts) = points {\n-                    planned.insert(\"points\".into(), json!(pts));\n-                }\n-                if no_points {\n-                    planned.insert(\"points\".into(), serde_json::Value::Null);\n-                }\n-                // Single-key-only fields: team, description, description_stdin, markdown.\n-                // Multi-key bulk rejects these flags upstream (C-1 guard), so reaching\n-                // here with effective_keys.len() > 1 and these flags set is impossible.\n-                if let Some(ref t) = team {\n-                    planned.insert(\"team\".into(), json!(t));\n-                }\n-                if let Some(ref d) = description {\n-                    planned.insert(\"description\".into(), json!(d));\n-                } else if description_stdin {\n-                    // --dry-run does NOT read stdin; document this as a known limitation.\n-                    planned.insert(\n-                        \"description\".into(),\n-                        json!(\"<from stdin — not yet read in dry-run>\"),\n-                    );\n-                }\n-                if markdown {\n-                    planned.insert(\"markdown\".into(), json!(true));\n-                }\n-                let payload = json!({\n-                    \"dryRun\": true,\n-                    \"issues\": &effective_keys,\n-                    \"plannedChanges\": planned,\n-                });\n-                println!(\"{}\", serde_json::to_string_pretty(&payload)?);\n-            }\n-            OutputFormat::Table => {\n-                // Human-readable prose on stdout (profile-1 for dry-run: data on stdout is fine).\n-                println!(\"DRY RUN — no changes will be made.\");\n-                println!(\"Issues affected ({}):\", effective_keys.len());\n-                for k in &effective_keys {\n-                    println!(\"  {k}\");\n-                }\n-                println!(\"Planned changes:\");\n-                if let Some(ref s) = summary {\n-                    println!(\"  summary → {s}\");\n-                }\n-                if let Some(ref p) = priority {\n-                    println!(\"  priority → {p}\");\n-                }\n-                if !labels.is_empty() {\n-                    println!(\"  labels → {}\", labels.join(\", \"));\n-                }\n-                if let Some(ref t) = issue_type {\n-                    println!(\"  type → {t}\");\n-                }\n-                if let Some(ref par) = parent {\n-                    println!(\"  parent → {par}\");\n-                }\n-                if no_parent {\n-                    println!(\"  parent → (clear)\");\n-                }\n-                if let Some(pts) = points {\n-                    println!(\"  points → {pts}\");\n-                }\n-                if no_points {\n-                    println!(\"  points → (clear)\");\n-                }\n-                // Single-key-only fields: team, description, description_stdin, markdown.\n-                // Multi-key bulk rejects these flags upstream (C-1 guard), so reaching\n-                // here with effective_keys.len() > 1 and these flags set is impossible.\n-                if let Some(ref t) = team {\n-                    println!(\"  team → {t}\");\n-                }\n-                if let Some(ref d) = description {\n-                    // Truncate long descriptions to 60 codepoints for readability.\n-                    // Use chars().count() / chars().take(60) — NOT byte slicing —\n-                    // to avoid panics on multi-byte UTF-8 codepoints (Cyrillic,\n-                    // CJK, emoji, accented chars). Codepoint-aware is the correct\n-                    // Rust-stdlib idiom; grapheme clusters (unicode_segmentation)\n-                    // would be overkill for a display truncation.\n-                    let char_count = d.chars().count();\n-                    let preview = if char_count > 60 {\n-                        let truncated: String = d.chars().take(60).collect();\n-                        format!(\"{truncated}...\")\n-                    } else {\n-                        d.clone()\n-                    };\n-                    println!(\"  description → {preview}\");\n-                } else if description_stdin {\n-                    // --dry-run does NOT read stdin; document this as a known limitation.\n-                    println!(\"  description → (read from stdin — not yet read in dry-run)\");\n-                }\n-                if markdown {\n-                    println!(\"  markdown rendering: enabled\");\n-                }\n-            }\n-        }\n-        return Ok(());\n-    }\n-\n-    // --- Confirmation for large JQL match sets. ---\n-    // Safety-net: when --jql is used AND match count > threshold (JQL_CONFIRM_THRESHOLD),\n-    // require explicit --yes or interactive confirmation.\n-    // --no-input without --yes on a large set emits a hint but proceeds\n-    // (implicit-yes policy for non-interactive mode on any size set).\n-    if jql.is_some() && effective_keys.len() > JQL_CONFIRM_THRESHOLD {\n-        if !yes && !no_input {\n-            // Interactive confirmation via dialoguer.\n-            let prompt = format!(\n-                \"This will bulk-edit {} issues. Proceed?\",\n-                effective_keys.len()\n-            );\n-            let confirmed =\n-                dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())\n-                    .with_prompt(prompt)\n-                    .default(false)\n-                    .interact()\n-                    .map_err(|e| {\n-                        JrError::UserError(format!(\n-                            \"Confirmation prompt failed: {e}. Use --yes to skip the prompt or \\\n-                             --no-input to disable interactive confirmation.\"\n-                        ))\n-                    })?;\n-            if !confirmed {\n-                return Err(JrError::UserError(\n-                    \"Bulk edit declined at confirmation prompt. No changes made.\".into(),\n-                )\n-                .into());\n-            }\n-        } else if !yes && no_input {\n-            // Safety-net hint for --no-input without --yes on a large set.\n-            eprintln!(\n-                \"Warning: bulk edit will affect {} issues (matched by --jql). \\\n-                 Use --yes to skip this hint, or --dry-run to preview. Proceeding.\",\n-                effective_keys.len()\n-            );\n-        }\n-        // --yes: skip prompt entirely.\n-    }\n-\n-    // --- Route: labels → bulk API. ---\n-    if !labels.is_empty() {\n-        return handle_edit_bulk_labels(&effective_keys, labels, output_format, client, no_input)\n-            .await;\n-    }\n-\n-    // Routing for non-label edits:\n-    // - 2+ keys (positional or --jql-resolved) → POST /rest/api/3/bulk/issues/fields (bulk API)\n-    // - 1 key (positional or single-match --jql) → PUT /rest/api/3/issue/{key} (legacy single-key)\n-    //\n-    // The single-match --jql case intentionally uses the legacy path because it's\n-    // per-issue more efficient (no taskId polling) and the bulk API has no advantage\n-    // for a single issue. Users mental-modeling \"JQL → always bulk\" should be aware\n-    // of this asymmetry; it's documented rather than enforced.\n-\n-    // --- Multi-key non-label: route through bulk_edit_fields. ---\n-    if effective_keys.len() > 1 {\n-        return handle_edit_bulk_fields(\n-            &effective_keys,\n-            summary.as_deref(),\n-            priority.as_deref(),\n-            issue_type.as_deref(),\n-            output_format,\n-            client,\n-        )\n-        .await;\n-    }\n-\n-    // --- Single-key non-label path (unchanged from before) ---\n-    let key = &effective_keys[0];\n-\n-    let mut fields = json!({});\n-    let mut has_updates = false;\n-\n-    // Resolve description (see handle_create for rationale on spawn_blocking).\n-    let desc_text = if description_stdin {\n-        let buf = tokio::task::spawn_blocking(|| {\n-            let mut buf = String::new();\n-            std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;\n-            Ok::<_, std::io::Error>(buf)\n-        })\n-        .await??;\n-        Some(buf)\n-    } else {\n-        description\n-    };\n-\n-    if let Some(ref text) = desc_text {\n-        let adf_body = if markdown {\n-            adf::markdown_to_adf(text)\n-        } else {\n-            adf::text_to_adf(text)\n-        };\n-        fields[\"description\"] = adf_body;\n-        has_updates = true;\n-    }\n-\n-    if let Some(ref s) = summary {\n-        fields[\"summary\"] = json!(s);\n-        has_updates = true;\n-    }\n-\n-    if let Some(ref t) = issue_type {\n-        fields[\"issuetype\"] = json!({ \"name\": t });\n-        has_updates = true;\n-    }\n-\n-    if let Some(ref p) = priority {\n-        fields[\"priority\"] = json!({ \"name\": p });\n-        has_updates = true;\n-    }\n-\n-    if let Some(ref team_name) = team {\n-        let (field_id, team_id) =\n-            helpers::resolve_team_field(config, client, team_name, no_input).await?;\n-        fields[&field_id] = json!(team_id);\n-        has_updates = true;\n-    }\n-\n-    if let Some(pts) = points {\n-        let field_id = helpers::resolve_story_points_field_id(config)?;\n-        fields[&field_id] = json!(pts);\n-        has_updates = true;\n-    }\n-\n-    if no_points {\n-        let field_id = helpers::resolve_story_points_field_id(config)?;\n-        fields[&field_id] = json!(null);\n-        has_updates = true;\n-    }\n-\n-    if let Some(ref parent_key) = parent {\n-        fields[\"parent\"] = json!({\"key\": parent_key});\n-        has_updates = true;\n-    }\n-\n-    if no_parent {\n-        fields[\"parent\"] = serde_json::Value::Null;\n-        has_updates = true;\n-    }\n-\n-    if !has_updates {\n-        bail!(\n-            \"No fields specified to update. Use --summary, --type, --priority, --label, --team, --points, --no-points, --parent, --no-parent, --description, or --description-stdin.\"\n-        );\n-    }\n-\n-    let edit_result = client.edit_issue(key, fields).await;\n-    if let Err(ref e) = edit_result {\n-        // --type arm: evaluated FIRST (dual-gate precedence, BC-3.4.010 invariant).\n-        // HTTP-400 gate: downcast to JrError::ApiError { status: 400, .. }.\n-        // Non-400 (401, 403, 5xx, network) → R0b: no enrichment, fall through.\n-        if let Some(ref type_name) = issue_type {\n-            if let Some(JrError::ApiError {\n-                status: 400,\n-                message: api_msg,\n-            }) = e.downcast_ref::<JrError>()\n-            {\n-                let api_msg = api_msg.clone();\n-                let type_name_lower = type_name.to_ascii_lowercase();\n-\n-                // Call ordering (BC-3.4.010 precondition):\n-                // 1. get_issue first; on Err → Indeterminate immediately (no project-types call).\n-                // 2. get_project_issue_types next; on Err → Indeterminate.\n-                // 3. Case-insensitive exact name match; not found → typo hint.\n-                // 4. Found → classify with is_cross_hierarchy_type_error.\n-                //\n-                // Fetch failure gate uses Result::is_err() (not a status downcast) so\n-                // JrError::NotAuthenticated, InsufficientScope, and all other Err variants\n-                // correctly trigger Indeterminate (BC-3.4.010 invariant 3).\n-                let issue_res = client.get_issue(key, &[]).await;\n-                if let Ok(issue) = issue_res {\n-                    let src_subtask = issue.fields.issue_type.as_ref().and_then(|t| t.subtask);\n-                    let project_key = issue\n-                        .fields\n-                        .project\n-                        .as_ref()\n-                        .map(|p| p.key.clone())\n-                        .unwrap_or_default();\n-\n-                    let types_res = client.get_project_issue_types(&project_key).await;\n-                    if let Ok(project_types) = types_res {\n-                        if let Some(target) = project_types\n-                            .iter()\n-                            .find(|t| t.name.to_ascii_lowercase() == type_name_lower)\n-                        {\n-                            let tgt_subtask = target.subtask;\n-                            match is_cross_hierarchy_type_error(src_subtask, tgt_subtask, &api_msg)\n-                            {\n-                                Classification::CrossHierarchy => {\n-                                    eprintln!(\"{CROSS_HIERARCHY_HINT}\");\n-                                    bail!(\"{api_msg}\");\n-                                }\n-                                Classification::SameCategory => {\n-                                    eprintln!(\"{TYPO_HINT}\");\n-                                    bail!(\"{api_msg}\");\n-                                }\n-                                Classification::Indeterminate => {\n-                                    // src or tgt subtask field absent; surface raw\n-                                    // 400 unchanged — fall through to edit_result?.\n-                                }\n-                            }\n-                        } else {\n-                            // Type name not in project's list → unresolvable-name\n-                            // sub-path: typo hint (classifier is NOT invoked).\n-                            eprintln!(\"{TYPO_HINT}\");\n-                            bail!(\"{api_msg}\");\n-                        }\n-                    }\n-                    // types_res.is_err() → Indeterminate Cause-1 R2: fall through.\n-                }\n-                // issue_res.is_err() → Indeterminate Cause-1 R1: fall through.\n-            }\n-            // Non-400 → R0b: fall through.\n-        }\n-\n-        // --no-parent arm: only reached when --type arm emitted no hint\n-        // (dual-gate first-hint-wins: if --type arm bailed, we never reach here).\n-        if no_parent && is_subtask_parent_error(e) {\n-            eprintln!(\"{NO_PARENT_CONTEXT_SENTENCE}\");\n-            eprintln!(\"{CROSS_HIERARCHY_HINT}\");\n-            bail!(\"{e}\");\n-        }\n-    }\n-    edit_result?;\n-\n-    match output_format {\n-        OutputFormat::Json => {\n-            println!(\n-                \"{}\",\n-                serde_json::to_string_pretty(&json_output::edit_response(key))?\n-            );\n-        }\n-        OutputFormat::Table => {\n-            output::print_success(&format!(\"Updated {}\", key));\n-        }\n-    }\n-\n-    Ok(())\n+    Ok(()) /* ~ changed by cargo-mutants ~ */\n }\n \n /// Build the edited-fields JSON object for a bulk-labels edit.\n ///\n /// Returns the complete `editedFieldsInput` object (with a top-level `\"labels\"` key)\n /// to be passed directly to `bulk_edit_fields`. JSON shapes per BC-3.4.006:\n /// - Single-action ADD: object-form\n ///   `{\"labels\": {\"labelsAction\": \"ADD\", \"labels\": [{\"name\": \"foo\"}]}}`\n",
+    "file": "src/cli/issue/create.rs",
+    "function": {
+      "function_name": "handle_edit",
+      "return_type": "-> Result<()>",
+      "span": {
+        "end": {
+          "column": 2,
+          "line": 919
+        },
+        "start": {
+          "column": 1,
+          "line": 267
+        }
+      }
+    },
+    "genre": "FnValue",
+    "name": "src/cli/issue/create.rs:274:5: replace handle_edit -> Result<()> with Ok(())",
+    "package": "jr",
+    "replacement": "Ok(())",
+    "span": {
+      "end": {
+        "column": 11,
+        "line": 918
+      },
+      "start": {
+        "column": 5,
+        "line": 274
+      }
+    }
+  },
+  {
+    "diff": "--- src/cli/issue/create.rs\n+++ replace == with != in handle_edit\n@@ -856,17 +856,17 @@\n                         .as_ref()\n                         .map(|p| p.key.clone())\n                         .unwrap_or_default();\n \n                     let types_res = client.get_project_issue_types(&project_key).await;\n                     if let Ok(project_types) = types_res {\n                         if let Some(target) = project_types\n                             .iter()\n-                            .find(|t| t.name.to_ascii_lowercase() == type_name_lower)\n+                            .find(|t| t.name.to_ascii_lowercase() != /* ~ changed by cargo-mutants ~ */ type_name_lower)\n                         {\n                             let tgt_subtask = target.subtask;\n                             match is_cross_hierarchy_type_error(src_subtask, tgt_subtask, &api_msg)\n                             {\n                                 Classification::CrossHierarchy => {\n                                     eprintln!(\"{CROSS_HIERARCHY_HINT}\");\n                                     bail!(\"{api_msg}\");\n                                 }\n",
+    "file": "src/cli/issue/create.rs",
+    "function": {
+      "function_name": "handle_edit",
+      "return_type": "-> Result<()>",
+      "span": {
+        "end": {
+          "column": 2,
+          "line": 919
+        },
+        "start": {
+          "column": 1,
+          "line": 267
+        }
+      }
+    },
+    "genre": "BinaryOperator",
+    "name": "src/cli/issue/create.rs:864:67: replace == with != in handle_edit",
+    "package": "jr",
+    "replacement": "!=",
+    "span": {
+      "end": {
+        "column": 69,
+        "line": 864
+      },
+      "start": {
+        "column": 67,
+        "line": 864
+      }
+    }
+  },
+  {
+    "diff": "--- src/cli/issue/create.rs\n+++ replace && with || in handle_edit\n@@ -890,17 +890,17 @@\n                 }\n                 // issue_res.is_err() → Indeterminate Cause-1 R1: fall through.\n             }\n             // Non-400 → R0b: fall through.\n         }\n \n         // --no-parent arm: only reached when --type arm emitted no hint\n         // (dual-gate first-hint-wins: if --type arm bailed, we never reach here).\n-        if no_parent && is_subtask_parent_error(e) {\n+        if no_parent || /* ~ changed by cargo-mutants ~ */ is_subtask_parent_error(e) {\n             eprintln!(\"{NO_PARENT_CONTEXT_SENTENCE}\");\n             eprintln!(\"{CROSS_HIERARCHY_HINT}\");\n             bail!(\"{e}\");\n         }\n     }\n     edit_result?;\n \n     match output_format {\n",
+    "file": "src/cli/issue/create.rs",
+    "function": {
+      "function_name": "handle_edit",
+      "return_type": "-> Result<()>",
+      "span": {
+        "end": {
+          "column": 2,
+          "line": 919
+        },
+        "start": {
+          "column": 1,
+          "line": 267
+        }
+      }
+    },
+    "genre": "BinaryOperator",
+    "name": "src/cli/issue/create.rs:898:22: replace && with || in handle_edit",
+    "package": "jr",
+    "replacement": "||",
+    "span": {
+      "end": {
+        "column": 24,
+        "line": 898
+      },
+      "start": {
+        "column": 22,
+        "line": 898
+      }
+    }
+  },
+  {
+    "diff": "--- src/cli/issue/create.rs\n+++ replace is_cross_hierarchy_type_error -> Classification with Default::default()\n@@ -1261,21 +1261,17 @@\n ///\n /// The `err` argument MUST NOT influence the return value (BC-3.4.010 invariant 1 / P4).\n /// It exists for potential future hint-composition use only.\n fn is_cross_hierarchy_type_error(\n     src_subtask: Option<bool>,\n     tgt_subtask: Option<bool>,\n     _err: &str,\n ) -> Classification {\n-    match (src_subtask, tgt_subtask) {\n-        (Some(a), Some(b)) if a != b => Classification::CrossHierarchy,\n-        (Some(_), Some(_)) => Classification::SameCategory,\n-        _ => Classification::Indeterminate,\n-    }\n+    Default::default() /* ~ changed by cargo-mutants ~ */\n }\n \n #[cfg(test)]\n mod tests {\n     use crate::error::JrError;\n     use std::collections::BTreeSet;\n \n     #[test]\n",
+    "file": "src/cli/issue/create.rs",
+    "function": {
+      "function_name": "is_cross_hierarchy_type_error",
+      "return_type": "-> Classification",
+      "span": {
+        "end": {
+          "column": 2,
+          "line": 1274
+        },
+        "start": {
+          "column": 1,
+          "line": 1255
+        }
+      }
+    },
+    "genre": "FnValue",
+    "name": "src/cli/issue/create.rs:1269:5: replace is_cross_hierarchy_type_error -> Classification with Default::default()",
+    "package": "jr",
+    "replacement": "Default::default()",
+    "span": {
+      "end": {
+        "column": 6,
+        "line": 1273
+      },
+      "start": {
+        "column": 5,
+        "line": 1269
+      }
+    }
+  },
+  {
+    "diff": "--- src/cli/issue/create.rs\n+++ delete match arm (Some(_), Some(_)) in is_cross_hierarchy_type_error\n@@ -1263,17 +1263,17 @@\n /// It exists for potential future hint-composition use only.\n fn is_cross_hierarchy_type_error(\n     src_subtask: Option<bool>,\n     tgt_subtask: Option<bool>,\n     _err: &str,\n ) -> Classification {\n     match (src_subtask, tgt_subtask) {\n         (Some(a), Some(b)) if a != b => Classification::CrossHierarchy,\n-        (Some(_), Some(_)) => Classification::SameCategory,\n+         /* ~ changed by cargo-mutants ~ */\n         _ => Classification::Indeterminate,\n     }\n }\n \n #[cfg(test)]\n mod tests {\n     use crate::error::JrError;\n     use std::collections::BTreeSet;\n",
+    "file": "src/cli/issue/create.rs",
+    "function": {
+      "function_name": "is_cross_hierarchy_type_error",
+      "return_type": "-> Classification",
+      "span": {
+        "end": {
+          "column": 2,
+          "line": 1274
+        },
+        "start": {
+          "column": 1,
+          "line": 1255
+        }
+      }
+    },
+    "genre": "MatchArm",
+    "name": "src/cli/issue/create.rs:1271:9: delete match arm (Some(_), Some(_)) in is_cross_hierarchy_type_error",
+    "package": "jr",
+    "replacement": "",
+    "span": {
+      "end": {
+        "column": 60,
+        "line": 1271
+      },
+      "start": {
+        "column": 9,
+        "line": 1271
+      }
+    }
+  },
+  {
+    "diff": "--- src/cli/issue/create.rs\n+++ replace match guard a != b with true in is_cross_hierarchy_type_error\n@@ -1262,17 +1262,17 @@\n /// The `err` argument MUST NOT influence the return value (BC-3.4.010 invariant 1 / P4).\n /// It exists for potential future hint-composition use only.\n fn is_cross_hierarchy_type_error(\n     src_subtask: Option<bool>,\n     tgt_subtask: Option<bool>,\n     _err: &str,\n ) -> Classification {\n     match (src_subtask, tgt_subtask) {\n-        (Some(a), Some(b)) if a != b => Classification::CrossHierarchy,\n+        (Some(a), Some(b)) if true /* ~ changed by cargo-mutants ~ */ => Classification::CrossHierarchy,\n         (Some(_), Some(_)) => Classification::SameCategory,\n         _ => Classification::Indeterminate,\n     }\n }\n \n #[cfg(test)]\n mod tests {\n     use crate::error::JrError;\n",
+    "file": "src/cli/issue/create.rs",
+    "function": {
+      "function_name": "is_cross_hierarchy_type_error",
+      "return_type": "-> Classification",
+      "span": {
+        "end": {
+          "column": 2,
+          "line": 1274
+        },
+        "start": {
+          "column": 1,
+          "line": 1255
+        }
+      }
+    },
+    "genre": "MatchArmGuard",
+    "name": "src/cli/issue/create.rs:1270:31: replace match guard a != b with true in is_cross_hierarchy_type_error",
+    "package": "jr",
+    "replacement": "true",
+    "span": {
+      "end": {
+        "column": 37,
+        "line": 1270
+      },
+      "start": {
+        "column": 31,
+        "line": 1270
+      }
+    }
+  },
+  {
+    "diff": "--- src/cli/issue/create.rs\n+++ replace match guard a != b with false in is_cross_hierarchy_type_error\n@@ -1262,17 +1262,17 @@\n /// The `err` argument MUST NOT influence the return value (BC-3.4.010 invariant 1 / P4).\n /// It exists for potential future hint-composition use only.\n fn is_cross_hierarchy_type_error(\n     src_subtask: Option<bool>,\n     tgt_subtask: Option<bool>,\n     _err: &str,\n ) -> Classification {\n     match (src_subtask, tgt_subtask) {\n-        (Some(a), Some(b)) if a != b => Classification::CrossHierarchy,\n+        (Some(a), Some(b)) if false /* ~ changed by cargo-mutants ~ */ => Classification::CrossHierarchy,\n         (Some(_), Some(_)) => Classification::SameCategory,\n         _ => Classification::Indeterminate,\n     }\n }\n \n #[cfg(test)]\n mod tests {\n     use crate::error::JrError;\n",
+    "file": "src/cli/issue/create.rs",
+    "function": {
+      "function_name": "is_cross_hierarchy_type_error",
+      "return_type": "-> Classification",
+      "span": {
+        "end": {
+          "column": 2,
+          "line": 1274
+        },
+        "start": {
+          "column": 1,
+          "line": 1255
+        }
+      }
+    },
+    "genre": "MatchArmGuard",
+    "name": "src/cli/issue/create.rs:1270:31: replace match guard a != b with false in is_cross_hierarchy_type_error",
+    "package": "jr",
+    "replacement": "false",
+    "span": {
+      "end": {
+        "column": 37,
+        "line": 1270
+      },
+      "start": {
+        "column": 31,
+        "line": 1270
+      }
+    }
+  },
+  {
+    "diff": "--- src/cli/issue/create.rs\n+++ replace != with == in is_cross_hierarchy_type_error\n@@ -1262,17 +1262,17 @@\n /// The `err` argument MUST NOT influence the return value (BC-3.4.010 invariant 1 / P4).\n /// It exists for potential future hint-composition use only.\n fn is_cross_hierarchy_type_error(\n     src_subtask: Option<bool>,\n     tgt_subtask: Option<bool>,\n     _err: &str,\n ) -> Classification {\n     match (src_subtask, tgt_subtask) {\n-        (Some(a), Some(b)) if a != b => Classification::CrossHierarchy,\n+        (Some(a), Some(b)) if a == /* ~ changed by cargo-mutants ~ */ b => Classification::CrossHierarchy,\n         (Some(_), Some(_)) => Classification::SameCategory,\n         _ => Classification::Indeterminate,\n     }\n }\n \n #[cfg(test)]\n mod tests {\n     use crate::error::JrError;\n",
+    "file": "src/cli/issue/create.rs",
+    "function": {
+      "function_name": "is_cross_hierarchy_type_error",
+      "return_type": "-> Classification",
+      "span": {
+        "end": {
+          "column": 2,
+          "line": 1274
+        },
+        "start": {
+          "column": 1,
+          "line": 1255
+        }
+      }
+    },
+    "genre": "BinaryOperator",
+    "name": "src/cli/issue/create.rs:1270:33: replace != with == in is_cross_hierarchy_type_error",
+    "package": "jr",
+    "replacement": "==",
+    "span": {
+      "end": {
+        "column": 35,
+        "line": 1270
+      },
+      "start": {
+        "column": 33,
+        "line": 1270
+      }
+    }
+  }
+]
