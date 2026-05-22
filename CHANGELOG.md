@@ -6,6 +6,13 @@ All notable changes to jr will be documented here.
 
 ### Added
 
+- `issue edit`: new `--field NAME=VALUE` flag (repeatable) for setting arbitrary custom
+  fields on an existing issue. Supports string, number, single-select (option), date,
+  datetime, and user field types. Single-select options are resolved from `editmeta`
+  `allowedValues` by human label (case-insensitive). Unsupported types (array, CMDB/any)
+  exit 64 with an actionable hint. Field-name resolution uses case-insensitive substring
+  match against `list_fields()`; supply `customfield_NNNNN` directly to bypass name
+  resolution. Multi-key bulk path rejects `--field` (exit 64). (Issue #396)
 - `jr issue edit` and `jr issue create` now echo changed/set fields on success.
   Table mode prints one `  field → value` line per field to stderr (alphabetical
   order; resolved team display name; `(updated)` marker for description; `(cleared)`

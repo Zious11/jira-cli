@@ -312,6 +312,24 @@ When adding a new feature:
   "fix" them to match — this asymmetry is load-bearing. Tested by VP-398-002
   (`test_bc_3_4_012_description_echo_is_updated_marker_not_content` and
   `test_bc_3_4_013_description_echo_is_raw_input_string_not_marker`).
+- **`issue edit --field` constraints and JSM behavior (issue #396):**
+  (1) `--field` is single-key only — the C-1 guard rejects bulk (`jr issue edit KEY1 KEY2 --field`
+  exits 64). (2) Changing the **Request Type** of an existing JSM issue is NOT supported via any
+  Jira Cloud API. `jr issue edit --field` does NOT support the `sd-customerrequesttype` system
+  field (JSDCLOUD-4609, open since 2016; PUT returns HTTP 500 — non-goal, declared out-of-scope).
+  (3) JSM Urgency/Impact and other request-type select fields CAN be set via
+  `jr issue edit --field NAME=VALUE` provided the field is on the issue's **agent Edit screen**.
+  By default these fields are on the portal request form only; a Jira admin must add them to the
+  Edit screen first (`Project settings → Screens`). (4) `--field` uses `GET .../editmeta` to
+  validate field presence and resolve `allowedValues`; this adds one HTTP round-trip per
+  `issue edit` call that includes `--field`. The call is skipped when `--field` is absent.
+  (5) **fields.json cache write guard:** `write_fields_cache` in `resolve_edit_fields` only
+  writes when `fresh.len() > cached_len` (strictly larger). This prevents single-field mock
+  responses in integration tests from overwriting the real `~/.cache/jr/v1/default/fields.json`
+  with synthetic data that would break subsequent test runs. In production, `list_fields()`
+  returns 100+ fields, so the write always fires on a cold cache (cached_len=0). In a fresh
+  dev environment (no `jr init`, empty cache), run `jr init` first or delete `fields.json`
+  before consecutive `cargo test` runs to avoid `.expect(1)` failures in tests 24/25/27/29/30/31.
 
 ## AI Agent Notes
 
