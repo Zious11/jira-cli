@@ -6,6 +6,12 @@ All notable changes to jr will be documented here.
 
 ### Added
 
+- `jr issue edit` and `jr issue create` now echo changed/set fields on success.
+  Table mode prints one `  field → value` line per field to stderr (alphabetical
+  order; resolved team display name; `(updated)` marker for description; `(cleared)`
+  for `--no-parent` / `--no-points`). `jr issue edit --output json` gains a
+  `changed_fields` object in the response body with raw field values (description
+  carries the raw user-supplied string, not the `(updated)` marker). (Issue #398)
 - JSM request type support in `jr issue create` via `--request-type <NAME|ID>`,
   `--field NAME=VALUE`, `--on-behalf-of <accountId>` flags. When `--request-type`
   is set, the command dispatches to `POST /rest/servicedeskapi/request` instead of
