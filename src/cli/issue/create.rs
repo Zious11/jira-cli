@@ -158,6 +158,15 @@ pub(super) async fn handle_create(
         description
     };
 
+    // BC-3.4.014: build echo map in parallel with `fields` as each flag is resolved.
+    // Emitted after POST 201 in table mode only; JSON path unchanged (AC-015).
+    // project is NOT echoed (analogous to not echoing the issue key on edit).
+    let mut create_echo: BTreeMap<String, String> = BTreeMap::new();
+
+    // Required fields: always present, always inserted.
+    create_echo.insert("issue_type".into(), issue_type_name.clone());
+    create_echo.insert("summary".into(), summary_text.clone());
+
     // Build fields
     let mut fields = json!({
         "project": { "key": project_key },
@@ -172,38 +181,53 @@ pub(super) async fn handle_create(
             adf::text_to_adf(text)
         };
         fields["description"] = adf_body;
+        // BC-3.4.014: table echo uses (updated) marker, same asymmetry as BC-3.4.012.
+        // JSON create path is unchanged (AC-015) — no raw desc in JSON output.
+        create_echo.insert("description".into(), "(updated)".into());
     }
 
     if let Some(ref prio) = priority {
         fields["priority"] = json!({ "name": prio });
+        create_echo.insert("priority".into(), prio.clone());
     }
 
     if !labels.is_empty() {
         fields["labels"] = json!(labels);
+        // BC-3.4.014: label echo is comma-space joined, command-line order (AC-011).
+        create_echo.insert("label".into(), labels.join(", "));
     }
 
     if let Some(ref team_name) = team {
-        let (field_id, team_id, _resolved_team_name) =
+        let (field_id, team_id, resolved_team_name) =
             helpers::resolve_team_field(config, client, team_name, no_input).await?;
         fields[&field_id] = json!(team_id);
+        // Echo the RESOLVED display name, not the UUID or partial query (AC-002, BC-3.4.014).
+        create_echo.insert("team".into(), resolved_team_name);
     }
 
     if let Some(pts) = points {
         let field_id = helpers::resolve_story_points_field_id(config)?;
         fields[&field_id] = json!(pts);
+        create_echo.insert("points".into(), pts.to_string());
     }
 
     if let Some(ref parent_key) = parent {
         fields["parent"] = json!({"key": parent_key});
+        create_echo.insert("parent".into(), parent_key.clone());
     }
 
     if let Some(ref id) = account_id {
         fields["assignee"] = json!({"accountId": id});
+        // --account-id path: echo the raw account ID string (AC-012).
+        create_echo.insert("assignee".into(), id.clone());
     } else if let Some(ref user_query) = to {
-        let (acct_id, _display_name) =
+        // Rebind _display_name → display_name (AC-012): second tuple element is the
+        // display name for both --to NAME and --to me paths (BC-3.4.014, OBS-1).
+        let (acct_id, display_name) =
             helpers::resolve_assignee_by_project(client, user_query, &project_key, no_input)
                 .await?;
         fields["assignee"] = json!({"accountId": acct_id});
+        create_echo.insert("assignee".into(), display_name);
     }
 
     let response = client.create_issue(fields).await?;
@@ -225,6 +249,7 @@ pub(super) async fn handle_create(
             // discovery error silently degrades to an empty field list. Tracked as a
             // separate cleanup in the follow-up concerns documented on PR #253 — will
             // be addressed codebase-wide, not per-call-site.
+            // AC-015: JSON output path UNCHANGED — no changed_fields key added here.
             let cmdb_fields = get_or_fetch_cmdb_fields(client).await.unwrap_or_default();
             let extra_owned = helpers::compose_extra_fields(config, &cmdb_fields);
             let extra: Vec<&str> = extra_owned.iter().map(String::as_str).collect();
@@ -256,7 +281,12 @@ pub(super) async fn handle_create(
             }
         }
         OutputFormat::Table => {
+            // BC-3.4.014: emit confirmation, then field echo lines (alphabetical via BTreeMap),
+            // then browse URL. This matches BC-3.4.012's table-mode ordering invariant.
             output::print_success(&format!("Created issue {}", response.key));
+            for (field, value) in &create_echo {
+                eprintln!("  {} \u{2192} {}", field, value);
+            }
             eprintln!("{}", browse_url);
         }
     }
