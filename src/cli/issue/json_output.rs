@@ -43,16 +43,21 @@ pub(crate) fn unassign_response(key: &str, changed: bool) -> Value {
 /// JSON response for `issue edit`.
 ///
 /// `changed_fields` is a `BTreeMap<String, String>` so JSON key order within
-/// the object is deterministic (alphabetical). STUB: the `changed_fields`
-/// parameter is accepted but not yet embedded in the output — the implementer
-/// will wire it in step 4. Existing behavior (`{"key":..., "updated": true}`)
-/// is preserved so all pre-S-398 tests remain green.
+/// the object is deterministic (alphabetical). BC-3.4.013: `updated: true` is
+/// retained for backward compatibility; `changed_fields` is always present
+/// (empty object when no fields were changed).
 pub(crate) fn edit_response(key: &str, changed_fields: &BTreeMap<String, String>) -> Value {
-    // STUB: changed_fields is intentionally unused here — the implementer adds
-    // the echo wiring in step 4. The `_` prefix on the variable avoids
-    // an unused-variable warning while keeping the parameter in the signature.
-    let _ = changed_fields;
+    // Convert BTreeMap to serde_json::Value so the JSON key order is
+    // alphabetical (BTreeMap iteration order). All values are strings.
+    let cf_value: serde_json::Value = changed_fields
+        .iter()
+        .fold(serde_json::Map::new(), |mut m, (k, v)| {
+            m.insert(k.clone(), json!(v));
+            m
+        })
+        .into();
     json!({
+        "changed_fields": cf_value,
         "key": key,
         "updated": true
     })
