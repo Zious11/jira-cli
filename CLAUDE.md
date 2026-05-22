@@ -304,6 +304,14 @@ When adding a new feature:
   `tests/search_issue_keys.rs::test_search_issue_keys_stderr_emits_jracloud_95368_literal`.
   Source: `.factory/research/issue-361-jra95368-scope.md`,
   `.factory/research/issue-361-jql-orderby.md`.
+- **`issue edit` description echo asymmetry (issue #398):** Table/human output echoes
+  `description → (updated)` — a marker, never the content. JSON `changed_fields.description`
+  carries the **raw user-supplied input string** from `--description` / `--description-stdin`,
+  not `"(updated)"` and not an ADF→text round-trip. The two channels intentionally differ:
+  the human channel optimizes for scannability; the machine channel must be lossless. Do NOT
+  "fix" them to match — this asymmetry is load-bearing. Tested by VP-398-002
+  (`test_BC_3_4_012_description_echo_is_updated_marker_not_content` and
+  `test_BC_3_4_013_description_echo_is_raw_input_string_not_marker`).
 
 ## AI Agent Notes
 
