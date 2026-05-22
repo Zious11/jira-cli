@@ -751,6 +751,11 @@ pub(super) async fn handle_edit(
     let mut fields = json!({});
     let mut has_updates = false;
 
+    // BC-3.4.012 / BC-3.4.013: track changed fields for echo on success.
+    // Populated in parallel with `fields` as each user flag is resolved.
+    // Only emitted AFTER PUT 204 — discarded on any error (AC-021, invariant 6).
+    let mut changed_fields: BTreeMap<String, String> = BTreeMap::new();
+
     // Resolve description (see handle_create for rationale on spawn_blocking).
     let desc_text = if description_stdin {
         let buf = tokio::task::spawn_blocking(|| {
@@ -772,50 +777,66 @@ pub(super) async fn handle_edit(
         };
         fields["description"] = adf_body;
         has_updates = true;
+        // BC-3.4.013: JSON changed_fields carries the RAW user-supplied input string —
+        // NOT the (updated) marker and NOT an ADF→text round-trip (DECISION LOCKED, AC-016).
+        // Table mode echoes the (updated) marker instead; see the emit loop below.
+        changed_fields.insert("description".into(), text.clone());
     }
 
     if let Some(ref s) = summary {
         fields["summary"] = json!(s);
         has_updates = true;
+        changed_fields.insert("summary".into(), s.clone());
     }
 
     if let Some(ref t) = issue_type {
         fields["issuetype"] = json!({ "name": t });
         has_updates = true;
+        changed_fields.insert("issue_type".into(), t.clone());
     }
 
     if let Some(ref p) = priority {
         fields["priority"] = json!({ "name": p });
         has_updates = true;
+        changed_fields.insert("priority".into(), p.clone());
     }
 
     if let Some(ref team_name) = team {
-        let (field_id, team_id, _resolved_team_name) =
+        let (field_id, team_id, resolved_team_name) =
             helpers::resolve_team_field(config, client, team_name, no_input).await?;
         fields[&field_id] = json!(team_id);
         has_updates = true;
+        // Echo the RESOLVED display name, not the UUID or partial-match query (AC-002).
+        changed_fields.insert("team".into(), resolved_team_name);
     }
 
     if let Some(pts) = points {
         let field_id = helpers::resolve_story_points_field_id(config)?;
         fields[&field_id] = json!(pts);
         has_updates = true;
+        // f64::to_string() at --points branch only (BC-3.4.012 MAJOR-1).
+        changed_fields.insert("points".into(), pts.to_string());
     }
 
     if no_points {
         let field_id = helpers::resolve_story_points_field_id(config)?;
         fields[&field_id] = json!(null);
         has_updates = true;
+        // Cleared-field model: key "points", value "(cleared)" (BC-3.4.012 MED-1).
+        changed_fields.insert("points".into(), "(cleared)".into());
     }
 
     if let Some(ref parent_key) = parent {
         fields["parent"] = json!({"key": parent_key});
         has_updates = true;
+        changed_fields.insert("parent".into(), parent_key.clone());
     }
 
     if no_parent {
         fields["parent"] = serde_json::Value::Null;
         has_updates = true;
+        // Cleared-field model: key "parent", value "(cleared)" (BC-3.4.012 MED-1).
+        changed_fields.insert("parent".into(), "(cleared)".into());
     }
 
     if !has_updates {
@@ -901,17 +922,30 @@ pub(super) async fn handle_edit(
             bail!("{e}");
         }
     }
+    // AC-021 / BC-3.4.012 invariant 6: echo fires ONLY after PUT 204.
+    // On any error, edit_result? propagates before the emit loop — changed_fields is discarded.
     edit_result?;
 
     match output_format {
         OutputFormat::Json => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&json_output::edit_response(key, &BTreeMap::new()))?
+                serde_json::to_string_pretty(&json_output::edit_response(key, &changed_fields))?
             );
         }
         OutputFormat::Table => {
             output::print_success(&format!("Updated {}", key));
+            // BC-3.4.012: emit one "  field → value" line per changed field, alphabetical.
+            // Description asymmetry (AC-016 / CLAUDE.md Gotcha): table shows "(updated)" marker;
+            // JSON changed_fields carries the raw input string (see the description insertion above).
+            for (field, value) in &changed_fields {
+                if field == "description" {
+                    // Table mode: marker only — content never echoed (BC-3.4.012, AC-003).
+                    eprintln!("  {} \u{2192} (updated)", field);
+                } else {
+                    eprintln!("  {} \u{2192} {}", field, value);
+                }
+            }
         }
     }
 
