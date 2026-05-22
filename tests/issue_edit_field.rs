@@ -1,0 +1,2082 @@
+//! Integration tests for `issue edit --field NAME=VALUE` (S-396).
+//!
+//! BC-3.4.015: string/number/date/datetime/user field on single-key path —
+//!   resolves field name, validates via editmeta, serializes per schema type,
+//!   PUTs; success echoes in `changed_fields`.
+//!
+//! BC-3.4.016: single-select `option` field — human value → `allowedValues[].id`
+//!   on wire; `changed_fields` echo shows human label, not id.
+//!
+//! BC-3.4.017: `--field` multi-key/`--jql` multi-issue rejection (Gate A) +
+//!   flag-overlap hard error for `summary`/`description`/`issuetype`/`priority`
+//!   (Gate B).
+//!
+//! All 33 tests MUST FAIL before implementation (Red Gate). The stubs in the
+//! current codebase do not call `resolve_edit_fields`, do not check Gate B,
+//! do not read `fields.json` cache, and do not call `get_editmeta`.
+
+#[allow(dead_code)]
+mod common;
+
+use assert_cmd::Command;
+use wiremock::matchers::{body_partial_json, method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+// ---------------------------------------------------------------------------
+// Harness helpers
+// ---------------------------------------------------------------------------
+
+fn jr_cmd(server_url: &str) -> Command {
+    let mut cmd = Command::cargo_bin("jr").unwrap();
+    cmd.env("JR_BASE_URL", server_url)
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0");
+    cmd
+}
+
+fn jr_cmd_with_xdg(
+    server_url: &str,
+    cache_dir: &std::path::Path,
+    config_dir: &std::path::Path,
+) -> Command {
+    let mut cmd = Command::cargo_bin("jr").unwrap();
+    cmd.env("JR_BASE_URL", server_url)
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir)
+        .env("XDG_CONFIG_HOME", config_dir);
+    cmd
+}
+
+/// Mount `GET /rest/api/3/field` returning a single field mapping.
+async fn mount_list_fields(server: &MockServer, field_id: &str, field_name: &str) {
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {
+                "id": field_id,
+                "name": field_name,
+                "custom": true,
+                "schema": { "type": "string" }
+            }
+        ])))
+        .mount(server)
+        .await;
+}
+
+/// Mount `GET /rest/api/3/issue/{key}/editmeta` returning a single string field.
+async fn mount_editmeta_string(server: &MockServer, key: &str, field_id: &str, field_name: &str) {
+    Mock::given(method("GET"))
+        .and(path(format!("/rest/api/3/issue/{key}/editmeta")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "fields": {
+                field_id: {
+                    "name": field_name,
+                    "schema": { "type": "string", "system": null, "custom": null },
+                    "operations": ["set"],
+                    "required": false,
+                    "allowedValues": null
+                }
+            }
+        })))
+        .mount(server)
+        .await;
+}
+
+/// Mount `PUT /rest/api/3/issue/{key}` returning 204.
+async fn mount_put_204(server: &MockServer, key: &str) {
+    Mock::given(method("PUT"))
+        .and(path(format!("/rest/api/3/issue/{key}")))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(server)
+        .await;
+}
+
+/// Write a `fields.json` cache into the given cache home.
+fn write_fields_cache_file(
+    cache_home: &std::path::Path,
+    profile: &str,
+    fields: &[(String, String)],
+) {
+    let dir = cache_home.join("jr").join("v1").join(profile);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let tuples: Vec<serde_json::Value> = fields
+        .iter()
+        .map(|(id, name)| serde_json::json!([id, name]))
+        .collect();
+
+    let cache = serde_json::json!({
+        "fields": tuples,
+        "fetched_at": chrono::Utc::now().to_rfc3339()
+    });
+    std::fs::write(
+        dir.join("fields.json"),
+        serde_json::to_string(&cache).unwrap(),
+    )
+    .unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Test 1 — VP-396-001 / AC-001 / BC-3.4.015
+// String field value appears in table-mode stderr echo.
+// Pre-impl failure mode: stderr does NOT contain `  Severity → Critical` —
+// the stub `_field_pairs` is ignored and `resolve_edit_fields` is never called.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_015_field_string_value_appears_in_table_echo() {
+    let server = MockServer::start().await;
+
+    mount_list_fields(&server, "customfield_10001", "Severity").await;
+    mount_editmeta_string(&server, "TEST-1", "customfield_10001", "Severity").await;
+    mount_put_204(&server, "TEST-1").await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "Severity=Critical",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0; stderr={stderr} stdout={stdout}"
+    );
+
+    assert!(
+        stderr.contains("  Severity \u{2192} Critical"),
+        "Expected '  Severity → Critical' in stderr (two-space indent, unicode arrow); stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 2 — VP-396-001 / AC-001 / BC-3.4.015
+// String field value appears in JSON changed_fields with human name as key.
+// Pre-impl failure mode: changed_fields absent or keyed by customfield_10001.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_015_field_string_value_appears_in_json_changed_fields() {
+    let server = MockServer::start().await;
+
+    mount_list_fields(&server, "customfield_10001", "Severity").await;
+    mount_editmeta_string(&server, "TEST-1", "customfield_10001", "Severity").await;
+    mount_put_204(&server, "TEST-1").await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "--output",
+            "json",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "Severity=Critical",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0; stderr={stderr} stdout={stdout}"
+    );
+
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout is not valid JSON: {e}; stdout={stdout}"));
+
+    assert_eq!(
+        parsed["changed_fields"]["Severity"].as_str(),
+        Some("Critical"),
+        "changed_fields[\"Severity\"] must be \"Critical\"; stdout={stdout}"
+    );
+
+    // Must NOT use the internal customfield ID as the key (human name required)
+    assert!(
+        parsed["changed_fields"].get("customfield_10001").is_none(),
+        "changed_fields must NOT contain 'customfield_10001' as key; stdout={stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 3 — VP-396-001 / AC-002 / BC-3.4.015
+// `customfield_NNNNN` literal bypass skips `GET /rest/api/3/field` entirely.
+// Pre-impl failure mode: the stub calls nothing; GET /field is never mounted so
+// this test is only RED because changed_fields is absent in the output.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_015_customfield_literal_bypass_skips_list_fields() {
+    let server = MockServer::start().await;
+
+    // Deliberately do NOT mount GET /rest/api/3/field — it must NOT be called.
+    // Mount only editmeta (Step 3 still executes) and PUT.
+    mount_editmeta_string(&server, "TEST-1", "customfield_10001", "Severity").await;
+
+    // Mount PUT with expected body containing the literal field ID.
+    mock_put_with_body_check(
+        &server,
+        "TEST-1",
+        serde_json::json!({
+            "fields": { "customfield_10001": "Critical" }
+        }),
+    )
+    .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "--output",
+            "json",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "customfield_10001=Critical",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for literal bypass; stderr={stderr} stdout={stdout}"
+    );
+
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout is not valid JSON: {e}; stdout={stdout}"));
+
+    // When literal bypass fires, the literal ID is used as the changed_fields key
+    assert_eq!(
+        parsed["changed_fields"]["customfield_10001"].as_str(),
+        Some("Critical"),
+        "changed_fields[\"customfield_10001\"] must be \"Critical\" for literal bypass; stdout={stdout}"
+    );
+}
+
+/// Mount PUT with body match (helper for body-checking tests).
+async fn mock_put_with_body_check(server: &MockServer, key: &str, body: serde_json::Value) {
+    Mock::given(method("PUT"))
+        .and(path(format!("/rest/api/3/issue/{key}")))
+        .and(body_partial_json(body))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(server)
+        .await;
+}
+
+// ---------------------------------------------------------------------------
+// Test 4 — VP-396-002 / AC-003 / BC-3.4.016
+// Option field: wire uses {"id": "<optionId>"}; echo shows human label.
+// Pre-impl failure mode: changed_fields absent; PUT body wrong.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_016_option_field_resolves_to_id_on_wire_and_label_in_echo() {
+    let server = MockServer::start().await;
+
+    // list_fields
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            { "id": "customfield_10176", "name": "Urgency", "custom": true }
+        ])))
+        .mount(&server)
+        .await;
+
+    // editmeta — option field with allowedValues
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1/editmeta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "fields": {
+                "customfield_10176": {
+                    "name": "Urgency",
+                    "schema": { "type": "option", "system": null, "custom": null },
+                    "operations": ["set"],
+                    "required": false,
+                    "allowedValues": [
+                        { "id": "10286", "value": "High" },
+                        { "id": "10287", "value": "Medium" },
+                        { "id": "10288", "value": "Low" }
+                    ]
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    // PUT must carry option id on wire, not the human label
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/TEST-1"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": { "customfield_10176": { "id": "10286" } }
+        })))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "--output",
+            "json",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "Urgency=High",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for option field; stderr={stderr} stdout={stdout}"
+    );
+
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout is not valid JSON: {e}; stdout={stdout}"));
+
+    // Echo must show the human label, NOT the option id
+    assert_eq!(
+        parsed["changed_fields"]["Urgency"].as_str(),
+        Some("High"),
+        "changed_fields[\"Urgency\"] must be human label \"High\", NOT id; stdout={stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 5 — VP-396-002 / AC-003 / BC-3.4.016
+// Option field: case-insensitive resolution (lowercase "high" → stored "High").
+// Pre-impl failure mode: resolve_edit_fields not called → changed_fields absent.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_016_option_field_case_insensitive_resolution() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            { "id": "customfield_10176", "name": "Urgency", "custom": true }
+        ])))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1/editmeta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "fields": {
+                "customfield_10176": {
+                    "name": "Urgency",
+                    "schema": { "type": "option", "system": null, "custom": null },
+                    "operations": ["set"],
+                    "required": false,
+                    "allowedValues": [
+                        { "id": "10286", "value": "High" },
+                        { "id": "10287", "value": "Medium" }
+                    ]
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    // Wire must still use id "10286" even when user supplied lowercase "high"
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/TEST-1"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": { "customfield_10176": { "id": "10286" } }
+        })))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "--output",
+            "json",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "Urgency=high", // lowercase — case-insensitive resolution required
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for case-insensitive option; stderr={stderr} stdout={stdout}"
+    );
+
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout is not valid JSON: {e}; stdout={stdout}"));
+
+    // Echo must show stored casing "High", not user's "high"
+    assert_eq!(
+        parsed["changed_fields"]["Urgency"].as_str(),
+        Some("High"),
+        "changed_fields[\"Urgency\"] must use stored casing \"High\", not \"high\"; stdout={stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 6 — VP-396-002 / AC-003 / BC-3.4.016
+// Option field id bypass: numeric literal → {"id": literal}; echo shows raw value.
+// Pre-impl failure mode: resolve_edit_fields not called → changed_fields absent.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_016_option_field_id_bypass() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            { "id": "customfield_10176", "name": "Urgency", "custom": true }
+        ])))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1/editmeta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "fields": {
+                "customfield_10176": {
+                    "name": "Urgency",
+                    "schema": { "type": "option", "system": null, "custom": null },
+                    "operations": ["set"],
+                    "required": false,
+                    "allowedValues": [
+                        { "id": "10286", "value": "High" },
+                        { "id": "10287", "value": "Medium" }
+                    ]
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    // Wire must carry {"id": "10286"} when numeric literal "10286" is supplied
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/TEST-1"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": { "customfield_10176": { "id": "10286" } }
+        })))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "--output",
+            "json",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "Urgency=10286", // numeric id literal — bypass path
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for option id bypass; stderr={stderr} stdout={stdout}"
+    );
+
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout is not valid JSON: {e}; stdout={stdout}"));
+
+    // When id-bypass fires, echo shows the raw value (no reverse label lookup)
+    assert_eq!(
+        parsed["changed_fields"]["Urgency"].as_str(),
+        Some("10286"),
+        "changed_fields[\"Urgency\"] must echo the raw id \"10286\" (no reverse lookup); stdout={stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 7 — VP-396-003 / AC-004 / BC-3.4.015
+// Field absent from editmeta → exit 64 with Edit-screen hint; no PUT.
+// Pre-impl failure mode: stub ignores field_pairs → exits 0 or wrong code.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_015_field_absent_from_editmeta_exits_64_with_hint() {
+    let server = MockServer::start().await;
+
+    // list_fields returns the field
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            { "id": "customfield_20001", "name": "MyField", "custom": true }
+        ])))
+        .mount(&server)
+        .await;
+
+    // editmeta does NOT include customfield_20001 — it's absent from the Edit screen
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1/editmeta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "fields": {}
+        })))
+        .mount(&server)
+        .await;
+
+    // PUT must NOT be called — no mock mounted
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "MyField=SomeValue",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 when field absent from editmeta; stderr={stderr}"
+    );
+
+    // Stderr must reference the Edit screen and an admin action
+    assert!(
+        stderr.to_lowercase().contains("edit screen"),
+        "Stderr must reference 'Edit screen'; stderr={stderr}"
+    );
+    assert!(
+        stderr.to_lowercase().contains("admin"),
+        "Stderr must reference 'admin'; stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 8 — VP-396-003 / AC-004 / BC-3.4.015
+// `customfield_NNNNN` literal + absent from editmeta → exit 64; list_fields NOT called.
+// Pre-impl failure mode: stub exits 0 (ignores field_pairs).
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_015_customfield_literal_absent_from_editmeta_exits_64() {
+    let server = MockServer::start().await;
+
+    // Deliberately do NOT mount GET /rest/api/3/field — literal bypass skips it.
+
+    // editmeta does NOT include customfield_20001
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1/editmeta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "fields": {}
+        })))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "customfield_20001=SomeValue",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 for literal bypass + absent field; stderr={stderr}"
+    );
+
+    assert!(
+        stderr.to_lowercase().contains("edit screen"),
+        "Stderr must reference 'Edit screen'; stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 9 — VP-396-004 / AC-005 / BC-3.4.015
+// `array`-type field → exit 64 with hint; no PUT.
+// Pre-impl failure mode: stub exits 0 (ignores field_pairs).
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_015_array_type_field_exits_64_with_hint() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            { "id": "customfield_30001", "name": "Labels", "custom": true }
+        ])))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1/editmeta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "fields": {
+                "customfield_30001": {
+                    "name": "Labels",
+                    "schema": { "type": "array", "system": null, "custom": null },
+                    "operations": ["set", "add", "remove"],
+                    "required": false,
+                    "allowedValues": null
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "Labels=bug",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 for array-type field; stderr={stderr}"
+    );
+
+    assert!(
+        stderr.contains("array"),
+        "Stderr must mention the unsupported type 'array'; stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 10 — VP-396-004 / AC-005 / BC-3.4.015
+// `any`-type field → exit 64 with hint; no PUT.
+// Pre-impl failure mode: stub exits 0 (ignores field_pairs).
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_015_any_type_field_exits_64_with_hint() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            { "id": "customfield_30002", "name": "AnyField", "custom": true }
+        ])))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1/editmeta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "fields": {
+                "customfield_30002": {
+                    "name": "AnyField",
+                    "schema": { "type": "any", "system": null, "custom": null },
+                    "operations": ["set"],
+                    "required": false,
+                    "allowedValues": null
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "AnyField=val",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 for any-type field; stderr={stderr}"
+    );
+
+    assert!(
+        stderr.contains("any"),
+        "Stderr must mention the unsupported type 'any'; stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 11 — VP-396-005 / AC-006 / BC-3.4.017
+// Gate A: `--field` with 2+ positional keys → exit 64, no HTTP.
+// Pre-impl failure mode: stub accepts multi-key without Gate A → exits 0 or wrong behavior.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_017_field_multi_key_rejected_exit_64() {
+    let server = MockServer::start().await;
+    // Mount NO mocks — Gate A must fire before any HTTP
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "TEST-2",
+            "--field",
+            "Urgency=High",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 for multi-key + --field; stderr={stderr}"
+    );
+
+    assert!(
+        stderr.contains("--field"),
+        "Stderr must reference '--field'; stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 12 — VP-396-005 / AC-006 / BC-3.4.017
+// Gate A: `--jql` resolving to 2+ issues → exit 64; no PUT.
+//
+// Stub failure mode: the current stub exits 64 via the "no fields specified"
+// guard BEFORE running the JQL search at all (--field is not yet counted as a
+// field change in `has_any_field_change`). This makes the prior test vacuous.
+//
+// Strengthened: the JQL search mock is mounted with `.expect(1)` — it MUST be
+// called. The stub never reaches the JQL endpoint, so wiremock will report an
+// unsatisfied expectation and the test will fail. After implementation the
+// search runs (returning 2 keys), Gate A fires, exit 64.
+//
+// Additionally: assert stderr does NOT contain "No fields specified to update"
+// — that is the stub's wrong-path message; Gate A must produce a different one.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_017_field_jql_multi_issue_rejected_exit_64() {
+    let server = MockServer::start().await;
+
+    // JQL must be called — Gate A fires AFTER seeing 2 keys from this search.
+    // The stub never reaches this endpoint; .expect(1) makes it actively fail.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "issues": [
+                { "key": "FOO-1", "fields": { "summary": "First" } },
+                { "key": "FOO-2", "fields": { "summary": "Second" } }
+            ],
+            "nextPageToken": serde_json::Value::Null
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // No editmeta, no PUT mounted
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "--jql",
+            "project = FOO",
+            "--field",
+            "Urgency=High",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 when --jql resolves to 2+ issues with --field; stderr={stderr}"
+    );
+
+    // Gate A message must NOT be the stub's "No fields specified" generic guard —
+    // that fires before JQL even runs. After implementation Gate A runs post-JQL.
+    assert!(
+        !stderr.contains("No fields specified to update"),
+        "Stderr must NOT be the stub's 'No fields specified' guard message; \
+         Gate A fires post-JQL, not pre-HTTP; stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 13 — VP-396-005 / AC-007 / BC-3.4.017
+// Gate B: `--summary` + `--field summary=...` → exit 64, no HTTP.
+// Pre-impl failure mode: no Gate B → exits 0 or wrong behavior (two values set).
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_017_field_summary_overlap_exits_64_no_http() {
+    let server = MockServer::start().await;
+    // Mount NO mocks — Gate B fires before any HTTP
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--summary",
+            "New title",
+            "--field",
+            "summary=Other title",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 for --summary + --field summary overlap; stderr={stderr}"
+    );
+
+    // Stderr must mention the conflict
+    assert!(
+        stderr.contains("--summary") || stderr.contains("summary"),
+        "Stderr must reference the conflicting flag; stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 14 — VP-396-005 / AC-007 / BC-3.4.017
+// Gate B: `--description` + `--field description=...` → exit 64, no HTTP.
+// Pre-impl failure mode: no Gate B implemented.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_017_field_description_overlap_exits_64_no_http() {
+    let server = MockServer::start().await;
+    // Mount NO mocks
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--description",
+            "Some text",
+            "--field",
+            "description=other",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 for --description + --field description overlap; stderr={stderr}"
+    );
+
+    assert!(
+        stderr.contains("--description") || stderr.contains("description"),
+        "Stderr must reference the conflicting flag; stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 15 — VP-396-005 / AC-007 / BC-3.4.017
+// Gate B: `--type` + `--field issuetype=...` → exit 64, no HTTP.
+// Pre-impl failure mode: no Gate B implemented.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_017_field_issuetype_overlap_exits_64_no_http() {
+    let server = MockServer::start().await;
+    // Mount NO mocks
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--type",
+            "Bug",
+            "--field",
+            "issuetype=Task",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 for --type + --field issuetype overlap; stderr={stderr}"
+    );
+
+    assert!(
+        stderr.contains("--type") || stderr.contains("issuetype") || stderr.contains("--field"),
+        "Stderr must reference the conflicting flags; stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 16 — VP-396-006 / AC-008 / BC-3.4.015
+// Warm `fields.json` cache → `GET /rest/api/3/field` NOT called.
+// Pre-impl failure mode: resolve_edit_fields not implemented → exits 0 but
+// GET /field mock not mounted; if the test verifies behavior via changed_fields
+// it fails because changed_fields is absent.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_015_warm_fields_cache_skips_field_list_http() {
+    let server = MockServer::start().await;
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    // Pre-populate the fields.json cache — GET /rest/api/3/field must NOT be called
+    write_fields_cache_file(
+        cache_dir.path(),
+        "default",
+        &[("customfield_10001".to_string(), "Severity".to_string())],
+    );
+
+    // Deliberately do NOT mount GET /rest/api/3/field — any call to it would be
+    // an unregistered request (wiremock returns 404 which the handler would surface).
+
+    mount_editmeta_string(&server, "TEST-1", "customfield_10001", "Severity").await;
+    mount_put_204(&server, "TEST-1").await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "Severity=Critical",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 with warm cache; stderr={stderr} stdout={stdout}"
+    );
+
+    assert!(
+        stderr.contains("  Severity \u{2192} Critical"),
+        "Expected '  Severity → Critical' in stderr from cache hit; stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 17 — VP-396-006 / AC-008 / BC-3.4.015
+// Cold cache: `GET /rest/api/3/field` called once; fields.json written after.
+// Pre-impl failure mode: resolve_edit_fields not implemented → changed_fields absent.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_015_cold_cache_fetches_and_populates_fields_cache() {
+    let server = MockServer::start().await;
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    // No pre-existing fields.json → cold cache → must call GET /rest/api/3/field
+    mock_list_fields_exact(&server, "customfield_10001", "Severity").await;
+    mount_editmeta_string(&server, "TEST-1", "customfield_10001", "Severity").await;
+    mount_put_204(&server, "TEST-1").await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "Severity=Critical",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 on cold cache; stderr={stderr} stdout={stdout}"
+    );
+
+    // After the call, fields.json must exist in the cache dir
+    let cache_path = cache_dir
+        .path()
+        .join("jr")
+        .join("v1")
+        .join("default")
+        .join("fields.json");
+    assert!(
+        cache_path.exists(),
+        "fields.json must be written to cache after cold-cache fetch; path={cache_path:?}"
+    );
+
+    // Verify the cache file is valid JSON with a fetched_at timestamp
+    let cache_content = std::fs::read_to_string(&cache_path).unwrap();
+    let cache_json: serde_json::Value = serde_json::from_str(&cache_content)
+        .expect("fields.json must be valid JSON after cold-cache write");
+    assert!(
+        cache_json.get("fetched_at").is_some(),
+        "fields.json must contain 'fetched_at' timestamp; content={cache_content}"
+    );
+}
+
+/// Mount list_fields with `.expect(1)` — exactly one call expected.
+async fn mock_list_fields_exact(server: &MockServer, field_id: &str, field_name: &str) {
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            { "id": field_id, "name": field_name, "custom": true }
+        ])))
+        .expect(1)
+        .mount(server)
+        .await;
+}
+
+// ---------------------------------------------------------------------------
+// Test 18 — VP-396-007 / AC-009 / BC-3.4.015
+// Cache-write failure: warning on stderr, PUT succeeds, exit 0.
+// Strategy: make cache dir unwritable so write_fields_cache fails with I/O error.
+// Pre-impl failure mode: resolve_edit_fields not implemented → no warning, no PUT body.
+// ---------------------------------------------------------------------------
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_015_cache_write_failure_warns_and_exits_0() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let server = MockServer::start().await;
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    // Create the v1/default dir and then make it read-only so writes fail
+    let profile_dir = cache_dir.path().join("jr").join("v1").join("default");
+    std::fs::create_dir_all(&profile_dir).unwrap();
+    std::fs::set_permissions(&profile_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    mount_list_fields(&server, "customfield_10001", "Severity").await;
+    mount_editmeta_string(&server, "TEST-1", "customfield_10001", "Severity").await;
+    mount_put_204(&server, "TEST-1").await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "Severity=Critical",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Restore permissions so tempdir cleanup succeeds
+    std::fs::set_permissions(&profile_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 despite cache-write failure; stderr={stderr} stdout={stdout}"
+    );
+
+    assert!(
+        stderr.contains("warning: failed to write fields cache"),
+        "Expected cache-write warning in stderr; stderr={stderr}"
+    );
+
+    assert!(
+        stderr.contains("  Severity \u{2192} Critical"),
+        "PUT must succeed and echo must appear despite cache-write failure; stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 19 — VP-396-007 / AC-009 / BC-3.4.015
+// Cache-write failure warning goes to stderr only; stdout is clean JSON.
+// Pre-impl failure mode: resolve_edit_fields not implemented → no changed_fields.
+// ---------------------------------------------------------------------------
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_015_cache_write_failure_warning_on_stderr_not_stdout() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let server = MockServer::start().await;
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    let profile_dir = cache_dir.path().join("jr").join("v1").join("default");
+    std::fs::create_dir_all(&profile_dir).unwrap();
+    std::fs::set_permissions(&profile_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    mount_list_fields(&server, "customfield_10001", "Severity").await;
+    mount_editmeta_string(&server, "TEST-1", "customfield_10001", "Severity").await;
+    mount_put_204(&server, "TEST-1").await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "--output",
+            "json",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "Severity=Critical",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Restore permissions for cleanup
+    std::fs::set_permissions(&profile_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 in --output json mode despite cache failure; stderr={stderr} stdout={stdout}"
+    );
+
+    // stdout must NOT contain "warning" — channel separation
+    assert!(
+        !stdout.contains("warning"),
+        "stdout must NOT contain 'warning' — channel separation; stdout={stdout}"
+    );
+
+    // stderr must contain the warning
+    assert!(
+        stderr.contains("warning: failed to write fields cache"),
+        "Warning must appear on stderr; stderr={stderr}"
+    );
+
+    // stdout must be valid JSON with changed_fields
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout must be valid JSON; error={e}; stdout={stdout}"));
+
+    assert!(
+        !parsed["changed_fields"].is_null(),
+        "changed_fields must be present in JSON despite cache write failure; stdout={stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 20 — VP-396-007 / AC-009 / BC-3.4.015
+// Unit test: `write_fields_cache` swallows I/O error and returns Ok(()).
+//
+// LEGITIMATELY PASSES PRE-IMPLEMENTATION: The stub in src/cache.rs provides
+// a fully-complete body for `write_fields_cache` — it is NOT a `todo!()`.
+// The best-effort writer pattern (swallow I/O errors + return Ok(())) was
+// shipped as part of the module scaffold commit (aa5b050) because it mirrors
+// the already-established pattern from `write_request_type_cache` exactly.
+// This test pins that stub-delivered behavior: the function correctly calls
+// write_cache, catches any Err, emits an eprintln! warning, and returns Ok(()).
+// The end-to-end integration tests (tests 18 and 19) are the load-bearing RED
+// tests for VP-396-007; this unit test is a correctness pin on the library
+// function itself and may legitimately remain green throughout the cycle.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_write_fields_cache_swallows_io_error_and_returns_ok() {
+    // Attempt to write to a non-existent path that cannot be created
+    // (a file used as a directory name).
+    let dir = tempfile::tempdir().unwrap();
+    let fake_file_as_dir = dir.path().join("this_is_a_file");
+    // Create a file so we can't create a directory with that name
+    std::fs::write(&fake_file_as_dir, "dummy").unwrap();
+
+    // XDG_CACHE_HOME points to `fake_file_as_dir` (a file, not a dir),
+    // so create_dir_all inside write_cache will fail on the `jr/v1/default` subdirectory.
+    // We use the env var to redirect the cache root.
+    // NOTE: env var mutation in tests is not safe for parallel tests; use a unique profile.
+    let result = jr::cache::write_fields_cache(
+        "test-profile-swallow",
+        &[("customfield_10001".to_string(), "Severity".to_string())],
+    );
+
+    // Best-effort writer MUST return Ok(()) even when the write fails
+    assert!(
+        result.is_ok(),
+        "write_fields_cache must return Ok(()) on I/O error; got: {result:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 21 — VP-396-008 / AC-010 / BC-3.4.015
+// `--field` + `--dry-run`: resolution runs; PUT NOT called; exit 0.
+// Pre-impl failure mode: resolve_edit_fields not called inside dry-run block
+// → planned-changes preview missing `Severity → Critical`; OR exit not 0.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_015_field_dry_run_exits_0_no_put() {
+    let server = MockServer::start().await;
+
+    mount_list_fields(&server, "customfield_10001", "Severity").await;
+    mount_editmeta_string(&server, "TEST-1", "customfield_10001", "Severity").await;
+    // Deliberately mount NO PUT — it must not be called under --dry-run
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "Severity=Critical",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 under --dry-run with --field; stderr={stderr} stdout={stdout}"
+    );
+
+    // Planned-changes preview must include the resolved --field entry
+    assert!(
+        stderr.contains("Severity") && stderr.contains("Critical"),
+        "Planned-changes preview must include 'Severity' and 'Critical'; stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 22 — VP-396-008 / AC-010 / BC-3.4.015 EC-3.4.015-19
+// Resolution failure under `--dry-run` → exit 64 (not suppressed by --dry-run).
+// Pre-impl failure mode: stub exits 0 regardless.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_015_field_dry_run_resolution_failure_exits_64() {
+    let server = MockServer::start().await;
+
+    // list_fields does NOT contain "UnknownField"
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            { "id": "customfield_10001", "name": "SomeOtherField", "custom": true }
+        ])))
+        .mount(&server)
+        .await;
+
+    // No PUT mounted
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "UnknownField=Value",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 when field resolution fails under --dry-run; stderr={stderr}"
+    );
+
+    // Stderr must indicate the unknown field
+    assert!(
+        stderr.contains("UnknownField")
+            || stderr.contains("unknown")
+            || stderr.contains("no match"),
+        "Stderr must mention the unknown field or zero matches; stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 23 — VP-396-008 / AC-010 / BC-3.4.017
+// Gate A fires under --dry-run (multi-key + --field + --dry-run → exit 64).
+//
+// Stub failure mode: the current stub exits 64 via "No fields specified to
+// update" BEFORE reaching Gate A (--field not counted in `has_any_field_change`).
+// The prior test was vacuous: exit 64 was satisfied by the wrong guard.
+//
+// Strengthened: assert stderr does NOT contain "No fields specified to update"
+// — that is the stub's wrong-path text. Gate A must produce a --field-specific
+// bulk-rejection message. This assertion is RED now (stub emits the wrong text)
+// and GREEN only after Gate A is wired so that --field is counted as a field
+// change and then rejected for multi-key bulk use.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_017_gate_a_fires_under_dry_run() {
+    let server = MockServer::start().await;
+    // No mocks — Gate A fires before any HTTP
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "TEST-2",
+            "--field",
+            "Urgency=High",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 for Gate A (multi-key + --field) under --dry-run; stderr={stderr}"
+    );
+
+    // The stub emits "No fields specified to update" because --field is not yet
+    // counted in has_any_field_change. Gate A must produce a different message
+    // that specifically mentions --field in the bulk-rejection context.
+    assert!(
+        !stderr.contains("No fields specified to update"),
+        "Stderr must NOT be the stub's generic guard — Gate A must fire with a \
+         --field-specific bulk-rejection message; stderr={stderr}"
+    );
+
+    // Positive: Gate A rejection must reference --field
+    assert!(
+        stderr.contains("--field"),
+        "Gate A rejection must reference '--field'; stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 24 — VP-396-009 / AC-011 / BC-3.4.015
+// Multi-`--field` partial-failure: any resolution failure → zero PUT; no echo.
+//
+// Stub failure mode: the current stub exits 64 via "No fields specified to
+// update" BEFORE calling list_fields — the stub never reaches field resolution.
+// The prior test was vacuous: "no PUT" and "no echo" were trivially satisfied
+// because the stub bailed long before PUT could be reached.
+//
+// Strengthened: `GET /rest/api/3/field` is mounted with `.expect(1)` — it MUST
+// be called exactly once. The stub never calls it, so the mock expectation is
+// unsatisfied and wiremock panics the test on server drop. After implementation
+// list_fields IS called (resolution starts for A_OK), UnknownField hits zero
+// matches, the whole batch aborts at exit 64, and no PUT is issued.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_015_field_partial_resolution_failure_no_put() {
+    let server = MockServer::start().await;
+
+    // list_fields MUST be called exactly once — resolution starts for the field
+    // batch before any individual failure aborts the batch. The stub never calls
+    // this endpoint; .expect(1) makes the test actively fail against the stub.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            { "id": "customfield_10001", "name": "A_OK", "custom": true }
+        ])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // editmeta may or may not be reached depending on resolution order; leave it
+    // without an expectation count — it's a valid but optional call.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1/editmeta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "fields": {
+                "customfield_10001": {
+                    "name": "A_OK",
+                    "schema": { "type": "string", "system": null, "custom": null },
+                    "operations": ["set"],
+                    "required": false,
+                    "allowedValues": null
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    // No PUT mock — zero PUT must be issued (all-or-nothing batch abort)
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "A_OK=val",
+            "--field",
+            "UnknownField=val",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 when any --field resolution fails (all-or-nothing); stderr={stderr}"
+    );
+
+    // No field-echo lines must appear (changed_fields not emitted on failure)
+    assert!(
+        !stderr.contains(" \u{2192} "),
+        "No field-echo '→' lines must appear when resolution partially fails; stderr={stderr}"
+    );
+
+    // Stderr must NOT be the stub's wrong-path "No fields specified" guard message —
+    // the failure must come from resolution, not from the pre-HTTP field-change guard.
+    assert!(
+        !stderr.contains("No fields specified to update"),
+        "Stderr must NOT be the stub's pre-HTTP guard message; resolution must have run; stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 25 — VP-396-009 / AC-011 / BC-3.4.015 EC-3.4.015-12a
+// PUT failure (400): changed_fields discarded, not echoed.
+//
+// Stub failure mode: the current stub exits 64 via "No fields specified to
+// update" BEFORE reaching list_fields, editmeta, or PUT. The prior test was
+// vacuous: "changed_fields absent" was trivially true because the stub bailed
+// before producing any output.
+//
+// Strengthened: all three HTTP mocks (list_fields, editmeta, PUT-400) carry
+// `.expect(1)` — each MUST be called exactly once. The stub calls none of
+// them, so all three expectations are unsatisfied and wiremock panics on
+// server drop. After implementation:
+//   • list_fields resolves "Severity" → customfield_10001
+//   • editmeta confirms the field is on the Edit screen with type "string"
+//   • PUT is issued and returns 400
+//   • changed_fields is discarded (never echoed because PUT failed)
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_015_field_put_failure_discards_changed_fields() {
+    let server = MockServer::start().await;
+
+    // list_fields MUST be called — resolution runs before PUT
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            { "id": "customfield_10001", "name": "Severity", "custom": true }
+        ])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // editmeta MUST be called — field-presence and type validation runs before PUT
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1/editmeta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "fields": {
+                "customfield_10001": {
+                    "name": "Severity",
+                    "schema": { "type": "string", "system": null, "custom": null },
+                    "operations": ["set"],
+                    "required": false,
+                    "allowedValues": null
+                }
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // PUT MUST be called — and it returns 400 (field value rejected by Jira)
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/TEST-1"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "errorMessages": ["Field value not valid."],
+            "errors": {}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "--output",
+            "json",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "Severity=Critical",
+        ])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        !output.status.success(),
+        "Expected non-zero exit on PUT 400"
+    );
+
+    // changed_fields must NOT appear in stdout on PUT failure (BC-3.4.015 invariant 4)
+    assert!(
+        !stdout.contains("changed_fields"),
+        "changed_fields must NOT appear in stdout when PUT returns 400; stdout={stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 26 — VP-396-010 / AC-012 / BC-3.4.015 EC-3.4.015-4a
+// Number field: integer `5` serializes as `5`, not `5.0`.
+// Pre-impl failure mode: resolve_edit_fields not implemented → PUT not called.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_015_number_field_integer_wire_form() {
+    let server = MockServer::start().await;
+
+    mock_list_fields_exact(&server, "customfield_20001", "StoryPoints").await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1/editmeta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "fields": {
+                "customfield_20001": {
+                    "name": "StoryPoints",
+                    "schema": { "type": "number", "system": null, "custom": null },
+                    "operations": ["set"],
+                    "required": false,
+                    "allowedValues": null
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    // PUT body must contain integer 5, NOT 5.0
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/TEST-1"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": { "customfield_20001": 5 }
+        })))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "StoryPoints=5",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for integer number field; stderr={stderr} stdout={stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 27 — VP-396-010 / AC-012 / BC-3.4.015 EC-3.4.015-4a
+// Number field: `5e3` scientific notation → wire integer 5000, not "5e3".
+// Pre-impl failure mode: resolve_edit_fields not implemented → PUT not called.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_015_number_field_scientific_notation_wire_form() {
+    let server = MockServer::start().await;
+
+    mount_list_fields(&server, "customfield_20001", "StoryPoints").await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1/editmeta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "fields": {
+                "customfield_20001": {
+                    "name": "StoryPoints",
+                    "schema": { "type": "number", "system": null, "custom": null },
+                    "operations": ["set"],
+                    "required": false,
+                    "allowedValues": null
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    // PUT body must contain integer 5000, not 5000.0 or "5e3"
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/TEST-1"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": { "customfield_20001": 5000 }
+        })))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "StoryPoints=5e3",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for 5e3 scientific notation; stderr={stderr} stdout={stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 28 — VP-396-010 / AC-012 / BC-3.4.015 EC-3.4.015-4
+// Number field: `inf` (NaN/Inf) → exit 64; PUT not called.
+// Pre-impl failure mode: stub exits 0 ignoring field_pairs.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_015_number_field_nan_rejected_exit_64() {
+    let server = MockServer::start().await;
+
+    mount_list_fields(&server, "customfield_20001", "StoryPoints").await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1/editmeta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "fields": {
+                "customfield_20001": {
+                    "name": "StoryPoints",
+                    "schema": { "type": "number", "system": null, "custom": null },
+                    "operations": ["set"],
+                    "required": false,
+                    "allowedValues": null
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    // No PUT mock — must not be called
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "StoryPoints=inf",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 for non-finite number 'inf'; stderr={stderr}"
+    );
+
+    assert!(
+        stderr.contains("inf") || stderr.contains("parse") || stderr.contains("invalid"),
+        "Stderr must mention the invalid number; stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 29 — VP-396-011 / AC-013 / BC-3.4.015
+// `user`-type field: wire shape `{"accountId": VALUE}`.
+// Pre-impl failure mode: resolve_edit_fields not implemented → PUT not called.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_015_user_field_wire_shape_account_id() {
+    let server = MockServer::start().await;
+
+    mock_list_fields_exact(&server, "customfield_10050", "Reporter").await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1/editmeta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "fields": {
+                "customfield_10050": {
+                    "name": "Reporter",
+                    "schema": { "type": "user", "system": null, "custom": null },
+                    "operations": ["set"],
+                    "required": false,
+                    "allowedValues": null
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    // PUT must carry {"accountId": "abc123"} shape
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/TEST-1"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": { "customfield_10050": { "accountId": "abc123" } }
+        })))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "--output",
+            "json",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "Reporter=abc123",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for user field; stderr={stderr} stdout={stdout}"
+    );
+
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout not valid JSON: {e}; stdout={stdout}"));
+
+    assert_eq!(
+        parsed["changed_fields"]["Reporter"].as_str(),
+        Some("abc123"),
+        "changed_fields[\"Reporter\"] must echo the raw accountId; stdout={stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 30 — VP-396-011 / AC-013 / BC-3.4.015
+// `date`-type field: bare-string pass-through ("2026-12-31" → wire as bare string).
+// Pre-impl failure mode: resolve_edit_fields not implemented → PUT not called.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_015_date_field_bare_string_pass_through() {
+    let server = MockServer::start().await;
+
+    mock_list_fields_exact(&server, "customfield_10060", "DueDate").await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1/editmeta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "fields": {
+                "customfield_10060": {
+                    "name": "DueDate",
+                    "schema": { "type": "date", "system": null, "custom": null },
+                    "operations": ["set"],
+                    "required": false,
+                    "allowedValues": null
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    // PUT must carry bare string "2026-12-31", no wrapping
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/TEST-1"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": { "customfield_10060": "2026-12-31" }
+        })))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "DueDate=2026-12-31",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for date field bare-string; stderr={stderr} stdout={stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 31 — VP-396-011 / AC-013 / BC-3.4.015
+// `datetime`-type field: junk value "not-a-date" passes through verbatim (no validation).
+// The BC explicitly requires no client-side ISO 8601 validation — junk reaches the wire.
+// Pre-impl failure mode: resolve_edit_fields not implemented → PUT not called.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_015_datetime_field_bare_string_pass_through() {
+    let server = MockServer::start().await;
+
+    mock_list_fields_exact(&server, "customfield_10070", "DueDatetime").await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1/editmeta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "fields": {
+                "customfield_10070": {
+                    "name": "DueDatetime",
+                    "schema": { "type": "datetime", "system": null, "custom": null },
+                    "operations": ["set"],
+                    "required": false,
+                    "allowedValues": null
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    // PUT must carry junk string verbatim — proves no client-side validation
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/TEST-1"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": { "customfield_10070": "not-a-date" }
+        })))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "DueDatetime=not-a-date",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 — datetime junk value must pass through without client-side rejection; \
+         stderr={stderr} stdout={stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 32 — VP-396-012 / AC-014 / BC-3.4.015 Step 3b / EC-3.4.015-20
+// Field present in editmeta but "set" absent from operations → exit 64 with hint.
+// Pre-impl failure mode: stub exits 0 ignoring field_pairs.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_015_operations_lacks_set_exits_64() {
+    let server = MockServer::start().await;
+
+    mount_list_fields(&server, "customfield_10070", "ComputedScore").await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1/editmeta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "fields": {
+                "customfield_10070": {
+                    "name": "ComputedScore",
+                    "schema": { "type": "number", "system": null, "custom": null },
+                    "operations": ["transition"],  // "set" is absent
+                    "required": false,
+                    "allowedValues": null
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    // No PUT mock
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "ComputedScore=99",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 when 'set' absent from operations; stderr={stderr}"
+    );
+
+    // Stderr must name the field and indicate the operations constraint
+    assert!(
+        stderr.contains("ComputedScore") || stderr.contains("set"),
+        "Stderr must mention 'ComputedScore' or 'set'; stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 33 — VP-396-012 / AC-014 / BC-3.4.015 Step 3b / EC-3.4.015-20
+// Empty operations list → exit 64 with hint; no PUT.
+// Pre-impl failure mode: stub exits 0 ignoring field_pairs.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_015_empty_operations_exits_64() {
+    let server = MockServer::start().await;
+
+    mount_list_fields(&server, "customfield_10070", "ComputedScore").await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1/editmeta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "fields": {
+                "customfield_10070": {
+                    "name": "ComputedScore",
+                    "schema": { "type": "number", "system": null, "custom": null },
+                    "operations": [],  // empty — "set" absent
+                    "required": false,
+                    "allowedValues": null
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    // No PUT mock
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "ComputedScore=99",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 when operations list is empty; stderr={stderr}"
+    );
+
+    assert!(
+        stderr.contains("ComputedScore") || stderr.contains("set") || stderr.contains("operation"),
+        "Stderr must mention the field or operations constraint; stderr={stderr}"
+    );
+}
