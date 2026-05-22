@@ -98,6 +98,17 @@ fn write_minimal_config(config_home: &std::path::Path) {
     std::fs::write(conf_dir.join("config.toml"), "").unwrap();
 }
 
+/// Write a config.toml with story_points_field_id set.
+fn write_config_with_story_points(config_home: &std::path::Path) {
+    let conf_dir = config_home.join("jr");
+    std::fs::create_dir_all(&conf_dir).unwrap();
+    std::fs::write(
+        conf_dir.join("config.toml"),
+        "[fields]\nstory_points_field_id = \"customfield_10031\"\n",
+    )
+    .unwrap();
+}
+
 /// Mount POST /rest/api/3/issue returning 201 with the given issue key.
 async fn mount_post_201(server: &MockServer, key: &str) {
     Mock::given(method("POST"))
@@ -627,5 +638,53 @@ async fn test_bc_3_4_014_create_json_output_unchanged_no_changed_fields_key() {
         parsed["key"].as_str(),
         Some("PROJ-1"),
         "key must be present; stdout={stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 19 — EC-3.4.014-11: `--points 5` echoes `  points → 5` on create
+// BC-3.4.014 EC-3.4.014-11; concrete (non-snapshot) assertion on f64::to_string().
+//
+// Behavior is already implemented (`pts.to_string()`); this test pins the format.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_014_create_points_integer_value_echo() {
+    let server = MockServer::start().await;
+    mount_post_201(&server, "PROJ-1").await;
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_config_with_story_points(config_dir.path());
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--type",
+            "Task",
+            "--summary",
+            "Points echo test",
+            "--points",
+            "5",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0; stderr={stderr} stdout={stdout}"
+    );
+
+    // BC-3.4.014 EC-3.4.014-11: integer points must echo as "5", not "5.0" or "5.00"
+    assert!(
+        stderr.contains("  points \u{2192} 5"),
+        "Expected '  points → 5' in stderr; stderr={stderr}"
     );
 }

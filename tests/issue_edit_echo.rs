@@ -892,3 +892,75 @@ async fn test_bc_3_4_012_echo_suppressed_on_put_error() {
         "changed_fields must NOT appear in stdout on PUT 400; stdout={stdout_json}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Test 24 — EC-3.4.012-5: `--points 5` echoes `  points → 5` (integer display)
+// BC-3.4.012 EC-3.4.012-5; concrete (non-snapshot) assertion on f64::to_string().
+//
+// Behavior is already implemented (`pts.to_string()`); this test pins the format.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_012_points_integer_value_echo() {
+    let server = MockServer::start().await;
+    mock_put_with_sp_field(&server, "TEST-1").await;
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_config_with_story_points(config_dir.path());
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["--no-input", "issue", "edit", "TEST-1", "--points", "5"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0; stderr={stderr} stdout={stdout}"
+    );
+
+    // BC-3.4.012 EC-3.4.012-5: integer points must echo as "5", not "5.0" or "5.00"
+    assert!(
+        stderr.contains("  points \u{2192} 5"),
+        "Expected '  points → 5' in stderr; stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 25 — EC-3.4.012-5: `--points 2.5` echoes `  points → 2.5` (decimal display)
+// BC-3.4.012 EC-3.4.012-5; concrete (non-snapshot) assertion on f64::to_string().
+//
+// Behavior is already implemented (`pts.to_string()`); this test pins the format.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_012_points_decimal_value_echo() {
+    let server = MockServer::start().await;
+    mock_put_with_sp_field(&server, "TEST-1").await;
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_config_with_story_points(config_dir.path());
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["--no-input", "issue", "edit", "TEST-1", "--points", "2.5"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0; stderr={stderr} stdout={stdout}"
+    );
+
+    // BC-3.4.012 EC-3.4.012-5: decimal points must echo as "2.5"
+    assert!(
+        stderr.contains("  points \u{2192} 2.5"),
+        "Expected '  points → 2.5' in stderr; stderr={stderr}"
+    );
+}
