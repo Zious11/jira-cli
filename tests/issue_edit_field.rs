@@ -1303,17 +1303,11 @@ fn test_write_fields_cache_swallows_io_error_and_returns_ok() {
         "write_fields_cache must return Ok(()) on I/O error; got: {result:?}"
     );
 
-    // The real ~/.cache/jr/v1/test-profile-swallow/ must NOT have been created.
-    // This assertion is verified by the post-test grep in the verification script,
-    // but we can also assert here that the only written path is under our TempDir.
-    let real_home = dirs::cache_dir();
-    if let Some(real) = real_home {
-        let real_profile_dir = real.join("jr").join("v1").join("test-profile-swallow");
-        assert!(
-            !real_profile_dir.exists(),
-            "real cache dir must NOT exist after isolated test; path={real_profile_dir:?}"
-        );
-    }
+    // The XDG override is verified by the primary assertion above; no need to
+    // inspect the real cache dir. (The secondary real-path check was removed per
+    // R2-C3: it could flake if ~/.cache/jr/v1/test-profile-swallow/ existed from
+    // a prior run, and cache_root() reads XDG_CACHE_HOME unconditionally first so
+    // there is no codepath where the override could be ignored while set.)
 }
 
 // ---------------------------------------------------------------------------

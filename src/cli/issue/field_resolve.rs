@@ -123,9 +123,14 @@ pub(crate) async fn resolve_edit_fields(
             let name_lower = name.to_lowercase();
 
             // Load the field list (from memory cache → on-disk cache → API).
+            // R2-C1: propagate genuine I/O errors from read_fields_cache with `?`
+            // instead of silently discarding them via .ok().flatten().
+            // read_cache already classifies: ENOENT → Ok(None); serde-corrupt →
+            // warn + Ok(None) self-heal; genuine I/O → Err. The previous
+            // .ok().flatten() negated the careful tri-state design by swallowing
+            // the Err arm. Consistent with every other cache-reader call site in src/.
             if field_list.is_none() {
-                let disk = read_fields_cache(profile).ok().flatten();
-                if let Some(fc) = disk {
+                if let Some(fc) = read_fields_cache(profile)? {
                     field_list = Some(fc.fields);
                 }
                 // If still None, we'll fetch from API when needed below.
