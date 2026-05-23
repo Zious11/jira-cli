@@ -316,7 +316,7 @@ pub(crate) async fn resolve_edit_fields(
                 // raw VALUE instead of the stored-casing label.  Mirroring the H-1
                 // customfield_NNNNN guard: non-empty + all-digits.
                 let id_match = if !value.is_empty() && value.chars().all(|c| c.is_ascii_digit()) {
-                    allowed.iter().find(|av| av.id == *value)
+                    allowed.iter().find(|av| av.id == value)
                 } else {
                     None
                 };

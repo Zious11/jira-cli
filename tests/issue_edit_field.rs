@@ -11,7 +11,7 @@
 //!   flag-overlap hard error for `summary`/`description`/`issuetype`/`priority`
 //!   (Gate B).
 //!
-//! All 33 tests MUST FAIL before implementation (Red Gate). The stubs in the
+//! Every test in this file MUST fail before implementation (Red Gate). The stubs in the
 //! current codebase do not call `resolve_edit_fields`, do not check Gate B,
 //! do not read `fields.json` cache, and do not call `get_editmeta`.
 

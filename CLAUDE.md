@@ -325,9 +325,11 @@ When adding a new feature:
   `issue edit` call that includes `--field`. The call is skipped when `--field` is absent.
   (5) **fields.json cache write:** `write_fields_cache` in `resolve_edit_fields` is
   UNCONDITIONAL on cache miss/stale — it mirrors the `write_cmdb_fields_cache` pattern.
-  All `--field` integration tests use `jr_cmd_with_xdg` with a per-test `tempfile::TempDir`
-  for both `XDG_CACHE_HOME` and `XDG_CONFIG_HOME`, so they never touch the real
-  `~/.cache/jr/v1/default/fields.json` and are fully order-independent.
+  Cache-touching `--field` integration tests use `jr_cmd_with_xdg` with a per-test
+  `tempfile::TempDir` for both `XDG_CACHE_HOME` and `XDG_CONFIG_HOME`, so they never
+  touch the real `~/.cache/jr/v1/default/fields.json`. Tests that fire Gate A/B
+  pre-HTTP or take the `customfield_NNNNN` literal-bypass path skip the cache entirely
+  and use plain `jr_cmd` — order-independent by construction.
 
 ## AI Agent Notes
 
