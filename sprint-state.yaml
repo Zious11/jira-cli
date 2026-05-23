@@ -561,10 +561,11 @@ feature_followup_standalone:
 
   - id: S-396
     title: "jr issue edit --field NAME=VALUE: arbitrary custom field support via editmeta-driven resolution (closes #396)"
-    status: in-progress
-    pr: null
-    merge_sha: null
-    merged_at: null
+    status: completed
+    pr: 401
+    merge_sha: 2f61566
+    merged_at: "2026-05-23"
+    merged_via: "gh pr merge --squash (Zious11; issue #396 auto-closed)"
     depends_on: [S-398]
     bc_anchors: [BC-3.4.015, BC-3.4.016, BC-3.4.017]
     verification_properties: [VP-396-001, VP-396-002, VP-396-003, VP-396-004, VP-396-005, VP-396-006, VP-396-007, VP-396-008, VP-396-009, VP-396-010, VP-396-011, VP-396-012]
@@ -575,7 +576,7 @@ feature_followup_standalone:
     implementation_strategy: tdd
     phase: F4
     phase_approved_at: "2026-05-22"
-    notes: "F3 story creation COMPLETE + human-approved 2026-05-22. Story spec at `.factory/stories/S-396-issue-edit-field-flag.md`. 18 ACs, 34 test deliverables, 8 SP, module criticality HIGH, implementation_strategy: tdd. Depends on S-398 (already delivered @ b49f2fd). F4 Delta Implementation IN PROGRESS."
+    notes: "F4 COMPLETE. PR #401 squash-merged @ 2f61566 (2026-05-23); issue #396 auto-closed. Per-story adversary: 5 passes, CONVERGED 3/3 CLEAN (P3/P4/P5). Trajectory: 4H+7MED → 1MED → CLEAN×3. Copilot: R1 3 findings all fixed; R2 4 findings (2 fixed in-PR, 1 REFUTED research-backed, 1 DEFERRED R2-C4 rationale); R3=0 → COPILOT-CONVERGED. All 7 review threads resolved. CI 10/10 including mutation testing. Test count: 44 (43 integration + 1 cache unit). Feature branch + ci/issue-396-bc-cumulative-counts-surface-h deleted. Worktree cleaned. AWAITING F5."
 
   - id: S-398
     title: "issue edit / issue create — changed-fields echo on success (closes #398)"

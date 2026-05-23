@@ -189,7 +189,7 @@ They have `wave: feature-followup` in frontmatter and live under `.factory/code-
 | S-385 | JSM input validation UX polish: harmonize project-required error, guard empty --request-type, reject --markdown+--field description= conflict, move platform-flag warnings post-require_service_desk (closes #385) | BC-3.8.016, BC-3.8.017, BC-3.8.002, BC-3.8.010, BC-3.8.011, BC-3.8.003 (regression-pin) | H-NEW-JSM-RT-006, H-NEW-JSM-RT-007 | **completed** — PR #395 / f7fc8c3 (2026-05-20) | medium (5 SP) |
 | S-388 | Cross-hierarchy `edit --type` 400 enrichment + fix `--no-parent` fake-endpoint hint (closes #388) | BC-3.4.010, BC-3.4.011, BC-3.4.003 (annotation-only) | — | **completed** — PR #397 / e0ea24b (2026-05-21; squash-merged; issue #388 closed) | medium (5 SP) |
 | S-398 | `issue edit` / `issue create` — changed-fields echo on success (closes #398) | BC-3.4.012, BC-3.4.013, BC-3.4.014 | — | **completed** — PR #399 / b49f2fd (2026-05-22) | medium (5 SP) |
-| S-396 | `issue edit --field NAME=VALUE` — arbitrary custom field editing via editmeta (closes #396) | BC-3.4.015, BC-3.4.016, BC-3.4.017 | — | **ready** — F3 story produced 2026-05-22; depends on S-398 | medium (8 SP) |
+| S-396 | `issue edit --field NAME=VALUE` — arbitrary custom field editing via editmeta (closes #396) | BC-3.4.015, BC-3.4.016, BC-3.4.017 | — | **completed** — PR #401 / 2f61566 (2026-05-23); F4 COMPLETE; 44 tests; adv 5 passes 3/3 CLEAN; Copilot R3=0; AWAITING F5 | medium (8 SP) |
 
 Feature-followup story files: `.factory/code-delivery/issue-NNN/story.md`
 
