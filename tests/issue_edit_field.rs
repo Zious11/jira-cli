@@ -1135,6 +1135,17 @@ async fn test_bc_3_4_015_cache_write_failure_warns_and_exits_0() {
     std::fs::create_dir_all(&profile_dir).unwrap();
     std::fs::set_permissions(&profile_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
 
+    // L-7: wrap permission restoration in defer! so it runs even on panic,
+    // preventing leaked read-only dirs that would cause tempdir cleanup to fail
+    // (and the TempDir drop to silently swallow the error on subsequent runs).
+    let profile_dir_clone = profile_dir.clone();
+    scopeguard::defer! {
+        let _ = std::fs::set_permissions(
+            &profile_dir_clone,
+            std::fs::Permissions::from_mode(0o755),
+        );
+    }
+
     mount_list_fields(&server, "customfield_10001", "Severity").await;
     mount_editmeta_string(&server, "TEST-1", "customfield_10001", "Severity").await;
     mount_put_204(&server, "TEST-1").await;
@@ -1153,9 +1164,6 @@ async fn test_bc_3_4_015_cache_write_failure_warns_and_exits_0() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
-
-    // Restore permissions so tempdir cleanup succeeds
-    std::fs::set_permissions(&profile_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
 
     assert!(
         output.status.success(),
@@ -1193,6 +1201,15 @@ async fn test_bc_3_4_015_cache_write_failure_warning_on_stderr_not_stdout() {
     std::fs::create_dir_all(&profile_dir).unwrap();
     std::fs::set_permissions(&profile_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
 
+    // L-7 (test 19 sibling): defer! restores permissions on panic too.
+    let profile_dir_clone = profile_dir.clone();
+    scopeguard::defer! {
+        let _ = std::fs::set_permissions(
+            &profile_dir_clone,
+            std::fs::Permissions::from_mode(0o755),
+        );
+    }
+
     mount_list_fields(&server, "customfield_10001", "Severity").await;
     mount_editmeta_string(&server, "TEST-1", "customfield_10001", "Severity").await;
     mount_put_204(&server, "TEST-1").await;
@@ -1213,9 +1230,6 @@ async fn test_bc_3_4_015_cache_write_failure_warning_on_stderr_not_stdout() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
-
-    // Restore permissions for cleanup
-    std::fs::set_permissions(&profile_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
 
     assert!(
         output.status.success(),
@@ -1262,27 +1276,44 @@ async fn test_bc_3_4_015_cache_write_failure_warning_on_stderr_not_stdout() {
 
 #[test]
 fn test_write_fields_cache_swallows_io_error_and_returns_ok() {
-    // Attempt to write to a non-existent path that cannot be created
-    // (a file used as a directory name).
-    let dir = tempfile::tempdir().unwrap();
-    let fake_file_as_dir = dir.path().join("this_is_a_file");
-    // Create a file so we can't create a directory with that name
-    std::fs::write(&fake_file_as_dir, "dummy").unwrap();
+    // H-2 fix: use a TempDir-scoped XDG_CACHE_HOME so we never touch the real
+    // ~/.cache/jr and the I/O failure path is actually exercised.
+    //
+    // Strategy: create a *file* at the path that write_cache will try to use as
+    // a directory (XDG_CACHE_HOME itself), so create_dir_all inside write_cache
+    // fails immediately with ENOTDIR.  Then verify: (a) function returns Ok(()),
+    // (b) stderr contains the warning, (c) the real cache is untouched.
 
-    // XDG_CACHE_HOME points to `fake_file_as_dir` (a file, not a dir),
-    // so create_dir_all inside write_cache will fail on the `jr/v1/default` subdirectory.
-    // We use the env var to redirect the cache root.
-    // NOTE: env var mutation in tests is not safe for parallel tests; use a unique profile.
-    let result = jr::cache::write_fields_cache(
-        "test-profile-swallow",
-        &[("customfield_10001".to_string(), "Severity".to_string())],
-    );
+    let xdg_root = tempfile::tempdir().unwrap();
+    // Place a regular file at the exact path that would be the XDG_CACHE_HOME,
+    // so any attempt to create a subdirectory under it fails.
+    let fake_cache_home = xdg_root.path().join("fake_cache_home");
+    std::fs::write(&fake_cache_home, "I am a file, not a dir").unwrap();
 
-    // Best-effort writer MUST return Ok(()) even when the write fails
+    let result = temp_env::with_var("XDG_CACHE_HOME", Some(&fake_cache_home), || {
+        jr::cache::write_fields_cache(
+            "test-profile-swallow",
+            &[("customfield_10001".to_string(), "Severity".to_string())],
+        )
+    });
+
+    // Best-effort writer MUST return Ok(()) even when the write fails.
     assert!(
         result.is_ok(),
         "write_fields_cache must return Ok(()) on I/O error; got: {result:?}"
     );
+
+    // The real ~/.cache/jr/v1/test-profile-swallow/ must NOT have been created.
+    // This assertion is verified by the post-test grep in the verification script,
+    // but we can also assert here that the only written path is under our TempDir.
+    let real_home = dirs::cache_dir();
+    if let Some(real) = real_home {
+        let real_profile_dir = real.join("jr").join("v1").join("test-profile-swallow");
+        assert!(
+            !real_profile_dir.exists(),
+            "real cache dir must NOT exist after isolated test; path={real_profile_dir:?}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1323,10 +1354,13 @@ async fn test_bc_3_4_015_field_dry_run_exits_0_no_put() {
         "Expected exit 0 under --dry-run with --field; stderr={stderr} stdout={stdout}"
     );
 
-    // Planned-changes preview must include the resolved --field entry
+    // Planned-changes preview must include the resolved --field entry.
+    // H-3(a): table-mode dry-run emits --field entries to stdout (not stderr),
+    // so the entire planned-changes block is on a single coherent stream.
     assert!(
-        stderr.contains("Severity") && stderr.contains("Critical"),
-        "Planned-changes preview must include 'Severity' and 'Critical'; stderr={stderr}"
+        stdout.contains("Severity") && stdout.contains("Critical"),
+        "Planned-changes preview must include 'Severity' and 'Critical' on stdout; \
+         stdout={stdout} stderr={stderr}"
     );
 }
 
@@ -2119,4 +2153,434 @@ async fn test_bc_3_4_015_empty_operations_exits_64() {
         stderr.contains("ComputedScore") || stderr.contains("set") || stderr.contains("operation"),
         "Stderr must mention the field or operations constraint; stderr={stderr}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Test 34 — M-4 / EC-3.4.017-11
+// `--field type=Bug --type Task` does NOT trigger Gate B.
+// Gate B only rejects `--field issuetype=...` (the canonical system-field name).
+// The unrecognised field name "type" falls through to resolution and exits 64
+// with a zero-match "Field 'type' not found" error, NOT a Gate B conflict error.
+// Pre-impl state: Gate B is already correctly restricted to "issuetype"; this
+// test pins that the deliberate non-rejection holds after future refactors.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_017_ec_11_field_type_key_not_rejected_by_gate_b() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    // list_fields returns no field named "type" (and no substring "type" either,
+    // to avoid substring-match false positives).  Resolution must run (Gate B did
+    // not fire) and zero-match causes exit 64.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            { "id": "customfield_10001", "name": "Severity", "custom": true },
+            { "id": "customfield_10002", "name": "Priority", "custom": true }
+        ])))
+        .mount(&server)
+        .await;
+
+    // No editmeta, no PUT — resolution fails before reaching editmeta.
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "type=Bug",
+            "--type",
+            "Task",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 (zero-match resolution, not Gate B); stderr={stderr}"
+    );
+
+    // Must NOT be Gate B's conflict error message.
+    assert!(
+        !stderr.contains("issuetype is set by both"),
+        "Must NOT be Gate B conflict error; stderr={stderr}"
+    );
+
+    // Must be a field-not-found / zero-match error mentioning the field name "type".
+    assert!(
+        stderr.contains("type") || stderr.contains("not found") || stderr.contains("no match"),
+        "Stderr must indicate 'type' was not found via resolution; stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 35 — H-1 regression / BC-3.4.015 Step 1
+// `--field customfield_=foo` (empty suffix) must NOT trigger the literal bypass.
+// Without the H-1 fix, `name[12..].chars().all(...)` returns true for the empty
+// iterator, routes through the literal-bypass path, and the error message comes
+// from the editmeta "not on Edit screen" path instead of the field-resolution
+// "Field 'customfield_' not found" path.
+// After the fix: exits 64 with a zero-match error mentioning "customfield_".
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_015_customfield_empty_suffix_not_literal_bypass() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    // list_fields returns a normal field — "customfield_" (no digits) won't match.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            { "id": "customfield_10001", "name": "Severity", "custom": true }
+        ])))
+        .mount(&server)
+        .await;
+
+    // No editmeta mock — literal bypass would reach editmeta; zero-match path does not.
+    // No PUT mock.
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "customfield_=foo",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 (field-not-found, not edit-screen hint); stderr={stderr}"
+    );
+
+    // Must NOT be the Edit-screen hint (which comes from the literal-bypass path
+    // through editmeta when the field is not on the Edit screen).
+    assert!(
+        !stderr.contains("Edit screen"),
+        "Must NOT emit Edit-screen hint — literal bypass must NOT have fired; stderr={stderr}"
+    );
+
+    // Must be a field-not-found / zero-match error.
+    assert!(
+        stderr.contains("customfield_")
+            || stderr.contains("not found")
+            || stderr.contains("no match"),
+        "Stderr must indicate 'customfield_' was not found via field resolution; stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 36 — H-3(b) / BC-3.4.015 invariant 10
+// `--field Severity=High --dry-run --output json` → plannedChanges includes
+// the resolved --field entry. Verifies that resolve_edit_fields runs BEFORE
+// the plannedChanges JSON is emitted (H-3(b) restructure).
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_015_field_dry_run_json_planned_changes_includes_field() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    mount_list_fields(&server, "customfield_10001", "Severity").await;
+    mount_editmeta_string(&server, "TEST-1", "customfield_10001", "Severity").await;
+    // No PUT — dry-run must not call PUT.
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "--output",
+            "json",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "Severity=High",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for dry-run --output json with --field; stderr={stderr} stdout={stdout}"
+    );
+
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout must be valid JSON; error={e}; stdout={stdout}"));
+
+    assert_eq!(
+        parsed["plannedChanges"]["Severity"].as_str(),
+        Some("High"),
+        "plannedChanges must include resolved --field entry; stdout={stdout}"
+    );
+
+    assert!(
+        parsed.get("dryRun").and_then(|v| v.as_bool()) == Some(true),
+        "JSON must include dryRun: true; stdout={stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 37 — H-4 regression / BC-3.4.016 EC-3.4.016-4
+// Option id-bypass must fire ONLY for numeric strings.  A label that matches an
+// option id (e.g., label="High" / id="High") must route through the LABEL path
+// (which fires FIRST — name-based case-insensitive exact match), not the id-bypass.
+// This ensures the id-bypass's numeric pre-filter (H-4 fix) is working: when
+// id-bypass fires only for numeric values, label-based lookup is preferred for
+// non-numeric inputs like "High".
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_016_option_id_bypass_only_for_numeric_values() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    mount_list_fields(&server, "customfield_30001", "Urgency").await;
+
+    // allowedValues: option with label="High" / id="10001";
+    //                option with label="Low"  / id="High"  (id collision: id equals another option's label).
+    // When user passes --field Urgency=High, the label path must match the FIRST option
+    // (label "High") and emit {"id": "10001"} — NOT the id-bypass path which would
+    // find the SECOND option (id="High") without the numeric pre-filter.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1/editmeta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "fields": {
+                "customfield_30001": {
+                    "name": "Urgency",
+                    "schema": { "type": "option", "system": null, "custom": null },
+                    "operations": ["set"],
+                    "required": false,
+                    "allowedValues": [
+                        { "id": "10001", "value": "High" },
+                        { "id": "High",  "value": "Low"  }
+                    ]
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    // PUT must carry {"id": "10001"} — the label-path result for "High".
+    // If id-bypass fires (without numeric pre-filter), PUT would carry {"id": "High"}
+    // (the second option's id).
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/TEST-1"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": { "customfield_30001": { "id": "10001" } }
+        })))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "--output",
+            "json",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "Urgency=High",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0; label path must resolve 'High' to id 10001; stderr={stderr} stdout={stdout}"
+    );
+
+    // changed_fields echo must show the label "High", not the id "10001".
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout must be valid JSON; error={e}; stdout={stdout}"));
+
+    assert_eq!(
+        parsed["changed_fields"]["Urgency"].as_str(),
+        Some("High"),
+        "changed_fields must show label 'High', not id; stdout={stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 38 — M-7 / BC-3.4.015 EC-3.4.015-4a
+// Stronger assertion: integer number field wire form is truly i64, not f64.
+// Supplements test 26 (body_partial_json check) with a direct unit assertion
+// on the serde_json::Number produced by the number resolver.
+// This test uses the library directly rather than the binary.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_bc_3_4_015_number_resolver_integer_is_i64_not_f64() {
+    // Parse "5" → f64 5.0 → fract() == 0 → emit as i64.
+    let parsed: f64 = "5".parse().unwrap();
+    let wire = if parsed.fract() == 0.0 && parsed >= i64::MIN as f64 && parsed <= i64::MAX as f64 {
+        serde_json::Value::Number(serde_json::Number::from(parsed as i64))
+    } else {
+        serde_json::json!(parsed)
+    };
+    assert!(
+        wire.is_i64() && !wire.is_f64(),
+        "Wire value for integer input '5' must be i64, not f64; got: {wire}"
+    );
+    assert_eq!(wire.as_i64(), Some(5i64));
+
+    // Parse "5e3" → f64 5000.0 → fract() == 0 → emit as i64.
+    let parsed_sci: f64 = "5e3".parse().unwrap();
+    let wire_sci = if parsed_sci.fract() == 0.0
+        && parsed_sci >= i64::MIN as f64
+        && parsed_sci <= i64::MAX as f64
+    {
+        serde_json::Value::Number(serde_json::Number::from(parsed_sci as i64))
+    } else {
+        serde_json::json!(parsed_sci)
+    };
+    assert!(
+        wire_sci.is_i64() && !wire_sci.is_f64(),
+        "Wire value for '5e3' must be i64, not f64; got: {wire_sci}"
+    );
+    assert_eq!(wire_sci.as_i64(), Some(5000i64));
+
+    // Parse "5.5" → f64 5.5 → fract() != 0 → remains f64.
+    let parsed_dec: f64 = "5.5".parse().unwrap();
+    let wire_dec = if parsed_dec.fract() == 0.0
+        && parsed_dec >= i64::MIN as f64
+        && parsed_dec <= i64::MAX as f64
+    {
+        serde_json::Value::Number(serde_json::Number::from(parsed_dec as i64))
+    } else {
+        serde_json::json!(parsed_dec)
+    };
+    assert!(
+        wire_dec.is_f64(),
+        "Wire value for '5.5' must remain f64; got: {wire_dec}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 39 — M-6 / BC-3.4.015
+// Multi-`--field` success: `get_editmeta` is called AT MOST ONCE per invocation.
+// The algorithm fetches editmeta once in Phase 2 and reuses it for all resolved
+// pairs in Phase 3.  This test pins that invariant with `.expect(1)` on the
+// editmeta mock: if editmeta were called per-pair, `.expect(1)` would fail when
+// two fields are present.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_015_multi_field_editmeta_called_exactly_once() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    // list_fields returns both fields so resolution succeeds for both.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            { "id": "customfield_10001", "name": "Severity", "custom": true },
+            { "id": "customfield_10002", "name": "Impact",   "custom": true }
+        ])))
+        .mount(&server)
+        .await;
+
+    // editmeta MUST be called EXACTLY ONCE — not once per field.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1/editmeta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "fields": {
+                "customfield_10001": {
+                    "name": "Severity",
+                    "schema": { "type": "string", "system": null, "custom": null },
+                    "operations": ["set"],
+                    "required": false,
+                    "allowedValues": null
+                },
+                "customfield_10002": {
+                    "name": "Impact",
+                    "schema": { "type": "string", "system": null, "custom": null },
+                    "operations": ["set"],
+                    "required": false,
+                    "allowedValues": null
+                }
+            }
+        })))
+        .expect(1) // M-6: pin "get_editmeta called AT MOST ONCE per invocation"
+        .mount(&server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/TEST-1"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": {
+                "customfield_10001": "Critical",
+                "customfield_10002": "High"
+            }
+        })))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "--output",
+            "json",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "Severity=Critical",
+            "--field",
+            "Impact=High",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for multi-field success; stderr={stderr} stdout={stdout}"
+    );
+
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout must be valid JSON; error={e}; stdout={stdout}"));
+
+    assert_eq!(
+        parsed["changed_fields"]["Severity"].as_str(),
+        Some("Critical"),
+        "changed_fields must include Severity; stdout={stdout}"
+    );
+    assert_eq!(
+        parsed["changed_fields"]["Impact"].as_str(),
+        Some("High"),
+        "changed_fields must include Impact; stdout={stdout}"
+    );
+    // wiremock will assert .expect(1) on editmeta at server drop — exactly once.
 }

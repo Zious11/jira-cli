@@ -600,6 +600,32 @@ pub(super) async fn handle_edit(
         // (pre-HTTP guard, lines ~276-294) before execution reaches here.  No
         // duplicate check needed — any invocation with zero field flags exits before
         // this block is entered.
+        //
+        // BC-3.4.015 invariant 10: resolve_edit_fields MUST run INSIDE the dry-run
+        // block.  Resolution errors exit 64 (NOT suppressed by --dry-run).
+        // Gate A already rejected multi-key + --field, so effective_keys has exactly
+        // 1 element when field_pairs is non-empty.
+        //
+        // H-3(b): resolve_edit_fields runs BEFORE the plannedChanges JSON is emitted
+        // so that resolved --field entries can be merged into the `planned` map as
+        // part of the single coherent JSON object.
+        // H-3(a): table-mode --field echo uses println! (stdout), NOT eprintln!
+        // (stderr), so the entire planned-changes preview is on one stream.
+        let mut dr_changed: BTreeMap<String, String> = BTreeMap::new();
+        if !field_pairs.is_empty() {
+            let dr_key = &effective_keys[0];
+            let mut dr_fields = json!({});
+            helpers::resolve_edit_fields(
+                client,
+                &config.active_profile_name,
+                dr_key,
+                &field_pairs,
+                &mut dr_fields,
+                &mut dr_changed,
+            )
+            .await?;
+        }
+
         match output_format {
             OutputFormat::Json => {
                 // C-3: --output json must produce machine-readable JSON on stdout,
@@ -682,6 +708,11 @@ pub(super) async fn handle_edit(
                 if markdown {
                     planned.insert("markdown".into(), json!(true));
                 }
+                // H-3(b): merge resolved --field entries into plannedChanges BEFORE
+                // emitting the JSON object (resolve ran above, before this match arm).
+                for (field, value) in &dr_changed {
+                    planned.insert(field.clone(), json!(value));
+                }
                 let payload = json!({
                     "dryRun": true,
                     "issues": &effective_keys,
@@ -749,36 +780,11 @@ pub(super) async fn handle_edit(
                 if markdown {
                     println!("  markdown rendering: enabled");
                 }
-            }
-        }
-        // BC-3.4.015 invariant 10: resolve_edit_fields MUST be called inside the
-        // dry-run block. Resolution errors exit 64 (NOT suppressed by --dry-run).
-        // Gate A already rejected multi-key + --field, so effective_keys has 1 element here
-        // when field_pairs is non-empty.
-        if !field_pairs.is_empty() {
-            let dr_key = &effective_keys[0];
-            let mut dr_fields = json!({});
-            let mut dr_changed: BTreeMap<String, String> = BTreeMap::new();
-            helpers::resolve_edit_fields(
-                client,
-                &config.active_profile_name,
-                dr_key,
-                &field_pairs,
-                &mut dr_fields,
-                &mut dr_changed,
-            )
-            .await?;
-            // Emit resolved --field entries in the planned-changes preview.
-            match output_format {
-                OutputFormat::Table => {
-                    for (field, value) in &dr_changed {
-                        eprintln!("  {} \u{2192} {}", field, value);
-                    }
-                }
-                OutputFormat::Json => {
-                    // JSON dry-run already printed; this is a no-op for now — the
-                    // dry-run JSON shape is a human preview and --field entries are
-                    // captured in dr_changed for future extension.
+                // H-3(a): emit resolved --field entries to stdout (not stderr) so the
+                // entire planned-changes preview is on a single coherent stream.
+                // resolve ran above (before this match arm), so dr_changed is ready.
+                for (field, value) in &dr_changed {
+                    println!("  {} \u{2192} {}", field, value);
                 }
             }
         }

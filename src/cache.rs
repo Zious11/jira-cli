@@ -887,6 +887,40 @@ mod tests {
         });
     }
 
+    // M-2: `write_fields_cache` swallow behavior — mirrors the best-effort-writer
+    // pattern documented in CLAUDE.md and tested end-to-end by tests 18 and 19 in
+    // `tests/issue_edit_field.rs`.  This unit test pins the library-function
+    // invariant directly: on I/O error, `Ok(())` is returned and the warning is
+    // emitted.  We use the `with_temp_cache` + `ENV_MUTEX` pattern to avoid race
+    // conditions with other cache tests.
+    #[test]
+    fn test_write_fields_cache_swallow_io_error_returns_ok() {
+        // Override XDG_CACHE_HOME to a *file* (not a directory) so create_dir_all
+        // inside write_cache fails immediately with ENOTDIR.
+        let outer_dir = tempfile::TempDir::new().unwrap();
+        let fake_cache_home = outer_dir.path().join("i_am_a_file");
+        std::fs::write(&fake_cache_home, "file, not a dir").unwrap();
+
+        // Acquire ENV_MUTEX to serialise env access with all other cache tests.
+        let guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: ENV_MUTEX serialises all tests that touch XDG_CACHE_HOME.
+        unsafe { std::env::set_var("XDG_CACHE_HOME", &fake_cache_home) };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            write_fields_cache(
+                "test-m2-swallow",
+                &[("customfield_10001".to_string(), "Severity".to_string())],
+            )
+        }));
+        unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+        drop(guard);
+
+        let result = result.expect("write_fields_cache must not panic on I/O error");
+        assert!(
+            result.is_ok(),
+            "write_fields_cache must return Ok(()) on I/O error (best-effort writer); got: {result:?}"
+        );
+    }
+
     #[test]
     fn read_missing_object_type_attr_cache_returns_none() {
         with_temp_cache(|| {

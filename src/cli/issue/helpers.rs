@@ -615,9 +615,13 @@ pub(super) async fn resolve_asset(
 /// - `fields`: mutable reference to the shared `fields` JSON object that will
 ///   be PUT to Jira. Resolution results are merged in here (Step 5).
 /// - `changed_fields`: mutable reference to the human-readable echo map
-///   (`BTreeMap<String, String>`). Resolved pairs are inserted here after a
-///   successful PUT 204 is confirmed (Step 6). For option fields the value is
-///   the human label, not the option id.
+///   (`BTreeMap<String, String>`). Resolved pairs are inserted here INSIDE
+///   `resolve_edit_fields` BEFORE the PUT is issued (Step 6). The caller's
+///   discard-on-failure behaviour is realised by `edit_result?` short-circuiting
+///   before the `changed_fields` echo/JSON emission in `handle_edit`: if the
+///   PUT returns a non-2xx error, `?` propagates the error and the already-
+///   populated `changed_fields` is never echoed. For option fields the value
+///   is the human label, not the option id.
 ///
 /// # Errors
 /// Returns `Err` (which the caller propagates as exit 64) on any of:
@@ -674,8 +678,13 @@ pub(crate) async fn resolve_edit_fields(
 
     for (name, value) in field_pairs {
         // Step 1: customfield_NNNNN literal bypass.
-        let is_literal_bypass =
-            name.starts_with("customfield_") && name[12..].chars().all(|c| c.is_ascii_digit());
+        // BC-3.4.015 Step 1: requires `customfield_` followed by ONE OR MORE digits.
+        // `.all(...)` on an empty iterator returns true, so we must also check that
+        // the suffix is non-empty (name.len() > 12) to prevent `customfield_=VALUE`
+        // from triggering the bypass and landing on the wrong "not on Edit screen" error.
+        let is_literal_bypass = name.starts_with("customfield_")
+            && name.len() > "customfield_".len()
+            && name[12..].chars().all(|c| c.is_ascii_digit());
 
         if is_literal_bypass {
             // Literal: use NAME as-is; no list_fields() call.
@@ -876,8 +885,17 @@ pub(crate) async fn resolve_edit_fields(
                     .into());
                 }
 
-                // Option id bypass: if VALUE matches an allowedValues[].id exactly.
-                let id_match = allowed.iter().find(|av| av.id == *value);
+                // Option id bypass: if VALUE is a purely numeric string AND matches
+                // an allowedValues[].id exactly.  EC-3.4.016-4: id-bypass fires only
+                // for numeric strings.  Without the pre-filter, a label that happens to
+                // equal an option id would silently route through id-bypass, echoing the
+                // raw VALUE instead of the stored-casing label.  Mirroring the H-1
+                // customfield_NNNNN guard: non-empty + all-digits.
+                let id_match = if !value.is_empty() && value.chars().all(|c| c.is_ascii_digit()) {
+                    allowed.iter().find(|av| av.id == *value)
+                } else {
+                    None
+                };
                 if let Some(av) = id_match {
                     wire_value = serde_json::json!({"id": av.id});
                     // Echo raw value (no reverse label lookup) when id-bypass fires.
@@ -908,7 +926,8 @@ pub(crate) async fn resolve_edit_fields(
                             })
                             .collect();
                         return Err(crate::error::JrError::UserError(format!(
-                            "Option value '{value}' is ambiguous for field '{human_name}': {}.",
+                            "Option value '{value}' is ambiguous for field '{human_name}': {}. \
+                             Disambiguate via the option id (numeric).",
                             candidates.join(", ")
                         ))
                         .into());
