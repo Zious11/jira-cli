@@ -466,6 +466,12 @@ pub enum IssueCommand {
         /// Interpret description as Markdown
         #[arg(long)]
         markdown: bool,
+        /// Arbitrary custom field values as NAME=VALUE pairs (repeatable).
+        /// The first '=' splits name from value; subsequent '=' are part of the value.
+        /// Duplicate keys use the last value provided. Single-key path only (rejected
+        /// in bulk-edit context). See also: CLAUDE.md Gotchas — `--field` on issue edit.
+        #[arg(long = "field", action = clap::ArgAction::Append)]
+        field: Vec<String>,
     },
     /// Transition one or more issues to a new status
     ///

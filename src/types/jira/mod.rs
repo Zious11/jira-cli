@@ -1,6 +1,7 @@
 pub mod board;
 pub mod bulk;
 pub mod changelog;
+pub mod editmeta;
 pub mod issue;
 pub mod project;
 pub mod sprint;
@@ -11,6 +12,7 @@ pub mod worklog;
 pub use board::*;
 pub use bulk::*;
 pub use changelog::*;
+pub use editmeta::{AllowedValue, EditMeta, EditMetaField, EditMetaFieldSchema};
 pub use issue::*;
 pub use project::*;
 pub use sprint::*;

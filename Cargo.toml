@@ -47,6 +47,10 @@ insta = { version = "1", features = ["json"] }
 proptest = "1"
 # test-util enables tokio::time::pause() + start_paused = true for S-3.07 AC-001/AC-002
 tokio = { version = "1", features = ["test-util"] }
+# temp-env: scoped env-var overrides for cache-isolation tests (H-2 / S-396)
+temp-env = "0.3"
+# scopeguard: defer! for cleanup-on-panic in integration tests (L-7 / S-396)
+scopeguard = "1"
 
 [profile.release]
 opt-level = 3

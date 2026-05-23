@@ -1,6 +1,6 @@
 use crate::api::client::JiraClient;
 use crate::api::pagination::{CursorPage, OffsetPage};
-use crate::types::jira::{Comment, CreateIssueResponse, Issue, TransitionsResponse};
+use crate::types::jira::{Comment, CreateIssueResponse, EditMeta, Issue, TransitionsResponse};
 use anyhow::Result;
 use serde::Deserialize;
 use serde_json::Value;
@@ -445,6 +445,22 @@ impl JiraClient {
         let path = format!("/rest/api/3/issue/{}", urlencoding::encode(key));
         let body = serde_json::json!({ "fields": fields });
         self.put(&path, &body).await
+    }
+
+    /// Fetch the editmeta for an issue.
+    ///
+    /// `GET /rest/api/3/issue/{key}/editmeta` returns the set of fields that
+    /// are on the issue's agent Edit screen, including their schemas and
+    /// `allowedValues`. Called by `resolve_edit_fields` (BC-3.4.015 Step 3)
+    /// when `--field` is set; skipped entirely when `--field` is absent so
+    /// existing `issue edit` invocations are byte-for-byte unchanged in latency.
+    ///
+    /// The response is NOT cached — it is issue-specific and mutable (an admin
+    /// can change the Edit screen at any time), so caching risks stale
+    /// `allowedValues` producing wrong option IDs on the wire.
+    pub async fn get_editmeta(&self, key: &str) -> Result<EditMeta> {
+        let path = format!("/rest/api/3/issue/{}/editmeta", urlencoding::encode(key));
+        self.get(&path).await
     }
 
     /// Get available transitions for an issue.

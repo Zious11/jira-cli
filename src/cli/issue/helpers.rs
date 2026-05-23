@@ -596,6 +596,9 @@ pub(super) async fn resolve_asset(
     }
 }
 
+/// Re-exported from `field_resolve` — see that module for the full algorithm
+/// doc (BC-3.4.015/BC-3.4.016 Steps 1–6).
+pub(crate) use super::field_resolve::resolve_edit_fields;
 #[cfg(test)]
 mod tests {
     use super::*;

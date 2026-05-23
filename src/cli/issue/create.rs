@@ -319,10 +319,15 @@ pub(super) async fn handle_edit(
         description,
         description_stdin,
         markdown,
+        field: field_raw,
     } = command
     else {
         unreachable!()
     };
+
+    // Parse --field NAME=VALUE pairs into a HashMap (last-wins on duplicate keys).
+    // Per EC-3.4.017-10: duplicate keys are collapsed here before resolve_edit_fields sees them.
+    let field_pairs = parse_field_kv(&field_raw)?;
 
     // Validate: at least one selector must be present (keys or --jql).
     // clap doesn't enforce this natively since both are optional — we validate here.
@@ -378,13 +383,52 @@ pub(super) async fn handle_edit(
             || parent.is_some()
             || no_parent
             || description.is_some()
-            || description_stdin;
+            || description_stdin
+            || !field_pairs.is_empty(); // S-396: --field NAME=VALUE pairs
         if !has_any_field_change {
             return Err(JrError::UserError(
                 "No fields specified to update. Use --summary, --type, --priority, --label, \
-                 --team, --points, --no-points, --parent, --no-parent, --description, or \
-                 --description-stdin."
+                 --team, --points, --no-points, --parent, --no-parent, --description, \
+                 --description-stdin, or --field NAME=VALUE."
                     .into(),
+            )
+            .into());
+        }
+    }
+
+    // --- Gate B: flag-overlap detection (BC-3.4.017). ---
+    // Fires before any HTTP call when a dedicated flag AND --field target the same
+    // system field. Covers exactly 4 first-party flags: summary, description,
+    // issuetype (--type flag), priority. Team and points use dynamically-resolved
+    // IDs; overlap detection for those is deferred to v2 (requires an API call,
+    // breaking the "no HTTP before the guard" invariant).
+    if !field_pairs.is_empty() {
+        let field_keys_lower: std::collections::HashSet<String> =
+            field_pairs.keys().map(|k| k.to_lowercase()).collect();
+        if summary.is_some() && field_keys_lower.contains("summary") {
+            return Err(JrError::UserError(
+                "summary is set by both --summary and --field; use only one.".into(),
+            )
+            .into());
+        }
+        if (description.is_some() || description_stdin) && field_keys_lower.contains("description")
+        {
+            return Err(JrError::UserError(
+                "description is set by both --description / --description-stdin and --field; \
+                 use only one."
+                    .into(),
+            )
+            .into());
+        }
+        if issue_type.is_some() && field_keys_lower.contains("issuetype") {
+            return Err(JrError::UserError(
+                "issuetype is set by both --type and --field; use only one.".into(),
+            )
+            .into());
+        }
+        if priority.is_some() && field_keys_lower.contains("priority") {
+            return Err(JrError::UserError(
+                "priority is set by both --priority and --field; use only one.".into(),
             )
             .into());
         }
@@ -537,6 +581,9 @@ pub(super) async fn handle_edit(
         if markdown {
             unsupported.push("--markdown");
         }
+        if !field_pairs.is_empty() {
+            unsupported.push("--field");
+        }
         if !unsupported.is_empty() {
             return Err(JrError::UserError(format!(
                 "Multi-key bulk edit doesn't yet support: {}. \
@@ -553,6 +600,32 @@ pub(super) async fn handle_edit(
         // (pre-HTTP guard, lines ~276-294) before execution reaches here.  No
         // duplicate check needed — any invocation with zero field flags exits before
         // this block is entered.
+        //
+        // BC-3.4.015 invariant 10: resolve_edit_fields MUST run INSIDE the dry-run
+        // block.  Resolution errors exit 64 (NOT suppressed by --dry-run).
+        // Gate A already rejected multi-key + --field, so effective_keys has exactly
+        // 1 element when field_pairs is non-empty.
+        //
+        // H-3(b): resolve_edit_fields runs BEFORE the plannedChanges JSON is emitted
+        // so that resolved --field entries can be merged into the `planned` map as
+        // part of the single coherent JSON object.
+        // H-3(a): table-mode --field echo uses println! (stdout), NOT eprintln!
+        // (stderr), so the entire planned-changes preview is on one stream.
+        let mut dr_changed: BTreeMap<String, String> = BTreeMap::new();
+        if !field_pairs.is_empty() {
+            let dr_key = &effective_keys[0];
+            let mut dr_fields = json!({});
+            helpers::resolve_edit_fields(
+                client,
+                &config.active_profile_name,
+                dr_key,
+                &field_pairs,
+                &mut dr_fields,
+                &mut dr_changed,
+            )
+            .await?;
+        }
+
         match output_format {
             OutputFormat::Json => {
                 // C-3: --output json must produce machine-readable JSON on stdout,
@@ -635,6 +708,11 @@ pub(super) async fn handle_edit(
                 if markdown {
                     planned.insert("markdown".into(), json!(true));
                 }
+                // H-3(b): merge resolved --field entries into plannedChanges BEFORE
+                // emitting the JSON object (resolve ran above, before this match arm).
+                for (field, value) in &dr_changed {
+                    planned.insert(field.clone(), json!(value));
+                }
                 let payload = json!({
                     "dryRun": true,
                     "issues": &effective_keys,
@@ -701,6 +779,12 @@ pub(super) async fn handle_edit(
                 }
                 if markdown {
                     println!("  markdown rendering: enabled");
+                }
+                // H-3(a): emit resolved --field entries to stdout (not stderr) so the
+                // entire planned-changes preview is on a single coherent stream.
+                // resolve ran above (before this match arm), so dr_changed is ready.
+                for (field, value) in &dr_changed {
+                    println!("  {} \u{2192} {}", field, value);
                 }
             }
         }
@@ -869,9 +953,25 @@ pub(super) async fn handle_edit(
         changed_fields.insert("parent".into(), "(cleared)".into());
     }
 
+    // BC-3.4.015 invariant 10 (live path): resolve_edit_fields on the live path.
+    // Errors here (field not found, absent from editmeta, bad type, etc.) exit 64
+    // BEFORE the PUT is issued (all-or-nothing semantics per EC-3.4.015-12).
+    if !field_pairs.is_empty() {
+        helpers::resolve_edit_fields(
+            client,
+            &config.active_profile_name,
+            key,
+            &field_pairs,
+            &mut fields,
+            &mut changed_fields,
+        )
+        .await?;
+        has_updates = true;
+    }
+
     if !has_updates {
         bail!(
-            "No fields specified to update. Use --summary, --type, --priority, --label, --team, --points, --no-points, --parent, --no-parent, --description, or --description-stdin."
+            "No fields specified to update. Use --summary, --type, --priority, --label, --team, --points, --no-points, --parent, --no-parent, --description, --description-stdin, or --field NAME=VALUE."
         );
     }
 
@@ -1460,6 +1560,7 @@ mod tests {
             "description",
             "description_stdin",
             "markdown",
+            "field", // --field NAME=VALUE (S-396): single-key only (BC-3.4.017 Gate A)
         ]
         .into_iter()
         .collect();
