@@ -690,6 +690,23 @@ pub(crate) async fn resolve_edit_fields(
             // Literal: use NAME as-is; no list_fields() call.
             resolved.push((name.clone(), name.clone(), value.clone()));
         } else {
+            // EC-3.4.015-9: empty NAME guard.  `--field =VALUE` (no name before `=`)
+            // is parsed by `parse_field_kv` into ("", VALUE).  Without this check,
+            // `name_lower = ""` and `String::contains("")` returns true for EVERY
+            // field name, causing a silent single-field match on 1-field instances or a
+            // confusing "ambiguous" error listing every field on multi-field instances.
+            // Both violate EC-3.4.015-9 which requires a zero-match error with an
+            // actionable hint.
+            if name.is_empty() {
+                return Err(crate::error::JrError::UserError(
+                    "Field '' not found. The field name before '=' must not be empty. \
+                     Check the field name with `jr project fields --output json` to list \
+                     available fields. Zero matches for ''."
+                        .into(),
+                )
+                .into());
+            }
+
             // Step 2: load or fetch the field list (once per invocation, shared).
             // Algorithm: try on-disk cache; if field is found there, use it.
             // If field is NOT found in the on-disk cache (cache may be stale/

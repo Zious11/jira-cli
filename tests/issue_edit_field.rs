@@ -2584,3 +2584,64 @@ async fn test_bc_3_4_015_multi_field_editmeta_called_exactly_once() {
     );
     // wiremock will assert .expect(1) on editmeta at server drop — exactly once.
 }
+
+// ---------------------------------------------------------------------------
+// Test 40 — F-1 / EC-3.4.015-9
+// `--field =VALUE` (empty NAME) exits 64 via the zero-match error path, not
+// via the substring "ambiguous" path.
+//
+// Root cause: `name_lower = ""` and `String::contains("")` is true for EVERY
+// string, so on a 1-field instance the empty name silently resolved to that
+// field; on a multi-field instance it produced a confusing "ambiguous" error
+// listing every field.  The fix adds an explicit empty-NAME guard before the
+// substring matcher is reached.
+//
+// Assertions:
+//   • exit code 64
+//   • stderr does NOT contain "ambiguous" or "matches:" (substring path NOT taken)
+//   • stderr contains the zero-match / actionable hint text
+//
+// The list_fields mock returns MULTIPLE fields so the assertion is genuine
+// on a realistic multi-field instance (the bug manifested as "ambiguous" there).
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_015_ec_009_empty_name_exits_64_via_zero_match() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    // Multiple fields — on the unfixed code this would produce the confusing
+    // "ambiguous — matches: ..." error listing every field because "" is a
+    // substring of every field name.  No HTTP call is expected; the guard fires
+    // before the field-list fetch.
+    // We do NOT mount list_fields here — the guard must fire before any HTTP.
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["--no-input", "issue", "edit", "TEST-1", "--field", "=foo"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 for empty-NAME --field; stderr={stderr}"
+    );
+
+    // Must NOT be the ambiguous/substring-match path.
+    assert!(
+        !stderr.contains("ambiguous") && !stderr.contains("matches:"),
+        "Stderr must NOT contain ambiguous/matches: text — substring path must not fire; \
+         stderr={stderr}"
+    );
+
+    // Must be a zero-match / not-found style message.
+    assert!(
+        stderr.contains("not found")
+            || stderr.contains("not be empty")
+            || stderr.contains("Zero matches"),
+        "Stderr must contain a zero-match or empty-NAME hint; stderr={stderr}"
+    );
+}
