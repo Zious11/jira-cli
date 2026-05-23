@@ -2,6 +2,7 @@ mod assets;
 mod changelog;
 mod comments;
 mod create;
+mod field_resolve;
 mod format;
 mod helpers;
 mod json_output;

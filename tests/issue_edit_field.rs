@@ -2645,3 +2645,157 @@ async fn test_bc_3_4_015_ec_009_empty_name_exits_64_via_zero_match() {
         "Stderr must contain a zero-match or empty-NAME hint; stderr={stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Test 41 — M-8 mutation kill / BC-3.4.017 Gate B boundary
+// `--field summary=X` WITHOUT `--summary` must NOT trigger Gate B.
+// Gate B fires only when BOTH sides are true: `summary.is_some() &&
+// field_keys_lower.contains("summary")`.  Without the right-side field name
+// present in the flag set, the guard must not fire.
+//
+// Mutation target: `src/cli/issue/create.rs:408` (replace && with ||).
+// If && is replaced with ||, the presence of "summary" in field_keys alone
+// would trigger Gate B even without --summary.  This test would then see exit
+// 64 with the conflict error and fail, killing the mutant.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_017_field_summary_without_flag_does_not_trigger_gate_b() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    // list_fields and editmeta must be called — Gate B must NOT have fired.
+    mount_list_fields(&server, "customfield_10000", "summary").await;
+    mount_editmeta_string(&server, "TEST-1", "customfield_10000", "summary").await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/TEST-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "summary=New title",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Gate B must NOT fire — exit must be 0, not 64.
+    assert!(
+        output.status.success(),
+        "Gate B must NOT fire for --field summary=X without --summary; stderr={stderr}"
+    );
+
+    // Must NOT contain the Gate B conflict message.
+    assert!(
+        !stderr.contains("summary is set by both"),
+        "Must NOT emit Gate B conflict error; stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 42 — M-9 mutation kill / BC-3.4.017 Gate B boundary
+// `--field description=X` WITHOUT `--description` must NOT trigger Gate B.
+// Gate B fires only when BOTH sides are true:
+// `(description.is_some() || description_stdin) && field_keys_lower.contains("description")`.
+//
+// Mutation target: `src/cli/issue/create.rs:414` (replace && with ||).
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_017_field_description_without_flag_does_not_trigger_gate_b() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    mount_list_fields(&server, "customfield_10001", "description").await;
+    mount_editmeta_string(&server, "TEST-1", "customfield_10001", "description").await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/TEST-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "description=some text",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "Gate B must NOT fire for --field description=X without --description; stderr={stderr}"
+    );
+
+    assert!(
+        !stderr.contains("description is set by both"),
+        "Must NOT emit Gate B conflict error; stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 43 — M-10 mutation kill / BC-3.4.017 Gate B boundary
+// `--field priority=X` WITHOUT `--priority` must NOT trigger Gate B.
+// Gate B fires only when BOTH sides are true: `priority.is_some() &&
+// field_keys_lower.contains("priority")`.
+//
+// Mutation target: `src/cli/issue/create.rs:429` (replace && with ||).
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_017_field_priority_without_flag_does_not_trigger_gate_b() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    mount_list_fields(&server, "customfield_10002", "priority").await;
+    mount_editmeta_string(&server, "TEST-1", "customfield_10002", "priority").await;
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/TEST-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "priority=High",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "Gate B must NOT fire for --field priority=X without --priority; stderr={stderr}"
+    );
+
+    assert!(
+        !stderr.contains("priority is set by both"),
+        "Must NOT emit Gate B conflict error; stderr={stderr}"
+    );
+}
