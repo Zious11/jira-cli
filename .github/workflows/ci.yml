@@ -68,7 +68,7 @@ jobs:
       - uses: taiki-e/install-action@e5de28abeb52d916c5e5875d54b21a9e738b61ec  # cargo-llvm-cov
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
       - run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
-      - uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2  # v6
+      - uses: codecov/codecov-action@e79a6962e0d4c0c17b229090214935d2e33f8354  # v6
         with:
           files: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
