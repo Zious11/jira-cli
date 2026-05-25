@@ -442,6 +442,11 @@ pub(super) async fn handle_edit(
     // silently discard the fields.
     // Mixed label + field bulk edits require the schema-correct combined payload tracked
     // at #331; until that lands, keep --label and field flags mutually exclusive.
+    // NOTE: the variable name 'conflicting' is reserved for this block —
+    // test_label_conflict_block_lists_every_relevant_flag uses a global scan of
+    // conflicting.push("--...") in create.rs. If a future cycle introduces a second
+    // 'conflicting' variable elsewhere in this file, re-scope the meta-test to
+    // brace-matched extraction.
     if !labels.is_empty() {
         let mut conflicting: Vec<&str> = Vec::new();
         if summary.is_some() {
@@ -1811,6 +1816,160 @@ pub enum IssueCommand {
         );
 
         fields
+    }
+
+    // -------------------------------------------------------------------------
+    // EC-3.4.017-14 — structural meta-test: --label conflict block completeness
+    // -------------------------------------------------------------------------
+
+    /// Meta-test: the `--label` conflict block in `handle_edit` (create.rs) MUST
+    /// enumerate every flag in `(BULK_SUPPORTED \ {"label"}) ∪ REJECTED_IN_BULK`.
+    ///
+    /// Strategy:
+    /// - Read the source of this file via `include_str!("create.rs")`.
+    /// - Globally scan for every `conflicting.push("--<flag>")` literal (safe
+    ///   because the variable name `conflicting` is reserved by the guard comment
+    ///   at the `if !labels.is_empty()` block — see AC-014).
+    /// - Build the expected set from the same constants used in
+    ///   `test_343_every_edit_field_is_categorized`, applying the one non-mechanical
+    ///   rename: `issue_type → "--type"` (the `#[arg(long = "type")]` override).
+    /// - Assert set equality with a clear failure message.
+    ///
+    /// Failure modes caught:
+    /// - Any `conflicting.push` line is deleted → extracted set loses a member → FAIL.
+    /// - A new flag is added to BULK_SUPPORTED or REJECTED_IN_BULK without extending
+    ///   the conflict block → expected set grows, extracted set does not → FAIL.
+    ///
+    /// Closes EC-3.4.017-14 (S-407).
+    #[test]
+    fn test_label_conflict_block_lists_every_relevant_flag() {
+        let source = include_str!("create.rs");
+
+        // Extract every `conflicting.push("--<flag>")` literal from the entire file.
+        // The guard comment at the `conflicting` variable declaration (AC-014) ensures
+        // this name is ONLY used within the --label mutual-exclusion block, so a global
+        // scan is unambiguous.
+        let extracted: BTreeSet<String> = source
+            .lines()
+            .filter_map(|line| {
+                let trimmed = line.trim();
+                // Match lines of the form: conflicting.push("--<flag>");
+                if let Some(rest) = trimmed.strip_prefix("conflicting.push(\"") {
+                    if let Some(flag) = rest.strip_suffix("\");") {
+                        if flag.starts_with("--") {
+                            return Some(flag.to_string());
+                        }
+                    }
+                }
+                None
+            })
+            .collect();
+
+        // Expected set: (BULK_SUPPORTED \ {"label"}) ∪ REJECTED_IN_BULK, mapped to
+        // kebab-case CLI flag names. The one non-mechanical rename: issue_type → "--type"
+        // (carries #[arg(long = "type")] in src/cli/mod.rs). All others: snake→kebab.
+        let expected: BTreeSet<String> = [
+            // BULK_SUPPORTED \ {"label"}  (label is the outer guard, not a pushed entry)
+            "--summary",  // summary
+            "--type",     // issue_type — explicit long = "type" override
+            "--priority", // priority
+            // REJECTED_IN_BULK
+            "--parent",
+            "--no-parent", // no_parent → no-parent
+            "--team",
+            "--points",
+            "--no-points", // no_points → no-points
+            "--description",
+            "--description-stdin", // description_stdin → description-stdin
+            "--markdown",
+            "--field",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+        assert_eq!(
+            extracted,
+            expected,
+            "\n\
+             --label conflict block is out of sync with (BULK_SUPPORTED \\ {{\"label\"}}) ∪ REJECTED_IN_BULK.\n\
+             \n\
+             Flags in expected but NOT in conflict block (missing push lines):\n  {:?}\n\
+             \n\
+             Flags in conflict block but NOT in expected (spurious push lines):\n  {:?}\n\
+             \n\
+             If you added a new Edit flag, extend the --label conflict block in handle_edit\n\
+             and update the expected set in this test. If you removed a flag, remove it from both.\n\
+             Closes EC-3.4.017-14.",
+            expected.difference(&extracted).collect::<Vec<_>>(),
+            extracted.difference(&expected).collect::<Vec<_>>(),
+        );
+    }
+
+    /// R2 pin: the `conflicting.push` extractor correctly identifies exactly 12 flags
+    /// from the current source of create.rs. This test pins the extractor against the
+    /// actual file — if the extraction logic regresses (e.g., formatting drift changes
+    /// the pattern), this fails distinctly from the set-equality meta-test.
+    ///
+    /// The 12 expected members are:
+    ///   --field, --summary, --priority, --type, --team, --points, --no-points,
+    ///   --parent, --no-parent, --description, --description-stdin, --markdown
+    ///
+    /// Closes EC-3.4.017-14 (R2 pin, S-407 AC-013).
+    #[test]
+    fn test_label_conflict_block_extractor_pin_12_members() {
+        let source = include_str!("create.rs");
+
+        let extracted: BTreeSet<String> = source
+            .lines()
+            .filter_map(|line| {
+                let trimmed = line.trim();
+                if let Some(rest) = trimmed.strip_prefix("conflicting.push(\"") {
+                    if let Some(flag) = rest.strip_suffix("\");") {
+                        if flag.starts_with("--") {
+                            return Some(flag.to_string());
+                        }
+                    }
+                }
+                None
+            })
+            .collect();
+
+        // The 12 current --label conflict block entries (as of S-407).
+        // If the count changes, update both this test AND the meta-test above.
+        let expected_12: BTreeSet<String> = [
+            "--field",
+            "--summary",
+            "--priority",
+            "--type",
+            "--team",
+            "--points",
+            "--no-points",
+            "--parent",
+            "--no-parent",
+            "--description",
+            "--description-stdin",
+            "--markdown",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+        assert_eq!(
+            extracted.len(),
+            12,
+            "R2 pin: expected exactly 12 conflicting.push entries in create.rs, found {}.\n\
+             Current extracted set: {:?}",
+            extracted.len(),
+            extracted,
+        );
+
+        assert_eq!(
+            extracted, expected_12,
+            "R2 pin: extracted flag set does not match the 12 expected members.\n\
+             Extracted: {:?}\nExpected: {:?}",
+            extracted, expected_12,
+        );
     }
 }
 
