@@ -11,7 +11,7 @@ input-hash: "[live-state]"
 traces_to: ""
 project: jira-cli
 mode: BROWNFIELD
-current_step: "issue-407-F4-in-progress"
+current_step: "issue-407-F5-CONVERGED-F6-pending"
 current_cycle: "cycle-001"
 dtu_required: false
 phase_2_status: APPROVED
@@ -36,7 +36,7 @@ activation_version: "v0.5.0-dev.7"
 | **Language** | Rust |
 | **Target Workspace** | develop → main |
 | **Started** | 2026-05-04 |
-| **Last Updated** | 2026-05-25 — Issue #407 F2 COMPLETE / adversarial CONVERGED (4 passes, 3 consecutive CLEAN). F1 PASSED (human-approved). Awaiting F2 human gate. (Prior: #396 CYCLE CLOSED 2026-05-25 — PR #401 @ 2f61566 + FIX-F5-001 PR #406 @ 699a5fd.) |
+| **Last Updated** | 2026-05-25 — Issue #407 F5 CONVERGED (3 passes, all CLEAN, no fix-PRs; trajectory 4→0→0). O-1/O-2 routed to #408. AWAITING F6. (Prior: F2/F3/F4 PASSED; #396 CYCLE CLOSED — PR #401 @ 2f61566 + FIX-F5-001 PR #406 @ 699a5fd.) |
 | **Current Phase** | Phase 3 — TDD Implementation **IN PROGRESS** — Wave 3 CLOSED (10/10). Feature Mode #110-pr2 COMPLETE. PRs #355–#364, #366–#367, #369–#373 MERGED. **0 audit-followups remain** (#331 sandbox-blocked deferred; #333 closed by PR #360; #340 closed by PR #370; #345 closed by PR #371; #346 closed by PR #373; #350 closed by PR #362; #361 closed by PR #364; #365 closed by PR #367; PG-365-1 closed by PR #369). **#383 DELIVERED PR #390 @ 25f7211 (2026-05-19)**. **#392 DELIVERED PR #393 @ 0be2e3a (2026-05-20)**. **#384 DELIVERED PR #394 @ b36b291 (2026-05-20)**: F3+F4 complete; 4 new BCs (BC-3.8.014/015, BC-X.8.006/007); spec v1.1.0 (573 BCs); F4 adversary 3/3 CLEAN; Copilot 3 cycles →0; issue #384 closed. Remaining open: #210, #331, #372, #385, #387. |
 | **Next Phase** | Wave 3 — 10 stories (S-3.01..S-3.10) |
 | **Activation HEAD** | dea166471e22eff55974d7675593469b37048c5f (v0.5.0-dev.7) |
@@ -88,7 +88,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | issue-398 (Feature Mode) | **ALL PHASES COMPLETE — CYCLE CLOSED (human-authorized F7 2026-05-22).** PR #399 @ b49f2fd; issue #398 CLOSED. F5: CONVERGED — 3 consecutive clean passes (no CRITICAL/HIGH). F6: PASS — mutation 100% (3/3 caught, zero surviving), Kani + fuzz JUSTIFIED-SKIP, cargo audit 0 vulns, cargo deny clean, no new dependencies, full regression clean (modulo pre-existing `multi_cloudid_disambiguation` macOS-keychain flake). F7: all 5 dimensions PASS (Spec, Test, Implementation, Verification, Holdout). MAXIMUM_VIABLE_REFINEMENT reached. Ships with next batched develop→main release (no release cut now). Follow-up: #400 filed for TH-398-1..4 + PG-398-1..5. | 2026-05-22 | 2026-05-22 | F1–F7 ALL COMPLETE — CYCLE CLOSED | F2 adv: 16 passes, 3/3 CLEAN (P14/15/16). F4 adv: 3/3 CLEAN (1 false-alarm PG-398-4 discarded). F5: 3 consecutive clean. F6: 100% mutation kill. F7: 5/5 PASS. |
 | issue-396 (Feature Mode) | **ALL PHASES COMPLETE — CYCLE CLOSED (human-authorized F7 2026-05-25).** PR #401 @ 2f61566 + FIX-F5-001 PR #406 @ 699a5fd; issue #396 CLOSED. F5 CONVERGED: 4 passes, passes 2/3/4 CLEAN; pass 1 HIGH (silent-drop `--label`+`--field`) → FIX-F5-001. F6 PASS: mutation 100% (15/15 viable), cargo-deny + audit 0 vulns, regression 1459/0. F7: all 5 dimensions PASS, MAXIMUM_VIABLE_REFINEMENT_REACHED. Follow-ups #407–#410 filed. Ships with next batched develop→main release. | 2026-05-22 | 2026-05-25 | F1–F7 ALL COMPLETE — CYCLE CLOSED | F2 adv: 9 passes, 3/3 CLEAN (P7/P8/P9). F4 adv: 5 passes, 3/3 CLEAN (P3/P4/P5). F5 adv: 4 passes, 3/3 CLEAN (P2/P3/P4). F6: 100% mutation kill. F7: 5/5 PASS. |
 | issue-396-FIX-F5-001 | **CLOSED — PR #406 squash-merged @ 699a5fd (2026-05-25); EC-3.4.017-13 committed factory-artifacts @ 9e61c05.** F5 pass 1 found 1 HIGH (silent-drop of `--label` + `--field` on platform non-JSM path). Fix: `--field` added to `--label` conflict block; exit 64 guard + integration test. Spec amendment: EC-3.4.017-13 in bc-3-issue-write.md. | 2026-05-25 | 2026-05-25 | CLOSED/DELIVERED | F5 pass 1: 1 HIGH (silent-drop). Fix-PR #406 @ 699a5fd. Spec @ 9e61c05. |
-| issue-407 (Feature Mode) | **F2 PASSED (human-approved 2026-05-25). F3 PASSED (human-approved 2026-05-25). F4 IN PROGRESS.** Test-hardening: `--label` conflict-block positive regression coverage + structural meta-test. F2: EC-3.4.017-14 added to BC-3.4.017. F3: S-407 created — 16 ACs, 12 test deliverables, 1 SP, LOW criticality. STORY-INDEX total_stories 46→47. | 2026-05-25 | | F4 in-progress | F2 adv: 4 passes, 3/3 CLEAN (P2/P3/P4). Trajectory: 7→2→1→2 (all LOW). |
+| issue-407 (Feature Mode) | **F5 CONVERGED (2026-05-25) — 3 passes, all CLEAN, no fix-PRs.** Test-hardening: `--label` conflict-block positive regression coverage + structural meta-test. F2: EC-3.4.017-14 added to BC-3.4.017. F3: S-407 created — 16 ACs, 12 test deliverables, 1 SP, LOW criticality. STORY-INDEX 46→47. **AWAITING F6.** | 2026-05-25 | | F5 CONVERGED | F2 adv: 4 passes, 3/3 CLEAN (P2/P3/P4). Trajectory: 7→2→1→2 (all LOW). F5: 4→0→0 (3 passes, 3/3 CLEAN). |
 | issue-385 (F1–F7) | **F1–F7 COMPLETE — PR #395 merged f7fc8c3, issue CLOSED 2026-05-20.** F1 (enhancement, standard scope). F2: 2 new BCs (BC-3.8.016/017), 3 modified (BC-3.8.002/010/011), 2 holdouts (H-NEW-JSM-RT-006/007), spec v1.2.0 (575 BCs), adv 3/3 CLEAN (19 passes). F3: S-385 decomposed (1 story, 5 SP, 7 ACs), adv 3/3 CLEAN (12 passes). F4: PR #395 delivered, Red Gate verified, all 4 O-08 fixes in handle_jsm_create. F7: traceability VERIFIED (4 fixes → 5 BCs → 7 test deliverables → merged code @ f7fc8c3). 7 process-gaps PG-385-1..7 JUSTIFIED DEFERRALS. Cycle CLOSED. | 2026-05-20 | 2026-05-20 | F7 CLOSED — F1–F7 COMPLETE; all 3 spec guards PASS | F2: 19 passes, 3/3 CLEAN \| F3 adv: 12 passes, 3/3 CLEAN \| F4 adv: 3/3 CLEAN \| Copilot: 3 rounds →0 |
 | 4: Holdout Evaluation | not-started | | | | |
 | 5: Adversarial Refinement | not-started | | | | |
@@ -105,7 +105,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | #396 F6 PASS + F7 PASS + CYCLE CLOSED (human-authorized 2026-05-25) | state-manager | complete | F6: Mutation 100% (15/15 viable caught). cargo-audit 0 vulns, cargo-deny clean. Regression 1459/0. F7: all 5 dimensions PASS. MAXIMUM_VIABLE_REFINEMENT_REACHED. PR #401 @ 2f61566 + FIX-F5-001 PR #406 @ 699a5fd. Issue #396 CLOSED. Follow-ups #407–#410 filed. |
 | #396 CYCLE CLOSED — 5 lessons codified (PG-396-1..5); factory-artifacts committed | state-manager | complete | Lessons PG-396-1 (silent-drop recurring 2×), PG-396-2 (line-anchor citation drift), PG-396-3 (test isolation), PG-396-4 (best-effort writer style), PG-396-5 (tautological tests recurring 3×) codified in cycles/cycle-001/lessons.md. |
 | #407 F2 PASSED (human-approved 2026-05-25) + F3 PASSED (human-approved 2026-05-25) | state-manager | complete | F2: EC-3.4.017-14 added to BC-3.4.017; adversarial 4 passes, 3/3 CLEAN. F3: S-407 created (16 ACs, 12 test deliverables, 1 SP, LOW criticality, tdd, depends_on S-396). STORY-INDEX total_stories 46→47. |
-| #407 F4 Delta Implementation IN PROGRESS | state-manager | in-progress | F4 started 2026-05-25. BC anchor BC-3.4.017, EC anchor EC-3.4.017-14. Implementing: `--label` conflict-block positive regression tests + structural meta-test via `include_str!`. |
+| #407 F5 CONVERGED — 3 passes, all CLEAN, no fix-PRs; O-1/O-2 routed to #408 | state-manager | complete | F5 trajectory: 4 LOW → 0 → 0. 12/12 conflict-block entries covered. Meta-test (EC-3.4.017-14) mechanically enforces invariant. AWAITING F6. |
 
 ## Decisions Log
 
@@ -323,6 +323,12 @@ _4 passes total. Convergence at passes 2/3/4 (3 consecutive CLEAN). Trajectory: 
 
 _Artifacts: `.factory/phase-f1-delta-analysis/issue-407/`, `.factory/phase-f1-delta-analysis/affected-files-407.txt`, `.factory/phase-f2-spec-evolution/prd-delta-407.md`, `adversarial-407-pass-1..4.md`, `consistency-audit-407.md`._
 
+### Issue #407 — F5 Scoped Adversarial Review CONVERGED (2026-05-25)
+
+_3 passes total. Convergence at passes 1/2/3 (3 consecutive CLEAN). Trajectory: 4→0→0 (LOW observation count per pass). No CRITICAL/HIGH/MEDIUM at any pass. No fix-PRs needed — implementation passed clean from the start. Pass 1: 4 LOW informational observations (O-1: stale code-comment line citation in test_343 — routed to #408; O-2: stale spec line citation in EC-3.4.017-10 — routed to #408; O-3: single-line-only extractor fragility with R2 pin as safety net — intentional; O-4: 12/12 coverage positive confirmation). Passes 2/3: 0 findings (novelty: NONE). Spec fidelity high; meta-test (EC-3.4.017-14) mechanically enforces BC-3.4.017 invariant 2; bidirectional test coverage 12/12. AWAITING F6._
+
+_Full pass reports: `.factory/phase-f5-adversarial/issue-407/`._
+
 ### Phase 5-adv — Adversarial Refinement
 _Not started._
 
@@ -332,8 +338,8 @@ _Not started._
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-25 |
-| **Position** | **Issue #407 F2 COMPLETE — AWAITING F2 HUMAN GATE.** F1 PASSED (human-approved; approach b: dedicated meta-test via `include_str!` source-text parsing). F2 spec evolution: EC-3.4.017-14 added to BC-3.4.017; invariant 2 updated with cross-ref; 0 new BCs/VPs; BC counts unchanged: 583 / bc-3: 103. Adversarial CONVERGED: 4 passes, 3/3 CLEAN (P2/P3/P4), trajectory 7→2→1→2 (all LOW). Consistency audit CONSISTENT. All 3 spec guards exit 0. Frontmatter dates advanced 2026-05-25. **Active cycle: #407.** Next action: human gate decision on F2, then proceed to F3 story decomposition. Open backlog (other): #210, #327, #331, #368, #372, #387, #400, #408, #409, #410. |
-| **Convergence counter** | #407 F2 adversarial: 4 passes, 3/3 CLEAN (P2/P3/P4). BC corpus: 583 BCs (unchanged). Story corpus: 46 stories. |
+| **Position** | **Issue #407 F5 CONVERGED — AWAITING F6.** F1/F2/F3 PASSED (human-approved). F4 COMPLETE (implementation delivered). F5 CONVERGED: 3 passes, all CLEAN, no fix-PRs; trajectory 4→0→0 (LOW count); 12/12 conflict-block entries covered; meta-test EC-3.4.017-14 mechanically enforces invariant 2. O-1/O-2 (stale line-anchor citations) routed to #408 — not new drift items. **Active cycle: #407.** Next action: F6 Formal Hardening. Open backlog (other): #210, #327, #331, #368, #372, #387, #400, #408, #409, #410. |
+| **Convergence counter** | #407 F5: 3 passes, 3/3 CLEAN (P1/P2/P3). BC corpus: 583 BCs (unchanged). Story corpus: 47 stories. |
 
 ## Post-Cycle Housekeeping (2026-05-19)
 
@@ -362,7 +368,7 @@ Events after issue #288 epic closeout (factory-artifacts @ 7dbbfed):
 | #398 | issue edit/create confirmation echoes changed fields | **CLOSED — DELIVERED (PR #399 @ b49f2fd)** | MEDIUM | F1–F7 ALL COMPLETE — CYCLE CLOSED (human-authorized 2026-05-22). BC-3.4.012/013/014 + VP-398-001..006; 580 BCs. F5 CONVERGED (3 clean), F6 100% mutation, F7 5/5 PASS. Ships with next batched develop→main release. |
 | #400 | Test-hardening + process-gap follow-ups from #398 | OPEN | LOW | Filed 2026-05-22 — non-blocking, future maintenance sweep. Tracks TH-398-1..4 (test-hardening items) + PG-398-1..5 (process-gap codifications). |
 | #396 | `jr issue edit --field NAME=VALUE` (custom field support) | **CLOSED — DELIVERED (PR #401 @ `2f61566` + FIX-F5-001 PR #406 @ `699a5fd`, 2026-05-25)** | MEDIUM | F1–F7 ALL COMPLETE. 3 new BCs (BC-3.4.015/016/017), 12 VPs; 583 BCs total. F5 CONVERGED; F6 PASS; F7 5/5 PASS. |
-| #407 | `--label` conflict-block structural meta-test + coverage (follow-up from #396 FIX-F5-001) | **F2 AWAITING GATE** | LOW | F1 PASSED (human-approved; approach b). F2 COMPLETE: EC-3.4.017-14 added; invariant 2 updated; 0 new BCs/VPs; adversarial CONVERGED 4 passes 3/3 CLEAN (7→2→1→2 all LOW); consistency audit CONSISTENT; all 3 spec guards exit 0. Awaiting F2 human gate to proceed to F3. |
+| #407 | `--label` conflict-block structural meta-test + coverage (follow-up from #396 FIX-F5-001) | **F5 CONVERGED — AWAITING F6** | LOW | F1–F5 COMPLETE. F5: 3 passes, all CLEAN, no fix-PRs; trajectory 4→0→0; 12/12 coverage; meta-test EC-3.4.017-14 mechanically enforces invariant 2. O-1/O-2 routed to #408. |
 | #408 | spec/CLAUDE.md line-anchor citation drift class (follow-up from #396 F5) | **OPEN** | LOW | Filed 2026-05-25. PG-396-2: EC-3.4.017-13 + 2 other stale line-anchor citations found in F5 review. Need systematic guard or sweep process. |
 | #409 | `parsed_number_to_wire_value` helper extraction — tautological test 38 (follow-up from #396 F4) | **OPEN** | LOW | Filed 2026-05-25. R2-C4: test 38 reimplements wire-serialization inline. Extract helper so test exercises production path. |
 | #410 | keychain-touching test isolation infra — developer macOS (follow-up from #396 F4) | **OPEN** | LOW | Filed 2026-05-25. S-382-FLAKE-01 class: `multi_cloudid_disambiguation` keychain flake; tests touching keychain should use JR_RUN_KEYRING_TESTS=1 + #[ignore] pattern. |

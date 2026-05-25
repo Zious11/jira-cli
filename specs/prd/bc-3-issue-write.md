@@ -1534,7 +1534,7 @@ adding bulk `--field` support would require a separate design pass.
   key → exit 64 with `--label` conflict-block error. The `--label` short-circuit at
   `src/cli/issue/create.rs:~835` routes to `handle_edit_bulk_labels` which does not accept
   `field_pairs`; without rejection before the routing decision the `--field` write silently
-  drops (exit 0, data loss). The `--label` mutual-exclusion block at lines 445-489 rejects
+  drops (exit 0, data loss). The `--label` mutual-exclusion block in `handle_edit` rejects
   this combination before any HTTP call. Error: `"--label cannot be combined with --field in
   the same call. Run separate \`jr issue edit\` commands, or open an issue to track combined
   label + field bulk edits (see #331)."` Combined label + custom-field bulk edits tracked at

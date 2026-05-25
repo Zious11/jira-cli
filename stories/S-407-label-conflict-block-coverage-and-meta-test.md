@@ -174,7 +174,7 @@ This story completes coverage to 12/12 and adds a structural meta-test.
 
 - `Mock::given(any()).expect(0)` catch-all.
 - Invocation: `jr issue edit TEST-1 --label add:x --description-stdin` (no stdin pipe required —
-  the `--label` conflict guard at line 474 fires BEFORE the stdin read at line 149; the process
+  the `--label` conflict guard at line 474 fires BEFORE the stdin read at line 882; the process
   exits 64 before any stdin I/O occurs).
 - Assert exit code 64.
 - Assert stderr contains `"--label cannot be combined with"`.
@@ -353,7 +353,7 @@ LOC delta estimate: +120–150 LOC in `tests/issue_edit_field.rs`; +40–60 LOC 
       confirm the exact `conflicting.push` pattern; the `#[cfg(test)]` block at end-of-file to
       confirm insertion point for meta-test and R2 pin; the `--markdown` pre-guard at ~357-363
       (CRITICAL: confirms why `--description "text"` is required alongside `--markdown`);
-      the `--description-stdin` conflict check line (~474) vs stdin read line (~149)
+      the `--description-stdin` conflict check line (~474) vs stdin read line (~882)
 - [ ] Read `src/cli/mod.rs` — locate `IssueCommand::Edit` variant and find `issue_type` field with
       `#[arg(long = "type")]` annotation (confirms the one non-mechanical rename for the meta-test)
 - [ ] Add 10 positive regression tests to `tests/issue_edit_field.rs` (AC-001 through AC-010):
@@ -406,7 +406,7 @@ PR #401, the S-396 implementation). Key lessons:
   `--markdown --description "some text"`. The test comment is non-optional.
 
 - **`--description-stdin` needs no stdin pipe:** The conflict check fires at line 474
-  (`if description_stdin {`), which is BEFORE the stdin read at line 149. No pipe needed.
+  (`if description_stdin {`), which is BEFORE the stdin read at line 882. No pipe needed.
   Confirmed by F1 delta analysis Q4 (self-answering).
 
 - **Global extraction is safe for NOW:** The meta-test uses a global scan of `conflicting.push`
