@@ -3252,7 +3252,7 @@ async fn test_label_plus_description_rejected_with_exit_64_no_http() {
 // AC-009 — --label + --description-stdin (boolean flag) → exit 64, zero HTTP
 //
 // No stdin pipe is required: the --label conflict guard fires at create.rs:~474
-// (if description_stdin {...}) BEFORE the stdin read at create.rs:~149. The
+// (if description_stdin {...}) BEFORE the stdin read at create.rs:~882. The
 // process exits 64 before any stdin I/O occurs.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_label_plus_description_stdin_rejected_with_exit_64_no_http() {
