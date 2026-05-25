@@ -19,7 +19,7 @@
 mod common;
 
 use assert_cmd::Command;
-use wiremock::matchers::{body_partial_json, method, path};
+use wiremock::matchers::{any, body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 // ---------------------------------------------------------------------------
@@ -2803,26 +2803,23 @@ async fn test_bc_3_4_017_field_priority_without_flag_does_not_trigger_gate_b() {
 // `handle_edit_bulk_labels` which does not accept `field_pairs`, silently
 // dropping the `--field` write while exiting 0 (data loss).
 //
-// The fix: add `--field` to the `--label` conflict block at create.rs:445-489.
+// The fix: add `--field` to the `--label` conflict block at create.rs:~445
+// (the --label conflict block).
 // Rejection fires BEFORE any HTTP call.
 //
-// Mounts with .expect(0) on both PUT and POST so wiremock panics if any HTTP
-// fires — stronger than just asserting exit 64.
+// Uses a catch-all any() mock with .expect(0) to pin "no HTTP at all".
+// This is stronger than matching specific methods/paths: it defends against
+// future refactors that hoist a GET (editmeta, list_fields, JQL search) above
+// the --label conflict block, which would silently pass a method-specific guard
+// while still making premature HTTP calls.
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_label_plus_field_rejected_with_exit_64_no_http() {
     let server = MockServer::start().await;
 
-    // Mount with .expect(0): wiremock panics on server drop if these are ever called.
-    Mock::given(method("PUT"))
-        .respond_with(ResponseTemplate::new(500).set_body_string("should not be called"))
-        .expect(0)
-        .mount(&server)
-        .await;
-
-    Mock::given(method("POST"))
-        .and(path("/rest/api/3/bulk/issues/labels"))
+    // Catch-all: wiremock panics on server drop if ANY HTTP fires.
+    Mock::given(any())
         .respond_with(ResponseTemplate::new(500).set_body_string("should not be called"))
         .expect(0)
         .mount(&server)
@@ -2872,15 +2869,10 @@ async fn test_label_plus_field_rejected_with_exit_64_no_http() {
 async fn test_label_plus_summary_rejected_with_exit_64_no_http() {
     let server = MockServer::start().await;
 
-    // Mount with .expect(0): wiremock panics on server drop if these are ever called.
-    Mock::given(method("PUT"))
-        .respond_with(ResponseTemplate::new(500).set_body_string("should not be called"))
-        .expect(0)
-        .mount(&server)
-        .await;
-
-    Mock::given(method("POST"))
-        .and(path("/rest/api/3/bulk/issues/labels"))
+    // Catch-all expect(0): any HTTP call at all panics on server drop.
+    // The --label + --summary conflict guard fires before any network I/O,
+    // so the mock must never be reached.
+    Mock::given(any())
         .respond_with(ResponseTemplate::new(500).set_body_string("should not be called"))
         .expect(0)
         .mount(&server)
