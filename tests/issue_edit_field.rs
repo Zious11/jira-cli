@@ -2907,3 +2907,451 @@ async fn test_label_plus_summary_rejected_with_exit_64_no_http() {
         "Stderr must contain --label conflict error referencing --summary; stderr={stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// S-407 — BC-3.4.017 invariant 2 + EC-3.4.017-14
+// 10 positive regression tests: one per untested --label conflict-block entry.
+// Pattern mirrors FIX-F5-001 (tests above): catch-all any().expect(0) + exit 64
+// + two SEPARATE stderr assertions (conflict prefix + specific flag name).
+// ---------------------------------------------------------------------------
+
+// AC-001 — --label + --priority → exit 64, zero HTTP
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_label_plus_priority_rejected_with_exit_64_no_http() {
+    let server = MockServer::start().await;
+
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(500).set_body_string("should not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--label",
+            "add:backend",
+            "--priority",
+            "High",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "--label + --priority must exit 64; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--label cannot be combined with"),
+        "Stderr must contain '--label cannot be combined with'; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--priority"),
+        "Stderr must contain '--priority'; stderr={stderr}"
+    );
+}
+
+// AC-002 — --label + --type → exit 64, zero HTTP
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_label_plus_type_rejected_with_exit_64_no_http() {
+    let server = MockServer::start().await;
+
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(500).set_body_string("should not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--label",
+            "add:backend",
+            "--type",
+            "Bug",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "--label + --type must exit 64; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--label cannot be combined with"),
+        "Stderr must contain '--label cannot be combined with'; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--type"),
+        "Stderr must contain '--type'; stderr={stderr}"
+    );
+}
+
+// AC-003 — --label + --team → exit 64, zero HTTP
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_label_plus_team_rejected_with_exit_64_no_http() {
+    let server = MockServer::start().await;
+
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(500).set_body_string("should not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--label",
+            "add:backend",
+            "--team",
+            "Platform Core",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "--label + --team must exit 64; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--label cannot be combined with"),
+        "Stderr must contain '--label cannot be combined with'; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--team"),
+        "Stderr must contain '--team'; stderr={stderr}"
+    );
+}
+
+// AC-004 — --label + --points → exit 64, zero HTTP
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_label_plus_points_rejected_with_exit_64_no_http() {
+    let server = MockServer::start().await;
+
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(500).set_body_string("should not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--label",
+            "add:backend",
+            "--points",
+            "5",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "--label + --points must exit 64; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--label cannot be combined with"),
+        "Stderr must contain '--label cannot be combined with'; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--points"),
+        "Stderr must contain '--points'; stderr={stderr}"
+    );
+}
+
+// AC-005 — --label + --no-points (boolean flag) → exit 64, zero HTTP
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_label_plus_no_points_rejected_with_exit_64_no_http() {
+    let server = MockServer::start().await;
+
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(500).set_body_string("should not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--label",
+            "add:backend",
+            "--no-points",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "--label + --no-points must exit 64; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--label cannot be combined with"),
+        "Stderr must contain '--label cannot be combined with'; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--no-points"),
+        "Stderr must contain '--no-points'; stderr={stderr}"
+    );
+}
+
+// AC-006 — --label + --parent → exit 64, zero HTTP
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_label_plus_parent_rejected_with_exit_64_no_http() {
+    let server = MockServer::start().await;
+
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(500).set_body_string("should not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--label",
+            "add:backend",
+            "--parent",
+            "EPIC-1",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "--label + --parent must exit 64; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--label cannot be combined with"),
+        "Stderr must contain '--label cannot be combined with'; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--parent"),
+        "Stderr must contain '--parent'; stderr={stderr}"
+    );
+}
+
+// AC-007 — --label + --no-parent (boolean flag) → exit 64, zero HTTP
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_label_plus_no_parent_rejected_with_exit_64_no_http() {
+    let server = MockServer::start().await;
+
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(500).set_body_string("should not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--label",
+            "add:backend",
+            "--no-parent",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "--label + --no-parent must exit 64; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--label cannot be combined with"),
+        "Stderr must contain '--label cannot be combined with'; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--no-parent"),
+        "Stderr must contain '--no-parent'; stderr={stderr}"
+    );
+}
+
+// AC-008 — --label + --description → exit 64, zero HTTP
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_label_plus_description_rejected_with_exit_64_no_http() {
+    let server = MockServer::start().await;
+
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(500).set_body_string("should not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--label",
+            "add:backend",
+            "--description",
+            "some text",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "--label + --description must exit 64; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--label cannot be combined with"),
+        "Stderr must contain '--label cannot be combined with'; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--description"),
+        "Stderr must contain '--description'; stderr={stderr}"
+    );
+}
+
+// AC-009 — --label + --description-stdin (boolean flag) → exit 64, zero HTTP
+//
+// No stdin pipe is required: the --label conflict guard fires at create.rs:~474
+// (if description_stdin {...}) BEFORE the stdin read at create.rs:~149. The
+// process exits 64 before any stdin I/O occurs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_label_plus_description_stdin_rejected_with_exit_64_no_http() {
+    let server = MockServer::start().await;
+
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(500).set_body_string("should not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--label",
+            "add:backend",
+            "--description-stdin",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "--label + --description-stdin must exit 64; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--label cannot be combined with"),
+        "Stderr must contain '--label cannot be combined with'; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--description-stdin"),
+        "Stderr must contain '--description-stdin'; stderr={stderr}"
+    );
+}
+
+// AC-010 — --label + --markdown (paired with --description) → exit 64, zero HTTP
+//
+// IMPORTANT: --markdown MUST be paired with --description "some text" here.
+// Without --description, the early guard at create.rs:357-363 fires first:
+//   "--markdown requires --description or --description-stdin to take effect."
+// That exits 64 for the WRONG reason — the --markdown pre-guard, not the
+// --label conflict block. Pairing with --description "some text" satisfies
+// the pre-guard and lets execution reach the --label conflict block.
+//
+// TWO SEPARATE stderr assertions (AC-015): the conflict block enumerates
+// "--description, --markdown" in a comma-separated list when both are present,
+// so the literal "--label cannot be combined with --markdown" does NOT appear
+// verbatim. The assertions verify the two components independently.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_label_plus_markdown_rejected_with_exit_64_no_http() {
+    let server = MockServer::start().await;
+
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(500).set_body_string("should not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--label",
+            "add:backend",
+            "--markdown",
+            "--description",
+            "some text",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "--label + --markdown (with --description) must exit 64; stderr={stderr}"
+    );
+    // Assertion 1: the right guard fired (--label conflict block, not a different guard).
+    assert!(
+        stderr.contains("--label cannot be combined with"),
+        "Stderr must contain '--label cannot be combined with' (verifies the right guard fired); \
+         stderr={stderr}"
+    );
+    // Assertion 2: the --markdown row in the conflict block cannot be deleted without this
+    // failing. Separate from assertion 1 because the conflict block joins both --description
+    // and --markdown into a comma-separated list; the literal concatenation
+    // "--label cannot be combined with --markdown" does NOT appear verbatim.
+    assert!(
+        stderr.contains("--markdown"),
+        "Stderr must contain '--markdown' (verifies --markdown push line cannot be deleted); \
+         stderr={stderr}"
+    );
+}
