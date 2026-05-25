@@ -3,7 +3,7 @@ context: bc-3
 title: "Issue Write (create/edit/move/assign/comment/link/open/remote-link)"
 total_bcs: 103   # cumulative claim (incl. range-collapsed); definitional_count below is individually-bodied headings
 definitional_count: 74   # count of `#### BC-` headings in this file
-last_updated: 2026-05-22
+last_updated: 2026-05-25
 source_pass: 3
 trace: |
   - L2: .factory/specs/domain-spec/bc-03-issue-write.md
@@ -57,6 +57,7 @@ trace: |
   - F2 amended (2026-05-22, adversary pass 1): BC-3.4.016 — EC-3.4.016-4 id/label collision note; VP-396-006 added to Verification Properties
   - F2 amended (2026-05-22, adversary pass 1): BC-3.4.017 — invariant 1 Gate B-before-A ordering; EC-3.4.017-2 JQL-multi clarification; EC-3.4.017-10 same-field two-pairs; EC-3.4.017-11 type vs issuetype; EC-3.4.017-12 simultaneous Gate A+B; Gate A postcondition split; LOW-001 EC ref corrected; VP-396-008 added
   - F2 amended (2026-05-22, adversary pass 3): BC-3.4.015 — Step 3b (operations/"set" check + exit 64 hint) added; EC-3.4.015-19 (resolution failure under --dry-run exits 64); EC-3.4.015-20 (operations lacks "set"); EC-3.4.015-18 exit code pinned to 0; VP-396-011 (user/date/datetime wire) and VP-396-012 (operations check) added; VP-396-008 one-liner updated
+  - F2 modified (2026-05-25): BC-3.4.017 — EC-3.4.017-14 added (mechanical enforcement meta-test for invariant 2 completeness); invariant 2 cross-reference added (issue #407 F2)
 ---
 
 # BC-3 — Issue Write
@@ -1466,9 +1467,12 @@ adding bulk `--field` support would require a separate design pass.
    mistake that is equally invalid on any key count, and surfacing it directly is more
    actionable than a bulk-rejection that obscures the root cause.
 2. The `REJECTED_IN_BULK` set partition test (the compile-time assertion in
-   `create.rs:1435+` that partitions flags into `SELECTORS`, `BULK_SUPPORTED`, and
-   `REJECTED_IN_BULK`) must be updated to include `--field`. This ensures the partition
-   is exhaustive: `--field` appears in exactly ONE of the three sets.
+   `test_343_every_edit_field_is_categorized` that partitions flags into `SELECTORS`,
+   `BULK_SUPPORTED`, and `REJECTED_IN_BULK`) must be updated to include `--field`. This
+   ensures the partition is exhaustive: `--field` appears in exactly ONE of the three
+   sets. The `--label` conflict block's completeness against that partition is
+   mechanically enforced by `test_label_conflict_block_lists_every_relevant_flag`
+   (see EC-3.4.017-14).
 3. `--jql` matching exactly ONE issue routes to the single-key path — this is NOT an
    error. Gate A only fires when `--jql` matches 2+ issues.
 4. The flag-overlap comparison on the `--field NAME` side is case-insensitive against
@@ -1535,6 +1539,59 @@ adding bulk `--field` support would require a separate design pass.
   the same call. Run separate \`jr issue edit\` commands, or open an issue to track combined
   label + field bulk edits (see #331)."` Combined label + custom-field bulk edits tracked at
   #331. [FIX-F5-001]
+- EC-3.4.017-14: The `--label` conflict block at
+  `src/cli/issue/create.rs::handle_edit::if !labels.is_empty()` is mechanically enforced
+  complete by `test_label_conflict_block_lists_every_relevant_flag` (in `create.rs::tests`).
+  **Extraction strategy**: the meta-test parses the conflict-block source via
+  `include_str!("create.rs")` and extracts every `conflicting.push("--<flag>")` literal
+  from the ENTIRE file (global extraction). This is safe because the local variable name
+  `conflicting` is used exclusively within the `if !labels.is_empty() { ... }` block in
+  `handle_edit`; if a future cycle introduces a second `conflicting` variable anywhere in
+  `create.rs`, the meta-test must be re-scoped to brace-matched extraction. A guard comment
+  MUST be added in `create.rs` at the conflict-block declaration site: `// NOTE: the variable
+  name 'conflicting' is reserved for this block — test_label_conflict_block_lists_every_relevant_flag
+  uses a global scan of conflicting.push("--...") in create.rs`.
+  **Expected set construction**: build a `BTreeSet<String>` (NOT `HashSet` — deterministic
+  failure diffs across runs, mirrors `test_343_every_edit_field_is_categorized`) from
+  `(BULK_SUPPORTED \ {"label"}) ∪ REJECTED_IN_BULK`. For each field, the kebab-case CLI
+  flag name is the explicit `long = "<literal>"` value when present, otherwise the field
+  name with underscores replaced by hyphens (clap's implicit default). Of the 12 fields
+  currently in scope: `issue_type` carries `#[arg(long = "type")]` and maps to `--type`
+  (NOT `--issue-type`); the other 11 (`summary`, `priority`, `team`, `points`,
+  `no_points`, `parent`, `no_parent`, `description`, `description_stdin`, `markdown`,
+  `field`) use the implicit snake→kebab transform. Any future field added to
+  `BULK_SUPPORTED`/`REJECTED_IN_BULK` with a non-mechanical `long = "..."` rename will
+  be caught by the R2 pin's 12-flag enumeration — the extractor side and the expected
+  side must be reconciled together.
+  **Assertion**: assert extracted `BTreeSet<String>` equals expected `BTreeSet<String>`.
+  A regression that drops any `conflicting.push` line OR adds a new Edit field to
+  `BULK_SUPPORTED`/`REJECTED_IN_BULK` without extending the conflict block fails this
+  meta-test at `cargo test` time.
+  **R2 pin**: include at least one pin test asserting the extractor correctly parses a
+  known-good input string (e.g., assert extracted set has exactly 12 members for the
+  current block: `--field`, `--summary`, `--priority`, `--type`, `--team`, `--points`,
+  `--no-points`, `--parent`, `--no-parent`, `--description`, `--description-stdin`,
+  `--markdown`. `--label` itself is the guard condition on the outer `if`, not a pushed
+  entry).
+  **Co-author**: 10 positive regression tests in `tests/issue_edit_field.rs`
+  (`test_label_plus_<flag>_rejected_with_exit_64_no_http` for each of: `priority`, `type`,
+  `team`, `points`, `no-points`, `parent`, `no-parent`, `description`, `description-stdin`,
+  `markdown`). Test names use snake_case substitution for kebab-case flags
+  (e.g., `--no-points` → `test_label_plus_no_points_...`; Rust identifiers cannot contain
+  hyphens). Each test asserts exit 64, stderr contains `"--label cannot be combined with"`,
+  and stderr contains the specific flag name as a SEPARATE assertion — not as one
+  concatenated substring (the conflict block joins all conflicting flags into a single
+  comma-separated message). For the `--markdown` test specifically: the invocation uses
+  `--label add:x --markdown --description "text"`, which causes BOTH `--description` and
+  `--markdown` to appear in the conflict output (`"--label cannot be combined with
+  --description, --markdown in the same call. ..."`). Assert `stderr.contains("--markdown")`
+  AND `stderr.contains("--label cannot be combined with")` as two separate checks, NOT
+  `stderr.contains("--label cannot be combined with --markdown")` (that concatenation does
+  not appear verbatim when `--description` precedes `--markdown` in the joined output). Note:
+  the `--markdown` test uses `--label add:x --markdown --description "text"` because
+  `--markdown` alone triggers an earlier guard at `create.rs:357-363` before the conflict
+  block; pairing with `--description` bypasses the early guard and reaches the conflict block,
+  verifying the `--markdown` row. [Issue #407]
 
 **Verification Properties**:
 - VP-396-005: Multi-key/`--jql`-multi-issue rejection exits 64; flag-overlap hard error
@@ -2148,4 +2205,4 @@ Sources: `src/cli/issue/snapshots/jr__cli__issue__json_output__tests__*.snap`; B
 
 ## Total BCs in this file: 74 individually-bodied (cumulative 103 incl. range-collapsed; see BC-INDEX.md)
 
-_Last updated 2026-05-22 (issue #396 F2): +3 BCs (BC-3.4.015..017) — BC-3.4.015 (`issue edit --field` string/number/date/datetime/user field single-key path, with editmeta validation, fields.json cache, and dry-run invariants), BC-3.4.016 (`issue edit --field` single-select `option` field), BC-3.4.017 (`--field` multi-key/`--jql` rejection Gate A and flag-overlap Gate B); Section 3.4 header updated to 17 contracts. Previous update (2026-05-21 issue #398 F2): +3 BCs (BC-3.4.012..014) — BC-3.4.012 (issue edit table-mode success echo), BC-3.4.013 (issue edit JSON-mode success echo with changed_fields), BC-3.4.014 (issue create table-mode all-fields echo (broadened from team-only at the 2026-05-22 human-gate to mirror BC-3.4.012)); BC-3.4.003 Success output cross-reference added; Section 3.4 header updated to 14 contracts. Previous update (2026-05-20 issue #388): +2 BCs (BC-3.4.010..011): BC-3.4.010 (cross-hierarchy `edit --type` 400 → CROSS_HIERARCHY_HINT citing JRACLOUD-27893) and BC-3.4.011 (same-hierarchy/indeterminate `edit --type` 400 → typo hint or raw error, no JRACLOUD-27893 hint) added in F2 delta (issue #388). BC-3.4.003 Errors cross-reference updated (annotation only, no behavioral change). Section 3.4 header updated to 11 contracts. Previous update (2026-05-20 issue #385): +2 BCs (BC-3.8.016..017); BC-3.8.002/010/011 modified._
+_Last updated 2026-05-25 (issue #407 F2): +EC-3.4.017-14 — mechanical enforcement meta-test for BC-3.4.017 invariant 2 (conflict block completeness via `test_label_conflict_block_lists_every_relevant_flag`); BC-3.4.017 invariant 2 cross-reference added; no BC count changes (103/74 unchanged). Previous update (2026-05-22 issue #396 F2): +3 BCs (BC-3.4.015..017) — BC-3.4.015 (`issue edit --field` string/number/date/datetime/user field single-key path, with editmeta validation, fields.json cache, and dry-run invariants), BC-3.4.016 (`issue edit --field` single-select `option` field), BC-3.4.017 (`--field` multi-key/`--jql` rejection Gate A and flag-overlap Gate B); Section 3.4 header updated to 17 contracts. Previous update (2026-05-21 issue #398 F2): +3 BCs (BC-3.4.012..014) — BC-3.4.012 (issue edit table-mode success echo), BC-3.4.013 (issue edit JSON-mode success echo with changed_fields), BC-3.4.014 (issue create table-mode all-fields echo (broadened from team-only at the 2026-05-22 human-gate to mirror BC-3.4.012)); BC-3.4.003 Success output cross-reference added; Section 3.4 header updated to 14 contracts. Previous update (2026-05-20 issue #388): +2 BCs (BC-3.4.010..011): BC-3.4.010 (cross-hierarchy `edit --type` 400 → CROSS_HIERARCHY_HINT citing JRACLOUD-27893) and BC-3.4.011 (same-hierarchy/indeterminate `edit --type` 400 → typo hint or raw error, no JRACLOUD-27893 hint) added in F2 delta (issue #388). BC-3.4.003 Errors cross-reference updated (annotation only, no behavioral change). Section 3.4 header updated to 11 contracts. Previous update (2026-05-20 issue #385): +2 BCs (BC-3.8.016..017); BC-3.8.002/010/011 modified._

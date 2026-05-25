@@ -1,0 +1,22 @@
+# Affected files — Issue #407
+# Test-hardening: --label conflict block positive regression coverage + structural meta-test
+# Generated: 2026-05-25
+# Scope: test-only (with optional minor production refactor if Q1 approach ii/iii is chosen)
+
+# MODIFIED (all approaches)
+tests/issue_edit_field.rs
+
+# MODIFIED (only if Q1 approach ii/iii: extract conflict list to const slice)
+src/cli/issue/create.rs
+
+# UNCHANGED (all approaches)
+src/cli/mod.rs
+src/api/jira/issues.rs
+src/api/jira/fields.rs
+src/types/jira/
+src/cache.rs
+src/config.rs
+CLAUDE.md
+.factory/specs/prd/bc-3-issue-write.md
+scripts/check-spec-counts.sh
+scripts/check-bc-cumulative-counts.sh

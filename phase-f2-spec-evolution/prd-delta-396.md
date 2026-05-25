@@ -318,7 +318,7 @@ For each `--field NAME=VALUE` pair, resolution proceeds in this order:
 > - `bc-3-issue-write.md §BC-3.4.015` — EC-3.4.015-1 through EC-3.4.015-20
 >   (incl. -4a; cache ECs -14/-15/-16; dry-run ECs -18/-19; operations check -20)
 > - `bc-3-issue-write.md §BC-3.4.016` — EC-3.4.016-1 through EC-3.4.016-7
-> - `bc-3-issue-write.md §BC-3.4.017` — EC-3.4.017-1 through EC-3.4.017-12
+> - `bc-3-issue-write.md §BC-3.4.017` — EC-3.4.017-1 through EC-3.4.017-14 (EC-3.4.017-13 added FIX-F5-001; EC-3.4.017-14 added issue #407 F2)
 >
 > The BC body is the single source of truth for EC details. This §7 now serves
 > only as a navigation pointer to avoid maintaining two copies of the same catalog.

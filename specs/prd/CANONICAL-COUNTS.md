@@ -2,7 +2,7 @@
 document_type: canonical-counts
 product: jr (jira-cli)
 generated: "2026-05-04"
-last_verified: "2026-05-22 (F2 delta issue #396; +3 BC-3.4.015..017; bc-3 definitional 71→74 total_bcs 100→103)"
+last_verified: "2026-05-25 (F2 delta issue #407; EC-3.4.017-14 added to BC-3.4.017; BC counts unchanged: 583 total, bc-3 103/74)"
 ---
 
 # Canonical Counts — jr (jira-cli) L3 PRD
@@ -54,7 +54,7 @@ done
 
 **Canonical grand total: 583** (+4 BC-7.4.013-016 added 2026-05-08 via Fix-PR A `28b0f35`; +1 BC-2.6.050 added 2026-05-13 via issue #350; +1 BC-2.6.051 added 2026-05-14 via issue #365; +1 BC-3.4.009 added 2026-05-15 via issue #340 F2; +18 BC-3.8.001..010 + BC-X.12.001..008 added 2026-05-18 via issue #288 F2+F1d; +3 BC-3.8.011..013 added 2026-05-19 via issue #288 F1d + issue #383 F2; +4 BC-3.8.014..015 + BC-X.8.006..007 added 2026-05-19 via issue #384 F2; +2 BC-3.8.016..017 added 2026-05-20 via issue #385 F2; +2 BC-3.4.010..011 added 2026-05-20 via issue #388 F2; +3 BC-3.4.012..014 added 2026-05-21 via issue #398 F2; +3 BC-3.4.015..017 added 2026-05-22 via issue #396 F2)
 
-_Note: BC-INDEX.md `total_bcs` header updated to 583 to match this file. CANONICAL-COUNTS.md carries the per-file sum as the primary source of truth. (+3 since last verified: BC-3.4.015..017 added at F2 issue #396 2026-05-22)_
+_Note: BC-INDEX.md `total_bcs` header updated to 583 to match this file. CANONICAL-COUNTS.md carries the per-file sum as the primary source of truth. (+0 BC count change since last verified — issue #407 F2 added EC-3.4.017-14 only; the prior +3 was BC-3.4.015..017 from #396 F2 2026-05-22)_
 
 Breakdown:
 - 583 = sum of per-file `total_bcs` values (canonical; see per-file table above)
