@@ -330,6 +330,12 @@ When adding a new feature:
   touch the real `~/.cache/jr/v1/default/fields.json`. Tests that fire Gate A/B
   pre-HTTP or take the `customfield_NNNNN` literal-bypass path skip the cache entirely
   and use plain `jr_cmd` — order-independent by construction.
+  (6) **`--field` cannot be combined with `--label` on a single key** — rejected with
+  exit 64 by the `--label` mutual-exclusion block at `src/cli/issue/create.rs:445-489`
+  (the same block that rejects `--label` + `--summary`/`--priority`/`--type`/etc.).
+  Without this guard the `--label` routing fork at `create.rs:~835` would silently drop
+  the `--field` write (exit 0, data loss). Combined label + custom-field bulk edits are
+  tracked at #331. [FIX-F5-001]
 
 ## AI Agent Notes
 

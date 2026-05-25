@@ -29,6 +29,14 @@ All notable changes to jr will be documented here.
   before JSM request creation will work. Existing access tokens continue working with
   old scopes until expiry; re-consent is triggered on the next token mint. (Issue #288)
 
+### Fixed
+
+- `jr issue edit --label ... --field ...` combination on a single key now exits 64 with a
+  clear conflict error instead of silently dropping the `--field` write and exiting 0. The
+  `--label` routing fork calls a labels-only handler that does not accept custom-field pairs;
+  the `--label` mutual-exclusion block now rejects this combination before any HTTP call.
+  (FIX-F5-001, follow-up to issue #396)
+
 ### BREAKING CHANGE (v0.6)
 
 - `--verbose` no longer prints HTTP request/response bodies by default. Use `--verbose-bodies` for full body inspection. The new flag emits a PII warning.
