@@ -477,6 +477,9 @@ pub(super) async fn handle_edit(
         if markdown {
             conflicting.push("--markdown");
         }
+        if !field_pairs.is_empty() {
+            conflicting.push("--field");
+        }
         if !conflicting.is_empty() {
             return Err(JrError::UserError(format!(
                 "--label cannot be combined with {} in the same call. \

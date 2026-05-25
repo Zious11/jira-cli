@@ -19,7 +19,7 @@
 mod common;
 
 use assert_cmd::Command;
-use wiremock::matchers::{body_partial_json, method, path};
+use wiremock::matchers::{any, body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 // ---------------------------------------------------------------------------
@@ -2791,5 +2791,119 @@ async fn test_bc_3_4_017_field_priority_without_flag_does_not_trigger_gate_b() {
     assert!(
         !stderr.contains("priority is set by both"),
         "Must NOT emit Gate B conflict error; stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// FIX-F5-001 — --label + --field silent-drop rejection
+// ---------------------------------------------------------------------------
+//
+// `jr issue edit KEY --label add:X --field Y=Z` on a single key must exit 64.
+// Without this guard, the `--label` short-circuit at create.rs:~835 routes to
+// `handle_edit_bulk_labels` which does not accept `field_pairs`, silently
+// dropping the `--field` write while exiting 0 (data loss).
+//
+// The fix: add `--field` to the `--label` conflict block at create.rs:~445
+// (the --label conflict block).
+// Rejection fires BEFORE any HTTP call.
+//
+// Uses a catch-all any() mock with .expect(0) to pin "no HTTP at all".
+// This is stronger than matching specific methods/paths: it defends against
+// future refactors that hoist a GET (editmeta, list_fields, JQL search) above
+// the --label conflict block, which would silently pass a method-specific guard
+// while still making premature HTTP calls.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_label_plus_field_rejected_with_exit_64_no_http() {
+    let server = MockServer::start().await;
+
+    // Catch-all: wiremock panics on server drop if ANY HTTP fires.
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(500).set_body_string("should not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--label",
+            "add:backend",
+            "--field",
+            "Severity=High",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "--label + --field must exit 64 (UserError); stderr={stderr}"
+    );
+
+    assert!(
+        stderr.contains("--label cannot be combined with") && stderr.contains("--field"),
+        "Stderr must contain --label conflict error referencing --field; stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// FIX-F5-001 negative regression — existing conflict block entries still work
+// ---------------------------------------------------------------------------
+//
+// The `--label` conflict block existed before --field was added. This test
+// pins that `--label` + `--summary` (one of the original 11 conflicting flags)
+// is still rejected with exit 64.  Pre-existing coverage gap: there was ZERO
+// test coverage for the entire --label conflict block before FIX-F5-001.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_label_plus_summary_rejected_with_exit_64_no_http() {
+    let server = MockServer::start().await;
+
+    // Catch-all expect(0): any HTTP call at all panics on server drop.
+    // The --label + --summary conflict guard fires before any network I/O,
+    // so the mock must never be reached.
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(500).set_body_string("should not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--label",
+            "add:backend",
+            "--summary",
+            "New title",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "--label + --summary must exit 64 (UserError); stderr={stderr}"
+    );
+
+    assert!(
+        stderr.contains("--label cannot be combined with") && stderr.contains("--summary"),
+        "Stderr must contain --label conflict error referencing --summary; stderr={stderr}"
     );
 }
