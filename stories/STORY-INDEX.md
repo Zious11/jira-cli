@@ -2,11 +2,11 @@
 document_type: story-index
 phase: phase-2-story-decomposition
 producer: story-writer
-version: "1.4.18"
-total_stories: 46
+version: "1.4.19"
+total_stories: 47
 total_waves: 4
 status: complete-pending-adv-review
-last_updated: 2026-05-22 (S-396 added; feature mode F3; 45→46)
+last_updated: 2026-05-25 (S-407 added; feature mode F3; 46→47)
 activation_head: dea1664
 ---
 
@@ -27,7 +27,7 @@ Phase 1 converged at adversary Pass 28. Gate approved 2026-05-04.
 | 3 | Low priority + deferred (DEFER NFRs, shard splits, process codification, DOCUMENT-AS-IS) | 10 | ~5-7 dev-days | Per-story gates; no v0.5 blocking |
 | feature-followup | Audit-followup test pins for shipped features (S-333, #340) | 1 | ~0.5 dev-days | cargo test green; per-story BC gates |
 
-**Final totals: 46 stories (authoritative count — see `total_stories` frontmatter and Story Manifest section).** Wave 0: 7, Wave 1: 8, Wave 2: 7, Wave 3: 10 (+S-3.10 added during Wave 2 as S-2.06 DEFER-01 follow-up). Wave 2: **7/7 COMPLETE** (PRs #303-#309; 2026-05-08). Feature-followup group: 14 stories — S-340 (task_id pin; 2026-05-15), S-345 (label-coalesce refactor + proptest; 2026-05-16), S-346 (cargo-mutants CI job + whitelist policy; 2026-05-16), issue-288-pr1-api, issue-288-pr2-cli, issue-288-pr4-dispatch (JSM request type cycle 3; 2026-05-18/19), S-382 (JrError::InsufficientScope refactor; 2026-05-19), S-383 (platform-inverse warnings; 2026-05-19), S-392 (cumulative BC-count guard DRIFT-002; 2026-05-19), S-384 (JSM 401 auth-aware hints; 2026-05-20), S-385 (JSM input validation UX polish; 2026-05-20), S-388 (cross-hierarchy edit --type 400 enrichment; 2026-05-20), S-398 (issue edit/create changed-fields echo; 2026-05-22), S-396 (issue edit --field NAME=VALUE arbitrary custom field editing; 2026-05-22). Note: the earlier "36 stories" figure was the wave-only baseline before feature-followup stories were added; the authoritative count is always `total_stories` / the Story Manifest row count. Updated 2026-05-20 (S-388 added; feature mode F3; 43→44). Updated 2026-05-22 (S-398 added; feature mode F3; 44→45). Updated 2026-05-22 (S-396 added; feature mode F3; 45→46).
+**Final totals: 47 stories (authoritative count — see `total_stories` frontmatter and Story Manifest section).** Wave 0: 7, Wave 1: 8, Wave 2: 7, Wave 3: 10 (+S-3.10 added during Wave 2 as S-2.06 DEFER-01 follow-up). Wave 2: **7/7 COMPLETE** (PRs #303-#309; 2026-05-08). Feature-followup group: 15 stories — S-340 (task_id pin; 2026-05-15), S-345 (label-coalesce refactor + proptest; 2026-05-16), S-346 (cargo-mutants CI job + whitelist policy; 2026-05-16), issue-288-pr1-api, issue-288-pr2-cli, issue-288-pr4-dispatch (JSM request type cycle 3; 2026-05-18/19), S-382 (JrError::InsufficientScope refactor; 2026-05-19), S-383 (platform-inverse warnings; 2026-05-19), S-392 (cumulative BC-count guard DRIFT-002; 2026-05-19), S-384 (JSM 401 auth-aware hints; 2026-05-20), S-385 (JSM input validation UX polish; 2026-05-20), S-388 (cross-hierarchy edit --type 400 enrichment; 2026-05-20), S-398 (issue edit/create changed-fields echo; 2026-05-22), S-396 (issue edit --field NAME=VALUE arbitrary custom field editing; 2026-05-22), S-407 (--label conflict block 10 regression tests + structural meta-test; 2026-05-25). Note: the earlier "36 stories" figure was the wave-only baseline before feature-followup stories were added; the authoritative count is always `total_stories` / the Story Manifest row count. Updated 2026-05-20 (S-388 added; feature mode F3; 43→44). Updated 2026-05-22 (S-398 added; feature mode F3; 44→45). Updated 2026-05-22 (S-396 added; feature mode F3; 45→46). Updated 2026-05-25 (S-407 added; feature mode F3; 46→47).
 
 Story file naming: `stories/wave-W/S-W.NN-short-slug.md`
 Story ID convention: `S-W.NN` (e.g., `S-0.01`, `S-1.03`)
@@ -190,6 +190,7 @@ They have `wave: feature-followup` in frontmatter and live under `.factory/code-
 | S-388 | Cross-hierarchy `edit --type` 400 enrichment + fix `--no-parent` fake-endpoint hint (closes #388) | BC-3.4.010, BC-3.4.011, BC-3.4.003 (annotation-only) | — | **completed** — PR #397 / e0ea24b (2026-05-21; squash-merged; issue #388 closed) | medium (5 SP) |
 | S-398 | `issue edit` / `issue create` — changed-fields echo on success (closes #398) | BC-3.4.012, BC-3.4.013, BC-3.4.014 | — | **completed** — PR #399 / b49f2fd (2026-05-22) | medium (5 SP) |
 | S-396 | `issue edit --field NAME=VALUE` — arbitrary custom field editing via editmeta (closes #396) | BC-3.4.015, BC-3.4.016, BC-3.4.017 | — | **completed** — PR #401 / 2f61566 (2026-05-23); F4 COMPLETE; 44 tests; adv 5 passes 3/3 CLEAN; Copilot R3=0; AWAITING F5 | medium (8 SP) |
+| S-407 | `--label` conflict block: 10 missing positive regression tests + structural meta-test (closes #407) | BC-3.4.017 | — | **ready** — F3 COMPLETE (2026-05-25); awaiting F4 dispatch | small (1 SP) |
 
 Feature-followup story files: `.factory/code-delivery/issue-NNN/story.md`
 
@@ -279,7 +280,7 @@ gaps that are not blocking for v0.5 but should be tracked.
 ## Story Manifest
 
 Complete mapping of every `story_id` to its absolute file path. Generated 2026-05-07; updated 2026-05-08 (S-3.10 added).
-Total rows: 46 (matches `total_stories: 46` in frontmatter). Updated 2026-05-15 (S-340 added). Updated 2026-05-16 (S-345 added). Updated 2026-05-16 (S-346 added). Updated 2026-05-18 (issue-288-pr1..pr4 added). Updated 2026-05-18 (issue-288-pr3-scope dropped; 40→39). Updated 2026-05-19 (S-382 added; quick-dev F4; 39→40). Updated 2026-05-19 (S-382 completed PR #389 / b1c863e). Updated 2026-05-19 (S-383 added; F3; 40→41). Updated 2026-05-19 (S-383 completed PR #390 / 25f7211). Updated 2026-05-19 (S-392 added; infrastructure; 41→42). Updated 2026-05-20 (S-392 completed PR #393 / 0be2e3a). Updated 2026-05-20 (S-384 added; feature mode F3; 42→43). Updated 2026-05-20 (S-384 completed PR #394 / b36b291). Updated 2026-05-20 (S-385 added; feature mode F3; 43→43; count held at 43). Updated 2026-05-20 (corrected pre-existing off-by-one overcount: total_stories 44→43 to match actual 43 manifest rows; overcount accumulated across S-382..S-384 additions — PG-385-6). Updated 2026-05-20 (S-385 completed PR #395 / f7fc8c3; issue #385 F1–F7 CLOSED; cycle CLOSED). Updated 2026-05-20 (S-388 added; feature mode F3; 43→44). Updated 2026-05-22 (S-398 added; feature mode F3; 44→45). Updated 2026-05-22 (S-396 added; feature mode F3; 45→46).
+Total rows: 47 (matches `total_stories: 47` in frontmatter). Updated 2026-05-15 (S-340 added). Updated 2026-05-16 (S-345 added). Updated 2026-05-16 (S-346 added). Updated 2026-05-18 (issue-288-pr1..pr4 added). Updated 2026-05-18 (issue-288-pr3-scope dropped; 40→39). Updated 2026-05-19 (S-382 added; quick-dev F4; 39→40). Updated 2026-05-19 (S-382 completed PR #389 / b1c863e). Updated 2026-05-19 (S-383 added; F3; 40→41). Updated 2026-05-19 (S-383 completed PR #390 / 25f7211). Updated 2026-05-19 (S-392 added; infrastructure; 41→42). Updated 2026-05-20 (S-392 completed PR #393 / 0be2e3a). Updated 2026-05-20 (S-384 added; feature mode F3; 42→43). Updated 2026-05-20 (S-384 completed PR #394 / b36b291). Updated 2026-05-20 (S-385 added; feature mode F3; 43→43; count held at 43). Updated 2026-05-20 (corrected pre-existing off-by-one overcount: total_stories 44→43 to match actual 43 manifest rows; overcount accumulated across S-382..S-384 additions — PG-385-6). Updated 2026-05-20 (S-385 completed PR #395 / f7fc8c3; issue #385 F1–F7 CLOSED; cycle CLOSED). Updated 2026-05-20 (S-388 added; feature mode F3; 43→44). Updated 2026-05-22 (S-398 added; feature mode F3; 44→45). Updated 2026-05-22 (S-396 added; feature mode F3; 45→46). Updated 2026-05-25 (S-407 added; feature mode F3; 46→47).
 
 ### Wave 0
 
@@ -351,3 +352,4 @@ Total rows: 46 (matches `total_stories: 46` in frontmatter). Updated 2026-05-15 
 | S-388 | feature-followup (feature mode F3) | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/S-388-cross-hierarchy-type-change-error-and-fake-endpoint-fix.md |
 | S-398 | feature-followup (feature mode F3) | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/S-398-issue-edit-create-changed-fields-echo.md |
 | S-396 | feature-followup (feature mode F3) | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/S-396-issue-edit-field-flag.md |
+| S-407 | feature-followup (feature mode F3) | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/S-407-label-conflict-block-coverage-and-meta-test.md |

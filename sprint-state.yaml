@@ -559,6 +559,26 @@ feature_followup_standalone:
     points: 5
     notes: "Feature mode F4 story (closes issue #385). All 4 O-08 fixes: O-08-02 (BC-3.8.002 harmonized project-required error string), O-08-04 (BC-3.8.016 empty --request-type guard, exits 64 'request type cannot be empty'), O-08-06 (BC-3.8.017 --markdown+--field description= conflict guard, exits 64), O-08-07 (BC-3.8.010/011 platform-flag warnings moved post-require_service_desk). F1+F2+F3 COMPLETE (F2 adv 3/3 CLEAN 19 passes; F3 adv 3/3 CLEAN 12 passes). F4 per-story adversary CONVERGED 3/3 CLEAN. Copilot 3 rounds →0. CI 10/10 GREEN. PR #395 squash-merged @ f7fc8c3 (2026-05-20). Issue #385 auto-closed. F7 traceability: 5 BCs (BC-3.8.002/010/011/016/017) ↔ 7 required test deliverables ↔ handle_jsm_create locus in src/cli/issue/create.rs. 7 process-gaps PG-385-1..7 recorded as justified deferrals. Cycle CLOSED 2026-05-20."
 
+  - id: S-407
+    title: "Label conflict-block positive regression coverage + structural meta-test (closes #407)"
+    status: in-progress
+    pr: null
+    merge_sha: null
+    merged_at: null
+    depends_on: [S-396]
+    bc_anchors: [BC-3.4.017]
+    ec_anchors: [EC-3.4.017-14]
+    holdout_anchors: []
+    issue: 407
+    points: 1
+    criticality: LOW
+    implementation_strategy: tdd
+    phase: F4
+    phase_approved_at: "2026-05-25"
+    f2_approved_at: "2026-05-25"
+    f3_approved_at: "2026-05-25"
+    notes: "F3 PASSED (human-approved 2026-05-25). S-407 created: 16 ACs, 12 test deliverables, 1 SP, LOW criticality, tdd strategy. Depends on S-396 (already merged @ 2f61566). EC anchor EC-3.4.017-14 (added to BC-3.4.017 in F2). F4 Delta Implementation in progress."
+
   - id: S-396
     title: "jr issue edit --field NAME=VALUE: arbitrary custom field support via editmeta-driven resolution (closes #396)"
     status: completed
