@@ -282,7 +282,12 @@ fn test_cloud_id_flag_recognized_in_help() {
 /// After implementation, the exit code will be non-zero for a different reason
 /// (no accessible resources mock / browser won't open), but critically not 2.
 #[test]
+#[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
 fn test_cloud_id_flag_is_parsed_not_rejected_by_clap() {
+    if std::env::var("JR_RUN_KEYRING_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set JR_RUN_KEYRING_TESTS=1 to run keychain tests");
+        return;
+    }
     let config_dir = TempDir::new().unwrap();
     let cache_dir = TempDir::new().unwrap();
 
@@ -340,7 +345,12 @@ fn test_cloud_id_flag_is_parsed_not_rejected_by_clap() {
 /// We assert: exit 0 AND stored config has `cloud_id = "cloud-A"`.
 /// Pre-implementation: fails at step 1 or 2 → not exit 0.
 #[tokio::test]
+#[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
 async fn test_cloud_id_flag_picks_named_resource_not_first() {
+    if std::env::var("JR_RUN_KEYRING_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set JR_RUN_KEYRING_TESTS=1 to run keychain tests");
+        return;
+    }
     use mock_harness::{mount_accessible_resources, mount_token_exchange, two_resources_b_first};
     use wiremock::MockServer;
 
@@ -656,7 +666,12 @@ async fn test_no_input_multi_org_lists_available_cloud_ids_in_error() {
 /// same time as AC-001 (the single-org path needs no code change, only the
 /// env-var override mechanism).
 #[tokio::test]
+#[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
 async fn test_single_resource_no_regression_single_org_path() {
+    if std::env::var("JR_RUN_KEYRING_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set JR_RUN_KEYRING_TESTS=1 to run keychain tests");
+        return;
+    }
     use mock_harness::{mount_accessible_resources, mount_token_exchange, one_resource};
     use wiremock::MockServer;
 
@@ -799,7 +814,12 @@ fn test_callback_url_contains_127_0_0_1_and_port_53682() {
 /// oauth_login flow, this test uses `JR_OAUTH_CODE` to inject a pre-built
 /// auth code and bypass both steps.
 #[tokio::test]
+#[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
 async fn test_cloud_id_flag_does_not_change_redirect_uri_in_authorize_url() {
+    if std::env::var("JR_RUN_KEYRING_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set JR_RUN_KEYRING_TESTS=1 to run keychain tests");
+        return;
+    }
     use mock_harness::{mount_accessible_resources, mount_token_exchange, two_resources_b_first};
     use wiremock::MockServer;
 
@@ -881,7 +901,12 @@ async fn test_cloud_id_flag_does_not_change_redirect_uri_in_authorize_url() {
 /// to the subprocess. After implementation, the dialoguer `Select` prompt
 /// reads from stdin and picks index 1 (0-based) = cloud-A.
 #[tokio::test]
+#[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
 async fn test_interactive_select_via_stdin_picks_second_resource() {
+    if std::env::var("JR_RUN_KEYRING_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set JR_RUN_KEYRING_TESTS=1 to run keychain tests");
+        return;
+    }
     use mock_harness::{mount_accessible_resources, mount_token_exchange, two_resources_b_first};
     use wiremock::MockServer;
 

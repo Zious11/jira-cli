@@ -238,7 +238,12 @@ mod harness {
 /// `test_refresh_persists_rotated_tokens_via_store_oauth_tokens` AC-002 for
 /// the keyring-gated green-gate variant).
 #[tokio::test]
+#[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
 async fn test_send_retries_once_after_refresh_on_401() {
+    if std::env::var("JR_RUN_KEYRING_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set JR_RUN_KEYRING_TESTS=1 to run keychain tests");
+        return;
+    }
     let _env_guard = harness::env_lock().lock().await;
 
     use jr::api::client::JiraClient;
@@ -425,7 +430,12 @@ async fn test_refresh_persists_rotated_tokens_via_store_oauth_tokens() {
 /// - `err_str.contains("jr auth refresh")` → fails (hint text is absent pre-implementation).
 /// - `Mock::expect(1)` on refresh → fails with 0 calls on MockServer drop.
 #[tokio::test]
+#[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
 async fn test_invalid_grant_surfaces_not_authenticated_with_refresh_hint() {
+    if std::env::var("JR_RUN_KEYRING_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set JR_RUN_KEYRING_TESTS=1 to run keychain tests");
+        return;
+    }
     let _env_guard = harness::env_lock().lock().await;
 
     use jr::api::client::JiraClient;
@@ -501,7 +511,12 @@ async fn test_invalid_grant_surfaces_not_authenticated_with_refresh_hint() {
 /// - `send()` doesn't attempt refresh at all. Returns 401 error immediately.
 /// - `Mock::expect(1)` on the refresh endpoint → 0 calls → MockServer drop fails.
 #[tokio::test]
+#[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
 async fn test_send_caps_refresh_at_one_attempt_when_retry_also_401() {
+    if std::env::var("JR_RUN_KEYRING_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set JR_RUN_KEYRING_TESTS=1 to run keychain tests");
+        return;
+    }
     let _env_guard = harness::env_lock().lock().await;
 
     use jr::api::client::JiraClient;
@@ -559,7 +574,12 @@ async fn test_send_caps_refresh_at_one_attempt_when_retry_also_401() {
 /// RED GATE (always fails pre-implementation):
 /// - `Mock::expect(1)` on refresh → 0 calls → MockServer drop fails.
 #[tokio::test]
+#[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
 async fn test_send_caps_refresh_at_one_attempt_when_refresh_fails() {
+    if std::env::var("JR_RUN_KEYRING_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set JR_RUN_KEYRING_TESTS=1 to run keychain tests");
+        return;
+    }
     let _env_guard = harness::env_lock().lock().await;
 
     use jr::api::client::JiraClient;
@@ -624,7 +644,12 @@ async fn test_send_caps_refresh_at_one_attempt_when_refresh_fails() {
 /// - `errors` list is not empty → first assertion fails.
 /// - `Mock::expect(1)` on refresh → 0 calls → MockServer drop fails.
 #[tokio::test]
+#[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
 async fn test_concurrent_sends_single_refresh_via_coordinator() {
+    if std::env::var("JR_RUN_KEYRING_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set JR_RUN_KEYRING_TESTS=1 to run keychain tests");
+        return;
+    }
     let _env_guard = harness::env_lock().lock().await;
 
     use futures::future::join_all;
@@ -717,7 +742,12 @@ async fn test_concurrent_sends_single_refresh_via_coordinator() {
 /// - All 10 calls return 401 errors (no refresh attempted).
 /// - `Mock::expect(1)` on refresh → 0 calls → MockServer drop fails.
 #[tokio::test]
+#[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
 async fn test_concurrent_invalid_grant_no_thundering_herd() {
+    if std::env::var("JR_RUN_KEYRING_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set JR_RUN_KEYRING_TESTS=1 to run keychain tests");
+        return;
+    }
     let _env_guard = harness::env_lock().lock().await;
 
     use futures::future::join_all;
@@ -857,7 +887,12 @@ fn test_manual_jr_auth_refresh_unchanged() {
 ///
 /// This test is split into two logical sections (success path and failure path).
 #[tokio::test]
+#[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
 async fn test_refresh_contract_pins_url_grant_type_rotation_invalid_grant() {
+    if std::env::var("JR_RUN_KEYRING_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set JR_RUN_KEYRING_TESTS=1 to run keychain tests");
+        return;
+    }
     let _env_guard = harness::env_lock().lock().await;
 
     use jr::api::client::JiraClient;
