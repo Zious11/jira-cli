@@ -55,6 +55,19 @@ name = "r-efi"
 version = "6"
 reason = "getrandom 0.4 (via tempfile/dialoguer/insta/proptest) pulls r-efi 6; getrandom 0.3 pulls r-efi 5. Transitive side-effect of getrandom version split; unification blocked upstream."
 
+# Note: rand 0.9 + rand 0.10 (and rand_core 0.9 + 0.10) both appear in
+# Cargo.lock post-#327 but cargo-deny correctly does NOT flag them as
+# multiple-versions violations. The active dependency graph contains only
+# rand 0.10 (jr direct dep); rand 0.9.4 is a Cargo cross-platform/feature
+# placeholder for proptest's transitive needs that never enters the actual
+# build. Verified empirically (2026-05-26): adding `[[bans.skip]]` entries
+# for rand/rand_core triggers `warning[unmatched-skip]` (rand 0.9 "not
+# encountered") and `warning[unnecessary-skip]` (rand 0.10 "only one
+# version") in cargo-deny 0.19.6. Intentionally NOT skipped here. If a
+# future cargo-deny upgrade starts flagging these, add the paired skips
+# at that point with the actual root-cause reason text. See PR #327 F5
+# adversarial review (`.factory/phase-f2-spec-evolution/adversarial-327-pass-1.md`).
+
 [[bans.skip]]
 name = "security-framework"
 version = "2"
