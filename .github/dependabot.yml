@@ -2,8 +2,12 @@ version: 2
 updates:
   - package-ecosystem: "cargo"
     directory: "/"
+    # Check daily so that a version finishing its cooldown surfaces within
+    # 24h of becoming eligible, rather than waiting up to a week for the
+    # next weekly check. The cooldown block below is the actual gate;
+    # daily just removes the slack a weekly schedule would add on top.
     schedule:
-      interval: "weekly"
+      interval: "daily"
     open-pull-requests-limit: 5
     # Supply-chain hardening: wait for the upstream release to "soak" before
     # opening an update PR, so that yanked/compromised releases (e.g.
@@ -25,8 +29,9 @@ updates:
 
   - package-ecosystem: "github-actions"
     directory: "/"
+    # Same daily cadence + cooldown rationale as the cargo block above.
     schedule:
-      interval: "weekly"
+      interval: "daily"
     open-pull-requests-limit: 5
     # GitHub Actions doesn't follow strict semver, so only default-days is
     # honored here per the Dependabot options reference.
