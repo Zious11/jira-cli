@@ -1075,7 +1075,7 @@ fn build_authorize_url(client_id: &str, scopes: &str, redirect_uri: &str, state:
 /// of the OAuth 2.0 authorization-code flow (RFC 6749 §10.12).
 ///
 /// 32 random bytes read directly from the operating system CSPRNG via
-/// `rand::rngs::OsRng` (which is a thin wrapper over the `getrandom` crate
+/// `rand::rngs::SysRng` (which is a thin wrapper over the `getrandom` crate
 /// and calls `getrandom(2)` / `BCryptGenRandom` on each invocation — no
 /// user-space reseeding state, unlike `rand::rng()` / `ThreadRng`).
 /// Rendered as 64 hex characters. 256 bits of entropy far exceeds the
@@ -1091,9 +1091,9 @@ fn build_authorize_url(client_id: &str, scopes: &str, redirect_uri: &str, state:
 /// an actionable error rather than aborting the process (the release
 /// profile uses `panic = "abort"`).
 fn generate_state() -> Result<String> {
-    use rand::TryRngCore;
+    use rand::TryRng;
     let mut bytes = [0u8; 32];
-    rand::rngs::OsRng.try_fill_bytes(&mut bytes).context(
+    rand::rngs::SysRng.try_fill_bytes(&mut bytes).context(
         "Failed to read from OS CSPRNG when generating OAuth state. \
          Check OS entropy availability or sandbox/seccomp restrictions \
          that may block getrandom(2) / BCryptGenRandom.",
