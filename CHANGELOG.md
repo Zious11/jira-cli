@@ -6,6 +6,14 @@ All notable changes to jr will be documented here.
 
 ### Added
 
+### Fixed
+
+### Changed
+
+## [0.5.0-dev.10] - 2026-05-26
+
+### Added
+
 - `issue edit`: new `--field NAME=VALUE` flag (repeatable) for setting arbitrary custom
   fields on an existing issue. Supports string, number, single-select (option), date,
   datetime, and user field types. Single-select options are resolved from `editmeta`
@@ -28,6 +36,20 @@ All notable changes to jr will be documented here.
   **MUST re-consent** (`jr auth refresh` or `jr auth login`) to gain the new scope
   before JSM request creation will work. Existing access tokens continue working with
   old scopes until expiry; re-consent is triggered on the next token mint. (Issue #288)
+- `jr issue create --request-type` and `jr issue create` (JSM path) now emit
+  auth-aware 401 error hints. When a 401 occurs against `/rest/servicedeskapi/*`,
+  the error message distinguishes between OAuth scope gaps (`write:servicedesk-request`
+  missing) and API-token expiry, with actionable next-step guidance. (Issue #384)
+- JSM input validation and UX polish for `jr issue create --request-type`: empty
+  `--request-type` value is rejected at parse time (exit 64); combining
+  `--markdown` with `--field description=` is rejected with a conflict error;
+  using platform-only flags (`--type`, `--team`, `--sprint`, etc.) on the JSM
+  path now emits a per-flag warning to stderr listing the ignored flags. (Issue #385)
+- `jr issue edit --type` now emits an enriched error message when the transition
+  is rejected with HTTP 400, including the target type name, the current hierarchy
+  level, and a hint that cross-hierarchy type changes are not supported by Jira
+  Cloud. `--no-parent` with a non-existent parent ID now surfaces a clear
+  fake-endpoint hint instead of a raw 404. (Issue #388)
 
 ### Fixed
 
@@ -36,6 +58,13 @@ All notable changes to jr will be documented here.
   `--label` routing fork calls a labels-only handler that does not accept custom-field pairs;
   the `--label` mutual-exclusion block now rejects this combination before any HTTP call.
   (FIX-F5-001, follow-up to issue #396)
+
+### Dependencies
+
+- `rand` bumped from 0.9.4 to 0.10.1. No user-visible behavior change; `jr` uses only
+  the OS CSPRNG path (unaffected by the soundness fix in GHSA-cq8v-f236-94qc /
+  RUSTSEC-2026-0097, which applies to `ThreadRng` with the `log` feature — neither of
+  which `jr` enables). Dependency hygiene update. (Issue #413)
 
 ### BREAKING CHANGE (v0.6)
 
