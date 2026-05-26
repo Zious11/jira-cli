@@ -2,11 +2,11 @@
 document_type: story-index
 phase: phase-2-story-decomposition
 producer: story-writer
-version: "1.4.20"
-total_stories: 48
+version: "1.4.21"
+total_stories: 49
 total_waves: 4
 status: complete-pending-adv-review
-last_updated: 2026-05-26 (S-327 added; feature mode F3; 47→48)
+last_updated: 2026-05-26 (S-410 added; feature mode bug-fix; 48→49)
 activation_head: dea1664
 ---
 
@@ -25,9 +25,9 @@ Phase 1 converged at adversary Pass 28. Gate approved 2026-05-04.
 | 1 | High-priority security posture, supply-chain hardening, structured logging, regression holdouts | 8 | ~6-7 dev-days | NFR-S-E/F gate; wave-0 holdouts green; H-001..H-006 MUST-PASS |
 | 2 | Medium-priority NFRs, BC-2/3/4/5 holdout suites, JSON output policy, documentation | 7 | ~5-6 dev-days | NFR-P-* gate; H-030..H-044 MUST-PASS |
 | 3 | Low priority + deferred (DEFER NFRs, shard splits, process codification, DOCUMENT-AS-IS) | 10 | ~5-7 dev-days | Per-story gates; no v0.5 blocking |
-| feature-followup | Audit-followup test pins + feature-mode F3 deliveries for shipped features and dependency hygiene | 16 | ~8-12 dev-days | cargo test green; per-story BC gates |
+| feature-followup | Audit-followup test pins + feature-mode F3 deliveries for shipped features and dependency hygiene | 17 | ~8-12 dev-days | cargo test green; per-story BC gates |
 
-**Final totals: 48 stories (authoritative count — see `total_stories` frontmatter and Story Manifest section).** Wave 0: 7, Wave 1: 8, Wave 2: 7, Wave 3: 10 (+S-3.10 added during Wave 2 as S-2.06 DEFER-01 follow-up). Wave 2: **7/7 COMPLETE** (PRs #303-#309; 2026-05-08). Feature-followup group: 16 stories — S-340 (task_id pin; 2026-05-15), S-345 (label-coalesce refactor + proptest; 2026-05-16), S-346 (cargo-mutants CI job + whitelist policy; 2026-05-16), issue-288-pr1-api, issue-288-pr2-cli, issue-288-pr4-dispatch (JSM request type cycle 3; 2026-05-18/19), S-382 (JrError::InsufficientScope refactor; 2026-05-19), S-383 (platform-inverse warnings; 2026-05-19), S-392 (cumulative BC-count guard DRIFT-002; 2026-05-19), S-384 (JSM 401 auth-aware hints; 2026-05-20), S-385 (JSM input validation UX polish; 2026-05-20), S-388 (cross-hierarchy edit --type 400 enrichment; 2026-05-20), S-398 (issue edit/create changed-fields echo; 2026-05-22), S-396 (issue edit --field NAME=VALUE arbitrary custom field editing; 2026-05-22), S-407 (--label conflict block 10 regression tests + structural meta-test; 2026-05-25), S-327 (rand 0.9→0.10 OsRng/TryRngCore symbol-rename migration + deny.toml skip; 2026-05-26). Note: the earlier "36 stories" figure was the wave-only baseline before feature-followup stories were added; the authoritative count is always `total_stories` / the Story Manifest row count. Updated 2026-05-20 (S-388 added; feature mode F3; 43→44). Updated 2026-05-22 (S-398 added; feature mode F3; 44→45). Updated 2026-05-22 (S-396 added; feature mode F3; 45→46). Updated 2026-05-25 (S-407 added; feature mode F3; 46→47). Updated 2026-05-26 (S-327 added; feature mode F3; 47→48).
+**Final totals: 49 stories (authoritative count — see `total_stories` frontmatter and Story Manifest section).** Wave 0: 7, Wave 1: 8, Wave 2: 7, Wave 3: 10 (+S-3.10 added during Wave 2 as S-2.06 DEFER-01 follow-up). Wave 2: **7/7 COMPLETE** (PRs #303-#309; 2026-05-08). Feature-followup group: 17 stories — S-340 (task_id pin; 2026-05-15), S-345 (label-coalesce refactor + proptest; 2026-05-16), S-346 (cargo-mutants CI job + whitelist policy; 2026-05-16), issue-288-pr1-api, issue-288-pr2-cli, issue-288-pr4-dispatch (JSM request type cycle 3; 2026-05-18/19), S-382 (JrError::InsufficientScope refactor; 2026-05-19), S-383 (platform-inverse warnings; 2026-05-19), S-392 (cumulative BC-count guard DRIFT-002; 2026-05-19), S-384 (JSM 401 auth-aware hints; 2026-05-20), S-385 (JSM input validation UX polish; 2026-05-20), S-388 (cross-hierarchy edit --type 400 enrichment; 2026-05-20), S-398 (issue edit/create changed-fields echo; 2026-05-22), S-396 (issue edit --field NAME=VALUE arbitrary custom field editing; 2026-05-22), S-407 (--label conflict block 10 regression tests + structural meta-test; 2026-05-25), S-327 (rand 0.9→0.10 OsRng/TryRngCore symbol-rename migration + deny.toml skip; 2026-05-26), S-410 (keychain test isolation; 2026-05-26). Note: the earlier "36 stories" figure was the wave-only baseline before feature-followup stories were added; the authoritative count is always `total_stories` / the Story Manifest row count. Updated 2026-05-20 (S-388 added; feature mode F3; 43→44). Updated 2026-05-22 (S-398 added; feature mode F3; 44→45). Updated 2026-05-22 (S-396 added; feature mode F3; 45→46). Updated 2026-05-25 (S-407 added; feature mode F3; 46→47). Updated 2026-05-26 (S-327 added; feature mode F3; 47→48). Updated 2026-05-26 (S-410 added; feature mode bug-fix; 48→49).
 
 Story file naming: `stories/wave-W/S-W.NN-short-slug.md`
 Story ID convention: `S-W.NN` (e.g., `S-0.01`, `S-1.03`)
@@ -192,6 +192,7 @@ They have `wave: feature-followup` in frontmatter and live under `.factory/code-
 | S-396 | `issue edit --field NAME=VALUE` — arbitrary custom field editing via editmeta (closes #396) | BC-3.4.015, BC-3.4.016, BC-3.4.017 | — | **completed** — PR #401 / 2f61566 (2026-05-23); F4 COMPLETE; 44 tests; adv 5 passes 3/3 CLEAN; Copilot R3=0; AWAITING F5 | medium (8 SP) |
 | S-407 | `--label` conflict block: 10 missing positive regression tests + structural meta-test (closes #407) | BC-3.4.017 | — | **ready** — F3 COMPLETE (2026-05-25); awaiting F4 dispatch | small (1 SP) |
 | S-327 | `rand` 0.9.4 → 0.10.1: OsRng/TryRngCore symbol-rename migration + deny.toml dual-presence skip (closes #327) | BC-1.5.035 | — | **ready** — F3 COMPLETE (2026-05-26); awaiting F4 dispatch | small (1 SP) |
+| S-410 | Gate keychain-touching tests behind JR_RUN_KEYRING_TESTS=1 (closes #410) | — | — | **in progress** — F4 COMPLETE (commit c73c2cb in .worktrees/S-410); awaiting PR | small (1 SP) |
 
 Feature-followup story files: `.factory/code-delivery/issue-NNN/story.md`
 
@@ -281,7 +282,7 @@ gaps that are not blocking for v0.5 but should be tracked.
 ## Story Manifest
 
 Complete mapping of every `story_id` to its absolute file path. Generated 2026-05-07; updated 2026-05-08 (S-3.10 added).
-Total rows: 48 (matches `total_stories: 48` in frontmatter). Updated 2026-05-15 (S-340 added). Updated 2026-05-16 (S-345 added). Updated 2026-05-16 (S-346 added). Updated 2026-05-18 (issue-288-pr1..pr4 added). Updated 2026-05-18 (issue-288-pr3-scope dropped; 40→39). Updated 2026-05-19 (S-382 added; quick-dev F4; 39→40). Updated 2026-05-19 (S-382 completed PR #389 / b1c863e). Updated 2026-05-19 (S-383 added; F3; 40→41). Updated 2026-05-19 (S-383 completed PR #390 / 25f7211). Updated 2026-05-19 (S-392 added; infrastructure; 41→42). Updated 2026-05-20 (S-392 completed PR #393 / 0be2e3a). Updated 2026-05-20 (S-384 added; feature mode F3; 42→43). Updated 2026-05-20 (S-384 completed PR #394 / b36b291). Updated 2026-05-20 (S-385 added; feature mode F3; 43→43; count held at 43). Updated 2026-05-20 (corrected pre-existing off-by-one overcount: total_stories 44→43 to match actual 43 manifest rows; overcount accumulated across S-382..S-384 additions — PG-385-6). Updated 2026-05-20 (S-385 completed PR #395 / f7fc8c3; issue #385 F1–F7 CLOSED; cycle CLOSED). Updated 2026-05-20 (S-388 added; feature mode F3; 43→44). Updated 2026-05-22 (S-398 added; feature mode F3; 44→45). Updated 2026-05-22 (S-396 added; feature mode F3; 45→46). Updated 2026-05-25 (S-407 added; feature mode F3; 46→47). Updated 2026-05-26 (S-327 added; feature mode F3; 47→48).
+Total rows: 49 (matches `total_stories: 49` in frontmatter). Updated 2026-05-15 (S-340 added). Updated 2026-05-16 (S-345 added). Updated 2026-05-16 (S-346 added). Updated 2026-05-18 (issue-288-pr1..pr4 added). Updated 2026-05-18 (issue-288-pr3-scope dropped; 40→39). Updated 2026-05-19 (S-382 added; quick-dev F4; 39→40). Updated 2026-05-19 (S-382 completed PR #389 / b1c863e). Updated 2026-05-19 (S-383 added; F3; 40→41). Updated 2026-05-19 (S-383 completed PR #390 / 25f7211). Updated 2026-05-19 (S-392 added; infrastructure; 41→42). Updated 2026-05-20 (S-392 completed PR #393 / 0be2e3a). Updated 2026-05-20 (S-384 added; feature mode F3; 42→43). Updated 2026-05-20 (S-384 completed PR #394 / b36b291). Updated 2026-05-20 (S-385 added; feature mode F3; 43→43; count held at 43). Updated 2026-05-20 (corrected pre-existing off-by-one overcount: total_stories 44→43 to match actual 43 manifest rows; overcount accumulated across S-382..S-384 additions — PG-385-6). Updated 2026-05-20 (S-385 completed PR #395 / f7fc8c3; issue #385 F1–F7 CLOSED; cycle CLOSED). Updated 2026-05-20 (S-388 added; feature mode F3; 43→44). Updated 2026-05-22 (S-398 added; feature mode F3; 44→45). Updated 2026-05-22 (S-396 added; feature mode F3; 45→46). Updated 2026-05-25 (S-407 added; feature mode F3; 46→47). Updated 2026-05-26 (S-327 added; feature mode F3; 47→48). Updated 2026-05-26 (S-410 added; feature mode bug-fix; 48→49).
 
 ### Wave 0
 
@@ -355,3 +356,4 @@ Total rows: 48 (matches `total_stories: 48` in frontmatter). Updated 2026-05-15 
 | S-396 | feature-followup (feature mode F3) | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/S-396-issue-edit-field-flag.md |
 | S-407 | feature-followup (feature mode F3) | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/S-407-label-conflict-block-coverage-and-meta-test.md |
 | S-327 | feature-followup (feature mode F3) | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/S-327-rand-0.10-migration.md |
+| S-410 | feature-followup (feature mode bug-fix) | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/S-410-keychain-test-isolation.md |

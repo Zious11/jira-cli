@@ -1,0 +1,16 @@
+# Affected Files — Issue #410
+# Test infra: unify keychain-touching test isolation pattern
+# Generated: 2026-05-26
+
+## Test files requiring changes (add #[ignore] + JR_RUN_KEYRING_TESTS guard)
+
+tests/multi_cloudid_disambiguation.rs
+tests/oauth_refresh_integration.rs
+
+## Documentation requiring changes
+
+CLAUDE.md
+
+## Production files
+
+# NONE — this is a test-infrastructure-only change.
