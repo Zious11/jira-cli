@@ -5,9 +5,26 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    # Supply-chain hardening: wait for the upstream release to "soak" before
+    # opening an update PR, so that yanked/compromised releases (e.g.
+    # post-publish hijacking) age out before we surface them for review.
+    # Cooldown does NOT apply to security advisories — Dependabot still opens
+    # those immediately, which is the desired behavior.
+    cooldown:
+      default-days: 7
+      # Majors (in Rust, also pre-1.0 minor bumps) almost always involve API
+      # breakage. Hold them an extra week so the ecosystem can shake out
+      # release-day regressions before we look at the diff.
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 7
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    # GitHub Actions doesn't follow strict semver, so only default-days is
+    # honored here per the Dependabot options reference.
+    cooldown:
+      default-days: 7
