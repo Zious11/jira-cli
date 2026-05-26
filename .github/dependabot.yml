@@ -13,9 +13,13 @@ updates:
     cooldown:
       default-days: 7
       # Majors (in Rust, also pre-1.0 minor bumps) almost always involve API
-      # breakage. Hold them an extra week so the ecosystem can shake out
-      # release-day regressions before we look at the diff.
-      semver-major-days: 14
+      # breakage. Hold them a full month so the ecosystem can shake out
+      # release-day regressions before we look at the diff. Matches the
+      # risk-tiered split GitHub uses in its own canonical example.
+      semver-major-days: 30
+      # Minor + patch stay at the policy floor of 7 days. Patches do NOT
+      # drop below this — "patch" labels don't make a release immune to
+      # post-publish hijacking; if anything the opposite is true.
       semver-minor-days: 7
       semver-patch-days: 7
 
