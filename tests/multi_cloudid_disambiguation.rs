@@ -992,7 +992,12 @@ async fn test_interactive_select_via_stdin_picks_second_resource() {
 /// After implementation: stderr or stdout shows something like:
 ///   "Authenticated with Company A (https://company-a.atlassian.net) [cloud-A]"
 #[tokio::test]
+#[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
 async fn test_interactive_render_shows_name_url_and_id() {
+    if std::env::var("JR_RUN_KEYRING_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set JR_RUN_KEYRING_TESTS=1 to run keychain tests");
+        return;
+    }
     use mock_harness::{mount_accessible_resources, mount_token_exchange, two_resources_b_first};
     use wiremock::MockServer;
 
