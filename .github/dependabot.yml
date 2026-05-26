@@ -2,12 +2,38 @@ version: 2
 updates:
   - package-ecosystem: "cargo"
     directory: "/"
+    # Check daily so that a version finishing its cooldown surfaces within
+    # 24h of becoming eligible, rather than waiting up to a week for the
+    # next weekly check. The cooldown block below is the actual gate;
+    # daily just removes the slack a weekly schedule would add on top.
     schedule:
-      interval: "weekly"
+      interval: "daily"
     open-pull-requests-limit: 5
+    # Supply-chain hardening: wait for the upstream release to "soak" before
+    # opening an update PR, so that yanked/compromised releases (e.g.
+    # post-publish hijacking) age out before we surface them for review.
+    # Cooldown does NOT apply to security advisories — Dependabot still opens
+    # those immediately, which is the desired behavior.
+    cooldown:
+      default-days: 7
+      # Majors (in Rust, also pre-1.0 minor bumps) almost always involve API
+      # breakage. Hold them a full month so the ecosystem can shake out
+      # release-day regressions before we look at the diff. Matches the
+      # risk-tiered split GitHub uses in its own canonical example.
+      semver-major-days: 30
+      # Minor + patch stay at the policy floor of 7 days. Patches do NOT
+      # drop below this — "patch" labels don't make a release immune to
+      # post-publish hijacking; if anything the opposite is true.
+      semver-minor-days: 7
+      semver-patch-days: 7
 
   - package-ecosystem: "github-actions"
     directory: "/"
+    # Same daily cadence + cooldown rationale as the cargo block above.
     schedule:
-      interval: "weekly"
+      interval: "daily"
     open-pull-requests-limit: 5
+    # GitHub Actions doesn't follow strict semver, so only default-days is
+    # honored here per the Dependabot options reference.
+    cooldown:
+      default-days: 7
