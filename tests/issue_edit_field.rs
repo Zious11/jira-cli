@@ -2422,59 +2422,13 @@ async fn test_bc_3_4_016_option_id_bypass_only_for_numeric_values() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 38 — M-7 / BC-3.4.015 EC-3.4.015-4a
-// Stronger assertion: integer number field wire form is truly i64, not f64.
-// Supplements test 26 (body_partial_json check) with a direct unit assertion
-// on the serde_json::Number produced by the number resolver.
-// This test uses the library directly rather than the binary.
+// Test 38 — REMOVED in S-409 (issue #409)
+// The integer-vs-float wire-form invariant is now unit-tested directly against
+// the production helper `parsed_number_to_wire_value` in
+// `src/cli/issue/field_resolve.rs::tests`. End-to-end coverage continues via
+// tests 26/27 (`test_bc_3_4_015_number_field_integer_wire_form` and
+// `_scientific_notation_wire_form`).
 // ---------------------------------------------------------------------------
-
-#[test]
-fn test_bc_3_4_015_number_resolver_integer_is_i64_not_f64() {
-    // Parse "5" → f64 5.0 → fract() == 0 → emit as i64.
-    let parsed: f64 = "5".parse().unwrap();
-    let wire = if parsed.fract() == 0.0 && parsed >= i64::MIN as f64 && parsed <= i64::MAX as f64 {
-        serde_json::Value::Number(serde_json::Number::from(parsed as i64))
-    } else {
-        serde_json::json!(parsed)
-    };
-    assert!(
-        wire.is_i64() && !wire.is_f64(),
-        "Wire value for integer input '5' must be i64, not f64; got: {wire}"
-    );
-    assert_eq!(wire.as_i64(), Some(5i64));
-
-    // Parse "5e3" → f64 5000.0 → fract() == 0 → emit as i64.
-    let parsed_sci: f64 = "5e3".parse().unwrap();
-    let wire_sci = if parsed_sci.fract() == 0.0
-        && parsed_sci >= i64::MIN as f64
-        && parsed_sci <= i64::MAX as f64
-    {
-        serde_json::Value::Number(serde_json::Number::from(parsed_sci as i64))
-    } else {
-        serde_json::json!(parsed_sci)
-    };
-    assert!(
-        wire_sci.is_i64() && !wire_sci.is_f64(),
-        "Wire value for '5e3' must be i64, not f64; got: {wire_sci}"
-    );
-    assert_eq!(wire_sci.as_i64(), Some(5000i64));
-
-    // Parse "5.5" → f64 5.5 → fract() != 0 → remains f64.
-    let parsed_dec: f64 = "5.5".parse().unwrap();
-    let wire_dec = if parsed_dec.fract() == 0.0
-        && parsed_dec >= i64::MIN as f64
-        && parsed_dec <= i64::MAX as f64
-    {
-        serde_json::Value::Number(serde_json::Number::from(parsed_dec as i64))
-    } else {
-        serde_json::json!(parsed_dec)
-    };
-    assert!(
-        wire_dec.is_f64(),
-        "Wire value for '5.5' must remain f64; got: {wire_dec}"
-    );
-}
 
 // ---------------------------------------------------------------------------
 // Test 39 — M-6 / BC-3.4.015
