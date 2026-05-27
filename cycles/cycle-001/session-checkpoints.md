@@ -112,3 +112,13 @@ _Archived 2026-05-21. Was the active checkpoint at issue #388 F4 COMPLETE. Super
 | **Date** | 2026-05-21 |
 | **Position** | **Issue #388 Feature Mode — F4 COMPLETE. Issue #388 CLOSED.** PR #397 squash-merged @ e0ea24b (2026-05-21). Red Gate VERIFIED (9/10 integration tests + proptest + T-06 correctly red pre-impl; test #10 `.expect(0)` regression-guard exception documented). Per-story adversary CONVERGED: 4 passes (pass 1 found 1 MAJOR — `--no-parent` arm surfaced fabricated English error instead of real Jira error, fixed fd0cdd5; passes 2/3/4 CLEAN). 5 VHS demo scenarios + evidence-report.md at docs/demo-evidence/S-388/ covering all 7 ACs. CI: first run caught mutation-testing gap (85%, 1 surviving mutant at create.rs:898) — fixed by `test_no_parent_non_subtask_400_does_not_surface_cross_hierarchy_hint`; second run 10/10 green. pr-reviewer APPROVE cycle 1 (0 blocking). Security review CLEAN. Worktree `.worktrees/S-388` and branch removed. STORY-INDEX S-388 → completed. BC corpus: 577 BCs (spec v1.3.0). Remaining open backlog: #210, #331, #372, #387. Open PRs: #327, #368. Next: next feature from open backlog (human directs). |
 | **Convergence counter** | #388 F4 COMPLETE (cycle CLOSED). BC corpus: 577 BCs (spec v1.3.0). Story corpus: 44 stories (all delivered). |
+
+---
+
+_Archived 2026-05-27. Was the active checkpoint at S-408 MERGED. Superseded by S-409 IN-PROGRESS checkpoint._
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-27 |
+| **Position** | **S-408 MERGED — cycle closed.** PR #417 merged 2026-05-27 (develop @ d53278a). 5 stale line-anchor citations re-anchored to symbol-form. 1 Copilot cycle (path-prefix inconsistency; fixed bfa333d; re-review clean). Issue #408 auto-closed. Symbol-form citation convention now active in CLAUDE.md. STORY-INDEX v1.4.24. Held Dependabot PRs #403/#404 due 2026-05-31. Open backlog: #210, #331, #368, #372, #387, #400, #409. |
+| **Convergence counter** | S-408 MERGED (CYCLE CLOSED). BC corpus: 583 BCs (unchanged). Story corpus: 50 stories. All feature-mode cycles since Wave 3 CONVERGED. |
