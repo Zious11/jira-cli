@@ -52,10 +52,17 @@ use crate::error::JrError;
 ///     present). Value IS valid `i64::MIN` (approximately); strict `>` routes to f64.
 ///
 ///   For cases (b) and (c) the value is actually valid `i64::MIN`; emitting f64 instead
-///   loses no precision (both wire forms encode -9223372036854775808 exactly per the JSON
-///   Number spec). Using a non-strict `>= i64::MIN as f64` would let cases (b)/(c) into
-///   the i64 branch, but would also let case (a) silently saturate to `i64::MIN` — a
-///   silent data-corruption bug. The strict `>` is the safer trade-off.
+///   loses no precision because (1) `-2^63` is exactly representable as IEEE-754 binary64
+///   (it's a power of two within f64's normal range), and (2) `serde_json` serializes
+///   finite f64 values whose `fract() == 0.0` as exact decimal integer literals on the
+///   wire (no scientific notation, no decimal point). Both
+///   `serde_json::Value::Number(Number::from(i64::MIN))` and
+///   `serde_json::json!(-9223372036854775808.0_f64)` produce the wire literal
+///   `-9223372036854775808`. JSON itself (RFC 8259) does not mandate numeric precision;
+///   the round-trip guarantee here is from f64 + `serde_json` semantics, not the JSON
+///   spec. Using a non-strict `>= i64::MIN as f64` would let cases (b)/(c) into the i64
+///   branch, but would also let case (a) silently saturate to `i64::MIN` — a silent
+///   data-corruption bug. The strict `>` is the safer trade-off.
 ///
 /// Caller is responsible for rejecting NaN / Inf BEFORE calling this helper —
 /// `serde_json::json!(f64)` panics on non-finite values (see `Number::from_f64`).
@@ -630,9 +637,13 @@ mod tests {
 
     #[test]
     fn test_parsed_number_to_wire_value_strict_lower_excludes_negative_two_to_the_63_in_stage2() {
-        // -2^63 = i64::MIN as f64 (exact). In Stage 2 context, this value can only
-        // arrive from an underflowing string like "-9223372036854775809"; the strict
-        // > i64::MIN comparison correctly routes it to f64.
+        // -2^63 = i64::MIN as f64 (exact). In Stage 2 context, a parsed f64 value of
+        // -2^63 may arrive from several string forms: an underflowing integer like
+        // "-9223372036854775809", the decimal form of i64::MIN "-9223372036854775808.0",
+        // or scientific notation "-9.223372036854776e18". The strict > i64::MIN
+        // comparison routes ALL these cases to f64 regardless of source. This test
+        // invokes the helper directly with the f64 value -2^63 to pin the predicate
+        // behavior independent of source string.
         let neg_two_to_63 = -9223372036854775808.0_f64;
         let wire = parsed_number_to_wire_value(neg_two_to_63);
         assert!(
