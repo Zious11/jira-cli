@@ -536,7 +536,7 @@ mod tests {
     // S-421: boundary regression pins for the strict-inequality predicate.
 
     #[test]
-    fn parsed_number_to_wire_value_strict_upper_excludes_two_to_the_63() {
+    fn test_parsed_number_to_wire_value_strict_upper_excludes_two_to_the_63() {
         // 2^63 = 9223372036854775808.0 = i64::MAX as f64 (rounds up because f64 can't
         // represent i64::MAX exactly). Strict-less-than predicate excludes it.
         let two_to_63 = 9223372036854775808.0_f64;
@@ -548,7 +548,7 @@ mod tests {
     }
 
     #[test]
-    fn parsed_number_to_wire_value_strict_lower_excludes_negative_two_to_the_63_in_stage2() {
+    fn test_parsed_number_to_wire_value_strict_lower_excludes_negative_two_to_the_63_in_stage2() {
         // -2^63 = i64::MIN as f64 (exact). In Stage 2 context, this value can only
         // arrive from an underflowing string like "-9223372036854775809"; the strict
         // > i64::MIN comparison correctly routes it to f64.
@@ -565,7 +565,7 @@ mod tests {
     // production logic in the "number" branch of resolve_edit_fields.
 
     #[test]
-    fn s421_i64_max_emits_i64() {
+    fn test_s421_i64_max_emits_i64() {
         // Simulate Stage 1 + Stage 2 logic for "9223372036854775807"
         let value = "9223372036854775807";
         let wire = if let Ok(n) = value.parse::<i64>() {
@@ -583,7 +583,7 @@ mod tests {
     }
 
     #[test]
-    fn s421_i64_max_plus_one_emits_f64() {
+    fn test_s421_i64_max_plus_one_emits_f64() {
         let value = "9223372036854775808"; // i64::MAX + 1 = 2^63
         let wire = if let Ok(n) = value.parse::<i64>() {
             serde_json::Value::Number(serde_json::Number::from(n))
@@ -598,7 +598,7 @@ mod tests {
     }
 
     #[test]
-    fn s421_i64_min_emits_i64() {
+    fn test_s421_i64_min_emits_i64() {
         let value = "-9223372036854775808";
         let wire = if let Ok(n) = value.parse::<i64>() {
             serde_json::Value::Number(serde_json::Number::from(n))
@@ -610,7 +610,7 @@ mod tests {
     }
 
     #[test]
-    fn s421_i64_min_minus_one_emits_f64() {
+    fn test_s421_i64_min_minus_one_emits_f64() {
         let value = "-9223372036854775809"; // i64::MIN - 1
         let wire = if let Ok(n) = value.parse::<i64>() {
             serde_json::Value::Number(serde_json::Number::from(n))
@@ -625,7 +625,7 @@ mod tests {
     }
 
     #[test]
-    fn s421_two_to_53_plus_one_emits_exact_i64_no_precision_loss() {
+    fn test_s421_two_to_53_plus_one_emits_exact_i64_no_precision_loss() {
         // 2^53 + 1 = 9007199254740993 — NOT exactly representable as f64 (rounds to 2^53).
         // Pre-S-421: parsed as f64 → 9007199254740992 (off by 1) → emitted as i64.
         // Post-S-421: Stage 1 parses as i64 exactly → emitted as i64 with correct value.
@@ -640,7 +640,7 @@ mod tests {
     }
 
     #[test]
-    fn s421_scientific_notation_one_e_ten_emits_i64() {
+    fn test_s421_scientific_notation_one_e_ten_emits_i64() {
         // "1e10" parses as i64 → FAILS (parser doesn't accept scientific notation).
         // Falls to Stage 2: f64 parse → 10000000000.0 → fract == 0 → strict predicate
         // (10000000000.0 < 2^63) → emit as i64 10_000_000_000.
