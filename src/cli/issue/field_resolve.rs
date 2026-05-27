@@ -13,11 +13,19 @@ use crate::error::JrError;
 ///
 /// # Context: Stage 2 (f64 fallback) caller contract
 ///
-/// This helper is called from a Stage 2 (f64) fallback context — Stage 1 (i64-first
-/// parse via `value.parse::<i64>()`) at the call site has already eliminated all
-/// exact-i64-representable inputs. Inputs that reach this helper therefore came from
-/// strings that failed `parse::<i64>()`: decimals, scientific notation, and integers
-/// outside the i64 range.
+/// This helper is called from the Stage 2 (f64) fallback in `resolve_edit_fields`.
+/// Stage 1 (`value.parse::<i64>()`) at the call site has already short-circuited all
+/// *string forms* that parse cleanly as i64 (e.g., plain integer literals like `"5"`
+/// or `"-9223372036854775807"`). Stage 2 therefore receives values from strings that
+/// failed i64 parsing — which includes:
+///
+/// - Decimal literals: `"5.5"` → emits f64; `"5.0"` → emits i64 via the fract predicate
+/// - Scientific notation: `"5e3"` → emits i64; `"1.5e3"` → emits i64; `"1e20"` → emits f64
+/// - Integer strings outside i64 range: `"9223372036854775808"` → emits f64
+///
+/// Note that decimal and scientific forms may represent values that ARE valid i64s
+/// (e.g., `"5.0"` = 5, `"5e3"` = 5000) — they reach Stage 2 only because the string
+/// form itself failed `parse::<i64>()`, not because the value is out of range.
 ///
 /// # Strict-inequality bounds (S-421, issue #421)
 ///
@@ -31,10 +39,23 @@ use crate::error::JrError;
 ///   silently to `i64::MAX`, producing wrong output. Strict `<` excludes 2^63.
 ///
 /// - **Lower bound:** `i64::MIN as f64` is -9_223_372_036_854_775_808.0 (= -2^63),
-///   which IS exactly representable as f64. In Stage 2 context, this value can only
-///   arrive from an underflowing string like "-9223372036854775809" (Stage 1 would
-///   have consumed the exact `i64::MIN` string "-9223372036854775808" before reaching
-///   here). The strict `>` excludes it, correctly routing it to f64.
+///   which IS exactly representable as f64. In Stage 2, a parsed f64 value of `-2^63`
+///   may arrive from several string forms:
+///
+///   - (a) An underflowing integer string like `"-9223372036854775809"` — Stage 1
+///     rejects it (parse fails); f64 rounds it to -2^63. Value is outside i64 range;
+///     emitting f64 is correct.
+///   - (b) The decimal form of `i64::MIN`: `"-9223372036854775808.0"` — Stage 1
+///     rejects it (decimal point). Value IS valid `i64::MIN`; strict `>` still routes
+///     it to f64.
+///   - (c) Scientific notation: `"-9.223372036854776e18"` — Stage 1 rejects it (`e`
+///     present). Value IS valid `i64::MIN` (approximately); strict `>` routes to f64.
+///
+///   For cases (b) and (c) the value is actually valid `i64::MIN`; emitting f64 instead
+///   loses no precision (both wire forms encode -9223372036854775808 exactly per the JSON
+///   Number spec). Using a non-strict `>= i64::MIN as f64` would let cases (b)/(c) into
+///   the i64 branch, but would also let case (a) silently saturate to `i64::MIN` — a
+///   silent data-corruption bug. The strict `>` is the safer trade-off.
 ///
 /// Caller is responsible for rejecting NaN / Inf BEFORE calling this helper —
 /// `serde_json::json!(f64)` panics on non-finite values (see `Number::from_f64`).
