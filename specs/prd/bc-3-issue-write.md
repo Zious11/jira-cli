@@ -979,7 +979,7 @@ BC-3.4.013 JSON-mode `changed_fields` object.
 **`resolve_edit_fields` canonical signature** (as of F2 amendment, P2-006 corrected, F-1 reconciled):
 `resolve_edit_fields(client: &JiraClient, profile: &str, key: &str, field_pairs: &HashMap<String, String>, fields: &mut Value, changed_fields: &mut BTreeMap<String, String>) -> Result<()>`
 
-The `field_pairs` parameter is `&HashMap<String, String>` (NOT `&[(String, String)]`) because `parse_field_kv` (the upstream parser at `src/cli/issue/create.rs:1982-1997`) returns `HashMap<String, String>`. `parse_field_kv` uses `map.insert(key, value)` with last-wins semantics — duplicate `--field` keys are collapsed AT PARSE TIME, before `resolve_edit_fields` ever runs. An ordered slice would be structurally incompatible with this upstream output. `HashMap` is the correct type at this boundary.
+The `field_pairs` parameter is `&HashMap<String, String>` (NOT `&[(String, String)]`) because `parse_field_kv` (the upstream parser at `src/cli/issue/create.rs::parse_field_kv`) returns `HashMap<String, String>`. `parse_field_kv` uses `map.insert(key, value)` with last-wins semantics — duplicate `--field` keys are collapsed AT PARSE TIME, before `resolve_edit_fields` ever runs. An ordered slice would be structurally incompatible with this upstream output. `HashMap` is the correct type at this boundary.
 
 The `profile: &str` parameter (second arg, after `client`) is REQUIRED because `read_fields_cache(profile)` and `write_fields_cache(profile, ...)` are called inside this function. Per the CLAUDE.md hard rule: every cache reader/writer takes `profile: &str`; cross-profile leakage is a correctness bug (sandbox vs prod custom-field IDs can differ). The caller passes `&config.active_profile_name`.
 
@@ -1508,7 +1508,7 @@ adding bulk `--field` support would require a separate design pass.
   pairs targeting the same system field, WITHOUT the dedicated `--summary` flag) → Gate B
   does NOT fire (Gate B requires the dedicated flag AND a `--field` pair for the same
   key; two `--field` pairs for the same key without the dedicated flag is not a Gate B
-  condition). `parse_field_kv` (at `src/cli/issue/create.rs:1982-1997`) collapses the
+  condition). `parse_field_kv` (at `src/cli/issue/create.rs::parse_field_kv`) collapses the
   duplicate key AT PARSE TIME via `map.insert(key, value)` — the HashMap retains only
   the LAST value (`"B"`). `resolve_edit_fields` never sees both entries; it receives
   `{"summary": "B"}` as a single-entry `HashMap<String, String>`. No "second write"
@@ -1532,7 +1532,7 @@ adding bulk `--field` support would require a separate design pass.
   reaches stderr. The multi-key detection is not reached.
 - EC-3.4.017-13: `jr issue edit KEY --label add:foo --field Severity=Critical` on a single
   key → exit 64 with `--label` conflict-block error. The `--label` short-circuit at
-  `src/cli/issue/create.rs:~835` routes to `handle_edit_bulk_labels` which does not accept
+  `src/cli/issue/create.rs::handle_edit § "Route: labels → bulk API"` routes to `handle_edit_bulk_labels` which does not accept
   `field_pairs`; without rejection before the routing decision the `--field` write silently
   drops (exit 0, data loss). The `--label` mutual-exclusion block in `handle_edit` rejects
   this combination before any HTTP call. Error: `"--label cannot be combined with --field in
