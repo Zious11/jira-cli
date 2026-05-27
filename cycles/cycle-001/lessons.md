@@ -2047,3 +2047,38 @@ Codifies PG-327-2. The mitigation is especially high-value for dependency-bump a
 stories where the adversary's primary axis is supply-chain hygiene.
 
 _Discovered: S-327 F5 pass-1 back-and-forth, 2026-05-26. Status: [codified]._
+
+---
+
+## L-410-1 [codified] F1 architect per-test audit requires grep cross-check to prevent undercounting
+
+**Context (S-410 / issue #410 — 2026-05-27):**
+
+During the F1 delta analysis for S-410, the F1 architect produced a per-test classification
+table for `tests/multi_cloudid_disambiguation.rs`. The table listed 11 tests as subject to
+gating behind `JR_RUN_KEYRING_TESTS=1`. The actual test count (determined by
+`grep -c "^async fn test_\|^fn test_"`) was 12. The missed test was
+`test_interactive_render_shows_name_url_and_id` — a full OAuth login flow that asserts
+exit-0 and is keychain-transitive.
+
+The undercount was caught by the pr-reviewer's removed-behavior audit during PR review.
+A followup commit (211265a) gated the missed test. The PR description count mismatch
+(5→6 gated in multi_cloudid, 12→13 total) was then caught by Copilot on pass 1.
+Copilot pass 2 was clean.
+
+**Root cause:** The F1 architect classified tests by reading function names and test
+docstrings. It did not cross-check the classification table row count against a mechanical
+count of test function definitions.
+
+**Process improvement:** Whenever the F1 architect produces a per-test classification
+table for a test file, it MUST cross-check the table row count against:
+```
+grep -c "^async fn test_\|^fn test_" <test_file>
+```
+If the counts do not match, the table is incomplete and must be revisited before sign-off.
+
+**Disposition:** DEFERRED drift item in STATE.md (single instance, low recurrence risk per
+established PG-NNN precedent for single-occurrence process gaps). No follow-up story
+created. Target: next maintenance sweep.
+
+_Discovered: S-410 PR review, 2026-05-27. Status: [codified]._

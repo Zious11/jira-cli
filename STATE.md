@@ -4,14 +4,14 @@ level: ops
 version: "2.0"
 status: active
 producer: state-manager
-timestamp: 2026-05-26T00:00:00
+timestamp: 2026-05-27T00:00:00
 phase: phase-3-tdd-implementation
 inputs: []
 input-hash: "[live-state]"
 traces_to: ""
 project: jira-cli
 mode: BROWNFIELD
-current_step: "S-410-F4-COMPLETE-awaiting-PR"
+current_step: "S-410-MERGED-PR416"
 current_cycle: "cycle-001"
 dtu_required: false
 phase_2_status: APPROVED
@@ -36,8 +36,8 @@ activation_version: "v0.5.0-dev.7"
 | **Language** | Rust |
 | **Target Workspace** | develop → main |
 | **Started** | 2026-05-04 |
-| **Last Updated** | 2026-05-26 — S-410 F4 COMPLETE (c73c2cb in .worktrees/S-410); awaiting PR. STORY-INDEX 48→49; feature-followup group 16→17. |
-| **Current Phase** | Phase 3 — TDD Implementation IN PROGRESS — Wave 3 CLOSED (10/10). Feature Mode ongoing. Open backlog: #210, #331, #368, #372, #387, #400, #408, #409, #410. |
+| **Last Updated** | 2026-05-27 — S-410 MERGED via PR #416 (develop @ 04e019a). Issue #410 closed. Cycle closed. |
+| **Current Phase** | Phase 3 — TDD Implementation IN PROGRESS — Wave 3 CLOSED (10/10). Feature Mode ongoing. Open backlog: #210, #331, #368, #372, #387, #400, #408, #409. Held Dependabot PRs #403/#404 due 2026-05-31, #368 stale. |
 | **Next Phase** | Phase 4: Holdout Evaluation (not started) |
 | **Activation HEAD** | dea166471e22eff55974d7675593469b37048c5f (v0.5.0-dev.7) |
 
@@ -76,7 +76,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | #407 F5 CONVERGED — 3 passes, all CLEAN, no fix-PRs; O-1/O-2 routed to #408 | state-manager | complete | F5 trajectory: 4 LOW → 0 → 0. 12/12 conflict-block entries covered. Meta-test (EC-3.4.017-14) mechanically enforces invariant. AWAITING F6. |
 | #407 F6 PASS + F7 PASS + CYCLE CLOSED (human-authorized 2026-05-25) | state-manager | complete | F6: Mutation 100% (1/1 in-diff caught). cargo-audit 0 vulns, cargo-deny clean. Regression 1483/0. CI @ 6eb2535 green (2m40s). F7: all 5 dimensions PASS. MAXIMUM_VIABLE_REFINEMENT_REACHED (12 refinement iterations, monotonic decay to zero). PR #411 @ 6eb2535. Issue #407 CLOSED. DI-396-F5-1/DI-396-F5-2 RESOLVED. O-1/O-2 pre-existing → #408. |
 | #327 F7 CONVERGED + CYCLE CLOSED (2026-05-26) | state-manager | complete | F7: all 6 dimensions PASS. Mutation 100% (2/2). Regression 1483/0. PR #413 @ 375c0f91. Dependabot PR #327 auto-closed. 4 PG items justified deferrals. 3 lessons codified (L-327-1/2/3). factory-artifacts committed. |
-| #410 F1 delta analysis + F4 implementation COMPLETE (2026-05-26); F1 audit miscount corrected 2026-05-26 post-PR-review | state-manager | complete | S-410 story created (7 ACs, 1 SP, feature-followup, MEDIUM). F1: delta-analysis.md in .factory/phase-f1-delta-analysis/issue-410/. F2/F3 skipped (bug-fix routing). F4: commit c73c2cb in .worktrees/S-410 gates 6 tests in multi_cloudid_disambiguation.rs + 7 tests in oauth_refresh_integration.rs behind JR_RUN_KEYRING_TESTS=1. (F1 initially counted 5 gated in multi_cloudid; pr-reviewer found `test_interactive_render_shows_name_url_and_id` was missed — corrected to 6.) STORY-INDEX 48→49; feature-followup 16→17. AWAITING PR. |
+| #410 MERGED 2026-05-27 via PR #416 (develop @ 04e019a) | state-manager | complete | S-410: 13 keychain-transitive tests gated behind JR_RUN_KEYRING_TESTS=1 (6 in multi_cloudid_disambiguation.rs + 7 in oauth_refresh_integration.rs). 1 review cycle: pr-reviewer caught F1 audit undercount (11→12 in multi_cloudid), Copilot pass 1 found description count mismatch (5→6/12→13), Copilot pass 2 clean. Issue #410 auto-closed. F1-AUDIT-MISCOUNT-410 codified as drift deferral (see Drift Items). L-410-1 in lessons.md. |
 
 ## Decisions Log
 
@@ -100,6 +100,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | DEC-018 | Always validate Copilot review findings with Perplexity (or Context7 for library-specific claims) BEFORE acting on them. Established 2026-05-11 per user standing rule; codified in lessons.md. Post-hoc validated PR #351 rounds 1-2 (all 3 Copilot claims confirmed correct via Perplexity). Post-rebase re-request on b38c018 returned 0 new comments, reinforcing that Perplexity-validation kept fix quality high through 3 rounds AND a force-push. Prior counterexample: PR #348 round-2 C1 (compile-error claim was wrong; CI was green). | Universal Copilot review discipline. Avoids wasted or wrong fixes when Copilot's training data is stale on external library/API behavior. Pattern holds across rebase cycles. | Phase 3 ongoing | 2026-05-11 | human (standing rule) |
 | DEC-019 | S-333 JrError variant taxonomy: introduce `JrError::DeadlineExceeded { remaining_ms, message }` (exit code 124, POSIX `timeout(1)` convention) for client-side caller-deadline-expired errors at all 3 sites (`[deadline:send-entry]` + `[deadline:429-retry]` + `[deadline:bulk-outer]`). REVERSES the earlier F3-pre-approval research-validation pass-02 Q6 decision that said "do NOT introduce a new variant; reuse `ApiError(429)` to avoid taxonomy churn". The reversal was triggered by F5 adversary pass-02 C-2 finding + research-validation pass-03 Q2 verification — empirical re-check found only 6 `JrError` match arms in `src/`, all on `404`, none on `429`. External CLI precedent (kubectl, gh, aws-cli, doctl, fly) unanimously uses a dedicated variant for client-side deadlines, NOT 4xx-code overloading. Cap-vs-deadline precedence also REORDERED so deadline-clamp fires BEFORE BC-X.4.009 cap-abort (research-validation pass-04 Q2 — aws-smithy-rs / tokio::time::timeout / kubectl client-go / RFC 9110 §10.2.3 all treat client deadline as a hard contract superseding server Retry-After). Story `.factory/code-delivery/issue-333/story.md` AC-005 annotated-as-superseded with an AC-005-v2 block (per research-validation pass-04 Q3 — supersession-via-iteration preserves audit trail). | Phase 3 / Feature Mode #333 | 2026-05-12 | orchestrator + research-agent + adversary (4 research-validation docs + 6 adversarial passes) |
 | DEC-020 | S-410 keychain test isolation — gate 13 tests behind JR_RUN_KEYRING_TESTS=1 per Option A convention from delta analysis | Per-test audit: multi_cloudid_disambiguation.rs has 12 tests (6 gate, 6 remain always-run for red-gate signal); oauth_refresh_integration.rs has 12 tests (7 gate, 5 remain always-run). Issue body count (10+7) corrected to actual 6+7 after audit. Initial F1 audit missed `test_interactive_render_shows_name_url_and_id`; corrected post-pr-review. F2/F3 skipped per bug-fix routing (no BC changes, no story spec needed beyond tracking). | Feature Mode / issue #410 | 2026-05-26 | orchestrator |
+| DEC-021 | 2026-05-27: S-410 MERGED via PR #416 (develop @ 04e019a). 1 review cycle (Copilot found undercounted F1 audit; followup commit 211265a gated the missed test; description count reconciliation 5→6 / 12→13). F1-AUDIT-MISCOUNT-410 stays in drift register pending codification follow-up. Codified as drift deferral per established PG-NNN precedent (single instance, low recurrence risk). | cycle close | 2026-05-27 | state-manager |
 | DEC-014 | S-3.07 spec pivot to v2.0.0 (3 corrections: Part A reframe + Part B conditional drop + Part D elevation as confirmed JRACLOUD-94632 bug response) | Perplexity-driven verification on 2026-05-08 found 3 errors in v1: (a) Atlassian Retry-After typical values are 1425-3089 seconds with documented 3600s ceiling, NOT the 86400s extreme used as v1's threat framing — `MAX_RETRY_AFTER_SECS=60` aborts essentially every real-world 429 (still defensible for interactive CLI per RFC 9110 §10.2.3, but story rationale + user error message must reflect reality); (b) Part B's `checked_mul` overflow guard targets the 3-arg `parse_duration` calculator that S-3.10 deletes — the orchestrator's earlier "WV2-SEC-01's 64-byte cap eliminates overflow" reasoning was mathematically false (14-20 digit inputs still overflow u64 within 64 bytes) — correct reason to drop is that S-3.10 deletes the function; drop is conditional via `depends_on: [S-3.10]` + AC-NEW-B sequencing gate, with reinstatement plan if S-3.10 slips; (c) Part D's `/rest/api/3/search/jql` cursor-loop is NOT a defensive nice-to-have — it is a confirmed Jira Cloud bug per JRACLOUD-94632 + JRACLOUD-92049 + JRACLOUD-85546 (also reported in atlassian/atlassian-mcp-server#118 and ankitpokhrel/jira-cli#898) → v2 elevates from KNOWN-GAP source comment to real defensive guard + stderr warning containing literal "JRACLOUD-94632" so users have a copy-pasteable upstream search term. ACs change: drop AC-004/005 (Part B specific); add AC-NEW-B sequencing guard; add AC-NEW-D JRACLOUD content assertion. New risk: R-NEW-S307-1 (silent partial results — failure mode now visible). NFR catalog: NFR-R-NEW-2 row removed (Part B dropped → no longer in scope); NFR-R-F routing flipped from DOCUMENT-AS-IS to DOCUMENT-AS-IS-FIXED (real guard delivered, not just documented). Verification report: `.factory/research/S-3.07-wave3-verification.md`. Story rewrite: `.factory/stories/wave-3/S-3.07-low-nfr-code-fixes-and-search-jql-anti-loop.md` (renamed from `-low-nfr-code-cleanup.md`) at factory-artifacts@898937e. No develop-branch impact. | Phase 3 / Wave 3 | 2026-05-08 | human + research-agent (Perplexity + WebFetch) |
 
 ## Skip Log
@@ -139,7 +140,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | M-03, O-01, O-08-01..07 | #288 retrospective observations — all filed as GitHub issues | MEDIUM/LOW | FILED → all CLOSED (#382/#383/#384/#385). |
 | PG-01..04 | Process gaps from pr4-dispatch adversary passes | LOW | DEFERRED — engine-scope. |
 | S-288-pr2-PG group | 13 DEFERRED process-gap items from S-288-pr2 cycle (PG-1a..1g, PG-2a/2b, PG-3a/3b, PG-F1, PG-1b/1c/1e/1f). PG-2c RESOLVED (see blocking-issues-resolved.md). | LOW | DEFER → post-S-288 self-improvement epic. Full details: `cycles/cycle-001/drift-items-deferred-S-288.md`. |
-| F1-AUDIT-MISCOUNT-410 | F1 architect undercounted tests in `multi_cloudid_disambiguation.rs` by 1 (claimed 11, actual 12). Reviewer caught during PR. Future: F1 audits of test files should cross-check by counting `^async fn test_\|^fn test_` matches against the explicit per-test table row count before sign-off. | LOW | CODIFIED — lesson logged in lessons.md |
+| F1-AUDIT-MISCOUNT-410 | F1 architect undercounted tests in `multi_cloudid_disambiguation.rs` by 1 (claimed 11, actual 12). Reviewer caught during PR. Future: F1 audits of test files should cross-check by counting `^async fn test_\|^fn test_` matches against the explicit per-test table row count before sign-off. | LOW | DEFERRED — single instance, low recurrence risk, codified informally in L-410-1 (lessons.md). Target: next maintenance sweep. No follow-up story created (per PG-NNN precedent for single-occurrence process gaps). |
 | S-382-FLAKE-01 | tests/multi_cloudid_disambiguation.rs keychain contention (macOS) | LOW | PRE-EXISTING — future test-infra cleanup. |
 | PG-388-4, PG-384-1/2, PG-385-1..7, PG-398-1..5 | Process gaps from issues #388/#384/#385/#398 cycles (checklists, template gaps, spec-guard gaps, worktree-path class) | LOW | CODIFIED in lessons.md / TRACKED IN #400. |
 | DI-396-F5 + R2-C4 | #396 cycle drift items: DI-396-F5-1/2/3/4, R2-C4 | LOW | FILED → #407 (F5-1/2), #408 (F5-4), #409 (R2-C4), #410 (F5-3). |
@@ -148,16 +149,16 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 
 See `cycles/cycle-001/convergence-trajectory.md` for all per-issue convergence narratives (Phase 1d, Phase 2-adv, Phase 3-adv, issues #288/#382/#383/#384/#385/#396/#398/#407).
 
-Current trajectory summary: All active Feature Mode cycles CONVERGED. BC corpus: 583 BCs. Story corpus: 49 stories (S-410 in progress).
+Current trajectory summary: All active Feature Mode cycles CONVERGED. BC corpus: 583 BCs. Story corpus: 49 stories (S-410 MERGED 2026-05-27).
 
 ## Session Resume Checkpoint
 
 <!-- Keep ONLY the latest checkpoint. Archive prior checkpoints to cycles/cycle-001/session-checkpoints.md. -->
 | Field | Value |
 |-------|-------|
-| **Date** | 2026-05-26 |
-| **Position** | **Issue #410 F4 COMPLETE — awaiting PR.** F1 delta analysis complete (.factory/phase-f1-delta-analysis/issue-410/delta-analysis.md). F1 audit miscount corrected 2026-05-26 post-PR-review (5→6 gated in multi_cloudid_disambiguation.rs). F2/F3 skipped (bug-fix routing). F4: commit c73c2cb on branch fix/S-410-keychain-test-isolation in .worktrees/S-410 — gates 6 tests in tests/multi_cloudid_disambiguation.rs + 7 tests in tests/oauth_refresh_integration.rs behind JR_RUN_KEYRING_TESTS=1. S-410 story created (7 ACs, 1 SP, MEDIUM, feature-followup). STORY-INDEX 48→49. Feature-followup group 16→17. PR creation next. Prior: #327 CYCLE CONVERGED — PR #413 @ 375c0f91. Open backlog: #210, #331, #368, #372, #387, #400, #408, #409, #410. |
-| **Convergence counter** | #410 F4: implementation complete. BC corpus: 583 BCs (unchanged). Story corpus: 49 stories. |
+| **Date** | 2026-05-27 |
+| **Position** | **S-410 CYCLE CLOSED — MERGED via PR #416 (develop @ 04e019a).** 13 keychain-transitive integration tests now gated behind JR_RUN_KEYRING_TESTS=1 (6 in tests/multi_cloudid_disambiguation.rs, 7 in tests/oauth_refresh_integration.rs). Issue #410 auto-closed. F1-AUDIT-MISCOUNT-410 codified as drift deferral. L-410-1 in lessons.md. STORY-INDEX v1.4.22 (S-410 → MERGED). Next work surface: held Dependabot PRs #403/#404 (due 2026-05-31) and/or #368 (stale); OR process-gap codification for F1-AUDIT-MISCOUNT-410 follow-up. Open backlog: #210, #331, #368, #372, #387, #400, #408, #409. |
+| **Convergence counter** | S-410 MERGED. BC corpus: 583 BCs (unchanged). Story corpus: 49 stories (all feature-mode cycles CONVERGED). |
 
 ## Open Issues Tracker (post-#288)
 
@@ -169,7 +170,6 @@ Current trajectory summary: All active Feature Mode cycles CONVERGED. BC corpus:
 | #400 | Test-hardening + process-gap follow-ups from #398 | OPEN | LOW | Filed 2026-05-22 — non-blocking, future maintenance sweep. Tracks TH-398-1..4 + PG-398-1..5. |
 | #408 | spec/CLAUDE.md line-anchor citation drift class (follow-up from #396 F5) | OPEN | LOW | Filed 2026-05-25. Need systematic guard or sweep process. |
 | #409 | `parsed_number_to_wire_value` helper extraction — tautological test 38 | OPEN | LOW | Filed 2026-05-25. R2-C4: extract helper so test exercises production path. |
-| #410 | keychain-touching test isolation infra — developer macOS | IN-PROGRESS | LOW | S-410 worktree commit c73c2cb (fix/S-410-keychain-test-isolation); awaiting PR creation. |
 | #387 | git history rewrite for demo-evidence blobs | OPEN | LOW | Deferred; force-push needed |
 | #368 | (open PR — see backlog) | OPEN | — | |
 
