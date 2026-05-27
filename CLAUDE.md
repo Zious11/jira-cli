@@ -333,7 +333,7 @@ When adding a new feature:
   (6) **`--field` cannot be combined with `--label` on a single key** — rejected with
   exit 64 by the `--label` mutual-exclusion block in `src/cli/issue/create.rs::handle_edit` (search for the `// NOTE: the variable name 'conflicting' is reserved for this block` anchor comment that introduces the block)
   (the same block that rejects `--label` + `--summary`/`--priority`/`--type`/etc.).
-  Without this guard the `--label` routing fork at `create.rs::handle_edit § "Route: labels → bulk API"` (the `// --- Route: labels → bulk API. ---` comment) would silently drop
+  Without this guard the `--label` routing fork at `src/cli/issue/create.rs::handle_edit § "Route: labels → bulk API"` (the `// --- Route: labels → bulk API. ---` comment) would silently drop
   the `--field` write (exit 0, data loss). Combined label + custom-field bulk edits are
   tracked at #331. [FIX-F5-001]
 
