@@ -2082,3 +2082,30 @@ established PG-NNN precedent for single-occurrence process gaps). No follow-up s
 created. Target: next maintenance sweep.
 
 _Discovered: S-410 PR review, 2026-05-27. Status: [codified]._
+
+---
+
+## L-408-1 [codified] Copilot caught within-document convention consistency gap missed by internal multi-angle pre-PR review
+
+**Context (S-408 / issue #408 — 2026-05-27):**
+
+S-408 re-anchored 5 stale line-number citations to symbol-form (`<file>::<function>` or
+`<file>::<function> § "<comment>"`). The internal pr-reviewer ran its standard three-angle
+scan (line-by-line diff, removed-behavior check, cross-file consistency) before the PR opened.
+Copilot round 1 then caught a path-prefix consistency gap: line 336 used `create.rs::handle_edit`
+(bare module-relative form) while line 334 immediately above used `src/cli/issue/create.rs::handle_edit`
+(full src-relative form). The inconsistency was within the same paragraph of the same file. The
+fix was a one-line update in bfa333d. Copilot re-review was clean.
+
+**Why the internal reviewer missed it:** The internal pr-reviewer's three angles focus on
+correctness, behavior change, and cross-file propagation. "Within-document convention
+consistency" is not an explicit axis — the reviewer treats each citation independently rather
+than comparing adjacent citations for format uniformity.
+
+**Disposition:** Opportunistic adoption rather than a new agent prompt edit this cycle.
+Adding "within-document convention consistency" as an explicit internal review angle would
+catch this class of gap, but the class is low-frequency (emerges mainly in docs/spec PRs that
+adopt a new formatting convention mid-document) and the Copilot fallback caught it with
+minimal cost (one round, one line). No follow-up story created.
+
+_Discovered: S-408 Copilot round 1, 2026-05-27. Status: [codified]._
