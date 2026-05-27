@@ -75,6 +75,30 @@ pub(crate) fn parsed_number_to_wire_value(parsed: f64) -> serde_json::Value {
     }
 }
 
+/// Returns the integer portion of a string in the form `^[-+]?\d+\.0+$` (an
+/// integer with only trailing zeros after the decimal point), e.g. `"5.0"` →
+/// `Some("5")`, `"9223372036854775807.0"` → `Some("9223372036854775807")`,
+/// `"5.00"` → `Some("5")`. Returns `None` for any other shape, including
+/// `"5.5"`, `"5."`, `".0"`, `"5e3"`, or empty/invalid input.
+///
+/// Used by the Stage 1.5 retry in `resolve_edit_fields`'s `"number"` branch
+/// (S-421 followup) to preserve exact i64 precision for decimal-form integer
+/// inputs that would otherwise lose precision via Stage 2's f64 round-trip.
+fn strip_integer_decimal_suffix(s: &str) -> Option<&str> {
+    let dot_pos = s.find('.')?;
+    let (int_part, after_dot) = s.split_at(dot_pos);
+    let dec_part = &after_dot[1..]; // skip the '.'
+    if dec_part.is_empty() || !dec_part.chars().all(|c| c == '0') {
+        return None;
+    }
+    // Validate int_part: optional sign + ≥1 digit, all ASCII digits.
+    let digits = int_part.trim_start_matches(['-', '+']);
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(int_part)
+}
+
 /// Resolve and apply `--field NAME=VALUE` pairs for `issue edit` (single-key path).
 ///
 /// Implements BC-3.4.015 Steps 1–6 and BC-3.4.016 option-value resolution.
@@ -346,13 +370,49 @@ pub(crate) async fn resolve_edit_fields(
                 // pre-fix when parsed through f64 first).
                 if let Ok(n) = value.parse::<i64>() {
                     wire_value = serde_json::Value::Number(serde_json::Number::from(n));
+                } else if let Some(stripped) = strip_integer_decimal_suffix(&value) {
+                    // Stage 1.5 (S-421 followup, post-Copilot review):
+                    // Integer with trailing-zero decimal like "5.0" or "9223372036854775807.0".
+                    // Strip the ".0+" suffix and retry i64 parse. This preserves exact i64
+                    // semantics for decimal-form integer inputs that would otherwise lose
+                    // precision via the f64 round-trip in Stage 2.
+                    //
+                    // Background: all four boundary strings — "9223372036854775807",
+                    // "9223372036854775808", "9223372036854775807.0", "9223372036854775808.0"
+                    // — parse to the same f64 value (2^63 = 9223372036854775808.0) because
+                    // i64::MAX is not exactly representable in f64. Without Stage 1.5, the
+                    // strict `<` predicate in Stage 2 would reject this f64 and emit it as
+                    // f64 wire form — correct for the overflow case but a regression for
+                    // "9223372036854775807.0" (the decimal form of i64::MAX, which IS valid).
+                    if let Ok(n) = stripped.parse::<i64>() {
+                        wire_value = serde_json::Value::Number(serde_json::Number::from(n));
+                    } else {
+                        // Stripped integer still doesn't fit in i64 (e.g., "9223372036854775808.0"
+                        // strips to "9223372036854775808" which overflows). Fall through to Stage 2.
+                        let parsed: f64 = value.parse().map_err(|_| {
+                            JrError::UserError(format!(
+                                "Cannot parse '{value}' as a number for field '{human_name}'. \
+                                 Provide a valid numeric value (integer, decimal, or scientific \
+                                 notation like 1e10)."
+                            ))
+                        })?;
+                        if !parsed.is_finite() {
+                            return Err(JrError::UserError(format!(
+                                "Value '{value}' for field '{human_name}' is not a finite number \
+                                 (NaN or Inf are not accepted). Provide a valid numeric value."
+                            ))
+                            .into());
+                        }
+                        wire_value = parsed_number_to_wire_value(parsed);
+                    }
                 } else {
                     // Stage 2: f64 fallback for decimals, scientific notation, and
                     // integers outside the i64 range.
                     let parsed: f64 = value.parse().map_err(|_| {
                         JrError::UserError(format!(
                             "Cannot parse '{value}' as a number for field '{human_name}'. \
-                             Provide a valid numeric value (integer or decimal)."
+                             Provide a valid numeric value (integer, decimal, or scientific \
+                             notation like 1e10)."
                         ))
                     })?;
                     if !parsed.is_finite() {
@@ -581,20 +641,35 @@ mod tests {
         );
     }
 
-    // S-421: two-stage end-to-end boundary tests.
-    // Each test replicates the Stage 1 + Stage 2 decision inline, matching the
-    // production logic in the "number" branch of resolve_edit_fields.
+    // S-421: two-stage (now three-stage) end-to-end boundary tests.
+    // Tests call `parse_number_wire` which mirrors the Stage 1 → Stage 1.5 → Stage 2
+    // dispatch from the production `"number"` branch of resolve_edit_fields.
+
+    /// Test-only replica of the production routing in `resolve_edit_fields`'s
+    /// `"number"` branch. Mirrors Stage 1 → Stage 1.5 → Stage 2 dispatch so the
+    /// boundary regression tests exercise the same decision tree without HTTP
+    /// mocking. Must be kept in sync with the production code — if `resolve_edit_fields`
+    /// adds a new stage or changes the dispatch order, update this helper accordingly.
+    fn parse_number_wire(value: &str) -> serde_json::Value {
+        if let Ok(n) = value.parse::<i64>() {
+            serde_json::Value::Number(serde_json::Number::from(n))
+        } else if let Some(stripped) = super::strip_integer_decimal_suffix(value) {
+            if let Ok(n) = stripped.parse::<i64>() {
+                serde_json::Value::Number(serde_json::Number::from(n))
+            } else {
+                let parsed: f64 = value.parse().unwrap();
+                super::parsed_number_to_wire_value(parsed)
+            }
+        } else {
+            let parsed: f64 = value.parse().unwrap();
+            super::parsed_number_to_wire_value(parsed)
+        }
+    }
 
     #[test]
     fn test_s421_i64_max_emits_i64() {
-        // Simulate Stage 1 + Stage 2 logic for "9223372036854775807"
         let value = "9223372036854775807";
-        let wire = if let Ok(n) = value.parse::<i64>() {
-            serde_json::Value::Number(serde_json::Number::from(n))
-        } else {
-            let parsed: f64 = value.parse().unwrap();
-            parsed_number_to_wire_value(parsed)
-        };
+        let wire = parse_number_wire(value);
         assert_eq!(
             wire.as_i64(),
             Some(i64::MAX),
@@ -606,12 +681,7 @@ mod tests {
     #[test]
     fn test_s421_i64_max_plus_one_emits_f64() {
         let value = "9223372036854775808"; // i64::MAX + 1 = 2^63
-        let wire = if let Ok(n) = value.parse::<i64>() {
-            serde_json::Value::Number(serde_json::Number::from(n))
-        } else {
-            let parsed: f64 = value.parse().unwrap();
-            parsed_number_to_wire_value(parsed)
-        };
+        let wire = parse_number_wire(value);
         assert!(
             wire.is_f64(),
             "expected f64 (not silently saturated i64), got {wire}"
@@ -621,24 +691,14 @@ mod tests {
     #[test]
     fn test_s421_i64_min_emits_i64() {
         let value = "-9223372036854775808";
-        let wire = if let Ok(n) = value.parse::<i64>() {
-            serde_json::Value::Number(serde_json::Number::from(n))
-        } else {
-            let parsed: f64 = value.parse().unwrap();
-            parsed_number_to_wire_value(parsed)
-        };
+        let wire = parse_number_wire(value);
         assert_eq!(wire.as_i64(), Some(i64::MIN));
     }
 
     #[test]
     fn test_s421_i64_min_minus_one_emits_f64() {
         let value = "-9223372036854775809"; // i64::MIN - 1
-        let wire = if let Ok(n) = value.parse::<i64>() {
-            serde_json::Value::Number(serde_json::Number::from(n))
-        } else {
-            let parsed: f64 = value.parse().unwrap();
-            parsed_number_to_wire_value(parsed)
-        };
+        let wire = parse_number_wire(value);
         assert!(
             wire.is_f64(),
             "expected f64 (not silently saturated i64::MIN), got {wire}"
@@ -651,12 +711,7 @@ mod tests {
         // Pre-S-421: parsed as f64 → 9007199254740992 (off by 1) → emitted as i64.
         // Post-S-421: Stage 1 parses as i64 exactly → emitted as i64 with correct value.
         let value = "9007199254740993";
-        let wire = if let Ok(n) = value.parse::<i64>() {
-            serde_json::Value::Number(serde_json::Number::from(n))
-        } else {
-            let parsed: f64 = value.parse().unwrap();
-            parsed_number_to_wire_value(parsed)
-        };
+        let wire = parse_number_wire(value);
         assert_eq!(wire.as_i64(), Some(9007199254740993));
     }
 
@@ -666,12 +721,85 @@ mod tests {
         // Falls to Stage 2: f64 parse → 10000000000.0 → fract == 0 → strict predicate
         // (10000000000.0 < 2^63) → emit as i64 10_000_000_000.
         let value = "1e10";
-        let wire = if let Ok(n) = value.parse::<i64>() {
-            serde_json::Value::Number(serde_json::Number::from(n))
-        } else {
-            let parsed: f64 = value.parse().unwrap();
-            parsed_number_to_wire_value(parsed)
-        };
+        let wire = parse_number_wire(value);
         assert_eq!(wire.as_i64(), Some(10_000_000_000));
+    }
+
+    // S-421 Stage 1.5 regression pins.
+
+    #[test]
+    fn test_s421_decimal_form_of_i64_max_uses_stage_1_5_and_emits_i64() {
+        // Regression pin: "9223372036854775807.0" parses to f64 2^63 (rounded UP),
+        // which strict Stage 2 would reject. Stage 1.5 strips the .0 suffix and
+        // retries as i64, recovering exact i64::MAX.
+        let value = "9223372036854775807.0";
+        let wire = parse_number_wire(value);
+        assert_eq!(
+            wire.as_i64(),
+            Some(i64::MAX),
+            "decimal form of i64::MAX must emit i64, got {wire}"
+        );
+        assert!(wire.is_i64() && !wire.is_f64());
+    }
+
+    #[test]
+    fn test_s421_decimal_form_of_i64_min_uses_stage_1_5_and_emits_i64() {
+        // Mirror of the upper-bound regression.
+        let value = "-9223372036854775808.0";
+        let wire = parse_number_wire(value);
+        assert_eq!(
+            wire.as_i64(),
+            Some(i64::MIN),
+            "decimal form of i64::MIN must emit i64, got {wire}"
+        );
+        assert!(wire.is_i64() && !wire.is_f64());
+    }
+
+    #[test]
+    fn test_s421_stage_1_5_decimal_form_overflow_falls_through_to_f64() {
+        // "9223372036854775808.0" strips to "9223372036854775808" which still
+        // overflows i64. Falls through to Stage 2 (f64). The wire form encodes
+        // the f64 representation (2^63), distinct from emitting silently-saturated i64.
+        let value = "9223372036854775808.0";
+        let wire = parse_number_wire(value);
+        assert!(
+            wire.is_f64(),
+            "out-of-i64-range decimal form must emit f64, got {wire}"
+        );
+    }
+
+    // Unit tests for strip_integer_decimal_suffix.
+
+    #[test]
+    fn test_strip_integer_decimal_suffix_recognizes_trailing_zeros() {
+        assert_eq!(super::strip_integer_decimal_suffix("5.0"), Some("5"));
+        assert_eq!(super::strip_integer_decimal_suffix("5.00"), Some("5"));
+        assert_eq!(super::strip_integer_decimal_suffix("-5.0"), Some("-5"));
+        assert_eq!(super::strip_integer_decimal_suffix("+5.0"), Some("+5"));
+        assert_eq!(
+            super::strip_integer_decimal_suffix("9223372036854775807.0"),
+            Some("9223372036854775807")
+        );
+    }
+
+    #[test]
+    fn test_strip_integer_decimal_suffix_rejects_non_integer_decimals() {
+        assert_eq!(super::strip_integer_decimal_suffix("5.5"), None);
+        assert_eq!(super::strip_integer_decimal_suffix("5.01"), None);
+        assert_eq!(super::strip_integer_decimal_suffix("5.10"), None); // trailing zero but non-zero digit after dot
+        assert_eq!(super::strip_integer_decimal_suffix("5.0e1"), None);
+    }
+
+    #[test]
+    fn test_strip_integer_decimal_suffix_rejects_malformed_input() {
+        assert_eq!(super::strip_integer_decimal_suffix(""), None);
+        assert_eq!(super::strip_integer_decimal_suffix("5"), None); // no dot
+        assert_eq!(super::strip_integer_decimal_suffix("5."), None); // empty decimal part
+        assert_eq!(super::strip_integer_decimal_suffix(".0"), None); // empty integer part
+        assert_eq!(super::strip_integer_decimal_suffix("-.0"), None); // sign only
+        assert_eq!(super::strip_integer_decimal_suffix("5e3"), None); // scientific notation
+        assert_eq!(super::strip_integer_decimal_suffix("5e3.0"), None); // mixed
+        assert_eq!(super::strip_integer_decimal_suffix("abc.0"), None); // non-digit
+        assert_eq!(super::strip_integer_decimal_suffix("1.0.0"), None); // multiple dots
     }
 }
