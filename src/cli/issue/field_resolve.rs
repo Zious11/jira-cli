@@ -5,6 +5,29 @@ use anyhow::Result;
 use crate::api::client::JiraClient;
 use crate::error::JrError;
 
+/// Convert a parsed f64 numeric value into the JSON wire form expected by the Jira
+/// REST API: emit a whole-number integer as i64 (Atlassian's editmeta `number`
+/// schema accepts both i64 and f64, but i64 is the canonical form for whole values
+/// and avoids implicit precision warnings on some Jira instances). Decimal values
+/// stay as f64 via `serde_json::json!`.
+///
+/// Caller is responsible for rejecting NaN / Inf BEFORE calling this helper —
+/// `serde_json::json!(f64)` panics on non-finite values (see `Number::from_f64`).
+///
+/// Extracted in S-409 (issue #409) so the integer-vs-float wire-form invariant
+/// can be unit-tested without reimplementing the conversion in the test body.
+pub(crate) fn parsed_number_to_wire_value(parsed: f64) -> serde_json::Value {
+    debug_assert!(
+        parsed.is_finite(),
+        "parsed_number_to_wire_value requires a finite value; caller must reject NaN/Inf"
+    );
+    if parsed.fract() == 0.0 && parsed >= i64::MIN as f64 && parsed <= i64::MAX as f64 {
+        serde_json::Value::Number(serde_json::Number::from(parsed as i64))
+    } else {
+        serde_json::json!(parsed)
+    }
+}
+
 /// Resolve and apply `--field NAME=VALUE` pairs for `issue edit` (single-key path).
 ///
 /// Implements BC-3.4.015 Steps 1–6 and BC-3.4.016 option-value resolution.
@@ -283,13 +306,9 @@ pub(crate) async fn resolve_edit_fields(
                     ))
                     .into());
                 }
-                // Integer wire form: if the value is a whole number, emit as i64.
-                if parsed.fract() == 0.0 && parsed >= i64::MIN as f64 && parsed <= i64::MAX as f64 {
-                    wire_value = serde_json::Value::Number(serde_json::Number::from(parsed as i64));
-                } else {
-                    // Decimal: use serde_json's f64 representation.
-                    wire_value = serde_json::json!(parsed);
-                }
+                // Emit integer wire form for whole numbers, f64 otherwise.
+                // Helper extracted in S-409 so the invariant can be unit-tested.
+                wire_value = parsed_number_to_wire_value(parsed);
                 display_value = value.clone();
             }
             "date" | "datetime" => {
@@ -427,4 +446,54 @@ pub(crate) async fn resolve_edit_fields(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parsed_number_to_wire_value_whole_emits_i64() {
+        let wire = parsed_number_to_wire_value(5.0);
+        assert!(wire.is_i64() && !wire.is_f64(), "expected i64, got {wire}");
+        assert_eq!(wire.as_i64(), Some(5));
+    }
+
+    #[test]
+    fn parsed_number_to_wire_value_scientific_whole_emits_i64() {
+        let wire = parsed_number_to_wire_value(5e3);
+        assert!(wire.is_i64() && !wire.is_f64(), "expected i64, got {wire}");
+        assert_eq!(wire.as_i64(), Some(5000));
+    }
+
+    #[test]
+    fn parsed_number_to_wire_value_fractional_emits_f64() {
+        let wire = parsed_number_to_wire_value(5.5);
+        assert!(wire.is_f64(), "expected f64, got {wire}");
+        assert_eq!(wire.as_f64(), Some(5.5));
+    }
+
+    #[test]
+    fn parsed_number_to_wire_value_zero_emits_i64() {
+        let wire = parsed_number_to_wire_value(0.0);
+        assert!(wire.is_i64(), "expected i64 for 0.0, got {wire}");
+        assert_eq!(wire.as_i64(), Some(0));
+    }
+
+    #[test]
+    fn parsed_number_to_wire_value_negative_whole_emits_i64() {
+        let wire = parsed_number_to_wire_value(-42.0);
+        assert!(wire.is_i64(), "expected i64 for -42.0, got {wire}");
+        assert_eq!(wire.as_i64(), Some(-42));
+    }
+
+    #[test]
+    fn parsed_number_to_wire_value_out_of_i64_range_emits_f64() {
+        // i64::MAX is 9_223_372_036_854_775_807; this f64 exceeds that.
+        let wire = parsed_number_to_wire_value(1e20);
+        assert!(
+            wire.is_f64(),
+            "expected f64 for 1e20 (overflow), got {wire}"
+        );
+    }
 }
