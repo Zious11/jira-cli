@@ -98,8 +98,14 @@ fn strip_integer_decimal_suffix(s: &str) -> Option<&str> {
     if dec_part.is_empty() || !dec_part.chars().all(|c| c == '0') {
         return None;
     }
-    // Validate int_part: optional sign + ≥1 digit, all ASCII digits.
-    let digits = int_part.trim_start_matches(['-', '+']);
+    // Validate int_part: at most ONE optional sign char + ≥1 digit, all ASCII digits.
+    // Use a first-byte check rather than `trim_start_matches(['-', '+'])`, which would
+    // strip ALL leading sign chars (e.g., "--5" → "5") and allow inputs like "--5.0"
+    // to pass the digit check despite not matching the documented `^[-+]?\d+\.0+$` shape.
+    let digits = match int_part.as_bytes().first() {
+        Some(b'+') | Some(b'-') => &int_part[1..],
+        _ => int_part,
+    };
     if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
         return None;
     }
@@ -812,5 +818,26 @@ mod tests {
         assert_eq!(super::strip_integer_decimal_suffix("5e3.0"), None); // mixed
         assert_eq!(super::strip_integer_decimal_suffix("abc.0"), None); // non-digit
         assert_eq!(super::strip_integer_decimal_suffix("1.0.0"), None); // multiple dots
+        // S-421 R5: multi-sign inputs must return None (matches the ^[-+]?\d+\.0+$ contract).
+        assert_eq!(
+            super::strip_integer_decimal_suffix("--5.0"),
+            None,
+            "two leading minuses must reject"
+        );
+        assert_eq!(
+            super::strip_integer_decimal_suffix("++5.0"),
+            None,
+            "two leading pluses must reject"
+        );
+        assert_eq!(
+            super::strip_integer_decimal_suffix("+-5.0"),
+            None,
+            "plus-then-minus must reject"
+        );
+        assert_eq!(
+            super::strip_integer_decimal_suffix("-+5.0"),
+            None,
+            "minus-then-plus must reject"
+        );
     }
 }
