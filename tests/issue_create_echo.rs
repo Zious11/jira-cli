@@ -770,7 +770,7 @@ async fn test_bc_3_4_014_create_assignee_account_id_echo() {
 
 // ---------------------------------------------------------------------------
 // Test 21 — AC-014: JSM `--request-type` path never emits field echo lines
-// BC-3.4.014 EC-014; VP-398-AC-014.
+// BC-3.4.014 EC-014; AC-014.
 //
 // `handle_jsm_create` is entered when `--request-type` is set. The `create_echo`
 // BTreeMap is declared structurally AFTER the dispatch fork, so `handle_jsm_create`
@@ -911,5 +911,66 @@ async fn test_bc_3_4_014_create_jsm_request_type_path_no_field_echo() {
     assert!(
         !stderr.contains("  priority \u{2192}"),
         "AC-014: 'priority →' must not appear on JSM path; stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 22 — TH-398-4: create --description-stdin echoes `(updated)` marker
+// BC-3.4.014 invariant 2; parity with edit-side
+// test_bc_3_4_013_description_stdin_trailing_newline_preserved_in_changed_fields.
+//
+// The create side must echo `  description → (updated)` (table mode) when
+// description is supplied via stdin. The stdin content must NOT appear in stderr.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_014_create_description_stdin_echo_is_updated_marker() {
+    let server = MockServer::start().await;
+    mount_post_201(&server, "PROJ-1").await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .args([
+            "--no-input",
+            "issue",
+            "create",
+            "--project",
+            "PROJ",
+            "--type",
+            "Task",
+            "--summary",
+            "X",
+            "--description-stdin",
+        ])
+        .write_stdin("Some stdin description\n")
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0; stderr={stderr} stdout={stdout}"
+    );
+
+    // Must echo the (updated) marker — BC-3.4.014 invariant 2
+    assert!(
+        stderr.contains("  description \u{2192} (updated)"),
+        "Expected 'description → (updated)' in stderr; stderr={stderr}"
+    );
+
+    // Must NOT echo the stdin content — BC-3.4.014 invariant 2
+    assert!(
+        !stderr.contains("Some stdin description"),
+        "Stdin description content must NOT appear in stderr; stderr={stderr}"
+    );
+
+    // stdout must be empty in table mode
+    assert!(
+        stdout.is_empty(),
+        "stdout must be empty in table mode; stdout={stdout}"
     );
 }

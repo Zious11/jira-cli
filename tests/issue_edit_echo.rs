@@ -648,16 +648,39 @@ fn test_bc_3_4_012_edit_echo_does_not_fire_on_dry_run() {
         .output()
         .unwrap();
 
+    let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    // dry-run exits non-zero (no keys to resolve) or exits 0 with planned output
-    // but in EITHER case, no `→` field-echo lines from the changed-fields echo
-    // of this contract must appear.
-    // Note: --dry-run requires a JQL or multiple keys; single key exits before PUT.
-    // The guarantee: no field-echo `  <field> → <value>` lines must appear.
+    // POSITIVE guard: prove the dry-run path actually executed (not an error
+    // path that vacuously satisfies the negative checks). Single-key `--dry-run`
+    // exits 0 and writes the planned-changes PREVIEW to *stdout*:
+    //   "DRY RUN — no changes will be made." + "  summary → X"
+    // (see src/cli/issue/create.rs handle_edit dry-run block — println!, stdout).
+    assert!(
+        output.status.success(),
+        "single-key --dry-run must exit 0; status={:?} stderr={stderr}",
+        output.status.code()
+    );
+    assert!(
+        stdout.contains("DRY RUN") && stdout.contains("summary \u{2192} X"),
+        "dry-run preview (planned changes) must appear on stdout; stdout={stdout}"
+    );
+
+    // NEGATIVE guard: the post-success changed-fields ECHO must NOT fire on
+    // dry-run. The success confirmation `Updated TEST-1` is emitted to stderr
+    // via output::print_success ONLY on the live PUT path; dry-run `return`s
+    // before reaching it. Asserting its absence on BOTH streams catches a
+    // regression where dry-run falls through to the live success/echo path.
+    assert!(
+        !stdout.contains("Updated TEST-1") && !stderr.contains("Updated TEST-1"),
+        "dry-run must not reach the success confirmation path; stdout={stdout} stderr={stderr}"
+    );
+    // The post-success echo writes `  <field> → <value>` to stderr; it must be
+    // absent (the identical-looking line on stdout is the dry-run PREVIEW, a
+    // different code path on a different stream).
     assert!(
         !stderr.contains("  summary \u{2192} X"),
-        "echo must not fire on dry-run; stderr={stderr}"
+        "post-success echo (stderr) must not fire on dry-run; stderr={stderr}"
     );
 }
 
@@ -674,15 +697,52 @@ fn test_bc_3_4_012_edit_echo_does_not_fire_on_dry_run() {
 async fn test_bc_3_4_012_edit_echo_excluded_for_bulk_multi_key() {
     let server = MockServer::start().await;
 
-    // Bulk edit issues two or more keys — the bulk path is used
+    // Two-key edit routes through handle_edit_bulk_fields → POST
+    // /rest/api/3/bulk/issues/fields, NOT through PUT /rest/api/3/issue/{key}.
+    // Mount the PUT mocks as `.expect(0)` sentinels to assert they are never called.
     Mock::given(method("PUT"))
         .and(path("/rest/api/3/issue/TEST-1"))
         .respond_with(ResponseTemplate::new(204))
+        .expect(0)
         .mount(&server)
         .await;
     Mock::given(method("PUT"))
         .and(path("/rest/api/3/issue/TEST-2"))
         .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    // Bulk submit: POST /rest/api/3/bulk/issues/fields returns 200 with taskId.
+    // Body shape matches BulkSubmitResponse (taskId deserialized from camelCase).
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "taskId": "task-bulk-echo-001",
+            "status": "ENQUEUED",
+            "progressPercent": 0,
+            "totalIssueCount": 0,
+            "processedAccessibleIssues": [],
+            "failedAccessibleIssues": {},
+            "invalidOrInaccessibleIssueCount": 0
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Task poll: GET /rest/api/3/bulk/queue/task-bulk-echo-001 returns COMPLETE.
+    // Body shape matches BulkOperationProgress (processedAccessibleIssues, status).
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/bulk/queue/task-bulk-echo-001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "taskId": "task-bulk-echo-001",
+            "status": "COMPLETE",
+            "progressPercent": 100,
+            "totalIssueCount": 2,
+            "processedAccessibleIssues": ["TEST-1", "TEST-2"],
+            "failedAccessibleIssues": {},
+            "invalidOrInaccessibleIssueCount": 0
+        })))
         .mount(&server)
         .await;
 
@@ -700,6 +760,12 @@ async fn test_bc_3_4_012_edit_echo_excluded_for_bulk_multi_key() {
         .unwrap();
 
     let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // The bulk path must succeed (exit 0)
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for bulk path; stderr={stderr}"
+    );
 
     // bulk path must never emit changed-fields echo lines
     assert!(
