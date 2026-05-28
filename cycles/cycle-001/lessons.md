@@ -2282,3 +2282,80 @@ this cycle could likely have been replaced by this approach.
 _Discovered: S-421 9-round Copilot cycle retrospective, 2026-05-28. Status: [codified]._
 
 _Discovered: S-409 Copilot review, 2026-05-27. Status: [codified]._
+
+---
+
+## L-428-1 [codified] `pub(crate)` is invisible to integration-test crates — use `#[doc(hidden)] pub` for test-reachable non-public items
+
+**Context (S-428 / issue #428 — 2026-05-28):**
+
+The F1 delta analysis for S-428 locked `AccessibleResource` and `resolve_cloud_id` as
+`pub(crate)` visibility (decision DEC-028). During F3 implementation, the implementer
+discovered that `pub(crate)` is not reachable from `tests/` — integration test crates link
+the non-test build of the library as an external crate, which sees only `pub` items from
+the library's API surface. `pub(crate)` restricts visibility to within the current crate;
+from the perspective of an external crate (like the integration-test binary), `pub(crate)`
+items are completely invisible.
+
+The correct visibility for items that must be reachable from `tests/` but are not intended
+as a supported public API is `#[doc(hidden)] pub`:
+- `pub` makes the item reachable from external crates (including integration tests).
+- `#[doc(hidden)]` suppresses the item from rustdoc output, signaling "not a supported API."
+
+This deviation was validated via research-agent + Perplexity; the story ACs were corrected
+accordingly before F4 sign-off.
+
+**Rule:** F1 design decisions that prescribe `pub(crate)` visibility for items intended to be
+called from `tests/` are technically impossible — `pub(crate)` is invisible to integration
+test crates. The F1 architect should ask: "Does this item need to be reachable from `tests/`
+(integration test crate)?" If yes, `pub(crate)` is wrong; use `#[doc(hidden)] pub` instead.
+If the item only needs to be reachable from inline `#[cfg(test)]` blocks within the same
+file, `pub(crate)` is correct.
+
+**Summary:** `pub(crate)` = reachable from any module within the same compiled crate
+(including inline `#[cfg(test)]` blocks). `pub` = reachable from any crate. Integration
+test files in `tests/` are compiled as separate crates — they see only `pub` items.
+
+_Discovered: S-428 F3 implementation, 2026-05-28. Source: research-agent + Perplexity validation. Status: [codified]._
+
+---
+
+## L-428-2 [codified] [process-gap] Story AC verification greps must anchor on stable code-arm patterns, not speculative implementations
+
+**Context (S-428 / issue #428 — 2026-05-28):**
+
+During the S-428 cycle, story ACs were written with literal grep verification commands
+before the implementation existed. Three verification commands drifted from the
+as-built code:
+
+1. AC visibility grep: `grep "pub(crate) fn resolve_cloud_id"` — the implementation used
+   `#[doc(hidden)] pub fn resolve_cloud_id` (pub(crate) invisible to integration tests).
+2. AC test-attribute grep: `grep '#\[ignore\]'` — the rewritten tests used
+   `#[ignore = "..."]` with an explanatory string, not bare `#[ignore]`.
+3. AC resource-ID count: a grep that counted `resources[0].id.clone()` occurrences also
+   matched a rustdoc example line, producing a count one higher than expected.
+
+All three were resolved before F7 close, but each required a mid-cycle spec correction pass.
+
+**Root cause:** AC verification greps were written speculatively based on imagined
+implementation structure, not derived from actual code patterns. The greps were
+"correct in spirit" but incorrect in exact syntax.
+
+**Rule:** When writing story ACs that include grep-based verification commands:
+1. Write the grep AFTER the implementation exists (or at minimum, after the implementer
+   confirms the exact code form).
+2. Anchor greps on stable semantic patterns (e.g., function name, struct name) rather
+   than assumed exact syntax (e.g., exact attribute spelling, exact attribute argument form).
+3. Validate the grep command against the actual code before including it in the AC.
+4. For count-based greps (e.g., "appears exactly N times"), add a non-code-file exclusion
+   (e.g., `--include="*.rs" --exclude-dir=target`) to avoid false matches from docs or tests.
+
+**Scope:** Applies to all future story ACs that include literal grep verification commands.
+Consider whether the story-writer agent prompt should require verification-grep validation
+against actual code before sign-off.
+
+**Disposition:** DEFERRED drift item (L-428-2-PG) added to STATE.md Drift Items table —
+target: next maintenance sweep; reason: low-severity doc-mechanics gap, no runtime impact.
+No follow-up story created.
+
+_Discovered: S-428 F3–F5 cycle (3 AC grep drift instances), 2026-05-28. Status: [codified] [process-gap]._

@@ -3233,6 +3233,14 @@ The following are full per-row narratives from the STATE.md Phase Progress table
 
 ## Extracted from STATE.md Post-Cycle Housekeeping on 2026-05-26 (compact-state run)
 
+### Archived Current Phase Step: #410 (from STATE.md — 2026-05-28 S-428 merge)
+
+| Step | Agent | Status | Output |
+|------|-------|--------|--------|
+| #410 MERGED 2026-05-27 via PR #416 (develop @ 04e019a) | state-manager | complete | S-410: 13 keychain-transitive tests gated behind JR_RUN_KEYRING_TESTS=1 (6 in multi_cloudid_disambiguation.rs + 7 in oauth_refresh_integration.rs). 1 review cycle: pr-reviewer caught F1 audit undercount (11→12 in multi_cloudid), Copilot pass 1 found description count mismatch (5→6/12→13), Copilot pass 2 clean. Issue #410 auto-closed. F1-AUDIT-MISCOUNT-410 codified as drift deferral (see Drift Items). L-410-1 in lessons.md. |
+
+---
+
 ### Post-Cycle Housekeeping (2026-05-19)
 
 Events after issue #288 epic closeout (factory-artifacts @ 7dbbfed):

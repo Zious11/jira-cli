@@ -36,7 +36,7 @@ traces_to:
   - issue-428
   - issue-429
 files_modified:
-  - src/api/auth.rs                      # MODIFIED — lift AccessibleResource to module scope (pub(crate), Debug, PartialEq, Deserialize); extract pub(crate) resolve_cloud_id function; update call site in oauth_login
+  - src/api/auth.rs                      # MODIFIED — lift AccessibleResource to module scope (#[doc(hidden)] pub, Debug, PartialEq, Deserialize); extract #[doc(hidden)] pub resolve_cloud_id function; update call site in oauth_login
   - tests/multi_cloudid_disambiguation.rs # MODIFIED — rewrite bodies of tests #4, #5, #6 to call resolve_cloud_id in-process via Vec<AccessibleResource> struct literals; remove jr_isolated() from those three tests
   - CLAUDE.md                            # MODIFIED (same commit) — update JR_RUN_KEYRING_TESTS=1 bullet to describe in-process pattern for tests #4/#5/#6
 files_created: []
@@ -57,7 +57,7 @@ Issue #429: related root-cause alternative (see References section)
 ## Goal
 
 Extract the multi-org disambiguation block in `src/api/auth.rs::oauth_login` into a
-`pub(crate)` function `resolve_cloud_id`, then rewrite the three flaking integration tests
+`#[doc(hidden)] pub` function `resolve_cloud_id`, then rewrite the three flaking integration tests
 (#4, #5, #6 in `tests/multi_cloudid_disambiguation.rs`) to call that function in-process
 via wiremock — eliminating the keychain-race root cause at the test level without losing
 always-run CI coverage of the exit-64 disambiguation contract.
@@ -114,12 +114,15 @@ let resource_id = resolve_cloud_id(&resources, cloud_id_override, no_input)
 The extracted function's signature (locked at F1 approval):
 
 ```rust
-pub(crate) fn resolve_cloud_id(
+#[doc(hidden)]
+pub fn resolve_cloud_id(
     resources: &[AccessibleResource],
     cloud_id_override: Option<&str>,
     no_input: bool,
 ) -> Result<String, crate::error::JrError>
 ```
+
+`pub(crate)` is invisible to the integration-test crate (separate crate linkage); `pub` is required and `#[doc(hidden)]` signals not-a-supported-public-API.
 
 Return type is `Result<String, crate::error::JrError>` (not `anyhow::Error`) so tests
 can match on the error variant directly without downcasting.
@@ -139,17 +142,16 @@ Semantics are identical — no behavioral change.
 It must be lifted to module scope with these attributes (locked at F1 approval):
 
 ```rust
+#[doc(hidden)]
 #[derive(Debug, PartialEq, serde::Deserialize)]
-pub(crate) struct AccessibleResource {
-    pub(crate) id: String,
-    pub(crate) url: String,
-    pub(crate) name: String,
+pub struct AccessibleResource {
+    pub id: String,
+    pub url: String,
+    pub name: String,
 }
 ```
 
-`pub(crate)` is unconditional — NOT gated behind `#[cfg(test)]`. Rationale: the function
-may have future callers (e.g., `jr auth check`) and `pub(crate)` is the correct visibility
-for crate-internal use. This does not add to the binary's public API surface.
+`pub(crate)` is invisible to the integration-test crate (separate crate linkage); `pub` is required and `#[doc(hidden)]` signals not-a-supported-public-API. The visibility is unconditional — NOT gated behind `#[cfg(test)]`. The function may have future callers (e.g., `jr auth check`).
 
 ### C. Test rewrites — `tests/multi_cloudid_disambiguation.rs` tests #4, #5, #6
 
@@ -223,7 +225,7 @@ updated to reflect that the file's 12 tests now split into three groups:
 
 ```
 `tests/multi_cloudid_disambiguation.rs` (6 KEYCHAIN-TRANSITIVE tests touching
-`store_oauth_tokens`; tests #4, #5, #6 in the same file are in-process wiremock tests
+`store_oauth_tokens`; tests #4, #5, #6 in the same file are in-process tests (no subprocess, no MockServer — Vec<AccessibleResource> struct literals)
 that call `resolve_cloud_id` directly — no keyring access, no JR_RUN_KEYRING_TESTS gate)
 ```
 
@@ -249,29 +251,34 @@ story merges, #429 may be superseded as WONTFIX. Decide at F7 review.
 not as a function-local struct inside `oauth_login`.
 
 The struct has exactly:
+- `#[doc(hidden)]` attribute
 - `#[derive(Debug, PartialEq, serde::Deserialize)]` (in addition to any existing derives)
-- `pub(crate)` visibility on the struct
-- `pub(crate)` visibility on fields `id`, `url`, `name`
+- `pub` visibility on the struct and fields `id`, `url`, `name`
 
-Verification: `grep -n "pub(crate) struct AccessibleResource" src/api/auth.rs` returns
+(`pub(crate)` is invisible to the integration-test crate (separate crate linkage); `pub` is required and `#[doc(hidden)]` signals not-a-supported-public-API.)
+
+Verification: `grep -n "pub struct AccessibleResource" src/api/auth.rs` returns
 exactly one match at module scope (not inside a function body).
 
-### AC-002 — `resolve_cloud_id` is a `pub(crate)` function at module scope
+### AC-002 — `resolve_cloud_id` is a `#[doc(hidden)] pub` function at module scope
 
-`src/api/auth.rs` contains `pub(crate) fn resolve_cloud_id` with the locked signature:
+`src/api/auth.rs` contains `#[doc(hidden)] pub fn resolve_cloud_id` with the locked signature:
 
 ```rust
-pub(crate) fn resolve_cloud_id(
+#[doc(hidden)]
+pub fn resolve_cloud_id(
     resources: &[AccessibleResource],
     cloud_id_override: Option<&str>,
     no_input: bool,
 ) -> Result<String, crate::error::JrError>
 ```
 
+(`pub(crate)` is invisible to the integration-test crate (separate crate linkage); `pub` is required and `#[doc(hidden)]` signals not-a-supported-public-API.)
+
 The function is NOT `async` — the disambiguation logic is pure (no I/O on non-interactive
 paths). The interactive branch (dialoguer) is synchronous.
 
-Verification: `grep -n "pub(crate) fn resolve_cloud_id" src/api/auth.rs` returns exactly
+Verification: `grep -n "pub fn resolve_cloud_id" src/api/auth.rs` returns exactly
 one match.
 
 ### AC-003 — All three disambiguation branches are present in `resolve_cloud_id`
@@ -284,7 +291,7 @@ The extracted function body contains all three cases:
    - `no_input` true without override: `Err(JrError::UserError(...))`
    - Interactive branch: dialoguer or line-based fallback
 
-Verification: `grep -c "resources\[0\].id.clone()" src/api/auth.rs` returns exactly 1
+Verification: `grep -c "=> Ok(resources\[0\].id.clone())" src/api/auth.rs` returns exactly 1
 (the single-resource fast-path, now inside `resolve_cloud_id`). The old call site in
 `oauth_login` must no longer contain the inline `match resources.len()` block.
 
@@ -343,10 +350,10 @@ The six tests gated by S-410 (PR #416) are NOT modified:
 - `test_interactive_select_via_stdin_picks_second_resource` (test #10)
 - `test_interactive_render_shows_name_url_and_id` (test #12)
 
-Each retains `#[ignore]` and the `JR_RUN_KEYRING_TESTS=1` early-return guard.
+Each retains `#[ignore = "..."]` (message form) and the `JR_RUN_KEYRING_TESTS=1` early-return guard.
 
-Verification: `grep -c '#\[ignore\]' tests/multi_cloudid_disambiguation.rs` returns
-exactly **6** (same as post-S-410).
+Verification: `grep -c '#\[ignore' tests/multi_cloudid_disambiguation.rs` returns
+exactly **6** (same as post-S-410; matches both bare `#[ignore]` and message-form `#[ignore = "..."]`).
 
 ### AC-009 — Observable behavior of `oauth_login` is byte-identical before and after
 
@@ -367,8 +374,8 @@ On CI (without the env var), `cargo test` exits 0 — all 6 always-run tests pas
 The CLAUDE.md `JR_RUN_KEYRING_TESTS=1` bullet is updated to describe that:
 - The count of KEYCHAIN-TRANSITIVE tests in `tests/multi_cloudid_disambiguation.rs`
   remains **6**.
-- Tests #4, #5, #6 in the same file now exercise `resolve_cloud_id` in-process via
-  wiremock without keyring access and therefore do NOT require the `JR_RUN_KEYRING_TESTS`
+- Tests #4, #5, #6 in the same file now exercise `resolve_cloud_id` in-process (no subprocess, no MockServer — Vec<AccessibleResource> struct literals)
+  without keyring access and therefore do NOT require the `JR_RUN_KEYRING_TESTS`
   gate.
 
 The update is in the SAME commit as the `src/api/auth.rs` and test changes. There is no
@@ -447,8 +454,8 @@ No BC files are modified by this story. All three scripts must pass with zero ed
    as `Vec<AccessibleResource>` struct literals.
 
 4. **Lift `AccessibleResource` to module scope** (Scope B): move the struct definition out
-   of `oauth_login` to the module level; add `#[derive(Debug, PartialEq, serde::Deserialize)]`
-   and `pub(crate)` visibility on the struct and fields.
+   of `oauth_login` to the module level; add `#[doc(hidden)]`, `#[derive(Debug, PartialEq, serde::Deserialize)]`,
+   and `pub` visibility on the struct and fields.
 
 5. **Extract `resolve_cloud_id`** (Scope A): lift the `match resources.len() { ... }` block
    verbatim into the new function with the locked signature. Update the call site in
@@ -473,8 +480,8 @@ No BC files are modified by this story. All three scripts must pass with zero ed
 
 11. **Run `cargo test`** — exits 0 (AC-011).
 
-12. **Verify #[ignore] count unchanged:** `grep -c '#\[ignore\]' tests/multi_cloudid_disambiguation.rs`
-    returns 6 (AC-008).
+12. **Verify #[ignore] count unchanged:** `grep -c '#\[ignore' tests/multi_cloudid_disambiguation.rs`
+    returns 6 (AC-008; the pattern matches both bare `#[ignore]` and message-form `#[ignore = "..."]`).
 
 13. **Run `cargo fmt --all -- --check`** and `cargo clippy --all-targets -- -D warnings`
     — both exit 0 (AC-011).
@@ -500,16 +507,21 @@ No BC files are modified by this story. All three scripts must pass with zero ed
 Net suite delta: 0 new test functions (rewrites only). The 3 rewritten tests move from
 subprocess+keychain-touching to in-process+pure — they become more reliable, not fewer.
 
+Note: the #1–#12 labels above are LOGICAL labels per the S-3.04 AC→test mapping, NOT strict
+file-position order. In particular, the always-run `test_cloud_id_help_text_mentions_disambiguation_or_multiple_orgs`
+and the gated `test_interactive_render_shows_name_url_and_id` are positionally swapped relative
+to their logical labels. Do not renumber; the gated set is correctly identified by function name in AC-008.
+
 ## Quality Gate Self-Check
 
 | Criterion | Required | Notes |
 |-----------|----------|-------|
 | `cargo test` exits 0 (no env vars) | AC-011 | All 6 always-run tests pass; 6 gated skipped |
-| `grep -c '#\[ignore\]' tests/multi_cloudid_disambiguation.rs` → 6 | AC-008 | Same count as post-S-410 |
+| `grep -c '#\[ignore' tests/multi_cloudid_disambiguation.rs` → 6 | AC-008 | Same count as post-S-410; matches message-form `#[ignore = "..."]` |
 | Tests #4, #5, #6 have no `jr_isolated()` call | AC-005/AC-006/AC-007 | Grep for absence |
 | Tests #4, #5, #6 have no `#[ignore]` | AC-005/AC-006/AC-007 | grep confirm |
-| `grep -n "pub(crate) struct AccessibleResource" src/api/auth.rs` → 1 match at module scope | AC-001 | Module-level, not function-local |
-| `grep -n "pub(crate) fn resolve_cloud_id" src/api/auth.rs` → 1 match | AC-002 | Function present |
+| `grep -n "pub struct AccessibleResource" src/api/auth.rs` → 1 match at module scope | AC-001 | Module-level, not function-local |
+| `grep -n "pub fn resolve_cloud_id" src/api/auth.rs` → 1 match | AC-002 | Function present |
 | `cargo fmt --all -- --check` exits 0 | AC-011 | No format drift |
 | `cargo clippy --all-targets -- -D warnings` exits 0 | AC-011 | No `#[allow]` suppressions |
 | `bash scripts/check-spec-counts.sh` exits 0 | AC-012 | No BC files touched |
@@ -541,14 +553,14 @@ boilerplate removed; in-process assertions are typically shorter).
 - [ ] Create branch `fix/S-428-wiremock-only-disambiguation` from `develop`
 - [ ] Read `src/api/auth.rs` from `oauth_login` entry through end of disambiguation block — confirm exact text of `match resources.len()` and current `AccessibleResource` struct definition (verify function-local scope)
 - [ ] Read `tests/multi_cloudid_disambiguation.rs` in full — identify tests #4, #5, #6 function bodies; note available fixture helpers for `Vec<AccessibleResource>` construction
-- [ ] Lift `AccessibleResource` to module scope: add `#[derive(Debug, PartialEq, serde::Deserialize)]`, `pub(crate)` visibility (AC-001)
+- [ ] Lift `AccessibleResource` to module scope: add `#[doc(hidden)]`, `#[derive(Debug, PartialEq, serde::Deserialize)]`, `pub` visibility on struct and fields (AC-001)
 - [ ] Extract `resolve_cloud_id` function with locked signature (AC-002, AC-003); move inline `match` block verbatim; update 0-arm from `return Err(...).into()` to `Err(...)`
 - [ ] Update call site in `oauth_login`: replace inline match with `resolve_cloud_id(&resources, cloud_id_override, no_input).map_err(anyhow::Error::from)?` (AC-004)
 - [ ] `cargo build` — exits 0 before touching test files
 - [ ] Rewrite test #4 (`test_cloud_id_flag_value_not_in_response_exits_64`): remove `jr_isolated()`, construct `Vec<AccessibleResource>` via struct literals, call `jr::api::auth::resolve_cloud_id(...)`, assert `Err(JrError::UserError(_))` + message content (AC-005)
 - [ ] Rewrite test #5 (`test_no_input_multi_org_exits_64_with_actionable_error`): same pattern (AC-006)
 - [ ] Rewrite test #6 (`test_no_input_multi_org_lists_available_cloud_ids_in_error`): same pattern, two-org fixture (AC-007)
-- [ ] Verify `grep -c '#\[ignore\]' tests/multi_cloudid_disambiguation.rs` → 6 (AC-008)
+- [ ] Verify `grep -c '#\[ignore' tests/multi_cloudid_disambiguation.rs` → 6 (AC-008)
 - [ ] Verify tests #4, #5, #6 have no `jr_isolated()` call (AC-005/006/007)
 - [ ] Update CLAUDE.md: JR_RUN_KEYRING_TESTS=1 bullet — count stays 6, add in-process description for tests #4/#5/#6 (AC-010)
 - [ ] Run `cargo test` — exits 0 (AC-011)
@@ -585,9 +597,10 @@ Separate "docs" commits allow the two to drift.
 
 ## Architecture Compliance Rules
 
-1. **`pub(crate)` visibility, unconditional.** `resolve_cloud_id` and `AccessibleResource`
-   are `pub(crate)`, NOT gated behind `#[cfg(test)]`. The function may have future callers
-   in production code.
+1. **`#[doc(hidden)] pub` visibility, unconditional.** `resolve_cloud_id` and `AccessibleResource`
+   are `#[doc(hidden)] pub`, NOT gated behind `#[cfg(test)]`. `pub(crate)` is invisible to the
+   integration-test crate (separate crate linkage); `pub` is required and `#[doc(hidden)]`
+   signals not-a-supported-public-API. The function may have future callers in production code.
 
 2. **No production behavior change.** `oauth_login` must exhibit byte-identical observable
    behavior before and after the extraction. The extraction is pure "lift into named
@@ -610,8 +623,10 @@ Separate "docs" commits allow the two to drift.
    bodies must be identical to the post-S-410 state.
 
 7. **`AccessibleResource` field visibility.** Fields `id`, `url`, `name` must be
-   `pub(crate)` for tests to construct `Vec<AccessibleResource>` via struct literals without
-   `Default` or builder patterns.
+   `pub` (with `#[doc(hidden)]` on the struct) for tests to construct `Vec<AccessibleResource>`
+   via struct literals without `Default` or builder patterns. `pub(crate)` is invisible to the
+   integration-test crate (separate crate linkage) and would make struct-literal construction
+   fail to compile in `tests/`.
 
 8. **No new module files.** All changes are within `src/api/auth.rs`,
    `tests/multi_cloudid_disambiguation.rs`, and `CLAUDE.md`.

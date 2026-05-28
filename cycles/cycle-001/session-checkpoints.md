@@ -132,3 +132,13 @@ _Archived 2026-05-27. Was the active checkpoint at S-409 IN-PROGRESS. Superseded
 | **Date** | 2026-05-27 |
 | **Position** | **S-409 IN-PROGRESS — awaiting PR.** Worktree `refactor/S-409-extract-number-wire-helper` off develop @ d53278a. Implementation commit 71dc2d4: extract `parsed_number_to_wire_value` helper (field_resolve.rs) + 6 inline unit tests + delete tautological integration test 38 (tests/issue_edit_field.rs). 2 files, 82 ins / 59 del. No BC changes. STORY-INDEX v1.4.25 (50→51). Open backlog: #210, #331, #368, #372, #387, #400. Held Dependabot PRs #403/#404 due 2026-05-31. |
 | **Convergence counter** | S-409 IN-PROGRESS (commit 71dc2d4; pre-PR). BC corpus: 583 BCs (unchanged). Story corpus: 51 stories. All feature-mode cycles through S-408 CONVERGED. |
+
+---
+
+_Archived 2026-05-28. Was the active checkpoint at S-428 F1+F2 COMPLETE / F3 PENDING. Superseded by S-428 MERGED checkpoint._
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-28 |
+| **Position** | **#428 mid-cycle (F1+F2 COMPLETE, F3 PENDING).** Story file at `.factory/stories/S-428-wiremock-only-disambiguation.md` (12 ACs, SMALL/3pt). Delta analysis at `.factory/phase-f1-delta-analysis/issue-428/delta-analysis.md` (v2 revised). 4 design decisions locked (DEC-027/DEC-028). Next was: worktree `fix/S-428-wiremock-only-disambiguation` off develop @ 9369d35-OR-newer, test-writer for failing in-process tests in `tests/multi_cloudid_disambiguation.rs` covering tests #4/#5/#6 with in-process `resolve_cloud_id` calls, then implementer for the refactor in `src/api/auth.rs` (extract `resolve_cloud_id`, lift `AccessibleResource`, update CLAUDE.md atomically). Open backlog: #210, #331, #368, #372, #387, #400, #428, #429. Held Dependabot PRs #404/#422/#423/#424/#425/#426 due 2026-05-31. |
+| **Convergence counter** | S-428 F1+F2 complete; F3 pending. BC corpus: 583 BCs (unchanged — no new BCs in S-428). Story corpus: 53 stories (added S-428). |
