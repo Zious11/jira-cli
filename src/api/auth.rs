@@ -835,7 +835,8 @@ pub async fn oauth_login(
         .await
         .context("accessible-resources response body was not valid JSON")?;
 
-    // Disambiguation: BC-1.5.038 — delegate to the extracted pure helper.
+    // Disambiguation: BC-1.5.038 — delegate to the extracted helper
+    // (pure on the non-interactive paths; the interactive branch does I/O).
     let resource_id =
         resolve_cloud_id(&resources, cloud_id_override, no_input).map_err(anyhow::Error::from)?;
     let resource = resources

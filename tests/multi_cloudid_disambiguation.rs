@@ -431,10 +431,6 @@ async fn test_cloud_id_flag_picks_named_resource_not_first() {
 /// called with a `cloud_id_override` that does not match any entry in the
 /// resources slice, it must return `Err(JrError::UserError(_))` with a message
 /// containing the missing ID and a "not found" cue.
-///
-/// RED-GATE: FAILS because `jr::api::auth::resolve_cloud_id` does not exist
-/// yet and `jr::api::auth::AccessibleResource` is not module-scope pub(crate).
-/// The compile error IS the expected red gate.
 #[test]
 fn test_cloud_id_flag_value_not_in_response_exits_64() {
     let resources = vec![
@@ -472,13 +468,10 @@ fn test_cloud_id_flag_value_not_in_response_exits_64() {
 // AC-002 / AC-006 — `--no-input` + multi-org + no `--cloud-id` → exit 64
 // ---------------------------------------------------------------------------
 
-/// AC-002 / AC-006 / AC-006 (exit-64 contract, in-process): When
+/// AC-002 / AC-006 (exit-64 contract, in-process): When
 /// `resolve_cloud_id` is called with no `cloud_id_override` and `no_input =
 /// true` against a 2-resource slice, it must return `Err(JrError::UserError(_))`
 /// with a message containing BOTH "Multiple" AND "--cloud-id".
-///
-/// RED-GATE: FAILS because `jr::api::auth::resolve_cloud_id` does not exist
-/// yet. The compile error IS the expected red gate.
 #[test]
 fn test_no_input_multi_org_exits_64_with_actionable_error() {
     let resources = vec![
@@ -521,9 +514,6 @@ fn test_no_input_multi_org_exits_64_with_actionable_error() {
 /// `resolve_cloud_id` when `no_input = true` with multiple resources must list
 /// ALL available orgs with their `name`, `url`, and `id` so the user can pick
 /// the right one to pass via `--cloud-id`. Opaque UUIDs alone are not actionable.
-///
-/// RED-GATE: FAILS because `jr::api::auth::resolve_cloud_id` does not exist
-/// yet. The compile error IS the expected red gate.
 #[test]
 fn test_no_input_multi_org_lists_available_cloud_ids_in_error() {
     let name1 = "Company B";
