@@ -2145,4 +2145,140 @@ is non-trivial.
 function, the implementer can scan the block for latent issues and queue them as
 follow-ups or include trivial fixes in scope. No new agent prompt edit this cycle.
 
+---
+
+## L-421-1 [codified] F1 architect's full rationale section must be re-read before implementing
+
+**Context (S-421 / issue #421 — 2026-05-28):**
+
+The F1 delta analysis for S-421 explicitly walked through Option A vs Option B vs Option C
+trade-offs for the two-stage i64-first parser. The architect's rationale section flagged that
+Option B alone would not fix the bug — Option C (i64-first with strict inequalities) was the
+correct choice. The BLOCKING bug Copilot R2 caught (precision regression in the initial fix)
+occurred because the implementer implemented a version closer to Option B without re-reading
+the full rationale section before coding.
+
+**Lesson:** When an F1 delta-analysis explicitly walks through multiple options and selects one
+with a documented rationale for why the rejected options are insufficient, the implementer MUST
+re-read the full rationale section (not just the recommendation) before implementing. The
+recommendation is incomplete without the rationale for why alternatives were rejected.
+
+**Disposition:** Codified. Add to implementer playbook: "Before implementing any Option X
+recommendation from an F1 delta analysis, re-read the 'why the other options were rejected'
+rationale. The rejection criteria are the safeguards against implementing a near-miss variant."
+
+_Discovered: S-421 Copilot round 2, 2026-05-28. Status: [codified]._
+
+---
+
+## L-421-2 [codified] Rustdoc rewrites touching enumeration labels must grep for stale cross-references before pushing
+
+**Context (S-421 / issue #421 — 2026-05-28):**
+
+Copilot rounds R6-R8 caught 4 separate stale-cross-reference issues introduced during
+rustdoc rewrites in rounds R3-R7. Each rewrite touched an enumeration or case label in
+a multi-section rustdoc that had internal cross-references (bullet labels, case names,
+paragraph back-references). The rewrite systematically leaked stale references pointing
+at the OLD structure. The pattern repeated across 4 rounds because each round's fix
+introduced new stale references in the sections that were rewritten to fix prior issues.
+
+**Lesson:** After any rustdoc rewrite that touches an enumeration or case label, grep the
+file for all references to the OLD label names BEFORE pushing. Internal cross-references
+in rustdoc are invisible to the compiler (unlike Rust symbol references) and silently
+diverge on any structural rename.
+
+**Disposition:** Codified. Implementer playbook addition: "When rewriting a multi-section
+rustdoc that contains enumeration labels (e.g., 'Stage 1', 'Case A', 'Form X'), before
+pushing: grep the file for all occurrences of each old label name to identify stale
+back-references. Treat stale rustdoc cross-references with the same seriousness as stale
+code cross-references — they mislead maintainers."
+
+_Discovered: S-421 Copilot rounds 6-8, 2026-05-28. Status: [codified]._
+
+---
+
+## L-421-3 [codified] Library-behavior claims in docs must be empirically verified before asserting
+
+**Context (S-421 / issue #421 — 2026-05-28):**
+
+Copilot R6 caught a doc claim about serde_json's serialization behavior that was empirically
+false: the rustdoc asserted that "serde_json serializes integer-valued f64s as bare integer
+literals" (e.g., `1.0` → `1`). This claim was carried through R3 and R4 doc rewrites without
+verification. The claim contradicts serde_json's actual behavior (it serializes `1.0_f64` as
+`1.0`, preserving the fractional part).
+
+**Lesson:** Any doc claim about a library's runtime behavior (serialization, formatting,
+parsing semantics, encoding conventions) MUST be empirically verified by a small test
+program or REPL check before being asserted in rustdoc. Library behavior can change across
+versions, and training-data knowledge is not a substitute for a runtime test.
+
+**Disposition:** Codified. Mirrors the existing "Perplexity-validate any external-tracker
+citation" rule in CLAUDE.md. Generalized rule: "Empirically verify any library-behavior
+claim before asserting it in docs." Consider adding to CLAUDE.md AI Agent Notes as a
+standing rule alongside the Perplexity-validation rule.
+
+_Discovered: S-421 Copilot round 6, 2026-05-28. Status: [codified]._
+
+---
+
+## L-421-4 [codified] S-410 architect-miscount extends — 'follows exit path' reasoning incomplete for subprocess keychain classification
+
+**Context (S-421 / issue #421 — 2026-05-28):**
+
+During the S-421 PR cycle, 3 'NO-KEYCHAIN' tests flaked on parallel CI runs:
+- `test_no_input_multi_org_exits_64_with_actionable_error`
+- `test_cloud_id_flag_value_not_in_response_exits_64`
+- `test_no_input_multi_org_lists_available_cloud_ids_in_error`
+
+The S-410 F1 architect had classified these as no-keychain because "the exit-64 path doesn't
+reach `store_oauth_tokens`". But the subprocess setup happens early enough that
+`JR_SERVICE_NAME` contamination still occurs during parallel test execution, causing
+contention even on the exit-64 path. Filed as #428.
+
+**Lesson:** The architect's "follows exit path" reasoning for keychain classification was
+incomplete — it considered only the explicit code path to keychain write, not the full
+subprocess lifecycle (where JR_SERVICE_NAME is set at subprocess spawn time, before any
+exit-64 branch is reached). Future keychain-isolation audits must check whether the test
+subprocess sets `JR_SERVICE_NAME` at all, regardless of whether the code path reaches an
+explicit keychain call.
+
+**Disposition:** Codified. Filed as #428 (3 more tests need gating behind JR_RUN_KEYRING_TESTS=1).
+Future F1 audits for keychain test isolation should use the question: "Does this test's subprocess
+set JR_SERVICE_NAME at any point during its lifecycle?" not "Does the code path reach a keychain
+call?".
+
+_Discovered: S-421 PR CI flakes (3 occurrences), 2026-05-28. Status: [codified]. Follow-up: #428._
+
+---
+
+## L-421-5 [codified] Copilot review diminishing-returns heuristic — stop when findings transition from 'bugs in fix' to 'imprecision in my own doc cleanup'
+
+**Context (S-421 / issue #421 — 2026-05-28):**
+
+The S-421 PR cycle used 9 Copilot review rounds (R1-R9), the deepest of the project. The 15
+distinct findings followed a clear pattern:
+- R1: deferred to follow-up (out of scope)
+- R2: BLOCKING precision regression in initial fix
+- R3-R5: docs imprecision + contract-vs-impl mismatch (`trim_start_matches` multi-sign) + minor API contract issues
+- R6-R8: stale cross-references I introduced in my own R3-R7 rewrites + empirically-false serde_json claim
+- R9: design-intent disagreement (accepted as documented Option C trade-off)
+
+Rounds R6-R8 were in response to issues I introduced during my own doc cleanup. R9 was a
+design debate rather than a bug.
+
+**Lesson:** Once Copilot's findings transition from "bugs in the fix" to "imprecision in my
+own doc cleanup" (i.e., the fix has stabilized but my rewrite work keeps introducing new
+doc issues), that is the diminishing-returns inflection point. The correct response at that
+point is: (a) step back from incremental doc rewrites, (b) do one complete top-down reread
+of the changed rustdoc looking for internal consistency, then (c) push and request one final
+Copilot pass. Doing incremental rewrites per-round causes each round's fix to potentially
+introduce new stale references in the rewritten sections.
+
+**Disposition:** Heuristic codified. Suggested rule: "If two consecutive Copilot rounds find
+only doc nits introduced by my own previous-round rewrites, stop incremental rewrites. Do
+a single top-down consistency pass of the full changed doc, then close." Rounds R8/R9 in
+this cycle could likely have been replaced by this approach.
+
+_Discovered: S-421 9-round Copilot cycle retrospective, 2026-05-28. Status: [codified]._
+
 _Discovered: S-409 Copilot review, 2026-05-27. Status: [codified]._
