@@ -716,18 +716,13 @@ async fn test_bc_3_4_012_edit_echo_excluded_for_bulk_multi_key() {
         .mount(&server)
         .await;
 
-    // Bulk submit: POST /rest/api/3/bulk/issues/fields returns 200 with taskId.
-    // Body shape matches BulkSubmitResponse (taskId deserialized from camelCase).
+    // Bulk submit: POST /rest/api/3/bulk/issues/fields returns 200. Only `taskId`
+    // is deserialized into BulkSubmitResponse (src/types/jira/bulk.rs); the body is
+    // trimmed to exactly that field.
     Mock::given(method("POST"))
         .and(path("/rest/api/3/bulk/issues/fields"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "taskId": "task-bulk-echo-001",
-            "status": "ENQUEUED",
-            "progressPercent": 0,
-            "totalIssueCount": 0,
-            "processedAccessibleIssues": [],
-            "failedAccessibleIssues": {},
-            "invalidOrInaccessibleIssueCount": 0
+            "taskId": "task-bulk-echo-001"
         })))
         .expect(1)
         .mount(&server)
