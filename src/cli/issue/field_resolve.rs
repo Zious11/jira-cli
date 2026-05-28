@@ -16,16 +16,20 @@ use crate::error::JrError;
 /// This helper is called from the Stage 2 (f64) fallback in `resolve_edit_fields`.
 /// Stage 1 (`value.parse::<i64>()`) at the call site has already short-circuited all
 /// *string forms* that parse cleanly as i64 (e.g., plain integer literals like `"5"`
-/// or `"-9223372036854775807"`). Stage 2 therefore receives values from strings that
-/// failed i64 parsing — which includes:
+/// or `"-9223372036854775807"`). Stage 1.5 (`strip_integer_decimal_suffix` retry) then
+/// intercepts inputs matching `^[-+]?\d+\.0+$` (trailing-zero decimals like `"5.0"` or
+/// `"-9223372036854775808.0"`) — those never reach Stage 2. Stage 2 therefore receives
+/// values from strings that failed BOTH Stage 1 and Stage 1.5:
 ///
-/// - Decimal literals: `"5.5"` → emits f64; `"5.0"` → emits i64 via the fract predicate
-/// - Scientific notation: `"5e3"` → emits i64; `"1.5e3"` → emits i64; `"1e20"` → emits f64
-/// - Integer strings outside i64 range: `"9223372036854775808"` → emits f64
+/// - Decimals with non-zero fractional digit: `"5.5"` → emits f64; `"5.01"` → emits f64
+/// - Scientific notation: `"5e3"` → emits i64 (in range); `"1.5e3"` → emits i64 (in
+///   range); `"1e20"` → emits f64 (overflow); `"-9.223372036854776e18"` → emits f64
+///   (at the boundary, strict `>` predicate routes to f64)
+/// - Integer strings outside i64 range (no decimal point): `"9223372036854775808"` →
+///   emits f64; `"-9223372036854775809"` → emits f64
 ///
-/// Note that decimal and scientific forms may represent values that ARE valid i64s
-/// (e.g., `"5.0"` = 5, `"5e3"` = 5000) — they reach Stage 2 only because the string
-/// form itself failed `parse::<i64>()`, not because the value is out of range.
+/// Note: inputs matching `^[-+]?\d+\.0+$` (e.g., `"5.0"`, `"9223372036854775807.0"`,
+/// `"-9223372036854775808.0"`) are intercepted by Stage 1.5 before reaching Stage 2.
 ///
 /// # Strict-inequality bounds (S-421, issue #421)
 ///
@@ -51,18 +55,35 @@ use crate::error::JrError;
 ///   - (c) Scientific notation: `"-9.223372036854776e18"` — Stage 1 rejects it (`e`
 ///     present). Value IS valid `i64::MIN` (approximately); strict `>` routes to f64.
 ///
-///   For cases (b) and (c) the value is actually valid `i64::MIN`; emitting f64 instead
-///   loses no precision because (1) `-2^63` is exactly representable as IEEE-754 binary64
-///   (it's a power of two within f64's normal range), and (2) `serde_json` serializes
-///   finite f64 values whose `fract() == 0.0` as exact decimal integer literals on the
-///   wire (no scientific notation, no decimal point). Both
-///   `serde_json::Value::Number(Number::from(i64::MIN))` and
-///   `serde_json::json!(-9223372036854775808.0_f64)` produce the wire literal
-///   `-9223372036854775808`. JSON itself (RFC 8259) does not mandate numeric precision;
-///   the round-trip guarantee here is from f64 + `serde_json` semantics, not the JSON
-///   spec. Using a non-strict `>= i64::MIN as f64` would let cases (b)/(c) into the i64
-///   branch, but would also let case (a) silently saturate to `i64::MIN` — a silent
-///   data-corruption bug. The strict `>` is the safer trade-off.
+///   For case (a) — underflowing integer strings like `"-9223372036854775809"` — the
+///   value is outside i64 range; emitting f64 is correct. The wire form is scientific
+///   notation `-9.223372036854776e+18` (`serde_json` formats large-magnitude finite f64s
+///   using Rust's default f64 `Display`; it does NOT flatten integer-valued f64s to bare
+///   integer literals).
+///
+///   For case (c) — scientific notation `"-9.223372036854776e18"` — the value IS
+///   approximately `i64::MIN`, but the user supplied a non-integer string form; emitting
+///   f64 preserves that choice. Wire form is also scientific notation.
+///
+///   (Note: `"-9223372036854775808.0"` — the decimal form of `i64::MIN` — is intercepted
+///   by Stage 1.5 (`strip_integer_decimal_suffix`) and reaches the i64 wire path,
+///   producing the integer literal `-9223372036854775808`. It does NOT reach Stage 2.)
+///
+///   Using a non-strict `>= i64::MIN as f64` would let case (a) silently saturate to
+///   `i64::MIN` (silent data corruption: user supplied -9223372036854775809, wire carried
+///   -9223372036854775808). The strict `>` is the safer trade-off — case (a) gets the
+///   correct out-of-range f64 wire form, and case (c) is mathematically equivalent either
+///   way.
+///
+///   Caveat on `serde_json` wire formatting: `serde_json::json!(5.0_f64)` produces `5.0`
+///   (decimal point, not `5`); `serde_json::json!(-9223372036854775808.0_f64)` produces
+///   `-9.223372036854776e+18` (scientific notation). `Number::from(i64::MIN)` produces
+///   the bare integer literal `-9223372036854775808`. These wire forms are distinct even
+///   though they encode mathematically equivalent values — downstream consumers that
+///   distinguish JSON integers from JSON floats (e.g., tests 26 and 27 in
+///   `tests/issue_edit_field.rs` using wiremock's `NumericMode::Strict`) will observe the
+///   difference. This is why Stage 1 and Stage 1.5 preserve the i64 wire path wherever
+///   possible.
 ///
 /// Caller is responsible for rejecting NaN / Inf BEFORE calling this helper —
 /// `serde_json::json!(f64)` panics on non-finite values (see `Number::from_f64`).
