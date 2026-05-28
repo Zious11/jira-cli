@@ -58,7 +58,7 @@ use crate::error::JrError;
 ///   using Rust's default f64 `Display`; it does NOT flatten integer-valued f64s to bare
 ///   integer literals).
 ///
-///   For case (c) — scientific notation `"-9.223372036854776e18"` — the value IS
+///   For case (b) — scientific notation `"-9.223372036854776e18"` — the value IS
 ///   approximately `i64::MIN`, but the user supplied a non-integer string form; emitting
 ///   f64 preserves that choice. Wire form is also scientific notation.
 ///
@@ -69,7 +69,7 @@ use crate::error::JrError;
 ///   Using a non-strict `>= i64::MIN as f64` would let case (a) silently saturate to
 ///   `i64::MIN` (silent data corruption: user supplied -9223372036854775809, wire carried
 ///   -9223372036854775808). The strict `>` is the safer trade-off — case (a) gets the
-///   correct out-of-range f64 wire form, and case (c) is mathematically equivalent either
+///   correct out-of-range f64 wire form, and case (b) is mathematically equivalent either
 ///   way.
 ///
 ///   Caveat on `serde_json` wire formatting: `serde_json::json!(5.0_f64)` produces `5.0`
@@ -682,11 +682,25 @@ mod tests {
     // Tests call `parse_number_wire` which mirrors the Stage 1 → Stage 1.5 → Stage 2
     // dispatch from the production `"number"` branch of resolve_edit_fields.
 
-    /// Test-only replica of the production routing in `resolve_edit_fields`'s
-    /// `"number"` branch. Mirrors Stage 1 → Stage 1.5 → Stage 2 dispatch so the
-    /// boundary regression tests exercise the same decision tree without HTTP
-    /// mocking. Must be kept in sync with the production code — if `resolve_edit_fields`
-    /// adds a new stage or changes the dispatch order, update this helper accordingly.
+    /// Test-only replica of the **happy-path** routing in `resolve_edit_fields`'s
+    /// `"number"` branch — Stage 1 (i64 parse) → Stage 1.5 (strip-decimal + i64 retry) →
+    /// Stage 2 (f64 parse + helper call). Used by the S-421 boundary regression tests to
+    /// exercise the same decision tree without HTTP mocking.
+    ///
+    /// **Limitations vs production:**
+    /// - Uses `unwrap()` on the f64 parse paths instead of returning a user error.
+    ///   Inputs that fail `parse::<f64>()` (e.g., `"abc"`, `""`) will panic here.
+    /// - Does NOT replicate the production `is_finite()` rejection guard. Inputs that
+    ///   parse to `+Inf`/`-Inf` (`"1e309"`, `"-1e309"`) or `NaN` (`"NaN"`) will reach
+    ///   `parsed_number_to_wire_value` directly, which then panics via its own
+    ///   `debug_assert!(parsed.is_finite())`.
+    ///
+    /// Tests using this helper must supply only valid finite numeric strings. If a
+    /// future test needs to exercise the NaN/Inf rejection path, call
+    /// `resolve_edit_fields` end-to-end with HTTP mocking or build a separate helper.
+    ///
+    /// Must be kept in sync with the production code — if `resolve_edit_fields` adds
+    /// a new stage or changes the dispatch order, update this helper accordingly.
     fn parse_number_wire(value: &str) -> serde_json::Value {
         if let Ok(n) = value.parse::<i64>() {
             serde_json::Value::Number(serde_json::Number::from(n))
