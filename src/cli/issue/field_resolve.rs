@@ -49,10 +49,7 @@ use crate::error::JrError;
 ///   - (a) An underflowing integer string like `"-9223372036854775809"` — Stage 1
 ///     rejects it (parse fails); f64 rounds it to -2^63. Value is outside i64 range;
 ///     emitting f64 is correct.
-///   - (b) The decimal form of `i64::MIN`: `"-9223372036854775808.0"` — Stage 1
-///     rejects it (decimal point). Value IS valid `i64::MIN`; strict `>` still routes
-///     it to f64.
-///   - (c) Scientific notation: `"-9.223372036854776e18"` — Stage 1 rejects it (`e`
+///   - (b) Scientific notation: `"-9.223372036854776e18"` — Stage 1 rejects it (`e`
 ///     present). Value IS valid `i64::MIN` (approximately); strict `>` routes to f64.
 ///
 ///   For case (a) — underflowing integer strings like `"-9223372036854775809"` — the
@@ -665,12 +662,14 @@ mod tests {
     #[test]
     fn test_parsed_number_to_wire_value_strict_lower_excludes_negative_two_to_the_63_in_stage2() {
         // -2^63 = i64::MIN as f64 (exact). In Stage 2 context, a parsed f64 value of
-        // -2^63 may arrive from several string forms: an underflowing integer like
-        // "-9223372036854775809", the decimal form of i64::MIN "-9223372036854775808.0",
-        // or scientific notation "-9.223372036854776e18". The strict > i64::MIN
-        // comparison routes ALL these cases to f64 regardless of source. This test
-        // invokes the helper directly with the f64 value -2^63 to pin the predicate
-        // behavior independent of source string.
+        // -2^63 may arrive from two string forms: (a) an underflowing integer like
+        // "-9223372036854775809" (Stage 1 parse fails; f64 rounds to -2^63), or
+        // (b) scientific notation like "-9.223372036854776e18" (Stage 1 rejects `e`).
+        // The decimal form "-9223372036854775808.0" is intercepted by Stage 1.5
+        // (strip_integer_decimal_suffix) and NEVER reaches Stage 2. The strict
+        // > i64::MIN comparison routes both Stage 2 cases to f64. This test invokes
+        // the helper directly with the f64 value -2^63 to pin the predicate behavior
+        // independent of source string.
         let neg_two_to_63 = -9223372036854775808.0_f64;
         let wire = parsed_number_to_wire_value(neg_two_to_63);
         assert!(
