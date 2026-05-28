@@ -633,8 +633,11 @@ async fn test_bc_3_4_013_no_points_key_is_points_not_no_points() {
 
 #[test]
 fn test_bc_3_4_012_edit_echo_does_not_fire_on_dry_run() {
+    // --dry-run exits before any HTTP call, so no real server is needed.
+    // JR_BASE_URL must still be set to satisfy config loading (exit 78 otherwise).
     let output = Command::cargo_bin("jr")
         .unwrap()
+        .env("JR_BASE_URL", "http://127.0.0.1:19999")
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .args([
             "--no-input",
