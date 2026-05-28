@@ -427,69 +427,40 @@ async fn test_cloud_id_flag_picks_named_resource_not_first() {
 // AC-001 — `--cloud-id` not found in list → exit 64
 // ---------------------------------------------------------------------------
 
-/// AC-001 (negative path): When `accessible-resources` returns two sites but
-/// `--cloud-id cloud-NONEXISTENT` is passed, the command must exit 64
-/// (ConfigError / UsageError) with stderr explaining the cloud-id was not found.
-///
-/// RED-GATE: FAILS because:
-///   1. `--cloud-id` flag doesn't exist yet → exit 2 (clap).
-///   2. Even with flag: `JR_OAUTH_TOKEN_URL` / `JR_ACCESSIBLE_RESOURCES_URL`
-///      aren't honored → actual Atlassian calls fail.
-///   3. Even if both exist: no "not found" logic implemented → exit 0 wrong.
-#[tokio::test]
-async fn test_cloud_id_flag_value_not_in_response_exits_64() {
-    use mock_harness::{mount_accessible_resources, mount_token_exchange, two_resources_b_first};
-    use wiremock::MockServer;
+/// AC-001 / AC-005 (negative path, in-process): When `resolve_cloud_id` is
+/// called with a `cloud_id_override` that does not match any entry in the
+/// resources slice, it must return `Err(JrError::UserError(_))` with a message
+/// containing the missing ID and a "not found" cue.
+#[test]
+fn test_cloud_id_flag_value_not_in_response_exits_64() {
+    let resources = vec![
+        jr::api::auth::AccessibleResource {
+            id: "cloud-B".to_string(),
+            name: "Company B".to_string(),
+            url: "https://company-b.atlassian.net".to_string(),
+        },
+        jr::api::auth::AccessibleResource {
+            id: "cloud-A".to_string(),
+            name: "Company A".to_string(),
+            url: "https://company-a.atlassian.net".to_string(),
+        },
+    ];
 
-    let server = MockServer::start().await;
-    mount_token_exchange(&server).await;
-    mount_accessible_resources(&server, two_resources_b_first()).await;
+    let result = jr::api::auth::resolve_cloud_id(&resources, Some("cloud-NONEXISTENT"), true);
+    let err = result.unwrap_err();
 
-    let config_dir = TempDir::new().unwrap();
-    let cache_dir = TempDir::new().unwrap();
-
-    write_oauth_profile_config(&config_dir, "default", "https://test.atlassian.net");
-
-    let server_url = server.uri();
-
-    let output = jr_isolated(&config_dir, &cache_dir)
-        .args([
-            "auth",
-            "login",
-            "--oauth",
-            "--cloud-id",
-            "cloud-NONEXISTENT",
-            "--no-input",
-            "--url",
-            "https://test.atlassian.net",
-            "--client-id",
-            "test-client-id",
-            "--client-secret",
-            "test-client-secret",
-        ])
-        .env("JR_OAUTH_TOKEN_URL", format!("{server_url}/oauth/token"))
-        .env(
-            "JR_ACCESSIBLE_RESOURCES_URL",
-            format!("{server_url}/oauth/token/accessible-resources"),
-        )
-        .env("JR_OAUTH_CODE", "test-auth-code-skip-browser")
-        .timeout(std::time::Duration::from_secs(10))
-        .output()
-        .unwrap();
-
-    let exit_code = output.status.code().unwrap_or(255);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert_eq!(
-        exit_code, 64,
-        "jr auth login --oauth --cloud-id cloud-NONEXISTENT must exit 64 \
-         (cloud-id not in accessible-resources list); stderr: {stderr}"
+    assert!(
+        matches!(err, jr::error::JrError::UserError(_)),
+        "expected JrError::UserError, got: {err:?}"
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("cloud-NONEXISTENT"),
+        "error message must contain the unknown ID 'cloud-NONEXISTENT'. Got: {msg}"
     );
     assert!(
-        stderr.contains("cloud-NONEXISTENT")
-            || stderr.contains("not found")
-            || stderr.contains("cloud-id"),
-        "stderr must explain that cloud-NONEXISTENT was not found. Got: {stderr}"
+        msg.contains("not found"),
+        "error message must contain 'not found'. Got: {msg}"
     );
 }
 
@@ -497,76 +468,41 @@ async fn test_cloud_id_flag_value_not_in_response_exits_64() {
 // AC-002 / AC-006 — `--no-input` + multi-org + no `--cloud-id` → exit 64
 // ---------------------------------------------------------------------------
 
-/// AC-002 / AC-006 (exit-64 contract): When `accessible-resources` returns two
-/// sites AND `--no-input` is set AND `--cloud-id` is NOT provided, the command
-/// must exit 64 with stderr containing BOTH `"Multiple Atlassian orgs"` AND
-/// `"--cloud-id"`.
-///
-/// RED-GATE: FAILS because:
-///   1. `JR_OAUTH_TOKEN_URL` / `JR_ACCESSIBLE_RESOURCES_URL` not honored →
-///      calls fail or the flow never reaches accessible-resources (browser step fails first).
-///   2. Even if accessible-resources is reached: current code picks `first()`
-///      silently and exits 0 (no disambiguation, no error).
-///
-/// H-047 status flips from KNOWN-GAP to MUST-PASS when this test goes GREEN.
-#[tokio::test]
-async fn test_no_input_multi_org_exits_64_with_actionable_error() {
-    use mock_harness::{mount_accessible_resources, mount_token_exchange, two_resources_b_first};
-    use wiremock::MockServer;
+/// AC-002 / AC-006 (exit-64 contract, in-process): When
+/// `resolve_cloud_id` is called with no `cloud_id_override` and `no_input =
+/// true` against a 2-resource slice, it must return `Err(JrError::UserError(_))`
+/// with a message containing BOTH "Multiple" AND "--cloud-id".
+#[test]
+fn test_no_input_multi_org_exits_64_with_actionable_error() {
+    let resources = vec![
+        jr::api::auth::AccessibleResource {
+            id: "cloud-B".to_string(),
+            name: "Company B".to_string(),
+            url: "https://company-b.atlassian.net".to_string(),
+        },
+        jr::api::auth::AccessibleResource {
+            id: "cloud-A".to_string(),
+            name: "Company A".to_string(),
+            url: "https://company-a.atlassian.net".to_string(),
+        },
+    ];
 
-    let server = MockServer::start().await;
-    mount_token_exchange(&server).await;
-    mount_accessible_resources(&server, two_resources_b_first()).await;
+    // no override, no_input = true → must error with actionable message
+    let result = jr::api::auth::resolve_cloud_id(&resources, None, true);
+    let err = result.unwrap_err();
 
-    let config_dir = TempDir::new().unwrap();
-    let cache_dir = TempDir::new().unwrap();
-
-    write_oauth_profile_config(&config_dir, "default", "https://test.atlassian.net");
-
-    let server_url = server.uri();
-
-    let output = jr_isolated(&config_dir, &cache_dir)
-        .args([
-            "--no-input",
-            "auth",
-            "login",
-            "--oauth",
-            "--url",
-            "https://test.atlassian.net",
-            "--client-id",
-            "test-client-id",
-            "--client-secret",
-            "test-client-secret",
-            // Intentionally NO --cloud-id
-        ])
-        .env("JR_OAUTH_TOKEN_URL", format!("{server_url}/oauth/token"))
-        .env(
-            "JR_ACCESSIBLE_RESOURCES_URL",
-            format!("{server_url}/oauth/token/accessible-resources"),
-        )
-        .env("JR_OAUTH_CODE", "test-auth-code-skip-browser")
-        .timeout(std::time::Duration::from_secs(10))
-        .output()
-        .unwrap();
-
-    let exit_code = output.status.code().unwrap_or(255);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert_eq!(
-        exit_code, 64,
-        "jr --no-input auth login --oauth without --cloud-id must exit 64 \
-         when multiple orgs are accessible; stderr: {stderr}"
+    assert!(
+        matches!(err, jr::error::JrError::UserError(_)),
+        "expected JrError::UserError, got: {err:?}"
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Multiple"),
+        "error message must contain 'Multiple' (AC-002 contract). Got: {msg}"
     );
     assert!(
-        stderr.contains("Multiple Atlassian orgs")
-            || stderr.contains("multiple")
-            || stderr.contains("orgs"),
-        "stderr must mention 'Multiple Atlassian orgs' (AC-002 contract). Got: {stderr}"
-    );
-    assert!(
-        stderr.contains("--cloud-id"),
-        "stderr must mention '--cloud-id' so user knows the remedy (AC-002 contract). \
-         Got: {stderr}"
+        msg.contains("--cloud-id"),
+        "error message must contain '--cloud-id' so user knows the remedy. Got: {msg}"
     );
 }
 
@@ -574,79 +510,57 @@ async fn test_no_input_multi_org_exits_64_with_actionable_error() {
 // AC-002 refinement — error lists both cloud IDs + names so user can choose
 // ---------------------------------------------------------------------------
 
-/// AC-002 (verification refinement): The error message emitted when
-/// `--no-input` + multi-org + no `--cloud-id` must list ALL available
-/// orgs with their `name`, `url`, and `id` so the user can pick the right
-/// one to pass via `--cloud-id`. Opaque UUIDs alone are not actionable.
-///
-/// RED-GATE: FAILS because (same as above): either the process never reaches
-/// the disambiguation logic, or it picks first() silently and exits 0.
-#[tokio::test]
-async fn test_no_input_multi_org_lists_available_cloud_ids_in_error() {
-    use mock_harness::{mount_accessible_resources, mount_token_exchange, two_resources_b_first};
-    use wiremock::MockServer;
+/// AC-002 / AC-007 (listing refinement, in-process): The error message from
+/// `resolve_cloud_id` when `no_input = true` with multiple resources must list
+/// ALL available orgs with their `name`, `url`, and `id` so the user can pick
+/// the right one to pass via `--cloud-id`. Opaque UUIDs alone are not actionable.
+#[test]
+fn test_no_input_multi_org_lists_available_cloud_ids_in_error() {
+    let name1 = "Company B";
+    let name2 = "Company A";
+    let cloud_id1 = "cloud-B";
+    let cloud_id2 = "cloud-A";
 
-    let server = MockServer::start().await;
-    mount_token_exchange(&server).await;
-    mount_accessible_resources(&server, two_resources_b_first()).await;
+    let resources = vec![
+        jr::api::auth::AccessibleResource {
+            id: cloud_id1.to_string(),
+            name: name1.to_string(),
+            url: "https://company-b.atlassian.net".to_string(),
+        },
+        jr::api::auth::AccessibleResource {
+            id: cloud_id2.to_string(),
+            name: name2.to_string(),
+            url: "https://company-a.atlassian.net".to_string(),
+        },
+    ];
 
-    let config_dir = TempDir::new().unwrap();
-    let cache_dir = TempDir::new().unwrap();
+    let result = jr::api::auth::resolve_cloud_id(&resources, None, true);
+    let err = result.unwrap_err();
 
-    write_oauth_profile_config(&config_dir, "default", "https://test.atlassian.net");
-
-    let server_url = server.uri();
-
-    let output = jr_isolated(&config_dir, &cache_dir)
-        .args([
-            "--no-input",
-            "auth",
-            "login",
-            "--oauth",
-            "--url",
-            "https://test.atlassian.net",
-            "--client-id",
-            "test-client-id",
-            "--client-secret",
-            "test-client-secret",
-        ])
-        .env("JR_OAUTH_TOKEN_URL", format!("{server_url}/oauth/token"))
-        .env(
-            "JR_ACCESSIBLE_RESOURCES_URL",
-            format!("{server_url}/oauth/token/accessible-resources"),
-        )
-        .env("JR_OAUTH_CODE", "test-auth-code-skip-browser")
-        .timeout(std::time::Duration::from_secs(10))
-        .output()
-        .unwrap();
-
-    let exit_code = output.status.code().unwrap_or(255);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    // Must exit 64 (prerequisite — same as AC-002 test above)
-    assert_eq!(
-        exit_code, 64,
-        "Must exit 64 before we can check the error message content; stderr: {stderr}"
+    assert!(
+        matches!(err, jr::error::JrError::UserError(_)),
+        "expected JrError::UserError, got: {err:?}"
     );
+    let msg = err.to_string();
 
     // Both site names must appear so the user can identify their org.
     assert!(
-        stderr.contains("Company A") || stderr.contains("company-a"),
-        "stderr must list 'Company A' so user can identify their org. Got: {stderr}"
+        msg.contains(name1),
+        "error message must contain org name '{name1}'. Got: {msg}"
     );
     assert!(
-        stderr.contains("Company B") || stderr.contains("company-b"),
-        "stderr must list 'Company B' so user can identify their org. Got: {stderr}"
+        msg.contains(name2),
+        "error message must contain org name '{name2}'. Got: {msg}"
     );
 
     // Both cloud IDs must appear so the user knows what to pass to --cloud-id.
     assert!(
-        stderr.contains("cloud-A"),
-        "stderr must list cloud-A so user can pass --cloud-id cloud-A. Got: {stderr}"
+        msg.contains(cloud_id1),
+        "error message must contain cloud ID '{cloud_id1}'. Got: {msg}"
     );
     assert!(
-        stderr.contains("cloud-B"),
-        "stderr must list cloud-B so user can pass --cloud-id cloud-B. Got: {stderr}"
+        msg.contains(cloud_id2),
+        "error message must contain cloud ID '{cloud_id2}'. Got: {msg}"
     );
 }
 

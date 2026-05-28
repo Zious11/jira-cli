@@ -63,6 +63,141 @@ pub const DEFAULT_OAUTH_SCOPES: &str = concat!(
     "offline_access",
 );
 
+/// One Atlassian site returned by the `accessible-resources` endpoint.
+///
+/// Lifted to module scope so that `resolve_cloud_id` tests can construct
+/// `Vec<AccessibleResource>` via struct literals without needing serde
+/// round-trips, and so that future production callers (e.g., `jr auth check`)
+/// can reference the type directly.
+///
+/// Fields are `pub` so that integration tests in `tests/` (a separate crate
+/// that imports `jr` as a library) can construct struct literals directly.
+/// `#[doc(hidden)] pub` rather than `pub(crate)`: the integration-test crate
+/// links the non-test build of the lib and cannot see `pub(crate)` items, so
+/// `pub` is required; `#[doc(hidden)]` signals this is not a supported public
+/// API. Matches the `pub` testable-item convention used elsewhere in this module.
+#[doc(hidden)]
+#[derive(Debug, PartialEq, serde::Deserialize)]
+pub struct AccessibleResource {
+    pub id: String,
+    pub url: String,
+    pub name: String,
+}
+
+/// Resolve the cloud ID from a list of accessible resources, applying
+/// disambiguation logic per BC-1.5.038.
+///
+/// - 0 resources: returns `Err(JrError::UserError(...))` — no authorized sites.
+/// - 1 resource: returns `Ok(resources[0].id.clone())` — auto-select, no prompt.
+/// - Multiple resources with `cloud_id_override` set: finds the matching resource
+///   or returns `Err(JrError::UserError(...))` listing available IDs.
+/// - Multiple resources with `no_input = true` and no override: returns
+///   `Err(JrError::UserError(...))` listing available IDs and instructing the user
+///   to re-run with `--cloud-id`.
+/// - Multiple resources, interactive: presents a dialoguer prompt (TTY) or
+///   line-based stdin reader (non-TTY) and returns the selected ID.
+///
+/// Not async — disambiguation is pure on the non-interactive paths; the
+/// interactive branch (dialoguer) is synchronous.
+///
+/// `#[doc(hidden)] pub`: reachable from the integration-test crate (which
+/// `pub(crate)` cannot satisfy), but not a supported public API.
+#[doc(hidden)]
+pub fn resolve_cloud_id(
+    resources: &[AccessibleResource],
+    cloud_id_override: Option<&str>,
+    no_input: bool,
+) -> Result<String, crate::error::JrError> {
+    match resources.len() {
+        0 => Err(crate::error::JrError::UserError(
+            "No Atlassian sites authorized this token. Re-run `jr auth login` \
+                 and select at least one site at the consent screen."
+                .into(),
+        )),
+        1 => Ok(resources[0].id.clone()),
+        _ => {
+            if let Some(override_id) = cloud_id_override {
+                // --cloud-id provided: find matching resource or exit 64.
+                resources
+                    .iter()
+                    .find(|r| r.id == override_id)
+                    .map(|r| r.id.clone())
+                    .ok_or_else(|| {
+                        let listing = resources
+                            .iter()
+                            .map(|r| format!("  {} — {} ({})", r.id, r.name, r.url))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        crate::error::JrError::UserError(format!(
+                            "Provided --cloud-id '{override_id}' not found in accessible \
+                             resources. Available:\n{listing}"
+                        ))
+                    })
+            } else if no_input {
+                // --no-input without --cloud-id: exit 64 with actionable message.
+                let listing = resources
+                    .iter()
+                    .map(|r| format!("  {} — {} ({})", r.id, r.name, r.url))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                Err(crate::error::JrError::UserError(format!(
+                    "Multiple Atlassian orgs found. Use --cloud-id <id> to disambiguate. \
+                     Available:\n{listing}"
+                )))
+            } else {
+                // Interactive: present a selection prompt.
+                let items: Vec<String> = resources
+                    .iter()
+                    .map(|r| format!("{} ({}) [cloudId: {}]", r.name, r.url, r.id))
+                    .collect();
+                // Attempt dialoguer Select; fall back to line-based reading on
+                // non-TTY stdin (e.g., test harness piping "2\n" via write_stdin).
+                use std::io::IsTerminal;
+                let selection = if std::io::stdin().is_terminal() {
+                    dialoguer::Select::new()
+                        .with_prompt("Multiple Atlassian orgs accessible. Select one:")
+                        .items(&items)
+                        .default(0)
+                        .interact()
+                        .map_err(|e| {
+                            crate::error::JrError::UserError(format!(
+                                "Failed to read selection: {e}"
+                            ))
+                        })?
+                } else {
+                    // Non-TTY stdin: print items and read a 1-based index.
+                    eprintln!("Multiple Atlassian orgs accessible. Select one:");
+                    for (i, item) in items.iter().enumerate() {
+                        eprintln!("  {}: {}", i + 1, item);
+                    }
+                    let mut line = String::new();
+                    std::io::stdin().read_line(&mut line).map_err(|e| {
+                        crate::error::JrError::UserError(format!(
+                            "Failed to read selection from stdin: {e}"
+                        ))
+                    })?;
+                    let idx: usize = line.trim().parse::<usize>().map_err(|_| {
+                        crate::error::JrError::UserError(format!(
+                            "Invalid selection '{}': expected a number between 1 and {}",
+                            line.trim(),
+                            items.len()
+                        ))
+                    })?;
+                    if idx == 0 || idx > items.len() {
+                        return Err(crate::error::JrError::UserError(format!(
+                            "Selection {} out of range (1..{})",
+                            idx,
+                            items.len()
+                        )));
+                    }
+                    idx - 1 // convert to 0-based
+                };
+                Ok(resources[selection].id.clone())
+            }
+        }
+    }
+}
+
 fn entry(key: &str) -> Result<Entry> {
     Entry::new(&service_name(), key).context("Failed to access keychain")
 }
@@ -670,12 +805,6 @@ pub async fn oauth_login(
     )?;
 
     // 4. Fetch accessible resources to discover cloud ID and site info.
-    #[derive(serde::Deserialize)]
-    struct AccessibleResource {
-        id: String,
-        url: String,
-        name: String,
-    }
     // Test-only override: JR_ACCESSIBLE_RESOURCES_URL redirects the
     // accessible-resources lookup to a wiremock server. See
     // tests/multi_cloudid_disambiguation.rs.
@@ -706,100 +835,10 @@ pub async fn oauth_login(
         .await
         .context("accessible-resources response body was not valid JSON")?;
 
-    // Disambiguation: BC-1.5.038 — replace first-result-wins with multi-org logic.
-    let resource_id: String = match resources.len() {
-        0 => {
-            return Err(crate::error::JrError::UserError(
-                "No Atlassian sites authorized this token. Re-run `jr auth login` \
-                 and select at least one site at the consent screen."
-                    .into(),
-            )
-            .into());
-        }
-        1 => resources[0].id.clone(),
-        _ => {
-            if let Some(override_id) = cloud_id_override {
-                // --cloud-id provided: find matching resource or exit 64.
-                resources
-                    .iter()
-                    .find(|r| r.id == override_id)
-                    .map(|r| r.id.clone())
-                    .ok_or_else(|| {
-                        let listing = resources
-                            .iter()
-                            .map(|r| format!("  {} — {} ({})", r.id, r.name, r.url))
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        crate::error::JrError::UserError(format!(
-                            "Provided --cloud-id '{override_id}' not found in accessible \
-                             resources. Available:\n{listing}"
-                        ))
-                    })?
-            } else if no_input {
-                // --no-input without --cloud-id: exit 64 with actionable message.
-                let listing = resources
-                    .iter()
-                    .map(|r| format!("  {} — {} ({})", r.id, r.name, r.url))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                return Err(crate::error::JrError::UserError(format!(
-                    "Multiple Atlassian orgs found. Use --cloud-id <id> to disambiguate. \
-                     Available:\n{listing}"
-                ))
-                .into());
-            } else {
-                // Interactive: present a selection prompt.
-                let items: Vec<String> = resources
-                    .iter()
-                    .map(|r| format!("{} ({}) [cloudId: {}]", r.name, r.url, r.id))
-                    .collect();
-                // Attempt dialoguer Select; fall back to line-based reading on
-                // non-TTY stdin (e.g., test harness piping "2\n" via write_stdin).
-                use std::io::IsTerminal;
-                let selection = if std::io::stdin().is_terminal() {
-                    dialoguer::Select::new()
-                        .with_prompt("Multiple Atlassian orgs accessible. Select one:")
-                        .items(&items)
-                        .default(0)
-                        .interact()
-                        .map_err(|e| {
-                            crate::error::JrError::UserError(format!(
-                                "Failed to read selection: {e}"
-                            ))
-                        })?
-                } else {
-                    // Non-TTY stdin: print items and read a 1-based index.
-                    eprintln!("Multiple Atlassian orgs accessible. Select one:");
-                    for (i, item) in items.iter().enumerate() {
-                        eprintln!("  {}: {}", i + 1, item);
-                    }
-                    let mut line = String::new();
-                    std::io::stdin().read_line(&mut line).map_err(|e| {
-                        crate::error::JrError::UserError(format!(
-                            "Failed to read selection from stdin: {e}"
-                        ))
-                    })?;
-                    let idx: usize = line.trim().parse::<usize>().map_err(|_| {
-                        crate::error::JrError::UserError(format!(
-                            "Invalid selection '{}': expected a number between 1 and {}",
-                            line.trim(),
-                            items.len()
-                        ))
-                    })?;
-                    if idx == 0 || idx > items.len() {
-                        return Err(crate::error::JrError::UserError(format!(
-                            "Selection {} out of range (1..{})",
-                            idx,
-                            items.len()
-                        ))
-                        .into());
-                    }
-                    idx - 1 // convert to 0-based
-                };
-                resources[selection].id.clone()
-            }
-        }
-    };
+    // Disambiguation: BC-1.5.038 — delegate to the extracted helper
+    // (pure on the non-interactive paths; the interactive branch does I/O).
+    let resource_id =
+        resolve_cloud_id(&resources, cloud_id_override, no_input).map_err(anyhow::Error::from)?;
     let resource = resources
         .iter()
         .find(|r| r.id == resource_id)
