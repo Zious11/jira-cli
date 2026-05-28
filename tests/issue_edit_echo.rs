@@ -641,6 +641,8 @@ fn test_bc_3_4_012_edit_echo_does_not_fire_on_dry_run() {
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .args([
             "--no-input",
+            "--output",
+            "table",
             "issue",
             "edit",
             "TEST-1",
