@@ -928,10 +928,10 @@ async fn test_bc_3_4_014_create_description_stdin_echo_is_updated_marker() {
     let server = MockServer::start().await;
     mount_post_201(&server, "PROJ-1").await;
 
-    let output = Command::cargo_bin("jr")
-        .unwrap()
-        .env("JR_BASE_URL", server.uri())
-        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
             "--no-input",
             "issue",

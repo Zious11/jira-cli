@@ -746,6 +746,7 @@ async fn test_bc_3_4_012_edit_echo_excluded_for_bulk_multi_key() {
             "failedAccessibleIssues": {},
             "invalidOrInaccessibleIssueCount": 0
         })))
+        .expect(1)
         .mount(&server)
         .await;
 
