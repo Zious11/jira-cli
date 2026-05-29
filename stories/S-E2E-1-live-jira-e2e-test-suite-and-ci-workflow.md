@@ -46,6 +46,32 @@ files_created:
 breaking_change: false
 assumption_validations: []
 risk_mitigations: [R-NEW-1, R-NEW-2, R-NEW-3]
+last_updated: "2026-05-29"
+changelog:
+  - date: "2026-05-29"
+    phase: F5-adversarial-review
+    author: story-writer
+    summary: >
+      AC-004-v2: stricken auth-status --output-json row (unsatisfiable — no JSON arm,
+      no API call in src/cli/auth/status.rs); designated issue-list as the auth-seam
+      validator. Added reconciliation note under AC-004. Updated Implementation Strategy
+      step 3 and Tasks checklist to remove the auth-status test reference. Added OQ-5
+      (OUT-OF-SCOPE) to Open Items recording the CLAUDE.md NFR-O-N doc/code drift for
+      separate follow-up.
+  - date: "2026-05-29"
+    phase: F5-adversarial-review-pass-3
+    author: story-writer
+    summary: >
+      H-2 fix: AC-004 board-list and user-search rows relaxed from "JSON array with at
+      least one element" to "JSON array (shape-only; element count is site-dependent —
+      do not over-fit)". The tests already assert is_array() only; the AC text was the
+      inaccurate artifact (per S-398 lesson: do not over-fit to seed data). Amendment
+      note added below the AC-004 table.
+      M-2 fix: AC-007 step 1 corrected from --label e2e-<run_label> to --label <run_label>
+      (single e2e- prefix). run_label() already returns e2e-<GITHUB_RUN_ID>, so the
+      original wording implied e2e-e2e-<run_id> (double prefix), which would not match
+      teardown JQL. Rationale sentence updated with clarifying note that run_label() is
+      already prefixed. Implementation is correct; AC text was the inaccurate artifact.
 ---
 
 # S-E2E-1 — Live-Jira E2E Test Suite + CI Workflow
@@ -161,25 +187,54 @@ Verification: `grep -n "fn e2e_cmd" tests/e2e_live.rs` returns exactly one match
 
 ### AC-004 — Read command coverage (traces to NFR-T-E2E-1; spec §4 Read coverage)
 
+**AC-004-v2 (supersedes AC-004-v1 row 1; amended 2026-05-29, F5 adversarial review):**
+
+> **Reconciliation note (F-2/F-3, HIGH, 2026-05-29):**
+> The original AC-004-v1 table included a row:
+> `auth status --output json` → "exits 0; JSON object contains `accountId` or `emailAddress` field"
+> This row is **unsatisfiable** against the real implementation. Verified at
+> `src/cli/auth/status.rs::status`: the function accepts no `OutputFormat` parameter,
+> emits only `println!` plaintext to stdout (no JSON arm, no `--output` flag), and makes
+> **no Jira API call** — it probes only the local keychain/config. It cannot emit
+> `accountId`/`emailAddress` (fields that require a `/rest/api/3/myself` call) and it
+> cannot validate the auth seam against the live instance.
+>
+> **Resolution:** The auth seam is validated by the **first real network call** —
+> `issue list --jql "project=<E2E>" --output json`. A 401 response from that call
+> definitively indicates a broken `JR_AUTH_HEADER` seam or expired credential.
+> The `auth status` command verifies only local keychain presence; it is not useful
+> as a live-Jira E2E auth validator and is removed from this table.
+>
+> The `auth status --output json` row is stricken from AC-004. The `issue list` row
+> (unchanged below) is the designated auth-seam validator.
+
 When `JR_RUN_E2E=1` and the required env vars are set, the following read commands are
 each exercised by at least one `#[ignore]`-gated test that asserts exit 0 and validates
 the JSON output shape (presence checks, not value equality):
 
 | Command | Minimum assertion |
 |---------|-------------------|
-| `auth status --output json` | exits 0; JSON object contains `"accountId"` or `"emailAddress"` field |
-| `issue list --jql "project=<E2E>" --output json` | exits 0; output is a JSON array (may be empty) |
+| ~~`auth status --output json`~~ | ~~exits 0; JSON object contains `"accountId"` or `"emailAddress"` field~~ _(stricken 2026-05-29 F5: auth status emits no JSON and makes no API call — unsatisfiable; see reconciliation note above)_ |
+| `issue list --jql "project=<E2E>" --output json` | exits 0; output is a JSON array (may be empty) — **also serves as the auth-seam validator**: a 401 here means the `JR_AUTH_HEADER` seam or credential is broken |
 | `issue list --jql "project=<E2E> AND summary ~ e2e" --output json` | exits 0; output is a JSON array |
 | `issue view <SEED_OR_CREATED_KEY> --output json` | exits 0; JSON object contains `"key"` field |
-| `board list --output json` | exits 0; output is a JSON array with at least one element |
+| `board list --output json` | exits 0; output is a JSON array _(shape-only; element count is site-dependent — do not over-fit)_ |
 | `sprint list --board <BOARD_ID> --output json` (or equivalent) | exits 0; output is a JSON array (only if `JR_E2E_BOARD_ID` is set; skipped cleanly if unset) |
 | `sprint current --board <BOARD_ID> --output json` (or equivalent) | exits 0; output is a JSON object or array (only if `JR_E2E_BOARD_ID` is set) |
 | `worklog list <KEY> --output json` | exits 0; output is a JSON array (may be empty) |
-| `user search <SELF_NAME_OR_EMAIL> --output json` | exits 0; output is a JSON array with at least one element |
-| `project fields --project <E2E> --output json` (or equivalent) | exits 0; output is a JSON array |
+| `user search <SELF_NAME_OR_EMAIL> --output json` | exits 0; output is a JSON array _(shape-only; element count is site-dependent — do not over-fit)_ |
+| `project fields --project <E2E> --output json` (or equivalent) | exits 0; output is a JSON **object** with `issue_types` + `statuses_by_issue_type` keys (corrected 2026-05-29, F5 pass-5: the handler emits an object, not an array; test asserts `is_object()` + key presence) |
 
 **JSM optional:** if `JR_E2E_JSM_PROJECT` is set, run `jr queue list --project <JSM>` and
 `jr requesttype list --project <JSM>`; skip cleanly (not a test failure) if the env var is unset.
+
+> **AC-004 amendment note (2026-05-29, F5 pass-3):** The `board list` and `user search` rows
+> previously stated "JSON array with at least one element." That phrasing over-specifies:
+> board and user counts are site-dependent (the sandbox may have zero boards until provisioned,
+> or zero user-search results for a novel query term). Per the S-398 lesson ("do not over-fit
+> to seed data"), the assertion is relaxed to shape-only (`is_array()` — zero or more elements).
+> The tests already assert shape only; the AC text was the inaccurate artifact and has been
+> corrected above.
 
 Verification: `grep -c "#\[ignore\]" tests/e2e_live.rs` returns at least 10 (one gate per
 read command family, plus the write flow tests).
@@ -233,10 +288,10 @@ outside of the `status_done()` and `status_in_progress()` function bodies.
 A single `#[ignore]`-gated test exercises the full write flow against the live site, all
 steps in sequence:
 
-1. `issue create --project <E2E> --type Task --summary "[e2e <run_label>] smoke test" --label e2e-<run_label> --output json` — exits 0; captures `key` from JSON `{"key": "..."}` response.
+1. `issue create --project <E2E> --type Task --summary "[e2e <run_label>] smoke test" --label <run_label> --output json` — exits 0; captures `key` from JSON `{"key": "..."}` response.
 2. `poll_view(key)` — returns without panicking; response JSON contains `"key": key`.
 3. `issue edit <key> --summary "[e2e <run_label>] smoke test (edited)" --output json` — exits 0.
-4. `issue comment <key> --body "E2E smoke comment" --output json` — exits 0.
+4. `issue comment <key> "E2E smoke comment" --output json` — exits 0. (comment text is a POSITIONAL `message` arg — there is no `--body` flag; corrected 2026-05-29, F5 pass-6.)
 5. `worklog add <key> 5m --output json` — exits 0.
 6. `issue move <key> <status_in_progress()>` — exits 0; single-key `move` is idempotent if already in that status.
 7. `issue move <key> <status_done()>` — exits 0.
@@ -244,8 +299,10 @@ steps in sequence:
 Each step's exit code is asserted. The key captured in step 1 is the run-scoped key used
 for all subsequent steps — no cross-test state sharing.
 
-The label `e2e-<run_label>` (format: `e2e-<GITHUB_RUN_ID>` or `e2e-<timestamp>`) ensures
-the teardown step in the workflow can select exactly this run's issues.
+The label `<run_label>` (format: `e2e-<GITHUB_RUN_ID>` or `e2e-<timestamp>`, produced by
+`run_label()`) ensures the teardown step in the workflow can select exactly this run's issues.
+`run_label()` already includes the `e2e-` prefix — callers pass it directly to `--label`
+without an extra `e2e-` prefix.
 
 Verification: the write flow test function (identified by name containing "write_flow" or
 "create_edit_comment_worklog_close") exercises all 7 sub-steps.
@@ -382,6 +439,7 @@ Verification: `grep -n "JR_RUN_E2E\|JR_E2E_" CLAUDE.md` returns at least 8 match
 | R-NEW-1 | Site provisioning — if not done, workflow silently fails every run | MEDIUM | AC-008 and AC-010 are verifiable in dry-run before provisioning; file tracking issue at F4 dispatch |
 | R-NEW-2 | Free-site idle deactivation data loss (15–60 day post-deactivation deletion window) | LOW | Nightly cron is the primary mitigation; runbook note in CLAUDE.md (AC-012) |
 | R-NEW-3 | Concurrent runs clobber each other | LOW | `cancel-in-progress: false` serializes; run-scoped labels prevent cross-run confusion |
+| OQ-5 (OUT-OF-SCOPE — doc drift, separate follow-up) | `CLAUDE.md` NFR-O-N line states: "auth status --output json covers single-profile JSON" — this contradicts `src/cli/auth/status.rs`, which has **no JSON arm and makes no API call**. The CLAUDE.md entry is pre-existing doc/code drift. This story does not fix `auth status` behavior (zero `src/` changes). **Recommended action: file a separate follow-up issue** to either (a) implement a JSON arm in `auth status` that calls `/rest/api/3/myself` and emits `accountId`/`emailAddress`, or (b) remove the NFR-O-N claim as inaccurate. Not fixed here. | LOW | File follow-up issue at F5 close; note in CLAUDE.md PR review. |
 
 ## Implementation Strategy
 
@@ -391,7 +449,7 @@ Verification: `grep -n "JR_RUN_E2E\|JR_E2E_" CLAUDE.md` returns at least 8 match
 
 2. **Harness helpers (AC-003, AC-005, AC-006)** — write `e2e_cmd()`, `run_label()`, `project()`, `poll_view()`, `status_done()`, `status_in_progress()`. These are the foundation for all other tests. Compile-check without running live.
 
-3. **Read tests (AC-004)** — write `#[ignore]`-gated tests for each read command family in the table. Start with `auth status` (cheapest; validates the seam), then `issue list`, then `board list`. Write one test at a time; run each locally with `JR_RUN_E2E=1` if credentials are available, or accept compile-check only until the site is provisioned.
+3. **Read tests (AC-004)** — write `#[ignore]`-gated tests for each read command family in the table. Start with `issue list --jql "project=<E2E>" --output json` (cheapest network call; also serves as the auth-seam validator — a 401 here means the seam/credential is broken), then `issue view`, then `board list`. Do NOT write a test for `auth status --output json` — that command emits no JSON and makes no API call (see AC-004-v2 reconciliation note). Write one test at a time; run each locally with `JR_RUN_E2E=1` if credentials are available, or accept compile-check only until the site is provisioned.
 
 4. **Write flow (AC-007)** — write the `#[ignore]`-gated write flow test. Run locally with `JR_RUN_E2E=1` to confirm the full flow.
 
@@ -480,7 +538,7 @@ LOC delta: `tests/e2e_live.rs` +~350 LOC; `.github/workflows/e2e.yml` +~65 LOC;
 - [ ] `cargo test --test e2e_live` — exits 0 with the gate test passing (Red Gate: 1 always-run test, 0 gated tests yet)
 - [ ] Add harness helpers: `e2e_cmd()`, `run_label()`, `project()`, `status_done()`, `status_in_progress()` (AC-003, AC-006)
 - [ ] Add `poll_view(key: &str) -> serde_json::Value` with bounded 5-attempt retry + backoff (AC-005)
-- [ ] Add `#[ignore]`-gated read tests: `auth status`, `issue list`, `issue list with JQL filter`, `issue view`, `board list` (AC-004)
+- [ ] Add `#[ignore]`-gated read tests: `issue list` (auth-seam validator; a 401 = broken seam), `issue list with JQL filter`, `issue view`, `board list` — do NOT add an `auth status --output json` test (no JSON arm, no API call; see AC-004-v2) (AC-004)
 - [ ] Add `#[ignore]`-gated optional tests: `sprint list`/`sprint current` (behind `JR_E2E_BOARD_ID` check), `worklog list`, `user search`, `project fields` (AC-004)
 - [ ] Add optional JSM read tests: `queue list`, `requesttype list` (behind `JR_E2E_JSM_PROJECT` check; skip cleanly if unset) (AC-004)
 - [ ] Add `#[ignore]`-gated write flow test: all 7 sub-steps in AC-007 (issue create → poll_view → edit → comment → worklog add → move In Progress → move Done)
