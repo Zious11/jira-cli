@@ -1,0 +1,222 @@
+# Feature Spec: Live-Jira E2E Testing in CI
+
+**Status:** Draft
+**Author:** jr maintainers (brainstormed 2026-05-28)
+**Research:** `.factory/research/e2e-real-jira-ci.md`
+**Tracking:** TBD (GitHub issue to be filed)
+
+## 1. Overview
+
+Add an end-to-end (E2E) test suite that exercises the compiled `jr` binary against a
+**real Jira Cloud instance**, wired into GitHub Actions. Today all 64 integration test
+files are hermetic (wiremock / `JR_BASE_URL` mocks); nothing verifies `jr` against real
+Jira API response shapes, pagination, eventual consistency, or error bodies. This feature
+closes that gap with a small, high-value, **read-heavy + minimal-write** suite that runs on
+push to `develop`/`main`, nightly, and on demand.
+
+## 2. Goals / Non-Goals
+
+### Goals
+- Verify `jr`'s read commands against a live Jira Cloud site (real data shapes, real JQL,
+  real pagination).
+- Verify one happy-path write flow (create → verify → mutate → close) against the live site.
+- Run automatically on push to `develop`/`main` + nightly schedule + manual dispatch.
+- Be **non-blocking**: E2E failures surface but do not gate branches or PRs.
+- Keep the Jira credential safe on a **public** repo (never reachable from fork PRs).
+- Guarantee cleanup of every run's artifacts even when tests fail.
+
+### Non-Goals
+- **Not** testing the OAuth 3LO / keychain login flows (interactive/local; can't run in CI;
+  already covered by unit/integration tests). E2E authenticates via the debug-only
+  `JR_AUTH_HEADER` Basic seam.
+- **Not** testing Assets/CMDB (`assets`, linked-asset lookup) live — Assets is an Atlassian
+  **Premium** feature, unavailable on a free site. These stay under wiremock.
+- **Not** exhaustive command coverage — smoke-level happy paths per command family, not every
+  flag combination.
+- **Not** adding a `jr issue delete` command (teardown is close-only; see §7).
+
+## 3. Authentication seam
+
+CI runs `cargo test`, which builds in **debug** mode. The `JR_BASE_URL` and `JR_AUTH_HEADER`
+env seams are gated to `#[cfg(debug_assertions)]` (release binaries ignore them — pinned by
+`tests/base_url_release_gate.rs` and `tests/auth_header_release_gate.rs`). The E2E suite reuses
+this exact seam — the same one the existing wiremock tests use — pointed at the real site:
+
+- `JR_BASE_URL` = real site URL (e.g. `https://<site>.atlassian.net`), from a secret.
+- `JR_AUTH_HEADER` = `Basic <base64(email:api-token)>`, composed in-workflow from secrets.
+
+Atlassian **email + API-token Basic auth** is current and works non-interactively for REST v3
+and the Agile API (only password Basic auth was deprecated, in 2019). This exercises everything
+downstream of auth against real Jira. **Token caveat:** API tokens created after Dec 2024 expire
+in ≤ 1 year — see §9 (Maintenance).
+
+## 4. Test suite — `tests/e2e_live.rs`
+
+A new gated integration test file.
+
+### Gating
+Mirrors `tests/oauth_embedded_login.rs`: every test is `#[ignore]` and early-returns unless
+`JR_RUN_E2E=1`. A normal `cargo test` (local or in the existing `ci.yml`) never touches Jira.
+The E2E workflow runs `cargo test --test e2e_live -- --include-ignored --test-threads=1`.
+
+### Harness helper
+```
+fn e2e_cmd() -> Command   // Command::cargo_bin("jr") with:
+  // - JR_BASE_URL    = env JR_E2E_BASE_URL
+  // - JR_AUTH_HEADER = env JR_AUTH_HEADER (pre-composed Basic header)
+  // - XDG_CONFIG_HOME / XDG_CACHE_HOME = per-process tempfile::tempdir()
+  // - --no-input (non-interactive)
+```
+Plus helpers: `run_label()` → `e2e-<run_id>` (from `GITHUB_RUN_ID`, falling back to a process
+timestamp locally); `project()` → env `JR_E2E_PROJECT`; `poll_view(key)` → retry
+`jr issue view <KEY> --output json` until exit 0 (GET-by-key is read-after-write consistent,
+so this dodges Jira's search-index lag of seconds-to-minutes).
+
+### Read coverage (assert exit 0 + JSON shape)
+| Command family | E2E assertion |
+|---|---|
+| `auth status --output json` | authenticated; expected fields present |
+| `issue list --jql "project=<E2E>" --output json` | valid JSON array |
+| `issue search` / list with JQL | filters apply |
+| `issue view <seed-or-created-key> --output json` | issue fields present |
+| `board list --output json` | the Scrum board appears |
+| `sprint list` / `sprint current` | sprints enumerate (Scrum project) |
+| `worklog list <key>` | valid (possibly empty) list |
+| `user search <self> --output json` | service account resolves |
+| `project` fields/types/statuses | enumerate for `<E2E>` |
+
+### Write flow (one happy path, run-scoped)
+1. `issue create --project <E2E> --type Task --summary "[e2e <run_id>] ..." --label e2e-<run_id> --output json` → capture `key`.
+2. `poll_view(key)` until consistent.
+3. `issue edit <key>` (e.g. add/update summary or a second label).
+4. `issue comment <key> ...`.
+5. `worklog add <key> 5m ...`.
+6. `issue move <key> <In Progress>` then `<Done>` (single-key `move` is idempotent).
+7. Best-effort in-test close; **guaranteed** close handled by the workflow teardown (§5).
+
+### Optional / feature-flagged
+- **JSM** (`queue list`, `requesttype list`): only run if `JR_E2E_JSM_PROJECT` is set; skip
+  cleanly otherwise (free-tier JSM feature gating is uncertain).
+- **Sprint mutation** (`sprint add/remove`): only if `JR_E2E_BOARD_ID` is set.
+
+## 5. CI workflow — `.github/workflows/e2e.yml`
+
+```yaml
+on:
+  push:           { branches: [develop, main] }
+  schedule:       [ { cron: "0 6 * * *" } ]   # 06:00 UTC nightly; also keeps the site warm
+  workflow_dispatch:
+
+concurrency: { group: jira-e2e, cancel-in-progress: false }   # serialize on shared site
+
+jobs:
+  e2e:
+    if: github.event_name != 'pull_request'   # belt: never on PRs
+    runs-on: ubuntu-latest
+    environment: jira-e2e                      # secrets gated to this env + branch policy
+    timeout-minutes: 20
+    permissions: { contents: read }
+    steps:
+      - harden-runner (audit)
+      - checkout
+      - install Rust
+      - compose JR_AUTH_HEADER from secrets:
+          JR_AUTH_HEADER="Basic $(printf '%s:%s' "$EMAIL" "$TOKEN" | base64 -w0)"
+      - cargo test --test e2e_live -- --include-ignored --test-threads=1
+          env: JR_RUN_E2E=1, JR_BASE_URL, JR_AUTH_HEADER, JR_E2E_PROJECT, GITHUB_RUN_ID, (optional JSM/board vars)
+      - name: Teardown (close-only)
+        if: always()
+        run: |
+          # close every issue this run created, by label
+          jr issue list --jql "project=$JR_E2E_PROJECT AND labels=e2e-${GITHUB_RUN_ID} AND statusCategory != Done" --output json \
+            | jq -r '.[].key' \
+            | while read -r KEY; do jr issue move "$KEY" "Done" || true; done
+```
+
+- **Non-blocking:** this workflow is separate from `ci.yml` and is not added to branch
+  protection's required checks.
+- **Teardown is close-only:** transitions this run's issues to `Done` (no DELETE, no new
+  command, no delete permission). Accumulated closed issues are acceptable on a throwaway site
+  and remain selectable by label.
+
+## 6. Secret safety (public repo)
+
+- GitHub already withholds repo/environment secrets from `pull_request` runs triggered by
+  **forks** (only `GITHUB_TOKEN`, downgraded to read-only, is passed). Fork PRs therefore can
+  never read the Jira credential.
+- **Defense-in-depth:** the job is bound to a GitHub **Environment** named `jira-e2e` whose
+  **deployment-branch policy** is restricted to `develop` and `main`. Even a same-repo feature
+  branch cannot read the environment's secrets. Optionally add **required reviewers** on the
+  environment for an approval gate.
+- The workflow is `push`/`schedule`/`workflow_dispatch` only and guarded by
+  `if: github.event_name != 'pull_request'`. **`pull_request_target` is never used.**
+
+## 7. Isolation & cleanup
+
+- **Dedicated project** `<E2E>` used by nothing else — a botched teardown never touches real work.
+- **Run-scoped label** `e2e-<run_id>` (+ summary prefix `[e2e <run_id>]`) on every created
+  artifact, so teardown selects exactly this run's issues and concurrent/serialized runs don't
+  interfere.
+- **Guaranteed teardown** via the `if: always()` close-only step (§5).
+- **Read-after-write consistency:** poll `jr issue view <KEY>` (GET-by-key, consistent) instead
+  of searching (JQL search is eventually consistent, lag of seconds-to-minutes).
+- **Rate limits:** rely on `jr`'s built-in 429/`Retry-After` retry (`api/rate_limit.rs`,
+  `api/client.rs`); the suite does not add a competing retry layer and keeps request volume modest.
+
+## 8. Configuration inventory (GitHub Environment `jira-e2e`)
+
+| Name | Kind | Example | Notes |
+|---|---|---|---|
+| `JR_E2E_BASE_URL` | secret | `https://<site>.atlassian.net` | real URL never in repo |
+| `JR_E2E_EMAIL` | secret | `ci@example.com` | service-account login |
+| `JR_E2E_API_TOKEN` | secret | `<365-day token>` | annual rotation (§9) |
+| `JR_E2E_PROJECT` | variable | `E2E` | Scrum project key |
+| `JR_E2E_BOARD_ID` | variable (optional) | `1` | enables sprint mutation |
+| `JR_E2E_JSM_PROJECT` | variable (optional) | `HELP` | enables JSM read tests |
+
+## 9. Maintenance
+
+- **Annual API-token rotation:** Atlassian caps API tokens at 1 year. The owner mints a new
+  365-day token from the CI service account before expiry and updates `JR_E2E_API_TOKEN`. When
+  a token expires, the nightly run fails with HTTP 401 (loud signal). A runbook section in the
+  repo documents the steps.
+- **Keep-warm:** the nightly run prevents ~120-day idle deactivation of the free site.
+
+## 10. Provisioning runbook (one-time, manual — documented for the maintainer)
+
+1. Create a free Jira Cloud site (e.g. `<site>.atlassian.net`) dedicated to E2E.
+2. Create a CI service account (a real Atlassian account, member of the site).
+3. Create a **Scrum** software project, key `E2E`, and a board (note the board id).
+4. (Optional) Create a JSM project for JSM read tests.
+5. Mint a 365-day API token for the service account.
+6. In the repo: create Environment `jira-e2e`, set deployment-branch policy to `develop`/`main`,
+   add the secrets/variables from §8.
+
+## 11. Testing strategy
+
+- The E2E tests themselves are the verification artifact; they assert exit codes + JSON shapes.
+- A short local dry-run path: a maintainer with creds can run
+  `JR_RUN_E2E=1 JR_BASE_URL=... JR_AUTH_HEADER=... JR_E2E_PROJECT=E2E cargo test --test e2e_live -- --include-ignored`.
+- The gate (`JR_RUN_E2E`) is itself verified by a non-gated assertion that the suite is a no-op
+  when the flag is unset.
+
+## 12. Open items (resolve during implementation)
+
+1. **Exact read assertions** per command — finalize the minimal JSON-shape checks that are
+   stable across a fresh free site (avoid over-fitting to seed data).
+2. **Transition names** — `move` targets depend on the project's workflow status names
+   (`In Progress`, `Done`); confirm against the provisioned Scrum project, or make them
+   configurable via vars.
+3. **JSM free-tier coverage** — confirm which JSM read commands work on free; keep behind the
+   `JR_E2E_JSM_PROJECT` flag so the suite passes if a feature is unavailable.
+4. **Token-expiry early warning** — optional: a scheduled step that warns ~30 days before
+   expiry (requires storing the mint/expiry date as a variable). Minor; loud 401 on expiry is
+   the baseline.
+
+## 13. References
+
+- Research report: `.factory/research/e2e-real-jira-ci.md` (primary-source-anchored).
+- Atlassian Basic auth, API-token expiry, Search-and-Reconcile (eventual consistency).
+- GitHub Actions: secrets withheld from fork PRs; Environments + deployment-branch policies.
+- Peer signal: `ankitpokhrel/jira-cli` runs **mock-only** CI (no live-Jira E2E) — live E2E is a
+  deliberate addition, not table stakes.
