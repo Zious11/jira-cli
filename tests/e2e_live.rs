@@ -146,8 +146,8 @@ fn run_label() -> String {
 
 /// Returns the E2E project key from the `JR_E2E_PROJECT` env var.
 ///
-/// Panics if the var is unset — every live test that calls this should be
-/// guarded by `if !e2e_enabled() { return; }` at the top.
+/// Panics if the var is unset, empty, or whitespace-only — every live test
+/// that calls this should be guarded by `if !e2e_enabled() { return; }` at the top.
 fn project() -> String {
     let p = env::var("JR_E2E_PROJECT")
         .expect("JR_E2E_PROJECT must be set for E2E tests")
