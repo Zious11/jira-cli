@@ -122,11 +122,15 @@ jobs:
     timeout-minutes: 20
     permissions: { contents: read }
     steps:
-      - harden-runner (audit)
+      - harden-runner (egress-policy: block, allowlisted)
+          # block is fail-closed: an unlisted host aborts the job rather than leaking
+          # the credential. api.atlassian.com is intentionally omitted — the E2E suite
+          # uses Basic auth against *.atlassian.net directly and makes no OAuth/cloudId
+          # calls (those are the OAuth 3LO path, not exercised here).
       - checkout
       - install Rust
       - compose JR_AUTH_HEADER from secrets:
-          JR_AUTH_HEADER="Basic $(printf '%s:%s' "$EMAIL" "$TOKEN" | base64 -w0)"
+          JR_AUTH_HEADER="Basic $(printf '%s:%s' "$EMAIL" "$TOKEN" | base64 | tr -d '\n')"
       - cargo test --test e2e_live -- --include-ignored --test-threads=1
           env: JR_RUN_E2E=1, JR_BASE_URL, JR_AUTH_HEADER, JR_E2E_PROJECT, GITHUB_RUN_ID, (optional JSM/board vars)
       - name: Teardown (close-only)
