@@ -4,22 +4,22 @@ level: ops
 version: "2.0"
 status: active
 producer: state-manager
-timestamp: 2026-05-28T00:00:00
+timestamp: 2026-05-29T00:00:00
 phase: phase-3-tdd-implementation
 inputs: []
 input-hash: "[live-state]"
 traces_to: ""
 project: jira-cli
 mode: BROWNFIELD
-current_step: "S-400-A-MERGED-PR431-develop-9d4a65b"
+current_step: "v0.5.0-dev.11-RELEASED-develop-15bf305"
 current_cycle: "cycle-001"
 dtu_required: false
 phase_2_status: APPROVED
 phase_2_approved_at: 2026-05-07
 phase_2_approved_by: "human (user)"
 phase_3_status: IN_PROGRESS
-activation_head: "dea166471e22eff55974d7675593469b37048c5f"
-activation_version: "v0.5.0-dev.7"
+activation_head: "15bf305"
+activation_version: "v0.5.0-dev.11"
 ---
 
 <!-- SIZE BUDGET: <200 lines. Historical content → cycle files. Run /vsdd-factory:compact-state if over 200. -->
@@ -36,10 +36,10 @@ activation_version: "v0.5.0-dev.7"
 | **Language** | Rust |
 | **Target Workspace** | develop → main |
 | **Started** | 2026-05-04 |
-| **Last Updated** | 2026-05-28 — S-400-A MERGED via PR #431 (develop @ 9d4a65b). TEST-ONLY hardening: TH-398-1..4 (dry-run echo, bulk-edit echo, comment typo, hermetic stdin test). 4 Copilot rounds, 0 findings. 3/3 CLEAN adversarial passes. CI 11/11 green. #400 stays OPEN (Story B + engine items remain). |
+| **Last Updated** | 2026-05-28 (UTC 2026-05-29) — v0.5.0-dev.11 RELEASED. Tag on develop @ 15bf305 (PR #432 squash-merged). 7 commits since dev.10: S-400-A/#431, #430, #427, #418, #417, #368, #416. Pre-PR: cargo check, fmt, clippy, full test suite green. PR CI 11/11 green. Release workflow triggered (pre-release binaries in progress). |
 | **Current Phase** | Phase 3 — TDD Implementation IN PROGRESS — Wave 3 CLOSED (10/10). Feature Mode ongoing. Open backlog: #210, #331, #368, #372, #387, #400, #429. Held Dependabot PRs #404/#422/#423/#424/#425/#426 due 2026-05-31. |
 | **Next Phase** | Phase 4: Holdout Evaluation (not started) |
-| **Activation HEAD** | dea166471e22eff55974d7675593469b37048c5f (v0.5.0-dev.7) |
+| **Activation HEAD** | 15bf305 (v0.5.0-dev.11) |
 
 ## Pipeline Goal
 
@@ -72,11 +72,11 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 
 | Step | Agent | Status | Output |
 |------|-------|--------|--------|
-| #408 MERGED 2026-05-27 via PR #417 (develop @ d53278a) | state-manager | complete | S-408: 5 stale line-anchor citations re-anchored to symbol-form (2 in CLAUDE.md AI Agent Notes, 3 in bc-3-issue-write.md). 1 Copilot review cycle: caught path-prefix inconsistency on line 336 (`create.rs::handle_edit` vs `src/cli/issue/create.rs::handle_edit`); fixed in bfa333d; re-review clean. Symbol-form convention now active. Issue #408 auto-closed. L-408-1 in lessons.md. |
 | #409 MERGED 2026-05-27 via PR #418 (develop @ 88cf863) | state-manager | complete | S-409: extract `parsed_number_to_wire_value` helper + replace tautological test 38. 6 inline unit tests. 1 Copilot review cycle (caught 2 pre-existing f64→i64 precision findings at bounds check; Perplexity-validated; deferred as #421). Copilot re-review clean. Issue #409 auto-closed. |
 | #421 MERGED 2026-05-28 via PR #427 (develop @ c7ffb55) | state-manager | complete | S-421: two-stage i64-first parser eliminates f64→i64 boundary saturation. 20 unit tests in field_resolve.rs::tests (was 14). 9-round Copilot review cycle (deepest to date): R2 BLOCKING precision regression; R3-R8 doc/stale-cross-ref; R5 contract-vs-impl mismatch; R6 empirically-false serde_json claim; R9 accepted as Option C trade-off (3-way boundary asymmetry documented in rustdoc). F2 spec evolution at factory 6680de7. STORY-INDEX v1.4.28. Follow-up #428 filed. |
 | #428 MERGED 2026-05-28 via PR #430 (develop @ e1706d4) | state-manager | complete | S-428: wiremock-only refactor extracting `#[doc(hidden)] pub fn resolve_cloud_id` + lifting `AccessibleResource` to module scope in `src/api/auth.rs`. Tests #4/#5/#6 in `tests/multi_cloudid_disambiguation.rs` rewritten in-process, removing jr_isolated() keychain-race root cause while preserving always-run exit-64 coverage of BC-1.5.038. CLAUDE.md doc-fallout in same commit (two squashed: 4f3c21a + 506cfe5). 5 adversarial passes, 3 consecutive CLEAN (passes 3/4/5), zero code defects, all 12 ACs PASS, CI 11/11 green. Copilot 3 documentation-accuracy findings (stale RED-GATE comments, duplicate AC-006 tag, "pure helper" overclaim); all Perplexity-validated, fixed, threads resolved; no re-review findings. Visibility deviation from F1 (pub(crate) invisible to integration-test crates) resolved to `#[doc(hidden)] pub`. Issue #428 auto-closed. L-428-1/L-428-2 codified. DEC-029 recorded. |
 | S-400-A MERGED 2026-05-28 via PR #431 (develop @ 9d4a65b) | state-manager | complete | S-400-A: TEST-ONLY hardening of 4 echo tests (TH-398-1..4). Files: tests/issue_edit_echo.rs, tests/issue_create_echo.rs. TH-398-1: dry-run echo exclusion (DRY RUN preview on stdout + explicit --output table). TH-398-2: bulk-edit echo exclusion (real bulk POST+poll path; poll .expect(1); bulk-submit mock trimmed to taskId-only). TH-398-3: comment typo fix. TH-398-4: --description-stdin echo test hermetic via jr_cmd_with_xdg + temp dirs. 4 Copilot rounds → 0 findings (commits 894c0bf, bf74354, 6f2b741). Round-3 finding (defaults.output flips dry-run branch) REFUTED by code trace — config.defaults.output not wired into runtime output decision; --output table added as defensive hardening. 3/3 CLEAN adversarial passes. CI 11/11 green. No src/ changes, no new #[allow]. #400 stays OPEN (Story B + PG-398-4/5 remain). Worktree .worktrees/S-400-A removed; branch test/S-400-A-echo-test-hardening deleted. L-400-1 codified. DEC-030 recorded. |
+| v0.5.0-dev.11 RELEASED 2026-05-28 (UTC 2026-05-29) via PR #432 (develop @ 15bf305) | state-manager | complete | Dev release v0.5.0-dev.11 tagged on develop @ 15bf305 (PR #432 squash-merged). Branch: chore/release-v0.5.0-dev.11. 7 commits since dev.10: S-400-A/#431, #430, #427, #418, #417, #368, #416. Pre-PR: cargo check (Cargo.lock bumped to dev.11), fmt clean, clippy zero warnings, full test suite green. PR CI 11/11 green. Annotated tag v0.5.0-dev.11 pushed; Release workflow triggered (pre-release binaries in progress). DEC-031 recorded. |
 
 ## Decisions Log
 
@@ -109,6 +109,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 | DEC-027 | 2026-05-28: S-428 F1 scope expansion — user chose to close the always-run coverage gap (wiremock-only refactor) rather than accept it (gate-only). F1 v1 proposed gating tests #4/#5/#6 behind JR_RUN_KEYRING_TESTS=1 (simpler, closes CI flakes, but loses always-run exit-64 coverage). User closed the OQ by selecting option (b): extract resolve_cloud_id + rewrite tests in-process. Scope expanded from 3-line gating patch to ~60 LOC production refactor + test rewrites. | F1 human gate for #428 | 2026-05-28 | human |
 | DEC-028 | 2026-05-28: S-428 — 4 design decisions locked at F1 human gate: (1) AccessibleResource lifted to module scope with pub(crate) visibility + Debug + PartialEq derives (not function-local); (2) resolve_cloud_id is pub(crate) fn (not async) with return type Result<String, JrError> so tests match variants without downcasting; (3) Vec<AccessibleResource> struct literals in tests (no serde JSON round-trip — cleaner and faster); (4) pub(crate) visibility is unconditional — not cfg(test)-gated — because function may have future callers (e.g., jr auth check). | F1 human gate for #428 | 2026-05-28 | human |
 | DEC-029 | 2026-05-28: #429 WONTFIX decision deferred to F7 (open). Issue #429 proposed a crypto-random `JR_SERVICE_NAME` suffix to prevent keychain contention across parallel subprocess tests. Now that #428 has merged (in-process rewrite removes the subprocess keychain-race root cause for tests #4/#5/#6), #429's mechanism is superseded for those 3 tests. WONTFIX decision is pending — #429 may still have value for other subprocess-based tests beyond the 3 rewritten in #428. Defer to next F7 cycle-close or maintenance sweep. Do NOT close #429 autonomously; requires human decision. | Open decision deferred to F7 | Feature Mode / #428 close | 2026-05-28 | deferred-to-human |
+| DEC-031 | 2026-05-28 (UTC 2026-05-29): Dev release v0.5.0-dev.11 shipped via branch chore/release-v0.5.0-dev.11 → PR #432 → squash-merge to develop @ 15bf305. Annotated tag v0.5.0-dev.11. 7 commits bundled since dev.10 (S-400-A/#431, #430, #427, #418, #417, #368, #416). Pre-PR local checks all green: cargo check, fmt, clippy -D warnings, full test suite. PR CI 11/11 green. Release workflow triggered (pre-release binaries). Protected-branch + standing branch-PR-tag rule followed throughout. | Dev releases follow the branch+PR+tag flow — no direct commits to develop. | Phase 3 / dev release cadence | 2026-05-28 | state-manager |
 | DEC-030 | 2026-05-28: S-400-A MERGED via PR #431 (develop @ 9d4a65b). TEST-ONLY hardening of TH-398-1..4 (issue #400 Story A). 4 Copilot review rounds converged to 0 findings. Round-3 Copilot finding (config.defaults.output flips dry-run output branch) REFUTED by code trace — `config.defaults.output` is not wired into the runtime output decision in main.rs (which reads `cli.output`, clap-defaulted to "table"); `--output table` flag added as defensive hardening / explicit intent rather than a bug fix. This validates the DEC-018 pattern: validate Copilot causal mechanism by code trace before acting. #400 NOT closed — Story B (PG-398-1 count-guard extension) and engine-scoped items (PG-398-4/5) remain open. | Receiving-code-review discipline: validate stated causal mechanism by code trace; hardening that documents intent is still a valid outcome even when the stated mechanism is wrong. | Feature Mode / S-400-A | 2026-05-28 | orchestrator + code-trace |
 | DEC-014 | S-3.07 spec pivot to v2.0.0 (3 corrections: Part A reframe + Part B conditional drop + Part D elevation as confirmed JRACLOUD-94632 bug response) | Perplexity-driven verification on 2026-05-08 found 3 errors in v1: (a) Atlassian Retry-After typical values are 1425-3089 seconds with documented 3600s ceiling, NOT the 86400s extreme used as v1's threat framing — `MAX_RETRY_AFTER_SECS=60` aborts essentially every real-world 429 (still defensible for interactive CLI per RFC 9110 §10.2.3, but story rationale + user error message must reflect reality); (b) Part B's `checked_mul` overflow guard targets the 3-arg `parse_duration` calculator that S-3.10 deletes — the orchestrator's earlier "WV2-SEC-01's 64-byte cap eliminates overflow" reasoning was mathematically false (14-20 digit inputs still overflow u64 within 64 bytes) — correct reason to drop is that S-3.10 deletes the function; drop is conditional via `depends_on: [S-3.10]` + AC-NEW-B sequencing gate, with reinstatement plan if S-3.10 slips; (c) Part D's `/rest/api/3/search/jql` cursor-loop is NOT a defensive nice-to-have — it is a confirmed Jira Cloud bug per JRACLOUD-94632 + JRACLOUD-92049 + JRACLOUD-85546 (also reported in atlassian/atlassian-mcp-server#118 and ankitpokhrel/jira-cli#898) → v2 elevates from KNOWN-GAP source comment to real defensive guard + stderr warning containing literal "JRACLOUD-94632" so users have a copy-pasteable upstream search term. ACs change: drop AC-004/005 (Part B specific); add AC-NEW-B sequencing guard; add AC-NEW-D JRACLOUD content assertion. New risk: R-NEW-S307-1 (silent partial results — failure mode now visible). NFR catalog: NFR-R-NEW-2 row removed (Part B dropped → no longer in scope); NFR-R-F routing flipped from DOCUMENT-AS-IS to DOCUMENT-AS-IS-FIXED (real guard delivered, not just documented). Verification report: `.factory/research/S-3.07-wave3-verification.md`. Story rewrite: `.factory/stories/wave-3/S-3.07-low-nfr-code-fixes-and-search-jql-anti-loop.md` (renamed from `-low-nfr-code-cleanup.md`) at factory-artifacts@898937e. No develop-branch impact. | Phase 3 / Wave 3 | 2026-05-08 | human + research-agent (Perplexity + WebFetch) |
 
@@ -159,17 +160,17 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 
 See `cycles/cycle-001/convergence-trajectory.md` for all per-issue convergence narratives (Phase 1d, Phase 2-adv, Phase 3-adv, issues #288/#382/#383/#384/#385/#396/#398/#407).
 
-Current trajectory summary: S-400-A MERGED (PR #431 @ 9d4a65b, 2026-05-28). TEST-ONLY; 3/3 CLEAN adversarial passes. No src/ changes; zero new BCs. BC corpus: 583 BCs (unchanged). Story corpus: 53 stories (S-400-A complete). #400 stays OPEN. Next active: open backlog #400 Story B / other backlog items, or Dependabot PRs (held until 2026-05-31).
+Current trajectory summary: v0.5.0-dev.11 RELEASED (develop @ 15bf305, 2026-05-28 UTC 2026-05-29). 7 commits bundled. BC corpus: 583 BCs (unchanged). Story corpus: 53 stories. No active story. Next active: open backlog #400 Story B / other backlog items, or Dependabot PRs (held until 2026-05-31).
 
 ## Session Resume Checkpoint
 
 <!-- Keep ONLY the latest checkpoint. Archive prior checkpoints to cycles/cycle-001/session-checkpoints.md. -->
 | Field | Value |
 |-------|-------|
-| **Date** | 2026-05-28 |
-| **Position** | **S-400-A COMPLETE. Develop @ 9d4a65b (PR #431 squash-merged, #400 stays OPEN).** No active mid-cycle story. Open backlog: #210, #331, #368, #372, #387, #400, #429. Held Dependabot PRs #404/#422/#423/#424/#425/#426 due 2026-05-31. #429 WONTFIX-pending (DEC-029) — do NOT close #429 autonomously. #400 Story B (PG-398-1) + engine items (PG-398-4/5) remain open. |
-| **Convergence counter** | S-400-A MERGED (TEST-ONLY). BC corpus: 583 BCs (unchanged). Story corpus: 53 stories. No active story. |
-| **Resume prompt** | `Read .factory/STATE.md latest checkpoint. S-400-A is closed (PR #431 @ 9d4a65b); #400 stays OPEN (Story B + PG-398-4/5). Open backlog: #210, #331, #368, #372, #387, #400, #429. Held Dependabot PRs #404/#422/#423/#424/#425/#426 due 2026-05-31. Issue #429 WONTFIX decision deferred to human (DEC-029). Next: pick #400 Story B, another backlog item, or advise on Dependabot strategy.` |
+| **Date** | 2026-05-28 (UTC 2026-05-29) |
+| **Position** | **Dev release v0.5.0-dev.11 SHIPPED. Develop @ 15bf305 (PR #432 squash-merged, annotated tag v0.5.0-dev.11 pushed).** No active mid-cycle story. Open backlog: #210, #331, #368, #372, #387, #400 (Story B), #429. Held Dependabot PRs #404/#422/#423/#424/#425/#426 due 2026-05-31. #429 WONTFIX-pending (DEC-029) — do NOT close #429 autonomously. #400 Story B (PG-398-1) + engine items (PG-398-4/5) remain open. |
+| **Convergence counter** | v0.5.0-dev.11 released. BC corpus: 583 BCs (unchanged). Story corpus: 53 stories. No active story. |
+| **Resume prompt** | `Read .factory/STATE.md latest checkpoint. v0.5.0-dev.11 released (develop @ 15bf305, tag pushed, CI green). No active story. Open backlog: #210, #331, #368, #372, #387, #400 (Story B + PG-398-4/5), #429. Held Dependabot PRs #404/#422/#423/#424/#425/#426 due 2026-05-31. Issue #429 WONTFIX decision deferred to human (DEC-029). Next: pick #400 Story B, another backlog item, or handle Dependabot PRs when they land.` |
 
 ## Open Issues Tracker (post-#288)
 

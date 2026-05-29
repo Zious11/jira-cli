@@ -3252,3 +3252,11 @@ Events after issue #288 epic closeout (factory-artifacts @ 7dbbfed):
 - **Issue #387 FILED** — history rewrite tracking. URL: https://github.com/Zious11/jira-cli/issues/387. Title: `chore: rewrite git history to remove docs/demo-evidence/ blobs (deferred from #386)`. Severity: LOW (housekeeping). Tracks destructive history rewrite to reclaim ~80 MB from `.git/objects/`. Full prerequisites + blast-radius analysis included in issue body (force-push to protected branches required, all clones invalidated, SHA citations dangle). Current repo size ~105 MB; deferred pending explicit approval for protected-branch force-push.
 
 - **Process improvement note (PG-365-1 discipline):** Any PR touching `.factory/specs/prd/*.md` BC files should run `scripts/check-bc-no-numeric-test-counts.sh` locally before creating the PR. Would have caught the BC-3.8.011 Trace drift at PR #381 time instead of CI failure on PR #386. Add to pre-PR-creation checklist for BC file edits.
+
+---
+
+### Archived Current Phase Step: #408 (from STATE.md — 2026-05-28 dev release v0.5.0-dev.11 burst)
+
+| Step | Agent | Status | Output |
+|------|-------|--------|--------|
+| #408 MERGED 2026-05-27 via PR #417 (develop @ d53278a) | state-manager | complete | S-408: 5 stale line-anchor citations re-anchored to symbol-form (2 in CLAUDE.md AI Agent Notes, 3 in bc-3-issue-write.md). 1 Copilot review cycle: caught path-prefix inconsistency on line 336 (`create.rs::handle_edit` vs `src/cli/issue/create.rs::handle_edit`); fixed in bfa333d; re-review clean. Symbol-form convention now active. Issue #408 auto-closed. L-408-1 in lessons.md. |
