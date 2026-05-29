@@ -96,7 +96,7 @@ GET succeeding immediately.
 3. `issue edit <key>` (e.g. add/update summary or a second label).
 4. `issue comment <key> ...`.
 5. `worklog add <key> 5m ...`.
-6. `issue move <key> <In Progress>` then `<Done>` (single-key `move` is idempotent).
+6. `issue move <key> $JR_E2E_STATUS_IN_PROGRESS` then `$JR_E2E_STATUS_DONE` (single-key `move` is idempotent). Status names are configurable via env vars (see §8); defaults are `"In Progress"` and `"Done"` respectively.
 7. Best-effort in-test close; **guaranteed** close handled by the workflow teardown (§5).
 
 ### Optional / feature-flagged
@@ -133,9 +133,11 @@ jobs:
         if: always()
         run: |
           # close every issue this run created, by label
+          # JR_E2E_STATUS_DONE defaults to "Done" if unset
+          STATUS_DONE="${JR_E2E_STATUS_DONE:-Done}"
           jr issue list --jql "project=$JR_E2E_PROJECT AND labels=e2e-${GITHUB_RUN_ID} AND statusCategory != Done" --output json \
             | jq -r '.[].key' \
-            | while read -r KEY; do jr issue move "$KEY" "Done" || true; done
+            | while read -r KEY; do jr issue move "$KEY" "$STATUS_DONE" || true; done
 ```
 
 - **Non-blocking:** this workflow is separate from `ci.yml` and is not added to branch
@@ -179,6 +181,8 @@ jobs:
 | `JR_E2E_PROJECT` | variable | `E2E` | Scrum project key |
 | `JR_E2E_BOARD_ID` | variable (optional) | `1` | enables sprint mutation |
 | `JR_E2E_JSM_PROJECT` | variable (optional) | `HELP` | enables JSM read tests |
+| `JR_E2E_STATUS_DONE` | variable (optional) | `Done` | workflow status name for "closed/done"; default `"Done"`. Set if the provisioned Scrum project uses a different status name (e.g. `"Closed"`). Used in write-flow step 6 and teardown. |
+| `JR_E2E_STATUS_IN_PROGRESS` | variable (optional) | `In Progress` | workflow status name for "in progress"; default `"In Progress"`. Set if the provisioned Scrum project uses a different status name. Used in write-flow step 6. |
 
 ## 9. Maintenance
 
@@ -213,9 +217,12 @@ jobs:
 
 1. **Exact read assertions** per command — finalize the minimal JSON-shape checks that are
    stable across a fresh free site (avoid over-fitting to seed data).
-2. **Transition names** — `move` targets depend on the project's workflow status names
+2. ~~**Transition names** — `move` targets depend on the project's workflow status names
    (`In Progress`, `Done`); confirm against the provisioned Scrum project, or make them
-   configurable via vars.
+   configurable via vars.~~ **RESOLVED (F2, 2026-05-29):** Status names are now configurable
+   via `JR_E2E_STATUS_DONE` (default `"Done"`) and `JR_E2E_STATUS_IN_PROGRESS` (default
+   `"In Progress"`) env vars (see §8). The write-flow step 6 and teardown both use these
+   vars, falling back to the defaults when unset. Hard-coded names are eliminated.
 3. **JSM free-tier coverage** — confirm which JSM read commands work on free; keep behind the
    `JR_E2E_JSM_PROJECT` flag so the suite passes if a feature is unavailable.
 4. **Token-expiry early warning** — optional: a scheduled step that warns ~30 days before
