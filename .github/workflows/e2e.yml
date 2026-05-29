@@ -28,10 +28,24 @@ jobs:
     environment: jira-e2e
 
     steps:
-      - name: Harden the runner (Audit all outbound calls)
+      - name: Harden the runner (block unexpected egress)
         uses: step-security/harden-runner@ab7a9404c0f3da075243ca237b5fac12c98deaa5 # v2.19.3
         with:
-          egress-policy: audit
+          egress-policy: block
+          # Allowlist seeded from expected endpoints — confirm/tune on first live run.
+          # Fail-closed: an incomplete list fails the job rather than leaking credentials.
+          # No real subdomain is hard-coded; the Atlassian target is matched by wildcard.
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            objects.githubusercontent.com:443
+            codeload.github.com:443
+            *.atlassian.net:443
+            static.crates.io:443
+            index.crates.io:443
+            crates.io:443
+            static.rust-lang.org:443
+            sh.rustup.rs:443
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
 
@@ -76,6 +90,10 @@ jobs:
           JR_E2E_STATUS_DONE: ${{ vars.JR_E2E_STATUS_DONE }}
           JR_E2E_EMAIL: ${{ secrets.JR_E2E_EMAIL }}
           JR_E2E_API_TOKEN: ${{ secrets.JR_E2E_API_TOKEN }}
+          # GITHUB_RUN_ID is set explicitly so the JQL label matches the label the
+          # test built from this same env var — no implicit coupling to the Actions
+          # expression context.
+          GITHUB_RUN_ID: ${{ github.run_id }}
         run: |
           # Compose auth header the same way as the test step.
           JR_AUTH_HEADER="Basic $(printf '%s:%s' "$JR_E2E_EMAIL" "$JR_E2E_API_TOKEN" | base64 | tr -d '\n')"
@@ -84,14 +102,22 @@ jobs:
           # Default to "Done" if JR_E2E_STATUS_DONE is not configured as a variable.
           STATUS_DONE="${JR_E2E_STATUS_DONE:-Done}"
 
-          # Close every issue this run created, identified by the run-scoped label.
-          # || true prevents a single move failure from aborting the teardown loop
-          # (a partially-closed set is better than an aborted teardown).
+          # Fetch ALL matching issues — --all bypasses the default page limit so
+          # every issue labelled for this run is closed, not just the first page.
           # The debug binary is used here so JR_BASE_URL / JR_AUTH_HEADER seams work.
-          ./target/debug/jr issue list \
-            --jql "project=$JR_E2E_PROJECT AND labels=e2e-${{ github.run_id }} AND statusCategory != Done" \
-            --output json \
-            | jq -r '.[].key' \
-            | while read -r KEY; do
-                ./target/debug/jr issue move "$KEY" "$STATUS_DONE" || true
-              done
+          KEYS=$(./target/debug/jr issue list \
+            --jql "project=$JR_E2E_PROJECT AND labels=e2e-$GITHUB_RUN_ID AND statusCategory != Done" \
+            --output json --all \
+            | jq -r '.[].key')
+
+          # Emit a runtime count so an empty match is visible in the log (M-5).
+          COUNT=$(echo "$KEYS" | grep -c '[A-Z]' || true)
+          echo "Teardown: closing $COUNT issue(s) for run $GITHUB_RUN_ID"
+
+          # Close every issue; || true prevents a single move failure from aborting
+          # the teardown loop (a partially-closed set is better than an aborted teardown).
+          echo "$KEYS" | while read -r KEY; do
+            [ -z "$KEY" ] && continue
+            ./target/debug/jr issue move "$KEY" "$STATUS_DONE" || true
+            echo "closed $KEY"
+          done
