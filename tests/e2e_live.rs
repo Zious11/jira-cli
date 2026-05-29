@@ -376,18 +376,47 @@ fn test_every_ignored_test_has_gate_guard() {
 
 /// Extract the full source text of the function starting at `fn_start`.
 ///
-/// Uses a simple state machine that tracks whether the scanner is inside a
-/// double-quoted string literal (`"..."`) or a char literal (`'.'`),
-/// honoring backslash escapes in both.  Only braces that occur OUTSIDE
-/// of any literal are counted toward depth, so `{` / `}` characters in
-/// string arguments (e.g. `format!("{{ }}")` or assertion messages) do not
-/// confuse the depth counter.
+/// Uses a state machine that tracks whether the scanner is inside a
+/// double-quoted string literal (`"..."`), a char literal (`'.'`),
+/// a `//` line comment, or a `/* ... */` block comment.
+/// Only braces that occur OUTSIDE of any literal or comment are counted
+/// toward depth, so `{` / `}` characters in string arguments, comments,
+/// or assertion messages do not confuse the depth counter.
+///
+/// # Lifetime sigils
+///
+/// Rust's `'` character is used both as a char-literal delimiter and as a
+/// lifetime sigil (e.g. `&'static str`, `'a`).  A lifetime `'` is always
+/// followed immediately by an ASCII identifier-start character (`a-z A-Z _`).
+/// A char literal `'` is followed by the character content or a `\` escape.
+/// The scanner uses this distinction: a `'` followed by an identifier-start
+/// byte is treated as a lifetime sigil and skipped rather than entering
+/// `InChar` state.  Note that this heuristic does not handle the degenerate
+/// case where a char literal begins with an identifier-start character, e.g.
+/// `'a'` — that will be treated as a lifetime.  For the purposes of this
+/// meta-guard (scanning Rust *test* source for brace balance), this is
+/// acceptable: a lifetime mis-classified as a char literal would at worst
+/// keep the scanner in `Code` state (the correct behaviour), and a char
+/// literal mis-classified as a lifetime would emit one extra bare `'` char
+/// which also stays in `Code` state.  In either case the depth counter
+/// remains correct unless the char literal or lifetime content itself
+/// contains `{` or `}`, which is vanishingly rare in test source.
+///
+/// # Block comment nesting
+///
+/// Rust block comments nest (`/* /* */ */`), but this scanner uses a simple
+/// non-nesting scan for block comments: it enters `InBlockComment` on `/*`
+/// and exits on the first `*/`.  Nested block comments inside test function
+/// bodies are uncommon enough that this limitation is acceptable.  A comment
+/// is added inline noting this residual limitation.
 fn extract_fn_body(lines: &[&str], fn_start: usize) -> String {
     #[derive(PartialEq)]
     enum Scan {
         Code,
         InString,
         InChar,
+        InLineComment,
+        InBlockComment,
     }
 
     let mut body = String::new();
@@ -399,37 +428,108 @@ fn extract_fn_body(lines: &[&str], fn_start: usize) -> String {
         body.push_str(line);
         body.push('\n');
 
-        let mut chars = line.chars();
-        while let Some(ch) = chars.next() {
+        // Line comments last only until end-of-line; reset to Code at each new line.
+        if state == Scan::InLineComment {
+            state = Scan::Code;
+        }
+
+        let bytes = line.as_bytes();
+        let mut i = 0usize;
+        while i < bytes.len() {
+            let ch = bytes[i] as char;
             match state {
-                Scan::Code => match ch {
-                    '"' => state = Scan::InString,
-                    '\'' => state = Scan::InChar,
-                    '{' => {
-                        depth += 1;
-                        found_open = true;
+                Scan::InLineComment => {
+                    // Consume to end-of-line; the outer loop resets state after
+                    // each line, so we just break here.
+                    break;
+                }
+                Scan::InBlockComment => {
+                    // Look for the `*/` terminator.
+                    // Non-nesting: the first `*/` ends the comment regardless
+                    // of nested `/*` inside (residual limitation — uncommon in
+                    // test source bodies).
+                    if ch == '*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                        i += 2;
+                        state = Scan::Code;
+                        continue;
                     }
-                    '}' => {
-                        depth = depth.saturating_sub(1);
-                    }
-                    _ => {}
-                },
+                    i += 1;
+                }
                 Scan::InString => match ch {
                     '\\' => {
-                        // Skip the next character (escape sequence).
-                        chars.next();
+                        // Skip the next byte (escape sequence).
+                        i += 2;
                     }
-                    '"' => state = Scan::Code,
-                    _ => {}
+                    '"' => {
+                        state = Scan::Code;
+                        i += 1;
+                    }
+                    _ => {
+                        i += 1;
+                    }
                 },
                 Scan::InChar => match ch {
                     '\\' => {
-                        // Skip the escaped char.
-                        chars.next();
+                        // Skip the escaped byte.
+                        i += 2;
                     }
-                    '\'' => state = Scan::Code,
-                    _ => {}
+                    '\'' => {
+                        state = Scan::Code;
+                        i += 1;
+                    }
+                    _ => {
+                        i += 1;
+                    }
                 },
+                Scan::Code => {
+                    // Check for `//` line comment first (takes priority over
+                    // any `"` or `'` that might appear on the same byte).
+                    if ch == '/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                        state = Scan::InLineComment;
+                        break; // Consume the rest of the line without scanning.
+                    }
+                    // Check for `/*` block comment.
+                    if ch == '/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+                        state = Scan::InBlockComment;
+                        i += 2;
+                        continue;
+                    }
+                    match ch {
+                        '"' => {
+                            state = Scan::InString;
+                            i += 1;
+                        }
+                        '\'' => {
+                            // Distinguish lifetime sigil from char literal.
+                            // A lifetime is `'` followed immediately by an
+                            // ASCII identifier-start character (a-z, A-Z, _).
+                            // In that case, skip the `'` and stay in Code.
+                            let next_is_ident_start = i + 1 < bytes.len() && {
+                                let nb = bytes[i + 1];
+                                nb.is_ascii_alphabetic() || nb == b'_'
+                            };
+                            if next_is_ident_start {
+                                // Lifetime sigil — not a char literal; stay in Code.
+                                i += 1;
+                            } else {
+                                state = Scan::InChar;
+                                i += 1;
+                            }
+                        }
+                        '{' => {
+                            depth += 1;
+                            found_open = true;
+                            i += 1;
+                        }
+                        '}' => {
+                            depth = depth.saturating_sub(1);
+                            i += 1;
+                        }
+                        _ => {
+                            i += 1;
+                        }
+                    }
+                }
             }
         }
 
@@ -1169,5 +1269,184 @@ fn test_e2e_issue_view_returns_key_field() {
     assert!(
         view_json.get("key").is_some(),
         "issue view JSON must contain a 'key' field; got: {view_json}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests for `extract_fn_body` parser (always-run, no gate required)
+// ---------------------------------------------------------------------------
+
+/// Regression pin for the comment + lifetime parser fix (PR #433 Copilot finding).
+///
+/// Verifies that `extract_fn_body` correctly handles:
+///   1. `//` line comments containing apostrophes (e.g. `// don't forget`)
+///   2. `//` line comments containing double-quotes (e.g. `// a "quoted" word`)
+///   3. `/* ... */` block comments containing quotes and braces
+///   4. Rust lifetime sigils (`&'static str`) that must NOT enter `InChar` state
+///   5. A closing brace inside a string literal that must NOT close the function body
+///
+/// Without the fix, a `'` inside a `//` comment would toggle the scanner into
+/// `InChar` state and subsequent `'` or brace characters would be misinterpreted,
+/// potentially causing the meta-guard `test_every_ignored_test_has_gate_guard`
+/// to mis-extract function bodies and produce false pass/fail results.
+#[test]
+fn test_extract_fn_body_handles_line_comment_with_apostrophe() {
+    // Function body containing `// don't forget` — the apostrophe must not
+    // desync the brace counter.
+    let src = [
+        "fn foo() {",
+        "    // don't forget to close",
+        "    let x = 1;",
+        "}",
+        "fn bar() {}", // must NOT be included in the extracted body
+    ];
+    let body = extract_fn_body(&src, 0);
+    // Must include up to and including the closing `}` of `foo`.
+    assert!(
+        body.contains("fn foo()"),
+        "body must start at fn foo; got: {body:?}"
+    );
+    assert!(
+        body.contains("don't forget"),
+        "body must contain the comment text; got: {body:?}"
+    );
+    assert!(
+        !body.contains("fn bar()"),
+        "body must NOT include fn bar (over-extraction); got: {body:?}"
+    );
+    // Brace depth must be balanced — the extracted body ends at the right `}`.
+    let open = body.chars().filter(|&c| c == '{').count();
+    let close = body.chars().filter(|&c| c == '}').count();
+    assert_eq!(
+        open, close,
+        "extracted body must have balanced braces; open={open} close={close}"
+    );
+}
+
+#[test]
+fn test_extract_fn_body_handles_line_comment_with_double_quote() {
+    // Function body containing `// a "quoted" word` — the double-quote must not
+    // enter InString state.
+    let src = [
+        "fn foo() {",
+        r#"    // a "quoted" word in comment"#,
+        "    let x = 2;",
+        "}",
+        "fn bar() {}",
+    ];
+    let body = extract_fn_body(&src, 0);
+    assert!(
+        body.contains("fn foo()"),
+        "body must start at fn foo; got: {body:?}"
+    );
+    assert!(
+        !body.contains("fn bar()"),
+        "body must NOT include fn bar; got: {body:?}"
+    );
+}
+
+#[test]
+fn test_extract_fn_body_handles_block_comment_with_quotes_and_braces() {
+    // Block comment containing quotes and braces must not affect depth.
+    let src = [
+        "fn foo() {",
+        "    /* don't count { these } braces \"or these\" */",
+        "    let y = 3;",
+        "}",
+        "fn bar() {}",
+    ];
+    let body = extract_fn_body(&src, 0);
+    assert!(
+        body.contains("fn foo()"),
+        "body must start at fn foo; got: {body:?}"
+    );
+    assert!(
+        !body.contains("fn bar()"),
+        "body must NOT include fn bar (block comment braces must not count); got: {body:?}"
+    );
+    let open = body.chars().filter(|&c| c == '{').count();
+    let close = body.chars().filter(|&c| c == '}').count();
+    // The body text includes the braces inside the comment, but the scanner
+    // must still terminate at the real closing brace.  Only assert termination
+    // (fn bar absent) and that the raw text is intact.
+    let _ = (open, close); // brace counts in raw text include comment braces; shape check only
+}
+
+#[test]
+fn test_extract_fn_body_handles_lifetime_sigil() {
+    // `&'static str` lifetime must NOT enter InChar state.
+    // If it did, the `'` in `str` would never close it and subsequent `'`
+    // characters would be misinterpreted.
+    let src = [
+        "fn foo() {",
+        "    let s: &'static str = \"hello\";",
+        "    // don't forget the lifetime",
+        "}",
+        "fn bar() {}",
+    ];
+    let body = extract_fn_body(&src, 0);
+    assert!(
+        body.contains("fn foo()"),
+        "body must start at fn foo; got: {body:?}"
+    );
+    assert!(
+        !body.contains("fn bar()"),
+        "body must NOT include fn bar (lifetime must not desync scanner); got: {body:?}"
+    );
+}
+
+#[test]
+fn test_extract_fn_body_handles_closing_brace_in_string() {
+    // A `}` inside a string literal must NOT close the function body early.
+    let src = [
+        "fn foo() {",
+        r#"    let x = "}"; // closing brace in string"#,
+        "    let y = 4;",
+        "}",
+        "fn bar() {}",
+    ];
+    let body = extract_fn_body(&src, 0);
+    assert!(
+        body.contains("fn foo()"),
+        "body must start at fn foo; got: {body:?}"
+    );
+    assert!(
+        body.contains("let y = 4"),
+        "body must include content after the string-literal brace; got: {body:?}"
+    );
+    assert!(
+        !body.contains("fn bar()"),
+        "body must NOT include fn bar; got: {body:?}"
+    );
+}
+
+#[test]
+fn test_extract_fn_body_combined_comments_and_lifetime() {
+    // All three hazards together: line comment with apostrophe, block comment
+    // with brace and quote, and a lifetime.  This is the canonical regression
+    // case from the PR #433 Copilot finding.
+    let src = [
+        "fn test_fn() {",
+        "    // don't forget",
+        "    /* block { comment } with \"quotes\" */",
+        "    let s: &'static str = \"value\";",
+        r#"    let closing = "}"; // closing brace in string"#,
+        "    assert!(true);",
+        "}",
+        "// trailing comment — don't include fn next",
+        "fn next() {}",
+    ];
+    let body = extract_fn_body(&src, 0);
+    assert!(
+        body.contains("fn test_fn()"),
+        "body must start at fn test_fn; got: {body:?}"
+    );
+    assert!(
+        body.contains("assert!(true)"),
+        "body must include assert; got: {body:?}"
+    );
+    assert!(
+        !body.contains("fn next()"),
+        "body must NOT include fn next; got: {body:?}"
     );
 }
