@@ -184,3 +184,14 @@ _Archived 2026-05-29. Was the active checkpoint at E2E feature F1+F2+F3 COMPLETE
 | **Position** | **E2E Feature Mode: F1 APPROVED + F2 COMPLETE + F3 COMPLETE. Story S-E2E-1 created (12 ACs, MEDIUM/8SP, draft). Design spec on feat/e2e-live-jira-testing @ c3e967a. Next: F4 delta implementation (TDD).** 54 stories / 41 NFRs. Develop @ 15bf305 (v0.5.0-dev.11). Open backlog: #210, #331, #368, #372, #387, #400 (Story B), #429. Held Dependabot PRs #404/#422/#423/#424/#425/#426 due 2026-05-31. #429 WONTFIX-pending (DEC-029) — do NOT close #429 autonomously. File provisioning GitHub issue (R-NEW-1) before F4. |
 | **Convergence counter** | E2E feature F1+F2+F3 complete. BC corpus: 583 BCs (unchanged). NFR corpus: 41 NFRs. Story corpus: 54 stories (+1 S-E2E-1). |
 | **Resume prompt** | `Read .factory/STATE.md. E2E feature (Feature Mode, DEC-032): F1✓ F2✓ F3✓ (story S-E2E-1, 12 ACs, draft). Design spec: docs/specs/e2e-live-jira-testing.md on feat/e2e-live-jira-testing @ c3e967a. Next: F4 delta implementation (TDD). File provisioning GitHub issue (R-NEW-1) before F4. 54 stories / 41 NFRs. Develop @ 15bf305 (v0.5.0-dev.11). Dependabot PRs held until 2026-05-31. DEC-029 deferred to human (do NOT close #429).` |
+
+---
+
+_Archived 2026-05-29. Was the active checkpoint after E2E F5 CONVERGED. Superseded by S-E2E-1 MERGED (F7) checkpoint._
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-29 |
+| **Position** | **E2E Feature Mode: F1✓ F2✓ F3✓ F4✓ F5✓ (CONVERGED, 3 consecutive CLEAN). Next: F6 targeted hardening.** Branch feat/e2e-live-jira-testing; 10 commits (cdf4dcf..f78eed2); zero src/ changes. Story S-E2E-1 (12 ACs, MEDIUM/8SP). 54 stories / 41 NFRs. Develop @ 15bf305 (v0.5.0-dev.11). Open backlog: #210, #331, #368, #372, #387, #400 (Story B), #429. Held Dependabot PRs #404/#422/#423/#424/#425/#426 due 2026-05-31. #429 WONTFIX-pending (DEC-029) — do NOT close #429 autonomously. File provisioning GitHub issue (R-NEW-1) before F6/F7 merge. |
+| **Convergence counter** | E2E F5 CONVERGED (7 passes, 3 consecutive CLEAN). BC corpus: 583 BCs. NFR corpus: 41 NFRs. Story corpus: 54 stories. |
+| **Resume prompt** | `Read .factory/STATE.md. E2E feature (Feature Mode, DEC-032): F1✓ F2✓ F3✓ F4✓ F5✓ (CONVERGED, 3 consecutive CLEAN; DEC-033). Next: F6 targeted hardening on feat/e2e-live-jira-testing. 10 commits, zero src/ changes. 54 stories / 41 NFRs. Develop @ 15bf305 (v0.5.0-dev.11). Dependabot PRs held until 2026-05-31. DEC-029 deferred to human (do NOT close #429). File provisioning GitHub issue (R-NEW-1) before F6/F7 merge.` |
