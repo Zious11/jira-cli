@@ -29,8 +29,9 @@ push to `develop`/`main`, nightly, and on demand.
 - **Not** testing the OAuth 3LO / keychain login flows (interactive/local; can't run in CI;
   already covered by unit/integration tests). E2E authenticates via the debug-only
   `JR_AUTH_HEADER` Basic seam.
-- **Not** testing Assets/CMDB (`assets`, linked-asset lookup) live — Assets is an Atlassian
-  **Premium** feature, unavailable on a free site. These stay under wiremock.
+- **Not** testing Assets/CMDB (`assets`, linked-asset lookup) live — Assets requires a **paid**
+  plan (Standard+ as of Feb 2026; ~5k objects on Standard) and is **not available on Free**, so a
+  free CI site cannot exercise it. These stay under wiremock.
 - **Not** exhaustive command coverage — smoke-level happy paths per command family, not every
   flag combination.
 - **Not** adding a `jr issue delete` command (teardown is close-only; see §7).
@@ -68,9 +69,13 @@ fn e2e_cmd() -> Command   // Command::cargo_bin("jr") with:
   // - --no-input (non-interactive)
 ```
 Plus helpers: `run_label()` → `e2e-<run_id>` (from `GITHUB_RUN_ID`, falling back to a process
-timestamp locally); `project()` → env `JR_E2E_PROJECT`; `poll_view(key)` → retry
-`jr issue view <KEY> --output json` until exit 0 (GET-by-key is read-after-write consistent,
-so this dodges Jira's search-index lag of seconds-to-minutes).
+timestamp locally); `project()` → env `JR_E2E_PROJECT`; `poll_view(key)` → **bounded retry** of
+`jr issue view <KEY> --output json` until exit 0 (a few attempts with short backoff). The
+working assumption is that GET-issue-by-key is read-after-write consistent — sidestepping the
+search-index lag of seconds-to-minutes that affects JQL search — but **this is a reasonable
+inference, not vendor-documented** (Atlassian documents only that *search* is eventually
+consistent). The bounded retry in `poll_view` is the real guarantee; do not rely on a single
+GET succeeding immediately.
 
 ### Read coverage (assert exit 0 + JSON shape)
 | Command family | E2E assertion |
@@ -158,8 +163,9 @@ jobs:
   artifact, so teardown selects exactly this run's issues and concurrent/serialized runs don't
   interfere.
 - **Guaranteed teardown** via the `if: always()` close-only step (§5).
-- **Read-after-write consistency:** poll `jr issue view <KEY>` (GET-by-key, consistent) instead
-  of searching (JQL search is eventually consistent, lag of seconds-to-minutes).
+- **Read-after-write consistency:** poll `jr issue view <KEY>` (GET-by-key, *assumed* consistent —
+  see §4) with bounded retry instead of searching (JQL search is documented eventually consistent,
+  lag of seconds-to-minutes).
 - **Rate limits:** rely on `jr`'s built-in 429/`Retry-After` retry (`api/rate_limit.rs`,
   `api/client.rs`); the suite does not add a competing retry layer and keeps request volume modest.
 
@@ -180,7 +186,10 @@ jobs:
   365-day token from the CI service account before expiry and updates `JR_E2E_API_TOKEN`. When
   a token expires, the nightly run fails with HTTP 401 (loud signal). A runbook section in the
   repo documents the steps.
-- **Keep-warm:** the nightly run prevents ~120-day idle deactivation of the free site.
+- **Keep-warm (data-loss safeguard):** the nightly run prevents ~120-day idle deactivation of the
+  free site. This matters beyond convenience — after deactivation there is only a **~15–60 day
+  reactivation grace window before the site's data is permanently deleted**, so the nightly job is
+  effectively a data-retention guard, not just a latency optimization.
 
 ## 10. Provisioning runbook (one-time, manual — documented for the maintainer)
 
