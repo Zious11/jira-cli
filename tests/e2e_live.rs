@@ -770,10 +770,12 @@ fn test_e2e_user_search_returns_array() {
     if !e2e_enabled() {
         return;
     }
-    // Use the email's local-part as a search query if available, otherwise "e2e".
+    // Use the email's local-part as a search query if non-empty, otherwise "e2e".
+    // Mirror the FIX-A empty-env guard: treat Ok("") the same as Err (absent).
     let query = env::var("JR_E2E_EMAIL")
         .ok()
-        .and_then(|e| e.split('@').next().map(|s| s.to_string()))
+        .map(|e| e.split('@').next().unwrap_or("").to_string())
+        .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "e2e".to_string());
 
     let h = e2e_harness();
