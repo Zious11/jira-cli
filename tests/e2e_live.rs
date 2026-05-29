@@ -597,6 +597,12 @@ fn test_e2e_sprint_list_returns_array() {
 ///
 /// Skipped cleanly when `JR_E2E_BOARD_ID` is not set.
 ///
+/// Also skipped cleanly when the board has no active sprint: `handle_current`
+/// exits 1 and emits "No active sprint found for board ..." to stderr on a
+/// freshly provisioned free Scrum site that has not started any sprint. Treating
+/// this as a clean skip (not a failure) prevents spurious test failures on valid
+/// E2E environments that simply have no active sprint yet.
+///
 /// Traces to: AC-004, NFR-T-E2E-1.
 #[test]
 #[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
@@ -620,14 +626,23 @@ fn test_e2e_sprint_current_returns_json() {
         .output()
         .expect("failed to spawn jr");
 
-    assert!(
-        output.status.success(),
-        "sprint current failed:\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    // Clean skip: if the board has no active sprint, `handle_current` exits 1
+    // with "No active sprint found for board ..." on stderr. This is valid
+    // behavior on a freshly provisioned site — not a test failure.
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("No active sprint") {
+            return;
+        }
+        panic!(
+            "sprint current failed (not a no-active-sprint condition):\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            stderr
+        );
+    }
 
-    // The output is an object or array depending on whether a sprint is active.
+    // On the success path, the output must be valid JSON (object or array
+    // depending on whether a sprint is active).
     let _v: Value =
         serde_json::from_slice(&output.stdout).expect("sprint current output must be valid JSON");
 }
@@ -1003,9 +1018,15 @@ fn test_e2e_write_flow_create_edit_comment_worklog_close() {
 
 /// E2E: `jr worklog list <KEY> --output json` exits 0 and returns a JSON array.
 ///
-/// Picks the most recent issue from the project to check worklogs on. If no
-/// issues exist in the project yet, this test is skipped (the write-flow test
-/// should be run first to seed the project).
+/// This test is self-seeding: it creates a throwaway Task issue labeled with
+/// `run_label()` at the start, polls for GET-consistency via `poll_view`, and
+/// then runs `worklog list` against that key. This guarantees the read path is
+/// always exercised regardless of whether the project is freshly provisioned or
+/// already populated, and regardless of test execution order under
+/// `--test-threads=1`.
+///
+/// The created issue carries the `e2e-<run_label>` label so the `if: always()`
+/// teardown step in `e2e.yml` will close it even if the test is interrupted.
 ///
 /// Traces to: AC-004, NFR-T-E2E-1.
 #[test]
@@ -1015,39 +1036,48 @@ fn test_e2e_worklog_list_returns_array() {
         return;
     }
 
+    let label = run_label();
+    let proj = project();
     let h = e2e_harness();
 
-    // Find any existing issue to run worklog list against.
-    let jql = format!("project={} ORDER BY created DESC", project());
-    let list_output = h
+    // Self-seed: create a throwaway issue so this test always has a key to work with.
+    let summary = format!("[e2e {label}] worklog-list seed");
+    let create_output = h
         .cmd()
         .args([
-            "issue", "list", "--jql", &jql, "--limit", "1", "--output", "json",
+            "issue",
+            "create",
+            "--project",
+            &proj,
+            "--type",
+            "Task",
+            "--summary",
+            &summary,
+            "--label",
+            &label,
+            "--output",
+            "json",
         ])
         .output()
-        .expect("failed to spawn jr for issue list");
+        .expect("failed to spawn jr for issue create (worklog-list seed)");
 
     assert!(
-        list_output.status.success(),
-        "issue list for worklog test failed:\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&list_output.stdout),
-        String::from_utf8_lossy(&list_output.stderr)
+        create_output.status.success(),
+        "issue create (worklog-list seed) failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&create_output.stdout),
+        String::from_utf8_lossy(&create_output.stderr)
     );
 
-    let issues: Value =
-        serde_json::from_slice(&list_output.stdout).expect("issue list output must be valid JSON");
+    let create_json: Value = serde_json::from_slice(&create_output.stdout)
+        .expect("issue create output must be valid JSON");
+    let key = create_json
+        .get("key")
+        .and_then(Value::as_str)
+        .expect("issue create JSON must contain a 'key' field")
+        .to_string();
 
-    let key = match issues.as_array().and_then(|arr| arr.first()) {
-        Some(issue) => issue
-            .get("key")
-            .and_then(Value::as_str)
-            .expect("issue JSON must have 'key' field")
-            .to_string(),
-        None => {
-            // No issues in the project yet; skip this test.
-            return;
-        }
-    };
+    // Poll for GET-consistency before running worklog list.
+    poll_view(&key, &h);
 
     let worklog_output = h
         .cmd()
@@ -1076,8 +1106,15 @@ fn test_e2e_worklog_list_returns_array() {
 
 /// E2E: `jr issue view <KEY> --output json` exits 0 and contains a `"key"` field.
 ///
-/// Uses the most recent issue from the project. Skipped if the project has
-/// no issues yet.
+/// This test is self-seeding: it creates a throwaway Task issue labeled with
+/// `run_label()` at the start, polls for GET-consistency via `poll_view`, and
+/// then runs `issue view` against that key. This guarantees the read path is
+/// always exercised regardless of whether the project is freshly provisioned or
+/// already populated, and regardless of test execution order under
+/// `--test-threads=1`.
+///
+/// The created issue carries the `e2e-<run_label>` label so the `if: always()`
+/// teardown step in `e2e.yml` will close it even if the test is interrupted.
 ///
 /// Traces to: AC-004, NFR-T-E2E-1.
 #[test]
@@ -1087,51 +1124,50 @@ fn test_e2e_issue_view_returns_key_field() {
         return;
     }
 
+    let label = run_label();
+    let proj = project();
     let h = e2e_harness();
 
-    let jql = format!("project={} ORDER BY created DESC", project());
-    let list_output = h
+    // Self-seed: create a throwaway issue so this test always has a key to work with.
+    let summary = format!("[e2e {label}] issue-view seed");
+    let create_output = h
         .cmd()
         .args([
-            "issue", "list", "--jql", &jql, "--limit", "1", "--output", "json",
+            "issue",
+            "create",
+            "--project",
+            &proj,
+            "--type",
+            "Task",
+            "--summary",
+            &summary,
+            "--label",
+            &label,
+            "--output",
+            "json",
         ])
         .output()
-        .expect("failed to spawn jr for issue list");
-
-    assert!(list_output.status.success(), "issue list failed");
-
-    let issues: Value =
-        serde_json::from_slice(&list_output.stdout).expect("issue list output must be valid JSON");
-
-    let key = match issues.as_array().and_then(|arr| arr.first()) {
-        Some(issue) => issue
-            .get("key")
-            .and_then(Value::as_str)
-            .expect("issue JSON must have 'key' field")
-            .to_string(),
-        None => {
-            // No issues in the project yet; skip.
-            return;
-        }
-    };
-
-    let view_output = h
-        .cmd()
-        .args(["issue", "view", &key, "--output", "json"])
-        .output()
-        .expect("failed to spawn jr for issue view");
+        .expect("failed to spawn jr for issue create (issue-view seed)");
 
     assert!(
-        view_output.status.success(),
-        "issue view failed for {key}:\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&view_output.stdout),
-        String::from_utf8_lossy(&view_output.stderr)
+        create_output.status.success(),
+        "issue create (issue-view seed) failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&create_output.stdout),
+        String::from_utf8_lossy(&create_output.stderr)
     );
 
-    let v: Value =
-        serde_json::from_slice(&view_output.stdout).expect("issue view output must be valid JSON");
+    let create_json: Value = serde_json::from_slice(&create_output.stdout)
+        .expect("issue create output must be valid JSON");
+    let key = create_json
+        .get("key")
+        .and_then(Value::as_str)
+        .expect("issue create JSON must contain a 'key' field")
+        .to_string();
+
+    // Poll for GET-consistency before running issue view.
+    let view_json = poll_view(&key, &h);
     assert!(
-        v.get("key").is_some(),
-        "issue view JSON must contain a 'key' field; got: {v}"
+        view_json.get("key").is_some(),
+        "issue view JSON must contain a 'key' field; got: {view_json}"
     );
 }
