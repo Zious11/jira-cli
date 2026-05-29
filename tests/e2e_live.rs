@@ -149,10 +149,15 @@ fn run_label() -> String {
 /// Panics if the var is unset — every live test that calls this should be
 /// guarded by `if !e2e_enabled() { return; }` at the top.
 fn project() -> String {
-    env::var("JR_E2E_PROJECT")
-        .expect("JR_E2E_PROJECT must be set when JR_RUN_E2E=1")
+    let p = env::var("JR_E2E_PROJECT")
+        .expect("JR_E2E_PROJECT must be set for E2E tests")
         .trim()
-        .to_string()
+        .to_string();
+    assert!(
+        !p.is_empty(),
+        "JR_E2E_PROJECT must not be empty or whitespace-only"
+    );
+    p
 }
 
 /// Returns the configured "Done" status name (default: `"Done"`).
