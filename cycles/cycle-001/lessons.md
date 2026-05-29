@@ -2359,3 +2359,39 @@ target: next maintenance sweep; reason: low-severity doc-mechanics gap, no runti
 No follow-up story created.
 
 _Discovered: S-428 F3–F5 cycle (3 AC grep drift instances), 2026-05-28. Status: [codified] [process-gap]._
+
+---
+
+## L-400-1 [codified] [receiving-code-review] Validate Copilot's stated causal mechanism by code trace before acting — hardening that documents intent is still a valid outcome even when the mechanism is wrong
+
+**Context (S-400-A / issue #400 — 2026-05-28):**
+
+During the S-400-A cycle (4 Copilot review rounds on TH-398-1..4 test hardening),
+round-3 surfaced the following finding: "the `--output table` flag addition to the dry-run
+echo test is unnecessary because `config.defaults.output` would flip the output branch
+regardless, making the test environment-dependent."
+
+Code trace refutation:
+- `config.defaults.output` is read in `src/config.rs` as a config-file default.
+- The runtime output decision in `main.rs` reads `cli.output`, which is the clap-parsed
+  value from the command line — clap-defaulted to `"table"` regardless of config file.
+- `config.defaults.output` is therefore NOT wired into the runtime output path for the
+  binary under test. The claimed branch-flip mechanism does not exist.
+
+**Outcome:** The `--output table` flag was retained as **defensive hardening** that makes
+the test's intent explicit, not as a fix for a real bug. The distinction matters: if the
+fix had been applied as a real bug fix, a future reader might infer that the test was
+previously broken — misleading audit trail. Framing it as defensive hardening is accurate.
+
+**Rule (per DEC-018 / receiving-code-review discipline):**
+1. When a Copilot review finding identifies a causal mechanism (e.g., "X causes Y"),
+   trace the mechanism in the actual code before accepting the finding as a bug.
+2. If the mechanism is false but the suggested change is still beneficial (e.g., makes
+   intent explicit, adds a defensive assertion), apply it as hardening — not as a bug fix.
+3. Document the refutation in the DEC log so future readers understand the real rationale.
+
+**Scope:** Applies to all future Copilot review cycles on this project and validates the
+DEC-018 standing rule (established 2026-05-11) that Perplexity/code-trace validation
+should precede action on any Copilot finding.
+
+_Discovered: S-400-A round-3 Copilot review, 2026-05-28. Status: [codified] [receiving-code-review]._
