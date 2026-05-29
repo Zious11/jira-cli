@@ -149,7 +149,10 @@ fn run_label() -> String {
 /// Panics if the var is unset — every live test that calls this should be
 /// guarded by `if !e2e_enabled() { return; }` at the top.
 fn project() -> String {
-    env::var("JR_E2E_PROJECT").expect("JR_E2E_PROJECT must be set when JR_RUN_E2E=1")
+    env::var("JR_E2E_PROJECT")
+        .expect("JR_E2E_PROJECT must be set when JR_RUN_E2E=1")
+        .trim()
+        .to_string()
 }
 
 /// Returns the configured "Done" status name (default: `"Done"`).
@@ -160,7 +163,7 @@ fn project() -> String {
 /// `Ok("")` in that case, so `unwrap_or_else` would never fire (FIX-A, S-E2E-2).
 fn status_done() -> String {
     match std::env::var("JR_E2E_STATUS_DONE") {
-        Ok(v) if !v.trim().is_empty() => v,
+        Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
         _ => "Done".to_string(),
     }
 }
@@ -173,7 +176,7 @@ fn status_done() -> String {
 /// `Ok("")` in that case, so `unwrap_or_else` would never fire (FIX-A, S-E2E-2).
 fn status_in_progress() -> String {
     match std::env::var("JR_E2E_STATUS_IN_PROGRESS") {
-        Ok(v) if !v.trim().is_empty() => v,
+        Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
         _ => "In Progress".to_string(),
     }
 }
@@ -666,7 +669,7 @@ fn test_e2e_sprint_list_returns_array() {
         return;
     }
     let board_id = match env::var("JR_E2E_BOARD_ID") {
-        Ok(id) if !id.trim().is_empty() => id,
+        Ok(id) if !id.trim().is_empty() => id.trim().to_string(),
         _ => {
             // Skipped: JR_E2E_BOARD_ID not set.
             return;
@@ -720,7 +723,7 @@ fn test_e2e_sprint_current_returns_json() {
         return;
     }
     let board_id = match env::var("JR_E2E_BOARD_ID") {
-        Ok(id) if !id.trim().is_empty() => id,
+        Ok(id) if !id.trim().is_empty() => id.trim().to_string(),
         _ => {
             // Skipped: JR_E2E_BOARD_ID not set.
             return;
@@ -773,7 +776,7 @@ fn test_e2e_user_search_returns_array() {
     // Mirror the FIX-A empty-env guard: treat Ok("") the same as Err (absent).
     let query = env::var("JR_E2E_EMAIL")
         .ok()
-        .map(|e| e.split('@').next().unwrap_or("").to_string())
+        .map(|e| e.trim().split('@').next().unwrap_or("").to_string())
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "e2e".to_string());
 
@@ -866,7 +869,7 @@ fn test_e2e_jsm_queue_list_exits_ok() {
         return;
     }
     let jsm_project = match env::var("JR_E2E_JSM_PROJECT") {
-        Ok(p) if !p.trim().is_empty() => p,
+        Ok(p) if !p.trim().is_empty() => p.trim().to_string(),
         _ => {
             // Skipped: JR_E2E_JSM_PROJECT not set.
             return;
@@ -913,7 +916,7 @@ fn test_e2e_jsm_requesttype_list_exits_ok() {
         return;
     }
     let jsm_project = match env::var("JR_E2E_JSM_PROJECT") {
-        Ok(p) if !p.trim().is_empty() => p,
+        Ok(p) if !p.trim().is_empty() => p.trim().to_string(),
         _ => {
             // Skipped: JR_E2E_JSM_PROJECT not set.
             return;
