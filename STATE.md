@@ -36,7 +36,7 @@ activation_version: "v0.5.0-dev.11"
 | **Language** | Rust |
 | **Target Workspace** | develop → main |
 | **Started** | 2026-05-04 |
-| **Last Updated** | 2026-05-29 — E2E feature (Feature Mode) F1 APPROVED + F2 COMPLETE. NFR-T-E2E-1 added (NFR count 40→41). Design spec on feat/e2e-live-jira-testing @ c3e967a. Next: F3 story S-E2E-1. |
+| **Last Updated** | 2026-05-29 — E2E feature (Feature Mode) F1+F2+F3 COMPLETE. Story S-E2E-1 created (12 ACs, MEDIUM/8SP). STORY-INDEX 53→54. Design spec on feat/e2e-live-jira-testing @ c3e967a. Next: F4. |
 | **Current Phase** | Phase 3 — TDD Implementation IN PROGRESS — Wave 3 CLOSED (10/10). Feature Mode ongoing. Open backlog: #210, #331, #368, #372, #387, #400, #429. Held Dependabot PRs #404/#422/#423/#424/#425/#426 due 2026-05-31. |
 | **Next Phase** | Phase 4: Holdout Evaluation (not started) |
 | **Activation HEAD** | 15bf305 (v0.5.0-dev.11) |
@@ -72,11 +72,11 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 
 | Step | Agent | Status | Output |
 |------|-------|--------|--------|
-| #421 MERGED 2026-05-28 via PR #427 (develop @ c7ffb55) | state-manager | complete | S-421: two-stage i64-first parser eliminates f64→i64 boundary saturation. 20 unit tests in field_resolve.rs::tests (was 14). 9-round Copilot review cycle (deepest to date): R2 BLOCKING precision regression; R3-R8 doc/stale-cross-ref; R5 contract-vs-impl mismatch; R6 empirically-false serde_json claim; R9 accepted as Option C trade-off (3-way boundary asymmetry documented in rustdoc). F2 spec evolution at factory 6680de7. STORY-INDEX v1.4.28. Follow-up #428 filed. |
 | #428 MERGED 2026-05-28 via PR #430 (develop @ e1706d4) | state-manager | complete | S-428: wiremock-only refactor extracting `#[doc(hidden)] pub fn resolve_cloud_id` + lifting `AccessibleResource` to module scope in `src/api/auth.rs`. Tests #4/#5/#6 in `tests/multi_cloudid_disambiguation.rs` rewritten in-process. 5 adversarial passes, 3 CLEAN. CI 11/11 green. L-428-1/L-428-2 codified. DEC-029 recorded. |
 | S-400-A MERGED 2026-05-28 via PR #431 (develop @ 9d4a65b) | state-manager | complete | S-400-A: TEST-ONLY hardening of 4 echo tests (TH-398-1..4). 4 Copilot rounds → 0 findings. 3/3 CLEAN adversarial passes. CI 11/11 green. #400 stays OPEN (Story B + PG-398-4/5 remain). DEC-030 recorded. |
 | v0.5.0-dev.11 RELEASED 2026-05-28 (UTC 2026-05-29) via PR #432 (develop @ 15bf305) | state-manager | complete | Dev release v0.5.0-dev.11 tagged on develop @ 15bf305 (PR #432 squash-merged). 7 commits since dev.10. CI 11/11 green. Release workflow triggered. DEC-031 recorded. |
 | E2E feature (F1 APPROVED + F2 COMPLETE) 2026-05-29 | state-manager | complete | Feature Mode: "Live-Jira E2E testing in CI" (DEC-032). F1: zero src/ changes, BC delta EMPTY, LOW risk. F2: NFR-T-E2E-1 added (nfr-catalog.md, MEDIUM, Dimension 6). NFR 40→41. OQ-2 resolved: status names configurable via JR_E2E_STATUS_DONE/JR_E2E_STATUS_IN_PROGRESS. Both guards green. Next: F3 story S-E2E-1 (11 ACs). |
+| E2E feature F3 COMPLETE 2026-05-29 (factory-artifacts 187e477) | state-manager | complete | F3 (Incremental Stories): story S-E2E-1 created (12 ACs, MEDIUM/8SP, draft). Traceability: NFR-T-E2E-1 + design-spec §3–§8; BC delta EMPTY. STORY-INDEX v1.4.30→v1.4.31, total_stories 53→54, feature-followup group 21→22. |
 
 ## Decisions Log
 
@@ -161,7 +161,7 @@ Goal 1c: **Harden v0.5 + feature delivery** — formalize existing codebase with
 
 See `cycles/cycle-001/convergence-trajectory.md` for all per-issue convergence narratives (Phase 1d, Phase 2-adv, Phase 3-adv, issues #288/#382/#383/#384/#385/#396/#398/#407).
 
-Current trajectory summary: E2E feature F1+F2 COMPLETE (2026-05-29). NFR-T-E2E-1 added (41 NFRs). BC corpus: 583 BCs (unchanged). Story corpus: 53 stories. Active: e2e-live-jira-testing F3 (story S-E2E-1, 11 ACs). Develop @ 15bf305 (v0.5.0-dev.11).
+Current trajectory summary: E2E feature F1+F2+F3 COMPLETE (2026-05-29). NFR-T-E2E-1 added (41 NFRs). BC corpus: 583 BCs (unchanged). Story corpus: 54 stories (S-E2E-1 created, 12 ACs, MEDIUM/8SP, draft). Active: e2e-live-jira-testing F4 (TDD implementation). Develop @ 15bf305 (v0.5.0-dev.11).
 
 ## Session Resume Checkpoint
 
@@ -169,15 +169,15 @@ Current trajectory summary: E2E feature F1+F2 COMPLETE (2026-05-29). NFR-T-E2E-1
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-05-29 |
-| **Position** | **E2E feature (Feature Mode): F1 APPROVED + F2 COMPLETE. Design spec on feat/e2e-live-jira-testing @ c3e967a. NFR-T-E2E-1 added (41 NFRs). Next: F3 story S-E2E-1 (11 ACs, MEDIUM effort).** Develop @ 15bf305 (v0.5.0-dev.11). Open backlog: #210, #331, #368, #372, #387, #400 (Story B), #429. Held Dependabot PRs #404/#422/#423/#424/#425/#426 due 2026-05-31. #429 WONTFIX-pending (DEC-029) — do NOT close #429 autonomously. Provisioning tracking issue R-NEW-1 must be filed before F4. |
-| **Convergence counter** | E2E feature F1+F2 complete. BC corpus: 583 BCs (unchanged). NFR corpus: 41 NFRs (+1 NFR-T-E2E-1). Story corpus: 53 stories (S-E2E-1 not yet created). |
-| **Resume prompt** | `Read .factory/STATE.md. E2E feature (Feature Mode, DEC-032): F1 APPROVED (zero src/, BC-empty, LOW risk) + F2 COMPLETE (NFR-T-E2E-1 added, nfr-catalog.md 41 NFRs). Design spec: docs/specs/e2e-live-jira-testing.md on feat/e2e-live-jira-testing @ c3e967a. Next: F3 — create story S-E2E-1 (11 ACs). File provisioning GitHub issue (R-NEW-1) before F4. OQ-2 resolved (JR_E2E_STATUS_DONE / JR_E2E_STATUS_IN_PROGRESS). Develop @ 15bf305 (v0.5.0-dev.11). Dependabot PRs held until 2026-05-31. DEC-029 deferred to human (do NOT close #429).` |
+| **Position** | **E2E Feature Mode: F1 APPROVED + F2 COMPLETE + F3 COMPLETE. Story S-E2E-1 created (12 ACs, MEDIUM/8SP, draft). Design spec on feat/e2e-live-jira-testing @ c3e967a. Next: F4 delta implementation (TDD).** 54 stories / 41 NFRs. Develop @ 15bf305 (v0.5.0-dev.11). Open backlog: #210, #331, #368, #372, #387, #400 (Story B), #429. Held Dependabot PRs #404/#422/#423/#424/#425/#426 due 2026-05-31. #429 WONTFIX-pending (DEC-029) — do NOT close #429 autonomously. File provisioning GitHub issue (R-NEW-1) before F4. |
+| **Convergence counter** | E2E feature F1+F2+F3 complete. BC corpus: 583 BCs (unchanged). NFR corpus: 41 NFRs. Story corpus: 54 stories (+1 S-E2E-1). |
+| **Resume prompt** | `Read .factory/STATE.md. E2E feature (Feature Mode, DEC-032): F1✓ F2✓ F3✓ (story S-E2E-1, 12 ACs, draft). Design spec: docs/specs/e2e-live-jira-testing.md on feat/e2e-live-jira-testing @ c3e967a. Next: F4 delta implementation (TDD). File provisioning GitHub issue (R-NEW-1) before F4. 54 stories / 41 NFRs. Develop @ 15bf305 (v0.5.0-dev.11). Dependabot PRs held until 2026-05-31. DEC-029 deferred to human (do NOT close #429).` |
 
 ## Open Issues Tracker (post-#288)
 
 | Issue | Title | Status | Priority | Notes |
 |-------|-------|--------|----------|-------|
-| e2e-live-jira-testing | Live-Jira E2E testing in CI (Feature Mode) | IN_PROGRESS (F3 next) | MEDIUM | DEC-032. F1+F2 COMPLETE. Design spec feat/e2e-live-jira-testing @ c3e967a. GitHub issue TBD (file as R-NEW-1 before F4). |
+| e2e-live-jira-testing | Live-Jira E2E testing in CI (Feature Mode) | IN_PROGRESS (F4 next) | MEDIUM | DEC-032. F1+F2+F3 COMPLETE. S-E2E-1 (12 ACs, draft). Design spec feat/e2e-live-jira-testing @ c3e967a. File GitHub issue R-NEW-1 before F4. |
 | #210 | (backlog) | OPEN | — | |
 | #331 | Sandbox-blocked defer | OPEN | DEFERRED | Requires sandbox access |
 | #372 | cargo-mutants partial baseline | OPEN | LOW | Follow-up from #346 |

@@ -3276,3 +3276,11 @@ Events after issue #288 epic closeout (factory-artifacts @ 7dbbfed):
 | Step | Agent | Status | Output |
 |------|-------|--------|--------|
 | #408 MERGED 2026-05-27 via PR #417 (develop @ d53278a) | state-manager | complete | S-408: 5 stale line-anchor citations re-anchored to symbol-form (2 in CLAUDE.md AI Agent Notes, 3 in bc-3-issue-write.md). 1 Copilot review cycle: caught path-prefix inconsistency on line 336 (`create.rs::handle_edit` vs `src/cli/issue/create.rs::handle_edit`); fixed in bfa333d; re-review clean. Symbol-form convention now active. Issue #408 auto-closed. L-408-1 in lessons.md. |
+
+---
+
+### Archived Current Phase Step: #421 (from STATE.md — 2026-05-29 F3 burst)
+
+| Step | Agent | Status | Output |
+|------|-------|--------|--------|
+| #421 MERGED 2026-05-28 via PR #427 (develop @ c7ffb55) | state-manager | complete | S-421: two-stage i64-first parser eliminates f64→i64 boundary saturation. 20 unit tests in field_resolve.rs::tests (was 14). 9-round Copilot review cycle (deepest to date): R2 BLOCKING precision regression; R3-R8 doc/stale-cross-ref; R5 contract-vs-impl mismatch; R6 empirically-false serde_json claim; R9 accepted as Option C trade-off (3-way boundary asymmetry documented in rustdoc). F2 spec evolution at factory 6680de7. STORY-INDEX v1.4.28. Follow-up #428 filed. |
