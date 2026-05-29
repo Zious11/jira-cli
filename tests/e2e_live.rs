@@ -781,8 +781,8 @@ fn test_e2e_user_search_returns_array() {
     // Mirror the FIX-A empty-env guard: treat Ok("") the same as Err (absent).
     let query = env::var("JR_E2E_EMAIL")
         .ok()
-        .map(|e| e.trim().split('@').next().unwrap_or("").to_string())
-        .filter(|s| !s.trim().is_empty())
+        .map(|e| e.trim().split('@').next().unwrap_or_default().to_string())
+        .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "e2e".to_string());
 
     let h = e2e_harness();
