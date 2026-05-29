@@ -261,32 +261,42 @@ fn test_e2e_gate_disabled_when_env_unset() {
 }
 
 /// Meta-guard: every `#[ignore]`-annotated test in this file must contain
-/// the `e2e_enabled()` guard token in its body.
+/// the `e2e_enabled()` guard token in its body, AND that guard must appear
+/// BEFORE the first occurrence of any live-call token (`e2e_harness(`,
+/// `.cmd()`, or `.output()`).
 ///
 /// Reads the source of this file via `include_str!` and scans for test
-/// functions annotated with `#[ignore`. For each such function, asserts that
-/// its body contains `e2e_enabled()` before any `h.cmd()` or `e2e_harness()`
-/// call could reach the live Jira site.
+/// functions annotated with `#[ignore`. For each such function:
+///
+/// 1. The body is extracted using a string-literal-aware brace-depth counter
+///    that skips `{`/`}` characters inside `"..."` string literals and `'.'`
+///    char literals (honoring `\` escapes). This prevents false brace-depth
+///    readings caused by `{` or `}` inside string arguments.
+///
+/// 2. The guard `e2e_enabled()` is checked to appear BEFORE the first
+///    occurrence of any live-call token (`e2e_harness(`, `.cmd()`, or
+///    `.output()`). A test that spawns `jr` before calling the guard must
+///    fail this meta-test.
 ///
 /// This regression-pins AC-002: it is impossible to add a new gated test and
-/// forget the guard without this test failing.
+/// forget the guard (or mis-order it) without this test failing.
 ///
 /// Traces to: AC-002, design spec §4 Gating.
 #[test]
 fn test_every_ignored_test_has_gate_guard() {
     let source = include_str!("e2e_live.rs");
 
-    // Collect all test function bodies that are annotated with #[ignore.
-    // Strategy: find each "#[ignore" occurrence, then scan forward to the
-    // next "fn test_" to locate the function, then extract until the matching
-    // closing brace (tracked by brace depth).
+    // Live-call tokens: any of these appearing before `e2e_enabled()` is a
+    // violation — they would cause `jr` to be spawned without the gate check.
+    const LIVE_CALL_TOKENS: &[&str] = &["e2e_harness(", ".cmd()", ".output()"];
+
     let mut violations: Vec<String> = Vec::new();
 
     let lines: Vec<&str> = source.lines().collect();
     let mut i = 0;
     while i < lines.len() {
         if lines[i].trim_start().starts_with("#[ignore") {
-            // Scan forward up to 5 lines to find the fn line.
+            // Scan forward up to 5 lines to find the `fn test_` line.
             let mut fn_line = None;
             for (offset, line) in lines[i..lines.len().min(i + 5)].iter().enumerate() {
                 if line.trim_start().starts_with("fn test_") {
@@ -296,7 +306,7 @@ fn test_every_ignored_test_has_gate_guard() {
             }
 
             if let Some(fn_start) = fn_line {
-                // Extract the function name for the error message.
+                // Extract the function name for error messages.
                 let fn_name = lines[fn_start]
                     .trim()
                     .trim_start_matches("fn ")
@@ -305,32 +315,29 @@ fn test_every_ignored_test_has_gate_guard() {
                     .unwrap_or("(unknown)")
                     .to_string();
 
-                // Collect body lines until brace depth returns to 0.
-                let mut depth = 0usize;
-                let mut body = String::new();
-                let mut found_open = false;
-                for line in lines.iter().skip(fn_start) {
-                    body.push_str(line);
-                    body.push('\n');
-                    for ch in line.chars() {
-                        match ch {
-                            '{' => {
-                                depth += 1;
-                                found_open = true;
-                            }
-                            '}' => {
-                                depth = depth.saturating_sub(1);
-                            }
-                            _ => {}
-                        }
-                    }
-                    if found_open && depth == 0 {
-                        break;
-                    }
+                // Build the raw body string using a string-literal-aware
+                // brace-depth counter so that `{` / `}` inside `"..."` or
+                // `'.'` literals are not counted toward depth.
+                let body = extract_fn_body(&lines, fn_start);
+
+                // Check 1: guard token is present at all.
+                if !body.contains("e2e_enabled()") {
+                    violations.push(format!("{fn_name}: missing `e2e_enabled()` guard"));
+                    i = fn_start + 1;
+                    continue;
                 }
 
-                if !body.contains("e2e_enabled()") {
-                    violations.push(fn_name);
+                // Check 2: guard appears BEFORE the first live-call token.
+                let guard_pos = body.find("e2e_enabled()").unwrap();
+                for token in LIVE_CALL_TOKENS {
+                    if let Some(call_pos) = body.find(token) {
+                        if call_pos < guard_pos {
+                            violations.push(format!(
+                                "{fn_name}: live-call token `{token}` appears at byte {call_pos} \
+                                 before `e2e_enabled()` at byte {guard_pos}"
+                            ));
+                        }
+                    }
                 }
 
                 i = fn_start + 1;
@@ -342,11 +349,79 @@ fn test_every_ignored_test_has_gate_guard() {
 
     assert!(
         violations.is_empty(),
-        "AC-002 VIOLATION: the following #[ignore]-annotated tests are missing \
-         the `e2e_enabled()` early-return guard:\n  {}\n\
-         Every gated test MUST begin with `if !e2e_enabled() {{ return; }}`.",
+        "AC-002 VIOLATION: the following #[ignore]-annotated tests have \
+         guard ordering problems:\n  {}\n\
+         Every gated test MUST call `e2e_enabled()` BEFORE any live call \
+         (`e2e_harness(`, `.cmd()`, `.output()`).",
         violations.join("\n  ")
     );
+}
+
+/// Extract the full source text of the function starting at `fn_start`.
+///
+/// Uses a simple state machine that tracks whether the scanner is inside a
+/// double-quoted string literal (`"..."`) or a char literal (`'.'`),
+/// honoring backslash escapes in both.  Only braces that occur OUTSIDE
+/// of any literal are counted toward depth, so `{` / `}` characters in
+/// string arguments (e.g. `format!("{{ }}")` or assertion messages) do not
+/// confuse the depth counter.
+fn extract_fn_body(lines: &[&str], fn_start: usize) -> String {
+    #[derive(PartialEq)]
+    enum Scan {
+        Code,
+        InString,
+        InChar,
+    }
+
+    let mut body = String::new();
+    let mut depth = 0usize;
+    let mut found_open = false;
+    let mut state = Scan::Code;
+
+    'outer: for line in lines.iter().skip(fn_start) {
+        body.push_str(line);
+        body.push('\n');
+
+        let mut chars = line.chars();
+        while let Some(ch) = chars.next() {
+            match state {
+                Scan::Code => match ch {
+                    '"' => state = Scan::InString,
+                    '\'' => state = Scan::InChar,
+                    '{' => {
+                        depth += 1;
+                        found_open = true;
+                    }
+                    '}' => {
+                        depth = depth.saturating_sub(1);
+                    }
+                    _ => {}
+                },
+                Scan::InString => match ch {
+                    '\\' => {
+                        // Skip the next character (escape sequence).
+                        chars.next();
+                    }
+                    '"' => state = Scan::Code,
+                    _ => {}
+                },
+                Scan::InChar => match ch {
+                    '\\' => {
+                        // Skip the escaped char.
+                        chars.next();
+                    }
+                    '\'' => state = Scan::Code,
+                    _ => {}
+                },
+            }
+        }
+
+        if found_open && depth == 0 {
+            break 'outer;
+        }
+    }
+
+    body
 }
 
 // ---------------------------------------------------------------------------
@@ -837,13 +912,15 @@ fn test_e2e_write_flow_create_edit_comment_worklog_close() {
     );
 
     // --- Step 4: add comment ---
+    // The `issue comment` subcommand takes the message as a positional argument,
+    // not via `--body`. See `IssueCommand::Comment { message: Option<String>, .. }`
+    // in src/cli/mod.rs.
     let comment_output = h
         .cmd()
         .args([
             "issue",
             "comment",
             &key,
-            "--body",
             "E2E smoke comment",
             "--output",
             "json",
