@@ -103,7 +103,9 @@ test functions required (mostly), just deeper bodies.
 - `issue list` (by project, and the summary-filter variant): when the array is non-empty, assert
   every element has `key` (format) + a `status` object with a `statusCategory`.
 - `board list`: if non-empty, each element has `id` + `name` + `type`.
-- `sprint list` / `sprint current`: if present, each sprint object has `id` + `state`.
+- `sprint list --board <id>` / `sprint current --board <id>`: both **require** `--board`
+  (from `JR_E2E_BOARD_ID`; clean-skip when unset, as the existing tests do). If present, each
+  sprint object has `id` + `state`.
 - `user search`: if non-empty, each element has `accountId` + `displayName` (presence/type only).
 - `worklog list`: if non-empty, each entry's `timeSpentSeconds` **if present is numeric** (the
   field is `Option<u64>` in the `Worklog` type — do NOT require it non-null; F-07). Reserve the
@@ -142,7 +144,9 @@ New gated tests (all `#[ignore]` + `e2e_enabled()` guard + run-label + teardown-
 self-seeds its own data (no inter-test dependency).
 
 ### 6.1 Read / discovery
-- `issue transitions <key>` → array of transition objects (shape: `id` + `name` present).
+- `issue transitions <key>` → **bare JSON array** of transition objects, each
+  `{id, name, to_category}` (confirmed against `handle_transitions`); assert `v.is_array()` and,
+  if non-empty, each element has `id` + `name`.
 - `issue changelog <key>` → **object** shape `{key, entries}`; assert `v.is_object()` and
   `v["entries"].is_array()` (F-03: the JSON is `ChangelogOutput { key, entries }`, NOT a bare
   array and NOT a `histories` key).
@@ -176,10 +180,13 @@ self-seeds its own data (no inter-test dependency).
   single-key shape `{key, status, changed}`). `inaccessible` can occur transiently for an
   eventually-consistent just-created issue — treat it as retryable, not a failure. Pins the
   documented **non-idempotent** bulk contract (distinct from single-key idempotency).
-- **pagination dedup**: create 3 issues under one unique label, `issue list --jql "labels=<L>"
-  --all --output json`, assert the returned keys are **duplicate-free** and include all 3. Pins
-  the JRACLOUD-95368 client-side dedup contract without needing to trigger the upstream bug.
-  (Use `poll_jql` — this is a search-path assertion.)
+- **pagination dedup**: create 3 issues under one **per-test-unique** label — embed `run_label()`
+  plus a per-test nonce (e.g. `e2e-<run_id>-pgN`), NOT a shared/static label, so a prior or
+  concurrent run's leftovers cannot inflate the count (M-3). Then `issue list --jql
+  "labels=<unique-L>" --all --output json` (exact `labels=` match is valid JQL), assert the
+  returned keys are **duplicate-free** and include exactly the 3 created keys. Pins the
+  JRACLOUD-95368 client-side dedup contract without needing to trigger the upstream bug.
+  (Use `poll_jql` — this is a search-path assertion; treat <3 results as retryable index lag.)
 
 ### 6.3 Error / exit-code paths (no mutation)
 Assert **mapped exit code** (`src/error.rs::JrError::exit_code()` contract) + JSON error envelope
@@ -213,26 +220,28 @@ shape; **never** message substrings.
   test does not retry → latent flake on a cold index).
 - **Secret-leak guard test**: run a normal `--output json` command and assert that neither stdout
   nor stderr contains the base64 token or the service-account email. Cheap, high-value, portable.
-- **Leak-detection log** at suite start: count pre-existing **open** E2E issues via
-  `summary ~ "[e2e "` (NOT a label prefix — see F-02 in §7.2) and `eprintln!` the number
-  (warn-only, never fails) — visible drift signals a broken teardown.
+- **Leak-detection log** at suite start: count pre-existing **open** E2E issues via the
+  best-effort `summary ~ "e2e"` predicate (NOT a label prefix — see F-02/M-1 in §7.2) and
+  `eprintln!` the number (warn-only, never fails) — visible drift signals a broken teardown.
 - (Optional, low priority) per-test wall-clock guard mapping a hung call toward exit 124.
 
 ### 7.2 CI / ops (`.github/workflows/`)
 - **New `e2e-sweeper.yml`** — scheduled daily, non-blocking, `concurrency: jira-e2e` (shares the
   serialization group so it never interleaves with the main run). Closes
-  `project=$JR_E2E_PROJECT AND summary ~ "[e2e " AND statusCategory != Done AND created <= -1d`.
-  **JQL correctness (F-02):** the cross-run sweeper matches on **`summary ~ "[e2e "`**, NOT on
+  `project=$JR_E2E_PROJECT AND summary ~ "e2e" AND statusCategory != Done AND created <= -1d`.
+  **JQL correctness (F-02):** the cross-run sweeper matches on **`summary ~ "e2e"`**, NOT on
   labels. The `labels` field does not support the `~` (CONTAINS) operator and JQL has no
   label prefix/wildcard match, so `labels ~ "e2e-"` is invalid (HTTP 400). Every seeded issue
-  carries the summary prefix `[e2e <run_label>]` (see existing tests), and `summary` does support
-  `~`, so this reliably matches all runs' issues. (The per-run teardown in `e2e.yml` correctly
-  uses exact `labels=e2e-$GITHUB_RUN_ID` — exact match is valid; only the prefix sweep must use
-  summary.) This is the backstop for **hard-cancelled** runs, where GitHub may skip even the
-  `if: always()` teardown step (research §4). Close-only (no delete), best-effort (`|| true`),
-  idempotent.
-  **Note:** the leak-detection log (§7.1) and any label-based selection must likewise use the
-  `summary ~ "[e2e "` predicate for cross-run matching, not a label prefix.
+  carries the summary prefix `[e2e <run_label>]` (see existing tests).
+  **Best-effort matching (M-1):** `~` is a **tokenized full-text** match, not substring/prefix —
+  Jira strips punctuation like `[` and matches the *term* `e2e`. This is intentionally a
+  best-effort cleanup backstop, not a precise selector: within the **dedicated, disposable** E2E
+  project, over-matching is acceptable (everything there is throwaway) and under-matching only
+  delays cleanup to the next sweep. Do NOT rely on it for precise selection — the per-run
+  teardown in `e2e.yml` (exact `labels=e2e-$GITHUB_RUN_ID`) remains the precise path; the sweeper
+  only catches what hard-cancellation left behind (research §4: cancelled runs skip even
+  `if: always()`). Close-only (no delete), best-effort (`|| true`), idempotent.
+  **Note:** the leak-detection log (§7.1) uses the same best-effort `summary ~ "e2e"` predicate.
 - **`e2e.yml` failure classification**: distinguish a first-call **401** (expired/revoked token →
   "rotate token") from a **connection/site-not-found** error (possible inactivity deactivation →
   "reactivate site within the grace window"). Different remediation, different log message.
