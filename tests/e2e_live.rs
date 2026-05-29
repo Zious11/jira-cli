@@ -16,7 +16,7 @@
 //! ```bash
 //! JR_RUN_E2E=1 \
 //! JR_E2E_BASE_URL=https://<site>.atlassian.net \
-//! JR_AUTH_HEADER="Basic $(printf '%s:%s' "$EMAIL" "$TOKEN" | base64 -w0)" \
+//! JR_AUTH_HEADER="Basic $(printf '%s:%s' "$EMAIL" "$TOKEN" | base64 | tr -d '\n')" \
 //! JR_E2E_PROJECT=E2E \
 //! cargo test --test e2e_live -- --include-ignored --test-threads=1
 //! ```
@@ -162,22 +162,38 @@ fn status_in_progress() -> String {
     env::var("JR_E2E_STATUS_IN_PROGRESS").unwrap_or_else(|_| "In Progress".to_string())
 }
 
-/// Poll `jr issue view <key> --output json` with bounded retry.
+/// Poll `jr issue view <key> --output json` with bounded exponential backoff.
 ///
-/// Attempts at most `MAX_ATTEMPTS` iterations with a fixed backoff between
-/// each attempt. Returns the parsed `serde_json::Value` on the first
-/// successful attempt (exit 0 + valid JSON).
+/// Attempts at most `MAX_ATTEMPTS` iterations. The sleep between each attempt
+/// doubles from the initial delay, giving a bounded exponential schedule:
+///
+/// | Attempt | Sleep before next |
+/// |---------|-------------------|
+/// | 1       | 250 ms            |
+/// | 2       | 500 ms            |
+/// | 3       | 1 000 ms          |
+/// | 4       | 2 000 ms          |
+/// | 5       | — (last attempt)  |
+///
+/// Worst-case total wall time: ~7.75 s (250 + 500 + 1000 + 2000 + up to one
+/// `jr` subprocess round-trip). The loop is hard-capped at `MAX_ATTEMPTS`
+/// iterations — there is no `loop` / `while true` and no unbounded retry.
+///
+/// Returns the parsed `serde_json::Value` on the first successful attempt
+/// (exit 0 + valid JSON).
 ///
 /// Rationale: GET-by-key is *assumed* read-after-write consistent (unlike JQL
-/// search which is documented eventually consistent), but the bounded retry is
-/// the real guarantee per AC-005.
+/// search which is documented eventually consistent), but the bounded retry
+/// provides headroom for cold free-tier Jira sites per AC-005.
 ///
 /// # Panics
 ///
 /// Panics with a descriptive message after exhausting all attempts.
 fn poll_view(key: &str, harness: &E2eHarness) -> Value {
     const MAX_ATTEMPTS: u32 = 5;
-    const BACKOFF: Duration = Duration::from_millis(500);
+    // Exponential backoff delays (ms) indexed by attempt number (0-based).
+    // Length must be >= MAX_ATTEMPTS - 1 (sleep is skipped on the last attempt).
+    const BACKOFF_MS: [u64; 4] = [250, 500, 1_000, 2_000];
 
     for attempt in 1..=MAX_ATTEMPTS {
         let output = harness
@@ -194,7 +210,8 @@ fn poll_view(key: &str, harness: &E2eHarness) -> Value {
         }
 
         if attempt < MAX_ATTEMPTS {
-            std::thread::sleep(BACKOFF);
+            let delay_ms = BACKOFF_MS[(attempt - 1) as usize];
+            std::thread::sleep(Duration::from_millis(delay_ms));
         }
     }
 
