@@ -80,15 +80,14 @@ GET succeeding immediately.
 ### Read coverage (assert exit 0 + JSON shape)
 | Command family | E2E assertion |
 |---|---|
-| `auth status --output json` | authenticated; expected fields present |
-| `issue list --jql "project=<E2E>" --output json` | valid JSON array |
+| `issue list --jql "project=<E2E>" --output json` | valid JSON array — **also the auth-seam validator** (first real network call; a 401 means the `JR_AUTH_HEADER` seam/credential is broken). `auth status` is intentionally NOT tested: it emits no JSON and makes no API call (see story AC-004-v2). |
 | `issue search` / list with JQL | filters apply |
 | `issue view <seed-or-created-key> --output json` | issue fields present |
 | `board list --output json` | the Scrum board appears |
 | `sprint list` / `sprint current` | sprints enumerate (Scrum project) |
 | `worklog list <key>` | valid (possibly empty) list |
 | `user search <self> --output json` | service account resolves |
-| `project` fields/types/statuses | enumerate for `<E2E>` |
+| `project fields --project <E2E> --output json` | JSON **object** with `issue_types` + `statuses_by_issue_type` keys (types/priorities/statuses are surfaced inside `project fields`; there are no separate `project types`/`project statuses` subcommands) |
 
 ### Write flow (one happy path, run-scoped)
 1. `issue create --project <E2E> --type Task --summary "[e2e <run_id>] ..." --label e2e-<run_id> --output json` → capture `key`.
