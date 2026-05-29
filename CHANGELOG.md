@@ -6,6 +6,16 @@ All notable changes to jr will be documented here.
 
 ### Added
 
+- Live-Jira E2E test suite (`tests/e2e_live.rs`) plus a non-blocking CI workflow
+  (`.github/workflows/e2e.yml`) that exercises `jr` against a real Jira Cloud site.
+  Gated behind `JR_RUN_E2E=1` (a complete no-op in normal `cargo test`); runs on push
+  to `develop`/`main`, nightly, and on demand, inside a branch-restricted `jira-e2e`
+  GitHub Environment. Covers read paths (issue/board/sprint/worklog/user/project, JSM
+  optional) and a create→verify→edit→comment→worklog→transition write flow on a dedicated
+  `E2E` project, with run-scoped labels and guaranteed close-only teardown. No `src/`
+  changes; auth via the existing debug-only `JR_AUTH_HEADER`/`JR_BASE_URL` test seams.
+  (S-E2E-1)
+
 ### Fixed
 
 ### Changed
