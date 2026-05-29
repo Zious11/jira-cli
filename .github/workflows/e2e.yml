@@ -1,0 +1,97 @@
+name: E2E (Live Jira)
+
+on:
+  push:
+    branches: [develop, main]
+  schedule:
+    - cron: "0 6 * * *"  # 06:00 UTC nightly; also keeps the free site warm
+  workflow_dispatch:
+
+# Serialize on the shared Jira site — never cancel an in-flight run.
+# Cancellation mid-flight leaves orphaned in-progress issues with no teardown.
+concurrency:
+  group: jira-e2e
+  cancel-in-progress: false
+
+jobs:
+  e2e:
+    # Belt-and-suspenders guard: this workflow has no pull_request trigger, but
+    # this if: ensures we never accidentally run against a Jira site from a PR
+    # even if the on: block is later modified.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    # Secrets are gated to this GitHub Environment + its branch-protection policy
+    # (deploy allowed only from develop/main). Fork PRs cannot read these secrets.
+    environment: jira-e2e
+
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@ab7a9404c0f3da075243ca237b5fac12c98deaa5 # v2.19.3
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@c93f4f9c67595668add93d3d6895795ce52d8c2d  # stable
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+
+      - name: Run live E2E tests
+        env:
+          JR_RUN_E2E: "1"
+          # JR_BASE_URL is the debug-only seam (gated by #[cfg(debug_assertions)])
+          # that redirects jr's HTTP calls to the configured Jira site.
+          # The real site URL is stored as a secret — never hard-coded here.
+          JR_BASE_URL: ${{ secrets.JR_E2E_BASE_URL }}
+          JR_E2E_PROJECT: ${{ vars.JR_E2E_PROJECT }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          # Optional: enables sprint list/current tests
+          JR_E2E_BOARD_ID: ${{ vars.JR_E2E_BOARD_ID }}
+          # Optional: enables JSM queue/requesttype read tests
+          JR_E2E_JSM_PROJECT: ${{ vars.JR_E2E_JSM_PROJECT }}
+          # Optional: override status names for sites with non-default workflow names
+          JR_E2E_STATUS_DONE: ${{ vars.JR_E2E_STATUS_DONE }}
+          JR_E2E_STATUS_IN_PROGRESS: ${{ vars.JR_E2E_STATUS_IN_PROGRESS }}
+          # Individual secrets for auth header composition (composed in-script below)
+          JR_E2E_EMAIL: ${{ secrets.JR_E2E_EMAIL }}
+          JR_E2E_API_TOKEN: ${{ secrets.JR_E2E_API_TOKEN }}
+        run: |
+          # Compose JR_AUTH_HEADER from individual secrets.
+          # Stored separately so email and API token can be rotated independently.
+          # tr -d '\n' strips the trailing newline that base64 adds on Linux.
+          JR_AUTH_HEADER="Basic $(printf '%s:%s' "$JR_E2E_EMAIL" "$JR_E2E_API_TOKEN" | base64 | tr -d '\n')"
+          export JR_AUTH_HEADER
+
+          cargo test --test e2e_live -- --include-ignored --test-threads=1
+
+      - name: Teardown — close leftover E2E issues (close-only, always runs)
+        if: always()
+        env:
+          JR_BASE_URL: ${{ secrets.JR_E2E_BASE_URL }}
+          JR_E2E_PROJECT: ${{ vars.JR_E2E_PROJECT }}
+          JR_E2E_STATUS_DONE: ${{ vars.JR_E2E_STATUS_DONE }}
+          JR_E2E_EMAIL: ${{ secrets.JR_E2E_EMAIL }}
+          JR_E2E_API_TOKEN: ${{ secrets.JR_E2E_API_TOKEN }}
+        run: |
+          # Compose auth header the same way as the test step.
+          JR_AUTH_HEADER="Basic $(printf '%s:%s' "$JR_E2E_EMAIL" "$JR_E2E_API_TOKEN" | base64 | tr -d '\n')"
+          export JR_AUTH_HEADER
+
+          # Default to "Done" if JR_E2E_STATUS_DONE is not configured as a variable.
+          STATUS_DONE="${JR_E2E_STATUS_DONE:-Done}"
+
+          # Close every issue this run created, identified by the run-scoped label.
+          # || true prevents a single move failure from aborting the teardown loop
+          # (a partially-closed set is better than an aborted teardown).
+          # The debug binary is used here so JR_BASE_URL / JR_AUTH_HEADER seams work.
+          ./target/debug/jr issue list \
+            --jql "project=$JR_E2E_PROJECT AND labels=e2e-${{ github.run_id }} AND statusCategory != Done" \
+            --output json \
+            | jq -r '.[].key' \
+            | while read -r KEY; do
+                ./target/debug/jr issue move "$KEY" "$STATUS_DONE" || true
+              done
