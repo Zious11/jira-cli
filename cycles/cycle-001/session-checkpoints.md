@@ -206,3 +206,14 @@ _Archived 2026-05-29. Was the active checkpoint after S-E2E-1 MERGED (F7 CONVERG
 | **Position** | **S-E2E-1 MERGED (PR #433 @ d484f84) via full VSDD Feature Mode F1–F7.** E2E machinery on develop but INERT until jira-e2e secrets provisioned (R-NEW-1, manual). 54 stories / 41 NFRs / 583 BCs. Develop @ d484f84. Open backlog: #210, #331, #368, #372, #387, #400 (Story B), #429. Held Dependabot PRs #404/#422/#423/#424/#425/#426 due 2026-05-31. #429 WONTFIX-pending (DEC-029) — do NOT close #429 autonomously. Open follow-up: OQ-5 (NFR-O-N doc drift). |
 | **Convergence counter** | S-E2E-1 F7 CONVERGED + MERGED. BC corpus: 583 BCs. NFR corpus: 41 NFRs. Story corpus: 54 stories. |
 | **Resume prompt** | `Read .factory/STATE.md. S-E2E-1 MERGED (PR #433 @ d484f84) via full VSDD Feature Mode F1–F7 (DEC-032/033/034). E2E INERT until R-NEW-1 provisioned (jira-e2e GitHub Environment + secrets). Next: provisioning (R-NEW-1, ops), or next backlog item. Open: OQ-5 (NFR-O-N doc drift — file GitHub issue). DEC-029 deferred to human (do NOT close #429). Dependabot PRs #404/#422/#423/#424/#425/#426 held until 2026-05-31. 54 stories / 41 NFRs. Develop @ d484f84.` |
+
+---
+
+_Archived 2026-05-29. Was the active checkpoint after S-E2E-2 MERGED + live GREEN (run 26658705120, 20/0). Superseded by OQ-1 RESOLVED + board 3 + run 26659977426 checkpoint._
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-29 |
+| **Position** | **E2E feature DELIVERED + OPERATIONAL.** S-E2E-1 (PR #433 @ d484f84) + S-E2E-2 (PR #434 @ 2ca9fc1) MERGED. Live e2e.yml GREEN (run 26658705120, 20/0). Provisioning complete (e2e profile OAuth + jira-e2e GitHub env + ES project + board 1). 55 stories / 41 NFRs / 583 BCs. Develop @ 2ca9fc1. Open backlog: #210, #331, #368, #372, #387, #400 (Story B), #429. Held Dependabot PRs #404/#422/#423/#424/#425/#426 due 2026-05-31. #429 WONTFIX-pending (DEC-029) — do NOT close #429 autonomously. Open: OQ-1 (sprint coverage — team-managed board, LOW); OQ-5 (NFR-O-N doc drift). |
+| **Convergence counter** | S-E2E-2 F7 CONVERGED + MERGED. BC corpus: 583 BCs. NFR corpus: 41 NFRs. Story corpus: 55 stories. |
+| **Resume prompt** | `Read .factory/STATE.md. E2E feature DELIVERED + OPERATIONAL (run 26658705120, 20/0). S-E2E-1 (#433 @ d484f84) + S-E2E-2 (#434 @ 2ca9fc1) merged. Provisioning complete (e2e profile, jira-e2e env, ES project, board 1). OQ-1 open (sprint coverage on team-managed board — LOW, no code change needed). OQ-5 open (NFR-O-N doc drift — file GitHub issue). DEC-029 deferred to human (do NOT close #429). Dependabot PRs #404/#422/#423/#424/#425/#426 held until 2026-05-31. 55 stories / 41 NFRs / 583 BCs. Develop @ 2ca9fc1.` |
