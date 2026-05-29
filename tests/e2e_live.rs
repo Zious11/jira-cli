@@ -681,9 +681,8 @@ fn test_e2e_sprint_list_returns_array() {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.contains("only available for scrum boards") || stderr.contains("No active sprint")
-        {
-            return; // clean skip — board is not a scrum board or has no active sprint; not a jr defect
+        if stderr.contains("only available for scrum boards") {
+            return; // clean skip — board is not a scrum board (kanban/simple/team-managed); not a jr defect
         }
         panic!(
             "sprint list failed unexpectedly:\nstdout: {}\nstderr: {stderr}",
