@@ -34,6 +34,7 @@
 //! | `JR_E2E_PROJECT`    | yes      | Scrum project key (e.g. `E2E`)                     |
 //! | `JR_E2E_BOARD_ID`   | no       | Board ID; enables sprint list/current tests        |
 //! | `JR_E2E_JSM_PROJECT`| no       | JSM project key; enables queue/requesttype tests   |
+//! | `JR_E2E_EMAIL`      | no       | Service account email; used by user-search test    |
 //! | `JR_E2E_STATUS_DONE`| no       | Status name for "closed"; default `"Done"`         |
 //! | `JR_E2E_STATUS_IN_PROGRESS` | no | Status name for "in progress"; default `"In Progress"` |
 
@@ -47,11 +48,21 @@ use tempfile::TempDir;
 // Gate helper
 // ---------------------------------------------------------------------------
 
+/// Pure gate logic: returns `true` only when the given value is `Some("1")`.
+///
+/// Extracted as a pure function so the gate can be tested without any env
+/// mutation. The public entry point `e2e_enabled()` delegates to this.
+///
+/// Traces to: AC-001, AC-002.
+fn e2e_enabled_from(v: Option<&str>) -> bool {
+    v == Some("1")
+}
+
 /// Returns `true` only when `JR_RUN_E2E` is set to `"1"`.
 ///
 /// Used as the early-return guard in every `#[ignore]`-gated test.
 fn e2e_enabled() -> bool {
-    env::var("JR_RUN_E2E").as_deref() == Ok("1")
+    e2e_enabled_from(env::var("JR_RUN_E2E").ok().as_deref())
 }
 
 // ---------------------------------------------------------------------------
@@ -80,6 +91,11 @@ impl E2eHarness {
     /// - `JR_AUTH_HEADER` from `JR_AUTH_HEADER` env var (pre-composed Basic header)
     /// - Isolated `XDG_CONFIG_HOME` / `XDG_CACHE_HOME` (per-test temp dirs)
     /// - `--no-input` prepended (non-interactive mode)
+    ///
+    /// The harness returns an owned `E2eHarness` guard rather than a bare
+    /// `Command` because the `TempDir` handles must remain alive for the
+    /// entire duration of the `jr` subprocess (AC-003 deviation: TempDir
+    /// ownership requires the caller to bind the harness).
     fn cmd(&self) -> Command {
         let base_url =
             env::var("JR_E2E_BASE_URL").expect("JR_E2E_BASE_URL must be set when JR_RUN_E2E=1");
@@ -109,25 +125,6 @@ impl E2eHarness {
 /// the test — dropping it early removes the temp dirs before `jr` finishes.
 fn e2e_harness() -> E2eHarness {
     E2eHarness::new()
-}
-
-/// Returns a `Command` bound to a fresh `E2eHarness`.
-///
-/// This function signature matches the AC-003 requirement. However, because
-/// Rust does not allow returning a reference to a locally-owned value, callers
-/// that need to issue multiple commands within a single test should use
-/// `E2eHarness` directly.
-///
-/// For single-command tests the pattern is:
-/// ```ignore
-/// let h = e2e_harness();
-/// h.cmd().args([...]).assert().success();
-/// ```
-#[allow(dead_code)]
-fn e2e_cmd() -> (E2eHarness, Command) {
-    let h = E2eHarness::new();
-    let cmd = h.cmd();
-    (h, cmd)
 }
 
 /// Returns a run-scoped label string.
@@ -232,41 +229,123 @@ fn test_suite_is_noop_without_jr_run_e2e() {
     );
 }
 
-/// Verifies that `e2e_enabled()` returns `false` when the env var is absent.
+/// Verifies `e2e_enabled_from()` gate logic without any env mutation.
 ///
-/// This test explicitly removes `JR_RUN_E2E` from the process environment for
-/// the duration of the check, so it is safe to run anywhere. It pins the gate
-/// logic itself — if `e2e_enabled()` is ever accidentally changed to default
-/// to `true`, this test fails.
+/// Tests the pure function over literal inputs to pin the exact gate semantics.
+/// No `unsafe`, no process-env mutation, no race risk under multi-threaded
+/// `cargo test`.
 ///
 /// Traces to: AC-001/AC-002 gate logic.
 #[test]
 fn test_e2e_gate_disabled_when_env_unset() {
-    // Save any existing value so we can restore it, then remove for the check.
-    let saved = env::var("JR_RUN_E2E").ok();
+    assert!(
+        !e2e_enabled_from(None),
+        "e2e_enabled_from(None) must return false (var absent)"
+    );
+    assert!(
+        e2e_enabled_from(Some("1")),
+        "e2e_enabled_from(Some(\"1\")) must return true"
+    );
+    assert!(
+        !e2e_enabled_from(Some("0")),
+        "e2e_enabled_from(Some(\"0\")) must return false"
+    );
+    assert!(
+        !e2e_enabled_from(Some("")),
+        "e2e_enabled_from(Some(\"\")) must return false"
+    );
+    assert!(
+        !e2e_enabled_from(Some("1 ")),
+        "e2e_enabled_from(Some(\"1 \")) must return false (trailing space)"
+    );
+}
 
-    // Safety: env mutation in tests is acceptable here because:
-    // (1) this test runs before any gated tests, and
-    // (2) we restore the original value in all code paths.
-    // SAFETY: single-threaded test runner (or at worst a data race on the env
-    // string, which is not UB on the platforms we target).
-    unsafe {
-        env::remove_var("JR_RUN_E2E");
-    }
+/// Meta-guard: every `#[ignore]`-annotated test in this file must contain
+/// the `e2e_enabled()` guard token in its body.
+///
+/// Reads the source of this file via `include_str!` and scans for test
+/// functions annotated with `#[ignore`. For each such function, asserts that
+/// its body contains `e2e_enabled()` before any `h.cmd()` or `e2e_harness()`
+/// call could reach the live Jira site.
+///
+/// This regression-pins AC-002: it is impossible to add a new gated test and
+/// forget the guard without this test failing.
+///
+/// Traces to: AC-002, design spec §4 Gating.
+#[test]
+fn test_every_ignored_test_has_gate_guard() {
+    let source = include_str!("e2e_live.rs");
 
-    let result = e2e_enabled();
+    // Collect all test function bodies that are annotated with #[ignore.
+    // Strategy: find each "#[ignore" occurrence, then scan forward to the
+    // next "fn test_" to locate the function, then extract until the matching
+    // closing brace (tracked by brace depth).
+    let mut violations: Vec<String> = Vec::new();
 
-    // Restore prior to any assertion that could panic and skip the restore.
-    unsafe {
-        match saved {
-            Some(v) => env::set_var("JR_RUN_E2E", v),
-            None => env::remove_var("JR_RUN_E2E"),
+    let lines: Vec<&str> = source.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        if lines[i].trim_start().starts_with("#[ignore") {
+            // Scan forward up to 5 lines to find the fn line.
+            let mut fn_line = None;
+            for (offset, line) in lines[i..lines.len().min(i + 5)].iter().enumerate() {
+                if line.trim_start().starts_with("fn test_") {
+                    fn_line = Some(i + offset);
+                    break;
+                }
+            }
+
+            if let Some(fn_start) = fn_line {
+                // Extract the function name for the error message.
+                let fn_name = lines[fn_start]
+                    .trim()
+                    .trim_start_matches("fn ")
+                    .split('(')
+                    .next()
+                    .unwrap_or("(unknown)")
+                    .to_string();
+
+                // Collect body lines until brace depth returns to 0.
+                let mut depth = 0usize;
+                let mut body = String::new();
+                let mut found_open = false;
+                for line in lines.iter().skip(fn_start) {
+                    body.push_str(line);
+                    body.push('\n');
+                    for ch in line.chars() {
+                        match ch {
+                            '{' => {
+                                depth += 1;
+                                found_open = true;
+                            }
+                            '}' => {
+                                depth = depth.saturating_sub(1);
+                            }
+                            _ => {}
+                        }
+                    }
+                    if found_open && depth == 0 {
+                        break;
+                    }
+                }
+
+                if !body.contains("e2e_enabled()") {
+                    violations.push(fn_name);
+                }
+
+                i = fn_start + 1;
+                continue;
+            }
         }
+        i += 1;
     }
 
     assert!(
-        !result,
-        "e2e_enabled() must return false when JR_RUN_E2E is unset"
+        violations.is_empty(),
+        "AC-002 VIOLATION: the following #[ignore]-annotated tests are missing \
+         the `e2e_enabled()` early-return guard:\n  {}\n\
+         Every gated test MUST begin with `if !e2e_enabled() {{ return; }}`.",
+        violations.join("\n  ")
     );
 }
 
@@ -274,46 +353,16 @@ fn test_e2e_gate_disabled_when_env_unset() {
 // AC-004 — Read command coverage (all #[ignore] + early-return gated)
 // ---------------------------------------------------------------------------
 
-/// E2E: `jr auth status --output json` exits 0 and returns expected fields.
+/// E2E: `jr issue list --jql "project=<E2E>" --output json` returns a JSON array
+/// and validates the JR_AUTH_HEADER seam end-to-end.
 ///
-/// Validates the auth seam (design spec §3): the `JR_AUTH_HEADER` debug-only
-/// env var is correctly threaded through to the Jira API.
+/// This is the auth-seam validator: it is the first test that makes a real
+/// network call. A 401 response here means the JR_AUTH_HEADER seam or the
+/// credential is broken — there is no need for a separate `auth status` test
+/// because `auth status` is plaintext-only and makes no Jira API calls.
 ///
-/// Traces to: AC-004, NFR-T-E2E-1.
-#[test]
-#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
-fn test_e2e_auth_status_returns_account_info() {
-    if !e2e_enabled() {
-        return;
-    }
-    let h = e2e_harness();
-    let output = h
-        .cmd()
-        .args(["auth", "status", "--output", "json"])
-        .output()
-        .expect("failed to spawn jr");
-
-    assert!(
-        output.status.success(),
-        "auth status --output json failed:\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let v: Value =
-        serde_json::from_slice(&output.stdout).expect("auth status output must be valid JSON");
-
-    // Shape-level check: at least one of these fields must be present in the
-    // response for any authenticated Jira user.
-    assert!(
-        v.get("accountId").is_some() || v.get("emailAddress").is_some(),
-        "auth status JSON must contain 'accountId' or 'emailAddress'; got: {v}"
-    );
-}
-
-/// E2E: `jr issue list --jql "project=<E2E>" --output json` returns a JSON array.
-///
-/// May be empty on a freshly provisioned project — the assertion is shape-only.
+/// May return an empty array on a freshly provisioned project — the assertion
+/// is shape-only.
 ///
 /// Traces to: AC-004, NFR-T-E2E-1.
 #[test]
@@ -378,14 +427,15 @@ fn test_e2e_issue_list_with_summary_filter_returns_array() {
     );
 }
 
-/// E2E: `jr board list --output json` returns a non-empty JSON array.
+/// E2E: `jr board list --output json` returns a JSON array.
 ///
-/// Asserts at least one board is present (a Scrum project has a board).
+/// Shape-only assertion — the board count is site-specific and not guaranteed
+/// to be non-empty on all valid E2E sites.
 ///
 /// Traces to: AC-004, NFR-T-E2E-1.
 #[test]
 #[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
-fn test_e2e_board_list_returns_nonempty_array() {
+fn test_e2e_board_list_returns_array() {
     if !e2e_enabled() {
         return;
     }
@@ -408,10 +458,6 @@ fn test_e2e_board_list_returns_nonempty_array() {
     assert!(
         v.is_array(),
         "board list output must be a JSON array; got: {v}"
-    );
-    assert!(
-        !v.as_array().unwrap().is_empty(),
-        "board list must contain at least one board; got empty array"
     );
 }
 
@@ -494,19 +540,17 @@ fn test_e2e_sprint_current_returns_json() {
         serde_json::from_slice(&output.stdout).expect("sprint current output must be valid JSON");
 }
 
-/// E2E: `jr user search <self> --output json` resolves the service account.
+/// E2E: `jr user search <query> --output json` returns a JSON array.
 ///
-/// The E2E auth header identifies a specific account; searching by any prefix
-/// of the service account email must return at least one result.
-///
-/// Uses `JR_E2E_PROJECT` as the `--project` flag to scope assignable-user
-/// search; the search term is the domain part of `JR_E2E_EMAIL` if set,
-/// otherwise falls back to an empty string (which lists all users).
+/// Shape-only assertion — Browse Users permission availability varies across
+/// sites and is not guaranteed non-empty for all valid E2E deployments
+/// (lesson from S-398 over-fitting). The search term is derived from
+/// `JR_E2E_EMAIL` if set (local-part only), otherwise falls back to `"e2e"`.
 ///
 /// Traces to: AC-004, NFR-T-E2E-1.
 #[test]
 #[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
-fn test_e2e_user_search_returns_nonempty_array() {
+fn test_e2e_user_search_returns_array() {
     if !e2e_enabled() {
         return;
     }
@@ -536,18 +580,19 @@ fn test_e2e_user_search_returns_nonempty_array() {
         v.is_array(),
         "user search output must be a JSON array; got: {v}"
     );
-    assert!(
-        !v.as_array().unwrap().is_empty(),
-        "user search for '{query}' must return at least one user; got empty array"
-    );
 }
 
-/// E2E: `jr project fields --project <E2E> --output json` returns a JSON array.
+/// E2E: `jr project fields --project <E2E> --output json` returns a JSON object
+/// with the expected top-level keys.
+///
+/// `project fields --output json` returns an object (not an array) with keys:
+/// `project`, `issue_types`, `priorities`, `statuses_by_issue_type`, `asset_fields`.
+/// Asserts object shape and presence of `issue_types` and `statuses_by_issue_type`.
 ///
 /// Traces to: AC-004, NFR-T-E2E-1.
 #[test]
 #[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
-fn test_e2e_project_fields_returns_array() {
+fn test_e2e_project_fields_returns_object() {
     if !e2e_enabled() {
         return;
     }
@@ -575,70 +620,16 @@ fn test_e2e_project_fields_returns_array() {
     let v: Value =
         serde_json::from_slice(&output.stdout).expect("project fields output must be valid JSON");
     assert!(
-        v.is_array(),
-        "project fields output must be a JSON array; got: {v}"
+        v.is_object(),
+        "project fields output must be a JSON object; got: {v}"
     );
-}
-
-/// E2E: `jr project types --project <E2E> --output json` exits 0.
-///
-/// Traces to: AC-004, NFR-T-E2E-1.
-#[test]
-#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
-fn test_e2e_project_types_exits_ok() {
-    if !e2e_enabled() {
-        return;
-    }
-    let h = e2e_harness();
-    let output = h
-        .cmd()
-        .args(["project", "types", "--output", "json"])
-        .output()
-        .expect("failed to spawn jr");
-
     assert!(
-        output.status.success(),
-        "project types failed:\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        v.get("issue_types").is_some(),
+        "project fields JSON must contain 'issue_types' key; got: {v}"
     );
-
-    let v: Value =
-        serde_json::from_slice(&output.stdout).expect("project types output must be valid JSON");
     assert!(
-        v.is_array(),
-        "project types output must be a JSON array; got: {v}"
-    );
-}
-
-/// E2E: `jr project statuses --project <E2E> --output json` exits 0.
-///
-/// Traces to: AC-004, NFR-T-E2E-1.
-#[test]
-#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
-fn test_e2e_project_statuses_exits_ok() {
-    if !e2e_enabled() {
-        return;
-    }
-    let h = e2e_harness();
-    let output = h
-        .cmd()
-        .args(["project", "statuses", "--output", "json"])
-        .output()
-        .expect("failed to spawn jr");
-
-    assert!(
-        output.status.success(),
-        "project statuses failed:\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let v: Value =
-        serde_json::from_slice(&output.stdout).expect("project statuses output must be valid JSON");
-    assert!(
-        v.is_array(),
-        "project statuses output must be a JSON array; got: {v}"
+        v.get("statuses_by_issue_type").is_some(),
+        "project fields JSON must contain 'statuses_by_issue_type' key; got: {v}"
     );
 }
 
@@ -755,6 +746,12 @@ fn test_e2e_jsm_requesttype_list_exits_ok() {
 /// 5. `worklog add 5m` → logs 5 minutes of work.
 /// 6. `issue move <key> <status_in_progress()>` → single-key idempotent move.
 /// 7. `issue move <key> <status_done()>` → closes the issue.
+///
+/// Assumption: the project uses a workflow with reachable In Progress → Done
+/// transitions under the configured status names (`JR_E2E_STATUS_IN_PROGRESS`
+/// and `JR_E2E_STATUS_DONE`). If a transition assert fails, the `if: always()`
+/// teardown step in `e2e.yml` is the safety net for closing any leaked issues
+/// (they carry the `e2e-<run_label>` label for that purpose).
 ///
 /// The label `e2e-<run_label>` is used on the created issue so the CI
 /// teardown step (e2e.yml `if: always()`) can close any leftover issues.
