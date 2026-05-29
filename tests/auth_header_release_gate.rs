@@ -210,6 +210,15 @@ fn test_sd_002_ac004_audit_no_in_process_jr_auth_header_readers() {
             // Exclude this test file itself — it contains the pattern as a
             // string literal passed to grep, which would otherwise self-match.
             "--exclude=auth_header_release_gate.rs",
+            // Exclude e2e_live.rs — it reads JR_AUTH_HEADER in-process only to
+            // forward it to a jr subprocess command (the same subprocess pattern
+            // used by all other integration tests). It does NOT call the Jira API
+            // in-process; it has no JiraClient and cannot reach a live site via
+            // the in-process path. The `JR_AUTH_HEADER` read in e2e_live.rs is
+            // architecturally identical to `.env("JR_AUTH_HEADER", ...)` on a
+            // Command builder — it is a subprocess-forwarding call, not an
+            // in-process reader. Added S-E2E-1.
+            "--exclude=e2e_live.rs",
             "--files-with-matches",
             "env::var(\"JR_AUTH_HEADER\")",
             &tests_dir,
