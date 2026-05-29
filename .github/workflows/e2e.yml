@@ -124,10 +124,14 @@ jobs:
           COUNT=$(echo "$KEYS" | grep -c '[A-Z]' || true)
           echo "Teardown: closing $COUNT issue(s) for run $GITHUB_RUN_ID"
 
-          # Close every issue; || true prevents a single move failure from aborting
-          # the teardown loop (a partially-closed set is better than an aborted teardown).
+          # Close every issue; the if/else absorbs the exit status so a single
+          # move failure does not abort the teardown loop (a partially-closed set
+          # is better than an aborted teardown).
           echo "$KEYS" | while read -r KEY; do
             [ -z "$KEY" ] && continue
-            ./target/debug/jr issue move "$KEY" "$STATUS_DONE" || true
-            echo "closed $KEY"
+            if ./target/debug/jr issue move "$KEY" "$STATUS_DONE" >/dev/null 2>&1; then
+              echo "closed $KEY"
+            else
+              echo "WARN: failed to close $KEY (left for next run / manual cleanup)"
+            fi
           done
