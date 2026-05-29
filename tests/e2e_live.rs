@@ -666,7 +666,7 @@ fn test_e2e_sprint_list_returns_array() {
         return;
     }
     let board_id = match env::var("JR_E2E_BOARD_ID") {
-        Ok(id) if !id.is_empty() => id,
+        Ok(id) if !id.trim().is_empty() => id,
         _ => {
             // Skipped: JR_E2E_BOARD_ID not set.
             return;
@@ -721,7 +721,7 @@ fn test_e2e_sprint_current_returns_json() {
         return;
     }
     let board_id = match env::var("JR_E2E_BOARD_ID") {
-        Ok(id) if !id.is_empty() => id,
+        Ok(id) if !id.trim().is_empty() => id,
         _ => {
             // Skipped: JR_E2E_BOARD_ID not set.
             return;
@@ -867,7 +867,7 @@ fn test_e2e_jsm_queue_list_exits_ok() {
         return;
     }
     let jsm_project = match env::var("JR_E2E_JSM_PROJECT") {
-        Ok(p) if !p.is_empty() => p,
+        Ok(p) if !p.trim().is_empty() => p,
         _ => {
             // Skipped: JR_E2E_JSM_PROJECT not set.
             return;
@@ -914,7 +914,7 @@ fn test_e2e_jsm_requesttype_list_exits_ok() {
         return;
     }
     let jsm_project = match env::var("JR_E2E_JSM_PROJECT") {
-        Ok(p) if !p.is_empty() => p,
+        Ok(p) if !p.trim().is_empty() => p,
         _ => {
             // Skipped: JR_E2E_JSM_PROJECT not set.
             return;
