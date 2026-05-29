@@ -538,6 +538,47 @@ Artifacts: `.factory/phase-f1-delta-analysis/issue-407/`, `.factory/phase-f1-del
 
 Full pass reports: `.factory/phase-f5-adversarial/issue-407/`.
 
+### E2E Live-Jira Feature — F5 Scoped Adversarial Review CONVERGED (2026-05-29)
+
+7 passes total. Convergence at passes 5/6/7 (3 consecutive CLEAN). Full bar chosen by human over early-accept at 1 clean (DEC-033).
+
+| Pass | Date | CRIT | HIGH | MED | LOW | Counter | Verdict |
+|------|------|------|------|-----|-----|---------|---------|
+| 1 | 2026-05-29 | 4 | 4 | 0 | 0 | 0/3 | FINDINGS_REMAIN |
+| 2 | 2026-05-29 | 1 | 2 | 0 | 0 | 0/3 | FINDINGS_REMAIN |
+| 3 | 2026-05-29 | 1 | 2 | 1 | 0 | 0/3 | FINDINGS_REMAIN |
+| 4 | 2026-05-29 | 0 | 0 | 2 | 0 | 0/3 | FINDINGS_REMAIN |
+| 5 | 2026-05-29 | 0 | 0 | 0 | 0 | 1/3 | CLEAN-PASS |
+| 6 | 2026-05-29 | 0 | 0 | 0 | 0 | 2/3 | CLEAN-PASS |
+| 7 | 2026-05-29 | 0 | 0 | 0 | 0 | 3/3 | FULL CONVERGENCE |
+
+Trajectory shorthand: `(4C/4H)→(1C/2H)→(1C/2H/1M)→(2M)→CLEAN→CLEAN→CLEAN`
+
+**CRITICAL cluster (passes 1-3, all fixed):**
+- C-1 (pass 1): `auth status` command emits no JSON and makes no Jira API call — AC-004 auth-status row was unsatisfiable. Fixed: AC-004-v2 stricken that row; `issue list` designated auth-seam validator.
+- C-2 (pass 1): `project types` and `project statuses` are nonexistent subcommands. Fixed: tests removed from AC-004.
+- C-3 (pass 1): `project fields` handler emits a JSON **object** (not array). Fixed: AC-004 corrected to assert `is_object()` + key presence.
+- C-4 (pass 1, recorded as pass-2/3 C): workflow env-var mismatch — tests referenced `JR_BASE_URL` for the E2E base URL, but the harness uses `JR_E2E_BASE_URL` (AC-003 canonical). Fixed: e2e_cmd() harness corrected.
+- C-5 (pass 2): `issue comment <key>` body is a positional message arg — no `--body` flag exists. Fixed: AC-007 step 4 corrected.
+- C-6 (pass 2): harden-runner `egress-policy: audit` must be `block` for secret-safety. Fixed: e2e.yml updated.
+
+**HIGH cluster (passes 1-3, all fixed):**
+- Teardown `--all` resilience + `set -e` handling; coverage log; run-id consistency.
+- Gate-test env-mutation UB → pure fn pattern.
+- Sprint current clean-skip for no-active-sprint case.
+- AC-007 label single-prefix fix (double `e2e-` prefix bug in AC text).
+- Board list / user search element-count relaxation (shape-only; site-dependent).
+
+**MEDIUM (pass 4, fixed):** harden-runner allowlist completion; meta-guard hardening.
+
+**Two LOW deferred observations (passes 5-7, non-blocking):**
+- DI-E2E-F5-1: AC-006 verification grep text is imprecise — `grep '"Done"|"In Progress"'` returns doc-comment matches (lines 38-39/155/160); executable code is correct; AC text is the imprecise artifact. Deferred: doc/runbook-level, no runtime impact on correctly-provisioned site.
+- DI-E2E-F5-2: `sprint current` clean-skip only matches "No active sprint" stderr — a kanban-misconfigured `JR_E2E_BOARD_ID` would panic instead of skip. Provisioning assumption: board must be Scrum. Deferred: provisioning runbook item, no code change needed.
+
+Branch fix commits (feat/e2e-live-jira-testing): df660d7, b6aad30, 8336752, fb00b61, be1e2b8, 2175463, 25c5f78, f78eed2 (plus original F4 commits cdf4dcf, cc77b9f).
+
+**Root-cause pattern:** 6 CRITICAL defects were all in tests/workflow artifacts, invisible to hermetic CI because the live tests are gated no-ops. The adversary was able to catch them by verifying against real handler source code + CLI surface. This validates the discipline of F5 for infrastructure-only stories (zero src/ changes does not mean zero spec/test surface risk).
+
 ### Phase 5-adv — Adversarial Refinement
 Not started.
 

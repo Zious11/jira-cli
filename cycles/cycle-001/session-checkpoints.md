@@ -173,3 +173,14 @@ _Archived 2026-05-29. Was the active checkpoint at v0.5.0-dev.11 RELEASED. Super
 | **Date** | 2026-05-28 (UTC 2026-05-29) |
 | **Position** | **Dev release v0.5.0-dev.11 SHIPPED. Develop @ 15bf305 (PR #432 squash-merged, annotated tag v0.5.0-dev.11 pushed).** No active mid-cycle story. Open backlog: #210, #331, #368, #372, #387, #400 (Story B), #429. Held Dependabot PRs #404/#422/#423/#424/#425/#426 due 2026-05-31. #429 WONTFIX-pending (DEC-029) — do NOT close #429 autonomously. #400 Story B (PG-398-1) + engine items (PG-398-4/5) remain open. |
 | **Convergence counter** | v0.5.0-dev.11 released. BC corpus: 583 BCs (unchanged). Story corpus: 53 stories. No active story. |
+
+---
+
+_Archived 2026-05-29. Was the active checkpoint at E2E feature F1+F2+F3 COMPLETE. Superseded by E2E F5 CONVERGED checkpoint._
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-29 |
+| **Position** | **E2E Feature Mode: F1 APPROVED + F2 COMPLETE + F3 COMPLETE. Story S-E2E-1 created (12 ACs, MEDIUM/8SP, draft). Design spec on feat/e2e-live-jira-testing @ c3e967a. Next: F4 delta implementation (TDD).** 54 stories / 41 NFRs. Develop @ 15bf305 (v0.5.0-dev.11). Open backlog: #210, #331, #368, #372, #387, #400 (Story B), #429. Held Dependabot PRs #404/#422/#423/#424/#425/#426 due 2026-05-31. #429 WONTFIX-pending (DEC-029) — do NOT close #429 autonomously. File provisioning GitHub issue (R-NEW-1) before F4. |
+| **Convergence counter** | E2E feature F1+F2+F3 complete. BC corpus: 583 BCs (unchanged). NFR corpus: 41 NFRs. Story corpus: 54 stories (+1 S-E2E-1). |
+| **Resume prompt** | `Read .factory/STATE.md. E2E feature (Feature Mode, DEC-032): F1✓ F2✓ F3✓ (story S-E2E-1, 12 ACs, draft). Design spec: docs/specs/e2e-live-jira-testing.md on feat/e2e-live-jira-testing @ c3e967a. Next: F4 delta implementation (TDD). File provisioning GitHub issue (R-NEW-1) before F4. 54 stories / 41 NFRs. Develop @ 15bf305 (v0.5.0-dev.11). Dependabot PRs held until 2026-05-31. DEC-029 deferred to human (do NOT close #429).` |
