@@ -105,14 +105,24 @@ test functions required (mostly), just deeper bodies.
 - `board list`: if non-empty, each element has `id` + `name` + `type`.
 - `sprint list` / `sprint current`: if present, each sprint object has `id` + `state`.
 - `user search`: if non-empty, each element has `accountId` + `displayName` (presence/type only).
-- `worklog list`: if non-empty, each entry has `timeSpentSeconds` (numeric) + `id`.
-- `project fields`: assert **all 5** documented keys present: `project`, `issue_types`,
-  `priorities`, `statuses_by_issue_type`, `asset_fields` (currently only 2 are checked).
+- `worklog list`: if non-empty, each entry's `timeSpentSeconds` **if present is numeric** (the
+  field is `Option<u64>` in the `Worklog` type — do NOT require it non-null; F-07). Reserve the
+  exact `== 300` value check for the just-written entry only (§5.2 step 4).
+- `project fields`: assert **all 5** documented keys are **present** (never non-empty): `project`,
+  `issue_types`, `priorities`, `statuses_by_issue_type`, `asset_fields` (currently only 2 are
+  checked). **Trap (F-08):** `asset_fields` is `[]` on any non-CMDB instance and `priorities` /
+  `statuses_by_issue_type` may be empty — assert key-presence only; do NOT strengthen to non-empty.
 
 ### 5.2 Write flow — round-trip every mutation
-`test_e2e_write_flow_*` becomes a read-back flow:
+`test_e2e_write_flow_*` becomes a read-back flow.
+
+> **Create-JSON contract (F-05):** `issue create --output json` returns ONLY `{"key": "<KEY>"}` —
+> NOT the full issue. Assert `key` format on the create output; read **every** field/label/type
+> assertion from the `poll_view` body, never from the create output.
+
 1. **create** → assert `key` format; then `poll_view` and assert echoed `summary == summary_create`,
-   issue type name == `Task`, and the run label is present in `labels`.
+   the issue type name **equals the value passed to `--type`** (env-parametric, not a hardcoded
+   `"Task"` literal; F-12), and the run label is present in `labels`.
 2. **edit** (summary) → `poll_view`, assert `summary == summary_edit`; assert the edit command's
    own JSON `changed_fields` shape (honor the #398/#396 echo-asymmetry contracts: human channel
    prints `(updated)` marker, JSON carries raw input — assert each channel **distinctly**).
@@ -122,7 +132,8 @@ test functions required (mostly), just deeper bodies.
    `timeSpentSeconds == 300`.
 5. **move → In Progress** → `poll_view`, assert `statusCategory` is the In-Progress category
    (**by category, not name**); then **re-issue the same move and assert exit 0** (single-key
-   idempotency contract).
+   idempotency contract). Single-key move JSON is `{key, status, changed}` — the idempotent
+   re-issue returns `changed: false` (F-10; distinct from the bulk shape in §6.2).
 6. **move → Done** → `poll_view`, assert `statusCategory` is the Done category.
 
 ## 6. Milestone M2 — New regression coverage (portability-safe)
@@ -132,24 +143,38 @@ self-seeds its own data (no inter-test dependency).
 
 ### 6.1 Read / discovery
 - `issue transitions <key>` → array of transition objects (shape: `id` + `name` present).
-- `issue changelog <key>` → shape (histories array).
+- `issue changelog <key>` → **object** shape `{key, entries}`; assert `v.is_object()` and
+  `v["entries"].is_array()` (F-03: the JSON is `ChangelogOutput { key, entries }`, NOT a bare
+  array and NOT a `histories` key).
 - `issue comments <key>` → array shape (standalone, beyond the M1 write-flow read-back).
-- `board view <board_id>` → object shape (gated on `JR_E2E_BOARD_ID`, clean-skip otherwise).
+- `board view --board <board_id>` → object shape (gated on `JR_E2E_BOARD_ID`, clean-skip otherwise).
 - `team list` → array shape (clean-skip if org has no teams / endpoint unavailable — portability).
 - `user view <self-accountId>` → object with `accountId` (resolve self via `user search` seed).
-- `issue link-types` → array shape (`id` + `name` + `inward` + `outward`).
+- `issue link-types` → array shape; assert only `name` present (F-06: `id`/`inward`/`outward` are
+  `Option` in `IssueLinkType` and serialize as null — only `name` is guaranteed). `--output json`
+  IS supported (global flag).
 
 ### 6.2 Write / behavioral contracts
-- **assign**: `issue assign <key> --me` → `poll_view`, assert `assignee.accountId` is set;
-  round-trip. (Self-assignment is permission-safe on any instance.)
-- **link / unlink**: create two issues, `issue link A B <type>` → view A, assert the link to B
-  present; `issue unlink` → view A, assert it's gone. Use a link type discovered from
-  `link-types` (don't hardcode "Blocks" — pick the first available → portable).
+- **assign**: `issue assign <key>` with the assignee **omitted** → self-assignment (there is NO
+  `--me` flag; F-01 — `handle_assign` falls to the `client.get_myself()` branch when no assignee
+  is given; `--to me` is the equivalent explicit form). Then `poll_view`, assert
+  `assignee.accountId` is set; round-trip. (Self-assignment is permission-safe on any instance.)
+- **link / unlink**: create two issues, `issue link A B --type <name>` (type defaults to `Relates`
+  if omitted) → view A, assert the link to B is present by traversing
+  `fields.issuelinks[]` and matching B's key under **either** `inwardIssue.key` **or**
+  `outwardIssue.key` with `type.name` matching (F-09: direction depends on key1=outward /
+  key2=inward; check both sides). `issue unlink A B` → view A, assert no `issuelinks` entry
+  references B. Discover the type from `link-types` (pick the first available `name` → portable;
+  don't hardcode "Blocks").
 - **edit --dry-run** (+ `--output json`): run against a seeded issue, assert **no mutation**
   (subsequent `poll_view` shows the field unchanged) + the dry-run JSON shape. Fully portable,
   no write.
 - **bulk move** (multi-key positional / `--to`): create 2 issues, bulk-move both, assert the
-  per-key bulk-result shape and that each transitioned (`poll_view` per key). Pins the
+  bulk-result shape and that each transitioned (`poll_view` per key). The bulk-move JSON is
+  `{taskId, results:[{key, status (, error)}]}` and the operation is **async/polled** — assert
+  `results[].status ∈ {success, error, inaccessible}`, NOT `changed` (F-10: that is the
+  single-key shape `{key, status, changed}`). `inaccessible` can occur transiently for an
+  eventually-consistent just-created issue — treat it as retryable, not a failure. Pins the
   documented **non-idempotent** bulk contract (distinct from single-key idempotency).
 - **pagination dedup**: create 3 issues under one unique label, `issue list --jql "labels=<L>"
   --all --output json`, assert the returned keys are **duplicate-free** and include all 3. Pins
@@ -157,20 +182,29 @@ self-seeds its own data (no inter-test dependency).
   (Use `poll_jql` — this is a search-path assertion.)
 
 ### 6.3 Error / exit-code paths (no mutation)
-Assert **mapped exit code** (`src/error.rs` contract) + JSON error envelope shape; **never**
-message substrings. The **exact** expected code per case is taken from `src/error.rs` and the
-existing mocked error tests (`tests/issue_view_errors.rs`, `tests/issue_list_errors.rs`) — the
-live tests must assert the **same** mapping those tests pin, so the live and mocked contracts
-cannot drift. (Implementation step: read those tests first and reuse their expected codes; do
-not invent a number.)
-- **404** — `issue view E2E-99999999 --output json` → assert the not-found exit code from the
-  contract above + presence of a JSON error field.
-- **400** — `issue list --jql "this is not valid ("` --output json → assert the
-  malformed-query exit code from the contract above + presence of a JSON error field.
-- **401** — a command run with a deliberately bad `JR_AUTH_HEADER` → exit `2`
-  (`JrError::NotAuthenticated`, confirmed in `error.rs`) + `errorMessages` present (assert
-  presence, not Atlassian's sentence; honor the documented "no machine-readable `code`,
-  no RFC-6750 header" shape).
+Assert **mapped exit code** (`src/error.rs::JrError::exit_code()` contract) + JSON error envelope
+shape; **never** message substrings.
+
+> **Exit-code source of truth (F-04):** the mocked error tests pin only **500→1** and **401→2**
+> (`tests/issue_view_errors.rs`) and **500→1, 401→2, board-not-found→64** (`tests/issue_list_errors.rs`).
+> There is **no** existing mocked pin for 400 or 404 — do NOT instruct the implementer to "reuse"
+> a nonexistent number. Instead: 400 and 404 both map to exit **1** via the `JrError::ApiError`
+> catch-all arm (`error.rs`: `_ => 1`). Assert exit 1 directly for those two, and reuse the
+> pinned **2** for 401. The implementer should still read the two mocked files to confirm the
+> 401→2 and 500→1 pins have not drifted.
+
+- **404** — `issue view E2E-99999999 --output json` → exit **1** (`ApiError{status:404}`) +
+  presence of a JSON error field.
+- **400** — `issue list --jql "this is not valid ("` --output json → exit **1**
+  (`ApiError{status:400}`; freeform `--jql` is not client-side validated, so it reaches the API)
+  + presence of a JSON error field.
+- **401** — a command run with a deliberately bad-but-syntactically-valid `JR_AUTH_HEADER`
+  (a well-formed `Basic <base64>` with wrong credentials, not a malformed string) → exit `2`
+  (`JrError::NotAuthenticated`) + `errorMessages` present (assert presence, not Atlassian's
+  sentence; honor the documented "no machine-readable `code`, no RFC-6750 header" shape).
+  **Debug-build-only by construction (F-11):** `JR_AUTH_HEADER` is gated behind
+  `#[cfg(debug_assertions)]` (SD-002); the E2E harness already runs the debug binary, so this is
+  consistent with the rest of the suite — but it is not a release-binary behavior.
 
 ## 7. Milestone M3 — Robustness & ops
 
@@ -179,16 +213,26 @@ not invent a number.)
   test does not retry → latent flake on a cold index).
 - **Secret-leak guard test**: run a normal `--output json` command and assert that neither stdout
   nor stderr contains the base64 token or the service-account email. Cheap, high-value, portable.
-- **Leak-detection log** at suite start: count pre-existing `e2e-*`-labeled **open** issues and
-  `eprintln!` the number (warn-only, never fails) — visible drift signals a broken teardown.
+- **Leak-detection log** at suite start: count pre-existing **open** E2E issues via
+  `summary ~ "[e2e "` (NOT a label prefix — see F-02 in §7.2) and `eprintln!` the number
+  (warn-only, never fails) — visible drift signals a broken teardown.
 - (Optional, low priority) per-test wall-clock guard mapping a hung call toward exit 124.
 
 ### 7.2 CI / ops (`.github/workflows/`)
 - **New `e2e-sweeper.yml`** — scheduled daily, non-blocking, `concurrency: jira-e2e` (shares the
   serialization group so it never interleaves with the main run). Closes
-  `project=$JR_E2E_PROJECT AND labels ~ "e2e-" AND statusCategory != Done AND created <= -1d`.
-  This is the backstop for **hard-cancelled** runs, where GitHub may skip even the `if: always()`
-  teardown step (research §4). Close-only (no delete), best-effort (`|| true`), idempotent.
+  `project=$JR_E2E_PROJECT AND summary ~ "[e2e " AND statusCategory != Done AND created <= -1d`.
+  **JQL correctness (F-02):** the cross-run sweeper matches on **`summary ~ "[e2e "`**, NOT on
+  labels. The `labels` field does not support the `~` (CONTAINS) operator and JQL has no
+  label prefix/wildcard match, so `labels ~ "e2e-"` is invalid (HTTP 400). Every seeded issue
+  carries the summary prefix `[e2e <run_label>]` (see existing tests), and `summary` does support
+  `~`, so this reliably matches all runs' issues. (The per-run teardown in `e2e.yml` correctly
+  uses exact `labels=e2e-$GITHUB_RUN_ID` — exact match is valid; only the prefix sweep must use
+  summary.) This is the backstop for **hard-cancelled** runs, where GitHub may skip even the
+  `if: always()` teardown step (research §4). Close-only (no delete), best-effort (`|| true`),
+  idempotent.
+  **Note:** the leak-detection log (§7.1) and any label-based selection must likewise use the
+  `summary ~ "[e2e "` predicate for cross-run matching, not a label prefix.
 - **`e2e.yml` failure classification**: distinguish a first-call **401** (expired/revoked token →
   "rotate token") from a **connection/site-not-found** error (possible inactivity deactivation →
   "reactivate site within the grace window"). Different remediation, different log message.
