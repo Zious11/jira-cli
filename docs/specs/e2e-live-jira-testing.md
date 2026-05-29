@@ -212,9 +212,12 @@ jobs:
 
 - The E2E tests themselves are the verification artifact; they assert exit codes + JSON shapes.
 - A short local dry-run path: a maintainer with creds can run
-  `JR_RUN_E2E=1 JR_BASE_URL=... JR_AUTH_HEADER=... JR_E2E_PROJECT=E2E cargo test --test e2e_live -- --include-ignored`.
-- The gate (`JR_RUN_E2E`) is itself verified by a non-gated assertion that the suite is a no-op
-  when the flag is unset.
+  `JR_RUN_E2E=1 JR_E2E_BASE_URL=... JR_AUTH_HEADER=... JR_E2E_PROJECT=E2E cargo test --test e2e_live -- --include-ignored`.
+- The gate (`JR_RUN_E2E`) is itself verified by the always-run `test_e2e_gate_disabled_when_env_unset`
+  (a pure-function assertion over literal inputs) and `test_every_ignored_test_has_gate_guard`
+  (a source meta-guard ensuring every `#[ignore]` test early-returns via `e2e_enabled()`);
+  `ci.yml` never passes `--include-ignored`, so gated tests are inert there regardless of
+  `JR_RUN_E2E`.
 
 ## 12. Open items (resolve during implementation)
 
