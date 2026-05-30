@@ -37,6 +37,7 @@
 //! | `JR_E2E_EMAIL`              | no       | Service account email; used by user-search test               |
 //! | `JR_E2E_STATUS_DONE`        | no       | Status name for "closed"; default `"Done"`                    |
 //! | `JR_E2E_STATUS_IN_PROGRESS` | no       | Status name for "in progress"; default `"In Progress"`        |
+//! | `JR_E2E_ISSUE_TYPE`         | no       | Issue type for test-created issues; default `"Task"` (F-12)   |
 //! | `JR_E2E_POLL_MAX_ATTEMPTS`  | no       | Max poll iterations for `poll_jql`/`poll_view` (default 5);  |
 //! |                             |          | read by test code only — no `#[cfg(debug_assertions)]` needed |
 //! | `JR_E2E_POLL_INITIAL_MS`    | no       | Initial backoff milliseconds for `poll_jql` (default 250);   |
@@ -291,12 +292,81 @@ fn poll_schedule(max_attempts: usize, initial_ms: u64) -> Vec<u64> {
 /// - `SkipOnEmpty`: on budget exhaustion with 0 results, return `None` (clean skip).
 ///   A non-zero result that doesn't satisfy the predicate is NOT retried — caller
 ///   must not use this mode when a positive result count is expected.
-/// - `FailOnShort(min)`: on budget exhaustion with a count in `1..min`, panic loud
-///   (REGRESSION). On 0 results, behaves identically to `SkipOnEmpty` (clean skip).
+/// - `FailOnShort(min)`: retry when count is in `1..min` and budget is not yet
+///   exhausted (index lag toward target). On budget exhaustion with count in `1..min`,
+///   panic loud (REGRESSION). On 0 results, behaves identically to `SkipOnEmpty`
+///   (clean skip, both during retries and at budget exhaustion).
 #[derive(Debug, Clone, Copy)]
 enum PollJqlMode {
     SkipOnEmpty,
     FailOnShort(usize),
+}
+
+/// Decision returned by `poll_outcome` for each iteration of `poll_jql`.
+///
+/// Extracted as a pure enum so the decision logic can be tested in isolation
+/// without spawning any processes (S-E2E-3 BUG-3 fix).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PollDecision {
+    /// Return the current result to the caller (predicate satisfied, or
+    /// `SkipOnEmpty` with a non-zero result that failed the predicate).
+    Return,
+    /// Sleep and retry (count is 0, OR `FailOnShort` with count in 1..min
+    /// and budget is not yet exhausted).
+    Retry,
+    /// Budget exhausted with 0 results — clean skip, return `None`.
+    SkipNone,
+    /// Budget exhausted with count in `1..min` (`FailOnShort`) — REGRESSION panic.
+    FailPanic,
+}
+
+/// Pure decision function for one `poll_jql` iteration.
+///
+/// # Arguments
+///
+/// - `last_count`: number of results returned by the current attempt (0 = no results).
+/// - `predicate_met`: whether the caller's predicate was satisfied.
+/// - `budget_exhausted`: whether this is the last allowed attempt.
+/// - `mode`: the polling mode.
+///
+/// # Contract
+///
+/// | last_count | predicate_met | budget_exhausted | mode          | decision   |
+/// |------------|---------------|------------------|---------------|------------|
+/// | 0          | false         | false            | any           | Retry      |
+/// | 0          | false         | true             | any           | SkipNone   |
+/// | >0         | true          | any              | any           | Return     |
+/// | >0         | false         | false            | SkipOnEmpty   | Return     |
+/// | >0         | false         | false            | FailOnShort   | Retry      |
+/// | >0         | false         | true             | SkipOnEmpty   | Return     |
+/// | >0         | false         | true             | FailOnShort(m)| FailPanic  |
+fn poll_outcome(
+    last_count: usize,
+    predicate_met: bool,
+    budget_exhausted: bool,
+    mode: PollJqlMode,
+) -> PollDecision {
+    if predicate_met {
+        return PollDecision::Return;
+    }
+    if last_count == 0 {
+        return if budget_exhausted {
+            PollDecision::SkipNone
+        } else {
+            PollDecision::Retry
+        };
+    }
+    // last_count > 0, predicate not met.
+    match mode {
+        PollJqlMode::SkipOnEmpty => PollDecision::Return,
+        PollJqlMode::FailOnShort(_) => {
+            if budget_exhausted {
+                PollDecision::FailPanic
+            } else {
+                PollDecision::Retry
+            }
+        }
+    }
 }
 
 /// Poll `jr issue list --jql <jql> --output json` with bounded exponential backoff.
@@ -306,12 +376,16 @@ enum PollJqlMode {
 ///
 /// # Retry policy
 ///
+/// Uses `poll_outcome` for all decision logic (pure, testable). In summary:
+///
 /// - 0 results: retryable (pure index lag) regardless of mode.
 /// - Non-zero + predicate satisfied: return `Some(value)`.
 /// - Non-zero + predicate NOT satisfied (`SkipOnEmpty`): do NOT retry; return
 ///   the value immediately (NEVER masks a positive result in skip-on-empty mode).
+/// - Non-zero + predicate NOT satisfied (`FailOnShort`): retry until budget
+///   exhausted (absorbing index lag toward the target count).
 /// - Budget exhausted with 0 results: clean-skip (return `None` + eprintln!).
-/// - Budget exhausted with count in `1..min` (`FailOnShort(min)`): panic.
+/// - Budget exhausted with count in `1..min` (`FailOnShort(min)`): panic (REGRESSION).
 ///
 /// # Env seams (test-code only — no `#[cfg(debug_assertions)]` needed)
 ///
@@ -341,6 +415,7 @@ fn poll_jql(
     let start = std::time::Instant::now();
 
     let mut last_count: usize = 0;
+    let mut last_value: Option<Value> = None;
     for attempt in 1..=max_attempts {
         let output = harness
             .cmd()
@@ -348,30 +423,62 @@ fn poll_jql(
             .output()
             .expect("failed to spawn jr for poll_jql");
 
+        // Staged for M2 wiring: `is_transient_error` classifies HTTP status codes
+        // (429, 503, 0) as retryable. The subprocess exit code from `jr` is not an
+        // HTTP status code, so full wiring requires the binary to emit a structured
+        // error with a status field. Until then, a non-success exit with no parseable
+        // JSON is treated as Retry unconditionally (same as 0-results — index lag fallback).
+
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             if let Ok(v) = serde_json::from_str::<Value>(stdout.trim()) {
                 if let Some(arr) = v.as_array() {
                     last_count = arr.len();
-                    if last_count == 0 {
-                        // Pure index lag — retryable regardless of mode.
-                    } else if predicate(&v) {
-                        let elapsed = start.elapsed().as_millis();
-                        eprintln!(
-                            "poll_jql: predicate satisfied after {attempt} attempt(s) \
-                             ({elapsed} ms elapsed)"
-                        );
-                        return Some(v);
-                    } else {
-                        // Non-zero, predicate not satisfied.
-                        // In SkipOnEmpty mode: do NOT retry — return the value.
-                        // In FailOnShort mode: only retry on 0; non-zero is final.
-                        let elapsed = start.elapsed().as_millis();
-                        eprintln!(
-                            "poll_jql: non-zero result ({last_count}) but predicate not \
-                             satisfied after {attempt} attempt(s) ({elapsed} ms elapsed)"
-                        );
-                        return Some(v);
+                    let predicate_met = last_count > 0 && predicate(&v);
+                    let budget_exhausted = attempt == max_attempts;
+                    let decision = poll_outcome(last_count, predicate_met, budget_exhausted, mode);
+
+                    match decision {
+                        PollDecision::Return => {
+                            let elapsed = start.elapsed().as_millis();
+                            if predicate_met {
+                                eprintln!(
+                                    "poll_jql: predicate satisfied after {attempt} attempt(s) \
+                                     ({elapsed} ms elapsed)"
+                                );
+                            } else {
+                                eprintln!(
+                                    "poll_jql: non-zero result ({last_count}) but predicate not \
+                                     satisfied after {attempt} attempt(s) ({elapsed} ms elapsed)"
+                                );
+                            }
+                            return Some(v);
+                        }
+                        PollDecision::Retry => {
+                            last_value = Some(v);
+                            // Fall through to sleep/retry below.
+                        }
+                        PollDecision::SkipNone => {
+                            let elapsed = start.elapsed().as_millis();
+                            eprintln!(
+                                "poll_jql: budget exhausted after {max_attempts} attempt(s) \
+                                 ({elapsed} ms); 0 results — treating as index lag, clean-skip"
+                            );
+                            return None;
+                        }
+                        PollDecision::FailPanic => {
+                            let elapsed = start.elapsed().as_millis();
+                            let min = match mode {
+                                PollJqlMode::FailOnShort(m) => m,
+                                PollJqlMode::SkipOnEmpty => unreachable!(),
+                            };
+                            panic!(
+                                "REGRESSION: poll_jql expected at least {min} results after \
+                                 full poll budget ({max_attempts} attempts, {elapsed} ms), \
+                                 but got {last_count}. \
+                                 This is a persistent short count, not index lag."
+                            );
+                        }
                     }
                 }
             }
@@ -387,29 +494,42 @@ fn poll_jql(
         }
     }
 
+    // Budget exhausted without returning inside the loop (only reachable when
+    // the last attempt produced a parse error or non-success exit — the
+    // SkipNone/FailPanic paths are taken from inside the loop for valid JSON).
     let elapsed = start.elapsed().as_millis();
-    match mode {
-        PollJqlMode::SkipOnEmpty => {
+    let budget_exhausted = true;
+    let decision = poll_outcome(last_count, false, budget_exhausted, mode);
+    match decision {
+        PollDecision::SkipNone | PollDecision::Retry => {
             eprintln!(
                 "poll_jql: budget exhausted after {max_attempts} attempt(s) ({elapsed} ms); \
                  0 results — treating as index lag, clean-skip"
             );
             None
         }
-        PollJqlMode::FailOnShort(min) => {
-            if last_count == 0 {
-                eprintln!(
-                    "poll_jql: budget exhausted after {max_attempts} attempt(s) ({elapsed} ms); \
-                     0 results — treating as index lag, clean-skip"
-                );
-                None
-            } else {
-                panic!(
-                    "REGRESSION: poll_jql expected at least {min} results after full poll budget \
-                     ({max_attempts} attempts, {elapsed} ms), but got {last_count}. \
-                     This is a persistent short count, not index lag."
-                );
-            }
+        PollDecision::FailPanic => {
+            let min = match mode {
+                PollJqlMode::FailOnShort(m) => m,
+                PollJqlMode::SkipOnEmpty => unreachable!(),
+            };
+            panic!(
+                "REGRESSION: poll_jql expected at least {min} results after full poll budget \
+                 ({max_attempts} attempts, {elapsed} ms), but got {last_count}. \
+                 This is a persistent short count, not index lag."
+            );
+        }
+        PollDecision::Return => {
+            // Reachable only when an earlier FailOnShort retry captured a value
+            // (last_value = Some) and the final attempt produced a parse error /
+            // non-success. In SkipOnEmpty mode this arm is unreachable (non-zero
+            // results return inside the loop). Returns the last successfully-parsed
+            // value.
+            debug_assert!(
+                last_value.is_some(),
+                "poll_jql post-loop Return arm reached with no captured value"
+            );
+            last_value
         }
     }
 }
@@ -590,6 +710,13 @@ fn assert_array_of_objects_with_keys(v: &Value, keys: &[&str]) {
 ///
 /// This is a pure function (no side effects, no I/O) so it can be tested without
 /// spawning any process.
+///
+/// # Staged for M2 wiring
+///
+/// `poll_jql` currently cannot extract an HTTP status code from the `jr` subprocess
+/// exit code — the two are different things. Full wiring requires the binary to emit
+/// a structured error response with a parseable HTTP status field. Until then this
+/// function is exercised by unit tests but not called from the live poll loop.
 fn is_transient_error(status_code: u16, _stderr: &str) -> bool {
     matches!(status_code, 429 | 503 | 0)
 }
@@ -1588,7 +1715,7 @@ fn test_e2e_write_flow_create_edit_comment_worklog_close() {
     let edit_summary_json: Value = serde_json::from_slice(&edit_summary_output.stdout)
         .expect("issue edit (summary) output must be valid JSON");
 
-    // Assert changed_fields.summary present + updated: true (AC-011).
+    // Assert changed_fields.summary present (AC-011).
     assert!(
         edit_summary_json
             .get("changed_fields")
@@ -1596,12 +1723,14 @@ fn test_e2e_write_flow_create_edit_comment_worklog_close() {
             .is_some(),
         "edit JSON must have changed_fields.summary; got: {edit_summary_json}"
     );
+    // Assert top-level updated == true (AC-011).
+    // `updated` is a TOP-LEVEL key in the edit response JSON — NOT nested inside
+    // `changed_fields`. Structure: {key, changed_fields: {...}, updated: true}.
+    // See src/cli/issue/json_output.rs::edit_response for the canonical layout.
     assert_eq!(
-        edit_summary_json
-            .get("changed_fields")
-            .and_then(|cf| cf.get("updated")),
+        edit_summary_json.get("updated"),
         Some(&Value::Bool(true)),
-        "edit JSON must have changed_fields.updated == true; got: {edit_summary_json}"
+        "edit JSON must have top-level updated == true; got: {edit_summary_json}"
     );
 
     // poll_view + assert summary changed (AC-011).
@@ -1617,9 +1746,22 @@ fn test_e2e_write_flow_create_edit_comment_worklog_close() {
 
     // -------------------------------------------------------------------------
     // Step 2b: edit description — #398 asymmetry (AC-012)
-    // DI-E2E-F2-1: the (updated) marker is on STDERR, not stdout.
+    //
+    // TWO separate invocations are required because the two BCs are exercised
+    // on different output channels and cannot be tested from a single `jr` call:
+    //
+    //   BC-3.4.013 (JSON/lossless channel): `changed_fields.description` carries
+    //     the raw user-supplied input string. This requires `--output json`.
+    //   BC-3.4.012 (human/table channel): stderr contains the `(updated)` marker.
+    //     The marker is emitted ONLY in OutputFormat::Table branch (eprintln!);
+    //     JSON mode suppresses it entirely (stderr is silent in JSON mode).
+    //
+    // Asserting `(updated)` in stderr of a `--output json` invocation would
+    // always fail — the marker is never written in JSON mode. Hence the split.
     // -------------------------------------------------------------------------
-    let edit_desc_output = h
+
+    // Invocation 2b-i: JSON mode — verify lossless description echo (BC-3.4.013).
+    let edit_desc_json_output = h
         .cmd()
         .args([
             "issue",
@@ -1631,18 +1773,19 @@ fn test_e2e_write_flow_create_edit_comment_worklog_close() {
             "json",
         ])
         .output()
-        .expect("failed to spawn jr for issue edit (description)");
+        .expect("failed to spawn jr for issue edit (description, JSON mode)");
 
     assert!(
-        edit_desc_output.status.success(),
-        "issue edit (description) failed for {key}:\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&edit_desc_output.stdout),
-        String::from_utf8_lossy(&edit_desc_output.stderr)
+        edit_desc_json_output.status.success(),
+        "issue edit (description, JSON mode) failed for {key}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&edit_desc_json_output.stdout),
+        String::from_utf8_lossy(&edit_desc_json_output.stderr)
     );
 
     // JSON channel (stdout): changed_fields.description == raw input string (BC-3.4.013).
-    let edit_desc_json: Value = serde_json::from_slice(&edit_desc_output.stdout)
-        .expect("issue edit (description) stdout must be valid JSON");
+    // Stderr of this invocation has NO marker — do not assert on it.
+    let edit_desc_json: Value = serde_json::from_slice(&edit_desc_json_output.stdout)
+        .expect("issue edit (description, JSON mode) stdout must be valid JSON");
     assert_eq!(
         edit_desc_json
             .get("changed_fields")
@@ -1653,12 +1796,35 @@ fn test_e2e_write_flow_create_edit_comment_worklog_close() {
          got: {edit_desc_json}"
     );
 
-    // Human channel (stderr): must contain the '(updated)' marker (BC-3.4.012; DI-E2E-F2-1).
-    let edit_desc_stderr = String::from_utf8_lossy(&edit_desc_output.stderr);
+    // Invocation 2b-ii: table mode — verify the (updated) marker on stderr (BC-3.4.012).
+    // Use a distinct description value so the edit actually changes the field.
+    let desc_text2 = format!("{desc_text} (v2)");
+    let edit_desc_table_output = h
+        .cmd()
+        .args([
+            "issue",
+            "edit",
+            &key,
+            "--description",
+            &desc_text2,
+            // No --output json: table mode emits the (updated) marker to stderr.
+        ])
+        .output()
+        .expect("failed to spawn jr for issue edit (description, table mode)");
+
     assert!(
-        edit_desc_stderr.contains("(updated)"),
+        edit_desc_table_output.status.success(),
+        "issue edit (description, table mode) failed for {key}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&edit_desc_table_output.stdout),
+        String::from_utf8_lossy(&edit_desc_table_output.stderr)
+    );
+
+    // Human channel (stderr): must contain the '(updated)' marker (BC-3.4.012; DI-E2E-F2-1).
+    let edit_desc_table_stderr = String::from_utf8_lossy(&edit_desc_table_output.stderr);
+    assert!(
+        edit_desc_table_stderr.contains("(updated)"),
         "human channel (stderr) must contain '(updated)' marker for description edit \
-         (BC-3.4.012); stderr: {edit_desc_stderr:?}"
+         (BC-3.4.012); stderr: {edit_desc_table_stderr:?}"
     );
 
     // -------------------------------------------------------------------------
@@ -2243,61 +2409,114 @@ fn test_poll_schedule_one_attempt_returns_empty() {
     assert!(schedule.is_empty(), "1 attempt needs no sleep delays");
 }
 
-// --- AC-001 / AC-002: poll_jql mode decision logic ---
-// The poll_jql function makes live network calls, so we test the pure sub-logic
-// via poll_schedule (the decision tree itself is covered by the mode-doc tests
-// below that verify the SkipOnEmpty / FailOnShort contract descriptions).
+// --- AC-001 / AC-002: poll_outcome pure decision logic (table-driven) ---
+// poll_jql makes live network calls; the decision logic is extracted into
+// poll_outcome so it can be exercised without spawning any processes.
 
-/// The SkipOnEmpty mode returns None on budget exhaustion with 0 results.
-/// Verified by the poll_schedule shape (budget computation is pure).
+/// Table-driven unit tests for `poll_outcome` (S-E2E-3 BUG-3).
+///
+/// Each case specifies (last_count, predicate_met, budget_exhausted, mode)
+/// and the expected `PollDecision`. These tests are always-run (#[test], NOT
+/// #[ignore]) and must never be gated behind JR_RUN_E2E.
 #[test]
-fn test_poll_jql_skip_on_empty_returns_none_on_zero_results() {
-    // The SkipOnEmpty mode contract: if last_count == 0 after full budget,
-    // we return None. We verify this by confirming PollJqlMode::SkipOnEmpty
-    // is the correct discriminant and that the key string matches expectations.
-    let mode = PollJqlMode::SkipOnEmpty;
-    match mode {
-        PollJqlMode::SkipOnEmpty => {} // correct
-        PollJqlMode::FailOnShort(_) => panic!("wrong mode variant"),
-    }
-    // Budget schedule for 5 attempts, 250 ms initial:
-    let schedule = poll_schedule(5, 250);
+fn test_poll_outcome_zero_results_not_exhausted_retries() {
+    // 0 results, budget not exhausted → Retry regardless of mode.
     assert_eq!(
-        schedule.len(),
-        4,
-        "SkipOnEmpty budget: 5 attempts → 4 delays"
+        poll_outcome(0, false, false, PollJqlMode::SkipOnEmpty),
+        PollDecision::Retry,
+        "0 results + not exhausted + SkipOnEmpty → Retry"
+    );
+    assert_eq!(
+        poll_outcome(0, false, false, PollJqlMode::FailOnShort(3)),
+        PollDecision::Retry,
+        "0 results + not exhausted + FailOnShort → Retry"
     );
 }
 
-/// The FailOnShort mode panics when last_count is in 1..min.
-/// Verified indirectly: the enum carries the min value and the schedule is
-/// computed by poll_schedule. The actual panic path is covered by the
-/// live-test harness when run with JR_RUN_E2E=1.
 #[test]
-fn test_poll_jql_fail_on_short_panics_on_partial_results() {
-    // Verify the FailOnShort variant carries a min value accessible at runtime.
-    let mode = PollJqlMode::FailOnShort(3);
-    match mode {
-        PollJqlMode::FailOnShort(min) => {
-            assert_eq!(min, 3, "FailOnShort must preserve the min value");
-        }
-        PollJqlMode::SkipOnEmpty => panic!("wrong mode variant"),
-    }
+fn test_poll_outcome_zero_results_exhausted_skip_none() {
+    // 0 results, budget exhausted → SkipNone regardless of mode.
+    assert_eq!(
+        poll_outcome(0, false, true, PollJqlMode::SkipOnEmpty),
+        PollDecision::SkipNone,
+        "0 results + exhausted + SkipOnEmpty → SkipNone"
+    );
+    assert_eq!(
+        poll_outcome(0, false, true, PollJqlMode::FailOnShort(1)),
+        PollDecision::SkipNone,
+        "0 results + exhausted + FailOnShort → SkipNone (not FailPanic; pure lag)"
+    );
 }
 
-/// FailOnShort with 0 results behaves identically to SkipOnEmpty (clean skip).
 #[test]
-fn test_poll_jql_fail_on_short_skips_on_zero() {
-    // When last_count == 0 at budget exhaustion, FailOnShort must return None
-    // (not panic). This is verified structurally: the code branches on last_count == 0
-    // before the FailOnShort(min) panic path. Confirm the enum discriminant exists.
-    let mode = PollJqlMode::FailOnShort(1);
-    match mode {
-        PollJqlMode::FailOnShort(min) => {
-            assert_eq!(min, 1);
-        }
-        PollJqlMode::SkipOnEmpty => panic!("wrong variant"),
-    }
+fn test_poll_outcome_predicate_met_returns_regardless_of_mode_or_budget() {
+    // Predicate satisfied → Return regardless of mode or budget.
+    assert_eq!(
+        poll_outcome(5, true, false, PollJqlMode::SkipOnEmpty),
+        PollDecision::Return,
+        "predicate met + not exhausted + SkipOnEmpty → Return"
+    );
+    assert_eq!(
+        poll_outcome(5, true, true, PollJqlMode::SkipOnEmpty),
+        PollDecision::Return,
+        "predicate met + exhausted + SkipOnEmpty → Return"
+    );
+    assert_eq!(
+        poll_outcome(2, true, false, PollJqlMode::FailOnShort(3)),
+        PollDecision::Return,
+        "predicate met + not exhausted + FailOnShort → Return"
+    );
+    assert_eq!(
+        poll_outcome(2, true, true, PollJqlMode::FailOnShort(3)),
+        PollDecision::Return,
+        "predicate met + exhausted + FailOnShort → Return"
+    );
+}
+
+#[test]
+fn test_poll_outcome_nonzero_skip_on_empty_returns_immediately() {
+    // Non-zero + predicate not met + SkipOnEmpty → Return (never masks positive result).
+    assert_eq!(
+        poll_outcome(2, false, false, PollJqlMode::SkipOnEmpty),
+        PollDecision::Return,
+        "non-zero + predicate not met + not exhausted + SkipOnEmpty → Return"
+    );
+    assert_eq!(
+        poll_outcome(2, false, true, PollJqlMode::SkipOnEmpty),
+        PollDecision::Return,
+        "non-zero + predicate not met + exhausted + SkipOnEmpty → Return"
+    );
+}
+
+#[test]
+fn test_poll_outcome_fail_on_short_retries_nonzero_under_min_before_exhaustion() {
+    // Non-zero + predicate not met + FailOnShort + NOT exhausted → Retry
+    // (absorbs index lag toward target count).
+    assert_eq!(
+        poll_outcome(2, false, false, PollJqlMode::FailOnShort(3)),
+        PollDecision::Retry,
+        "2 results + FailOnShort(3) + not exhausted → Retry"
+    );
+    assert_eq!(
+        poll_outcome(1, false, false, PollJqlMode::FailOnShort(5)),
+        PollDecision::Retry,
+        "1 result + FailOnShort(5) + not exhausted → Retry"
+    );
+}
+
+#[test]
+fn test_poll_outcome_fail_on_short_panics_at_budget_exhaustion_with_nonzero() {
+    // Non-zero + predicate not met + FailOnShort + exhausted → FailPanic (REGRESSION).
+    assert_eq!(
+        poll_outcome(2, false, true, PollJqlMode::FailOnShort(3)),
+        PollDecision::FailPanic,
+        "2 results + FailOnShort(3) + exhausted → FailPanic"
+    );
+    assert_eq!(
+        poll_outcome(1, false, true, PollJqlMode::FailOnShort(5)),
+        PollDecision::FailPanic,
+        "1 result + FailOnShort(5) + exhausted → FailPanic"
+    );
 }
 
 // --- AC-003: shape matcher unit tests ---
