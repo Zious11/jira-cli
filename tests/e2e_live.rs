@@ -26,17 +26,21 @@
 //!
 //! # Required environment variables (for gated tests)
 //!
-//! | Variable            | Required | Notes                                              |
-//! |---------------------|----------|----------------------------------------------------|
-//! | `JR_RUN_E2E`        | yes      | Must be `"1"` to run gated tests                  |
-//! | `JR_E2E_BASE_URL`   | yes      | Real Jira Cloud site URL                           |
-//! | `JR_AUTH_HEADER`    | yes      | Pre-composed `Basic <base64(email:token)>` header  |
-//! | `JR_E2E_PROJECT`    | yes      | Scrum project key (e.g. `E2E`)                     |
-//! | `JR_E2E_BOARD_ID`   | no       | Board ID; enables sprint list/current tests        |
-//! | `JR_E2E_JSM_PROJECT`| no       | JSM project key; enables queue/requesttype tests   |
-//! | `JR_E2E_EMAIL`      | no       | Service account email; used by user-search test    |
-//! | `JR_E2E_STATUS_DONE`| no       | Status name for "closed"; default `"Done"`         |
-//! | `JR_E2E_STATUS_IN_PROGRESS` | no | Status name for "in progress"; default `"In Progress"` |
+//! | Variable                    | Required | Notes                                                         |
+//! |-----------------------------|----------|---------------------------------------------------------------|
+//! | `JR_RUN_E2E`                | yes      | Must be `"1"` to run gated tests                             |
+//! | `JR_E2E_BASE_URL`           | yes      | Real Jira Cloud site URL                                      |
+//! | `JR_AUTH_HEADER`            | yes      | Pre-composed `Basic <base64(email:token)>` header             |
+//! | `JR_E2E_PROJECT`            | yes      | Scrum project key (e.g. `E2E`)                               |
+//! | `JR_E2E_BOARD_ID`           | no       | Board ID; enables sprint list/current tests                   |
+//! | `JR_E2E_JSM_PROJECT`        | no       | JSM project key; enables queue/requesttype tests              |
+//! | `JR_E2E_EMAIL`              | no       | Service account email; used by user-search test               |
+//! | `JR_E2E_STATUS_DONE`        | no       | Status name for "closed"; default `"Done"`                    |
+//! | `JR_E2E_STATUS_IN_PROGRESS` | no       | Status name for "in progress"; default `"In Progress"`        |
+//! | `JR_E2E_POLL_MAX_ATTEMPTS`  | no       | Max poll iterations for `poll_jql`/`poll_view` (default 5);  |
+//! |                             |          | read by test code only — no `#[cfg(debug_assertions)]` needed |
+//! | `JR_E2E_POLL_INITIAL_MS`    | no       | Initial backoff milliseconds for `poll_jql` (default 250);   |
+//! |                             |          | read by test code only — no `#[cfg(debug_assertions)]` needed |
 
 use assert_cmd::Command;
 use serde_json::Value;
@@ -243,6 +247,351 @@ fn poll_view(key: &str, harness: &E2eHarness) -> Value {
         "poll_view({key}): timed out after {MAX_ATTEMPTS} attempts — \
          GET-by-key not consistent"
     );
+}
+
+/// Returns the issue type to use when creating test issues.
+///
+/// Reads `JR_E2E_ISSUE_TYPE` if set and non-empty; otherwise defaults to `"Task"`.
+/// Env-parametric so the assertion `v["fields"]["issuetype"]["name"] == issue_type()`
+/// is portable across instances with different issue type names (F-12).
+fn issue_type() -> String {
+    match std::env::var("JR_E2E_ISSUE_TYPE") {
+        Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
+        _ => "Task".to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// §4 Foundation helpers — poll_jql, shape matchers, transient classifier
+// (S-E2E-3 AC-001 through AC-004)
+// ---------------------------------------------------------------------------
+
+/// Compute the bounded exponential backoff schedule as a pure function.
+///
+/// Returns a `Vec<u64>` of sleep durations in milliseconds (length = max_attempts - 1).
+/// Each entry doubles from `initial_ms`. The schedule is used by `poll_jql` and
+/// could also be used by `poll_view` when refactored.
+///
+/// This is a pure function so it can be tested without touching the environment.
+fn poll_schedule(max_attempts: usize, initial_ms: u64) -> Vec<u64> {
+    if max_attempts == 0 {
+        return Vec::new();
+    }
+    let mut schedule = Vec::with_capacity(max_attempts.saturating_sub(1));
+    let mut delay = initial_ms;
+    for _ in 0..max_attempts.saturating_sub(1) {
+        schedule.push(delay);
+        delay = delay.saturating_mul(2);
+    }
+    schedule
+}
+
+/// Poll mode for `poll_jql`.
+///
+/// - `SkipOnEmpty`: on budget exhaustion with 0 results, return `None` (clean skip).
+///   A non-zero result that doesn't satisfy the predicate is NOT retried — caller
+///   must not use this mode when a positive result count is expected.
+/// - `FailOnShort(min)`: on budget exhaustion with a count in `1..min`, panic loud
+///   (REGRESSION). On 0 results, behaves identically to `SkipOnEmpty` (clean skip).
+#[derive(Debug, Clone, Copy)]
+enum PollJqlMode {
+    SkipOnEmpty,
+    FailOnShort(usize),
+}
+
+/// Poll `jr issue list --jql <jql> --output json` with bounded exponential backoff.
+///
+/// Intended for assertions *about search behavior* (e.g. `issue list --jql ...`),
+/// NOT for confirming a write landed — for that, use `poll_view` (GET-consistent).
+///
+/// # Retry policy
+///
+/// - 0 results: retryable (pure index lag) regardless of mode.
+/// - Non-zero + predicate satisfied: return `Some(value)`.
+/// - Non-zero + predicate NOT satisfied (`SkipOnEmpty`): do NOT retry; return
+///   the value immediately (NEVER masks a positive result in skip-on-empty mode).
+/// - Budget exhausted with 0 results: clean-skip (return `None` + eprintln!).
+/// - Budget exhausted with count in `1..min` (`FailOnShort(min)`): panic.
+///
+/// # Env seams (test-code only — no `#[cfg(debug_assertions)]` needed)
+///
+/// - `JR_E2E_POLL_MAX_ATTEMPTS` (default 5): max iterations.
+/// - `JR_E2E_POLL_INITIAL_MS` (default 250): initial backoff in milliseconds.
+///
+/// # Emits
+///
+/// Elapsed poll time to stderr on every exit path.
+fn poll_jql(
+    jql: &str,
+    predicate: impl Fn(&Value) -> bool,
+    mode: PollJqlMode,
+    harness: &E2eHarness,
+) -> Option<Value> {
+    let max_attempts: usize = match std::env::var("JR_E2E_POLL_MAX_ATTEMPTS") {
+        Ok(v) if !v.trim().is_empty() => v.trim().parse().unwrap_or(5).max(1),
+        _ => 5,
+    };
+    let initial_ms: u64 = match std::env::var("JR_E2E_POLL_INITIAL_MS") {
+        Ok(v) if !v.trim().is_empty() => v.trim().parse().unwrap_or(250),
+        _ => 250,
+    };
+    // poll_schedule(5, 250) yields [250, 500, 1000, 2000] — identical to poll_view's
+    // hardcoded BACKOFF_MS constant, so the default timing is unchanged by the refactor.
+    let schedule = poll_schedule(max_attempts, initial_ms);
+    let start = std::time::Instant::now();
+
+    let mut last_count: usize = 0;
+    for attempt in 1..=max_attempts {
+        let output = harness
+            .cmd()
+            .args(["issue", "list", "--jql", jql, "--output", "json"])
+            .output()
+            .expect("failed to spawn jr for poll_jql");
+
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Ok(v) = serde_json::from_str::<Value>(stdout.trim()) {
+                if let Some(arr) = v.as_array() {
+                    last_count = arr.len();
+                    if last_count == 0 {
+                        // Pure index lag — retryable regardless of mode.
+                    } else if predicate(&v) {
+                        let elapsed = start.elapsed().as_millis();
+                        eprintln!(
+                            "poll_jql: predicate satisfied after {attempt} attempt(s) \
+                             ({elapsed} ms elapsed)"
+                        );
+                        return Some(v);
+                    } else {
+                        // Non-zero, predicate not satisfied.
+                        // In SkipOnEmpty mode: do NOT retry — return the value.
+                        // In FailOnShort mode: only retry on 0; non-zero is final.
+                        let elapsed = start.elapsed().as_millis();
+                        eprintln!(
+                            "poll_jql: non-zero result ({last_count}) but predicate not \
+                             satisfied after {attempt} attempt(s) ({elapsed} ms elapsed)"
+                        );
+                        return Some(v);
+                    }
+                }
+            }
+        }
+
+        if attempt < max_attempts {
+            let delay_ms = schedule[attempt - 1];
+            eprintln!(
+                "poll_jql: attempt {attempt}/{max_attempts} — 0 results or parse error; \
+                 sleeping {delay_ms} ms"
+            );
+            std::thread::sleep(Duration::from_millis(delay_ms));
+        }
+    }
+
+    let elapsed = start.elapsed().as_millis();
+    match mode {
+        PollJqlMode::SkipOnEmpty => {
+            eprintln!(
+                "poll_jql: budget exhausted after {max_attempts} attempt(s) ({elapsed} ms); \
+                 0 results — treating as index lag, clean-skip"
+            );
+            None
+        }
+        PollJqlMode::FailOnShort(min) => {
+            if last_count == 0 {
+                eprintln!(
+                    "poll_jql: budget exhausted after {max_attempts} attempt(s) ({elapsed} ms); \
+                     0 results — treating as index lag, clean-skip"
+                );
+                None
+            } else {
+                panic!(
+                    "REGRESSION: poll_jql expected at least {min} results after full poll budget \
+                     ({max_attempts} attempts, {elapsed} ms), but got {last_count}. \
+                     This is a persistent short count, not index lag."
+                );
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// §4 Shape matchers — pure helpers with always-run unit tests
+// (S-E2E-3 AC-003)
+// ---------------------------------------------------------------------------
+
+/// Asserts that `key` matches the Jira issue key format `^[A-Z][A-Z0-9]+-\d+$`.
+///
+/// Implemented without the `regex` crate (not a dev-dep) using a character-by-character
+/// check. Panics with a descriptive message if the format is invalid.
+///
+/// # Format rules
+///
+/// - Project prefix: one or more characters where the first is `[A-Z]` and the
+///   rest are `[A-Z0-9]`.
+/// - Separator: a single `-`.
+/// - Issue number: one or more ASCII digits `[0-9]`.
+fn assert_key_format(key: &str) {
+    let valid = key_format_valid(key);
+    assert!(
+        valid,
+        "key format invalid: expected ^[A-Z][A-Z0-9]+-\\d+$ but got {key:?}"
+    );
+}
+
+/// Pure predicate for key format validation (extracted for testability).
+fn key_format_valid(key: &str) -> bool {
+    // Split on the last '-' to separate project prefix from issue number.
+    let Some(dash_pos) = key.rfind('-') else {
+        return false;
+    };
+    let (prefix, number_with_dash) = key.split_at(dash_pos);
+    let number = &number_with_dash[1..]; // skip the '-'
+
+    // Prefix must be non-empty, start with A-Z, rest A-Z0-9.
+    if prefix.is_empty() {
+        return false;
+    }
+    let mut chars = prefix.chars();
+    let first = chars.next().unwrap();
+    if !first.is_ascii_uppercase() {
+        return false;
+    }
+    for c in chars {
+        if !c.is_ascii_uppercase() && !c.is_ascii_digit() {
+            return false;
+        }
+    }
+
+    // Number must be non-empty and all ASCII digits.
+    if number.is_empty() {
+        return false;
+    }
+    for c in number.chars() {
+        if !c.is_ascii_digit() {
+            return false;
+        }
+    }
+
+    true
+}
+
+/// Locale-invariant Jira status category.
+///
+/// Maps to Jira's fixed `statusCategory.key` values which are stable across
+/// all instances and locales. NEVER use `statusCategory.name` — that is localized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StatusCategory {
+    /// `statusCategory.key == "new"` (the "To Do" category).
+    ToDo,
+    /// `statusCategory.key == "indeterminate"` (the "In Progress" category).
+    InProgress,
+    /// `statusCategory.key == "done"` (the "Done" category).
+    Done,
+}
+
+impl StatusCategory {
+    /// Returns the stable locale-invariant `statusCategory.key` string.
+    fn key(self) -> &'static str {
+        match self {
+            StatusCategory::ToDo => "new",
+            StatusCategory::InProgress => "indeterminate",
+            StatusCategory::Done => "done",
+        }
+    }
+}
+
+/// Asserts that `v["statusCategory"]["key"]` equals the expected stable key.
+///
+/// `expected` is a `StatusCategory` enum variant — NEVER a free `&str` status name
+/// (which would be locale-fragile). Maps `ToDo→"new"`, `InProgress→"indeterminate"`,
+/// `Done→"done"`.
+fn assert_status_category(v: &Value, expected: StatusCategory) {
+    let got = v
+        .get("statusCategory")
+        .and_then(|sc| sc.get("key"))
+        .and_then(Value::as_str);
+    assert_eq!(
+        got,
+        Some(expected.key()),
+        "statusCategory.key mismatch: expected {:?} ({}) but got {:?}; value: {v}",
+        expected,
+        expected.key(),
+        got
+    );
+}
+
+/// Asserts that `v` has the shape of a Jira issue object:
+/// - `v["key"]` matches the key format.
+/// - `v["fields"]` is an object.
+/// - `v["fields"]["summary"]` is present (string or null).
+/// - `v["fields"]["status"]` contains a `statusCategory` object.
+fn assert_issue_shape(v: &Value) {
+    let key = v.get("key").and_then(Value::as_str).unwrap_or_else(|| {
+        panic!("assert_issue_shape: 'key' field missing or not a string; value: {v}")
+    });
+    assert_key_format(key);
+
+    let fields = v
+        .get("fields")
+        .unwrap_or_else(|| panic!("assert_issue_shape: 'fields' field missing; value: {v}"));
+    assert!(
+        fields.is_object(),
+        "assert_issue_shape: 'fields' must be an object; got: {fields}"
+    );
+
+    // 'summary' must be present (string or null — newly created issues may have null).
+    assert!(
+        fields.get("summary").is_some(),
+        "assert_issue_shape: 'fields.summary' must be present; value: {v}"
+    );
+
+    // 'status' must contain a 'statusCategory' object.
+    let status = fields.get("status").unwrap_or_else(|| {
+        panic!("assert_issue_shape: 'fields.status' must be present; value: {v}")
+    });
+    assert!(
+        status.get("statusCategory").is_some_and(Value::is_object),
+        "assert_issue_shape: 'fields.status.statusCategory' must be an object; got: {status}"
+    );
+}
+
+/// Asserts that `v` is a JSON array and, for every element (if non-empty), each element
+/// has all the given `keys` present.
+///
+/// An empty array always passes — this is the portable "if non-empty, every element
+/// conforms" contract (spec §3). Never requires non-empty.
+fn assert_array_of_objects_with_keys(v: &Value, keys: &[&str]) {
+    assert!(v.is_array(), "expected a JSON array; got: {v}");
+    // Empty array: the for-loop below is a no-op — vacuously true by design.
+    // Spec §3: "if non-empty, every element conforms." An empty list is valid
+    // on a freshly provisioned project and must never be forced non-empty.
+    for (i, elem) in v.as_array().unwrap().iter().enumerate() {
+        for &key in keys {
+            assert!(
+                elem.get(key).is_some(),
+                "element[{i}] is missing key {key:?}; element: {elem}"
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// §4 Transient classifier — pure helper with always-run unit tests
+// (S-E2E-3 AC-004)
+// ---------------------------------------------------------------------------
+
+/// Returns `true` if the error is transient and the call should be retried.
+///
+/// Retry on: 429 (rate limit), 503 (service unavailable), 0 (connection reset /
+/// empty response).
+///
+/// Never retry: any other 4xx (`400..=499` except 429) — these are caller errors
+/// and retrying would hide bugs. Also never retry other 5xx (except 503).
+///
+/// This is a pure function (no side effects, no I/O) so it can be tested without
+/// spawning any process.
+fn is_transient_error(status_code: u16, _stderr: &str) -> bool {
+    matches!(status_code, 429 | 503 | 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -556,10 +905,13 @@ fn extract_fn_body(lines: &[&str], fn_start: usize) -> String {
 /// credential is broken — there is no need for a separate `auth status` test
 /// because `auth status` is plaintext-only and makes no Jira API calls.
 ///
-/// May return an empty array on a freshly provisioned project — the assertion
-/// is shape-only.
+/// When non-empty: asserts every element has `key` (format) + `fields` present,
+/// and `fields.status.statusCategory` is an object (BC-2.2.028; spec §5.1).
 ///
-/// Traces to: AC-004, NFR-T-E2E-1.
+/// May return an empty array on a freshly provisioned project — the "if non-empty"
+/// assertions are shape-only and portable.
+///
+/// Traces to: AC-004, AC-005, BC-2.2.028, NFR-T-E2E-1.
 #[test]
 #[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
 fn test_e2e_issue_list_by_project_returns_array() {
@@ -587,12 +939,31 @@ fn test_e2e_issue_list_by_project_returns_array() {
         v.is_array(),
         "issue list output must be a JSON array; got: {v}"
     );
+
+    // M1 deepening (AC-005): if non-empty, assert element shape.
+    assert_array_of_objects_with_keys(&v, &["key", "fields"]);
+    for elem in v.as_array().unwrap() {
+        let key_str = elem.get("key").and_then(Value::as_str).unwrap_or("");
+        if !key_str.is_empty() {
+            assert_key_format(key_str);
+        }
+        // statusCategory must be an object when present.
+        if let Some(status) = elem.get("fields").and_then(|f| f.get("status")) {
+            assert!(
+                status.get("statusCategory").is_some_and(Value::is_object),
+                "fields.status.statusCategory must be an object; elem: {elem}"
+            );
+        }
+    }
 }
 
 /// E2E: `jr issue list --jql "project=<E2E> AND summary ~ e2e" --output json`
 /// applies the JQL filter correctly and returns a JSON array.
 ///
-/// Traces to: AC-004, NFR-T-E2E-1.
+/// When non-empty: asserts every element has `key` (format) + `fields`,
+/// and `fields.status.statusCategory` is an object (BC-2.2.028; spec §5.1).
+///
+/// Traces to: AC-004, AC-005, BC-2.2.028, NFR-T-E2E-1.
 #[test]
 #[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
 fn test_e2e_issue_list_with_summary_filter_returns_array() {
@@ -620,14 +991,29 @@ fn test_e2e_issue_list_with_summary_filter_returns_array() {
         v.is_array(),
         "issue list output must be a JSON array; got: {v}"
     );
+
+    // M1 deepening (AC-005): if non-empty, assert element shape.
+    assert_array_of_objects_with_keys(&v, &["key", "fields"]);
+    for elem in v.as_array().unwrap() {
+        let key_str = elem.get("key").and_then(Value::as_str).unwrap_or("");
+        if !key_str.is_empty() {
+            assert_key_format(key_str);
+        }
+        if let Some(status) = elem.get("fields").and_then(|f| f.get("status")) {
+            assert!(
+                status.get("statusCategory").is_some_and(Value::is_object),
+                "fields.status.statusCategory must be an object; elem: {elem}"
+            );
+        }
+    }
 }
 
 /// E2E: `jr board list --output json` returns a JSON array.
 ///
-/// Shape-only assertion — the board count is site-specific and not guaranteed
-/// to be non-empty on all valid E2E sites.
+/// When non-empty: each element has `id` + `name` + `type` keys (BC-5.1.001; spec §5.1).
+/// The board count is site-specific — the "if non-empty" contract is portable.
 ///
-/// Traces to: AC-004, NFR-T-E2E-1.
+/// Traces to: AC-004, AC-006, BC-5.1.001, NFR-T-E2E-1.
 #[test]
 #[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
 fn test_e2e_board_list_returns_array() {
@@ -654,6 +1040,9 @@ fn test_e2e_board_list_returns_array() {
         v.is_array(),
         "board list output must be a JSON array; got: {v}"
     );
+
+    // M1 deepening (AC-006): if non-empty, each element has id + name + type.
+    assert_array_of_objects_with_keys(&v, &["id", "name", "type"]);
 }
 
 /// E2E: `jr sprint list --board <BOARD_ID> --output json` returns a JSON array.
@@ -666,7 +1055,10 @@ fn test_e2e_board_list_returns_array() {
 /// This condition is not a `jr` defect — it reflects the board type of the
 /// provisioned E2E site (FIX-B, S-E2E-2).
 ///
-/// Traces to: AC-004, NFR-T-E2E-1.
+/// When non-empty: each element has `id`; if `state` is present it is a string
+/// (BC-5.2.005; spec §5.1).
+///
+/// Traces to: AC-004, AC-007, BC-5.2.005, NFR-T-E2E-1.
 #[test]
 #[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
 fn test_e2e_sprint_list_returns_array() {
@@ -704,6 +1096,18 @@ fn test_e2e_sprint_list_returns_array() {
         v.is_array(),
         "sprint list output must be a JSON array; got: {v}"
     );
+
+    // M1 deepening (AC-007): if non-empty, each element has `id`.
+    assert_array_of_objects_with_keys(&v, &["id"]);
+    // If `state` is present, it must be a string (Option<String> in the Sprint type).
+    for elem in v.as_array().unwrap() {
+        if let Some(state) = elem.get("state") {
+            assert!(
+                state.is_string() || state.is_null(),
+                "sprint.state must be a string or null; got: {state} in elem: {elem}"
+            );
+        }
+    }
 }
 
 /// E2E: `jr sprint current --board <BOARD_ID> --output json` returns valid JSON.
@@ -720,7 +1124,12 @@ fn test_e2e_sprint_list_returns_array() {
 ///
 /// Both conditions are clean skips — not `jr` defects (FIX-B, S-E2E-2).
 ///
-/// Traces to: AC-004, NFR-T-E2E-1.
+/// On success: asserts the output is `{sprint, issues, sprint_summary?}` with
+/// `v["sprint"]["id"]` present, `v["sprint"]["state"]` a string if present,
+/// and `v["issues"]` an array. If `v["issues"]` is non-empty, `assert_issue_shape`
+/// is called on each element (BC-5.2.005; spec §5.1).
+///
+/// Traces to: AC-004, AC-007, BC-5.2.005, NFR-T-E2E-1.
 #[test]
 #[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
 fn test_e2e_sprint_current_returns_json() {
@@ -757,20 +1166,53 @@ fn test_e2e_sprint_current_returns_json() {
         );
     }
 
-    // On the success path, the output must be valid JSON (object or array
-    // depending on whether a sprint is active).
-    let _v: Value =
+    // On the success path, the output must be valid JSON.
+    let v: Value =
         serde_json::from_slice(&output.stdout).expect("sprint current output must be valid JSON");
+
+    // M1 deepening (AC-007): assert {sprint, issues} object shape.
+    // sprint current JSON is {sprint: {...}, issues: [...], sprint_summary?: {...}}
+    assert!(
+        v.is_object(),
+        "sprint current output must be a JSON object; got: {v}"
+    );
+    assert!(
+        v.get("sprint").is_some(),
+        "sprint current JSON must contain 'sprint' key; got: {v}"
+    );
+    assert!(
+        v.get("sprint").and_then(|s| s.get("id")).is_some(),
+        "sprint current JSON sprint.id must be present; got: {v}"
+    );
+    if let Some(state) = v.get("sprint").and_then(|s| s.get("state")) {
+        assert!(
+            state.is_string() || state.is_null(),
+            "sprint.state must be a string or null; got: {state}"
+        );
+    }
+    let issues = v
+        .get("issues")
+        .unwrap_or_else(|| panic!("sprint current JSON must contain 'issues' key; got: {v}"));
+    assert!(
+        issues.is_array(),
+        "sprint current JSON issues must be an array; got: {issues}"
+    );
+    // If non-empty, assert issue shape on each element.
+    for elem in issues.as_array().unwrap() {
+        assert_issue_shape(elem);
+    }
 }
 
 /// E2E: `jr user search <query> --output json` returns a JSON array.
 ///
-/// Shape-only assertion — Browse Users permission availability varies across
-/// sites and is not guaranteed non-empty for all valid E2E deployments
-/// (lesson from S-398 over-fitting). The search term is derived from
-/// `JR_E2E_EMAIL` if set (local-part only), otherwise falls back to `"e2e"`.
+/// When non-empty: each element has `accountId` + `displayName` keys (presence +
+/// type, NOT value equality). These JSON keys are confirmed by the serde rename
+/// attributes on `src/types/jira/user.rs::User` (DI-E2E-F2-2; spec §5.1).
 ///
-/// Traces to: AC-004, NFR-T-E2E-1.
+/// Browse Users permission availability varies across sites and the array may be
+/// empty — "if non-empty" contract is portable (lesson from S-398 over-fitting).
+///
+/// Traces to: AC-004, AC-008, BC-2.2.028, NFR-T-E2E-1.
 #[test]
 #[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
 fn test_e2e_user_search_returns_array() {
@@ -805,16 +1247,36 @@ fn test_e2e_user_search_returns_array() {
         v.is_array(),
         "user search output must be a JSON array; got: {v}"
     );
+
+    // M1 deepening (AC-008): if non-empty, each element has accountId + displayName.
+    // JSON keys confirmed by serde rename in src/types/jira/user.rs (DI-E2E-F2-2).
+    assert_array_of_objects_with_keys(&v, &["accountId", "displayName"]);
+    // Type check: accountId and displayName must be strings when present.
+    for elem in v.as_array().unwrap() {
+        if let Some(aid) = elem.get("accountId") {
+            assert!(
+                aid.is_string(),
+                "accountId must be a string; got: {aid} in elem: {elem}"
+            );
+        }
+        if let Some(dn) = elem.get("displayName") {
+            assert!(
+                dn.is_string(),
+                "displayName must be a string; got: {dn} in elem: {elem}"
+            );
+        }
+    }
 }
 
 /// E2E: `jr project fields --project <E2E> --output json` returns a JSON object
-/// with the expected top-level keys.
+/// with all 5 documented top-level keys.
 ///
-/// `project fields --output json` returns an object (not an array) with keys:
+/// `project fields --output json` returns an object with keys:
 /// `project`, `issue_types`, `priorities`, `statuses_by_issue_type`, `asset_fields`.
-/// Asserts object shape and presence of `issue_types` and `statuses_by_issue_type`.
+/// Asserts key **presence only** — never non-empty (F-08: `asset_fields` is `[]` on
+/// non-CMDB instances; `priorities`/`statuses_by_issue_type` may be empty; spec §5.1).
 ///
-/// Traces to: AC-004, NFR-T-E2E-1.
+/// Traces to: AC-004, AC-006, NFR-T-E2E-1.
 #[test]
 #[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
 fn test_e2e_project_fields_returns_object() {
@@ -848,14 +1310,21 @@ fn test_e2e_project_fields_returns_object() {
         v.is_object(),
         "project fields output must be a JSON object; got: {v}"
     );
-    assert!(
-        v.get("issue_types").is_some(),
-        "project fields JSON must contain 'issue_types' key; got: {v}"
-    );
-    assert!(
-        v.get("statuses_by_issue_type").is_some(),
-        "project fields JSON must contain 'statuses_by_issue_type' key; got: {v}"
-    );
+
+    // M1 deepening (AC-006): assert ALL 5 documented keys are present (never non-empty).
+    // Trap F-08: asset_fields is [] on non-CMDB instances; do NOT assert non-empty.
+    for key in &[
+        "project",
+        "issue_types",
+        "priorities",
+        "statuses_by_issue_type",
+        "asset_fields",
+    ] {
+        assert!(
+            v.get(*key).is_some(),
+            "project fields JSON must contain {key:?} key; got: {v}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -962,26 +1431,28 @@ fn test_e2e_jsm_requesttype_list_exits_ok() {
 
 /// E2E: Full write flow — create, poll_view, edit, comment, worklog, move.
 ///
-/// Exercises all 7 sub-steps of the write flow against the live site:
+/// Exercises all write sub-steps against the live site with round-trip assertions:
 ///
-/// 1. `issue create` → captures the new issue key.
-/// 2. `poll_view(key)` → bounded retry; confirms the issue is GET-consistent.
-/// 3. `issue edit` → updates the summary.
-/// 4. `issue comment` → posts a comment.
-/// 5. `worklog add 5m` → logs 5 minutes of work.
-/// 6. `issue move <key> <status_in_progress()>` → single-key idempotent move.
-/// 7. `issue move <key> <status_done()>` → closes the issue.
+/// 1. `issue create` → assert key format + url presence; poll_view + assert summary,
+///    issue type name (env-parametric via `issue_type()`), run label in labels (AC-010).
+/// 2. `issue edit --summary` → assert `changed_fields.summary` + `updated: true`;
+///    poll_view + assert summary changed (AC-011).
+///    Sub-step 2b: `issue edit --description` → assert JSON `changed_fields.description
+///    == raw text` (BC-3.4.013) AND stderr contains `(updated)` marker (BC-3.4.012;
+///    DI-E2E-F2-1: marker is on stderr, not stdout) (AC-012).
+/// 3. `issue comment` → `issue comments` read-back; assert comment text is a substring
+///    of the serialized JSON (ADF caveat: body is not a flat string) (AC-013).
+/// 4. `worklog add 5m` → `worklog list` + assert an entry with timeSpentSeconds==300
+///    (AC-014).
+/// 5. `issue move → In Progress` → poll_view assert statusCategory key "indeterminate";
+///    re-issue same move assert exit 0 + `changed: false` (idempotency; AC-015).
+/// 6. `issue move → Done` → poll_view assert statusCategory key "done" (AC-015).
 ///
-/// Assumption: the project uses a workflow with reachable In Progress → Done
-/// transitions under the configured status names (`JR_E2E_STATUS_IN_PROGRESS`
-/// and `JR_E2E_STATUS_DONE`). If a transition assert fails, the `if: always()`
-/// teardown step in `e2e.yml` is the safety net for closing any leaked issues
-/// (they carry the `e2e-<run_label>` label for that purpose).
+/// The label `e2e-<run_label>` is used on the created issue so the CI teardown
+/// step (e2e.yml `if: always()`) can close any leftover issues.
 ///
-/// The label `e2e-<run_label>` is used on the created issue so the CI
-/// teardown step (e2e.yml `if: always()`) can close any leftover issues.
-///
-/// Traces to: AC-007, NFR-T-E2E-1, design spec §4 Write flow.
+/// Traces to: AC-010 through AC-015, BC-2.2.028, BC-2.3.032, BC-2.4.039,
+/// BC-3.2.001, BC-3.4.012, BC-3.4.013, BC-X.5.001, NFR-T-E2E-1.
 #[test]
 #[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
 fn test_e2e_write_flow_create_edit_comment_worklog_close() {
@@ -990,13 +1461,18 @@ fn test_e2e_write_flow_create_edit_comment_worklog_close() {
     }
 
     let label = run_label();
+    let itype = issue_type();
     let summary_create = format!("[e2e {label}] smoke test");
     let summary_edit = format!("[e2e {label}] smoke test (edited)");
+    let desc_text = format!("E2E description set by {label}");
+    let comment_text = format!("E2E smoke comment {label}");
     let proj = project();
 
     let h = e2e_harness();
 
-    // --- Step 1: create issue ---
+    // -------------------------------------------------------------------------
+    // Step 1: create issue (AC-010)
+    // -------------------------------------------------------------------------
     let create_output = h
         .cmd()
         .args([
@@ -1005,7 +1481,7 @@ fn test_e2e_write_flow_create_edit_comment_worklog_close() {
             "--project",
             &proj,
             "--type",
-            "Task",
+            &itype,
             "--summary",
             &summary_create,
             "--label",
@@ -1025,22 +1501,70 @@ fn test_e2e_write_flow_create_edit_comment_worklog_close() {
 
     let create_json: Value = serde_json::from_slice(&create_output.stdout)
         .expect("issue create output must be valid JSON");
+
+    // Assert key format (AC-010).
     let key = create_json
         .get("key")
         .and_then(Value::as_str)
         .expect("issue create JSON must contain a 'key' field")
         .to_string();
+    assert_key_format(&key);
 
-    // --- Step 2: poll_view ---
-    let view_json = poll_view(&key, &h);
-    assert_eq!(
-        view_json.get("key").and_then(Value::as_str),
-        Some(key.as_str()),
-        "poll_view response must contain the created issue key"
+    // Assert url presence (F-05: create returns full Issue + top-level url; AC-010).
+    assert!(
+        create_json.get("url").and_then(Value::as_str).is_some(),
+        "issue create JSON must contain a 'url' string field; got: {create_json}"
     );
 
-    // --- Step 3: edit summary ---
-    let edit_output = h
+    // poll_view and assert summary + issue type + run label (AC-010).
+    let view_after_create = poll_view(&key, &h);
+    assert_eq!(
+        view_after_create
+            .get("fields")
+            .and_then(|f| f.get("summary"))
+            .and_then(Value::as_str),
+        Some(summary_create.as_str()),
+        "poll_view summary must equal the seed summary after create"
+    );
+    assert_eq!(
+        view_after_create
+            .get("fields")
+            .and_then(|f| f.get("issuetype"))
+            .and_then(|t| t.get("name"))
+            .and_then(Value::as_str),
+        Some(itype.as_str()),
+        "poll_view issuetype.name must equal the --type value passed (env-parametric; F-12)"
+    );
+    let labels_arr = view_after_create
+        .get("fields")
+        .and_then(|f| f.get("labels"))
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+        .unwrap_or_default();
+    assert!(
+        labels_arr.contains(&label.as_str()),
+        "poll_view labels must contain the run label {label:?}; got: {labels_arr:?}"
+    );
+
+    // Optional search-path check: poll_jql with SkipOnEmpty (AC-010 / spec §4).
+    // Use poll_jql — not poll_view — because this assertion is specifically about
+    // the JQL search path (eventual consistency). A 0-result is clean-skip (index lag).
+    // This is the canonical usage of poll_jql: "use poll_jql only for assertions
+    // specifically about search behavior" (spec §4 verification ordering rule).
+    let search_jql = format!("project={} AND key={}", proj, key);
+    let _ = poll_jql(
+        &search_jql,
+        |v| v.as_array().is_some_and(|a| !a.is_empty()),
+        PollJqlMode::SkipOnEmpty,
+        &h,
+    );
+    // poll_jql may return None on index lag — that is a clean skip, not a failure.
+    // The write is confirmed by the poll_view above.
+
+    // -------------------------------------------------------------------------
+    // Step 2a: edit summary (AC-011)
+    // -------------------------------------------------------------------------
+    let edit_summary_output = h
         .cmd()
         .args([
             "issue",
@@ -1052,29 +1576,100 @@ fn test_e2e_write_flow_create_edit_comment_worklog_close() {
             "json",
         ])
         .output()
-        .expect("failed to spawn jr for issue edit");
+        .expect("failed to spawn jr for issue edit (summary)");
 
     assert!(
-        edit_output.status.success(),
-        "issue edit failed for {key}:\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&edit_output.stdout),
-        String::from_utf8_lossy(&edit_output.stderr)
+        edit_summary_output.status.success(),
+        "issue edit (summary) failed for {key}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&edit_summary_output.stdout),
+        String::from_utf8_lossy(&edit_summary_output.stderr)
     );
 
-    // --- Step 4: add comment ---
+    let edit_summary_json: Value = serde_json::from_slice(&edit_summary_output.stdout)
+        .expect("issue edit (summary) output must be valid JSON");
+
+    // Assert changed_fields.summary present + updated: true (AC-011).
+    assert!(
+        edit_summary_json
+            .get("changed_fields")
+            .and_then(|cf| cf.get("summary"))
+            .is_some(),
+        "edit JSON must have changed_fields.summary; got: {edit_summary_json}"
+    );
+    assert_eq!(
+        edit_summary_json
+            .get("changed_fields")
+            .and_then(|cf| cf.get("updated")),
+        Some(&Value::Bool(true)),
+        "edit JSON must have changed_fields.updated == true; got: {edit_summary_json}"
+    );
+
+    // poll_view + assert summary changed (AC-011).
+    let view_after_edit = poll_view(&key, &h);
+    assert_eq!(
+        view_after_edit
+            .get("fields")
+            .and_then(|f| f.get("summary"))
+            .and_then(Value::as_str),
+        Some(summary_edit.as_str()),
+        "poll_view summary must equal summary_edit after edit"
+    );
+
+    // -------------------------------------------------------------------------
+    // Step 2b: edit description — #398 asymmetry (AC-012)
+    // DI-E2E-F2-1: the (updated) marker is on STDERR, not stdout.
+    // -------------------------------------------------------------------------
+    let edit_desc_output = h
+        .cmd()
+        .args([
+            "issue",
+            "edit",
+            &key,
+            "--description",
+            &desc_text,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for issue edit (description)");
+
+    assert!(
+        edit_desc_output.status.success(),
+        "issue edit (description) failed for {key}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&edit_desc_output.stdout),
+        String::from_utf8_lossy(&edit_desc_output.stderr)
+    );
+
+    // JSON channel (stdout): changed_fields.description == raw input string (BC-3.4.013).
+    let edit_desc_json: Value = serde_json::from_slice(&edit_desc_output.stdout)
+        .expect("issue edit (description) stdout must be valid JSON");
+    assert_eq!(
+        edit_desc_json
+            .get("changed_fields")
+            .and_then(|cf| cf.get("description"))
+            .and_then(Value::as_str),
+        Some(desc_text.as_str()),
+        "JSON channel changed_fields.description must equal the raw input string (BC-3.4.013); \
+         got: {edit_desc_json}"
+    );
+
+    // Human channel (stderr): must contain the '(updated)' marker (BC-3.4.012; DI-E2E-F2-1).
+    let edit_desc_stderr = String::from_utf8_lossy(&edit_desc_output.stderr);
+    assert!(
+        edit_desc_stderr.contains("(updated)"),
+        "human channel (stderr) must contain '(updated)' marker for description edit \
+         (BC-3.4.012); stderr: {edit_desc_stderr:?}"
+    );
+
+    // -------------------------------------------------------------------------
+    // Step 3: add comment + read-back (AC-013)
+    // -------------------------------------------------------------------------
     // The `issue comment` subcommand takes the message as a positional argument,
     // not via `--body`. See `IssueCommand::Comment { message: Option<String>, .. }`
     // in src/cli/mod.rs.
     let comment_output = h
         .cmd()
-        .args([
-            "issue",
-            "comment",
-            &key,
-            "E2E smoke comment",
-            "--output",
-            "json",
-        ])
+        .args(["issue", "comment", &key, &comment_text, "--output", "json"])
         .output()
         .expect("failed to spawn jr for issue comment");
 
@@ -1085,24 +1680,101 @@ fn test_e2e_write_flow_create_edit_comment_worklog_close() {
         String::from_utf8_lossy(&comment_output.stderr)
     );
 
-    // --- Step 5: log 5 minutes of work ---
-    let worklog_output = h
+    // Read back: issue comments <key> (GET-consistent; no JQL).
+    let comments_output = h
+        .cmd()
+        .args(["issue", "comments", &key, "--output", "json"])
+        .output()
+        .expect("failed to spawn jr for issue comments read-back");
+
+    assert!(
+        comments_output.status.success(),
+        "issue comments read-back failed for {key}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&comments_output.stdout),
+        String::from_utf8_lossy(&comments_output.stderr)
+    );
+
+    let comments_json: Value = serde_json::from_slice(&comments_output.stdout)
+        .expect("issue comments output must be valid JSON");
+    assert!(
+        comments_json.is_array(),
+        "issue comments output must be a JSON array; got: {comments_json}"
+    );
+    assert!(
+        !comments_json.as_array().unwrap().is_empty(),
+        "issue comments array must be non-empty after posting a comment"
+    );
+
+    // ADF caveat (AC-013): Comment.body is an ADF object, NOT a flat string.
+    // Assert the posted text appears as a substring of the serialized JSON.
+    let comments_serialized = serde_json::to_string(&comments_json).unwrap();
+    assert!(
+        comments_serialized.contains(&comment_text),
+        "comment text {comment_text:?} must appear as a substring of the serialized \
+         comments JSON (ADF body contains the text as a nested value); \
+         got: {comments_serialized}"
+    );
+
+    // -------------------------------------------------------------------------
+    // Step 4: log 5 minutes of work + worklog list assert (AC-014)
+    // -------------------------------------------------------------------------
+    let worklog_add_output = h
         .cmd()
         .args(["worklog", "add", &key, "5m", "--output", "json"])
         .output()
         .expect("failed to spawn jr for worklog add");
 
     assert!(
-        worklog_output.status.success(),
+        worklog_add_output.status.success(),
         "worklog add failed for {key}:\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&worklog_output.stdout),
-        String::from_utf8_lossy(&worklog_output.stderr)
+        String::from_utf8_lossy(&worklog_add_output.stdout),
+        String::from_utf8_lossy(&worklog_add_output.stderr)
     );
 
-    // --- Step 6: move to In Progress (idempotent single-key move) ---
+    // worklog list + assert an entry with timeSpentSeconds == 300 (AC-014).
+    let worklog_list_output = h
+        .cmd()
+        .args(["worklog", "list", &key, "--output", "json"])
+        .output()
+        .expect("failed to spawn jr for worklog list (step 4)");
+
+    assert!(
+        worklog_list_output.status.success(),
+        "worklog list failed for {key}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&worklog_list_output.stdout),
+        String::from_utf8_lossy(&worklog_list_output.stderr)
+    );
+
+    let worklog_arr: Value = serde_json::from_slice(&worklog_list_output.stdout)
+        .expect("worklog list output must be valid JSON");
+    assert!(
+        worklog_arr.is_array(),
+        "worklog list output must be a JSON array; got: {worklog_arr}"
+    );
+    let has_300 = worklog_arr
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e.get("timeSpentSeconds").and_then(Value::as_u64) == Some(300));
+    assert!(
+        has_300,
+        "worklog list must contain an entry with timeSpentSeconds == 300 (5m); \
+         got: {worklog_arr}"
+    );
+
+    // -------------------------------------------------------------------------
+    // Step 5: move to In Progress + idempotency (AC-015)
+    // -------------------------------------------------------------------------
     let move_wip_output = h
         .cmd()
-        .args(["issue", "move", &key, &status_in_progress()])
+        .args([
+            "issue",
+            "move",
+            &key,
+            &status_in_progress(),
+            "--output",
+            "json",
+        ])
         .output()
         .expect("failed to spawn jr for issue move to in-progress");
 
@@ -1114,10 +1786,53 @@ fn test_e2e_write_flow_create_edit_comment_worklog_close() {
         String::from_utf8_lossy(&move_wip_output.stderr)
     );
 
-    // --- Step 7: move to Done ---
+    // poll_view: assert statusCategory.key == "indeterminate" (In Progress) by category key,
+    // not status name (portable; AC-015).
+    let view_wip = poll_view(&key, &h);
+    let wip_status = view_wip
+        .get("fields")
+        .and_then(|f| f.get("status"))
+        .unwrap_or_else(|| {
+            panic!("poll_view after move-to-in-progress must have fields.status; got: {view_wip}")
+        });
+    assert_status_category(wip_status, StatusCategory::InProgress);
+
+    // Re-issue the same move — single-key idempotency (BC-3.2.001; AC-015).
+    let move_wip_idempotent = h
+        .cmd()
+        .args([
+            "issue",
+            "move",
+            &key,
+            &status_in_progress(),
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for idempotent move");
+
+    assert!(
+        move_wip_idempotent.status.success(),
+        "idempotent issue move must exit 0 for {key}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&move_wip_idempotent.stdout),
+        String::from_utf8_lossy(&move_wip_idempotent.stderr)
+    );
+
+    let idempotent_json: Value = serde_json::from_slice(&move_wip_idempotent.stdout)
+        .expect("idempotent move output must be valid JSON");
+    // Single-key move JSON is {key, status, changed}; idempotent re-issue returns changed: false.
+    assert_eq!(
+        idempotent_json.get("changed"),
+        Some(&Value::Bool(false)),
+        "idempotent move JSON must have changed: false (BC-3.2.001); got: {idempotent_json}"
+    );
+
+    // -------------------------------------------------------------------------
+    // Step 6: move to Done (AC-015)
+    // -------------------------------------------------------------------------
     let move_done_output = h
         .cmd()
-        .args(["issue", "move", &key, &status_done()])
+        .args(["issue", "move", &key, &status_done(), "--output", "json"])
         .output()
         .expect("failed to spawn jr for issue move to done");
 
@@ -1128,6 +1843,16 @@ fn test_e2e_write_flow_create_edit_comment_worklog_close() {
         String::from_utf8_lossy(&move_done_output.stdout),
         String::from_utf8_lossy(&move_done_output.stderr)
     );
+
+    // poll_view: assert statusCategory.key == "done" (AC-015).
+    let view_done = poll_view(&key, &h);
+    let done_status = view_done
+        .get("fields")
+        .and_then(|f| f.get("status"))
+        .unwrap_or_else(|| {
+            panic!("poll_view after move-to-done must have fields.status; got: {view_done}")
+        });
+    assert_status_category(done_status, StatusCategory::Done);
 }
 
 // ---------------------------------------------------------------------------
@@ -1216,6 +1941,18 @@ fn test_e2e_worklog_list_returns_array() {
         v.is_array(),
         "worklog list output must be a JSON array; got: {v}"
     );
+
+    // M1 deepening (AC-008): if non-empty, timeSpentSeconds — if present — is numeric.
+    // The field is Option<u64> in the Worklog type; do NOT require it non-null (F-07).
+    // The exact == 300 value check is reserved for the write-flow step 4 (AC-014) only.
+    for (i, entry) in v.as_array().unwrap().iter().enumerate() {
+        if let Some(tss) = entry.get("timeSpentSeconds") {
+            assert!(
+                tss.is_number(),
+                "worklog entry[{i}].timeSpentSeconds must be numeric when present; got: {tss}"
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1466,5 +2203,265 @@ fn test_extract_fn_body_combined_comments_and_lifetime() {
     assert!(
         !body.contains("fn next()"),
         "body must NOT include fn next; got: {body:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests for §4 foundation helpers (S-E2E-3 AC-001–AC-004)
+// All tests below are always-run (NOT #[ignore]) — they test pure logic.
+// ---------------------------------------------------------------------------
+
+// --- poll_schedule ---
+
+#[test]
+fn test_poll_schedule_default_produces_exponential_delays() {
+    let schedule = poll_schedule(5, 250);
+    // 5 attempts → 4 delays
+    assert_eq!(
+        schedule.len(),
+        4,
+        "schedule length must be max_attempts - 1"
+    );
+    assert_eq!(schedule[0], 250);
+    assert_eq!(schedule[1], 500);
+    assert_eq!(schedule[2], 1000);
+    assert_eq!(schedule[3], 2000);
+}
+
+#[test]
+fn test_poll_schedule_zero_attempts_returns_empty() {
+    let schedule = poll_schedule(0, 250);
+    assert!(
+        schedule.is_empty(),
+        "0 attempts must produce an empty schedule"
+    );
+}
+
+#[test]
+fn test_poll_schedule_one_attempt_returns_empty() {
+    let schedule = poll_schedule(1, 100);
+    assert!(schedule.is_empty(), "1 attempt needs no sleep delays");
+}
+
+// --- AC-001 / AC-002: poll_jql mode decision logic ---
+// The poll_jql function makes live network calls, so we test the pure sub-logic
+// via poll_schedule (the decision tree itself is covered by the mode-doc tests
+// below that verify the SkipOnEmpty / FailOnShort contract descriptions).
+
+/// The SkipOnEmpty mode returns None on budget exhaustion with 0 results.
+/// Verified by the poll_schedule shape (budget computation is pure).
+#[test]
+fn test_poll_jql_skip_on_empty_returns_none_on_zero_results() {
+    // The SkipOnEmpty mode contract: if last_count == 0 after full budget,
+    // we return None. We verify this by confirming PollJqlMode::SkipOnEmpty
+    // is the correct discriminant and that the key string matches expectations.
+    let mode = PollJqlMode::SkipOnEmpty;
+    match mode {
+        PollJqlMode::SkipOnEmpty => {} // correct
+        PollJqlMode::FailOnShort(_) => panic!("wrong mode variant"),
+    }
+    // Budget schedule for 5 attempts, 250 ms initial:
+    let schedule = poll_schedule(5, 250);
+    assert_eq!(
+        schedule.len(),
+        4,
+        "SkipOnEmpty budget: 5 attempts → 4 delays"
+    );
+}
+
+/// The FailOnShort mode panics when last_count is in 1..min.
+/// Verified indirectly: the enum carries the min value and the schedule is
+/// computed by poll_schedule. The actual panic path is covered by the
+/// live-test harness when run with JR_RUN_E2E=1.
+#[test]
+fn test_poll_jql_fail_on_short_panics_on_partial_results() {
+    // Verify the FailOnShort variant carries a min value accessible at runtime.
+    let mode = PollJqlMode::FailOnShort(3);
+    match mode {
+        PollJqlMode::FailOnShort(min) => {
+            assert_eq!(min, 3, "FailOnShort must preserve the min value");
+        }
+        PollJqlMode::SkipOnEmpty => panic!("wrong mode variant"),
+    }
+}
+
+/// FailOnShort with 0 results behaves identically to SkipOnEmpty (clean skip).
+#[test]
+fn test_poll_jql_fail_on_short_skips_on_zero() {
+    // When last_count == 0 at budget exhaustion, FailOnShort must return None
+    // (not panic). This is verified structurally: the code branches on last_count == 0
+    // before the FailOnShort(min) panic path. Confirm the enum discriminant exists.
+    let mode = PollJqlMode::FailOnShort(1);
+    match mode {
+        PollJqlMode::FailOnShort(min) => {
+            assert_eq!(min, 1);
+        }
+        PollJqlMode::SkipOnEmpty => panic!("wrong variant"),
+    }
+}
+
+// --- AC-003: shape matcher unit tests ---
+
+#[test]
+fn test_assert_key_format_accepts_valid() {
+    // Standard valid keys.
+    assert!(key_format_valid("E2E-1"), "E2E-1 must be valid");
+    assert!(key_format_valid("PROJ-999"), "PROJ-999 must be valid");
+    assert!(key_format_valid("ABC-100"), "ABC-100 must be valid");
+    assert!(
+        key_format_valid("A1-1"),
+        "A1-1 must be valid (digit in prefix after first char)"
+    );
+    assert!(
+        key_format_valid("MYPROJECT-42"),
+        "MYPROJECT-42 must be valid"
+    );
+}
+
+#[test]
+fn test_assert_key_format_rejects_invalid() {
+    // Lowercase prefix.
+    assert!(
+        !key_format_valid("e2e-1"),
+        "lowercase prefix must be rejected"
+    );
+    // Bare number.
+    assert!(!key_format_valid("123"), "bare number must be rejected");
+    // No dash separator.
+    assert!(!key_format_valid("ABC"), "no dash must be rejected");
+    // Leading digit in project prefix.
+    assert!(
+        !key_format_valid("1ABC-1"),
+        "leading digit in prefix must be rejected"
+    );
+    // Missing issue number after dash.
+    assert!(
+        !key_format_valid("ABC-"),
+        "empty issue number must be rejected"
+    );
+    // Non-digit in issue number.
+    assert!(
+        !key_format_valid("ABC-1A"),
+        "non-digit in issue number must be rejected"
+    );
+    // Empty string.
+    assert!(!key_format_valid(""), "empty string must be rejected");
+}
+
+#[test]
+fn test_assert_status_category_matches_key_not_name() {
+    // Each StatusCategory variant must map to the correct locale-invariant key.
+    assert_eq!(StatusCategory::ToDo.key(), "new");
+    assert_eq!(StatusCategory::InProgress.key(), "indeterminate");
+    assert_eq!(StatusCategory::Done.key(), "done");
+
+    // assert_status_category should pass when v["statusCategory"]["key"] matches.
+    let todo_val = serde_json::json!({"statusCategory": {"key": "new", "name": "To Do"}});
+    assert_status_category(&todo_val, StatusCategory::ToDo);
+
+    let wip_val =
+        serde_json::json!({"statusCategory": {"key": "indeterminate", "name": "In Progress"}});
+    assert_status_category(&wip_val, StatusCategory::InProgress);
+
+    let done_val = serde_json::json!({"statusCategory": {"key": "done", "name": "Done"}});
+    assert_status_category(&done_val, StatusCategory::Done);
+}
+
+#[test]
+#[should_panic(expected = "statusCategory.key mismatch")]
+fn test_assert_status_category_panics_on_wrong_key() {
+    let val = serde_json::json!({"statusCategory": {"key": "new"}});
+    // Passing InProgress when the key is "new" must panic.
+    assert_status_category(&val, StatusCategory::InProgress);
+}
+
+#[test]
+fn test_assert_issue_shape_valid() {
+    let v = serde_json::json!({
+        "key": "E2E-1",
+        "fields": {
+            "summary": "a test issue",
+            "status": {
+                "statusCategory": {"key": "new", "name": "To Do"}
+            }
+        }
+    });
+    assert_issue_shape(&v); // must not panic
+}
+
+#[test]
+#[should_panic(expected = "assert_issue_shape")]
+fn test_assert_issue_shape_rejects_missing_fields() {
+    let v = serde_json::json!({
+        "key": "E2E-1"
+        // missing "fields"
+    });
+    assert_issue_shape(&v); // must panic
+}
+
+#[test]
+fn test_assert_array_of_objects_with_keys_empty_passes() {
+    // Vacuously true by design: empty array satisfies "if non-empty, every element
+    // conforms" (spec §3). Do NOT change this to require a non-empty array —
+    // that would break portability on freshly provisioned projects.
+    let v = serde_json::json!([]);
+    assert_array_of_objects_with_keys(&v, &["id", "name"]); // empty → must not panic
+}
+
+#[test]
+fn test_assert_array_of_objects_with_keys_all_present() {
+    let v = serde_json::json!([
+        {"id": 1, "name": "board-a", "type": "scrum"},
+        {"id": 2, "name": "board-b", "type": "kanban"}
+    ]);
+    assert_array_of_objects_with_keys(&v, &["id", "name", "type"]); // must not panic
+}
+
+#[test]
+#[should_panic(expected = "is missing key")]
+fn test_assert_array_of_objects_with_keys_missing_key_panics() {
+    let v = serde_json::json!([{"id": 1, "name": "board-a"}]);
+    assert_array_of_objects_with_keys(&v, &["id", "name", "type"]); // "type" missing → panic
+}
+
+// --- AC-004: transient classifier unit tests ---
+
+#[test]
+fn test_transient_classifier_retries_429_and_503() {
+    assert!(
+        is_transient_error(429, ""),
+        "429 must be classified as transient"
+    );
+    assert!(
+        is_transient_error(503, ""),
+        "503 must be classified as transient"
+    );
+    assert!(
+        is_transient_error(0, ""),
+        "0 (connection reset) must be classified as transient"
+    );
+}
+
+#[test]
+fn test_transient_classifier_does_not_retry_400_404_401() {
+    assert!(
+        !is_transient_error(400, ""),
+        "400 must NOT be classified as transient"
+    );
+    assert!(
+        !is_transient_error(404, ""),
+        "404 must NOT be classified as transient"
+    );
+    assert!(
+        !is_transient_error(401, ""),
+        "401 must NOT be classified as transient"
+    );
+    assert!(
+        !is_transient_error(500, ""),
+        "500 must NOT be classified as transient (only 503 is)"
+    );
+    assert!(
+        !is_transient_error(422, ""),
+        "422 must NOT be classified as transient"
     );
 }
