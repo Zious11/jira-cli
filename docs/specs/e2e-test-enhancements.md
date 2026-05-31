@@ -149,7 +149,8 @@ test functions required (mostly), just deeper bodies.
 
 1. **create** → assert `key` format **and `url` present**; then `poll_view` and assert echoed
    `summary == summary_create`, the issue type name **equals the value passed to `--type`**
-   (env-parametric, not a hardcoded `"Task"` literal; F-12), and the run label is present in
+   (read from `JR_E2E_ISSUE_TYPE`, defaulting to `"Task"`; not a hardcoded literal — implemented
+   via `issue_type()` helper, S-E2E-3), and the run label is present in
    `labels`.
 2. **edit summary** → `poll_view`, assert `summary == summary_edit`; assert the edit command's own
    JSON has `changed_fields` containing `summary` + `updated: true` (`edit_response` shape). NOTE:
@@ -229,13 +230,17 @@ self-seeds its own data (no inter-test dependency).
   mutation** occurred — a subsequent `poll_view` shows the summary **unchanged** (the load-bearing
   assertion; does not depend on exact dry-run key names). Do NOT hard-pin dry-run JSON key names
   the spec hasn't verified — the no-mutation round-trip is the portable contract. No write.
-- **bulk move** (multi-key positional / `--to`): create 2 issues, bulk-move both, assert the
-  bulk-result shape and that each transitioned (`poll_view` per key). The bulk-move JSON is
-  `{taskId, results:[{key, status (, error)}]}` and the operation is **async/polled** — assert
-  `results[].status ∈ {success, error, inaccessible}`, NOT `changed` (F-10: that is the
-  single-key shape `{key, status, changed}`). `inaccessible` can occur transiently for an
-  eventually-consistent just-created issue — treat it as retryable, not a failure. Pins the
-  documented **non-idempotent** bulk contract (distinct from single-key idempotency).
+- **bulk move** — **DEFERRED (not delivered in S-E2E-4; tracked for a future pass).** The intended
+  test: create 2 issues, bulk-move both, assert the bulk-result shape and that each transitioned
+  (`poll_view` per key). The bulk-move JSON is `{taskId, results:[{key, status (, error)}]}` and
+  the operation is **async/polled** — assert `results[].status ∈ {success, error, inaccessible}`,
+  NOT `changed` (F-10: that is the single-key shape `{key, status, changed}`). `inaccessible` can
+  occur transiently for an eventually-consistent just-created issue — treat it as retryable, not a
+  failure. Pins the documented **non-idempotent** bulk contract (distinct from single-key
+  idempotency). **Deferral rationale:** the async-poll bulk path adds significant test complexity
+  and the single-key `move` idempotency contract (delivered in M1 §5.2 step 5) already exercises
+  the transition machinery; the non-idempotent bulk shape is lower-risk and is recorded here as a
+  follow-up rather than a blocker. The 11 other M2 tests are delivered.
 - **pagination dedup**: create 3 issues under one **per-test-unique** label — embed `run_label()`
   plus `run_attempt`/a random nonce (e.g. `e2e-<run_id>-<attempt>-pgN`), NOT a shared/static label
   and NOT just `run_id` (a re-run reuses `GITHUB_RUN_ID`, only `run_attempt` differs — a bare
