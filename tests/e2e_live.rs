@@ -722,6 +722,68 @@ fn is_transient_error(status_code: u16, _stderr: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// M3 AC-003 — Leak-detection log (always-run; never fails)
+// ---------------------------------------------------------------------------
+
+/// Leak-detection log: counts pre-existing open E2E issues and emits the count
+/// to stderr as a warn-only signal.
+///
+/// ALWAYS-RUN test (not `#[ignore]`) — NOT covered by `test_every_ignored_test_has_gate_guard`.
+/// The `e2e_enabled()` early-return MUST remain the first statement before any
+/// `e2e_harness()`/`.cmd()`/`.output()` call; verify manually when editing.
+///
+/// This function is ALWAYS-RUN (not `#[ignore]`). It does NOT require
+/// `e2e_enabled()` — instead it reads `JR_RUN_E2E` directly and returns early
+/// when the var is not `"1"`, so no live calls are made under normal `cargo test`.
+///
+/// NEVER fails regardless of count. A high count signals broken teardown in
+/// previous runs and is visible in CI logs.
+///
+/// JQL: `summary ~ "e2e"` (tokenized full-text; matches the `e2e` token embedded
+/// in `[e2e <run_label>]` summaries). Do NOT use `labels ~ "e2e-"` — the `~`
+/// operator is not supported on the `labels` field (HTTP 400; spec §7.1 F-02).
+///
+/// Traces to: AC-003, NFR-T-E2E-1, spec §7.1.
+#[test]
+fn test_aaaaa_leak_detection_log() {
+    // Early-return if not in live E2E mode — no subprocess invocation.
+    if !e2e_enabled() {
+        return;
+    }
+    let proj = match std::env::var("JR_E2E_PROJECT") {
+        Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
+        _ => {
+            eprintln!("E2E leak-detection: JR_E2E_PROJECT not set; skipping orphan count");
+            return;
+        }
+    };
+    let h = e2e_harness();
+    let jql = format!(
+        "project={} AND summary ~ \"e2e\" AND statusCategory != Done",
+        proj
+    );
+    let output = h
+        .cmd()
+        .args(["issue", "list", "--jql", &jql, "--output", "json"])
+        .output();
+    let count = match output {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            match serde_json::from_str::<Value>(stdout.trim()) {
+                Ok(v) => v.as_array().map(|a| a.len()).unwrap_or(0),
+                Err(_) => 0,
+            }
+        }
+        _ => 0,
+    };
+    eprintln!(
+        "E2E leak-detection: {} orphaned open E2E issue(s) found (warn-only; high count = broken teardown)",
+        count
+    );
+    // NEVER fails — this is a warn-only observability signal.
+}
+
+// ---------------------------------------------------------------------------
 // AC-001 — Non-gated gate-invariant test (ALWAYS runs in normal `cargo test`)
 // ---------------------------------------------------------------------------
 
@@ -1021,6 +1083,96 @@ fn extract_fn_body(lines: &[&str], fn_start: usize) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// M3 AC-002 — Secret-leak guard (gated; e2e_enabled() FIRST)
+// ---------------------------------------------------------------------------
+
+/// E2E secret-leak guard: asserts that `jr` output (stdout + stderr) never
+/// contains the base64 token portion of `JR_AUTH_HEADER` or the service-account
+/// email from `JR_E2E_EMAIL`.
+///
+/// This is a cheap, high-value, portable regression guard. A future code change
+/// that accidentally logs auth headers (e.g. verbose mode, debug output, error
+/// messages including the Authorization header value) will be caught by this test
+/// on the next live run.
+///
+/// Implementation:
+/// 1. Extracts the base64 portion from `JR_AUTH_HEADER` (the part after "Basic ").
+/// 2. Optionally reads `JR_E2E_EMAIL` — if absent or empty, skips the email check
+///    but still runs the base64 check.
+/// 3. Runs `issue list --jql "project=<E2E> AND summary ~ e2e" --output json`.
+/// 4. Asserts neither stdout NOR stderr contains the base64 token.
+/// 5. If JR_E2E_EMAIL was set: asserts neither stdout NOR stderr contains the email.
+///
+/// Traces to: AC-002 (M3 secret-leak guard), NFR-T-E2E-1, spec §7.1.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
+fn test_e2e_no_secret_in_output() {
+    if !e2e_enabled() {
+        return;
+    }
+
+    // Extract the base64 token from JR_AUTH_HEADER (part after "Basic ").
+    let auth_header =
+        std::env::var("JR_AUTH_HEADER").expect("JR_AUTH_HEADER must be set when JR_RUN_E2E=1");
+    let base64_token = auth_header
+        .strip_prefix("Basic ")
+        .unwrap_or(&auth_header)
+        .trim()
+        .to_string();
+
+    // Optionally read service-account email for the email leak check.
+    let maybe_email: Option<String> = std::env::var("JR_E2E_EMAIL")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+
+    let proj = project();
+    let jql = format!("project={} AND summary ~ e2e", proj);
+
+    let h = e2e_harness();
+    let output = h
+        .cmd()
+        .args(["issue", "list", "--jql", &jql, "--output", "json"])
+        .output()
+        .expect("failed to spawn jr for secret-leak guard test");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Assert the base64 token is not present in either channel.
+    assert!(
+        !stdout.contains(&base64_token),
+        "SECURITY: stdout contains the base64 auth token — credential leak detected!\n\
+         stdout (truncated to 200 chars): {:?}",
+        stdout.chars().take(200).collect::<String>()
+    );
+    assert!(
+        !stderr.contains(&base64_token),
+        "SECURITY: stderr contains the base64 auth token — credential leak detected!\n\
+         stderr (truncated to 200 chars): {:?}",
+        stderr.chars().take(200).collect::<String>()
+    );
+
+    // Assert the service-account email is not present in either channel (if configured).
+    // NOTE: do NOT echo `email` in the failure message — the assertion message itself
+    // must not leak the credential it is guarding.
+    if let Some(email) = maybe_email {
+        assert!(
+            !stdout.contains(&email),
+            "SECURITY: stdout contains the service-account email — credential leak detected!\n\
+             stdout (truncated to 200 chars): {:?}",
+            stdout.chars().take(200).collect::<String>()
+        );
+        assert!(
+            !stderr.contains(&email),
+            "SECURITY: stderr contains the service-account email — credential leak detected!\n\
+             stderr (truncated to 200 chars): {:?}",
+            stderr.chars().take(200).collect::<String>()
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // AC-004 — Read command coverage (all #[ignore] + early-return gated)
 // ---------------------------------------------------------------------------
 
@@ -1087,10 +1239,19 @@ fn test_e2e_issue_list_by_project_returns_array() {
 /// E2E: `jr issue list --jql "project=<E2E> AND summary ~ e2e" --output json`
 /// applies the JQL filter correctly and returns a JSON array.
 ///
+/// Uses `poll_jql` in `SkipOnEmpty` mode to absorb JQL index lag on cold
+/// free-tier Jira sites (JRACLOUD-97427; spec §7.1 AC-001). A bare `issue list`
+/// call without retry is a latent flake on first provisioning when the index
+/// has not yet caught up. `SkipOnEmpty` means: if the budget is exhausted with
+/// 0 results, the test emits an eprintln! skip notice and returns without
+/// failure (pure index lag, not a `jr` regression). If results appear, element
+/// shape is validated normally.
+///
 /// When non-empty: asserts every element has `key` (format) + `fields`,
 /// and `fields.status.statusCategory` is an object (BC-2.2.028; spec §5.1).
 ///
-/// Traces to: AC-004, AC-005, BC-2.2.028, NFR-T-E2E-1.
+/// Traces to: AC-001 (M3 poll_jql adoption), AC-004, AC-005, BC-2.2.028,
+/// NFR-T-E2E-1.
 #[test]
 #[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
 fn test_e2e_issue_list_with_summary_filter_returns_array() {
@@ -1099,24 +1260,33 @@ fn test_e2e_issue_list_with_summary_filter_returns_array() {
     }
     let h = e2e_harness();
     let jql = format!("project={} AND summary ~ e2e", project());
-    let output = h
-        .cmd()
-        .args(["issue", "list", "--jql", &jql, "--output", "json"])
-        .output()
-        .expect("failed to spawn jr");
 
-    assert!(
-        output.status.success(),
-        "issue list with summary filter failed:\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+    // poll_jql in SkipOnEmpty mode: absorbs JQL index lag on cold indices.
+    // A 0-result after full budget is a clean skip — index lag, not a jr regression.
+    // A non-zero result triggers shape validation below.
+    let result = poll_jql(
+        &jql,
+        |_| true, // any non-empty array satisfies the predicate
+        PollJqlMode::SkipOnEmpty,
+        &h,
     );
 
-    let v: Value =
-        serde_json::from_slice(&output.stdout).expect("issue list output must be valid JSON");
+    let v = match result {
+        None => {
+            // Budget exhausted with 0 results — pure index lag; clean skip.
+            eprintln!(
+                "test_e2e_issue_list_with_summary_filter_returns_array: \
+                 clean-skip (JQL index lag; 0 results after full poll budget)"
+            );
+            return;
+        }
+        Some(v) => v,
+    };
+
+    // poll_jql always returns Some(array) on a non-None result.
     assert!(
         v.is_array(),
-        "issue list output must be a JSON array; got: {v}"
+        "poll_jql result must be a JSON array; got: {v}"
     );
 
     // M1 deepening (AC-005): if non-empty, assert element shape.

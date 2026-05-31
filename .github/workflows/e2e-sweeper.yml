@@ -1,0 +1,131 @@
+# e2e-sweeper.yml — Daily backstop for orphaned E2E issues.
+#
+# Purpose: closes open E2E issues left by hard-cancelled runs where the
+# `e2e.yml` `if: always()` teardown step was skipped (GitHub may skip even
+# `if: always()` steps when a workflow run is force-cancelled or the runner
+# is lost). This sweeper runs daily at 07:00 UTC (offset from the main
+# `e2e.yml` nightly at 06:00 UTC) and transitions any matching open issues
+# to Done. Close-only — no deletes.
+#
+# JQL predicate: `summary ~ "e2e"` is a tokenized full-text match that catches
+# the `e2e` token embedded in `[e2e <run_label>]` summaries. The `labels` field
+# does NOT support the CONTAINS operator in JQL (HTTP 400); use `summary ~`
+# instead. Within the dedicated disposable E2E project, over-matching on the
+# `e2e` token is acceptable.
+#
+# `created <= -1d` excludes issues created in the last 24 hours, so a
+# currently-running e2e.yml does not have its live issues swept.
+#
+# Security: mirrors e2e.yml's harden-runner, concurrency group, environment,
+# permissions, and pinned-SHA actions exactly — no egress policy loosening.
+
+name: E2E Orphan Sweeper
+
+on:
+  schedule:
+    - cron: "0 7 * * *"  # 07:00 UTC daily (offset from e2e.yml at 06:00)
+  workflow_dispatch:
+
+# Shared serialization group with e2e.yml — never interleaves with the main run.
+# cancel-in-progress: false so a concurrent trigger does not abort a sweep in progress.
+concurrency:
+  group: jira-e2e
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    # Belt-and-suspenders guard: no pull_request trigger exists, but this if:
+    # ensures we never accidentally sweep from a PR even if on: is later modified.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    # Secrets are gated to this GitHub Environment + its branch-protection policy.
+    environment: jira-e2e
+
+    steps:
+      - name: Harden the runner (block unexpected egress)
+        uses: step-security/harden-runner@ab7a9404c0f3da075243ca237b5fac12c98deaa5 # v2.19.3
+        with:
+          egress-policy: block
+          # Exact same allowlist as e2e.yml — security parity, no egress loosening.
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            objects.githubusercontent.com:443
+            codeload.github.com:443
+            *.actions.githubusercontent.com:443
+            *.blob.core.windows.net:443
+            *.atlassian.net:443
+            static.crates.io:443
+            index.crates.io:443
+            crates.io:443
+            static.rust-lang.org:443
+            sh.rustup.rs:443
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@c93f4f9c67595668add93d3d6895795ce52d8c2d  # stable
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+
+      - name: Build jr (debug)
+        # Debug binary required so JR_BASE_URL / JR_AUTH_HEADER seams are active
+        # (both are gated behind #[cfg(debug_assertions)] — release binaries ignore them).
+        run: cargo build
+
+      - name: Compose auth header
+        env:
+          JR_E2E_EMAIL: ${{ secrets.JR_E2E_EMAIL }}
+          JR_E2E_API_TOKEN: ${{ secrets.JR_E2E_API_TOKEN }}
+        run: |
+          # Compose JR_AUTH_HEADER from individual secrets so email and API token
+          # can be rotated independently (mirrors e2e.yml auth composition).
+          # Secrets flow via env (runner-masked), not via text interpolation into
+          # the script — prevents the composed value from appearing in log text
+          # under ACTIONS_STEP_DEBUG (SEC-002 / CWE-532).
+          # tr -d '\n': strip the trailing newline base64 adds on Linux (POSIX-portable;
+          # avoids GNU-only base64 -w0 which is not available on BSD/macOS runners).
+          JR_AUTH_HEADER="Basic $(printf '%s:%s' "$JR_E2E_EMAIL" "$JR_E2E_API_TOKEN" | base64 | tr -d '\n')"
+          # Explicitly mask the composed header as a defense-in-depth measure so
+          # any accidental echo of JR_AUTH_HEADER in subsequent steps is redacted.
+          echo "::add-mask::$JR_AUTH_HEADER"
+          echo "JR_AUTH_HEADER=$JR_AUTH_HEADER" >> "$GITHUB_ENV"
+
+      - name: Sweep orphaned E2E issues
+        env:
+          JR_BASE_URL: ${{ secrets.JR_E2E_BASE_URL }}
+          JR_E2E_PROJECT: ${{ vars.JR_E2E_PROJECT }}
+          JR_E2E_STATUS_DONE: ${{ vars.JR_E2E_STATUS_DONE }}
+        run: |
+          STATUS_DONE="${JR_E2E_STATUS_DONE:-Done}"
+
+          echo "Sweeping orphaned E2E issues in project $JR_E2E_PROJECT (target status: $STATUS_DONE)"
+
+          # Acquire the list of candidate issues.
+          # summary ~ "e2e" is a tokenized full-text match — catches the `e2e`
+          # token in `[e2e <run_label>]` summaries created by the test suite.
+          # created <= -1d excludes issues from the current or last 24-hour window.
+          # || true: acquisition failure (401, connection error, empty project) must
+          # never fail the workflow — the sweeper is best-effort.
+          KEYS=$(./target/debug/jr issue list \
+            --jql "project=$JR_E2E_PROJECT AND summary ~ \"e2e\" AND statusCategory != Done AND created <= -1d" \
+            --output json --all \
+            | jq -r '.[].key' 2>/dev/null || true)
+
+          COUNT=$(echo "$KEYS" | grep -c '[A-Z]' 2>/dev/null || echo 0)
+          echo "Sweeper: found $COUNT orphaned open E2E issue(s) to close"
+
+          # Close each issue; || true on the per-key move so one failure never
+          # aborts the sweep loop (a partially-closed set is better than an
+          # aborted sweep). Close-only — no deletes.
+          echo "$KEYS" | while read -r KEY; do
+            [ -z "$KEY" ] && continue
+            if ./target/debug/jr issue move "$KEY" "$STATUS_DONE" >/dev/null 2>&1; then
+              echo "swept: closed $KEY"
+            else
+              echo "WARN: failed to close $KEY (will retry on next sweep)"
+            fi
+          done
