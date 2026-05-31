@@ -2217,6 +2217,7 @@ fn test_e2e_worklog_list_returns_array() {
 
     let label = run_label();
     let proj = project();
+    let itype = issue_type();
     let h = e2e_harness();
 
     // Self-seed: create a throwaway issue so this test always has a key to work with.
@@ -2229,7 +2230,7 @@ fn test_e2e_worklog_list_returns_array() {
             "--project",
             &proj,
             "--type",
-            "Task",
+            &itype,
             "--summary",
             &summary,
             "--label",
@@ -2317,6 +2318,7 @@ fn test_e2e_issue_view_returns_key_field() {
 
     let label = run_label();
     let proj = project();
+    let itype = issue_type();
     let h = e2e_harness();
 
     // Self-seed: create a throwaway issue so this test always has a key to work with.
@@ -2329,7 +2331,7 @@ fn test_e2e_issue_view_returns_key_field() {
             "--project",
             &proj,
             "--type",
-            "Task",
+            &itype,
             "--summary",
             &summary,
             "--label",
@@ -2539,6 +2541,67 @@ fn test_extract_fn_body_combined_comments_and_lifetime() {
     assert!(
         !body.contains("fn next()"),
         "body must NOT include fn next; got: {body:?}"
+    );
+}
+
+/// ALWAYS-RUN guard (not `#[ignore]`): asserts that no single test function body in
+/// this file exceeds 500 lines.
+///
+/// This is the permanent CI guard against runaway `#[ignore]`-gated dead code:
+/// such code compiles, passes clippy, and passes `cargo test` (without `--include-ignored`)
+/// even if it is corrupted (e.g. a `.args([...])` array repeated 2000 times).
+/// This meta-test catches that class of corruption at CI time without needing live
+/// credentials.
+///
+/// Line budget: 500 lines per function body. The write-flow test
+/// (`test_e2e_write_flow_create_edit_comment_worklog_close`) is the largest legitimate
+/// function at ~438 lines; the budget is set above that with headroom. A runaway
+/// `.args([...])` array repeated 2000 times would be orders of magnitude larger and
+/// is caught immediately. Any violator is listed by name so it can be fixed without
+/// guesswork.
+///
+/// Uses the same `extract_fn_body` brace-aware scanner as
+/// `test_every_ignored_test_has_gate_guard` to handle brace characters inside
+/// string literals, comments, and lifetime sigils correctly.
+#[test]
+fn test_no_test_function_exceeds_line_budget() {
+    const MAX_TEST_FN_LINES: usize = 500;
+    let source = include_str!("e2e_live.rs");
+    let lines: Vec<&str> = source.lines().collect();
+    let mut violators: Vec<String> = Vec::new();
+
+    let mut i = 0;
+    while i < lines.len() {
+        // Match any `fn test_` line (with or without preceding `#[ignore]`).
+        if lines[i].trim_start().starts_with("fn test_") {
+            let fn_name = lines[i]
+                .trim()
+                .trim_start_matches("fn ")
+                .split('(')
+                .next()
+                .unwrap_or("(unknown)")
+                .to_string();
+            let body = extract_fn_body(&lines, i);
+            let body_lines = body.lines().count();
+            if body_lines > MAX_TEST_FN_LINES {
+                violators.push(format!(
+                    "{fn_name}: {body_lines} lines (budget: {MAX_TEST_FN_LINES})"
+                ));
+            }
+            // Skip past this function to avoid re-scanning inner closures as top-level fns.
+            // Advance by at least 1 to avoid infinite loop; the scanner stops at function end.
+            i += body_lines.max(1);
+            continue;
+        }
+        i += 1;
+    }
+
+    assert!(
+        violators.is_empty(),
+        "LINE-BUDGET VIOLATION: the following test functions exceed {MAX_TEST_FN_LINES} lines \
+         (this guard catches runaway dead code that compiles but is never executed):\n  {}\n\
+         Refactor the function or extract helpers to bring it under the budget.",
+        violators.join("\n  ")
     );
 }
 
@@ -2969,6 +3032,7 @@ fn test_e2e_issue_transitions_returns_array() {
     }
     let label = run_label();
     let proj = project();
+    let itype = issue_type();
     let h = e2e_harness();
 
     // Seed one issue.
@@ -2981,7 +3045,7 @@ fn test_e2e_issue_transitions_returns_array() {
             "--project",
             &proj,
             "--type",
-            "Task",
+            &itype,
             "--summary",
             &summary,
             "--label",
@@ -3078,6 +3142,7 @@ fn test_e2e_issue_changelog_returns_object() {
     }
     let label = run_label();
     let proj = project();
+    let itype = issue_type();
     let h = e2e_harness();
 
     // Seed one issue.
@@ -3090,7 +3155,7 @@ fn test_e2e_issue_changelog_returns_object() {
             "--project",
             &proj,
             "--type",
-            "Task",
+            &itype,
             "--summary",
             &summary_orig,
             "--label",
@@ -3191,6 +3256,7 @@ fn test_e2e_issue_comments_returns_array() {
     }
     let label = run_label();
     let proj = project();
+    let itype = issue_type();
     let h = e2e_harness();
 
     // Seed one issue.
@@ -3203,7 +3269,7 @@ fn test_e2e_issue_comments_returns_array() {
             "--project",
             &proj,
             "--type",
-            "Task",
+            &itype,
             "--summary",
             &summary,
             "--label",
@@ -3506,6 +3572,7 @@ fn test_e2e_issue_edit_dry_run_no_mutation() {
     }
     let label = run_label();
     let proj = project();
+    let itype = issue_type();
     let h = e2e_harness();
 
     // Seed one issue with a known summary.
@@ -3518,7 +3585,7 @@ fn test_e2e_issue_edit_dry_run_no_mutation() {
             "--project",
             &proj,
             "--type",
-            "Task",
+            &itype,
             "--summary",
             &summary_orig,
             "--label",
@@ -3604,6 +3671,7 @@ fn test_e2e_issue_assign_self() {
     }
     let label = run_label();
     let proj = project();
+    let itype = issue_type();
     let h = e2e_harness();
 
     // Seed one issue.
@@ -3616,7 +3684,7 @@ fn test_e2e_issue_assign_self() {
             "--project",
             &proj,
             "--type",
-            "Task",
+            &itype,
             "--summary",
             &summary,
             "--label",
@@ -3693,6 +3761,7 @@ fn test_e2e_issue_link_and_unlink() {
     }
     let label = run_label();
     let proj = project();
+    let itype = issue_type();
     let h = e2e_harness();
 
     // Seed issue A.
@@ -3705,7 +3774,7 @@ fn test_e2e_issue_link_and_unlink() {
             "--project",
             &proj,
             "--type",
-            "Task",
+            &itype,
             "--summary",
             &summary_a,
             "--label",
@@ -3740,7 +3809,7 @@ fn test_e2e_issue_link_and_unlink() {
             "--project",
             &proj,
             "--type",
-            "Task",
+            &itype,
             "--summary",
             &summary_b,
             "--label",
@@ -3870,9 +3939,14 @@ fn test_e2e_pagination_dedup() {
         return;
     }
 
+    // Capture run_label() once: used both as the sweeper label AND as the base
+    // for unique_label so the sweeper can find these issues by base label.
+    let base_label = run_label();
+
     // Build a per-attempt-unique label (M-2: embed run_id AND attempt discriminator).
     // GITHUB_RUN_ATTEMPT re-runs with a different counter; for local runs, a
-    // millisecond timestamp nonce provides sufficient uniqueness.
+    // millisecond timestamp nonce (total milliseconds since epoch) provides
+    // sufficient uniqueness.
     let run_attempt = env::var("GITHUB_RUN_ATTEMPT")
         .ok()
         .filter(|s| !s.trim().is_empty())
@@ -3880,18 +3954,20 @@ fn test_e2e_pagination_dedup() {
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or(Duration::from_secs(0))
-                .subsec_millis()
+                .as_millis()
                 .to_string()
         });
-    let unique_label = format!("{}-a{run_attempt}-pg", run_label());
+    let unique_label = format!("{base_label}-a{run_attempt}-pg");
 
     let proj = project();
+    let itype = issue_type();
     let h = e2e_harness();
 
-    // Create 3 issues labeled with the unique label.
+    // Create 3 issues labeled with BOTH the base run label (for sweeper teardown)
+    // AND the unique label (for dedup JQL — F5 F-2 fix).
     let mut created_keys = Vec::with_capacity(3);
     for n in 1..=3u8 {
-        let summary = format!("[e2e] dedup-seed-{n} ({unique_label})");
+        let summary = format!("[e2e {base_label}] dedup-seed-{n}");
         let create_output = h
             .cmd()
             .args([
@@ -3900,9 +3976,11 @@ fn test_e2e_pagination_dedup() {
                 "--project",
                 &proj,
                 "--type",
-                "Task",
+                &itype,
                 "--summary",
                 &summary,
+                "--label",
+                &base_label,
                 "--label",
                 &unique_label,
                 "--output",
