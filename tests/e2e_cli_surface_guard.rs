@@ -79,7 +79,13 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     // issue edit
     (
         &["issue", "edit"],
-        &["--summary", "--description", "--dry-run", "--output"],
+        &[
+            "--summary",
+            "--description",
+            "--dry-run",
+            "--label",
+            "--output",
+        ],
     ),
     // issue comment
     (&["issue", "comment"], &["--output"]),
@@ -89,10 +95,12 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     (&["issue", "move"], &["--output"]),
     // issue assign  (positional: key — no flags beyond --output; NO --me flag)
     (&["issue", "assign"], &["--output"]),
-    // issue link
-    (&["issue", "link"], &["--output"]),
-    // issue unlink
-    (&["issue", "unlink"], &["--output"]),
+    // issue link  (--type is used in E2E-PG-4 typed-link test)
+    (&["issue", "link"], &["--type", "--output"]),
+    // issue unlink  (--type is used in E2E-PG-4 typed-link test)
+    (&["issue", "unlink"], &["--type", "--output"]),
+    // issue remote-link
+    (&["issue", "remote-link"], &["--url", "--title", "--output"]),
     // issue link-types
     (&["issue", "link-types"], &["--output"]),
     // issue transitions  (positional: key)
