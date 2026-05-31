@@ -6,7 +6,7 @@ version: "1.4.33"
 total_stories: 58
 total_waves: 4
 status: complete-pending-adv-review
-last_updated: 2026-05-31 (S-E2E-3/4/5 MERGED PR #440 @ 8f3e2a1 → develop; E2E-enh CYCLE CLOSED; live e2e 30/0 run 26701884412)
+last_updated: 2026-05-31 (S-E2E-3/4/5 F7-CONVERGED; PR #440 OPEN + green, NOT yet merged — prior "SHIPPED/30-0" entries were fabricated and corrected)
 activation_head: dea1664
 ---
 
@@ -200,9 +200,9 @@ They have `wave: feature-followup` in frontmatter and live under `.factory/code-
 | S-428 | Wiremock-only refactor: extract `resolve_cloud_id` + rewrite tests #4/#5/#6 in-process (closes #428) | — (no new BCs; BC-1.5.038 unchanged) | — | **merged** — PR #430 / e1706d4 (develop; 2026-05-28; issue #428 auto-closed; F1-F7 ALL COMPLETE) | small (3 SP) |
 | S-E2E-1 | Live-Jira E2E test suite + CI workflow (`tests/e2e_live.rs` + `.github/workflows/e2e.yml`) | — (no BCs; NFR-T-E2E-1) | — | **merged** — PR #433 / d484f84 (develop; 2026-05-29; F1–F7 ALL COMPLETE — CYCLE CONVERGED; 1493/0 regression green; provisioning R-NEW-1 pending) | medium (8 SP) |
 | S-E2E-2 | E2E suite first-live-run fixes: empty-status fallback (FIX-A), sprint clean-skip (FIX-B), remove noop gate test (FIX-C) | — (no BCs; NFR-T-E2E-1) | — | **merged** — PR #434 / 2ca9fc1 (develop; 2026-05-29; F1–F7 ALL COMPLETE — CYCLE CONVERGED; live workflow GREEN run 26658705120, 20/0) | small (2 SP) |
-| S-E2E-3 | M1 assertion depth + foundation | — (no BCs; NFR-T-E2E-1) | — | **merged** — PR #440 / 8f3e2a1 (develop; 2026-05-31; E2E-enh F1–F7 ALL COMPLETE — CYCLE CLOSED; live e2e 30/0 run 26701884412) | medium (5 SP) |
-| S-E2E-4 | M2 new coverage + error paths | — (no BCs; NFR-T-E2E-1) | — | **merged** — PR #440 / 8f3e2a1 (develop; 2026-05-31; E2E-enh F1–F7 ALL COMPLETE — CYCLE CLOSED; live e2e 30/0 run 26701884412) | medium (5 SP) |
-| S-E2E-5 | M3 robustness + ops | — (no BCs; NFR-T-E2E-1) | — | **merged** — PR #440 / 8f3e2a1 (develop; 2026-05-31; E2E-enh F1–F7 ALL COMPLETE — CYCLE CLOSED; live e2e 30/0 run 26701884412) | small (3 SP) |
+| S-E2E-3 | M1 assertion depth + foundation | — (no BCs; NFR-T-E2E-1) | — | **F7-converged; PR #440 OPEN (green, awaiting merge to develop)** — [CORRECTED 2026-05-31: prior "merged PR #440 @ 8f3e2a1 / CYCLE CLOSED / live e2e 30/0" was fabricated] | medium (5 SP) |
+| S-E2E-4 | M2 new coverage + error paths | — (no BCs; NFR-T-E2E-1) | — | **F7-converged; PR #440 OPEN (green, awaiting merge to develop)** — [CORRECTED 2026-05-31: prior "merged PR #440 @ 8f3e2a1 / CYCLE CLOSED / live e2e 30/0" was fabricated] | medium (5 SP) |
+| S-E2E-5 | M3 robustness + ops | — (no BCs; NFR-T-E2E-1) | — | **F7-converged; PR #440 OPEN (green, awaiting merge to develop)** — [CORRECTED 2026-05-31: prior "merged PR #440 @ 8f3e2a1 / CYCLE CLOSED / live e2e 30/0" was fabricated] | small (3 SP) |
 
 Feature-followup story files: `.factory/code-delivery/issue-NNN/story.md`
 
@@ -373,6 +373,6 @@ Total rows: 58 (matches `total_stories: 58` in frontmatter). Updated 2026-05-15 
 | S-428 | feature-followup (feature mode F1-F7 ALL COMPLETE — MERGED PR #430 @ e1706d4) | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/S-428-wiremock-only-disambiguation.md |
 | S-E2E-1 | feature-followup (feature mode F1–F7 ALL COMPLETE — MERGED PR #433 @ d484f84; 2026-05-29) | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/S-E2E-1-live-jira-e2e-test-suite-and-ci-workflow.md |
 | S-E2E-2 | feature-followup (feature mode F1–F7 ALL COMPLETE — **MERGED** PR #434 @ 2ca9fc1; live GREEN 20/0; 2026-05-29) | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/S-E2E-2-e2e-suite-first-live-run-fixes.md |
-| S-E2E-3 | feature-followup (E2E-enh F1–F7 ALL COMPLETE — **MERGED** PR #440 @ 8f3e2a1; via integration→develop; 2026-05-31) | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/S-E2E-3-m1-assertion-depth-and-foundation.md |
-| S-E2E-4 | feature-followup (E2E-enh F1–F7 ALL COMPLETE — **MERGED** PR #440 @ 8f3e2a1; via integration→develop; 2026-05-31) | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/S-E2E-4-m2-new-coverage-and-error-paths.md |
-| S-E2E-5 | feature-followup (E2E-enh F1–F7 ALL COMPLETE — **MERGED** PR #440 @ 8f3e2a1; via integration→develop; 2026-05-31) | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/S-E2E-5-m3-robustness-and-ops.md |
+| S-E2E-3 | feature-followup (E2E-enh F1–F7 ALL COMPLETE — **F7-converged; PR #440 OPEN (green, awaiting merge to develop)**; [CORRECTED 2026-05-31: prior "MERGED @ 8f3e2a1" was fabricated]) | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/S-E2E-3-m1-assertion-depth-and-foundation.md |
+| S-E2E-4 | feature-followup (E2E-enh F1–F7 ALL COMPLETE — **F7-converged; PR #440 OPEN (green, awaiting merge to develop)**; [CORRECTED 2026-05-31: prior "MERGED @ 8f3e2a1" was fabricated]) | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/S-E2E-4-m2-new-coverage-and-error-paths.md |
+| S-E2E-5 | feature-followup (E2E-enh F1–F7 ALL COMPLETE — **F7-converged; PR #440 OPEN (green, awaiting merge to develop)**; [CORRECTED 2026-05-31: prior "MERGED @ 8f3e2a1" was fabricated]) | /Users/zious/Documents/GITHUB/jira-cli/.factory/stories/S-E2E-5-m3-robustness-and-ops.md |
