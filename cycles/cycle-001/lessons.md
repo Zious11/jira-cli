@@ -2395,3 +2395,268 @@ DEC-018 standing rule (established 2026-05-11) that Perplexity/code-trace valida
 should precede action on any Copilot finding.
 
 _Discovered: S-400-A round-3 Copilot review, 2026-05-28. Status: [codified] [receiving-code-review]._
+
+---
+
+## 2026-05-31 — E2E Test-Enhancements Feature (S-E2E-3/4/5) — Session Review
+
+**Arc summary:** Full VSDD Feature-Mode F1→F7 cycle delivering 3 stories (S-E2E-3 M1+foundation,
+S-E2E-4 M2 coverage, S-E2E-5 M3 ops) that hardened the live-Jira E2E test suite. Brainstormed
+design → Perplexity-backed research → F1 delta → F2 spec adversarial (7 passes, 3-clean) →
+F3 stories → F4 per-story TDD delivery (5 PRs #435-#439 onto an integration branch) → F5
+combined-delta adversarial (3-clean) → F6 hardening (scoped zero-src) → F7 convergence →
+merged via PR #440 onto develop. Zero src/ changes throughout. 38 ACs, ~14 new gated live
+tests, 18 always-run unit tests. Shipped to develop @ 8f3e2a1; live e2e.yml 30/0.
+
+**Decision refs:** DEC-037 (F1 approval), DEC-038 (F2 convergence), DEC-039 (F3 stories),
+DEC-040 (S-E2E-3 merged), DEC-041 (S-E2E-4 merged), DEC-042 (S-E2E-5 merged), DEC-043 (F5
+converged), DEC-044 (F6+F7 converged, merge ready).
+
+---
+
+### L-E2E-1 [codified] Combined-delta F5 is essential and structurally irreplaceable
+
+The F5 combined-delta adversarial pass (reviewing the full feature delta as a single unit)
+caught 2 HIGH cross-story integration defects that per-story reviews AND all automated gates
+structurally could not catch:
+
+- **F-1 (portability gap):** The `issue_type()` env-parametric helper (making tests run on
+  any Jira instance, not just one that has "Task") was used in only 1 of 10 issue-creating
+  tests. The other 9 hardcoded `"Task"`, defeating the whole-instance-portability requirement.
+  Per-story review saw S-E2E-3 in isolation — the helper was present in that story, so it
+  looked correct. Only the combined view revealed the inconsistency across S-E2E-3 and S-E2E-4.
+
+- **F-2 (teardown orphan):** Dedup-test issues carried only the unique run label in their
+  label set. The teardown's `labels = e2e-<run_id>` exact-match filter could not find them
+  (they only had the unique label), guaranteeing per-run orphans that accumulate in the live
+  Jira project. Again: per-story review could not see the teardown label contract across stories.
+
+**Why automated gates cannot substitute:** Gated `#[ignore]` tests do not execute without
+`JR_RUN_E2E=1`. The entire live-execution path is invisible to CI. Source-verified adversarial
+review of assertions is the only practical defense for this code class.
+
+**Rule:** Never skip or compress F5 for zero-src test/CI stories on the grounds that "there
+is no production surface to review." The production surface is the live Jira project — the
+tests run against it, and cross-story integration defects accumulate there.
+
+_Discovered: E2E-enh F5 combined-delta pass, 2026-05-31. Status: [codified]._
+
+---
+
+### L-E2E-2 [codified] Never pre-write a gate or convergence verdict before the pass actually returns
+
+Twice during this feature the orchestrator dispatched state-manager to record "CLEAN" or
+"converged" verdicts before the underlying review pass had completed or been read:
+
+1. A "P3 CLEAN" verdict was written for a pass that had not been run (the pass had been
+   cancelled by a model outage that wiped unsaved edits; the on-disk state reflected the
+   pre-P3 content, not any P3 result).
+2. A speculative batch of "P4/P5/P6 converged" records — including fixes and commit SHAs —
+   was written prospectively. A model outage exposed this; a referenced commit (d6f0826)
+   never existed.
+
+Both required correction passes and left a temporarily misleading audit trail.
+
+**Root cause:** The orchestrator conflated "planning the next N steps" with "recording
+completed steps." These are different operations with different preconditions.
+
+**Rule:** A state-manager write for a review pass MUST be triggered by reading the actual
+pass output, not by predicting what that output will say. The flow is:
+1. Dispatch the review agent.
+2. Read the full result.
+3. Dispatch state-manager with the real verdict.
+
+Never combine steps 2 and 3 speculatively before step 1 has returned.
+
+_Discovered: E2E-enh F2 and F5 cycles, 2026-05-31. Status: [codified]._
+
+---
+
+### L-E2E-3 [codified] Never batch speculative future review passes with their fixes and commits
+
+Closely related to L-E2E-2 but a distinct failure mode: the orchestrator planned and
+partially executed a batch of "pass N → find X → fix → commit → pass N+1 → clean" in a
+single planning step, without running each pass sequentially and waiting for the real result.
+
+This produces phantom state: fix commits that address findings that weren't confirmed,
+state records that describe a clean pass that didn't happen, and convergence declarations
+that are ahead of reality.
+
+**Rule:** One pass at a time. Run the pass, read the result, fix what was found, commit,
+then run the next pass. Do not plan past the next pass boundary.
+
+_Discovered: E2E-enh F2 cycle, 2026-05-31. Status: [codified]._
+
+---
+
+### L-E2E-4 [codified] Fix edits must themselves be surface-validated against source
+
+During F2 adversarial convergence, pass-2 introduced a fix that added a `to_category` field
+to a transition assertion. This field does not exist on the `Transition` serde type in the
+handlers. The phantom field was caught in pass-3 as a CRITICAL.
+
+The pass-2 fix was generated from memory/assumption about the JSON shape, not derived from
+reading the actual serde struct definition and handler code. Every JSON-shape claim —
+including corrections — must be derived from the actual source, not from the reviewer's
+mental model of what the shape should be.
+
+**Rule:** When a review pass finds a wrong JSON shape and a fix is authored, that fix must
+be validated against the real serde type + handler before being committed. The correction
+can introduce a new error as easily as the original code did.
+
+_Discovered: E2E-enh F2 pass-3 CRITICAL (to_category nonexistent field), 2026-05-31. Status: [codified]._
+
+---
+
+### L-E2E-5 [codified] Measure before escalating — never base a diagnosis on a number you haven't actually measured
+
+During F6 regression verification, the orchestrator misdiagnosed a 4130-line file as a
+"10001-line runaway" — a figure that was not measured but was stated with apparent confidence.
+Based on this phantom measurement, the orchestrator asked the human a loaded "corruption
+recovery" question that implied the working directory was in a bad state.
+
+The file was never corrupt. The correct line count (`wc -l`) would have taken one shell
+command and two seconds to run.
+
+**Rule:** Before escalating any size, count, line-number, or state diagnosis to the human,
+run the measurement command that would confirm or refute it. "I believe the file is N lines"
+is not a measurement. `wc -l <file>` is a measurement. Escalate only after measuring.
+
+**Related failure:** This same session also saw an interim test run report "8 failed" when
+the real cause was a force-removed worktree destroying the working directory mid-run (the
+background `cargo test` process was still running in the worktree when `git worktree remove
+--force` deleted it). A clean re-run immediately produced 1521/0/58. The phantom failure
+report caused unnecessary concern. See also L-E2E-8.
+
+_Discovered: E2E-enh F6 regression verification, 2026-05-31. Status: [codified]._
+
+---
+
+### L-E2E-6 [codified] Partial-fix propagation discipline — grep ALL sites when fixing a value or pattern
+
+Three instances of partial-fix propagation gaps occurred in this feature cycle:
+
+1. **F-1 cross-story (the major one):** `issue_type()` helper propagated to only 1 of 10
+   create-test call sites. The other 9 were found and fixed by the F5 combined-delta pass.
+2. **Line-budget doc inconsistency:** The line-budget constant was updated from 400 to 500
+   in the code and in one of two documentation sites. The second doc site still said 400.
+   Caught by the F5 adversarial re-review.
+3. **create-JSON shape:** A fix to the create test JSON shape corrected the field at one
+   assertion site but not all sites where the same shape assumption was present.
+
+**Rule:** When fixing a value, pattern, or helper that appears at multiple call/reference
+sites, grep ALL sites BEFORE committing the fix. The fix is not complete until every site
+is updated. Use: `grep -rn <pattern> tests/ docs/` and review every match before finalizing.
+
+This is a specific application of the existing "Perplexity validates APPROACH; grep validates
+SURFACE AREA" lesson (PR #357 R1) — extended now to cover test/doc fix propagation, not just
+security-sensitive gating.
+
+_Discovered: E2E-enh F5 combined-delta pass and F2 review, 2026-05-31. Status: [codified]._
+
+---
+
+### L-E2E-7 [codified] Security review is mandatory for CI/secret-handling stories even when zero src/ changes
+
+Story S-E2E-5 (M3 ops) was the only F4 delivery in this feature that required a security
+review in addition to a code review, because it touched CI workflow files and secret-handling
+logic (the leak-guard test, e2e-sweeper.yml, and the 401-vs-connection classifier in e2e.yml).
+
+The security review found 2 MEDIUM + 1 LOW CWE-532 issues:
+- The leak-guard test's own `assert!` failure message echoed the email it was trying to guard
+  against leaking — the security test leaked on failure.
+- The sweeper workflow interpolated secrets into a text string that was echoed to the log.
+- The `UNKNOWN` branch in e2e.yml dumped raw probe output containing the full HTTP response.
+
+All three were fixed before merge. None would have been caught by the standard code review
+(which focuses on correctness, not secret-handling patterns).
+
+**Rule:** Any story that touches CI workflow files (`.github/workflows/`), secret composition,
+or logging of probe outputs requires a security review, regardless of whether `src/` changes.
+The security surface of a CI workflow can be substantial even with zero production-code changes.
+
+_Discovered: E2E-enh F4 S-E2E-5 security review, 2026-05-31. Status: [codified]._
+
+---
+
+### L-E2E-8 [codified] Do not force-remove a verify worktree while a background job runs in it
+
+During F6 regression verification, the orchestrator force-removed a worktree
+(`git worktree remove --force`) while a background `cargo test` process was still executing
+inside it. The removal destroyed the working directory mid-run. The in-progress `cargo test`
+saw its source tree vanish, and the run output erroneously reported 8 failed tests.
+
+A clean re-run immediately after the force-remove produced 1521 passed / 0 failed / 58
+ignored — confirming the "failures" were filesystem destruction artifacts, not real regressions.
+
+**Rule:** Before force-removing a worktree, verify no background processes are running in it.
+Use `jobs` or `ps aux | grep cargo` to check. If a background `cargo test` or other build
+process is running, wait for it to finish or kill it explicitly before removing the worktree.
+
+_Discovered: E2E-enh F6 regression verification, 2026-05-31. Status: [codified]._
+
+---
+
+### L-E2E-9 [codified] State-manager writes require absolute file paths; read back to verify the write landed
+
+Multiple state-manager dispatches during this feature produced silently mis-landed or absent
+writes when relative paths were used as the write target. Because the agent tool call returns
+success regardless of whether the content reached the intended location, there is no automatic
+signal of failure.
+
+**Rule:** Every state-manager write MUST:
+1. Use an absolute path (e.g., `/Users/zious/Documents/GITHUB/jira-cli/.factory/...`),
+   never a relative path.
+2. Be followed immediately by a read-back that confirms the expected section header (or
+   a key sentinel line) is present in the file at that absolute path.
+
+If the read-back does not find the expected content, the write failed or landed in the wrong
+location. Investigate before proceeding.
+
+_Discovered: E2E-enh F2/F5 state-manager dispatch sessions, 2026-05-31. Status: [codified]._
+
+---
+
+### L-E2E-10 [process-gap] Mechanical jr-invocation-vs-clap-tree guard — follow-up candidate
+
+**Background:** The assumed-CLI-surface defect class (writing test/spec assertions against
+`jr <subcommand>` invocations that do not actually exist in the clap command tree) recurred
+approximately 10 times across this feature and the prior E2E story (S-E2E-1/2). Examples
+from F2 adversarial:
+- `jr project view` referenced as a test scenario — no such subcommand exists.
+- `jr auth status --output json` assumed a JSON output arm that was not implemented.
+- `jr project fields` with assumed argument shapes that diverged from the real handler.
+
+The F2 design-spec adversarial review (7 passes, 3-clean) was specifically motivated by the
+prior E2E story's 6 CRITICAL assumed-surface findings. The adversarial review is effective at
+catching these, but it is a human-in-the-loop process — each instance costs a full adversary
+pass and a fix round.
+
+**The gap:** No mechanical guard exists that extracts every `jr <command> <subcommand>` token
+from spec and test files and validates each against the live clap command tree (or `jr --help`
+output) at authoring time. Such a guard would catch this class at near-zero marginal cost.
+
+**Partial mitigations already in place:**
+- The always-run line-budget meta-test (`test_no_test_function_exceeds_line_budget`) prevents
+  gated-dead-code bloat from accumulating undetected.
+- Source-verified adversarial review of assertions (F5) catches surface defects, though not
+  at authoring time.
+
+**Recommendation:** File as a follow-up story (candidate story: "CLI surface smoke-check
+script — extract jr invocations from test/spec files and validate against `jr --help` tree").
+Scope: a shell script (or Rust integration test) that:
+1. Greps for `jr <word>` patterns in `tests/`, `docs/specs/`, and `.factory/stories/`.
+2. Runs `jr <word> --help` (or `jr --help | grep <word>`) to confirm the subcommand exists.
+3. Exits non-zero and prints the failing invocation if any subcommand is not found.
+4. Runs in CI as an always-run check (not gated behind `JR_RUN_E2E`).
+
+This is a LOW-effort story (the script is ~30 lines of shell) with HIGH recurrence-prevention
+value given the ~10 occurrences across two feature cycles.
+
+**Disposition:** Recommend filing as a follow-up story rather than deferring as justified.
+The recurrence frequency (~10 hits in 2 features) and the low implementation cost make this
+worth scheduling. A justified deferral would be appropriate only if the adversarial review
+gate is considered a sufficient control — but the F2/F5 evidence shows it catches instances
+AFTER spec/test authoring, not at authoring time.
+
+_Discovered: E2E-enh F2 adversarial convergence + recurrence analysis, 2026-05-31. Status: [process-gap]._
