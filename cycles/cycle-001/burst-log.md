@@ -3373,3 +3373,9 @@ The following step row was archived from STATE.md "Current Phase Steps" table (o
 The following step row was archived from STATE.md "Current Phase Steps" table (oldest row pruned to maintain 5-row budget) when the E2E-enh F5 CONVERGED row was added:
 
 | E2E-enh F2 spec-evolution CONVERGED 2026-05-29 (3 consec clean P5/P6/P7) | orchestrator + adversary + product-owner | complete | BC delta EMPTY (PO; BC-2.6.051). Adversary P1 13→P2 5→[outage]→P4 6→P5/P6/P7 CLEAN. All assumed-CLI-surface defects eliminated + source-verified @ 3d29f8d. F-1 closed (board.rs type rename). 2 LOW deferred to F3/F4 (DI-E2E-F2-1/2). Awaiting F2 human gate → F3 story authoring. |
+
+## Burst N+7 — Archived Current Phase Steps Row (2026-05-31)
+
+The following step row was archived from STATE.md "Current Phase Steps" table (oldest row pruned to maintain 5-row budget) when the E2E-enh SHIPPED row was added:
+
+| E2E-enh F4 S-E2E-3 MERGED to integration 2026-05-30 (PR #435 squash @ 7f3a1e9) | orchestrator + implementer + code-reviewer + pr-reviewer + pr-manager | complete | M1+foundation: poll_jql (Skip/FailOnShort), shape matchers, JR_E2E_POLL_* test seams, 18 always-run unit tests (7→25 in e2e_live), deepened 12 gated tests to round-trip. Zero src/. 2 reviews APPROVED 0C/0H/0M. ci.yml N/A on integration PR; final integration→develop PR gets full CI. Worktree cleaned. Next: S-E2E-4 (M2). |
