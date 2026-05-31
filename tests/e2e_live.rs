@@ -1291,6 +1291,559 @@ fn test_e2e_issue_view_returns_key_field() {
 }
 
 // ---------------------------------------------------------------------------
+// AC-007 — Label add/remove round-trip
+// ---------------------------------------------------------------------------
+
+/// E2E: `jr issue edit <KEY> --label add:<L>` then `--label remove:<L>` round-trips
+/// the label absent→present→absent through GET-consistent poll_view assertions.
+///
+/// L is derived from `run_label()` with a `-probe` suffix so it is unique per
+/// run and guaranteed absent on a fresh issue.
+///
+/// The bulk-edit path (used by `--label`) requires the "Bulk Changes" global
+/// permission. When that permission is disabled, Jira returns HTTP 403 and the
+/// test skips cleanly. The skip is intentionally narrow — only a 403 from the
+/// bulk endpoint (exit 1, stderr contains "403") is accepted as a skip signal;
+/// any other non-zero exit (400 payload error, 401 auth, scope mismatch, etc.)
+/// fails the test with the captured stderr.
+///
+/// Traces to: AC-007 (label round-trip), NFR-T-E2E-1.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
+fn test_e2e_issue_edit_label_add_remove_roundtrip() {
+    if !e2e_enabled() {
+        return;
+    }
+
+    let label = run_label();
+    // Use a distinct probe label so absence before add is guaranteed on a new issue.
+    let probe = format!("{label}-probe");
+    let proj = project();
+    let h = e2e_harness();
+
+    // --- Step 1: Create the seed issue (labelled with run_label for teardown) ---
+    let summary = format!("[e2e {label}] label-roundtrip seed");
+    let create_output = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &proj,
+            "--type",
+            "Task",
+            "--summary",
+            &summary,
+            "--label",
+            &label,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for issue create (label-roundtrip seed)");
+
+    assert!(
+        create_output.status.success(),
+        "issue create (label-roundtrip seed) failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&create_output.stdout),
+        String::from_utf8_lossy(&create_output.stderr)
+    );
+
+    let create_json: Value = serde_json::from_slice(&create_output.stdout)
+        .expect("issue create output must be valid JSON");
+    let key = create_json
+        .get("key")
+        .and_then(Value::as_str)
+        .expect("issue create JSON must contain a 'key' field")
+        .to_string();
+
+    // --- Step 2: poll_view and ASSERT probe label is ABSENT (HIGH-1) ---
+    // The issue was created with `label` (run_label), not `probe`. Absence holds
+    // on any fresh issue because `probe` is unique per run.
+    let before_json = poll_view(&key, &h);
+    let before_labels = before_json
+        .pointer("/fields/labels")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    assert!(
+        !before_labels.contains(&probe),
+        "probe label '{probe}' must be ABSENT before add; found labels: {before_labels:?}"
+    );
+
+    // --- Step 3: add the probe label ---
+    let add_arg = format!("add:{probe}");
+    let add_output = h
+        .cmd()
+        .args([
+            "issue", "edit", &key, "--label", &add_arg, "--output", "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for issue edit --label add");
+
+    if !add_output.status.success() {
+        let stderr = String::from_utf8_lossy(&add_output.stderr);
+        // Skip is intentionally narrow — only bulk-changes permission denial (HTTP 403);
+        // any other failure must fail the test.
+        if add_output.status.code() == Some(1) && stderr.contains("403") {
+            eprintln!(
+                "SKIP: bulk-edit 403 — 'Bulk Changes' global permission \
+                 not enabled on this site; skipping label round-trip test.\nstderr: {stderr}"
+            );
+            return;
+        }
+        panic!(
+            "issue edit --label add failed for {key} (non-403 error — not a permission skip):\n\
+             exit: {:?}\nstdout: {}\nstderr: {}",
+            add_output.status.code(),
+            String::from_utf8_lossy(&add_output.stdout),
+            stderr,
+        );
+    }
+
+    // --- Step 4: poll_view and assert probe label IS present ---
+    let after_add_json = poll_view(&key, &h);
+    let after_add_labels = after_add_json
+        .pointer("/fields/labels")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    assert!(
+        after_add_labels.contains(&probe),
+        "probe label '{probe}' must be PRESENT after add; found labels: {after_add_labels:?}"
+    );
+
+    // --- Step 5: remove the probe label ---
+    let remove_arg = format!("remove:{probe}");
+    let remove_output = h
+        .cmd()
+        .args([
+            "issue",
+            "edit",
+            &key,
+            "--label",
+            &remove_arg,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for issue edit --label remove");
+
+    if !remove_output.status.success() {
+        let stderr = String::from_utf8_lossy(&remove_output.stderr);
+        // Skip is intentionally narrow — only bulk-changes permission denial (HTTP 403);
+        // any other failure must fail the test.
+        if remove_output.status.code() == Some(1) && stderr.contains("403") {
+            eprintln!(
+                "SKIP: bulk-edit 403 on remove — 'Bulk Changes' global permission \
+                 not enabled on this site.\nstderr: {stderr}"
+            );
+            return;
+        }
+        panic!(
+            "issue edit --label remove failed for {key} (non-403 error — not a permission skip):\n\
+             exit: {:?}\nstdout: {}\nstderr: {}",
+            remove_output.status.code(),
+            String::from_utf8_lossy(&remove_output.stdout),
+            stderr,
+        );
+    }
+
+    // --- Step 6: poll_view and assert probe label is ABSENT again ---
+    let after_remove_json = poll_view(&key, &h);
+    let after_remove_labels = after_remove_json
+        .pointer("/fields/labels")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    assert!(
+        !after_remove_labels.contains(&probe),
+        "probe label '{probe}' must be ABSENT after remove; found labels: {after_remove_labels:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AC-007 — Issue link with explicit type + type-scoped unlink
+// ---------------------------------------------------------------------------
+
+/// E2E: `jr issue link A B --type T` creates a typed link; `jr issue unlink A B --type T`
+/// removes it; a post-unlink poll_view asserts that no link with type T and
+/// the other key on either side remains.
+///
+/// This test is self-seeding: it creates two throwaway Task issues (A, B),
+/// discovers available link types via `issue link-types --output json`, and
+/// uses the first returned type. T is captured once and reused for the unlink
+/// assertion — the type name is not re-discovered after unlink.
+///
+/// Pre-link: both A and B are confirmed GET-consistent via poll_view before
+/// the link is issued, mirroring the sibling pattern in this suite.
+///
+/// Post-unlink assertion: proves the SPECIFIC link (B on either side AND
+/// type.name == T, case-insensitive) is gone — not merely that the issuelinks
+/// array shrank.
+///
+/// Traces to: AC-007 (link/unlink with type), NFR-T-E2E-1.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
+fn test_e2e_issue_link_with_type_and_unlink_with_type() {
+    if !e2e_enabled() {
+        return;
+    }
+
+    let label = run_label();
+    let proj = project();
+    let h = e2e_harness();
+
+    // --- Step 1: create two seed issues ---
+    let create_issue = |suffix: &str| -> String {
+        let summary = format!("[e2e {label}] link-type-test {suffix}");
+        let out = h
+            .cmd()
+            .args([
+                "issue",
+                "create",
+                "--project",
+                &proj,
+                "--type",
+                "Task",
+                "--summary",
+                &summary,
+                "--label",
+                &label,
+                "--output",
+                "json",
+            ])
+            .output()
+            .unwrap_or_else(|e| panic!("failed to spawn jr for issue create ({suffix}): {e}"));
+        assert!(
+            out.status.success(),
+            "issue create ({suffix}) failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let j: Value =
+            serde_json::from_slice(&out.stdout).expect("issue create output must be valid JSON");
+        j.get("key")
+            .and_then(Value::as_str)
+            .expect("issue create JSON must contain a 'key' field")
+            .to_string()
+    };
+
+    let key_a = create_issue("A");
+    let key_b = create_issue("B");
+
+    // --- Step 2: pre-link GET-consistency for both A and B (LOW-2 fix) ---
+    poll_view(&key_a, &h);
+    poll_view(&key_b, &h);
+
+    // --- Step 3: discover link types and pick the first one ---
+    let link_types_output = h
+        .cmd()
+        .args(["issue", "link-types", "--output", "json"])
+        .output()
+        .expect("failed to spawn jr for issue link-types");
+    assert!(
+        link_types_output.status.success(),
+        "issue link-types failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&link_types_output.stdout),
+        String::from_utf8_lossy(&link_types_output.stderr)
+    );
+    let link_types_json: Value = serde_json::from_slice(&link_types_output.stdout)
+        .expect("issue link-types output must be valid JSON");
+    let link_type_name = link_types_json
+        .as_array()
+        .and_then(|arr| arr.first())
+        .and_then(|lt| lt.get("name"))
+        .and_then(Value::as_str)
+        .expect("issue link-types must return a non-empty JSON array with a 'name' field")
+        .to_string();
+
+    // --- Step 4: link A → B with the discovered type ---
+    let link_output = h
+        .cmd()
+        .args([
+            "issue",
+            "link",
+            &key_a,
+            &key_b,
+            "--type",
+            &link_type_name,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for issue link");
+    assert!(
+        link_output.status.success(),
+        "issue link {key_a} → {key_b} ({link_type_name}) failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&link_output.stdout),
+        String::from_utf8_lossy(&link_output.stderr)
+    );
+
+    // --- Step 5: poll_view A and confirm the typed link to B is present ---
+    let linked_json = poll_view(&key_a, &h);
+    let links_after_link = linked_json
+        .pointer("/fields/issuelinks")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let has_typed_link = links_after_link.iter().any(|lnk| {
+        let type_matches = lnk
+            .pointer("/type/name")
+            .and_then(Value::as_str)
+            .map(|n| n.eq_ignore_ascii_case(&link_type_name))
+            .unwrap_or(false);
+        let key_matches = lnk
+            .pointer("/outwardIssue/key")
+            .and_then(Value::as_str)
+            .map(|k| k.eq_ignore_ascii_case(&key_b))
+            .unwrap_or(false)
+            || lnk
+                .pointer("/inwardIssue/key")
+                .and_then(Value::as_str)
+                .map(|k| k.eq_ignore_ascii_case(&key_b))
+                .unwrap_or(false);
+        type_matches && key_matches
+    });
+    assert!(
+        has_typed_link,
+        "after link, poll_view({key_a}) must contain a link to {key_b} with type \
+         '{link_type_name}'; found issuelinks: {links_after_link:?}"
+    );
+
+    // --- Step 6: unlink A B with the same type ---
+    let unlink_output = h
+        .cmd()
+        .args([
+            "issue",
+            "unlink",
+            &key_a,
+            &key_b,
+            "--type",
+            &link_type_name,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for issue unlink");
+    assert!(
+        unlink_output.status.success(),
+        "issue unlink {key_a} ↔ {key_b} ({link_type_name}) failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&unlink_output.stdout),
+        String::from_utf8_lossy(&unlink_output.stderr)
+    );
+
+    // --- Step 7: poll_view A and assert the SPECIFIC (key_b, link_type_name) link is GONE ---
+    // Reuse `link_type_name` captured before the unlink — do NOT re-discover types.
+    // Must prove the specific (B-on-either-side AND type.name==T) link is absent,
+    // not merely that the array shrank.
+    let unlinked_json = poll_view(&key_a, &h);
+    let links_after_unlink = unlinked_json
+        .pointer("/fields/issuelinks")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let still_has_typed_link = links_after_unlink.iter().any(|lnk| {
+        let type_matches = lnk
+            .pointer("/type/name")
+            .and_then(Value::as_str)
+            .map(|n| n.eq_ignore_ascii_case(&link_type_name))
+            .unwrap_or(false);
+        let key_matches = lnk
+            .pointer("/outwardIssue/key")
+            .and_then(Value::as_str)
+            .map(|k| k.eq_ignore_ascii_case(&key_b))
+            .unwrap_or(false)
+            || lnk
+                .pointer("/inwardIssue/key")
+                .and_then(Value::as_str)
+                .map(|k| k.eq_ignore_ascii_case(&key_b))
+                .unwrap_or(false);
+        type_matches && key_matches
+    });
+    assert!(
+        !still_has_typed_link,
+        "after unlink, poll_view({key_a}) must NOT contain a link to {key_b} with type \
+         '{link_type_name}'; found issuelinks: {links_after_unlink:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AC-007 — Remote link smoke test
+// ---------------------------------------------------------------------------
+
+/// E2E: `jr issue remote-link <KEY> --url https://example.com/ --title "E2E remote link"
+/// --output json` exits 0 and returns a non-empty JSON object with at least one key.
+///
+/// This test is self-seeding: it creates a throwaway Task issue, polls for
+/// GET-consistency, then creates a remote link to a stable, public URL.
+/// The assertion is deliberately instance-agnostic — it does NOT assert
+/// specific `id`, `self`, `key`, or `url` values (which differ per Jira instance).
+///
+/// Traces to: AC-007 (remote link), NFR-T-E2E-1.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
+fn test_e2e_issue_remote_link_smoke() {
+    if !e2e_enabled() {
+        return;
+    }
+
+    let label = run_label();
+    let proj = project();
+    let h = e2e_harness();
+
+    // --- Step 1: create seed issue ---
+    let summary = format!("[e2e {label}] remote-link seed");
+    let create_output = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &proj,
+            "--type",
+            "Task",
+            "--summary",
+            &summary,
+            "--label",
+            &label,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for issue create (remote-link seed)");
+
+    assert!(
+        create_output.status.success(),
+        "issue create (remote-link seed) failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&create_output.stdout),
+        String::from_utf8_lossy(&create_output.stderr)
+    );
+
+    let create_json: Value = serde_json::from_slice(&create_output.stdout)
+        .expect("issue create output must be valid JSON");
+    let key = create_json
+        .get("key")
+        .and_then(Value::as_str)
+        .expect("issue create JSON must contain a 'key' field")
+        .to_string();
+
+    // --- Step 2: poll_view for GET-consistency ---
+    poll_view(&key, &h);
+
+    // --- Step 3: create remote link ---
+    let remote_link_output = h
+        .cmd()
+        .args([
+            "issue",
+            "remote-link",
+            &key,
+            "--url",
+            "https://example.com/",
+            "--title",
+            "E2E remote link",
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for issue remote-link");
+
+    assert!(
+        remote_link_output.status.success(),
+        "issue remote-link failed for {key}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&remote_link_output.stdout),
+        String::from_utf8_lossy(&remote_link_output.stderr)
+    );
+
+    // Assert stdout parses as JSON AND is a non-empty object (at least one key).
+    // Do NOT assert instance-specific id/self values — those differ per site.
+    let remote_link_json: Value = serde_json::from_slice(&remote_link_output.stdout)
+        .expect("issue remote-link --output json must produce valid JSON on stdout");
+    assert!(
+        remote_link_json.is_object(),
+        "issue remote-link JSON must be an object; got: {remote_link_json}"
+    );
+    assert!(
+        !remote_link_json
+            .as_object()
+            .map(|o| o.is_empty())
+            .unwrap_or(true),
+        "issue remote-link JSON must be a non-empty object; got: {remote_link_json}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AC-META — line-budget meta-guard (always-run, no gate required)
+// ---------------------------------------------------------------------------
+
+/// Meta-guard: no test function body in this file may exceed 500 lines.
+///
+/// Uses `extract_fn_body` to scan every `fn test_` function in this source
+/// file (both gated and ungated) and fails if any function body exceeds the
+/// per-test line budget of 500 lines.
+///
+/// Rationale: large test functions are hard to review and often signal that
+/// a test is doing too much. Extract helpers when approaching the limit.
+///
+/// Note: `extract_fn_body` counts SOURCE lines (including blank lines and
+/// comments inside the function body), not executable statements.
+#[test]
+fn test_no_test_function_exceeds_line_budget() {
+    const LINE_BUDGET: usize = 500;
+
+    let source = include_str!("e2e_live.rs");
+    let lines: Vec<&str> = source.lines().collect();
+
+    let mut violations: Vec<String> = Vec::new();
+
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim_start();
+        // Match the first line of a `fn test_` definition (may be preceded by attributes).
+        if trimmed.starts_with("fn test_") {
+            let fn_name = trimmed
+                .trim_start_matches("fn ")
+                .split('(')
+                .next()
+                .unwrap_or("(unknown)")
+                .to_string();
+
+            let body = extract_fn_body(&lines, i);
+            let line_count = body.lines().count();
+            if line_count > LINE_BUDGET {
+                violations.push(format!(
+                    "{fn_name}: {line_count} lines (budget: {LINE_BUDGET})"
+                ));
+            }
+            i += 1;
+            continue;
+        }
+        i += 1;
+    }
+
+    assert!(
+        violations.is_empty(),
+        "AC-META: the following test functions exceed the {LINE_BUDGET}-line budget:\n  {}",
+        violations.join("\n  ")
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Unit tests for `extract_fn_body` parser (always-run, no gate required)
 // ---------------------------------------------------------------------------
 
