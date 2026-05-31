@@ -90,6 +90,45 @@ jobs:
 
           cargo test --test e2e_live -- --include-ignored --test-threads=1
 
+      - name: Classify failure (runs only when the test step fails)
+        if: failure()
+        env:
+          JR_BASE_URL: ${{ secrets.JR_E2E_BASE_URL }}
+          JR_E2E_PROJECT: ${{ vars.JR_E2E_PROJECT }}
+          JR_E2E_EMAIL: ${{ secrets.JR_E2E_EMAIL }}
+          JR_E2E_API_TOKEN: ${{ secrets.JR_E2E_API_TOKEN }}
+        run: |
+          # Compose auth header for the classification probe.
+          JR_AUTH_HEADER="Basic $(printf '%s:%s' "$JR_E2E_EMAIL" "$JR_E2E_API_TOKEN" | base64 | tr -d '\n')"
+          export JR_AUTH_HEADER
+          # Mask the composed header so any accidental echo in this step is redacted.
+          echo "::add-mask::$JR_AUTH_HEADER"
+
+          # Run a lightweight probe to classify the failure root cause.
+          # Classification is grep-based on PROBE_OUTPUT — not on the exit code.
+          # (PROBE_EXIT is always 0 because of the || true guard inside the
+          #  command substitution; it is intentionally not used for classification.)
+          PROBE_OUTPUT=$(./target/debug/jr issue list \
+            --jql "project=$JR_E2E_PROJECT" \
+            --output json 2>&1 || true)
+
+          if echo "$PROBE_OUTPUT" | grep -qi "401\|Unauthorized\|NotAuthenticated\|access token\|not authenticated"; then
+            echo "::error::AUTH FAILURE — the JR_E2E_API_TOKEN secret is expired or revoked."
+            echo "ACTION: rotate JR_E2E_API_TOKEN in the CI service account before expiry"
+            echo "        and update the secret in the 'jira-e2e' GitHub Environment."
+            echo "        Atlassian caps API tokens at 1 year — annual rotation is required."
+            echo "        Runbook: docs/specs/e2e-live-jira-testing.md §9"
+          elif echo "$PROBE_OUTPUT" | grep -qi "connection\|dns\|resolve\|network\|timeout\|unreachable\|tls\|certificate"; then
+            echo "::error::CONNECTION FAILURE — cannot reach the Jira E2E site."
+            echo "ACTION: the free Jira Cloud site may have been deactivated due to inactivity."
+            echo "        Free sites deactivate after ~120 days of inactivity and have only a"
+            echo "        ~15-60 day reactivation window before permanent data loss."
+            echo "        reactivate the site via https://id.atlassian.com/manage-profile/products"
+            echo "        Runbook: docs/specs/e2e-live-jira-testing.md §9"
+          else
+            echo "::warning::UNKNOWN FAILURE — see the test step output above for details."
+          fi
+
       - name: Teardown — close leftover E2E issues (close-only, always runs)
         if: always()
         env:
