@@ -4148,14 +4148,30 @@ fn test_e2e_issue_edit_label_add_remove_roundtrip() {
         .expect("issue create JSON must contain a 'key' field")
         .to_string();
 
+    // Use a probe label distinct from the seed label — unique per run, no spaces (HIGH-1).
+    // format!("{label}-probe") is the canonical probe name; `label` == run_label() above.
+    let probe = format!("{label}-probe");
+
     // Confirm GET-consistency before editing labels.
-    poll_view(&key, &h);
+    // --- HIGH-1: assert probe label is ABSENT before the add call ---
+    let before_json = poll_view(&key, &h);
+    let before_labels: Vec<String> = before_json
+        .get("fields")
+        .and_then(|f| f.get("labels"))
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        !before_labels.contains(&probe),
+        "probe label '{probe}' must be ABSENT before add; found labels: {before_labels:?}"
+    );
 
-    // Derive a unique test label from run_label() — hyphenated, no spaces (Q3).
-    // Suffix with "-lbl" to distinguish from the seed label used for teardown.
-    let test_label = format!("{label}-lbl");
-
-    // ADD the test label.
+    // ADD the probe label.
     let add_output = h
         .cmd()
         .args([
@@ -4163,56 +4179,52 @@ fn test_e2e_issue_edit_label_add_remove_roundtrip() {
             "edit",
             &key,
             "--label",
-            &format!("add:{test_label}"),
+            &format!("add:{probe}"),
             "--output",
             "json",
         ])
         .output()
         .expect("failed to spawn jr for issue edit --label add");
 
-    // Clean-skip: bulk-edit permission denial. The "Bulk Changes" global permission
-    // is not universally granted; non-zero exit + permission/403 hint in stderr
-    // indicates the instance is configured to restrict bulk writes.
     if !add_output.status.success() {
-        let stderr_add = String::from_utf8_lossy(&add_output.stderr);
-        let stderr_lower = stderr_add.to_lowercase();
-        if stderr_lower.contains("permission")
-            || stderr_lower.contains("403")
-            || stderr_lower.contains("forbidden")
-            || stderr_lower.contains("not authorized")
-        {
+        let stderr = String::from_utf8_lossy(&add_output.stderr);
+        // Skip is intentionally narrow — only bulk-changes permission denial (HTTP 403);
+        // any other failure must fail the test.
+        if add_output.status.code() == Some(1) && stderr.contains("403") {
             eprintln!(
-                "test_e2e_issue_edit_label_add_remove_roundtrip: \
-                 clean-skip — bulk-edit permission denied \
-                 ('Bulk Changes' global permission not granted; stderr: {stderr_add})"
+                "SKIP: bulk-edit 403 — 'Bulk Changes' global permission \
+                 not enabled on this site; skipping label round-trip test.\nstderr: {stderr}"
             );
             return;
         }
         panic!(
-            "issue edit --label add:{test_label} failed unexpectedly (exit {}):\n\
-             stdout: {}\nstderr: {}",
-            add_output.status.code().unwrap_or(-1),
+            "issue edit --label add failed for {key} (non-403 error — not a permission skip):\n\
+             exit: {:?}\nstdout: {}\nstderr: {}",
+            add_output.status.code(),
             String::from_utf8_lossy(&add_output.stdout),
-            stderr_add
+            stderr,
         );
     }
 
-    // Verify ADD: poll_view and assert test_label IS in fields.labels[].
+    // --- HIGH-1: assert probe label IS present after add ---
     let view_after_add = poll_view(&key, &h);
-    let labels_after_add: Vec<&str> = view_after_add
+    let labels_after_add: Vec<String> = view_after_add
         .get("fields")
         .and_then(|f| f.get("labels"))
         .and_then(Value::as_array)
-        .map(|arr| arr.iter().filter_map(Value::as_str).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default();
-
     assert!(
-        labels_after_add.contains(&test_label.as_str()),
-        "after --label add:{test_label}, fields.labels[] must contain {test_label:?}; \
-         got: {labels_after_add:?}"
+        labels_after_add.contains(&probe),
+        "probe label '{probe}' must be PRESENT after add; found labels: {labels_after_add:?}"
     );
 
-    // REMOVE the test label.
+    // REMOVE the probe label.
     let remove_output = h
         .cmd()
         .args([
@@ -4220,33 +4232,49 @@ fn test_e2e_issue_edit_label_add_remove_roundtrip() {
             "edit",
             &key,
             "--label",
-            &format!("remove:{test_label}"),
+            &format!("remove:{probe}"),
             "--output",
             "json",
         ])
         .output()
         .expect("failed to spawn jr for issue edit --label remove");
 
-    assert!(
-        remove_output.status.success(),
-        "issue edit --label remove:{test_label} failed:\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&remove_output.stdout),
-        String::from_utf8_lossy(&remove_output.stderr)
-    );
+    if !remove_output.status.success() {
+        let stderr = String::from_utf8_lossy(&remove_output.stderr);
+        // Skip is intentionally narrow — only bulk-changes permission denial (HTTP 403);
+        // any other failure must fail the test.
+        if remove_output.status.code() == Some(1) && stderr.contains("403") {
+            eprintln!(
+                "SKIP: bulk-edit 403 on remove — 'Bulk Changes' global permission \
+                 not enabled on this site.\nstderr: {stderr}"
+            );
+            return;
+        }
+        panic!(
+            "issue edit --label remove failed for {key} (non-403 error — not a permission skip):\n\
+             exit: {:?}\nstdout: {}\nstderr: {}",
+            remove_output.status.code(),
+            String::from_utf8_lossy(&remove_output.stdout),
+            stderr,
+        );
+    }
 
-    // Verify REMOVE: poll_view and assert test_label is ABSENT from fields.labels[].
+    // --- HIGH-1: assert probe label is ABSENT after remove ---
     let view_after_remove = poll_view(&key, &h);
-    let labels_after_remove: Vec<&str> = view_after_remove
+    let labels_after_remove: Vec<String> = view_after_remove
         .get("fields")
         .and_then(|f| f.get("labels"))
         .and_then(Value::as_array)
-        .map(|arr| arr.iter().filter_map(Value::as_str).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default();
-
     assert!(
-        !labels_after_remove.contains(&test_label.as_str()),
-        "after --label remove:{test_label}, fields.labels[] must NOT contain {test_label:?}; \
-         got: {labels_after_remove:?}"
+        !labels_after_remove.contains(&probe),
+        "probe label '{probe}' must be ABSENT after remove; found labels: {labels_after_remove:?}"
     );
 }
 
@@ -4594,14 +4622,18 @@ fn test_e2e_issue_remote_link_smoke() {
         String::from_utf8_lossy(&remote_link_output.stderr)
     );
 
-    // Assert stdout is a valid JSON object. Do NOT assert instance-specific values
-    // (id, self, globalId) — those are instance-dependent.
+    // Assert stdout parses as JSON AND is a non-empty object (LOW-1).
+    // Do NOT assert instance-specific id/self/url values — those differ per site.
     let stdout = String::from_utf8_lossy(&remote_link_output.stdout);
     let response: Value =
         serde_json::from_str(stdout.trim()).expect("issue remote-link stdout must be valid JSON");
     assert!(
         response.is_object(),
         "issue remote-link stdout must be a JSON object; got: {response}"
+    );
+    assert!(
+        !response.as_object().map(|o| o.is_empty()).unwrap_or(true),
+        "issue remote-link JSON must be a non-empty object (>=1 key); got: {response}"
     );
     // Teardown: the sweeper deletes the parent issue which cascades to its remote links.
 }
