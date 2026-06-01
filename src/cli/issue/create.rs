@@ -657,18 +657,18 @@ pub(super) async fn handle_edit(
                     //       "labels": [{"name": "foo"}]}]}` (nested array, or
                     //     two elements when ADD+REMOVE coalesce).
                     //   - `priority`: dry-run emits a bare string. POST body wraps as
-                    //     `{"name": "..."}` (best-guess; Atlassian docs document
-                    //     `{"priorityId": <int>}`).
+                    //     `{"priorityId": "<id-string>"}` (name→id resolved via
+                    //     GET /rest/api/3/priority; #331).
                     //   - `issueType`: dry-run emits a bare string. POST body wraps as
                     //     `{"issuetype": {"name": "..."}}` (best-guess; Atlassian docs
                     //     document `{"issueTypeId": "..."}`).
                     // The dry-run JSON is a human-and-tool-friendly preview, NOT a
-                    // byte-for-byte snapshot of the wire request. Rationale: all three
-                    // POST shapes are best-guesses pending #331 empirical verification.
-                    // Locking dry-run consumers to unverified canonical Atlassian
-                    // shapes now would force a second breaking change once #331
-                    // confirms the true shapes. Once #331 verifies the wire shapes,
-                    // this dry-run builder can be unified with
+                    // byte-for-byte snapshot of the wire request. Priority shape was
+                    // empirically verified by #331. Labels shape was verified and fixed
+                    // in #446. issueType shape is still a best-guess pending #331
+                    // empirical verification; locking dry-run consumers to an unverified
+                    // shape now would force a second breaking change. Once #331 verifies
+                    // the issueType shape, this dry-run builder can be unified with
                     // `handle_edit_bulk_labels` / `handle_edit_bulk_fields` to
                     // emit byte-identical JSON.
                     let label_entries: Vec<serde_json::Value> = labels
