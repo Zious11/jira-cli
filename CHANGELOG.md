@@ -6,6 +6,14 @@ All notable changes to jr will be documented here.
 
 ### Added
 
+### Fixed
+
+### Changed
+
+## [0.5.0-dev.12] - 2026-06-01
+
+### Added
+
 - Live-Jira E2E test suite (`tests/e2e_live.rs`) plus a non-blocking CI workflow
   (`.github/workflows/e2e.yml`) that exercises `jr` against a real Jira Cloud site.
   Gated behind `JR_RUN_E2E=1` (a complete no-op in normal `cargo test`); runs on push
@@ -14,11 +22,27 @@ All notable changes to jr will be documented here.
   optional) and a create→verify→edit→comment→worklog→transition write flow on a dedicated
   `E2E` project, with run-scoped labels and guaranteed close-only teardown. No `src/`
   changes; auth via the existing debug-only `JR_AUTH_HEADER`/`JR_BASE_URL` test seams.
-  (S-E2E-1)
+  Includes enhancements from follow-up rounds: deeper assertions, new coverage (label
+  add/remove, typed issue link/unlink, remote-link), error-path and robustness/ops
+  hardening, an orphan-cleanup sweeper, and first-live-run fixes (empty-status default,
+  sprint non-scrum skip). (S-E2E-1..5, #433, #434, #440, #441, #442)
+- Offline CLI-surface guard (`tests/e2e_cli_surface_guard.rs`) that validates every `jr`
+  subcommand path and flag referenced in `tests/e2e_live.rs` against `jr --help` at CI
+  time, without requiring `JR_RUN_E2E` or any network access. Catches assumed-surface
+  defects before live runs. (E2E-PG-1, #443)
+- Live E2E coverage for label add/remove, `issue link/unlink --type`, and
+  `issue remote-link`. (E2E-PG-4, #445)
 
 ### Fixed
 
-### Changed
+- **`jr issue edit --label add:X / remove:Y` now works against real Jira Cloud.**
+  Both single-key and multi-key label editing were previously broken end-to-end
+  (returning HTTP 400 / failing to parse responses) and had only mock-test coverage.
+  Single-key now uses `PUT /rest/api/3/issue/{key}` with the `update.labels` payload
+  (bare string values; synchronous 204); multi-key now uses the correct `labelsFields`
+  schema for the bulk endpoint, with `{"name":"<label>"}` objects per action element.
+  Bulk poll responses also now tolerate Jira returning `taskId` and issue IDs as JSON
+  integers rather than strings. (#447, #448, #449, #450; closes #446, BUG-LABEL-400)
 
 ## [0.5.0-dev.10] - 2026-05-26
 
