@@ -476,33 +476,40 @@ async fn test_polling_respects_retry_after_on_429() {
 
 // ---------------------------------------------------------------------------
 // AC-009 (single-key BC): jr issue edit KEY1 --label add:foo
-//   → still routes via bulk API (same code path), exits 0,
-//   --output json shape has "key" field for backward compatibility.
+//   UPDATED (BUG-LABEL-400 fix): single-key label edits now route to
+//   PUT /rest/api/3/issue/{key} with update.labels, NOT the bulk endpoint.
+//   The old test asserted the wrong (bulk) behavior and encoded the bug that
+//   caused HTTP 400 on real Jira instances (live E2E run 26730687481).
+//   Rewritten to assert the correct PUT behavior.
+//   --output json shape is {"key":"...","updated":true,"changed_fields":{...}}.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn test_edit_single_key_routes_via_bulk_api_backward_compatible() {
+async fn test_edit_single_key_label_routes_via_put_issue_update() {
     let server = MockServer::start().await;
 
-    // Even for a single key, the bulk endpoint is called.
+    // Single-key label edit MUST use PUT, NOT the bulk endpoint.
+    // .expect(0) panics on drop if the bulk endpoint is called.
     Mock::given(method("POST"))
         .and(path("/rest/api/3/bulk/issues/fields"))
-        .and(body_partial_json(serde_json::json!({
-            "selectedIssueIdsOrKeys": ["SOLO-1"]
-        })))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(bulk_task_enqueued_response("task-solo-001")),
+            ResponseTemplate::new(501)
+                .set_body_string("BUG: single-key label edit routed to bulk endpoint"),
         )
-        .expect(1)
+        .expect(0)
         .mount(&server)
         .await;
 
-    Mock::given(method("GET"))
-        .and(path("/rest/api/3/bulk/queue/task-solo-001"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(bulk_task_complete_response("task-solo-001", vec!["SOLO-1"])),
-        )
+    // PUT /rest/api/3/issue/SOLO-1 with update.labels (bare string).
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/SOLO-1"))
+        .and(body_partial_json(serde_json::json!({
+            "update": {
+                "labels": [{"add": "solo-test"}]
+            }
+        })))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
         .mount(&server)
         .await;
 
@@ -525,22 +532,29 @@ async fn test_edit_single_key_routes_via_bulk_api_backward_compatible() {
 
     assert!(
         output.status.success(),
-        "Expected exit 0 for single-key bulk edit; stderr={stderr} stdout={stdout}"
+        "Expected exit 0 for single-key label PUT; stderr={stderr} stdout={stdout}"
     );
 
-    // --output json must produce parseable JSON.
+    // --output json must produce the single-key edit shape:
+    //   {"key": "SOLO-1", "updated": true, "changed_fields": {...}}
     let parsed: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("stdout not valid JSON: {e}; stdout={stdout}"));
 
-    // Backward-compat shape: either {"key":"SOLO-1"} (single-key shorthand)
-    // or {"results":[{"key":"SOLO-1","status":"ok"}]} (multi-key shape with 1 item).
-    // Either is acceptable; verify one of these shapes is present.
-    let has_key_field = parsed.get("key").is_some();
-    let has_results_field = parsed.get("results").is_some();
-    assert!(
-        has_key_field || has_results_field,
-        "Expected {{\"key\":...}} or {{\"results\":[...]}} in --output json; got: {stdout}"
+    assert_eq!(
+        parsed.get("key").and_then(|v| v.as_str()),
+        Some("SOLO-1"),
+        "Expected \"key\": \"SOLO-1\" in JSON output; got: {stdout}"
     );
+    assert_eq!(
+        parsed.get("updated").and_then(|v| v.as_bool()),
+        Some(true),
+        "Expected \"updated\": true in JSON output; got: {stdout}"
+    );
+    assert!(
+        parsed.get("taskId").is_none(),
+        "Expected no 'taskId' in single-key label JSON output (bulk shape); got: {stdout}"
+    );
+    // wiremock .expect(0) on bulk POST + .expect(1) on PUT fire on drop.
 }
 
 // ---------------------------------------------------------------------------

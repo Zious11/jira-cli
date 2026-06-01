@@ -447,6 +447,47 @@ impl JiraClient {
         self.put(&path, &body).await
     }
 
+    /// Update a single issue's labels using the `update` verb (PUT issue).
+    ///
+    /// Sends `PUT /rest/api/3/issue/{key}` with body:
+    /// ```json
+    /// {"update": {"labels": [{"add": "foo"}, {"remove": "bar"}]}}
+    /// ```
+    ///
+    /// Label values are **bare strings** — NOT `{"name":"foo"}` objects. The bare-string
+    /// form is required by the Jira Cloud REST API v3 `update` verb; the `{"name":...}`
+    /// form is only valid on the bulk fields endpoint (per Atlassian docs, verified by
+    /// the research agent in `.factory/research/jr-label-edit-400.md`).
+    ///
+    /// Returns `Ok(())` on HTTP 204 No Content. Any other status propagates as an error.
+    ///
+    /// At least one of `adds` or `removes` must be non-empty (caller's responsibility).
+    pub async fn update_issue_labels(
+        &self,
+        key: &str,
+        adds: &[String],
+        removes: &[String],
+    ) -> Result<()> {
+        debug_assert!(
+            !adds.is_empty() || !removes.is_empty(),
+            "update_issue_labels: at least one of adds or removes must be non-empty",
+        );
+        let mut label_ops: Vec<serde_json::Value> = Vec::new();
+        for name in adds {
+            label_ops.push(serde_json::json!({"add": name}));
+        }
+        for name in removes {
+            label_ops.push(serde_json::json!({"remove": name}));
+        }
+        let path = format!("/rest/api/3/issue/{}", urlencoding::encode(key));
+        let body = serde_json::json!({
+            "update": {
+                "labels": label_ops
+            }
+        });
+        self.put(&path, &body).await
+    }
+
     /// Fetch the editmeta for an issue.
     ///
     /// `GET /rest/api/3/issue/{key}/editmeta` returns the set of fields that

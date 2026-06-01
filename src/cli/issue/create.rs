@@ -1207,6 +1207,52 @@ async fn handle_edit_bulk_labels(
         bail!("No label changes specified.");
     }
 
+    // --- Route: single key → PUT /rest/api/3/issue/{key} with update.labels ---
+    //
+    // Single-key label edits use PUT with the `update` verb (bare-string label values).
+    // This avoids the bulk endpoint entirely: the bulk endpoint requires a different
+    // payload shape (`labelsFields` array, `selectedActions`, `{"name":...}` objects)
+    // and was causing HTTP 400 on real Jira instances (BUG-LABEL-400, live E2E run
+    // 26730687481). The PUT path is synchronous (204 No Content) and simpler.
+    //
+    // Verified payload shape from Atlassian docs (`.factory/research/jr-label-edit-400.md`):
+    //   {"update": {"labels": [{"add": "foo"}, {"remove": "bar"}]}}
+    // where label values are BARE STRINGS, not {"name": "..."} objects.
+    if keys.len() == 1 {
+        let key = &keys[0];
+        client.update_issue_labels(key, &adds, &removes).await?;
+
+        // Build changed_fields for the echo: record adds and removes as human-readable strings.
+        let mut changed_fields: BTreeMap<String, String> = BTreeMap::new();
+        let mut parts: Vec<String> = Vec::new();
+        for a in &adds {
+            parts.push(format!("add:{a}"));
+        }
+        for r in &removes {
+            parts.push(format!("remove:{r}"));
+        }
+        changed_fields.insert("labels".into(), parts.join(", "));
+
+        match output_format {
+            OutputFormat::Json => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json_output::edit_response(
+                        key,
+                        &changed_fields
+                    ))?
+                );
+            }
+            OutputFormat::Table => {
+                output::print_success(&format!("Updated {}", key));
+                eprintln!("  labels \u{2192} {}", parts.join(", "));
+            }
+        }
+        return Ok(());
+    }
+
+    // --- Route: multi-key (2+) → POST /rest/api/3/bulk/issues/fields ---
+    //
     // Coalesce ADD and REMOVE into a single bulk POST when both are present.
     // Both operations are submitted in one request as an array of label-action objects.
     // See build_labels_edited_fields doc-comment for the verbatim #331 schema caveat.

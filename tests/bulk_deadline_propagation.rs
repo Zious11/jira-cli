@@ -107,11 +107,13 @@ fn bulk_enqueued(task_id: &str) -> serde_json::Value {
     })
 }
 
-/// Single-issue JQL search response shape — minimum required for `jr issue
-/// edit --jql ...` to route through to the bulk POST.
-fn jql_search_response_one(key: &str) -> serde_json::Value {
-    serde_json::json!({
-        "issues": [{
+/// Two-issue JQL search response — minimum required for `jr issue edit --jql
+/// ... --label` to route through to the bulk POST (BUG-LABEL-400 fix: single-key
+/// label edits now use PUT /rest/api/3/issue/{key} directly; 2+ keys still use
+/// the bulk path, which is what these deadline tests exercise).
+fn jql_search_response_two(key1: &str, key2: &str) -> serde_json::Value {
+    fn issue_json(key: &str) -> serde_json::Value {
+        serde_json::json!({
             "key": key,
             "fields": {
                 "summary": format!("Issue {}", key),
@@ -131,7 +133,10 @@ fn jql_search_response_one(key: &str) -> serde_json::Value {
                 "parent": null,
                 "issuelinks": []
             }
-        }],
+        })
+    }
+    serde_json::json!({
+        "issues": [issue_json(key1), issue_json(key2)],
         "nextPageToken": null
     })
 }
@@ -165,10 +170,13 @@ fn jql_search_response_one(key: &str) -> serde_json::Value {
 async fn test_333_bulk_429_storm_respects_deadline_within_grace() {
     let server = MockServer::start().await;
 
-    // Search returns 1 matched issue (minimum to trigger bulk routing).
+    // Search returns 2 matched issues (2+ required for label edits to use bulk path;
+    // BUG-LABEL-400 fix routes single-key label edits to PUT instead of bulk).
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(jql_search_response_one("PROJ-1")))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(jql_search_response_two("PROJ-1", "PROJ-2")),
+        )
         .mount(&server)
         .await;
 
@@ -297,10 +305,13 @@ async fn test_333_bulk_429_storm_respects_deadline_within_grace() {
 async fn test_333_b1_bulk_running_storm_respects_deadline_via_outer_clamp() {
     let server = MockServer::start().await;
 
-    // Search returns 1 matched issue (minimum to trigger bulk routing).
+    // Search returns 2 matched issues (2+ required for label edits to use bulk path;
+    // BUG-LABEL-400 fix routes single-key label edits to PUT instead of bulk).
     Mock::given(method("POST"))
         .and(path("/rest/api/3/search/jql"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(jql_search_response_one("PROJ-1")))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(jql_search_response_two("PROJ-1", "PROJ-2")),
+        )
         .mount(&server)
         .await;
 
