@@ -602,6 +602,36 @@ pub(super) async fn handle_edit(
         }
     }
 
+    // --- BC-3.4.019 cross-project guard for --type (fires in BOTH live and dry-run). ---
+    // Issue-type IDs are project-scoped; the bulk endpoint takes ONE issueTypeId for
+    // the entire batch. A cross-project set cannot be safely resolved to a single id,
+    // so we error BEFORE any API call — including before the dry-run block short-circuits.
+    //
+    // ASYMMETRY (EC-3.4.018-5 vs EC-3.4.019-5): the unknown-type-NAME check requires
+    // a createmeta HTTP call, so it is deliberately SKIPPED in dry-run (dry-run emits
+    // a bare string for issueType with no id resolution). The cross-project guard is
+    // purely client-side (no HTTP needed) and therefore MUST fire even in dry-run.
+    if issue_type.is_some() && effective_keys.len() > 1 {
+        let mut project_keys: Vec<&str> = effective_keys
+            .iter()
+            .map(|k| project_key_from_issue_key(k))
+            .collect();
+        project_keys.sort_unstable();
+        project_keys.dedup();
+        if project_keys.len() > 1 {
+            return Err(JrError::UserError(format!(
+                "--type requires all issues to be in the same project; \
+                 the provided keys span {} distinct projects: {}. \
+                 Issue-type IDs differ per project, so a single bulk edit cannot \
+                 target all of them — split the keys by project and run separate \
+                 `jr issue edit` commands.",
+                project_keys.len(),
+                project_keys.join(", "),
+            ))
+            .into());
+        }
+    }
+
     // --- Dry-run short-circuit: render diff, no HTTP mutations. ---
     if dry_run {
         // NOTE: The "no fields specified" guard already fired unconditionally above
@@ -1336,29 +1366,14 @@ async fn handle_edit_bulk_fields(
         selected_actions.push("priority".to_string());
     }
     if let Some(t) = issue_type {
-        // BC-3.4.019: cross-project guard. Issue-type IDs are project-scoped, and the
-        // bulk endpoint accepts only ONE issueTypeId for the entire batch. If keys span
-        // multiple projects, we cannot safely resolve to a single id — error early before
-        // any API call. The guard fires ONLY when --type is present (invariant 4).
-        let mut project_keys: Vec<&str> = keys.iter().map(|k| project_key_from_issue_key(k)).collect();
-        project_keys.sort_unstable();
-        project_keys.dedup();
-        if project_keys.len() > 1 {
-            return Err(JrError::UserError(format!(
-                "--type requires all issues to be in the same project; \
-                 the provided keys span {} distinct projects: {}. \
-                 Resolve issue-type ids differ per project — split the keys by project and \
-                 run separate `jr issue edit` commands.",
-                project_keys.len(),
-                project_keys.join(", "),
-            ))
-            .into());
-        }
-
         // BC-3.4.018: resolve issue type name → id via project-scoped createmeta endpoint.
         // No cache — one HTTP call per --type bulk invocation (matches priority resolver model).
         // Source: Atlassian Bulk Operations FAQ + createmeta issuetypes endpoint docs (issue #331).
-        let project_key = project_keys[0];
+        //
+        // The BC-3.4.019 cross-project guard (ensuring all keys are same-project) already
+        // fired in handle_edit before this function was called — so here we know all keys
+        // share the same project key and we can safely use keys[0] to derive it.
+        let project_key = project_key_from_issue_key(&keys[0]);
         let issue_types = client.get_issue_types_for_project(project_key).await?;
         let t_lower = t.to_lowercase();
         let type_id = issue_types
@@ -2822,7 +2837,10 @@ mod test_project_key_extraction {
     fn test_project_key_extraction_same_project_no_cross_project() {
         let k1 = project_key_from_issue_key("FOO-1");
         let k2 = project_key_from_issue_key("FOO-2");
-        assert_eq!(k1, k2, "Same-project keys must extract the same project key");
+        assert_eq!(
+            k1, k2,
+            "Same-project keys must extract the same project key"
+        );
     }
 
     /// Two different-project keys extract different project keys.
@@ -2830,6 +2848,9 @@ mod test_project_key_extraction {
     fn test_project_key_extraction_different_projects() {
         let k1 = project_key_from_issue_key("FOO-1");
         let k2 = project_key_from_issue_key("BAR-2");
-        assert_ne!(k1, k2, "Different-project keys must extract different project keys");
+        assert_ne!(
+            k1, k2,
+            "Different-project keys must extract different project keys"
+        );
     }
 }

@@ -1696,6 +1696,104 @@ async fn test_bulk_issuetype_cross_project_keys_exits_64() {
 }
 
 // ---------------------------------------------------------------------------
+// #331: cross-project guard fires in --dry-run too (EC-3.4.019-5)
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit FOO-1 BAR-2 --type Bug --dry-run --output json --no-input`
+///
+/// EC-3.4.019-5: the cross-project guard is a client-side pre-resolution check
+/// and MUST fire even in dry-run mode. Cross-project with --type exits 64 before
+/// emitting any plannedChanges, before any API call, in BOTH live and dry-run paths.
+///
+/// This is asymmetric with the unknown-type-name check (EC-3.4.018-5), which is
+/// deliberately SKIPPED in dry-run (no createmeta call, bare string emitted).
+/// The cross-project guard is purely client-side (no HTTP needed), so it has no
+/// reason to be skipped.
+///
+/// Assert:
+///   - Exit code 64 (UserError).
+///   - stderr contains "--type" and both project keys "FOO" and "BAR".
+///   - stdout does NOT contain "plannedChanges" or "issueType" (no partial output).
+///   - Zero HTTP calls (guard fires before any API call, even the dry-run search).
+///
+/// RED GATE (before C-1 fix): dry-run short-circuits before the bulk fork, so the
+/// cross-project guard in handle_edit_bulk_fields is never reached. The command
+/// currently exits 0 and emits plannedChanges — violating EC-3.4.019-5.
+#[tokio::test]
+async fn test_bulk_issuetype_cross_project_dry_run_exits_64() {
+    let server = MockServer::start().await;
+
+    // Mount NO mocks — any HTTP call is a test failure.
+    // wiremock returns 500 for unmatched requests by default, but we also assert
+    // zero received_requests to confirm the guard fires before any API call.
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "--output",
+            "json",
+            "issue",
+            "edit",
+            "FOO-1",
+            "BAR-2",
+            "--type",
+            "Bug",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Must exit 64 (UserError).
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit code 64 for cross-project --type with --dry-run; \
+         stderr={stderr} stdout={stdout}"
+    );
+
+    // stderr must contain "--type" and both project keys.
+    assert!(
+        stderr.contains("--type"),
+        "Expected '--type' in error message; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("FOO"),
+        "Expected project key 'FOO' in error message; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("BAR"),
+        "Expected project key 'BAR' in error message; stderr={stderr}"
+    );
+
+    // stdout must NOT contain any planned output (no partial --dry-run output).
+    assert!(
+        !stdout.contains("plannedChanges"),
+        "stdout must NOT contain 'plannedChanges' when guard exits 64; stdout={stdout}"
+    );
+    assert!(
+        !stdout.contains("issueType"),
+        "stdout must NOT contain 'issueType' when guard exits 64; stdout={stdout}"
+    );
+
+    // Zero HTTP calls (guard fires before any API call).
+    let received = server.received_requests().await.unwrap();
+    assert_eq!(
+        received.len(),
+        0,
+        "Expected zero HTTP calls for cross-project --type --dry-run guard; \
+         got {} requests: {:?}",
+        received.len(),
+        received
+            .iter()
+            .map(|r| format!("{} {}", r.method, r.url))
+            .collect::<Vec<_>>()
+    );
+}
+
+// ---------------------------------------------------------------------------
 // #331: unknown type name — exits 64 and lists valid types
 // ---------------------------------------------------------------------------
 
@@ -1767,6 +1865,90 @@ async fn test_bulk_issuetype_unknown_type_name_exits_non_zero() {
     );
 
     // wiremock .expect(0) on bulk POST fires on drop if called.
+}
+
+// ---------------------------------------------------------------------------
+// #331 I-1: createmeta pagination — two-page response resolves type from page 2
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit FOO-1 FOO-2 --type Story --no-input`
+/// where "Story" only appears on the second page of the createmeta response.
+///
+/// Verifies that get_issue_types_for_project paginates until isLast=true,
+/// so types beyond the first page are discoverable (I-1 fix).
+///
+/// Also pins that the request includes query params (startAt/maxResults),
+/// verifiable because wiremock records received_requests with full URL.
+#[tokio::test]
+async fn test_bulk_issuetype_resolution_paginates_to_second_page() {
+    use wiremock::matchers::query_param;
+
+    let server = MockServer::start().await;
+
+    // Page 1: isLast=false, contains only "Bug".
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/createmeta/FOO/issuetypes"))
+        .and(query_param("startAt", "0"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{"id": "10001", "name": "Bug"}],
+            "startAt": 0,
+            "maxResults": 200,
+            "total": 2,
+            "isLast": false
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Page 2: isLast=true, contains "Story".
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/createmeta/FOO/issuetypes"))
+        .and(query_param("startAt", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{"id": "10002", "name": "Story"}],
+            "startAt": 1,
+            "maxResults": 200,
+            "total": 2,
+            "isLast": true
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Bulk POST: must contain "issueTypeId" "10002" (the Story id from page 2).
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .and(body_string_contains("10002"))
+        .and(body_string_contains("issueTypeId"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-paginate-001")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    mount_poll_complete(&server, "task-paginate-001", &["FOO-1", "FOO-2"]).await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--type",
+            "Story",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 resolving type from page 2 of createmeta; \
+         stderr={stderr} stdout={stdout}"
+    );
+    // wiremock .expect(1) on both GET pages and the POST fires on drop if counts wrong.
 }
 
 // ---------------------------------------------------------------------------
