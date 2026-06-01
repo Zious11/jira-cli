@@ -153,59 +153,19 @@ When adding a new feature:
 - **Multi-profile boundary:** every cache reader/writer takes `profile: &str` as its first arg. Pass `&config.active_profile_name` from any handler that has `&Config` in scope. Cross-profile cache leakage is a correctness bug, not a UX issue — sandbox vs prod custom-field IDs can differ.
 - **Per-profile vs shared OAuth keys:** `email`, `api-token`, `oauth_client_id`, `oauth_client_secret` live under flat keychain keys (account-level, shared across profiles). `oauth-access-token` / `oauth-refresh-token` are namespaced as `<profile>:oauth-*` because they're cloudId-scoped. The `"default"` profile lazy-migrates legacy flat keys on first read; other profiles do not.
 - **Cache format changes:** `~/.cache/jr/v1/<profile>/cmdb_fields.json` stores `(id, name)` tuples. Old format (ID-only) causes deserialization failure, handled as cache miss. If you change cache structs, old caches auto-expire (7-day TTL) or fail gracefully. To break compatibility cleanly, bump the cache root from `v1/` to `v2/` — old files orphan harmlessly.
-  - **Request-type caches (S-288-pr2):** `~/.cache/jr/v1/<profile>/request_types_<service_desk_id>.json`
-    stores the list of `RequestType` structs; `request_type_fields_<service_desk_id>_<request_type_id>.json`
-    stores the fields response. Both inherit `RequestType`/`RequestTypeField` shape from
-    `src/types/jsm/request_type.rs`; if Atlassian adds required fields to either response,
-    older cache files fail to deserialize (handled as cache miss → refetch; self-heals).
-    Same 7-day TTL as all other caches; same `v1/` root-bump path for incompatible changes.
-- **`jr requesttype fields <NAME|ID>` numeric-bypass edge case:** When `<NAME|ID>`
-  is all ASCII digits, the handler treats it as a numeric request type ID and
-  skips `partial_match` resolution. If an admin names a request type `"100"` or
-  `"42"` (a legal Atlassian display name), `jr requesttype fields 100` will
-  hit `.../requesttype/100/field` directly and surface a raw API error if no
-  RT with that ID exists. To force name-based resolution, prefix with any
-  non-digit (no Atlassian-supported escape exists today; user must use the
-  numeric ID directly via `jr requesttype list --output json | jq` to look it
-  up). Tracked behavior — not a bug — but worth noting if you add a `--by-id`
-  flag in the future.
-- **Cache-write error handling — "best-effort writer" pattern (S-288-pr2):**
-  The `write_request_type_cache` and `write_request_type_fields_cache` functions
-  swallow disk-write errors via `eprintln!("warning: ...")` + return `Ok(())`,
-  diverging from all other cache writers in `src/cache.rs` which propagate
-  errors via `?`. The "best-effort" model exists because cache write failures
-  must NEVER break a successful API call (the cost of a missed write is at
-  most one extra HTTP on the next call). When adding a NEW cache family,
-  pick a model: (a) propagate via `?` if the cache is correctness-critical
-  (e.g., resolutions, team metadata where downstream code depends on values),
-  (b) swallow + warn if the cache is purely a read-acceleration shortcut.
-  Document the choice in the writer's rustdoc.
-- **`list.rs` is large (~970 lines):** Contains both `handle_list` and `handle_view` plus all JQL composition logic. If modifying, read the full function you're changing — context matters.
+  - **Request-type caches (S-288-pr2):** `request_types_<sid>.json` + `request_type_fields_<sid>_<rtId>.json`; shape from `src/types/jsm/request_type.rs`. Same 7-day TTL / `v1/`-bump rules; deserialize failure → cache miss → refetch (self-heals).
+- **`jr requesttype fields <NAME|ID>` numeric-bypass edge case:** all-ASCII-digit input is treated as a numeric RT ID and skips `partial_match`. A request type *named* `"100"` is therefore unreachable by name (no escape exists; look up its ID via `jr requesttype list --output json | jq`). Tracked behavior, not a bug — relevant if you add a `--by-id` flag.
+- **Cache-write error handling — two models (S-288-pr2):** most writers in `src/cache.rs` propagate via `?`; the request-type writers (`write_request_type_cache`, `write_request_type_fields_cache`) swallow + `eprintln!("warning:…")` so a failed write never breaks a successful API call. New cache family → pick (a) propagate if correctness-critical, (b) swallow+warn if pure read-acceleration; document the choice in the writer's rustdoc.
 - **`aqlFunction()` not `assetsQuery()`:** The Jira Assets JQL function is `aqlFunction()`. It requires the human-readable field **name**, not `cf[ID]` or `customfield_NNNNN`. AQL attribute for object key is `Key` (not `objectKey` — that's the JSON field name).
 - **Status category colors are fixed:** `green` = Done, `yellow` = In Progress, `blue-gray` = To Do. These mappings are hardcoded in Jira Cloud across all instances. Used by `--open` filtering.
-- **Embedded OAuth app uses fixed callback port 53682.** The release build
-  workflow injects `JR_BUILD_OAUTH_CLIENT_ID`/`_SECRET` (CI-only env vars)
-  via `build.rs`, which generates an XOR-obfuscated `embedded_oauth.rs` in
-  `$OUT_DIR`. The bound callback URL is `http://127.0.0.1:53682/callback`
-  (literal `127.0.0.1`, not `localhost` — forces IPv4 to match the listener
-  bind and avoids the macOS/Chrome `localhost`→`::1` resolver pitfall),
-  registered exactly in Atlassian Developer Console. Changing the port is a
-  breaking release. BYO sources (flag, env, keychain) keep the historical
-  dynamic-port behavior. See ADR-0006 and
-  `docs/superpowers/specs/2026-04-30-embedded-oauth-app-design.md`.
+- **Embedded OAuth app uses fixed callback port 53682.** Callback URL is `http://127.0.0.1:53682/callback` — literal `127.0.0.1` (not `localhost`) to force IPv4 and dodge the macOS/Chrome `localhost`→`::1` pitfall; must match the Atlassian Developer Console registration, so changing the port is a breaking release. Release builds inject `JR_BUILD_OAUTH_CLIENT_ID`/`_SECRET` via `build.rs` → XOR-obfuscated `embedded_oauth.rs`. BYO sources (flag/env/keychain) keep dynamic-port behavior. Detail: ADR-0006, `docs/superpowers/specs/2026-04-30-embedded-oauth-app-design.md`.
 - **`src/api/auth_embedded.rs` is a thin sibling module** to `auth.rs`. Keep
   obfuscation plumbing there; keep keychain/OAuth flow plumbing in `auth.rs`.
 - **`--verbose` is header-only (SD-003 breaking change):** As of v0.6, `--verbose` shows method + URL + status only. It does NOT print request/response bodies. To inspect bodies (e.g., for debugging API calls), use `--verbose-bodies`. This flag emits a 3-line PII warning to stderr because bodies contain accountIds, email addresses, and ADF content. Do not use `--verbose-bodies` in shared terminals, debug log files piped to shared storage, or AI-agent context windows. Migration: `jr ... --verbose` → `jr ... --verbose --verbose-bodies` if body inspection was relied upon.
 - **`refresh_oauth_token` resolves credentials internally** (keychain →
   embedded) — callers pass only `profile`. Do not re-introduce
   `client_id`/`client_secret` parameters; they short-circuit the resolver.
-- **`--open` filter uses two mechanisms:** For Jira issues, `statusCategory != Done` is
-  injected into the JQL query (server-side filter). For connected CMDB tickets in
-  `cli/assets.rs` (`filter_tickets` function), filtering is client-side via
-  `status.colorName != "green"`. Both implement the same user intent ("show only open
-  items") but at different layers — CMDB connected tickets do not support JQL
-  `statusCategory` filtering. Status category colors are hardcoded in Jira Cloud:
-  `green` = Done, `yellow` = In Progress, `blue-gray` = To Do.
+- **`--open` filter uses two mechanisms:** Jira issues → `statusCategory != Done` injected into JQL (server-side). Connected CMDB tickets (`cli/assets.rs::filter_tickets`) → client-side `status.colorName != "green"`, because CMDB tickets don't support JQL `statusCategory` filtering.
 - **User pagination advances by `USER_PAGE_SIZE`, not returned count:** In
   `src/api/jira/users.rs`, both `search_users_all` and `search_assignable_users_by_project_all`
   increment `start_at` by `USER_PAGE_SIZE` (100) after each page, NOT by the number of
@@ -213,32 +173,9 @@ When adding a new feature:
   pagination (selects range [startAt, startAt+maxResults) then applies permission
   filtering), so a short non-empty page does NOT mean end-of-data. Advancing by returned
   count would overlap windows and produce duplicates. Do not change this behavior.
-- **`jr requesttype list/fields` (JSM request-type discovery):** `cli/requesttype.rs` implements
-  two subcommands: `list` (table: Name, Description; JSON array) and `fields <NAME|ID>` (table:
-  Field Name, Required, Type; JSON object). Request types are cached per `(profile, serviceDeskId)`
-  as `request_types_<sid>.json` (7-day TTL); field schemas per `(profile, sid, rtId)` as
-  `request_type_fields_<sid>_<rtId>.json`. Search results (`--search`) are never cached — only
-  the full list is. Cache functions: `read_request_type_cache`, `write_request_type_cache`,
-  `read_request_type_fields_cache`, `write_request_type_fields_cache`.
-- **`require_service_desk` call-site label (BC-X.8.004):** `servicedesks::require_service_desk`
-  accepts a `call_site_label: &'static str` parameter; the rendered error embeds the label
-  followed by ` a Jira Service Management project.` (the template drops the verb to allow
-  correct plural/singular agreement). Every caller MUST supply a full noun-phrase ending in
-  the matching verb. Current callers:
-  - `cli/queue.rs:32` passes `"Queue commands (\`jr queue\`) require"`
-  - `cli/requesttype.rs:38` passes `` "`jr requesttype` commands require" ``
-  - `cli/issue/create.rs` passes `` "`jr issue create --request-type` requires" `` (S-288-pr4)
-  See `src/api/jsm/servicedesks.rs::require_service_desk` rustdoc for the canonical contract.
-- **`jr issue create --request-type` dispatch fork (S-288-pr4):** When
-  `--request-type <NAME|ID>` is set, `handle_create` short-circuits to
-  `handle_jsm_create` and POSTs to `/rest/servicedeskapi/request` instead of
-  `/rest/api/3/issue`. The dispatch is gated solely on `request_type.is_some()`;
-  absent flag → platform path is byte-for-byte unchanged (regression-pinned by
-  `test_jsm_create_without_request_type_uses_platform_path`). `--type` is silently
-  ignored on JSM path (warning to stderr per BC-3.8.010); custom fields must use
-  `--field NAME=VALUE`. Request types are resolved via the per-profile cache (sibling
-  to `jr requesttype`); numeric IDs bypass partial_match. 401 from servicedeskapi
-  triggers a scope-mismatch hint mentioning `write:servicedesk-request`. See ADR-0014.
+- **`jr requesttype list/fields` (JSM, `cli/requesttype.rs`):** `list` (Name, Description) + `fields <NAME|ID>` (Field Name, Required, Type). Caches per `(profile, sid[, rtId])`; `--search` results are never cached, only the full list. Cache fns: `{read,write}_request_type[_fields]_cache`.
+- **`require_service_desk` call-site label (BC-X.8.004):** `call_site_label: &'static str` is embedded before ` a Jira Service Management project.` (verb dropped for plural/singular agreement), so every caller must pass a full noun-phrase ending in the matching verb (e.g. `…require` / `…requires`). Canonical contract + current caller list: `src/api/jsm/servicedesks.rs::require_service_desk` rustdoc.
+- **`jr issue create --request-type` dispatch fork (S-288-pr4):** `--request-type` set → `handle_create` short-circuits to `handle_jsm_create`, POSTing `/rest/servicedeskapi/request` instead of `/rest/api/3/issue` (gated solely on `request_type.is_some()`; absent → platform path byte-for-byte unchanged). On JSM path: `--type` silently ignored (BC-3.8.010), custom fields via `--field`, 401 → `write:servicedesk-request` scope hint. Detail: ADR-0014.
 - **When changing `DEFAULT_OAUTH_SCOPES`:** (1) update the embedded `jr` OAuth app's
   permissions in the Atlassian Developer Console at
   https://developer.atlassian.com/console/myapps/ before tagging the release, and
@@ -249,61 +186,11 @@ When adding a new feature:
   columns — use --all to see everything") is written to stderr, consistent with the
   convention used by `issue list` and `sprint current`. This is intentional — stderr
   keeps hints out of `--output json` and pipe-friendly stdout.
-- **Atlassian's expired-access-token 401 response shape:** The Jira REST API v3 returns
-  `HTTP 401` with body `{"errorMessages": ["The access token provided is expired, revoked,
-  malformed, or invalid for other reasons."]}` — there is NO machine-readable `code` field
-  and NO RFC-6750-compliant `WWW-Authenticate: Bearer error="invalid_token"` header.
-  Auto-refresh wiring (S-3.03) uses blanket-401 trigger (matches `gh` CLI pattern), not
-  substring-match (locale-fragile) and not RFC-6750 header inspection (Atlassian doesn't
-  follow the spec). Source: `.factory/research/S-3.03-wave3-verification.md` (Claim 2, REFUTED).
-- **Refresh-token rotation is strictly single-use on Atlassian.** The "10-minute reuse
-  window" mentioned in some secondary sources (Nango.dev, etc.) is NOT documented by
-  Atlassian and is known to fail in clusters. Treat each refresh token as one-shot.
-  Concurrent refresh attempts MUST go through `src/api/refresh_coordinator.rs`
-  per-profile single-flight to avoid `invalid_grant` races. Source:
-  `.factory/research/S-3.03-v2-design-verification.md` (Claim 5, REFUTED).
-- **`refresh_coordinator.rs` mutex layering rule:** outer `std::sync::Mutex<HashMap<...>>`
-  is held ONLY BRIEFLY for HashMap lookup/insert; it is released BEFORE any `.await`.
-  Inner `tokio::sync::Mutex<RefreshState>` is held across the refresh `.await`. NEVER
-  use `std::sync::Mutex` for the inner mutex — `tokio::sync::Mutex` is mandatory because
-  it does NOT poison on panic, which is the correct semantic for refresh (a panicked
-  refresh should not permanently break the coordinator). Source: S-3.03 v2 spec.
-- **Bulk transitions are not idempotent.** Single-key `move` exits 0 if the issue is
-  already in the target status. Multi-key `move KEY1 KEY2 ... STATUS` (legacy positional
-  form) and `move KEY1 KEY2 ... --to STATUS` issue the transition unconditionally for
-  every key. For workflows that reject same-status transitions, expect per-key 400
-  errors in the bulk response. To pre-filter, list candidate keys first with
-  `jr issue list --jql "<query> AND status != \"<target>\"" --output json` and pass
-  them as positional args. The `--jql` selection form is on `edit` only — `move` does
-  not accept `--jql`.
-- **`/rest/api/3/search/jql` repeated-`nextPageToken` symptom = JRACLOUD-95368, NOT
-  JRACLOUD-94632 / -92049 / -85546.** When Jira Cloud's enhanced JQL search returns the
-  same `nextPageToken` on consecutive pages (which would cause an infinite client loop
-  without the anti-loop guard in `search_issues` / `search_issue_keys` in
-  `src/api/jira/issues.rs`), the documented root-cause ticket is
-  [JRACLOUD-95368](https://jira.atlassian.com/browse/JRACLOUD-95368) — *"nextPageToken
-  pagination is not snapshot-stable under live mutation"* — i.e. live-data drift between
-  page fetches. Earlier code/spec versions cited JRACLOUD-94632 / -92049 / -85546 as
-  "confirmed upstream bugs"; **all three are misattributed** (94632 = initial
-  `nextPageToken=null` rejection, fixed Jun 2025; 92049 = `startAt` offset behavior,
-  resolved Invalid; 85546 = `/field/search` `nextPage` field, different endpoint). The
-  rebind happened in issue #361 / PR #364 (2026-05-14). Both `SearchResult.has_more`
-  and `KeySearchResult.has_more` set `true` on guard abort. Both `search_issue_keys`
-  and `search_issues` use an incremental `seen_keys: HashSet<String>` (maintained
-  outside the pagination loop) to deduplicate on all exit paths — unique keys/issues
-  are appended once in first-occurrence order; the accumulated Vec is never rescanned
-  (implemented in #365 — closed). Duplicate keys/issues from live-data drift are
-  eliminated client-side before any break-decision check. Callers receive a
-  duplicate-free result. The user-facing stderr warning includes an
-  actionable ORDER BY mitigation; do NOT revert to a single-`ORDER BY` shorthand like
-  "add `ORDER BY key ASC` to your JQL" — JQL allows only one ORDER BY clause, so users
-  with an existing sort would receive HTTP 400. The precise wording is "append
-  `, key ASC` to an existing sort, or use `ORDER BY key ASC` if none". Stderr-literal
-  pin: any change to the literal `"JRACLOUD-95368"` in the warning must be paired with
-  updates to `tests/rate_limit_cap_tests.rs::ac_008_and_ac_new_d_…` and
-  `tests/search_issue_keys.rs::test_search_issue_keys_stderr_emits_jracloud_95368_literal`.
-  Source: `.factory/research/issue-361-jra95368-scope.md`,
-  `.factory/research/issue-361-jql-orderby.md`.
+- **Atlassian's expired-token 401 has no machine-readable signal:** body is `{"errorMessages":[…expired…]}` with NO `code` field and NO RFC-6750 `WWW-Authenticate` header. Auto-refresh (S-3.03) therefore triggers on blanket-401 (`gh` CLI pattern), not substring-match or header inspection. Detail: `.factory/research/S-3.03-wave3-verification.md` (Claim 2, REFUTED).
+- **Refresh tokens are strictly single-use on Atlassian.** The "10-minute reuse window" from secondary sources is undocumented and fails in clusters — treat each as one-shot. Concurrent refresh MUST go through `src/api/refresh_coordinator.rs` per-profile single-flight to avoid `invalid_grant` races. Detail: `.factory/research/S-3.03-v2-design-verification.md` (Claim 5, REFUTED).
+- **`refresh_coordinator.rs` mutex layering:** outer `std::sync::Mutex<HashMap>` held only briefly for lookup/insert, released BEFORE any `.await`. Inner `tokio::sync::Mutex<RefreshState>` held across the refresh `.await` — MUST be `tokio::sync::Mutex` (no poison-on-panic; a panicked refresh must not permanently break the coordinator). Detail: S-3.03 v2 spec.
+- **Bulk transitions are not idempotent.** Single-key `move` exits 0 if already in target status; multi-key `move` (positional or `--to`) transitions every key unconditionally → expect per-key 400s on workflows that reject same-status moves. Pre-filter with `jr issue list --jql "… AND status != \"<target>\""`. Note: `--jql` selection is on `edit` only, not `move`.
+- **`/rest/api/3/search/jql` repeated-`nextPageToken` = JRACLOUD-95368** (live-data drift between page fetches), NOT -94632/-92049/-85546 — those three are misattributed (verified, issue #361/PR #364). `search_issues` / `search_issue_keys` in `src/api/jira/issues.rs` carry an anti-loop guard (sets `has_more=true` on abort) plus an incremental `seen_keys: HashSet` that dedupes all exit paths in first-occurrence order. Two load-bearing string rules: (1) the stderr ORDER BY hint must read "append `, key ASC` to an existing sort, or use `ORDER BY key ASC` if none" — never a bare "add `ORDER BY key ASC`" (JQL allows one ORDER BY → HTTP 400 if user already sorts); (2) the literal `"JRACLOUD-95368"` is pinned by `tests/rate_limit_cap_tests.rs` and `tests/search_issue_keys.rs::test_..._emits_jracloud_95368_literal` — update together. Detail: `.factory/research/issue-361-jra95368-scope.md`, `-jql-orderby.md`.
 - **`issue edit` description echo asymmetry (issue #398):** Table/human output echoes
   `description → (updated)` — a marker, never the content. JSON `changed_fields.description`
   carries the **raw user-supplied input string** from `--description` / `--description-stdin`,
@@ -313,63 +200,35 @@ When adding a new feature:
   (`test_bc_3_4_012_description_echo_is_updated_marker_not_content` and
   `test_bc_3_4_013_description_echo_is_raw_input_string_not_marker`).
 - **`issue edit --field` constraints and JSM behavior (issue #396):**
-  (1) `--field` is single-key only — the C-1 guard rejects bulk (`jr issue edit KEY1 KEY2 --field`
-  exits 64). (2) Changing the **Request Type** of an existing JSM issue is NOT supported via any
-  Jira Cloud API. `jr issue edit --field` does NOT support the `sd-customerrequesttype` system
-  field (JSDCLOUD-4609, open since 2016; PUT returns HTTP 500 — non-goal, declared out-of-scope).
-  (3) JSM Urgency/Impact and other request-type select fields CAN be set via
-  `jr issue edit --field NAME=VALUE` provided the field is on the issue's **agent Edit screen**.
-  By default these fields are on the portal request form only; a Jira admin must add them to the
-  Edit screen first (`Project settings → Screens`). (4) `--field` uses `GET .../editmeta` to
-  validate field presence and resolve `allowedValues`; this adds one HTTP round-trip per
-  `issue edit` call that includes `--field`. The call is skipped when `--field` is absent.
-  (5) **fields.json cache write:** `write_fields_cache` in `resolve_edit_fields` is
-  UNCONDITIONAL on cache miss/stale — it mirrors the `write_cmdb_fields_cache` pattern.
-  Cache-touching `--field` integration tests use `jr_cmd_with_xdg` with a per-test
-  `tempfile::TempDir` for both `XDG_CACHE_HOME` and `XDG_CONFIG_HOME`, so they never
-  touch the real `~/.cache/jr/v1/default/fields.json`. Tests that fire Gate A/B
-  pre-HTTP or take the `customfield_NNNNN` literal-bypass path skip the cache entirely
-  and use plain `jr_cmd` — order-independent by construction.
-  (6) **`--field` cannot be combined with `--label` on a single key** — rejected with
-  exit 64 by the `--label` mutual-exclusion block in `src/cli/issue/create.rs::handle_edit` (search for the `// NOTE: the variable name 'conflicting' is reserved for this block` anchor comment that introduces the block)
-  (the same block that rejects `--label` + `--summary`/`--priority`/`--type`/etc.).
-  Without this guard the `--label` routing fork at `src/cli/issue/create.rs::handle_edit § "Route: labels → bulk API"` (the `// --- Route: labels → bulk API. ---` comment) would silently drop
-  the `--field` write (exit 0, data loss). Combined label + custom-field bulk edits are
-  tracked at #331. [FIX-F5-001]
-- **`issue edit --label` endpoint fork (single-key vs bulk, BUG-LABEL-400):** `handle_edit_bulk_labels` in `src/cli/issue/create.rs` routes on key count after `effective_keys` is resolved (positional or `--jql`-matched). Exactly ONE key → `PUT /rest/api/3/issue/{key}` with `{"update":{"labels":[{"add":"x"},{"remove":"y"}]}}` (synchronous 204 No Content); label values are **bare strings**, via `JiraClient::update_issue_labels` in `src/api/jira/issues.rs`. TWO OR MORE keys → `POST /rest/api/3/bulk/issues/fields` (async task-poll); label items in the bulk payload are `{"name":...}` objects structured via `build_labels_edited_fields` — each action is a separate element `{"fieldId":"labels","bulkEditMultiSelectFieldOption":"ADD"|"REMOVE","labels":[{"name":"<label>"}]}`. The two endpoints use **asymmetric** label payload shapes (bare strings for single-key PUT vs `{"name":...}` objects for multi-key bulk) — do not unify them. The single-key path was added in the BUG-LABEL-400 fix after live E2E run 26730687481 proved the bulk endpoint returns HTTP 400 on real Jira; the multi-key `labelsFields` array schema was verified and fixed in #446 (prior bulk payload also returned HTTP 400 on real Jira). The broader empirical schema-verification effort (priority, issueType, labels) is tracked at #331. A `--jql`-resolved set that matches exactly one issue takes the single-key PUT path (documented in the `// Routing for non-label edits:` comment in `handle_edit`).
-- **`issue edit --type` multi-key bulk path (S-331, BC-3.4.018/019):** Three key asymmetries and constraints:
-  1. **camelCase/lowercase asymmetry (load-bearing, do NOT fix):** `selectedActions` element is lowercase `"issuetype"` (Atlassian canonical field ID); `editedFieldsInput` key is camelCase `"issueType"` (bean name). These INTENTIONALLY differ per the Atlassian Bulk Operations FAQ verbatim JSON — the same asymmetry as `labelsFields` vs `"labels"` in selectedActions. Verified in `.factory/research/issue-331-issuetype-bulk-schema.md`. Pinned by `test_multi_key_type_update_body_uses_issue_type_id` and `test_bulk_issuetype_body_uses_issuetype_id_not_name` (in `tests/issue_bulk_pr2.rs`).
-  2. **Cross-project exit-64 guard (BC-3.4.019):** `--type` on a multi-key bulk edit requires ALL keys to be in the SAME project. Issue-type IDs are project-scoped, and the bulk endpoint accepts only ONE `issueTypeId` for the entire batch. If keys span multiple projects (e.g., `jr issue edit FOO-1 BAR-2 --type Bug`), the guard fires in `handle_edit_bulk_fields` (via `project_key_from_issue_key`) and exits 64 BEFORE any API call. The guard fires ONLY when `--type` is present — `--summary`, `--priority`, and other flags on cross-project sets are unaffected. Pinned by `test_bulk_issuetype_cross_project_keys_exits_64`.
-  3. **Name→issueTypeId resolution (project-scoped, no cache):** `GET /rest/api/3/issue/createmeta/{proj}/issuetypes` resolves the user-supplied type name to a string id. Case-insensitive match. Unknown name exits 64 listing valid types. One HTTP call per `--type` bulk invocation (matches priority resolver model). Implemented in `src/api/jira/issues.rs::JiraClient::get_issue_types_for_project`. Pinned by `test_bulk_issuetype_unknown_type_name_exits_non_zero`.
+  (1) single-key only — C-1 guard exits 64 on bulk.
+  (2) Changing a JSM issue's **Request Type** is unsupported by any Jira Cloud API — `--field` rejects `sd-customerrequesttype` (JSDCLOUD-4609; PUT 500; out-of-scope).
+  (3) JSM Urgency/Impact and other RT select fields CAN be set via `--field NAME=VALUE` **only if** an admin has added the field to the issue's agent Edit screen (portal-only by default).
+  (4) `--field` adds one `GET …/editmeta` round-trip (skipped when absent) to validate field + resolve `allowedValues`.
+  (5) `write_fields_cache` (in `resolve_edit_fields`) is unconditional on miss/stale (mirrors `write_cmdb_fields_cache`); cache-touching tests use `jr_cmd_with_xdg` + per-test `TempDir` to avoid the real `fields.json`.
+  (6) `--field` + `--label` on one key → exit 64 (mutual-exclusion block in `create.rs::handle_edit`); without the guard the label→bulk routing fork would silently drop the `--field` write. Combined label+custom-field bulk tracked at #331. [FIX-F5-001]
+- **`issue edit --label` endpoint fork (BUG-LABEL-400):** `handle_edit_bulk_labels` routes on key count. ONE key (incl. a `--jql` set matching one) → `PUT /issue/{key}` with **bare-string** labels via `update_issue_labels` (sync 204). TWO+ keys → `POST /bulk/issues/fields` with `{"name":…}` **objects** via `build_labels_edited_fields` (async poll). The two payload shapes are **asymmetric — do not unify**; both were proven against real Jira (single-key path + #446 bulk-schema fix after live 400s). Broader schema-verification effort: #331.
+- **`issue edit --type` multi-key bulk path (S-331, BC-3.4.018/019):**
+  1. **camelCase/lowercase asymmetry (load-bearing, do NOT fix):** `selectedActions` uses lowercase `"issuetype"` (canonical field ID); `editedFieldsInput` uses camelCase `"issueType"` (bean name) — verbatim per Atlassian Bulk Ops FAQ, same as `labelsFields`/`"labels"`. Detail: `.factory/research/issue-331-issuetype-bulk-schema.md`.
+  2. **Cross-project exit-64 guard (BC-3.4.019):** bulk `--type` requires all keys in ONE project (endpoint takes a single `issueTypeId`); guard fires in `handle_edit_bulk_fields` only when `--type` is present.
+  3. **Name→issueTypeId resolution (project-scoped, no cache):** `GET …/createmeta/{proj}/issuetypes`, case-insensitive; unknown name → exit 64 listing valid types. One HTTP call per bulk `--type`. `issues.rs::get_issue_types_for_project`.
 
 ## AI Agent Notes
 
 - `JR_BASE_URL` env var overrides the configured Jira instance URL (used by tests to inject wiremock). **Debug builds only** — release binaries ignore this env var. The override is gated via `#[cfg(debug_assertions)]` at BOTH read sites — `Config::base_url()` in `src/config.rs` and `JiraClient::from_config()` in `src/api/client.rs` — because either site alone leaves a token-leak vector where `JR_BASE_URL=http://attacker/` would redirect authenticated requests to a non-Atlassian host. Regression-pinned by `tests/base_url_release_gate.rs`. Mirrors the existing `JR_AUTH_HEADER` gate (SD-002).
-- `JR_BULK_UNKNOWN_GRACE_SECS` env var overrides the unknown-bulk-task-status grace period (default 30s). **Debug builds only** — gated via `#[cfg(debug_assertions)]` in `src/api/jira/bulk.rs::resolve_unknown_status_grace`. Used by CLI integration tests to drive the warn+escalate path in ~1s. Not security-critical (no token-leak vector); single-site gate. Regression-pinned by `tests/bulk_unknown_grace_release_gate.rs`. Closes audit-followup #336.
-- `JR_BULK_AWAIT_TIMEOUT_SECS` env var overrides the bulk-poll wall-clock timeout (default 300s / 5min). **Debug builds only** — gated via `#[cfg(debug_assertions)]` in `src/api/jira/bulk.rs::resolve_bulk_await_timeout`. Used by `tests/bulk_deadline_propagation.rs` to drive the 429-storm clamp through the binary in ~30s instead of ~300s. Not security-critical (no token-leak vector); single-site gate. Regression-pinned by `tests/bulk_await_timeout_release_gate.rs`. Closes audit-followup #333.
+- `JR_BULK_UNKNOWN_GRACE_SECS` overrides the unknown-bulk-task grace period (default 30s). Debug-only, single-site gate in `bulk.rs::resolve_unknown_status_grace` (not security-critical). Pinned by `tests/bulk_unknown_grace_release_gate.rs`. (#336)
+- `JR_BULK_AWAIT_TIMEOUT_SECS` overrides the bulk-poll wall-clock timeout (default 300s). Debug-only, single-site gate in `bulk.rs::resolve_bulk_await_timeout`. Pinned by `tests/bulk_await_timeout_release_gate.rs`. (#333)
 - **When adding a new `JR_*` test-seam env var:** grep `CLAUDE.md` for existing `JR_*` entries and add a parallel line in the SAME commit as the code change. This is the codified doc-fallout pattern from #335/#357; first applied retroactively when `JR_BULK_UNKNOWN_GRACE_SECS` and `JR_BULK_AWAIT_TIMEOUT_SECS` shipped without documentation.
-- **Citation discipline for external-tracker IDs in user-facing strings:** when adding a JRACLOUD-* / GitHub-issue / community-thread citation to anything a user will see (stderr warnings, error messages, JSON output, runtime hints) OR to a rustdoc / code comment that future maintainers will read literally, validate the cited source actually documents the symptom you're attributing to it — Perplexity is the cheapest validator. The PR #364 cycle (issue #361) showed the existing codebase had three misattributed JRACLOUD tickets that survived multiple PRs because no one had read them; nine rounds of Copilot review then surfaced five separate sites where rustdoc shorthand "(`ORDER BY key ASC`)" would have prompted invalid JQL when copy-pasted. Default to: (1) Perplexity-validate any external claim, (2) ensure user-facing strings are syntactically valid in the user's likely environment (e.g., JQL only allows one ORDER BY clause), (3) if rustdoc/comment paraphrases the user-facing text, keep them in lockstep. Source: `.factory/research/issue-361-validation.md` and `-followup.md`.
-- **Citation form for in-codebase references in spec/CLAUDE.md:** prefer symbol-form citations (`<file>::<function>` or `<file>::<function> § "<nearby-comment>"`) over bare line numbers (`<file>:NN-MM` or `<file>:~NN`). Line-number citations drift on every refactor; symbol references survive reformats and survive function reordering. When no good symbol anchor exists, fall back to `<file>:~NN` (the `~` signals "approximate, expect drift"); never use a bare range like `<file>:NN-MM` for new citations. Existing bare/range citations are cleaned up opportunistically when adjacent edits happen — no mass-sweep PR. Source: issue #408 follow-up.
+- **Citation discipline for external-tracker IDs in user-facing strings:** before citing a JRACLOUD-*/GitHub/community ID in anything a user sees (stderr, errors, JSON, hints) or in literal rustdoc, Perplexity-validate the source actually documents the symptom — issue #361 had three misattributed JRACLOUD tickets survive multiple PRs. Also ensure the string is valid in the user's env (e.g. JQL allows one ORDER BY) and keep paraphrasing rustdoc in lockstep. Detail: `.factory/research/issue-361-validation.md`, `-followup.md`.
+- **Citation form in spec/CLAUDE.md:** prefer symbol-form (`<file>::<fn>` or `… § "<comment>"`) over line numbers, which drift on refactor. Fall back to `<file>:~NN` (`~` = approximate); never a bare `<file>:NN-MM` for new citations. (#408)
 - `JR_PROFILE` env var overrides the active profile per-call (combine with direnv to scope a repo to a sandbox site)
 - `--profile NAME` flag overrides `JR_PROFILE` for one invocation; precedence is flag > env > config > "default"
 - `JiraClient::new_for_test(base_url, auth_header)` constructs a client for integration tests
 - Test fixtures live in `tests/common/fixtures.rs`
-- Keyring round-trip tests are gated behind `JR_RUN_KEYRING_TESTS=1` + `#[ignore]` because Linux CI may lack secret-service and macOS dev machines prompt for keychain access on novel service names. Coverage includes inline unit tests in `src/api/auth.rs` and integration tests in `tests/auth_profiles.rs`, `tests/multi_cloudid_disambiguation.rs` (6 KEYCHAIN-TRANSITIVE tests touching `store_oauth_tokens`; tests #4, #5, #6 in the same file are in-process tests that call `resolve_cloud_id` directly with `Vec<AccessibleResource>` struct literals — no subprocess, no keyring access, no JR_RUN_KEYRING_TESTS gate), and `tests/oauth_refresh_integration.rs` (4 KEYCHAIN-DIRECT + 7 KEYCHAIN-TRANSITIVE tests touching `load_oauth_tokens`/`store_oauth_tokens`). Run them locally with `JR_RUN_KEYRING_TESTS=1 cargo test -- --include-ignored`.
+- Keyring round-trip tests are gated behind `JR_RUN_KEYRING_TESTS=1` + `#[ignore]` (Linux CI may lack secret-service; macOS prompts on novel service names). Coverage in `src/api/auth.rs` (inline), `tests/auth_profiles.rs`, `tests/multi_cloudid_disambiguation.rs`, `tests/oauth_refresh_integration.rs`. Run: `JR_RUN_KEYRING_TESTS=1 cargo test -- --include-ignored`.
 - OAuth integration tests in `tests/oauth_embedded_login.rs` are gated behind `JR_RUN_OAUTH_INTEGRATION=1` + `#[ignore]`. The test is currently `unimplemented!()` — it requires a wiremock base-URL override in `oauth_login` before a real assertion can be written. CI does not run it; the embedded-creds smoke test in `release.yml` covers the binary-level check instead.
-- Live-Jira E2E tests in `tests/e2e_live.rs` are gated behind `JR_RUN_E2E=1` + `#[ignore]`. Every gated test also has an early-return guard (`if !e2e_enabled() { return; }`) to prevent execution when `--include-ignored` is passed without the env var set (S-410 lesson). The suite is a no-op in normal `cargo test` (including `ci.yml`); gate correctness is covered by the always-run `test_e2e_gate_disabled_when_env_unset` (pure-fn, no env mutation) and `test_every_ignored_test_has_gate_guard` (source meta-guard verifying every `#[ignore]` test has an `e2e_enabled()` call before any live code); `ci.yml` never passes `--include-ignored`, so the gated tests are inert there regardless of `JR_RUN_E2E`. The live suite runs only in `.github/workflows/e2e.yml` (non-blocking; not a required check). Run locally: `JR_RUN_E2E=1 JR_E2E_BASE_URL=... JR_AUTH_HEADER=... JR_E2E_PROJECT=E2E cargo test --test e2e_live -- --include-ignored --test-threads=1`. E2E env vars (all `#[cfg(debug_assertions)]` debug-only seams except `JR_RUN_E2E` itself):
-  - `JR_RUN_E2E` — set to `"1"` to activate gated tests; absent = complete no-op (parallel to `JR_RUN_KEYRING_TESTS` and `JR_RUN_OAUTH_INTEGRATION`).
-  - `JR_E2E_BASE_URL` — real Jira Cloud site URL (e.g. `https://<site>.atlassian.net`); becomes `JR_BASE_URL` inside the test harness; stored as a secret in the `jira-e2e` GitHub Environment — never hard-coded.
-  - `JR_AUTH_HEADER` — pre-composed `Basic <base64(email:token)>` auth header; set in the `e2e.yml` workflow by composing `JR_E2E_EMAIL` + `JR_E2E_API_TOKEN` secrets in-script (`printf '%s:%s' "$EMAIL" "$TOKEN" | base64 | tr -d '\n'`); the **debug-only** seam gate applies (SD-002 / `tests/auth_header_release_gate.rs`). Email and token are rotated independently.
-  - `JR_E2E_PROJECT` — Scrum project key for the dedicated E2E Jira project (e.g. `E2E`); stored as a GitHub Environment variable (not a secret).
-  - `JR_E2E_BOARD_ID` — optional; board ID for the Scrum project; enables `sprint list`/`sprint current` tests; skip cleanly if unset.
-  - `JR_E2E_JSM_PROJECT` — optional; JSM project key; enables `queue list`/`requesttype list` read tests; skip cleanly if unset (free-tier JSM availability not guaranteed).
-  - `JR_E2E_STATUS_DONE` — optional; status name for "closed/done"; default `"Done"`. Set if the provisioned Scrum project uses a different status name (e.g. `"Closed"`). Used in write-flow step 6 and workflow teardown.
-  - `JR_E2E_STATUS_IN_PROGRESS` — optional; status name for "in progress"; default `"In Progress"`. Set if the Scrum project uses a different name. Used in write-flow step 6.
-  - `JR_E2E_EMAIL` — CI service-account email address; stored as a secret in the `jira-e2e` GitHub Environment. In `e2e.yml` it is composed with `JR_E2E_API_TOKEN` to produce `JR_AUTH_HEADER` (never exposed directly). Also read directly by the user-search test to verify the authenticated account is discoverable via the users API.
-  - `JR_E2E_ISSUE_TYPE` — issue type name for test-created issues (default `"Task"`). Read by test code only (`tests/e2e_live.rs::issue_type()`). Set if the provisioned E2E project does not have a `"Task"` issue type (e.g. uses `"Story"` or a custom type). Used by the write-flow test to create and verify issue type round-trip (F-12). Added S-E2E-3.
-  - `JR_E2E_ISSUE_TYPE_ALT` — optional; alternate issue type name for the bulk issueType round-trip E2E test (`test_e2e_issue_edit_issuetype_multikey_bulk_roundtrip`). If unset, the test clean-skips. Must be a valid issue type in `JR_E2E_PROJECT`'s scheme and different from `JR_E2E_ISSUE_TYPE` (default `"Task"`) — e.g., `"Story"` or `"Bug"`. Read by test code only (`tests/e2e_live.rs`); no `#[cfg(debug_assertions)]` src/ gate needed. Added S-331.
-  - `JR_E2E_POLL_MAX_ATTEMPTS` — max poll iterations for `poll_jql` (default 5). Read by test code only (`tests/e2e_live.rs`) — no `#[cfg(debug_assertions)]` src/ read site needed because this controls the test-side poll loop, not the `jr` binary. Lets CI tune the poll ceiling; local runs can use a short budget (e.g. `JR_E2E_POLL_MAX_ATTEMPTS=3`). Added S-E2E-3.
-  - `JR_E2E_POLL_INITIAL_MS` — initial backoff in milliseconds for `poll_jql` (default 250). Doubles each attempt (250 → 500 → 1000 → 2000 → …). Read by test code only (`tests/e2e_live.rs`) — same scope as `JR_E2E_POLL_MAX_ATTEMPTS`. Added S-E2E-3.
+- Live-Jira E2E tests (`tests/e2e_live.rs`) are gated behind `JR_RUN_E2E=1` + `#[ignore]` + a per-test `if !e2e_enabled() { return; }` early-return (S-410). Inert in `cargo test`/`ci.yml` (never `--include-ignored`); gate correctness pinned by `test_e2e_gate_disabled_when_env_unset` + `test_every_ignored_test_has_gate_guard`. Runs only in `.github/workflows/e2e.yml` (non-blocking). Local: `JR_RUN_E2E=1 JR_E2E_BASE_URL=… JR_AUTH_HEADER=… JR_E2E_PROJECT=E2E cargo test --test e2e_live -- --include-ignored --test-threads=1`. **Full env-var table: `docs/specs/e2e-live-jira-testing.md`.** Quick reference (all debug-only seams except `JR_RUN_E2E`):
+  - Required: `JR_RUN_E2E`, `JR_E2E_BASE_URL` (→ `JR_BASE_URL`), `JR_AUTH_HEADER` (composed from `JR_E2E_EMAIL`+`JR_E2E_API_TOKEN`), `JR_E2E_PROJECT`.
+  - Optional: `JR_E2E_BOARD_ID` (sprint tests), `JR_E2E_JSM_PROJECT` (queue/requesttype), `JR_E2E_STATUS_DONE`/`_IN_PROGRESS` (default Done/In Progress), `JR_E2E_ISSUE_TYPE` (default Task), `JR_E2E_ISSUE_TYPE_ALT` (bulk issueType round-trip; clean-skips if unset), `JR_E2E_POLL_MAX_ATTEMPTS`/`_INITIAL_MS` (test-side poll loop; defaults 5/250ms).
 - **E2E suite maintenance:** The nightly `e2e.yml` schedule (`0 6 * * *` UTC) is a **data-retention guard**, not just a latency optimization: free Jira Cloud sites deactivate after ~120 days of inactivity and have only a ~15–60 day reactivation window before permanent data deletion. If the nightly job fails with HTTP 401, the `JR_E2E_API_TOKEN` secret has expired — Atlassian caps API tokens at 1 year. Rotate the token in the CI service account before expiry and update the secret in the `jira-e2e` GitHub Environment. Annual rotation is required. Runbook: `docs/specs/e2e-live-jira-testing.md` §9.
 - `tests/e2e_cli_surface_guard.rs` — always-run offline guard validating every `jr` subcommand path and flag referenced in `tests/e2e_live.rs` against `jr --help`; catches assumed-CLI-surface defects (nonexistent subcommands/flags) at CI time without requiring `JR_RUN_E2E` or any network access. Does NOT check JSON output shape or exit-code semantics (use serde types or a live run for that). Implemented as E2E-PG-1 / DRIFT-E2E-1; pairs the mechanical `--help` validator with a parser-consistency check (`test_parser_paths_are_subset_of_surface_table`) that flags new e2e_live.rs invocations not yet registered in the guard's SURFACE table.
 - All interactive prompts have non-interactive flag equivalents for AI agent usage
