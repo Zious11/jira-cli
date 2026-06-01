@@ -78,6 +78,10 @@ jobs:
           # Optional: override status names for sites with non-default workflow names
           JR_E2E_STATUS_DONE: ${{ vars.JR_E2E_STATUS_DONE }}
           JR_E2E_STATUS_IN_PROGRESS: ${{ vars.JR_E2E_STATUS_IN_PROGRESS }}
+          # Optional: alternate issue type for the multi-key `issue edit --type` bulk
+          # round-trip test (#331). Test clean-skips if unset. Must name a real issue
+          # type in the E2E project's scheme, distinct from JR_E2E_ISSUE_TYPE (seed type).
+          JR_E2E_ISSUE_TYPE_ALT: ${{ vars.JR_E2E_ISSUE_TYPE_ALT }}
           # Individual secrets for auth header composition (composed in-script below)
           JR_E2E_EMAIL: ${{ secrets.JR_E2E_EMAIL }}
           JR_E2E_API_TOKEN: ${{ secrets.JR_E2E_API_TOKEN }}
