@@ -1215,7 +1215,9 @@ async fn handle_edit_bulk_labels(
     // and was causing HTTP 400 on real Jira instances (BUG-LABEL-400, live E2E run
     // 26730687481). The PUT path is synchronous (204 No Content) and simpler.
     //
-    // Verified payload shape from Atlassian docs (`.factory/research/jr-label-edit-400.md`):
+    // Verified payload shape: Atlassian Cloud REST API v3 PUT /rest/api/3/issue/{key}
+    // "update" verb (https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/#api-rest-api-3-issue-issueidorkey-put);
+    // empirically confirmed by live E2E run 26730687481 (bulk-payload shape → HTTP 400).
     //   {"update": {"labels": [{"add": "foo"}, {"remove": "bar"}]}}
     // where label values are BARE STRINGS, not {"name": "..."} objects.
     if keys.len() == 1 {

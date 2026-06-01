@@ -456,8 +456,11 @@ impl JiraClient {
     ///
     /// Label values are **bare strings** — NOT `{"name":"foo"}` objects. The bare-string
     /// form is required by the Jira Cloud REST API v3 `update` verb; the `{"name":...}`
-    /// form is only valid on the bulk fields endpoint (per Atlassian docs, verified by
-    /// the research agent in `.factory/research/jr-label-edit-400.md`).
+    /// form is only valid on the bulk fields endpoint. Source: Atlassian Cloud REST API v3
+    /// `PUT /rest/api/3/issue/{issueIdOrKey}` "update" verb documentation
+    /// (<https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/#api-rest-api-3-issue-issueidorkey-put>);
+    /// empirically validated by live E2E run 26730687481 (the bulk-payload shape returned
+    /// HTTP 400 on real Jira Cloud instances).
     ///
     /// Returns `Ok(())` on HTTP 204 No Content. Any other status propagates as an error.
     ///
