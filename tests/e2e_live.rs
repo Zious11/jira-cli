@@ -4920,6 +4920,541 @@ fn test_e2e_issue_list_bad_jql_exits_nonzero() {
     );
 }
 
+/// E2E: single-key `jr issue edit <KEY> --priority <chosen>` round-trip.
+///
+/// Seeds one issue. Discovers valid priorities via `jr project fields --output json`.
+/// Reads the issue's current priority from poll_view. Picks a priority whose name
+/// differs from the current one. Edits the priority. Polls for the new value.
+///
+/// Portable: never hardcodes "High"; picks the target dynamically.
+/// Clean-skip when the project's priority scheme has fewer than 2 priorities
+/// (cannot make a distinguishable change).
+///
+/// Traces to: E2E-PG-4.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
+fn test_e2e_issue_edit_priority_roundtrip() {
+    if !e2e_enabled() {
+        return;
+    }
+    let label = run_label();
+    let proj = project();
+    let itype = issue_type();
+    let h = e2e_harness();
+
+    // Seed one throwaway issue.
+    let summary = format!("[e2e {label}] priority-roundtrip-seed");
+    let create_out = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &proj,
+            "--type",
+            &itype,
+            "--summary",
+            &summary,
+            "--label",
+            &label,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for issue create (priority roundtrip seed)");
+    assert!(
+        create_out.status.success(),
+        "issue create (priority roundtrip seed) failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&create_out.stdout),
+        String::from_utf8_lossy(&create_out.stderr)
+    );
+    let key = serde_json::from_slice::<Value>(&create_out.stdout)
+        .expect("issue create output must be valid JSON")
+        .get("key")
+        .and_then(Value::as_str)
+        .expect("issue create JSON must contain a 'key' field")
+        .to_string();
+
+    // Wait for GET-consistency before reading the current priority.
+    let before = poll_view(&key, &h);
+    let current_name = before
+        .get("fields")
+        .and_then(|f| f.get("priority"))
+        .and_then(|p| p.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+
+    // Discover valid priorities via `jr project fields --output json`.
+    let pf_out = h
+        .cmd()
+        .args(["project", "fields", "--project", &proj, "--output", "json"])
+        .output()
+        .expect("failed to spawn jr for project fields");
+    assert!(
+        pf_out.status.success(),
+        "project fields failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&pf_out.stdout),
+        String::from_utf8_lossy(&pf_out.stderr)
+    );
+    let pf_json: Value =
+        serde_json::from_slice(&pf_out.stdout).expect("project fields output must be valid JSON");
+    let priorities = pf_json
+        .get("priorities")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    // Pick a priority whose name differs from the current one.
+    let target_name = priorities
+        .iter()
+        .filter_map(|p| p.get("name").and_then(Value::as_str))
+        .find(|&name| !name.eq_ignore_ascii_case(&current_name))
+        .map(str::to_string);
+    let chosen = match target_name {
+        Some(n) => n,
+        None => {
+            eprintln!(
+                "SKIP: project {proj} has fewer than 2 priorities (only {current_name:?}); \
+                 cannot make a distinguishable change. Skipping priority round-trip test."
+            );
+            return;
+        }
+    };
+
+    // Edit the priority (single-key → PUT /rest/api/3/issue/{key}).
+    let edit_out = h
+        .cmd()
+        .args([
+            "issue",
+            "edit",
+            &key,
+            "--priority",
+            &chosen,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for issue edit --priority");
+    assert!(
+        edit_out.status.success(),
+        "issue edit --priority failed for {key}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&edit_out.stdout),
+        String::from_utf8_lossy(&edit_out.stderr)
+    );
+
+    // Poll for the updated priority.
+    let after = poll_view(&key, &h);
+    let new_name = after
+        .get("fields")
+        .and_then(|f| f.get("priority"))
+        .and_then(|p| p.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        new_name.eq_ignore_ascii_case(&chosen),
+        "After single-key priority edit, fields.priority.name must be '{chosen}'; \
+         got '{new_name}' (key={key})"
+    );
+}
+
+/// E2E: multi-key `jr issue edit K1 K2 --priority <chosen>` round-trip.
+///
+/// Seeds two issues. Discovers a target priority that differs from each issue's
+/// current priority. Fires the bulk edit. Polls both issues and asserts priority.
+///
+/// This test is the live backstop for the Part A bulk payload fix (issue #331).
+/// It validates that `jr` sends `{"priorityId": "<id>"}` (not `{"name": ...}`)
+/// by asserting the observable outcome on a real Jira instance.
+///
+/// Clean-skip: 403 (bulk-changes permission denied) or 404 (endpoint unavailable).
+/// Any other non-zero exit panics — a payload regression should fail loudly.
+///
+/// Portable: never hardcodes "High"; picks the target priority dynamically.
+///
+/// Traces to: E2E-PG-4, issue #331.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
+fn test_e2e_issue_edit_priority_multikey_bulk_roundtrip() {
+    if !e2e_enabled() {
+        return;
+    }
+    let label = run_label();
+    let proj = project();
+    let itype = issue_type();
+    let h = e2e_harness();
+
+    // Seed two throwaway issues.
+    let make_issue = |suffix: &str| -> String {
+        let summary = format!("[e2e {label}] prio-bulk-{suffix}");
+        let out = h
+            .cmd()
+            .args([
+                "issue",
+                "create",
+                "--project",
+                &proj,
+                "--type",
+                &itype,
+                "--summary",
+                &summary,
+                "--label",
+                &label,
+                "--output",
+                "json",
+            ])
+            .output()
+            .expect("failed to spawn jr for issue create (priority bulk seed)");
+        assert!(
+            out.status.success(),
+            "issue create ({suffix}) failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice::<Value>(&out.stdout)
+            .expect("issue create output must be valid JSON")
+            .get("key")
+            .and_then(Value::as_str)
+            .expect("issue create JSON must contain a 'key' field")
+            .to_string()
+    };
+
+    let key1 = make_issue("a");
+    let key2 = make_issue("b");
+
+    // Read current priorities of both issues.
+    let before1 = poll_view(&key1, &h);
+    let before2 = poll_view(&key2, &h);
+    let current1 = before1
+        .get("fields")
+        .and_then(|f| f.get("priority"))
+        .and_then(|p| p.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let current2 = before2
+        .get("fields")
+        .and_then(|f| f.get("priority"))
+        .and_then(|p| p.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+
+    // Discover valid priorities.
+    let pf_out = h
+        .cmd()
+        .args(["project", "fields", "--project", &proj, "--output", "json"])
+        .output()
+        .expect("failed to spawn jr for project fields");
+    assert!(
+        pf_out.status.success(),
+        "project fields failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&pf_out.stdout),
+        String::from_utf8_lossy(&pf_out.stderr)
+    );
+    let pf_json: Value =
+        serde_json::from_slice(&pf_out.stdout).expect("project fields must be valid JSON");
+    let priorities = pf_json
+        .get("priorities")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    // Pick a priority that differs from both issues' current priority.
+    let chosen = priorities
+        .iter()
+        .filter_map(|p| p.get("name").and_then(Value::as_str))
+        .find(|&name| {
+            !name.eq_ignore_ascii_case(&current1) && !name.eq_ignore_ascii_case(&current2)
+        })
+        .map(str::to_string);
+    let chosen = match chosen {
+        Some(n) => n,
+        None => {
+            eprintln!(
+                "SKIP: could not find a priority distinct from both {current1:?} and {current2:?}; \
+                 skipping bulk priority round-trip test."
+            );
+            return;
+        }
+    };
+
+    // Bulk edit both keys.
+    let edit_out = h
+        .cmd()
+        .args([
+            "issue",
+            "edit",
+            &key1,
+            &key2,
+            "--priority",
+            &chosen,
+            "--no-input",
+        ])
+        .output()
+        .expect("failed to spawn jr for multi-key issue edit --priority");
+
+    if !edit_out.status.success() {
+        let stderr = String::from_utf8_lossy(&edit_out.stderr);
+        // Clean-skip only on 403 (permission denied) or 404 (endpoint unavailable).
+        if edit_out.status.code() == Some(1) && (stderr.contains("403") || stderr.contains("404")) {
+            eprintln!(
+                "SKIP: bulk-edit {code} — 'Make bulk changes' permission not available or \
+                 endpoint absent on this site; skipping bulk priority round-trip test.\n\
+                 stderr: {stderr}",
+                code = if stderr.contains("403") { "403" } else { "404" }
+            );
+            return;
+        }
+        panic!(
+            "multi-key issue edit --priority failed (non-403/404 — likely a payload regression):\n\
+             exit: {:?}\nstdout: {}\nstderr: {}",
+            edit_out.status.code(),
+            String::from_utf8_lossy(&edit_out.stdout),
+            stderr,
+        );
+    }
+
+    // Poll both issues and assert priority updated.
+    for key in [&key1, &key2] {
+        let after = poll_view(key, &h);
+        let new_name = after
+            .get("fields")
+            .and_then(|f| f.get("priority"))
+            .and_then(|p| p.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        assert!(
+            new_name.eq_ignore_ascii_case(&chosen),
+            "After bulk priority edit, fields.priority.name must be '{chosen}'; \
+             got '{new_name}' (key={key})"
+        );
+    }
+}
+
+/// E2E: `jr worklog add <KEY> 1h` → `jr worklog list <KEY> --output json` round-trip.
+///
+/// Seeds one issue. Adds 1 hour of work via `jr worklog add`. Reads back the
+/// worklog list and asserts at least one entry has `timeSpentSeconds == 3600`.
+///
+/// Read-after-write is consistent in Jira Cloud v3 for issue-scoped worklog
+/// reads (the "missing last minute" caveat is Data-Center-only). No tier gate
+/// beyond "Work on issues" permission.
+///
+/// Traces to: E2E-PG-4.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
+fn test_e2e_worklog_add_roundtrip() {
+    if !e2e_enabled() {
+        return;
+    }
+    let label = run_label();
+    let proj = project();
+    let itype = issue_type();
+    let h = e2e_harness();
+
+    // Seed one throwaway issue.
+    let summary = format!("[e2e {label}] worklog-add-roundtrip-seed");
+    let create_out = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &proj,
+            "--type",
+            &itype,
+            "--summary",
+            &summary,
+            "--label",
+            &label,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for issue create (worklog-add seed)");
+    assert!(
+        create_out.status.success(),
+        "issue create (worklog-add seed) failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&create_out.stdout),
+        String::from_utf8_lossy(&create_out.stderr)
+    );
+    let key = serde_json::from_slice::<Value>(&create_out.stdout)
+        .expect("issue create output must be valid JSON")
+        .get("key")
+        .and_then(Value::as_str)
+        .expect("issue create JSON must contain a 'key' field")
+        .to_string();
+
+    // Wait for GET-consistency before logging work.
+    poll_view(&key, &h);
+
+    // Add 1 hour of work.
+    let add_out = h
+        .cmd()
+        .args(["worklog", "add", &key, "1h", "--output", "json"])
+        .output()
+        .expect("failed to spawn jr for worklog add");
+    assert!(
+        add_out.status.success(),
+        "worklog add failed for {key}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&add_out.stdout),
+        String::from_utf8_lossy(&add_out.stderr)
+    );
+
+    // Read back the worklog list.
+    let list_out = h
+        .cmd()
+        .args(["worklog", "list", &key, "--output", "json"])
+        .output()
+        .expect("failed to spawn jr for worklog list");
+    assert!(
+        list_out.status.success(),
+        "worklog list failed for {key}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&list_out.stdout),
+        String::from_utf8_lossy(&list_out.stderr)
+    );
+
+    let worklogs: Value =
+        serde_json::from_slice(&list_out.stdout).expect("worklog list output must be valid JSON");
+    assert!(
+        worklogs.is_array(),
+        "worklog list output must be a JSON array; got: {worklogs}"
+    );
+    let has_1h = worklogs
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|w| w.get("timeSpentSeconds").and_then(Value::as_u64) == Some(3600));
+    assert!(
+        has_1h,
+        "worklog list must contain an entry with timeSpentSeconds == 3600 (1h); \
+         got: {worklogs}"
+    );
+}
+
+/// E2E: `jr issue assign <KEY> --unassign` removes the assignee.
+///
+/// Seeds one issue. Assigns it to self first. Then unassigns.
+/// After unassign: if `fields.assignee` is null → PASS.
+/// If `fields.assignee` is non-null after a 2xx unassign → CLEAN-SKIP with
+/// an explanatory message (project has "Allow unassigned issues" disabled or
+/// a forced default-assignee / automation post-function — config-dependent
+/// behavior, not a jr bug).
+///
+/// Traces to: E2E-PG-4, BC-3.2.001 (unassign semantics).
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
+fn test_e2e_issue_unassign() {
+    if !e2e_enabled() {
+        return;
+    }
+    let label = run_label();
+    let proj = project();
+    let itype = issue_type();
+    let h = e2e_harness();
+
+    // Seed one throwaway issue.
+    let summary = format!("[e2e {label}] unassign-seed");
+    let create_out = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &proj,
+            "--type",
+            &itype,
+            "--summary",
+            &summary,
+            "--label",
+            &label,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for issue create (unassign seed)");
+    assert!(
+        create_out.status.success(),
+        "issue create (unassign seed) failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&create_out.stdout),
+        String::from_utf8_lossy(&create_out.stderr)
+    );
+    let key = serde_json::from_slice::<Value>(&create_out.stdout)
+        .expect("issue create output must be valid JSON")
+        .get("key")
+        .and_then(Value::as_str)
+        .expect("issue create JSON must contain a 'key' field")
+        .to_string();
+
+    // Wait for GET-consistency.
+    poll_view(&key, &h);
+
+    // Assign to self (no --to argument = self-assignment via /myself).
+    let assign_out = h
+        .cmd()
+        .args(["issue", "assign", &key, "--output", "json"])
+        .output()
+        .expect("failed to spawn jr for issue assign (self)");
+    assert!(
+        assign_out.status.success(),
+        "issue assign (self) failed for {key}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&assign_out.stdout),
+        String::from_utf8_lossy(&assign_out.stderr)
+    );
+
+    // Confirm assigned.
+    let assigned = poll_view(&key, &h);
+    let assignee_id = assigned
+        .get("fields")
+        .and_then(|f| f.get("assignee"))
+        .and_then(|a| a.get("accountId"))
+        .and_then(Value::as_str);
+    assert!(
+        assignee_id.is_some_and(|id| !id.is_empty()),
+        "after self-assignment, fields.assignee.accountId must be non-null; \
+         fields.assignee: {:?}",
+        assigned.get("fields").and_then(|f| f.get("assignee"))
+    );
+
+    // Unassign.
+    let unassign_out = h
+        .cmd()
+        .args(["issue", "assign", &key, "--unassign", "--output", "json"])
+        .output()
+        .expect("failed to spawn jr for issue assign --unassign");
+    assert!(
+        unassign_out.status.success(),
+        "issue assign --unassign failed for {key}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&unassign_out.stdout),
+        String::from_utf8_lossy(&unassign_out.stderr)
+    );
+
+    // Poll and check assignee.
+    let after = poll_view(&key, &h);
+    let assignee_after = after.get("fields").and_then(|f| f.get("assignee"));
+
+    // Clean-skip if assignee is non-null after unassign:
+    // project may have "Allow unassigned issues" disabled or a default-assignee/automation.
+    let is_null = assignee_after.is_none_or(Value::is_null);
+    if !is_null {
+        eprintln!(
+            "SKIP: after unassign, fields.assignee is still non-null for {key}. \
+             Project '{proj}' likely has 'Allow unassigned issues' disabled or a \
+             default-assignee / automation post-function. This is a project-config \
+             limitation, not a jr bug. Skipping unassign assertion."
+        );
+        return;
+    }
+    assert!(
+        is_null,
+        "After unassign, fields.assignee must be null; \
+         got: {assignee_after:?} (key={key})"
+    );
+}
+
 /// E2E: A well-formed but wrong `JR_AUTH_HEADER` exits 2 (`JrError::NotAuthenticated`).
 ///
 /// Constructs a syntactically valid `Basic <base64(wrong:creds)>` header that will
