@@ -2696,3 +2696,59 @@ the value exists. Record only values read from command output in the current tur
 
 _Discovered: E2E-PG-4 coverage cycle (DEC-050), 2026-06-01. Status: [process-gap].
 Recurrence: DEC-047 fabrication failure mode — third documented instance._
+
+---
+
+### L-E2E-12 [process-gap] Wiremock/mock tests that assert the client's own request/response assumptions provide false confidence
+
+**Background:** `jr issue edit --label` shipped with a 4-layer-deep latent bug family that was
+entirely green under wiremock-only coverage. The bugs were:
+
+1. **Wrong endpoint:** single-key path posted to the bulk edit endpoint instead of
+   `PUT /rest/api/3/issue/{key}` — never caught because wiremock served any path.
+2. **Malformed payload:** the `editedFieldsInput` schema used a fabricated
+   `labels.labelsAction + {"name":..}` structure that matches no real Jira schema;
+   multi-key bulk used the wrong `labelsFields` shape — wiremock matched whatever
+   the client sent, so the test was asserting its own wrong request.
+3. **Wrong type — integer taskId:** the bulk task-status response returns `taskId` as a
+   JSON integer; the type was declared as `String`; wiremock returned a string so the
+   deserializer never failed.
+4. **Wrong type — numeric issue IDs:** `processedAccessibleIssues` carries numeric issue
+   IDs; wiremock returned strings, masking the serde mismatch.
+
+All four bugs were green under wiremock because the mocks encoded the CLIENT's assumptions,
+not the real Jira wire shape. Nothing exercised the code against the actual API until the
+gated live E2E tests (E2E-PG-4, PR #445) existed.
+
+**Root cause pattern:** A mock that is constructed from the client's own outgoing request
+and expected response shapes cannot catch errors in those shapes. The mock is a mirror of
+the client's assumptions, not a validator of them. This is a structural property, not a
+bug in any individual test — the class is "mock fidelity derived from client expectations."
+
+**Live-run sequence that surfaced the layers (each run caught the next):**
+- 26730687481 (59/1): single-key 400 → PR #447 (single-key PUT, offline regression test
+  using REAL wire shape)
+- 26733056812 (60/0): single-key GREEN
+- 26733998365 (60/1): multi-key payload accepted, integer taskId deserialization error
+  → PR #448 (labelsFields schema) + PR #449 (string-or-int taskId deserializer)
+- 26735034015 (60/1): numeric issue-ID deserialization error → PR #450 (string-or-int
+  array deserializer for processedAccessibleIssues)
+- 26735722804 (61/0): ALL GREEN (develop @ cff86d2)
+
+**Why fix-forward worked:** each live failure panicked loudly (the label test uses a narrow
+skip on 403 only, so a 400 or a serde parse error immediately fails the test rather than
+silently passing), and each fix added an offline regression test constructed from a CAPTURED
+REAL response shape (not reconstructed from the client's prior assumption).
+
+**Mitigation rule:** Any code path that talks to a real external API MUST have at least one
+gated live or integration test against the real service before it is considered validated.
+Mock fidelity must be derived from a captured real response (e.g., from `--verbose-bodies`
+output, Postman/curl capture, or official Atlassian API playground) — NOT from the client's
+outgoing request or expected-response assumptions. The live E2E suite (gated behind
+`JR_RUN_E2E=1`, nightly in `e2e.yml`) is the backstop for this class of error. New
+API-touching code paths should be accompanied by a gated live test before the PR merges,
+or explicitly filed as `deferred-pending-live-validation` with a tracking issue.
+
+_Discovered: E2E-PG-4 label fix chain (#447-#450), 2026-06-01. Status: [process-gap].
+Reference: DEC-052. Live-run sequence: 26730687481 → 26733056812 → 26733998365 →
+26735034015 → 26735722804 (61/0 ALL GREEN, develop @ cff86d2)._
