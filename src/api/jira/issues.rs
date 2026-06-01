@@ -680,7 +680,7 @@ impl JiraClient {
         let mut all: Vec<IssueTypeEntry> = Vec::new();
         let mut start_at: u32 = 0;
         loop {
-            let response: CreametaIssueTypesResponse = self
+            let response: CreatemetaIssueTypesResponse = self
                 .get(&format!(
                     "/rest/api/3/issue/createmeta/{}/issuetypes?startAt={}&maxResults={}",
                     urlencoding::encode(project_key),
@@ -726,7 +726,7 @@ pub(crate) struct IssueTypeEntry {
 /// developer.atlassian.com (issue #331; see
 /// `.factory/research/issue-331-createmeta-response-schema.md`).
 #[derive(Debug, serde::Deserialize)]
-struct CreametaIssueTypesResponse {
+struct CreatemetaIssueTypesResponse {
     #[serde(rename = "issueTypes", default)]
     pub issue_types: Vec<IssueTypeEntry>,
     /// Total number of issue types across all pages. Defaults to 0 if absent
@@ -782,7 +782,7 @@ mod tests {
     /// jira.js client and developer.atlassian.com. See issue #331 and
     /// `.factory/research/issue-331-createmeta-response-schema.md`.
     #[test]
-    fn test_creatameta_response_deserializes_issuetypes_field() {
+    fn test_createmeta_response_deserializes_issuetypes_field() {
         // This is the REAL shape returned by
         // GET /rest/api/3/issue/createmeta/{projectKey}/issuetypes.
         // It uses the top-level key `issueTypes` — NOT `values`.
@@ -796,8 +796,8 @@ mod tests {
                 {"id": "10002", "name": "Story"}
             ]
         }"#;
-        let resp: CreametaIssueTypesResponse = serde_json::from_str(json)
-            .expect("CreametaIssueTypesResponse must deserialize from real Jira API shape");
+        let resp: CreatemetaIssueTypesResponse = serde_json::from_str(json)
+            .expect("CreatemetaIssueTypesResponse must deserialize from real Jira API shape");
         assert_eq!(resp.issue_types.len(), 2, "Expected 2 issue types");
         assert_eq!(resp.issue_types[0].id, "10001");
         assert_eq!(resp.issue_types[0].name, "Bug");
