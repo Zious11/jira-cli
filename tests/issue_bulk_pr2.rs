@@ -1604,10 +1604,15 @@ async fn test_multi_key_type_update_body_uses_issue_type_id() {
 
     // Mock GET /rest/api/3/issue/createmeta/FOO/issuetypes — name→id resolution.
     // The fix must call this endpoint to resolve "Bug" → id "10001".
+    // Real shape: PageOfCreateMetaIssueTypes uses `issueTypes` (NOT `values`),
+    // offset pagination (startAt/maxResults/total), no `isLast` field.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/createmeta/FOO/issuetypes"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "values": [{"id": "10001", "name": "Bug"}, {"id": "10002", "name": "Task"}]
+            "issueTypes": [{"id": "10001", "name": "Bug"}, {"id": "10002", "name": "Task"}],
+            "total": 2,
+            "startAt": 0,
+            "maxResults": 200
         })))
         .expect(1)
         .mount(&server)
@@ -1716,10 +1721,15 @@ async fn test_bulk_issuetype_body_uses_issuetype_id_not_name() {
     let server = MockServer::start().await;
 
     // Mock GET createmeta/FOO/issuetypes — returns Bug (id 10001) and Task (id 10002).
+    // Real shape: PageOfCreateMetaIssueTypes uses `issueTypes` (NOT `values`),
+    // offset pagination (startAt/maxResults/total), no `isLast` field.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/createmeta/FOO/issuetypes"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "values": [{"id": "10001", "name": "Bug"}, {"id": "10002", "name": "Task"}]
+            "issueTypes": [{"id": "10001", "name": "Bug"}, {"id": "10002", "name": "Task"}],
+            "total": 2,
+            "startAt": 0,
+            "maxResults": 200
         })))
         .expect(1)
         .mount(&server)
@@ -1825,11 +1835,15 @@ async fn test_bulk_issuetype_resolves_type_name_case_insensitively() {
     let server = MockServer::start().await;
 
     // createmeta returns title-case "Bug"; user supplies lowercase "bug".
+    // Real shape: PageOfCreateMetaIssueTypes uses `issueTypes` (NOT `values`),
+    // offset pagination (startAt/maxResults/total), no `isLast` field.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/createmeta/FOO/issuetypes"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "values": [{"id": "10001", "name": "Bug"}, {"id": "10002", "name": "Task"}],
-            "isLast": true
+            "issueTypes": [{"id": "10001", "name": "Bug"}, {"id": "10002", "name": "Task"}],
+            "total": 2,
+            "startAt": 0,
+            "maxResults": 200
         })))
         .expect(1)
         .mount(&server)
@@ -2093,10 +2107,15 @@ async fn test_bulk_issuetype_unknown_type_name_exits_non_zero() {
     let server = MockServer::start().await;
 
     // Mock createmeta returning only "Bug" — "Nonexistent" is not in the list.
+    // Real shape: PageOfCreateMetaIssueTypes uses `issueTypes` (NOT `values`),
+    // offset pagination (startAt/maxResults/total), no `isLast` field.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/createmeta/FOO/issuetypes"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "values": [{"id": "10001", "name": "Bug"}]
+            "issueTypes": [{"id": "10001", "name": "Bug"}],
+            "total": 1,
+            "startAt": 0,
+            "maxResults": 200
         })))
         .mount(&server)
         .await;
@@ -2152,8 +2171,14 @@ async fn test_bulk_issuetype_unknown_type_name_exits_non_zero() {
 /// `jr issue edit FOO-1 FOO-2 --type Story --no-input`
 /// where "Story" only appears on the second page of the createmeta response.
 ///
-/// Verifies that get_issue_types_for_project paginates until isLast=true,
-/// so types beyond the first page are discoverable (I-1 fix).
+/// Verifies that get_issue_types_for_project paginates using offset termination
+/// (`startAt + page_len >= total`), so types beyond the first page are discoverable.
+///
+/// Uses the REAL `PageOfCreateMetaIssueTypes` shape: `issueTypes` (NOT `values`),
+/// offset pagination (`startAt`/`maxResults`/`total`), NO `isLast` field.
+/// Page 1: startAt=0, total=2, issueTypes=[Bug].
+/// Page 2: startAt=1, total=2, issueTypes=[Story]. Loop terminates because
+/// `1 + 1 >= 2`.
 ///
 /// Also pins that the request includes query params (startAt/maxResults),
 /// verifiable because wiremock records received_requests with full URL.
@@ -2163,31 +2188,29 @@ async fn test_bulk_issuetype_resolution_paginates_to_second_page() {
 
     let server = MockServer::start().await;
 
-    // Page 1: isLast=false, contains only "Bug".
+    // Page 1: offset model, contains only "Bug". total=2 → not done (0 + 1 < 2).
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/createmeta/FOO/issuetypes"))
         .and(query_param("startAt", "0"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "values": [{"id": "10001", "name": "Bug"}],
+            "issueTypes": [{"id": "10001", "name": "Bug"}],
             "startAt": 0,
             "maxResults": 200,
-            "total": 2,
-            "isLast": false
+            "total": 2
         })))
         .expect(1)
         .mount(&server)
         .await;
 
-    // Page 2: isLast=true, contains "Story".
+    // Page 2: offset model, contains "Story". Loop terminates: 1 + 1 >= 2.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/createmeta/FOO/issuetypes"))
         .and(query_param("startAt", "1"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "values": [{"id": "10002", "name": "Story"}],
+            "issueTypes": [{"id": "10002", "name": "Story"}],
             "startAt": 1,
             "maxResults": 200,
-            "total": 2,
-            "isLast": true
+            "total": 2
         })))
         .expect(1)
         .mount(&server)
