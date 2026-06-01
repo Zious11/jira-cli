@@ -139,6 +139,100 @@ where
     deserializer.deserialize_any(OptStringOrIntVisitor)
 }
 
+/// Deserialize an array whose elements are either JSON strings or JSON integers,
+/// normalizing each element to `String`.
+///
+/// Real Jira Cloud returns `processedAccessibleIssues` as an array of **numeric
+/// issue IDs** (e.g. `[10129, 10130]`), not the issue-key strings (`["FOO-1"]`)
+/// that the Atlassian OpenAPI spec documents. The wiremock-based tests always
+/// mock this field as string arrays, so this mismatch never surfaced offline until
+/// live E2E run 26735034015.
+///
+/// This deserializer accepts both shapes:
+/// - `["FOO-1", "FOO-2"]` — string elements, returned as-is
+/// - `[10129, 10130]`     — integer elements, converted to `"10129"`, `"10130"`
+/// - `[]`                  — empty array, no-op
+///
+/// Mixed arrays (some string, some integer) are also accepted — each element is
+/// normalized independently.
+///
+/// Rejects floats, booleans, objects, and arrays-of-arrays with a serde error;
+/// only strings and integer types are plausible issue-ID representations.
+fn deserialize_string_or_int_array<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{Error, SeqAccess, Unexpected, Visitor};
+    use std::fmt;
+
+    struct StringOrIntSeqVisitor;
+
+    impl<'de> Visitor<'de> for StringOrIntSeqVisitor {
+        type Value = Vec<String>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("an array of strings or integers (issue IDs or keys)")
+        }
+
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            use serde::de::DeserializeSeed;
+            let mut result = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+
+            // Use a per-element visitor inline so we can convert each item.
+            struct ElementVisitor;
+            impl<'de> Visitor<'de> for ElementVisitor {
+                type Value = String;
+                fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    f.write_str("a string or integer issue ID")
+                }
+                fn visit_str<E: Error>(self, v: &str) -> Result<String, E> {
+                    Ok(v.to_owned())
+                }
+                fn visit_string<E: Error>(self, v: String) -> Result<String, E> {
+                    Ok(v)
+                }
+                fn visit_i64<E: Error>(self, v: i64) -> Result<String, E> {
+                    Ok(v.to_string())
+                }
+                fn visit_u64<E: Error>(self, v: u64) -> Result<String, E> {
+                    Ok(v.to_string())
+                }
+                fn visit_f64<E: Error>(self, v: f64) -> Result<String, E> {
+                    Err(E::invalid_type(
+                        Unexpected::Float(v),
+                        &"a string or integer issue ID",
+                    ))
+                }
+                fn visit_bool<E: Error>(self, v: bool) -> Result<String, E> {
+                    Err(E::invalid_type(
+                        Unexpected::Bool(v),
+                        &"a string or integer issue ID",
+                    ))
+                }
+            }
+
+            // serde requires a DeserializeSeed wrapper to call visit_any per element.
+            struct ElementSeed;
+            impl<'de> DeserializeSeed<'de> for ElementSeed {
+                type Value = String;
+                fn deserialize<D2: serde::Deserializer<'de>>(
+                    self,
+                    d: D2,
+                ) -> Result<Self::Value, D2::Error> {
+                    d.deserialize_any(ElementVisitor)
+                }
+            }
+
+            while let Some(elem) = seq.next_element_seed(ElementSeed)? {
+                result.push(elem);
+            }
+            Ok(result)
+        }
+    }
+
+    deserializer.deserialize_seq(StringOrIntSeqVisitor)
+}
+
 /// Request body for POST /rest/api/3/bulk/issues/fields (bulk field edit).
 ///
 /// CONFIRMED from OpenAPI JSON (2026-05-09) + Perplexity verification (2026-05-10, PR2):
@@ -218,8 +312,19 @@ pub struct BulkOperationProgress {
     pub task_id: Option<String>,
     /// Status string — terminal when one of: COMPLETE, FAILED, CANCELLED, DEAD
     pub status: String,
-    #[serde(default)]
+    /// Issue IDs (or keys) that were successfully processed.
+    ///
+    /// The Atlassian OpenAPI spec documents elements as `string`, but real Jira Cloud
+    /// returns **numeric issue IDs** (e.g. `[10129, 10130]`), not key strings like
+    /// `["FOO-1"]`. `deserialize_string_or_int_array` accepts both forms.
+    /// Discovered via live E2E run 26735034015.
+    #[serde(default, deserialize_with = "deserialize_string_or_int_array")]
     pub processed_accessible_issues: Vec<String>,
+    /// Per-issue error map: issue ID (string key) → error detail.
+    ///
+    /// JSON object keys are always strings — no numeric-key risk here.
+    /// Values (BulkActionError) contain only error message strings; no
+    /// issue-ID fields that could be numeric.
     #[serde(default)]
     pub failed_accessible_issues: HashMap<String, BulkActionError>,
     /// Human-readable failure reason from Atlassian when status is FAILED.
@@ -480,6 +585,93 @@ mod tests {
             )
             .is_err(),
             "BulkOperationProgress must reject a bool taskId"
+        );
+    }
+
+    // --- processedAccessibleIssues numeric ID tests (live E2E 26735034015) ---
+    //
+    // Real Jira Cloud returns `processedAccessibleIssues` as a JSON array of
+    // integers (numeric issue IDs, e.g. [10129]), NOT strings. The Atlassian
+    // OpenAPI spec documents the array element type as `string`, but the live
+    // API disagrees. The wiremock-based tests always mock this field as string
+    // arrays (e.g. ["FOO-1"]), so this never surfaced offline.
+    //
+    // REPRODUCTION (pre-fix RED state, empirically confirmed):
+    //   JSON: {"taskId":"10128","status":"COMPLETE","progressPercent":100,
+    //          "totalIssueCount":2,"processedAccessibleIssues":[10129],
+    //          "failedAccessibleIssues":{}}
+    //   Error: invalid type: integer 10129, expected a string at line 1 column 115
+    //   (column 110 is where 10129 starts; serde_json reports end of token + 1 = 115)
+    //   This PINS that `processedAccessibleIssues` is the field causing the live error.
+    //
+    // Fix: `deserialize_string_or_int_array` accepts both string and integer elements.
+
+    /// BulkOperationProgress: integer processedAccessibleIssues → Vec<String> (the live E2E fix).
+    /// Mirrors real Jira Cloud response shape: taskId string, processedAccessibleIssues integers.
+    #[test]
+    fn test_deserialize_bulk_operation_progress_numeric_processed_issues_succeeds() {
+        // This JSON reproduces the live error shape (E2E run 26735034015).
+        // Before the fix: serde_json error "invalid type: integer 10129, expected a string
+        // at line 1 column 115" — pinned that processedAccessibleIssues was the failing field.
+        let json = r#"{"taskId":"10128","status":"COMPLETE","progressPercent":100,"totalIssueCount":2,"processedAccessibleIssues":[10129],"failedAccessibleIssues":{}}"#;
+        let prog: BulkOperationProgress = serde_json::from_str(json)
+            .expect("BulkOperationProgress must deserialize integer processedAccessibleIssues");
+        assert_eq!(
+            prog.processed_accessible_issues,
+            vec!["10129".to_string()],
+            "Numeric issue ID must be normalized to string"
+        );
+        assert!(prog.failed_accessible_issues.is_empty());
+        assert_eq!(prog.status, "COMPLETE");
+        assert_eq!(prog.task_id, Some("10128".to_string()));
+    }
+
+    /// Multiple integer IDs in processedAccessibleIssues → all normalized to String.
+    #[test]
+    fn test_deserialize_bulk_operation_progress_multiple_numeric_processed_issues() {
+        let json = r#"{"taskId":"10128","status":"COMPLETE","progressPercent":100,"processedAccessibleIssues":[10129,10130,10131],"failedAccessibleIssues":{}}"#;
+        let prog: BulkOperationProgress = serde_json::from_str(json)
+            .expect("Must deserialize multiple integer processedAccessibleIssues");
+        assert_eq!(
+            prog.processed_accessible_issues,
+            vec![
+                "10129".to_string(),
+                "10130".to_string(),
+                "10131".to_string()
+            ]
+        );
+    }
+
+    /// String processedAccessibleIssues (issue keys) still work — regression guard.
+    #[test]
+    fn test_deserialize_bulk_operation_progress_string_processed_issues_regression() {
+        let json = r#"{"taskId":"task-1","status":"COMPLETE","progressPercent":100,"processedAccessibleIssues":["FOO-1","FOO-2"],"failedAccessibleIssues":{}}"#;
+        let prog: BulkOperationProgress = serde_json::from_str(json)
+            .expect("Must deserialize string processedAccessibleIssues (regression guard)");
+        assert_eq!(
+            prog.processed_accessible_issues,
+            vec!["FOO-1".to_string(), "FOO-2".to_string()]
+        );
+    }
+
+    /// Empty processedAccessibleIssues → empty Vec (no regression on ENQUEUED responses).
+    #[test]
+    fn test_deserialize_bulk_operation_progress_empty_processed_issues() {
+        let json = r#"{"taskId":"task-1","status":"ENQUEUED","progressPercent":0,"processedAccessibleIssues":[],"failedAccessibleIssues":{}}"#;
+        let prog: BulkOperationProgress =
+            serde_json::from_str(json).expect("Must deserialize empty processedAccessibleIssues");
+        assert!(prog.processed_accessible_issues.is_empty());
+    }
+
+    /// Mixed array (string + integer elements) — defensive against partially-migrated responses.
+    #[test]
+    fn test_deserialize_bulk_operation_progress_mixed_processed_issues() {
+        let json = r#"{"status":"COMPLETE","processedAccessibleIssues":["FOO-1",10130],"failedAccessibleIssues":{}}"#;
+        let prog: BulkOperationProgress = serde_json::from_str(json)
+            .expect("Must deserialize mixed string/integer processedAccessibleIssues");
+        assert_eq!(
+            prog.processed_accessible_issues,
+            vec!["FOO-1".to_string(), "10130".to_string()]
         );
     }
 

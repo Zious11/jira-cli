@@ -791,3 +791,86 @@ async fn test_edit_multi_key_output_json_returns_results_array() {
         "Expected 2 result entries for 2 keys; got: {stdout}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Regression: numeric processedAccessibleIssues in poll response (live E2E 26735034015)
+//
+// Real Jira Cloud returns processedAccessibleIssues as an array of numeric
+// issue IDs (e.g. [10129, 10130]), not the issue-key strings ("FOO-1") used
+// in wiremock mocks. This gap caused:
+//   "Error: invalid type: integer 10129, expected a string at line 1 column 115"
+// on every multi-key bulk label edit (jr issue edit K1 K2 --label add:<probe>).
+//
+// The mock in this test has the poll response return integer IDs to close the
+// wiremock-vs-real-API gap. The fix is `deserialize_string_or_int_array` on
+// `BulkOperationProgress::processed_accessible_issues`.
+// ---------------------------------------------------------------------------
+
+/// Multi-key label bulk edit succeeds when the poll response contains numeric
+/// (integer) processedAccessibleIssues, as returned by real Jira Cloud.
+///
+/// Previously this crashed with a serde deserialization error (live E2E run
+/// 26735034015). Now accepted via `deserialize_string_or_int_array`.
+#[tokio::test]
+async fn test_edit_multi_key_label_succeeds_with_numeric_processed_issues_in_poll() {
+    let server = MockServer::start().await;
+
+    // Bulk POST: returns a task ID (as a string — this was fixed separately in #449).
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .and(body_partial_json(serde_json::json!({
+            "selectedIssueIdsOrKeys": ["FOO-1", "FOO-2"]
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "taskId": "10128",
+            "status": "ENQUEUED",
+            "progressPercent": 0,
+            "processedAccessibleIssues": [],
+            "failedAccessibleIssues": {},
+            "totalIssueCount": 2
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Poll response: COMPLETE with NUMERIC processedAccessibleIssues (the live bug).
+    // Real Jira Cloud returns integer issue IDs here, not string keys like "FOO-1".
+    // Before the fix this response caused:
+    //   "invalid type: integer 10129, expected a string at line 1 column 115"
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/bulk/queue/10128"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "taskId": "10128",
+            "status": "COMPLETE",
+            "progressPercent": 100,
+            "processedAccessibleIssues": [10129, 10130],
+            "failedAccessibleIssues": {},
+            "totalIssueCount": 2,
+            "invalidOrInaccessibleIssueCount": 0
+        })))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--label",
+            "add:probe",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 when poll response has numeric processedAccessibleIssues; \
+         this was the live E2E 26735034015 failure. stderr={stderr} stdout={stdout}"
+    );
+    // wiremock .expect(1) on the bulk POST fires on drop — verifies the POST was made.
+}
