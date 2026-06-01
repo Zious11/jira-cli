@@ -1280,7 +1280,7 @@ async fn handle_edit_bulk_labels(
 /// {
 ///   "summary": "New title",
 ///   "priority": {"priorityId": "3"},
-///   "issuetype": {"issueTypeId": "10001"}
+///   "issuetype": {"name": "Bug"}
 /// }
 /// ```
 ///
@@ -1289,11 +1289,11 @@ async fn handle_edit_bulk_labels(
 /// resolve the priority name to a string id. If the name does not match any known
 /// priority (case-insensitive), a `UserError` is returned listing valid names.
 ///
-/// Issue type: the bulk endpoint key is `"issueType"` (camelCase) in
-/// `editedFieldsInput`, while `selectedActions` uses lowercase `"issuetype"`.
-/// Resolving issue-type name→id is tracked in #331 (multi-project type-id
-/// resolution is out of scope for this fix); the type path retains `{"name": t}`
-/// pending that follow-up.
+/// Issue type: the current implementation sends `{"name": t}` under the lowercase
+/// `"issuetype"` key (unchanged legacy behavior). Both key casing and the correct
+/// id-based shape (`{"issueTypeId": "..."}`) for the bulk endpoint are UNVERIFIED
+/// and tracked in #331 — do NOT assume a camelCase `"issueType"` / `issueTypeId`
+/// shape without confirmation from a live Atlassian response.
 async fn handle_edit_bulk_fields(
     keys: &[String],
     summary: Option<&str>,
