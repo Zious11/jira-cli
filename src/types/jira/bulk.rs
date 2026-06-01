@@ -1,5 +1,141 @@
 use std::collections::HashMap;
 
+/// Deserialize a taskId field that Jira Cloud may return as either a JSON string
+/// or a JSON integer.
+///
+/// Real Jira Cloud tenants return `taskId` as a JSON integer (e.g. `10110`),
+/// not a string. The Atlassian OpenAPI spec documents it as a string, but the
+/// live API disagrees. Discovered via live E2E run 26733998365 which produced:
+///   `Error: invalid type: integer 10110, expected a string at line 1 column 114`
+///
+/// This deserializer accepts both shapes and normalizes to `String` so downstream
+/// code (`validate_task_id`, URL path construction, `urlencoding::encode`) all
+/// receive a consistent type. "10110" is a valid `validate_task_id` input
+/// (all ASCII alphanumeric).
+///
+/// Rejects floats, booleans, arrays, objects, and nulls with a serde error —
+/// only `String` and integer types are plausible taskId representations.
+fn deserialize_task_id_string_or_int<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{Error, Unexpected, Visitor};
+    use std::fmt;
+
+    struct StringOrIntVisitor;
+
+    impl<'de> Visitor<'de> for StringOrIntVisitor {
+        type Value = String;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a string or integer taskId")
+        }
+
+        fn visit_str<E: Error>(self, v: &str) -> Result<Self::Value, E> {
+            Ok(v.to_owned())
+        }
+
+        fn visit_string<E: Error>(self, v: String) -> Result<Self::Value, E> {
+            Ok(v)
+        }
+
+        fn visit_i64<E: Error>(self, v: i64) -> Result<Self::Value, E> {
+            Ok(v.to_string())
+        }
+
+        fn visit_u64<E: Error>(self, v: u64) -> Result<Self::Value, E> {
+            Ok(v.to_string())
+        }
+
+        fn visit_f64<E: Error>(self, v: f64) -> Result<Self::Value, E> {
+            Err(E::invalid_type(
+                Unexpected::Float(v),
+                &"a string or integer taskId",
+            ))
+        }
+
+        fn visit_bool<E: Error>(self, v: bool) -> Result<Self::Value, E> {
+            Err(E::invalid_type(
+                Unexpected::Bool(v),
+                &"a string or integer taskId",
+            ))
+        }
+    }
+
+    deserializer.deserialize_any(StringOrIntVisitor)
+}
+
+/// Option-wrapped variant of `deserialize_task_id_string_or_int` for
+/// `BulkOperationProgress.task_id: Option<String>`. Handles `null` and
+/// absent fields (via `#[serde(default)]`) → `None`; string → `Some(String)`;
+/// integer → `Some(String)`.
+fn deserialize_opt_task_id_string_or_int<'de, D>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{Error, Unexpected, Visitor};
+    use std::fmt;
+
+    struct OptStringOrIntVisitor;
+
+    impl<'de> Visitor<'de> for OptStringOrIntVisitor {
+        type Value = Option<String>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a string, integer, or null taskId")
+        }
+
+        fn visit_none<E: Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_unit<E: Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_some<D2: serde::Deserializer<'de>>(
+            self,
+            deserializer: D2,
+        ) -> Result<Self::Value, D2::Error> {
+            deserialize_task_id_string_or_int(deserializer).map(Some)
+        }
+
+        fn visit_str<E: Error>(self, v: &str) -> Result<Self::Value, E> {
+            Ok(Some(v.to_owned()))
+        }
+
+        fn visit_string<E: Error>(self, v: String) -> Result<Self::Value, E> {
+            Ok(Some(v))
+        }
+
+        fn visit_i64<E: Error>(self, v: i64) -> Result<Self::Value, E> {
+            Ok(Some(v.to_string()))
+        }
+
+        fn visit_u64<E: Error>(self, v: u64) -> Result<Self::Value, E> {
+            Ok(Some(v.to_string()))
+        }
+
+        fn visit_f64<E: Error>(self, v: f64) -> Result<Self::Value, E> {
+            Err(E::invalid_type(
+                Unexpected::Float(v),
+                &"a string, integer, or null taskId",
+            ))
+        }
+
+        fn visit_bool<E: Error>(self, v: bool) -> Result<Self::Value, E> {
+            Err(E::invalid_type(
+                Unexpected::Bool(v),
+                &"a string, integer, or null taskId",
+            ))
+        }
+    }
+
+    deserializer.deserialize_any(OptStringOrIntVisitor)
+}
+
 /// Request body for POST /rest/api/3/bulk/issues/fields (bulk field edit).
 ///
 /// CONFIRMED from OpenAPI JSON (2026-05-09) + Perplexity verification (2026-05-10, PR2):
@@ -46,9 +182,14 @@ pub struct BulkTransitionRequest {
 ///
 /// CONFIRMED from OpenAPI JSON: taskId is a top-level field in the BulkOperationProgress body.
 /// HTTP 200 is the success status for both bulk submission endpoints.
+///
+/// NOTE: The Atlassian OpenAPI spec documents `taskId` as a string, but real Jira Cloud
+/// tenants return it as a JSON integer (e.g. 10110). `deserialize_task_id_string_or_int`
+/// normalizes both forms to `String`. Discovered via live E2E run 26733998365.
 #[derive(serde::Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct BulkSubmitResponse {
+    #[serde(deserialize_with = "deserialize_task_id_string_or_int")]
     pub task_id: String,
 }
 
@@ -70,6 +211,7 @@ pub struct BulkSubmitResponse {
 #[derive(serde::Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct BulkOperationProgress {
+    #[serde(default, deserialize_with = "deserialize_opt_task_id_string_or_int")]
     pub task_id: Option<String>,
     /// Status string — terminal when one of: COMPLETE, FAILED, CANCELLED, DEAD
     pub status: String,
@@ -234,6 +376,58 @@ mod tests {
                 "expected {s} non-terminal"
             );
         }
+    }
+
+    // --- taskId integer deserialization tests (live E2E 26733998365) ---
+    //
+    // Real Jira Cloud returns `taskId` as a JSON integer (e.g. 10110), not a
+    // string. The wiremock-based tests always mock it as a string, so this
+    // never surfaced offline. These tests pin the fix: both BulkSubmitResponse
+    // and BulkOperationProgress must accept integer taskId and normalize to String.
+
+    /// BulkSubmitResponse: integer taskId → String (the live E2E bug case).
+    #[test]
+    fn test_deserialize_bulk_submit_response_integer_task_id() {
+        let json = r#"{"taskId": 10110}"#;
+        let resp: BulkSubmitResponse = serde_json::from_str(json)
+            .expect("BulkSubmitResponse should deserialize integer taskId");
+        assert_eq!(resp.task_id, "10110");
+    }
+
+    /// BulkSubmitResponse: string taskId → unchanged (regression guard).
+    #[test]
+    fn test_deserialize_bulk_submit_response_string_task_id_regression() {
+        let json = r#"{"taskId": "abc-1"}"#;
+        let resp: BulkSubmitResponse = serde_json::from_str(json)
+            .expect("BulkSubmitResponse should deserialize string taskId");
+        assert_eq!(resp.task_id, "abc-1");
+    }
+
+    /// BulkOperationProgress: integer taskId → Some(String).
+    #[test]
+    fn test_deserialize_bulk_operation_progress_integer_task_id() {
+        let json = r#"{"taskId": 10110, "status": "ENQUEUED"}"#;
+        let prog: BulkOperationProgress = serde_json::from_str(json)
+            .expect("BulkOperationProgress should deserialize integer taskId");
+        assert_eq!(prog.task_id, Some("10110".to_string()));
+    }
+
+    /// BulkOperationProgress: string taskId → Some(String) (regression guard).
+    #[test]
+    fn test_deserialize_bulk_operation_progress_string_task_id_regression() {
+        let json = r#"{"taskId": "abc-1", "status": "COMPLETE"}"#;
+        let prog: BulkOperationProgress = serde_json::from_str(json)
+            .expect("BulkOperationProgress should deserialize string taskId");
+        assert_eq!(prog.task_id, Some("abc-1".to_string()));
+    }
+
+    /// BulkOperationProgress: absent taskId → None (field is Option).
+    #[test]
+    fn test_deserialize_bulk_operation_progress_absent_task_id() {
+        let json = r#"{"status": "RUNNING"}"#;
+        let prog: BulkOperationProgress =
+            serde_json::from_str(json).expect("BulkOperationProgress should allow absent taskId");
+        assert_eq!(prog.task_id, None);
     }
 
     #[test]
