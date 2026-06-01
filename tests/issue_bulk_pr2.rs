@@ -1259,6 +1259,113 @@ async fn test_dry_run_output_json_emits_valid_json_with_dry_run_field() {
 }
 
 // ---------------------------------------------------------------------------
+// #331 F-2: --dry-run --output json with --type uses camelCase key + bare string
+// (AC-007 / BC-3.4.018 invariant 5)
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit FOO-1 FOO-2 --type Bug --dry-run --output json --no-input`
+/// (same-project keys — cross-project guard does NOT trip)
+///
+/// AC-007 (BC-3.4.018 invariant 5): dry-run JSON builder must use:
+///   - camelCase `"issueType"` key in `plannedChanges` (NOT lowercase `"issuetype"`)
+///   - bare string value `"Bug"` (NOT `{"issueTypeId": "..."}` — no id resolution in dry-run)
+///
+/// MUTATION COVERAGE: catches two mutations:
+///   1. Reverting the dry-run builder key to lowercase `"issuetype"` (the pre-fix shape)
+///      → `plannedChanges.issueType` absent, `plannedChanges.issuetype` present → FAIL.
+///   2. Changing `json!(t)` to `json!({"issueTypeId": t})` in the dry-run builder
+///      → value is an object, not a bare string → FAIL.
+///
+/// ALSO asserts ZERO createmeta HTTP calls — dry-run must not resolve the type id
+/// (EC-3.4.018-5: no HTTP side-effects in dry-run).
+#[tokio::test]
+async fn test_dry_run_json_issuetype_uses_camelcase_key_bare_string_value() {
+    let server = MockServer::start().await;
+
+    // No createmeta call allowed in dry-run.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/createmeta/FOO/issuetypes"))
+        .respond_with(
+            ResponseTemplate::new(500).set_body_string("unexpected: createmeta in dry-run"),
+        )
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    // No bulk POST allowed in dry-run.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected bulk in dry-run"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "--output",
+            "json",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--type",
+            "Bug",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for same-project --type --dry-run --output json; \
+         stderr={stderr} stdout={stdout}"
+    );
+
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout not valid JSON: {e}; stdout={stdout}"));
+
+    // plannedChanges.issueType must be camelCase key with bare string value "Bug".
+    let planned = parsed
+        .get("plannedChanges")
+        .unwrap_or_else(|| panic!("Expected 'plannedChanges' in JSON; got: {stdout}"));
+
+    // camelCase key MUST be present.
+    assert!(
+        planned.get("issueType").is_some(),
+        "Expected camelCase 'issueType' key in plannedChanges; got: {planned}"
+    );
+
+    // lowercase key must NOT be present (catches the lowercase-key mutation).
+    assert!(
+        planned.get("issuetype").is_none(),
+        "Expected NO lowercase 'issuetype' key in plannedChanges (camelCase only); \
+         got: {planned}"
+    );
+
+    // value must be a bare string "Bug" (NOT an object like {"issueTypeId": "..."}).
+    assert_eq!(
+        planned.get("issueType").and_then(|v| v.as_str()),
+        Some("Bug"),
+        "Expected plannedChanges.issueType == \"Bug\" (bare string, no id resolution \
+         in dry-run); got: {planned}"
+    );
+
+    // wiremock .expect(0) on both createmeta GET and bulk POST fires on drop if called.
+    // Zero HTTP calls confirms no resolution attempt in dry-run.
+    let received = server.received_requests().await.unwrap();
+    assert_eq!(
+        received.len(),
+        0,
+        "Expected zero HTTP calls in --type --dry-run; got {} requests",
+        received.len()
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Audit follow-up: await_bulk_task must surface failureReason from FAILED response
 // ---------------------------------------------------------------------------
 
@@ -1525,9 +1632,8 @@ async fn test_multi_key_type_update_body_uses_issue_type_id() {
 /// AND wrong value shape. The body_string_contains("issueTypeId") matcher will NOT
 /// match the current body → wiremock rejects the request → test fails.
 ///
-/// Case-insensitive resolution is also verified: "bug" (lowercase) resolves to
-/// the same id "10001" as "Bug". This is tested as a sub-case by mounting the
-/// same createmeta mock and running with "--type" "bug" (lowercase).
+/// Case-insensitive resolution is verified in the dedicated test
+/// `test_bulk_issuetype_resolves_type_name_case_insensitively`.
 #[tokio::test]
 async fn test_bulk_issuetype_body_uses_issuetype_id_not_name() {
     let server = MockServer::start().await;
@@ -1613,6 +1719,101 @@ async fn test_bulk_issuetype_body_uses_issuetype_id_not_name() {
     assert!(
         !body_str.contains("\"Bug\""),
         "Bulk body must NOT contain '\"Bug\"' (name-based shape — use issueTypeId instead); body={body_str}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #331: case-insensitive type-name resolution (AC-005 / BC-3.4.018 invariant 1)
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit FOO-1 FOO-2 --type bug` (all-lowercase) against createmeta
+/// returning `{name:"Bug", id:"10001"}`.
+///
+/// AC-005 (BC-3.4.018 invariant 1): resolution is case-insensitive. The user
+/// supplies `"bug"` (lowercase); the createmeta response has `"Bug"` (title-case).
+/// The resolver must find the match and resolve to id `"10001"`.
+///
+/// MUTATION COVERAGE: this test catches the mutation `it.name == t` (case-sensitive
+/// comparison replacing `it.name.to_lowercase() == t_lower`). Under that mutation,
+/// `"Bug".to_lowercase()` vs `"bug"` would NOT match → exit-64 "not found". The
+/// previous tests all passed `"Bug"` (matching casing) and therefore could not
+/// catch this mutation.
+///
+/// Asserts:
+///   - exit 0
+///   - bulk POST body contains `"issueTypeId"` and `"10001"`
+///   - createmeta GET called exactly once (case-fold happens client-side, no retry)
+#[tokio::test]
+async fn test_bulk_issuetype_resolves_type_name_case_insensitively() {
+    let server = MockServer::start().await;
+
+    // createmeta returns title-case "Bug"; user supplies lowercase "bug".
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/createmeta/FOO/issuetypes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{"id": "10001", "name": "Bug"}, {"id": "10002", "name": "Task"}],
+            "isLast": true
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .and(body_string_contains("issueTypeId"))
+        .and(body_string_contains("10001"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-case-insensitive-001")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    mount_poll_complete(&server, "task-case-insensitive-001", &["FOO-1", "FOO-2"]).await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--type",
+            "bug", // all lowercase — createmeta has "Bug" (title-case)
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for case-insensitive --type resolution; \
+         stderr={stderr} stdout={stdout}"
+    );
+
+    // Verify the bulk POST body used the resolved id, not the raw input string.
+    let requests = server.received_requests().await.unwrap();
+    let bulk_req = requests
+        .iter()
+        .find(|r| r.url.path() == "/rest/api/3/bulk/issues/fields")
+        .expect("Expected exactly one POST to /rest/api/3/bulk/issues/fields");
+    let body_str = std::str::from_utf8(&bulk_req.body).unwrap_or("");
+
+    assert!(
+        body_str.contains("\"10001\""),
+        "Expected resolved id '\"10001\"' for lowercase 'bug' input; body={body_str}"
+    );
+    assert!(
+        body_str.contains("\"issueTypeId\""),
+        "Expected '\"issueTypeId\"' key in body; body={body_str}"
+    );
+    // The input string "bug" (lowercase) must NOT appear as a value — only the id.
+    assert!(
+        !body_str.contains("\"bug\""),
+        "Body must NOT contain '\"bug\"' as a value (must use id, not input string); \
+         body={body_str}"
     );
 }
 

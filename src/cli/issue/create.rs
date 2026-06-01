@@ -2853,4 +2853,28 @@ mod test_project_key_extraction {
             "Different-project keys must extract different project keys"
         );
     }
+
+    // --- Edge cases pinning BC-3.4.018 invariant 4 fail-safe behavior ---
+
+    /// No hyphen: the whole string is returned (fail-safe — treats the input as its
+    /// own project key). Real Jira keys always contain a hyphen, so this is a
+    /// defensive no-panic contract.
+    #[test]
+    fn test_project_key_from_issue_key_no_hyphen() {
+        assert_eq!(project_key_from_issue_key("FOO"), "FOO");
+    }
+
+    /// Trailing hyphen: `rfind('-')` returns the last position (the trailing hyphen),
+    /// so everything before it is returned — `"FOO-"` → `"FOO"`. This pins that a
+    /// malformed key doesn't panic and produces a stable (if semantically odd) result.
+    #[test]
+    fn test_project_key_from_issue_key_trailing_hyphen() {
+        assert_eq!(project_key_from_issue_key("FOO-"), "FOO");
+    }
+
+    /// Empty string: no hyphen → returns `""`. Pins the no-panic contract.
+    #[test]
+    fn test_project_key_from_issue_key_empty_string() {
+        assert_eq!(project_key_from_issue_key(""), "");
+    }
 }
