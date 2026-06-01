@@ -22,7 +22,8 @@
 //
 // Matcher philosophy (inherited from issue_bulk.rs):
 //   - body_partial_json: confirm required structural fields
-//   - body_string_contains: tolerate unverified casing / nesting (labelsAction etc.)
+//   - body_string_contains: tolerate minor nesting variations; labelsFields schema
+//     is verified in issue_edit_labels.rs (old labelsAction shape was incorrect)
 //   - Both used defensively; schema notes annotate each unverified field.
 //
 // DO NOT modify tests/issue_bulk.rs — those are the PR1 regression-pin tests.

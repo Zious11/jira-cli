@@ -12,14 +12,16 @@
 //
 //   CONFIRMED:
 //     selectedIssueIdsOrKeys  string[]  required  — list of up to 1,000 issue IDs or keys
-//   BEST-GUESS (unverified, mark for empirical check):
+//   VERIFIED (Atlassian Bulk Operations FAQ):
 //     editedFieldsInput       object    required  — per-field edit spec
-//       labels                object    optional  — label field edit
-//         labelsAction        enum      required  — ADD | REMOVE | REPLACE (consistent with
-//                                                   Atlassian bulk-edit UI semantics; exact
-//                                                   string values unverified — could be
-//                                                   "ADD"/"add"/"Add")
-//         labels              string[]  required  — label names to add/remove/replace
+//       labelsFields          array     required  — label field edit (one element per
+//                                                   ADD/REMOVE action; NOT "labels" object)
+//         fieldId             string    required  — "labels" (literal)
+//         bulkEditMultiSelectFieldOption
+//                             enum      required  — "ADD" | "REMOVE" | "REPLACE"
+//                                                   (verified casing from Atlassian FAQ)
+//         labels              object[]  required  — [{"name": "<label>"}] objects
+//                                                   (NOT bare strings — those are PUT-only)
 //   UNVERIFIED:
 //     sendBulkNotification    bool      optional  — suppress notifications during bulk op
 //     jql                     string    optional  — NOT confirmed; research report flags
@@ -74,7 +76,8 @@
 //   GET  /bulk/queue/{taskId}    → 200
 //
 // KNOWN GAPS (implementer must verify empirically):
-//   1. Exact casing/format of labelsAction enum values ("ADD" vs "add" vs "Add")
+//   1. [RESOLVED] Label schema uses labelsFields array with bulkEditMultiSelectFieldOption
+//      (verified against Atlassian Bulk Operations FAQ; old labelsAction shape was incorrect)
 //   2. Whether "COMPLETE" or "COMPLETED" is the actual live API status string
 //   3. Whether sendBulkNotification is a real field
 //   4. Whether jql is an accepted optional field on /bulk/issues/fields
@@ -183,7 +186,8 @@ async fn test_edit_multi_key_issues_one_bulk_post_then_polls_to_complete() {
 
     // The bulk edit POST: expect exactly 1 call.
     // Body must include selectedIssueIdsOrKeys with all three keys.
-    // SCHEMA NOTE: labelsAction casing is best-guess "ADD"; see SCHEMA NOTES block.
+    // SCHEMA NOTE: label payload uses labelsFields array with bulkEditMultiSelectFieldOption;
+    // see SCHEMA NOTES block (labelsAction shape was old/incorrect).
     // selectedActions pin: label paths pass vec!["labels"] as selected_actions, so the
     // request body must contain "selectedActions". This matcher catches regressions
     // where the field is accidentally dropped from the label edit path.
@@ -663,9 +667,9 @@ async fn test_edit_multi_key_with_no_input_skips_confirmation_prompt() {
 }
 
 // ---------------------------------------------------------------------------
-// Bonus: labels ADD vs REMOVE — verify labelsAction field is passed correctly.
-// SCHEMA NOTE: "ADD" and "REMOVE" are best-guess casing; implementer must
-// verify empirically against live Atlassian schema.
+// Bonus: labels ADD vs REMOVE — verify bulkEditMultiSelectFieldOption value is passed correctly.
+// SCHEMA NOTE: "ADD" and "REMOVE" casing is VERIFIED from Atlassian Bulk Operations FAQ
+// (old labelsAction shape was incorrect; see issue #446 fix).
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -673,9 +677,10 @@ async fn test_edit_label_remove_sends_remove_action_in_bulk_payload() {
     let server = MockServer::start().await;
 
     // Use body_string_contains instead of body_partial_json for the action value,
-    // because the exact casing of labelsAction enum is unverified (see SCHEMA NOTES).
-    // This matcher is intentionally loose: it checks the substring "REMOVE" appears
-    // in the request body JSON, tolerating different nesting structures.
+    // because this test predates the #446 fix and is intentionally loose: it checks
+    // the substring "REMOVE" appears in the request body JSON. The authoritative
+    // structural test is test_multi_key_label_remove_only_uses_labels_fields_schema
+    // in issue_edit_labels.rs, which pins the full labelsFields schema.
     Mock::given(method("POST"))
         .and(path("/rest/api/3/bulk/issues/fields"))
         .and(body_string_contains("REMOVE"))

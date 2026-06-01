@@ -652,8 +652,10 @@ pub(super) async fn handle_edit(
                     // shapes that DO NOT match the POST body shapes sent to Atlassian:
                     //   - `labels`: dry-run emits `[{"action": "ADD", "name": "foo"}]`
                     //     (flat array). POST body emits
-                    //     `{"labelsAction": "ADD", "labels": [{"name": "foo"}]}` (nested,
-                    //     or an array of those objects when ADD+REMOVE coalesce).
+                    //     `{"labelsFields": [{"fieldId": "labels",
+                    //       "bulkEditMultiSelectFieldOption": "ADD",
+                    //       "labels": [{"name": "foo"}]}]}` (nested array, or
+                    //     two elements when ADD+REMOVE coalesce).
                     //   - `priority`: dry-run emits a bare string. POST body wraps as
                     //     `{"name": "..."}` (best-guess; Atlassian docs document
                     //     `{"priorityId": <int>}`).
