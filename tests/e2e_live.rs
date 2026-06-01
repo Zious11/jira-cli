@@ -5605,3 +5605,139 @@ fn test_e2e_bad_auth_exits_2() {
         "bad auth must not create an issue — stdout unexpectedly contains a 'key': {stdout}"
     );
 }
+
+/// E2E: multi-key `jr issue edit K1 K2 --type <alt>` bulk issueType round-trip.
+///
+/// Seeds two issues using the default issue type (`JR_E2E_ISSUE_TYPE`, default "Task").
+/// Bulk-changes their type to `JR_E2E_ISSUE_TYPE_ALT` via the bulk edit path.
+/// Polls both issues and asserts the new type appears in `fields.issuetype.name`.
+///
+/// Clean-skip: if `JR_E2E_ISSUE_TYPE_ALT` is not set (no alternate type available).
+/// Also clean-skips on 403 (bulk-changes permission denied) or 404 (endpoint absent).
+///
+/// This test validates the project-scoped id resolution that has no precedent in the
+/// codebase: priority was global; issueType is project-scoped (issue #331 / BC-3.4.018).
+///
+/// `JR_E2E_ISSUE_TYPE_ALT` is read by test code only — no `#[cfg(debug_assertions)]`
+/// src/ gate needed. Documented in CLAUDE.md AI Agent Notes per the JR_* doc-fallout rule.
+///
+/// Traces to: AC-011 (BC-3.4.018), issue #331.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
+fn test_e2e_issue_edit_issuetype_multikey_bulk_roundtrip() {
+    if !e2e_enabled() {
+        return;
+    }
+
+    // Clean-skip if the alternate issue type env var is not set.
+    let alt_type = match std::env::var("JR_E2E_ISSUE_TYPE_ALT") {
+        Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
+        _ => {
+            eprintln!(
+                "SKIP: JR_E2E_ISSUE_TYPE_ALT not set — skipping bulk issueType round-trip test."
+            );
+            return;
+        }
+    };
+
+    let label = run_label();
+    let proj = project();
+    let itype = issue_type();
+    let h = e2e_harness();
+
+    // Seed two throwaway issues using the default issue type.
+    let make_issue = |suffix: &str| -> String {
+        let summary = format!("[e2e {label}] issuetype-bulk-{suffix}");
+        let out = h
+            .cmd()
+            .args([
+                "issue",
+                "create",
+                "--project",
+                &proj,
+                "--type",
+                &itype,
+                "--summary",
+                &summary,
+                "--label",
+                &label,
+                "--output",
+                "json",
+            ])
+            .output()
+            .expect("failed to spawn jr for issue create (issuetype bulk seed)");
+        assert!(
+            out.status.success(),
+            "issue create ({suffix}) failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice::<Value>(&out.stdout)
+            .expect("issue create output must be valid JSON")
+            .get("key")
+            .and_then(Value::as_str)
+            .expect("issue create JSON must contain a 'key' field")
+            .to_string()
+    };
+
+    let key1 = make_issue("a");
+    let key2 = make_issue("b");
+
+    // Wait for GET-consistency before editing.
+    poll_view(&key1, &h);
+    poll_view(&key2, &h);
+
+    // Bulk edit both keys to the alternate type.
+    let edit_out = h
+        .cmd()
+        .args([
+            "issue",
+            "edit",
+            &key1,
+            &key2,
+            "--type",
+            &alt_type,
+            "--no-input",
+        ])
+        .output()
+        .expect("failed to spawn jr for multi-key issue edit --type");
+
+    if !edit_out.status.success() {
+        let stderr = String::from_utf8_lossy(&edit_out.stderr);
+        // Clean-skip on 403 (permission denied) or 404 (endpoint unavailable).
+        if edit_out.status.code() == Some(1) && (stderr.contains("403") || stderr.contains("404")) {
+            eprintln!(
+                "SKIP: bulk-edit {code} — 'Make bulk changes' permission not available or \
+                 endpoint absent on this site; skipping bulk issueType round-trip test.\n\
+                 stderr: {stderr}",
+                code = if stderr.contains("403") { "403" } else { "404" }
+            );
+            return;
+        }
+        // Any other failure is a bug — fail loudly.
+        panic!(
+            "multi-key issue edit --type failed:\n\
+             exit: {:?}\nstdout: {}\nstderr: {}",
+            edit_out.status.code(),
+            String::from_utf8_lossy(&edit_out.stdout),
+            stderr,
+        );
+    }
+
+    // Poll both issues and assert the new type is reflected.
+    for key in [&key1, &key2] {
+        let after = poll_view(key, &h);
+        let new_type = after
+            .get("fields")
+            .and_then(|f| f.get("issuetype"))
+            .and_then(|it| it.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        assert!(
+            new_type.eq_ignore_ascii_case(&alt_type),
+            "After bulk issueType edit, fields.issuetype.name must be '{alt_type}'; \
+             got '{new_type}' (key={key})"
+        );
+    }
+}

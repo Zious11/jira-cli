@@ -235,26 +235,27 @@ where
 
 /// Request body for POST /rest/api/3/bulk/issues/fields (bulk field edit).
 ///
-/// CONFIRMED from OpenAPI JSON (2026-05-09) + Perplexity verification (2026-05-10, PR2):
-///   - selectedIssueIdsOrKeys: string[], required, max 1000
-///   - selectedActions: string[], required — list of field names being edited.
-///     Without this, the API returns 400. Examples: ["summary"], ["labels"],
-///     ["summary","priority","labels"]. The values mirror the keys used inside
-///     `editedFieldsInput`. The bulk endpoint's canonical casing for the issuetype key
-///     is unverified — the legacy single-key path uses lowercase "issuetype", which is
-///     preserved here for consistency. See #331.
-///   - editedFieldsInput: object, required (schema partially truncated in HTML docs).
-///     Per Perplexity verification, the canonical 2025 production shape uses:
-///     summary → plain string OR `{"value": "..."}` (sources differ).
-///     priority → `{"priorityId": <int>}` per docs; we currently ship `{"name": "..."}`
-///     as a best-guess and may receive 400 from real Jira tenants.
-///     issueType → `{"issueTypeId": "..."}` per docs (camelCase key); we currently
-///     ship `{"issuetype": {"name": "..."}}` (lowercase, name) as a best-guess.
-///     labels → `{"labelsFields": [{"fieldId":"labels","bulkEditMultiSelectFieldOption":"ADD|REMOVE","labels":[{"name":"..."}]}]}`
-///     per Atlassian Bulk Operations FAQ (verified, issue #446). Each action (ADD / REMOVE)
-///     is a separate element. Label items are `{"name":...}` objects.
-///     Empirical verification against a live Jira sandbox + name→ID resolution
-///     (priorities + issue types per project) is tracked at issue #331.
+/// CONFIRMED from OpenAPI JSON (2026-05-09) + Atlassian Bulk Operations FAQ (2026-06-01):
+///
+/// - `selectedIssueIdsOrKeys`: string[], required, max 1000
+/// - `selectedActions`: string[], required. Without this the API returns 400.
+///   Examples: `["summary"]`, `["labels"]`, `["summary","priority","issuetype"]`.
+///   IMPORTANT: the `selectedActions` element for issue type is lowercase `"issuetype"`
+///   while the `editedFieldsInput` key is camelCase `"issueType"`. These INTENTIONALLY
+///   differ per the Atlassian Bulk Operations FAQ — do NOT "fix" the asymmetry
+///   (BC-3.4.018 + issue #331).
+/// - `editedFieldsInput`: object, required.
+///   VERIFIED canonical shapes (Atlassian Bulk Operations FAQ verbatim JSON, 2026-06-01):
+///     - `summary` → plain string (e.g. `"New title"`).
+///     - `priority` → `{"priorityId": "<id-string>"}` (camelCase key, string id).
+///       Resolved via `GET /rest/api/3/priority` (global, no cache). Verified by #452.
+///     - `issueType` → `{"issueTypeId": "<id-string>"}` (camelCase key, string id).
+///       Resolved via `GET /rest/api/3/issue/createmeta/{proj}/issuetypes`
+///       (project-scoped, no cache). All keys must be in the same project (BC-3.4.019).
+///       Verified by issue #331. The `selectedActions` element stays lowercase `"issuetype"`.
+///     - `labelsFields` → `[{"fieldId":"labels","bulkEditMultiSelectFieldOption":"ADD|REMOVE","labels":[{"name":"..."}]}]`.
+///       Per Atlassian Bulk Operations FAQ (verified, issue #446). Each action (ADD/REMOVE)
+///       is a separate element. Label items are `{"name":...}` objects.
 #[derive(serde::Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct BulkEditRequest {

@@ -778,6 +778,83 @@ async fn test_multi_key_summary_update_uses_bulk_fields_endpoint() {
 }
 
 // ---------------------------------------------------------------------------
+// EC-3.4.019-4: cross-project keys WITHOUT --type must NOT trip the type guard
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit FOO-1 BAR-2 --summary "X" --no-input`
+/// (cross-project keys, NO --type flag)
+///
+/// EC-3.4.019-4 (BC-3.4.019 invariant 4): the cross-project guard fires ONLY
+/// when `--type` is present (`issue_type.is_some()`). A cross-project
+/// `--summary`-only bulk edit MUST succeed — the guard must be a no-op.
+///
+/// MUTATION COVERAGE: kills mutant B — `&&`→`||` in the guard condition
+/// `if issue_type.is_some() && effective_keys.len() > 1`.
+/// Under the `||` mutant the guard would evaluate to `true` even when
+/// `issue_type.is_none()`, causing this test to exit 64 instead of 0.
+///
+/// Asserts:
+///   - exit 0 (guard does NOT fire — no --type flag)
+///   - bulk POST received exactly 1 request (edit went through)
+///   - no createmeta GET was called (guard never reached resolution)
+#[tokio::test]
+async fn test_bulk_summary_cross_project_keys_does_not_trip_type_guard() {
+    let server = MockServer::start().await;
+
+    // Bulk POST: the summary edit must go through for cross-project keys when
+    // --type is absent. Expect exactly 1 call.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .and(body_string_contains("summary"))
+        .and(body_string_contains("selectedActions"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-cross-proj-sum-001")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    mount_poll_complete(&server, "task-cross-proj-sum-001", &["FOO-1", "BAR-2"]).await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1", // project FOO
+            "BAR-2", // project BAR — different project
+            "--summary",
+            "X",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for cross-project --summary (no --type); \
+         the cross-project guard must NOT fire when issue_type.is_none(); \
+         stderr={stderr} stdout={stdout}"
+    );
+    // wiremock .expect(1) on bulk POST confirms the edit went through.
+    // Verifying no createmeta call was made (guard never reached resolution code).
+    let received = server.received_requests().await.unwrap();
+    assert!(
+        received
+            .iter()
+            .all(|r| !r.url.path().contains("createmeta")),
+        "Expected no createmeta GET call for --summary-only bulk edit; \
+         got: {:?}",
+        received
+            .iter()
+            .map(|r| format!("{} {}", r.method, r.url))
+            .collect::<Vec<_>>()
+    );
+}
+
+// ---------------------------------------------------------------------------
 // AC-001 extension: non-label multi-key --priority bulk edit.
 // ---------------------------------------------------------------------------
 
@@ -1259,6 +1336,113 @@ async fn test_dry_run_output_json_emits_valid_json_with_dry_run_field() {
 }
 
 // ---------------------------------------------------------------------------
+// #331 F-2: --dry-run --output json with --type uses camelCase key + bare string
+// (AC-007 / BC-3.4.018 invariant 5)
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit FOO-1 FOO-2 --type Bug --dry-run --output json --no-input`
+/// (same-project keys — cross-project guard does NOT trip)
+///
+/// AC-007 (BC-3.4.018 invariant 5): dry-run JSON builder must use:
+///   - camelCase `"issueType"` key in `plannedChanges` (NOT lowercase `"issuetype"`)
+///   - bare string value `"Bug"` (NOT `{"issueTypeId": "..."}` — no id resolution in dry-run)
+///
+/// MUTATION COVERAGE: catches two mutations:
+///   1. Reverting the dry-run builder key to lowercase `"issuetype"` (the pre-fix shape)
+///      → `plannedChanges.issueType` absent, `plannedChanges.issuetype` present → FAIL.
+///   2. Changing `json!(t)` to `json!({"issueTypeId": t})` in the dry-run builder
+///      → value is an object, not a bare string → FAIL.
+///
+/// ALSO asserts ZERO createmeta HTTP calls — dry-run must not resolve the type id
+/// (EC-3.4.018-5: no HTTP side-effects in dry-run).
+#[tokio::test]
+async fn test_dry_run_json_issuetype_uses_camelcase_key_bare_string_value() {
+    let server = MockServer::start().await;
+
+    // No createmeta call allowed in dry-run.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/createmeta/FOO/issuetypes"))
+        .respond_with(
+            ResponseTemplate::new(500).set_body_string("unexpected: createmeta in dry-run"),
+        )
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    // No bulk POST allowed in dry-run.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected bulk in dry-run"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "--output",
+            "json",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--type",
+            "Bug",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for same-project --type --dry-run --output json; \
+         stderr={stderr} stdout={stdout}"
+    );
+
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout not valid JSON: {e}; stdout={stdout}"));
+
+    // plannedChanges.issueType must be camelCase key with bare string value "Bug".
+    let planned = parsed
+        .get("plannedChanges")
+        .unwrap_or_else(|| panic!("Expected 'plannedChanges' in JSON; got: {stdout}"));
+
+    // camelCase key MUST be present.
+    assert!(
+        planned.get("issueType").is_some(),
+        "Expected camelCase 'issueType' key in plannedChanges; got: {planned}"
+    );
+
+    // lowercase key must NOT be present (catches the lowercase-key mutation).
+    assert!(
+        planned.get("issuetype").is_none(),
+        "Expected NO lowercase 'issuetype' key in plannedChanges (camelCase only); \
+         got: {planned}"
+    );
+
+    // value must be a bare string "Bug" (NOT an object like {"issueTypeId": "..."}).
+    assert_eq!(
+        planned.get("issueType").and_then(|v| v.as_str()),
+        Some("Bug"),
+        "Expected plannedChanges.issueType == \"Bug\" (bare string, no id resolution \
+         in dry-run); got: {planned}"
+    );
+
+    // wiremock .expect(0) on both createmeta GET and bulk POST fires on drop if called.
+    // Zero HTTP calls confirms no resolution attempt in dry-run.
+    let received = server.received_requests().await.unwrap();
+    assert_eq!(
+        received.len(),
+        0,
+        "Expected zero HTTP calls in --type --dry-run; got {} requests",
+        received.len()
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Audit follow-up: await_bulk_task must surface failureReason from FAILED response
 // ---------------------------------------------------------------------------
 
@@ -1392,25 +1576,47 @@ async fn test_jql_zero_matches_exits_nonzero_with_hint() {
 }
 
 // ---------------------------------------------------------------------------
-// Audit F2: selectedActions key for issueType must match editedFieldsInput key
+// Audit F2 (REWRITTEN for #331): issueType bulk body must use camelCase key +
+// issueTypeId value, with lowercase "issuetype" in selectedActions.
 // ---------------------------------------------------------------------------
 
 /// `jr issue edit FOO-1 FOO-2 --type Bug --no-input`
-/// The bulk POST body must contain "issuetype" (lowercase) in BOTH
-/// selectedActions AND editedFieldsInput. Using camelCase "issueType" in
-/// selectedActions while the body key is lowercase "issuetype" is a
-/// self-inconsistency that may cause 400 errors from the Atlassian API.
 ///
-/// This test asserts the body contains "issuetype" (lowercase) and does NOT
-/// contain the camelCase variant "issueType" as a selectedActions value.
+/// The verified canonical Atlassian Bulk Operations FAQ shape (issue #331):
+///   selectedActions: ["issuetype"]            ← lowercase string (correct, unchanged)
+///   editedFieldsInput.issueType.issueTypeId   ← camelCase key, id-based value
+///
+/// This test was formerly `test_multi_key_type_update_uses_consistent_issuetype_casing`
+/// which INCORRECTLY asserted that camelCase "issueType" was ABSENT from the body.
+/// That assertion was wrong: "issueType" (camelCase) MUST appear as the
+/// `editedFieldsInput` key, and "issuetype" (lowercase) must appear ONLY in
+/// `selectedActions`. The two casings are intentionally asymmetric per Atlassian docs.
+///
+/// RED GATE: Current code inserts `edited["issuetype"] = {"name": "Bug"}` (lowercase
+/// key, name-based value). This test asserts the FIXED shape. It must FAIL before
+/// the fix and PASS after.
+///
+/// Source: Atlassian Bulk Operations FAQ verbatim JSON (fetched 2026-06-01),
+///         confirmed in `.factory/research/issue-331-issuetype-bulk-schema.md`.
 #[tokio::test]
-async fn test_multi_key_type_update_uses_consistent_issuetype_casing() {
+async fn test_multi_key_type_update_body_uses_issue_type_id() {
     let server = MockServer::start().await;
 
-    // Capture the raw POST body with a permissive mock, then assert on it.
+    // Mock GET /rest/api/3/issue/createmeta/FOO/issuetypes — name→id resolution.
+    // The fix must call this endpoint to resolve "Bug" → id "10001".
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/createmeta/FOO/issuetypes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{"id": "10001", "name": "Bug"}, {"id": "10002", "name": "Task"}]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Bulk POST: require "issueTypeId" in body (the id-based shape).
     Mock::given(method("POST"))
         .and(path("/rest/api/3/bulk/issues/fields"))
-        .and(body_string_contains("issuetype"))
+        .and(body_string_contains("issueTypeId"))
         .respond_with(ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-type-001")))
         .expect(1)
         .mount(&server)
@@ -1439,7 +1645,7 @@ async fn test_multi_key_type_update_uses_consistent_issuetype_casing() {
         "Expected exit 0 for multi-key --type bulk edit; stderr={stderr} stdout={stdout}"
     );
 
-    // Verify the recorded request body uses lowercase "issuetype" consistently.
+    // Inspect the raw POST body for the exact wire shape.
     let requests = server.received_requests().await.unwrap();
     let bulk_req = requests
         .iter()
@@ -1447,20 +1653,580 @@ async fn test_multi_key_type_update_uses_consistent_issuetype_casing() {
         .expect("Expected exactly one POST to /rest/api/3/bulk/issues/fields");
     let body_str = std::str::from_utf8(&bulk_req.body).unwrap_or("");
 
-    // "issuetype" (lowercase) must appear in the body (editedFieldsInput key).
+    // "issueType" (camelCase) MUST appear in editedFieldsInput (the container key).
     assert!(
-        body_str.contains("issuetype"),
-        "Expected lowercase 'issuetype' in bulk request body; body={body_str}"
+        body_str.contains("\"issueType\""),
+        "Expected camelCase '\"issueType\"' as editedFieldsInput key; body={body_str}"
     );
 
-    // The selectedActions array must NOT contain camelCase "issueType" as a standalone
-    // value — it must use lowercase "issuetype" to match editedFieldsInput.
-    // We check: the string "\"issueType\"" (quoted, camelCase) should not appear
-    // as a JSON string value inside selectedActions.
+    // "issueTypeId" MUST appear (the id-based value key).
     assert!(
-        !body_str.contains("\"issueType\""),
-        "Expected selectedActions NOT to contain camelCase \"issueType\"; body={body_str}"
+        body_str.contains("\"issueTypeId\""),
+        "Expected '\"issueTypeId\"' in bulk body (id-based shape); body={body_str}"
     );
+
+    // "issuetype" (lowercase) MUST appear in selectedActions.
+    assert!(
+        body_str.contains("\"issuetype\""),
+        "Expected lowercase '\"issuetype\"' in selectedActions; body={body_str}"
+    );
+
+    // The old name-based shape {"name": "Bug"} must NOT appear as the issueType value.
+    // We check that "\"name\"" does not appear in the issueType value context.
+    // Since the body is a flat JSON string, we check for the specific pattern:
+    // the issueType value must NOT have a "name" key.
+    assert!(
+        !body_str.contains("\"name\":\"Bug\"") && !body_str.contains("\"name\": \"Bug\""),
+        "Bulk body must NOT contain name-based shape '\"name\":\"Bug\"'; body={body_str}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #331: bulk issueType body shape pin — full wire shape assertion
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit FOO-1 FOO-2 --type Bug --no-input`
+///
+/// Full POST body shape pin for the corrected issueType bulk edit (issue #331).
+/// Mirrors `test_bulk_priority_body_uses_priority_id_not_name` for priority.
+///
+/// Verified canonical shape from Atlassian Bulk Operations FAQ:
+///   {
+///     "selectedActions": ["issuetype"],
+///     "selectedIssueIdsOrKeys": ["FOO-1", "FOO-2"],
+///     "editedFieldsInput": {
+///       "issueType": {"issueTypeId": "10001"}
+///     }
+///   }
+///
+/// The fix requires jr to:
+///   1. Extract project key from keys (all must be same project, here "FOO").
+///   2. Call `GET /rest/api/3/issue/createmeta/FOO/issuetypes` to resolve "Bug" → "10001".
+///   3. Build editedFieldsInput = {"issueType": {"issueTypeId": "10001"}}.
+///   4. NOT use {"name": "Bug"} in editedFieldsInput.
+///
+/// RED GATE: current code sends `{"issuetype": {"name": "Bug"}}` — wrong key casing
+/// AND wrong value shape. The body_string_contains("issueTypeId") matcher will NOT
+/// match the current body → wiremock rejects the request → test fails.
+///
+/// Case-insensitive resolution is verified in the dedicated test
+/// `test_bulk_issuetype_resolves_type_name_case_insensitively`.
+#[tokio::test]
+async fn test_bulk_issuetype_body_uses_issuetype_id_not_name() {
+    let server = MockServer::start().await;
+
+    // Mock GET createmeta/FOO/issuetypes — returns Bug (id 10001) and Task (id 10002).
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/createmeta/FOO/issuetypes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{"id": "10001", "name": "Bug"}, {"id": "10002", "name": "Task"}]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Bulk POST must contain "issueTypeId" (id-based shape) and selectedActions.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .and(body_string_contains("issueTypeId"))
+        .and(body_string_contains("selectedActions"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-issuetype-pin-001")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    mount_poll_complete(&server, "task-issuetype-pin-001", &["FOO-1", "FOO-2"]).await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--type",
+            "Bug",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for multi-key --type bug bulk edit; stderr={stderr} stdout={stdout}"
+    );
+
+    // Verify the recorded request body structure precisely.
+    let requests = server.received_requests().await.unwrap();
+    let bulk_req = requests
+        .iter()
+        .find(|r| r.url.path() == "/rest/api/3/bulk/issues/fields")
+        .expect("Expected exactly one POST to /rest/api/3/bulk/issues/fields");
+    let body_str = std::str::from_utf8(&bulk_req.body).unwrap_or("");
+
+    // "issueType" (camelCase) MUST appear as the editedFieldsInput key.
+    assert!(
+        body_str.contains("\"issueType\""),
+        "Expected camelCase '\"issueType\"' in editedFieldsInput; body={body_str}"
+    );
+
+    // "issueTypeId" MUST appear (id-based value, not name).
+    assert!(
+        body_str.contains("\"issueTypeId\""),
+        "Expected '\"issueTypeId\"' in bulk body; body={body_str}"
+    );
+
+    // The resolved id "10001" (for "Bug") must appear in the body.
+    assert!(
+        body_str.contains("\"10001\""),
+        "Expected issue type id '\"10001\"' in bulk body; body={body_str}"
+    );
+
+    // "issuetype" (lowercase) MUST appear in selectedActions.
+    assert!(
+        body_str.contains("\"issuetype\""),
+        "Expected lowercase '\"issuetype\"' in selectedActions; body={body_str}"
+    );
+
+    // The old name-based shape must NOT appear.
+    // "Bug" as a JSON string value should not appear in the issueType context.
+    assert!(
+        !body_str.contains("\"Bug\""),
+        "Bulk body must NOT contain '\"Bug\"' (name-based shape — use issueTypeId instead); body={body_str}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #331: case-insensitive type-name resolution (AC-005 / BC-3.4.018 invariant 1)
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit FOO-1 FOO-2 --type bug` (all-lowercase) against createmeta
+/// returning `{name:"Bug", id:"10001"}`.
+///
+/// AC-005 (BC-3.4.018 invariant 1): resolution is case-insensitive. The user
+/// supplies `"bug"` (lowercase); the createmeta response has `"Bug"` (title-case).
+/// The resolver must find the match and resolve to id `"10001"`.
+///
+/// MUTATION COVERAGE: this test catches the mutation `it.name == t` (case-sensitive
+/// comparison replacing `it.name.to_lowercase() == t_lower`). Under that mutation,
+/// `"Bug".to_lowercase()` vs `"bug"` would NOT match → exit-64 "not found". The
+/// previous tests all passed `"Bug"` (matching casing) and therefore could not
+/// catch this mutation.
+///
+/// Asserts:
+///   - exit 0
+///   - bulk POST body contains `"issueTypeId"` and `"10001"`
+///   - createmeta GET called exactly once (case-fold happens client-side, no retry)
+#[tokio::test]
+async fn test_bulk_issuetype_resolves_type_name_case_insensitively() {
+    let server = MockServer::start().await;
+
+    // createmeta returns title-case "Bug"; user supplies lowercase "bug".
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/createmeta/FOO/issuetypes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{"id": "10001", "name": "Bug"}, {"id": "10002", "name": "Task"}],
+            "isLast": true
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .and(body_string_contains("issueTypeId"))
+        .and(body_string_contains("10001"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-case-insensitive-001")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    mount_poll_complete(&server, "task-case-insensitive-001", &["FOO-1", "FOO-2"]).await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--type",
+            "bug", // all lowercase — createmeta has "Bug" (title-case)
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for case-insensitive --type resolution; \
+         stderr={stderr} stdout={stdout}"
+    );
+
+    // Verify the bulk POST body used the resolved id, not the raw input string.
+    let requests = server.received_requests().await.unwrap();
+    let bulk_req = requests
+        .iter()
+        .find(|r| r.url.path() == "/rest/api/3/bulk/issues/fields")
+        .expect("Expected exactly one POST to /rest/api/3/bulk/issues/fields");
+    let body_str = std::str::from_utf8(&bulk_req.body).unwrap_or("");
+
+    assert!(
+        body_str.contains("\"10001\""),
+        "Expected resolved id '\"10001\"' for lowercase 'bug' input; body={body_str}"
+    );
+    assert!(
+        body_str.contains("\"issueTypeId\""),
+        "Expected '\"issueTypeId\"' key in body; body={body_str}"
+    );
+    // The input string "bug" (lowercase) must NOT appear as a value — only the id.
+    assert!(
+        !body_str.contains("\"bug\""),
+        "Body must NOT contain '\"bug\"' as a value (must use id, not input string); \
+         body={body_str}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #331: cross-project guard — --type on keys from different projects exits 64
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit FOO-1 BAR-2 --type Bug --no-input`
+///
+/// AC-003 (BC-3.4.019): keys spanning multiple projects with --type must exit 64
+/// BEFORE any API call. The cross-project guard fires because issue-type IDs are
+/// project-scoped and the bulk endpoint accepts only ONE issueTypeId.
+///
+/// Assert:
+///   - Exit code 64 (JrError::UserError).
+///   - stderr contains "--type" and both project keys "FOO" and "BAR".
+///   - NO GET /rest/api/3/issue/createmeta/... call is made.
+///   - NO POST /rest/api/3/bulk/issues/fields call is made.
+///
+/// RED GATE: Current code does NOT implement the cross-project guard. It will
+/// either attempt the API call (wrong project key extraction) or produce a
+/// different error. This test must FAIL before the fix.
+#[tokio::test]
+async fn test_bulk_issuetype_cross_project_keys_exits_64() {
+    let server = MockServer::start().await;
+
+    // Mount NO mocks — any HTTP call is a test failure (unexpected request).
+    // wiremock returns 500 for unmatched requests by default, which will cause
+    // jr to error, but we verify zero received_requests to confirm no call was made.
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "BAR-2",
+            "--type",
+            "Bug",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Must exit 64 (UserError).
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit code 64 for cross-project --type keys; stderr={stderr} stdout={stdout}"
+    );
+
+    // stderr must contain "--type" and both project keys.
+    assert!(
+        stderr.contains("--type"),
+        "Expected '--type' in error message; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("FOO"),
+        "Expected project key 'FOO' in error message; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("BAR"),
+        "Expected project key 'BAR' in error message; stderr={stderr}"
+    );
+
+    // Zero HTTP calls must have been made (guard fires before any API call).
+    let received = server.received_requests().await.unwrap();
+    assert_eq!(
+        received.len(),
+        0,
+        "Expected zero HTTP calls for cross-project --type guard; \
+         got {} requests: {:?}",
+        received.len(),
+        received
+            .iter()
+            .map(|r| format!("{} {}", r.method, r.url))
+            .collect::<Vec<_>>()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #331: cross-project guard fires in --dry-run too (EC-3.4.019-5)
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit FOO-1 BAR-2 --type Bug --dry-run --output json --no-input`
+///
+/// EC-3.4.019-5: the cross-project guard is a client-side pre-resolution check
+/// and MUST fire even in dry-run mode. Cross-project with --type exits 64 before
+/// emitting any plannedChanges, before any API call, in BOTH live and dry-run paths.
+///
+/// This is asymmetric with the unknown-type-name check (EC-3.4.018-5), which is
+/// deliberately SKIPPED in dry-run (no createmeta call, bare string emitted).
+/// The cross-project guard is purely client-side (no HTTP needed), so it has no
+/// reason to be skipped.
+///
+/// Assert:
+///   - Exit code 64 (UserError).
+///   - stderr contains "--type" and both project keys "FOO" and "BAR".
+///   - stdout does NOT contain "plannedChanges" or "issueType" (no partial output).
+///   - Zero HTTP calls (guard fires before any API call, even the dry-run search).
+///
+/// RED GATE (before C-1 fix): dry-run short-circuits before the bulk fork, so the
+/// cross-project guard in handle_edit_bulk_fields is never reached. The command
+/// currently exits 0 and emits plannedChanges — violating EC-3.4.019-5.
+#[tokio::test]
+async fn test_bulk_issuetype_cross_project_dry_run_exits_64() {
+    let server = MockServer::start().await;
+
+    // Mount NO mocks — any HTTP call is a test failure.
+    // wiremock returns 500 for unmatched requests by default, but we also assert
+    // zero received_requests to confirm the guard fires before any API call.
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "--output",
+            "json",
+            "issue",
+            "edit",
+            "FOO-1",
+            "BAR-2",
+            "--type",
+            "Bug",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Must exit 64 (UserError).
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit code 64 for cross-project --type with --dry-run; \
+         stderr={stderr} stdout={stdout}"
+    );
+
+    // stderr must contain "--type" and both project keys.
+    assert!(
+        stderr.contains("--type"),
+        "Expected '--type' in error message; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("FOO"),
+        "Expected project key 'FOO' in error message; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("BAR"),
+        "Expected project key 'BAR' in error message; stderr={stderr}"
+    );
+
+    // stdout must NOT contain any planned output (no partial --dry-run output).
+    assert!(
+        !stdout.contains("plannedChanges"),
+        "stdout must NOT contain 'plannedChanges' when guard exits 64; stdout={stdout}"
+    );
+    assert!(
+        !stdout.contains("issueType"),
+        "stdout must NOT contain 'issueType' when guard exits 64; stdout={stdout}"
+    );
+
+    // Zero HTTP calls (guard fires before any API call).
+    let received = server.received_requests().await.unwrap();
+    assert_eq!(
+        received.len(),
+        0,
+        "Expected zero HTTP calls for cross-project --type --dry-run guard; \
+         got {} requests: {:?}",
+        received.len(),
+        received
+            .iter()
+            .map(|r| format!("{} {}", r.method, r.url))
+            .collect::<Vec<_>>()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #331: unknown type name — exits 64 and lists valid types
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit FOO-1 FOO-2 --type Nonexistent --no-input`
+/// with createmeta returning only [{id: "10001", name: "Bug"}]:
+///
+/// AC-002 (BC-3.4.018 invariant 2):
+///   - Exit code 64.
+///   - stderr contains "Nonexistent" (the bad type name).
+///   - stderr contains "Bug" (the valid type name).
+///   - NO POST /rest/api/3/bulk/issues/fields is made.
+///
+/// RED GATE: Current code does NOT call createmeta at all (no resolution). It will
+/// attempt to send {"name": "Nonexistent"} directly and succeed (wrong behavior),
+/// OR it will error for a different reason. Either way the exit code and error message
+/// assertions will not match the required behavior — test FAILS before fix.
+#[tokio::test]
+async fn test_bulk_issuetype_unknown_type_name_exits_non_zero() {
+    let server = MockServer::start().await;
+
+    // Mock createmeta returning only "Bug" — "Nonexistent" is not in the list.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/createmeta/FOO/issuetypes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{"id": "10001", "name": "Bug"}]
+        })))
+        .mount(&server)
+        .await;
+
+    // Bulk POST must NOT be called — the error happens before we build the payload.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected: bulk called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--type",
+            "Nonexistent",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Must exit 64 (UserError).
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit code 64 for unknown --type name; stderr={stderr} stdout={stdout}"
+    );
+
+    // stderr must contain the bad type name and the valid type name.
+    assert!(
+        stderr.contains("Nonexistent"),
+        "Expected 'Nonexistent' in error message; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("Bug"),
+        "Expected valid type 'Bug' listed in error message; stderr={stderr}"
+    );
+
+    // wiremock .expect(0) on bulk POST fires on drop if called.
+}
+
+// ---------------------------------------------------------------------------
+// #331 I-1: createmeta pagination — two-page response resolves type from page 2
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit FOO-1 FOO-2 --type Story --no-input`
+/// where "Story" only appears on the second page of the createmeta response.
+///
+/// Verifies that get_issue_types_for_project paginates until isLast=true,
+/// so types beyond the first page are discoverable (I-1 fix).
+///
+/// Also pins that the request includes query params (startAt/maxResults),
+/// verifiable because wiremock records received_requests with full URL.
+#[tokio::test]
+async fn test_bulk_issuetype_resolution_paginates_to_second_page() {
+    use wiremock::matchers::query_param;
+
+    let server = MockServer::start().await;
+
+    // Page 1: isLast=false, contains only "Bug".
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/createmeta/FOO/issuetypes"))
+        .and(query_param("startAt", "0"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{"id": "10001", "name": "Bug"}],
+            "startAt": 0,
+            "maxResults": 200,
+            "total": 2,
+            "isLast": false
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Page 2: isLast=true, contains "Story".
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/createmeta/FOO/issuetypes"))
+        .and(query_param("startAt", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{"id": "10002", "name": "Story"}],
+            "startAt": 1,
+            "maxResults": 200,
+            "total": 2,
+            "isLast": true
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Bulk POST: must contain "issueTypeId" "10002" (the Story id from page 2).
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .and(body_string_contains("10002"))
+        .and(body_string_contains("issueTypeId"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-paginate-001")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    mount_poll_complete(&server, "task-paginate-001", &["FOO-1", "FOO-2"]).await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--type",
+            "Story",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 resolving type from page 2 of createmeta; \
+         stderr={stderr} stdout={stdout}"
+    );
+    // wiremock .expect(1) on both GET pages and the POST fires on drop if counts wrong.
 }
 
 // ---------------------------------------------------------------------------

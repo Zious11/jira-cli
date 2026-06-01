@@ -85,6 +85,8 @@ const SURFACE: &[(&[&str], &[&str])] = &[
             "--dry-run",
             "--label",
             "--output",
+            "--type",
+            "--no-input",
         ],
     ),
     // issue comment
