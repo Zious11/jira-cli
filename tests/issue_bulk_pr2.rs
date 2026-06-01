@@ -784,16 +784,32 @@ async fn test_multi_key_summary_update_uses_bulk_fields_endpoint() {
 /// `jr issue edit KEY1 KEY2 --priority High --no-input`
 /// Assert: POST /rest/api/3/bulk/issues/fields with priority in editedFieldsInput.
 ///
-/// SCHEMA NOTE: priority shape in editedFieldsInput is unverified. Best-guess:
-///   {"editedFieldsInput": {"priority": {"name": "High"}}}
-/// Test uses body_string_contains("priority") as a tolerant matcher.
+/// Updated for issue #331: priority shape is now verified.
+/// The code calls GET /rest/api/3/priority to resolve "High" → id, then builds
+///   `{"editedFieldsInput": {"priority": {"priorityId": "<id>"}}}`.
+/// This test provides the priority list mock and uses a tolerant
+/// body_string_contains("priorityId") matcher (the strict id-value assertion is
+/// in `test_bulk_priority_body_uses_priority_id_not_name`).
 #[tokio::test]
 async fn test_multi_key_priority_update_uses_bulk_fields_endpoint() {
     let server = MockServer::start().await;
 
+    // Mock GET /rest/api/3/priority — required since the fix resolves name→id.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/priority"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {"id": "1", "name": "Highest"},
+            {"id": "2", "name": "High"},
+            {"id": "3", "name": "Medium"},
+            {"id": "4", "name": "Low"},
+            {"id": "5", "name": "Lowest"}
+        ])))
+        .mount(&server)
+        .await;
+
     Mock::given(method("POST"))
         .and(path("/rest/api/3/bulk/issues/fields"))
-        .and(body_string_contains("priority"))
+        .and(body_string_contains("priorityId"))
         // Regression pin (audit F5): selectedActions field must always be present.
         .and(body_string_contains("selectedActions"))
         .respond_with(ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-prio-001")))
@@ -821,6 +837,107 @@ async fn test_multi_key_priority_update_uses_bulk_fields_endpoint() {
     assert!(
         output.status.success(),
         "Expected exit 0 for multi-key --priority bulk edit; stderr={stderr} stdout={stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #331: bulk priority payload — must use priorityId (string), NOT name.
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit KEY1 KEY2 --priority High --no-input`
+/// Verifies the CORRECTED bulk priority wire shape (issue #331).
+///
+/// The Atlassian Bulk Operations FAQ (verbatim JSON) specifies:
+///   `editedFieldsInput.priority = {"priorityId": "<id-string>"}`
+/// NOT `{"name": "High"}` (which is what jr currently sends — the bug).
+///
+/// Fix requires jr to:
+///   1. Call `GET /rest/api/3/priority` to resolve "High" → id "3".
+///   2. Build `editedFieldsInput = {"priority": {"priorityId": "3"}}`.
+///   3. NOT use `{"name": "High"}` in `editedFieldsInput`.
+///
+/// RED gate: current code sends `{"priority":{"name":"High"}}` in editedFieldsInput,
+/// which contains `"name"` but NOT `"priorityId"`. The `body_string_contains("priorityId")`
+/// matcher will NOT match the current body, so wiremock rejects the request → test fails.
+///
+/// Source: https://developer.atlassian.com/cloud/jira/platform/bulk-operation-additional-examples-and-faqs/
+#[tokio::test]
+async fn test_bulk_priority_body_uses_priority_id_not_name() {
+    let server = MockServer::start().await;
+
+    // Mock GET /rest/api/3/priority → returns a list with "High" = id "3".
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/priority"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {"id": "1", "name": "Highest"},
+            {"id": "2", "name": "High"},
+            {"id": "3", "name": "Medium"},
+            {"id": "4", "name": "Low"},
+            {"id": "5", "name": "Lowest"}
+        ])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Bulk POST must contain "priorityId" (string id), NOT "name".
+    // Using body_string_contains("priorityId") as the RED gate:
+    // current code sends {"name":"High"} which does NOT contain "priorityId".
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .and(body_string_contains("priorityId"))
+        .and(body_string_contains("selectedActions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-prio-id-001")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    mount_poll_complete(&server, "task-prio-id-001", &["PRI-1", "PRI-2"]).await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "PRI-1",
+            "PRI-2",
+            "--priority",
+            "High",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for multi-key --priority bulk edit; stderr={stderr} stdout={stdout}"
+    );
+
+    // Verify the recorded request body structure precisely.
+    let requests = server.received_requests().await.unwrap();
+    let bulk_req = requests
+        .iter()
+        .find(|r| r.url.path() == "/rest/api/3/bulk/issues/fields")
+        .expect("Expected exactly one POST to /rest/api/3/bulk/issues/fields");
+    let body_str = std::str::from_utf8(&bulk_req.body).unwrap_or("");
+
+    // "priorityId" MUST appear in the body (the id-based shape).
+    assert!(
+        body_str.contains("priorityId"),
+        "Expected 'priorityId' in bulk body (got name-based shape instead); body={body_str}"
+    );
+
+    // The resolved id "2" (for "High") must appear in the body.
+    assert!(
+        body_str.contains("\"2\""),
+        "Expected priority id '\"2\"' in bulk body; body={body_str}"
+    );
+
+    // "priorityName" / {"name":"High"} must NOT appear as the editedFieldsInput value.
+    // We check that "\"High\"" does not appear as a JSON string value.
+    assert!(
+        !body_str.contains("\"High\""),
+        "Bulk body must NOT contain '\"High\"' (name-based shape — use priorityId instead); body={body_str}"
     );
 }
 
@@ -1275,22 +1392,30 @@ async fn test_jql_zero_matches_exits_nonzero_with_hint() {
 }
 
 // ---------------------------------------------------------------------------
-// Audit F2: selectedActions key for issueType must match editedFieldsInput key
+// Audit F2: selectedActions/editedFieldsInput casing for issueType (issue #331)
 // ---------------------------------------------------------------------------
 
 /// `jr issue edit FOO-1 FOO-2 --type Bug --no-input`
-/// The bulk POST body must contain "issuetype" (lowercase) in BOTH
-/// selectedActions AND editedFieldsInput. Using camelCase "issueType" in
-/// selectedActions while the body key is lowercase "issuetype" is a
-/// self-inconsistency that may cause 400 errors from the Atlassian API.
 ///
-/// This test asserts the body contains "issuetype" (lowercase) and does NOT
-/// contain the camelCase variant "issueType" as a selectedActions value.
+/// Per the Atlassian Bulk Operations FAQ (issue #331, verbatim JSON):
+///   - `selectedActions` uses lowercase `"issuetype"`.
+///   - `editedFieldsInput` key is camelCase `"issueType"`.
+///
+/// These intentionally differ — the FAQ example shows both in one payload. This
+/// test verifies the correct asymmetry:
+///   1. `selectedActions` contains lowercase `"issuetype"` (not camelCase).
+///   2. `editedFieldsInput` key is camelCase `"issueType"`.
+///
+/// Updated from the pre-#331 assertion that wrongly required `"issueType"` to be
+/// absent everywhere in the body. The correct spec is that `"issueType"` MUST
+/// appear as the `editedFieldsInput` object key while `"issuetype"` (lowercase)
+/// appears as the `selectedActions` array element.
 #[tokio::test]
 async fn test_multi_key_type_update_uses_consistent_issuetype_casing() {
     let server = MockServer::start().await;
 
     // Capture the raw POST body with a permissive mock, then assert on it.
+    // Body must contain both "issuetype" (selectedActions) and "issueType" (editedFieldsInput).
     Mock::given(method("POST"))
         .and(path("/rest/api/3/bulk/issues/fields"))
         .and(body_string_contains("issuetype"))
@@ -1322,7 +1447,7 @@ async fn test_multi_key_type_update_uses_consistent_issuetype_casing() {
         "Expected exit 0 for multi-key --type bulk edit; stderr={stderr} stdout={stdout}"
     );
 
-    // Verify the recorded request body uses lowercase "issuetype" consistently.
+    // Verify the recorded request body uses the correct casing per the Atlassian FAQ.
     let requests = server.received_requests().await.unwrap();
     let bulk_req = requests
         .iter()
@@ -1330,19 +1455,39 @@ async fn test_multi_key_type_update_uses_consistent_issuetype_casing() {
         .expect("Expected exactly one POST to /rest/api/3/bulk/issues/fields");
     let body_str = std::str::from_utf8(&bulk_req.body).unwrap_or("");
 
-    // "issuetype" (lowercase) must appear in the body (editedFieldsInput key).
+    // "issuetype" (lowercase) must appear as the selectedActions element.
     assert!(
         body_str.contains("issuetype"),
-        "Expected lowercase 'issuetype' in bulk request body; body={body_str}"
+        "Expected lowercase 'issuetype' in selectedActions; body={body_str}"
     );
 
-    // The selectedActions array must NOT contain camelCase "issueType" as a standalone
-    // value — it must use lowercase "issuetype" to match editedFieldsInput.
-    // We check: the string "\"issueType\"" (quoted, camelCase) should not appear
-    // as a JSON string value inside selectedActions.
+    // "issueType" (camelCase) must appear as the editedFieldsInput object key.
+    // This is the correct shape per the Atlassian Bulk Operations FAQ (issue #331).
     assert!(
-        !body_str.contains("\"issueType\""),
-        "Expected selectedActions NOT to contain camelCase \"issueType\"; body={body_str}"
+        body_str.contains("\"issueType\""),
+        "Expected camelCase '\"issueType\"' as editedFieldsInput key (per FAQ); body={body_str}"
+    );
+
+    // Verify selectedActions does NOT use camelCase: parse the JSON and check.
+    let body: serde_json::Value =
+        serde_json::from_str(body_str).expect("bulk body must be valid JSON");
+    let selected_actions = body
+        .get("selectedActions")
+        .and_then(|v| v.as_array())
+        .expect("selectedActions must be an array");
+    let has_lowercase = selected_actions
+        .iter()
+        .any(|v| v.as_str() == Some("issuetype"));
+    let has_camelcase = selected_actions
+        .iter()
+        .any(|v| v.as_str() == Some("issueType"));
+    assert!(
+        has_lowercase,
+        "selectedActions must contain lowercase 'issuetype'; got: {selected_actions:?}"
+    );
+    assert!(
+        !has_camelcase,
+        "selectedActions must NOT contain camelCase 'issueType' (only lowercase); got: {selected_actions:?}"
     );
 }
 

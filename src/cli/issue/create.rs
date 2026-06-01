@@ -1273,20 +1273,27 @@ async fn handle_edit_bulk_labels(
 /// previews for these same fields (bare strings for `priority` and `issueType`,
 /// see the dry-run builder in `handle_edit` above) that do NOT match the POST
 /// body shapes built here. Dry-run is a human-and-tool-friendly diff; the POST
-/// body shapes here are the current best-guess (still unverified, pending #331).
-/// Once #331 confirms the canonical wire shapes and the bulk builders are
-/// extracted into pure functions, the two paths can converge.
+/// body shapes here follow the Atlassian Bulk Operations FAQ (issue #331).
 ///
-/// editedFieldsInput shape (best-guess — unverified against live API):
+/// editedFieldsInput shape (verified against Atlassian Bulk Operations FAQ):
 /// ```json
 /// {
 ///   "summary": "New title",
-///   "priority": {"name": "High"},
-///   "issuetype": {"name": "Bug"}
+///   "priority": {"priorityId": "3"},
+///   "issuetype": {"issueTypeId": "10001"}
 /// }
 /// ```
-/// Tests use body_string_contains("summary") / body_string_contains("priority")
-/// as loose matchers so exact nesting variation is tolerated.
+///
+/// Priority resolution: the bulk endpoint requires `{"priorityId": "<id-string>"}`,
+/// NOT `{"name": "High"}`. This function calls `GET /rest/api/3/priority` to
+/// resolve the priority name to a string id. If the name does not match any known
+/// priority (case-insensitive), a `UserError` is returned listing valid names.
+///
+/// Issue type: the bulk endpoint key is `"issueType"` (camelCase) in
+/// `editedFieldsInput`, while `selectedActions` uses lowercase `"issuetype"`.
+/// Resolving issue-type name→id is tracked in #331 (multi-project type-id
+/// resolution is out of scope for this fix); the type path retains `{"name": t}`
+/// pending that follow-up.
 async fn handle_edit_bulk_fields(
     keys: &[String],
     summary: Option<&str>,
@@ -1303,14 +1310,33 @@ async fn handle_edit_bulk_fields(
         selected_actions.push("summary".to_string());
     }
     if let Some(p) = priority {
-        edited.insert("priority".into(), json!({"name": p}));
+        // Bulk endpoint requires {"priorityId": "<id-string>"}, NOT {"name": "High"}.
+        // Resolve name→id via GET /rest/api/3/priority (one extra HTTP call only when
+        // --priority is used on the bulk path).
+        // Source: Atlassian Bulk Operations FAQ (issue #331).
+        let priorities = client.get_priorities().await?;
+        let p_lower = p.to_lowercase();
+        let priority_id = priorities
+            .iter()
+            .find(|pm| pm.name.to_lowercase() == p_lower)
+            .map(|pm| pm.id.clone())
+            .ok_or_else(|| {
+                let valid: Vec<&str> = priorities.iter().map(|pm| pm.name.as_str()).collect();
+                JrError::UserError(format!(
+                    "Priority '{p}' not found. Valid priorities: {}. \
+                     Run `jr project fields --project <KEY>` to see priorities for your project.",
+                    valid.join(", ")
+                ))
+            })?;
+        edited.insert("priority".into(), json!({"priorityId": priority_id}));
         selected_actions.push("priority".to_string());
     }
     if let Some(t) = issue_type {
-        edited.insert("issuetype".into(), json!({"name": t}));
-        // Match editedFieldsInput key (lowercase). Atlassian docs are ambiguous on
-        // canonical casing for the bulk endpoint specifically; the lowercase form
-        // matches the legacy single-key path. Empirical schema verification deferred to #331.
+        // editedFieldsInput key is "issueType" (camelCase) per Atlassian Bulk Operations FAQ.
+        // selectedActions value stays lowercase "issuetype" (API asymmetry — documented in FAQ).
+        // Name-based dispatch retained here; id-based resolution for multi-project scenarios
+        // is tracked in #331 and is out of scope for this fix.
+        edited.insert("issueType".into(), json!({"name": t}));
         selected_actions.push("issuetype".to_string());
     }
 
