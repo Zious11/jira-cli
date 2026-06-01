@@ -125,8 +125,9 @@ single-key test code).
 `jr issue edit FOO-1 FOO-2 --type bug --no-input` (all-lowercase name) resolves
 case-insensitively to `{id: "10001", name: "Bug"}` and proceeds to the bulk POST
 with `"issueTypeId": "10001"`. The input casing does not affect resolution.
-Verified as an EC variant within `test_bulk_issuetype_body_uses_issuetype_id_not_name`
-(a sub-case using lowercase input) or a standalone inline assertion.
+Verified by the dedicated test `test_bulk_issuetype_resolves_type_name_case_insensitively`
+in `tests/issue_bulk_pr2.rs`, which passes `--type bug` (lowercase) against a createmeta
+mock returning `{name:"Bug"}` and asserts exit 0 with `issueTypeId` `"10001"`.
 
 **AC-006** (traces to BC-3.4.018, invariant 4 — project key extraction)
 Project key extraction splits each issue key on the LAST hyphen and takes all
