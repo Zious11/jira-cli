@@ -1,9 +1,9 @@
 ---
 context: bc-3
 title: "Issue Write (create/edit/move/assign/comment/link/open/remote-link)"
-total_bcs: 103   # cumulative claim (incl. range-collapsed); definitional_count below is individually-bodied headings
-definitional_count: 74   # count of `#### BC-` headings in this file
-last_updated: 2026-05-27
+total_bcs: 105   # cumulative claim (incl. range-collapsed); definitional_count below is individually-bodied headings
+definitional_count: 76   # count of `#### BC-` headings in this file
+last_updated: 2026-06-01
 source_pass: 3
 trace: |
   - L2: .factory/specs/domain-spec/bc-03-issue-write.md
@@ -59,11 +59,13 @@ trace: |
   - F2 amended (2026-05-22, adversary pass 3): BC-3.4.015 — Step 3b (operations/"set" check + exit 64 hint) added; EC-3.4.015-19 (resolution failure under --dry-run exits 64); EC-3.4.015-20 (operations lacks "set"); EC-3.4.015-18 exit code pinned to 0; VP-396-011 (user/date/datetime wire) and VP-396-012 (operations check) added; VP-396-008 one-liner updated
   - F2 modified (2026-05-25): BC-3.4.017 — EC-3.4.017-14 added (mechanical enforcement meta-test for invariant 2 completeness); invariant 2 cross-reference added (issue #407 F2)
   - F2 amended (2026-05-27): BC-3.4.015 — invariant 5 rewritten to describe two-stage i64-first strategy (no behavioral change for previously-correct inputs); EC-3.4.015-4b added (i64-boundary regression pin: "9223372036854775808" and "-9223372036854775809" MUST emit f64 wire form) (issue #421)
+  - F2 addition (2026-06-01): BC-3.4.018 — `issue edit KEY1 KEY2 --type <NAME>` multi-key bulk wire shape: selectedActions=["issuetype"] (lowercase), editedFieldsInput["issueType"]={"issueTypeId":"<id-string>"} (camelCase key, id-based value); name→id resolved via GET /rest/api/3/issue/createmeta/{proj}/issuetypes; unknown type name exits 64; dry-run builder consistency pin (issue #331 F2)
+  - F2 addition (2026-06-01): BC-3.4.019 — `issue edit KEY1 KEY2 --type <NAME>` cross-project guard: when resolved keys span >1 distinct project, exit 64 with actionable message BEFORE any API call; references single-issueTypeId-per-batch constraint as rationale (issue #331 F2)
 ---
 
 # BC-3 — Issue Write
 
-103 behavioral contracts across 8 subdomains: Assign (3.1), Move/Transition (3.2),
+105 behavioral contracts across 8 subdomains: Assign (3.1), Move/Transition (3.2),
 Create (3.3), Edit+Open (3.4), Comment (3.5), Links (3.6), Remote links (3.7),
 JSM Request Create + Platform-Path Inverse Warnings + Auth-Conditional 401 Hints (3.8).
 
@@ -1630,6 +1632,112 @@ set update; Gate B overlap check; `has_any_field_change` update to include `--fi
 
 ---
 
+#### BC-3.4.018: `issue edit KEY1 KEY2 --type <NAME>` multi-key bulk path — `editedFieldsInput["issueType"] = {"issueTypeId": "<id-string>"}` with `selectedActions: ["issuetype"]`; name resolved via `GET /rest/api/3/issue/createmeta/{proj}/issuetypes`
+
+**Confidence**: HIGH
+**Source**: issue #331 F2 spec evolution; `.factory/research/issue-331-issuetype-bulk-schema.md` (verified verbatim from Atlassian Bulk Operations FAQ — priority precedent BC confirmed live Jira #452); `tests/issue_bulk_pr2.rs` (new tests required in F4)
+**Subject**: Issue write (bulk edit path)
+
+**Description**: When `jr issue edit` is invoked with 2+ positional keys and `--type <NAME>`,
+`handle_edit_bulk_fields` builds a `BulkEditRequest` for `POST /rest/api/3/bulk/issues/fields`.
+This contract governs the canonical wire shape and the name→issueTypeId resolution mechanism.
+
+**Preconditions**:
+- 2 or more positional keys are supplied (all in the same Jira project — cross-project guard is BC-3.4.019).
+- `--type <NAME>` is present (NAME is a user-supplied display name, e.g. `Bug`, `Story`, `Task`).
+- `--no-input` is set or stdin is non-TTY (non-interactive execution assumed for all bulk paths).
+
+**Postconditions**:
+1. `GET /rest/api/3/issue/createmeta/{projectKey}/issuetypes` is called once before the bulk POST. The `projectKey` is derived from the common project prefix of all supplied keys (see Invariant 4 for extraction rule). The response is NOT cached (one-shot HTTP call per invocation, mirroring the priority resolver model).
+2. The bulk `POST /rest/api/3/bulk/issues/fields` body contains:
+   - `"selectedActions": ["issuetype"]` — the action string uses lowercase `"issuetype"` (system field id, NOT camelCase).
+   - `"editedFieldsInput": {"issueType": {"issueTypeId": "<id-string>"}}` — the container key is camelCase `"issueType"`; the value object uses the string `issueTypeId`, NOT `name`. The id is a JSON string (e.g. `"10013"`), NOT an integer.
+   - `"selectedIssueIdsOrKeys": [<keys>]` — all supplied keys are included.
+3. The `selectedActions` element `"issuetype"` (lowercase) and the `editedFieldsInput` key `"issueType"` (camelCase) INTENTIONALLY differ. This asymmetry is confirmed by the verbatim Atlassian Bulk Operations FAQ example and mirrors the priority pattern (`selectedActions: ["priority"]`, container key `"priority"` — both lowercase there; for issueType the action string diverges from the container key casing). Do not "fix" them to match.
+4. On a dry-run invocation (`--dry-run --output json`), the `plannedChanges` preview emits `"issueType"` as a bare string value (the type name, NOT `{"issueTypeId": "..."}`) — intentionally simplified, same model as the priority dry-run. The surrounding comment in the dry-run builder MUST NOT carry a "best-guess" or "unverified" qualifier for issueType after this fix ships.
+5. On success, the async bulk task proceeds through the existing `await_bulk_task` / `BulkOperationProgress` poll loop (unchanged behavior; see BC-3.4.009 for the timeout/deadline contract).
+
+**Invariants**:
+1. The name→issueTypeId resolution is case-insensitive exact match on the `name` field returned by `GET .../createmeta/{proj}/issuetypes`. Substring matching (partial_match) MUST NOT be used here — it could resolve ambiguous names and produce incorrect type changes.
+2. If the supplied `<NAME>` does not match any entry in the createmeta issuetypes response, `handle_edit_bulk_fields` exits 64 with a `JrError::UserError` listing the valid type names for the project. No bulk POST is issued. The error message format mirrors the priority unknown-name error: `"Issue type '<NAME>' not found for project <KEY>. Valid types: <comma-joined list>."`.
+3. The single-key `--type` path (`handle_edit` → `PUT /rest/api/3/issue/{key}`) is BYTE-FOR-BYTE UNCHANGED by this fix. BC-3.4.003, BC-3.4.010, and BC-3.4.011 remain authoritative for that path. The createmeta issuetypes lookup MUST NOT execute on a single-key invocation.
+4. **Project key extraction rule**: a Jira issue key has the form `<PROJECT>-<NUMBER>` where `<PROJECT>` is one or more uppercase ASCII letters optionally followed by uppercase digits (no hyphens). The project key is extracted by splitting on the LAST hyphen and taking all characters before it. Examples: `FOO-1` → `FOO`, `PROJ2-100` → `PROJ2`, `MY-LONG-KEY-1` is invalid Jira project-key form (project keys contain no hyphens), but if encountered the last-hyphen split is still applied for consistency.
+5. The dry-run builder and the live POST builder MUST stay consistent in their treatment of `--type`: both must use `"issueType"` (camelCase) as the `editedFieldsInput` key. If the dry-run builder still uses `"issuetype"` (lowercase) after this fix ships, it is a spec violation. The VALUE in the dry-run preview (bare name string) is intentionally different from the live POST value (`{"issueTypeId": "..."}`); the KEY must be identical.
+
+**Edge Cases**:
+- EC-3.4.018-1: `jr issue edit FOO-1 FOO-2 --type Bug --no-input` — happy path: createmeta returns `[{id: "10001", name: "Bug"}]`; bulk POST body contains `"issueType"` (camelCase key) and `"issueTypeId": "10001"` (string id, NOT `"name": "Bug"`); `selectedActions` contains `"issuetype"` (lowercase). Verified by `test_bulk_issuetype_body_uses_issuetype_id_not_name`.
+- EC-3.4.018-2: `jr issue edit FOO-1 FOO-2 --type Nonexistent --no-input` — createmeta returns `[{id: "10001", name: "Bug"}]`; name `"Nonexistent"` not found; exit 64; stderr contains `"Issue type 'Nonexistent' not found"` and lists `"Bug"` as a valid type. NO bulk POST is issued. Verified by `test_bulk_issuetype_unknown_type_name_exits_non_zero`.
+- EC-3.4.018-3: `jr issue edit FOO-1 FOO-2 --type bug --no-input` (lowercase name) — case-insensitive match against `name: "Bug"` succeeds; `issueTypeId` is resolved; bulk POST proceeds. The case of the input does not affect resolution.
+- EC-3.4.018-4: `jr issue edit FOO-1 --type Bug` (single key) — routes to `handle_edit` single-key path (PUT `/rest/api/3/issue/FOO-1`); `GET .../createmeta/.../issuetypes` is NOT called; this BC does not apply. Existing BC-3.4.003/010/011 govern.
+- EC-3.4.018-5: `jr issue edit FOO-1 FOO-2 --type Bug --dry-run --output json` — dry-run builder emits `plannedChanges` with `"issueType"` (camelCase key, matching live POST key) containing a bare string value (the name, NOT `{"issueTypeId": "..."}`). The dry-run is intentionally simplified (same model as priority); no createmeta HTTP call is issued during dry-run.
+
+**Verification Properties**:
+- VP-331-001: Multi-key bulk `--type` POST body contains camelCase `"issueType"` key in `editedFieldsInput` AND `"issueTypeId"` string value AND lowercase `"issuetype"` in `selectedActions`; does NOT contain `"\"name\":"` in the issueType value position.
+- VP-331-002: Unknown type name exits 64 before any bulk POST; stderr names the invalid type and lists valid alternatives.
+
+**Trace**: issue #331 F2; `.factory/research/issue-331-issuetype-bulk-schema.md`; `src/cli/issue/create.rs::handle_edit_bulk_fields`; `src/api/jira/issues.rs::get_issue_types_for_project` (new); `tests/issue_bulk_pr2.rs` (new integration tests: `test_bulk_issuetype_body_uses_issuetype_id_not_name`, `test_bulk_issuetype_unknown_type_name_exits_non_zero`; rewrite `test_multi_key_type_update_uses_consistent_issuetype_casing` → `test_multi_key_type_update_body_uses_issue_type_id`); live E2E coverage qualitative (gated `JR_RUN_E2E`)
+
+[NEW 2026-06-01 issue #331 F2]
+
+---
+
+#### BC-3.4.019: `issue edit KEY1 KEY2 --type <NAME>` cross-project guard — when keys span more than one Jira project, exit 64 BEFORE any API call
+
+**Confidence**: HIGH
+**Source**: issue #331 F2 spec evolution; `.factory/research/issue-331-issuetype-bulk-schema.md §CRITICAL per-project caveat for multi-key bulk`; human-gate decision 2026-06-01 (error-early v1; per-project grouping deferred to a future issue)
+**Subject**: Issue write (bulk edit path)
+
+**Description**: The Jira Cloud bulk endpoint accepts a single `issueTypeId` for the entire
+batch. Issue-type IDs are project-scoped — the same type name (`Bug`) can have different IDs
+in different projects. A multi-key `--type` edit spanning multiple projects cannot reliably
+use one `issueTypeId` for all issues. This contract defines the v1 error-early guard that
+prevents a silent partial-or-incorrect mutation.
+
+**Rationale**: The Atlassian bulk endpoint `POST /rest/api/3/bulk/issues/fields` provides a
+single `editedFieldsInput["issueType"] = {"issueTypeId": "<id>"}` slot — there is no per-issue
+issueTypeId mechanism. When keys span multiple projects, the resolved id for project FOO would
+be wrong for project BAR's issues, causing silent per-issue failures in the async bulk task.
+Per-project grouping (one POST per project, each with the project-correct id) is a valid v2
+path but is explicitly OUT OF SCOPE for this fix — it adds significant complexity and was
+not approved at the human gate for this issue. Error-early (this BC) is the safe v1 choice.
+
+**Preconditions**:
+- 2 or more positional keys are supplied.
+- `--type <NAME>` is present.
+- The keys' project prefixes (extracted by splitting each key on the LAST hyphen, per BC-3.4.018 Invariant 4) are NOT all identical — i.e., at least two distinct project prefixes are present in the supplied key set.
+
+**Postconditions**:
+- Exit code 64.
+- Stderr contains an actionable error message. Required substrings (all MUST appear):
+  - the literal `--type` (names the offending flag).
+  - a reference to the cross-project constraint, e.g. `"requires all issues to be in the same project"` or equivalent phrasing.
+  - the distinct project keys detected, so the user can identify which keys caused the conflict.
+- NO `GET /rest/api/3/issue/createmeta/{proj}/issuetypes` call is issued (no resolution attempted).
+- NO `POST /rest/api/3/bulk/issues/fields` call is issued (no mutation attempted).
+- The guard fires before ANY outbound HTTP call — this is a pure client-side argument check.
+
+**Invariants**:
+1. The cross-project check is performed BEFORE the name→issueTypeId resolution (see BC-3.4.018). No HTTP calls are made if the guard fires.
+2. The guard is specific to `--type` on the multi-key bulk path. Other bulk flags (`--summary`, `--priority`) are NOT affected by this guard — they operate on global or project-independent values.
+3. Per-project grouping (attempting to issue one bulk POST per project group, each with the project-specific issueTypeId) is explicitly NOT implemented in v1. Any code that attempts per-project grouping MUST NOT be introduced without updating this BC first.
+4. The guard is ONLY active when `--type` is present. A multi-key bulk edit without `--type` (e.g., `--summary` only) is unaffected.
+
+**Edge Cases**:
+- EC-3.4.019-1: `jr issue edit FOO-1 BAR-2 --type Bug --no-input` — keys span projects FOO and BAR; exit 64; stderr names `--type`, references cross-project constraint, and lists `FOO` and `BAR`; no HTTP calls issued. Verified by `test_bulk_issuetype_cross_project_keys_exits_64`.
+- EC-3.4.019-2: `jr issue edit FOO-1 FOO-2 FOO-3 --type Bug --no-input` — all keys in project FOO; guard does NOT fire; proceeds to BC-3.4.018 resolution and bulk POST.
+- EC-3.4.019-3: `jr issue edit PROJ2-1 PROJ2-2 --type Bug --no-input` — project key `PROJ2` (uppercase letters + digit, no hyphen); last-hyphen split correctly extracts `PROJ2` from both keys; both keys are in the same project; guard does NOT fire.
+- EC-3.4.019-4: `jr issue edit FOO-1 BAR-2 --summary "New title" --no-input` (no `--type`) — cross-project guard DOES NOT fire; only `--type` triggers this guard. The `--summary` bulk edit proceeds normally (summary is not project-scoped).
+- EC-3.4.019-5: `jr issue edit FOO-1 BAR-2 --type Bug --dry-run --output json` — guard fires (same as non-dry-run); exit 64 even in dry-run mode, because the cross-project constraint is a pre-resolution error, not a live-API error. No `plannedChanges` are emitted.
+
+**Verification Properties**:
+- VP-331-003: Cross-project `--type` bulk edit exits 64 before any HTTP call; stderr contains `--type` and both project keys; no createmeta and no bulk POST mocks are hit.
+
+**Trace**: issue #331 F2; `.factory/research/issue-331-issuetype-bulk-schema.md §CRITICAL per-project caveat for multi-key bulk`; `src/cli/issue/create.rs::handle_edit_bulk_fields` (cross-project guard, pre-resolution); `tests/issue_bulk_pr2.rs` (new integration test: `test_bulk_issuetype_cross_project_keys_exits_64`)
+
+[NEW 2026-06-01 issue #331 F2]
+
+---
+
 ### 3.5 Comments
 
 #### BC-3.5.001: `issue comment <key> --internal` adds `sd.public.comment` property
@@ -2226,6 +2334,6 @@ When `--markdown` is absent, the guard does NOT fire — `--field description=va
 
 Sources: `src/cli/issue/snapshots/jr__cli__issue__json_output__tests__*.snap`; BC-1104..BC-1112 (R4)
 
-## Total BCs in this file: 74 individually-bodied (cumulative 103 incl. range-collapsed; see BC-INDEX.md)
+## Total BCs in this file: 76 individually-bodied (cumulative 105 incl. range-collapsed; see BC-INDEX.md)
 
-_Last updated 2026-05-27 (issue #421 F2): BC-3.4.015 invariant 5 rewritten (two-stage i64-first strategy); EC-3.4.015-4b added (i64-boundary regression pin); no BC count changes (103/74 unchanged). Previous update (2026-05-25 issue #407 F2): +EC-3.4.017-14 — mechanical enforcement meta-test for BC-3.4.017 invariant 2 (conflict block completeness via `test_label_conflict_block_lists_every_relevant_flag`); BC-3.4.017 invariant 2 cross-reference added; no BC count changes (103/74 unchanged). Previous update (2026-05-22 issue #396 F2): +3 BCs (BC-3.4.015..017) — BC-3.4.015 (`issue edit --field` string/number/date/datetime/user field single-key path, with editmeta validation, fields.json cache, and dry-run invariants), BC-3.4.016 (`issue edit --field` single-select `option` field), BC-3.4.017 (`--field` multi-key/`--jql` rejection Gate A and flag-overlap Gate B); Section 3.4 header updated to 17 contracts. Previous update (2026-05-21 issue #398 F2): +3 BCs (BC-3.4.012..014) — BC-3.4.012 (issue edit table-mode success echo), BC-3.4.013 (issue edit JSON-mode success echo with changed_fields), BC-3.4.014 (issue create table-mode all-fields echo (broadened from team-only at the 2026-05-22 human-gate to mirror BC-3.4.012)); BC-3.4.003 Success output cross-reference added; Section 3.4 header updated to 14 contracts. Previous update (2026-05-20 issue #388): +2 BCs (BC-3.4.010..011): BC-3.4.010 (cross-hierarchy `edit --type` 400 → CROSS_HIERARCHY_HINT citing JRACLOUD-27893) and BC-3.4.011 (same-hierarchy/indeterminate `edit --type` 400 → typo hint or raw error, no JRACLOUD-27893 hint) added in F2 delta (issue #388). BC-3.4.003 Errors cross-reference updated (annotation only, no behavioral change). Section 3.4 header updated to 11 contracts. Previous update (2026-05-20 issue #385): +2 BCs (BC-3.8.016..017); BC-3.8.002/010/011 modified._
+_Last updated 2026-06-01 (issue #331 F2): +2 BCs (BC-3.4.018..019) — BC-3.4.018 (multi-key `--type` bulk wire shape: camelCase `issueType` key, `issueTypeId` string value, name resolved via createmeta issuetypes), BC-3.4.019 (cross-project guard: keys spanning >1 project exit 64 before any API call); Section 3.4 header updated to 19 contracts. Previous update 2026-05-27 (issue #421 F2): BC-3.4.015 invariant 5 rewritten (two-stage i64-first strategy); EC-3.4.015-4b added (i64-boundary regression pin); no BC count changes (103/74 unchanged). Previous update (2026-05-25 issue #407 F2): +EC-3.4.017-14 — mechanical enforcement meta-test for BC-3.4.017 invariant 2 (conflict block completeness via `test_label_conflict_block_lists_every_relevant_flag`); BC-3.4.017 invariant 2 cross-reference added; no BC count changes (103/74 unchanged). Previous update (2026-05-22 issue #396 F2): +3 BCs (BC-3.4.015..017) — BC-3.4.015 (`issue edit --field` string/number/date/datetime/user field single-key path, with editmeta validation, fields.json cache, and dry-run invariants), BC-3.4.016 (`issue edit --field` single-select `option` field), BC-3.4.017 (`--field` multi-key/`--jql` rejection Gate A and flag-overlap Gate B); Section 3.4 header updated to 17 contracts. Previous update (2026-05-21 issue #398 F2): +3 BCs (BC-3.4.012..014) — BC-3.4.012 (issue edit table-mode success echo), BC-3.4.013 (issue edit JSON-mode success echo with changed_fields), BC-3.4.014 (issue create table-mode all-fields echo (broadened from team-only at the 2026-05-22 human-gate to mirror BC-3.4.012)); BC-3.4.003 Success output cross-reference added; Section 3.4 header updated to 14 contracts. Previous update (2026-05-20 issue #388): +2 BCs (BC-3.4.010..011): BC-3.4.010 (cross-hierarchy `edit --type` 400 → CROSS_HIERARCHY_HINT citing JRACLOUD-27893) and BC-3.4.011 (same-hierarchy/indeterminate `edit --type` 400 → typo hint or raw error, no JRACLOUD-27893 hint) added in F2 delta (issue #388). BC-3.4.003 Errors cross-reference updated (annotation only, no behavioral change). Section 3.4 header updated to 11 contracts. Previous update (2026-05-20 issue #385): +2 BCs (BC-3.8.016..017); BC-3.8.002/010/011 modified._

@@ -2,7 +2,7 @@
 document_type: canonical-counts
 product: jr (jira-cli)
 generated: "2026-05-04"
-last_verified: "2026-05-25 (F2 delta issue #407; EC-3.4.017-14 added to BC-3.4.017; BC counts unchanged: 583 total, bc-3 103/74)"
+last_verified: "2026-06-01 (F2 delta issue #331; BC-3.4.018..019 added; 585 total, bc-3 105/76)"
 ---
 
 # Canonical Counts — jr (jira-cli) L3 PRD
@@ -21,13 +21,13 @@ re-run to verify. Disputes go here first.
 |------|------------------------|----------------------------------|--------|
 | bc-1-auth-identity.md | 46 | 46 | YES |
 | bc-2-issue-read.md | 51 | 51 | YES |
-| bc-3-issue-write.md | 74 | 74 | YES |
+| bc-3-issue-write.md | 76 | 76 | YES |
 | bc-4-assets-cmdb.md | 22 | 22 | YES |
 | bc-5-boards-sprints.md | 17 | 17 | YES |
 | bc-6-config-cache.md | 29 | 29 | YES |
 | bc-7-output-render.md | 38 | 38 | YES |
 | cross-cutting.md | 74 | 74 | YES |
-| **Total individually-bodied** | **351** | — | — |
+| **Total individually-bodied** | **353** | — | — |
 
 Verification command:
 ```bash
@@ -42,23 +42,23 @@ done
 |------|------------------------|
 | bc-1-auth-identity.md | 57 |
 | bc-2-issue-read.md | 93 |
-| bc-3-issue-write.md | 103 |
+| bc-3-issue-write.md | 105 |
 | bc-4-assets-cmdb.md | 32 |
 | bc-5-boards-sprints.md | 35 |
 | bc-6-config-cache.md | 39 |
 | bc-7-output-render.md | 84 |
 | cross-cutting.md | 140 |
-| **Sum** | **583** |
+| **Sum** | **585** |
 
 ### Grand total
 
-**Canonical grand total: 583** (+4 BC-7.4.013-016 added 2026-05-08 via Fix-PR A `28b0f35`; +1 BC-2.6.050 added 2026-05-13 via issue #350; +1 BC-2.6.051 added 2026-05-14 via issue #365; +1 BC-3.4.009 added 2026-05-15 via issue #340 F2; +18 BC-3.8.001..010 + BC-X.12.001..008 added 2026-05-18 via issue #288 F2+F1d; +3 BC-3.8.011..013 added 2026-05-19 via issue #288 F1d + issue #383 F2; +4 BC-3.8.014..015 + BC-X.8.006..007 added 2026-05-19 via issue #384 F2; +2 BC-3.8.016..017 added 2026-05-20 via issue #385 F2; +2 BC-3.4.010..011 added 2026-05-20 via issue #388 F2; +3 BC-3.4.012..014 added 2026-05-21 via issue #398 F2; +3 BC-3.4.015..017 added 2026-05-22 via issue #396 F2)
+**Canonical grand total: 585** (+4 BC-7.4.013-016 added 2026-05-08 via Fix-PR A `28b0f35`; +1 BC-2.6.050 added 2026-05-13 via issue #350; +1 BC-2.6.051 added 2026-05-14 via issue #365; +1 BC-3.4.009 added 2026-05-15 via issue #340 F2; +18 BC-3.8.001..010 + BC-X.12.001..008 added 2026-05-18 via issue #288 F2+F1d; +3 BC-3.8.011..013 added 2026-05-19 via issue #288 F1d + issue #383 F2; +4 BC-3.8.014..015 + BC-X.8.006..007 added 2026-05-19 via issue #384 F2; +2 BC-3.8.016..017 added 2026-05-20 via issue #385 F2; +2 BC-3.4.010..011 added 2026-05-20 via issue #388 F2; +3 BC-3.4.012..014 added 2026-05-21 via issue #398 F2; +3 BC-3.4.015..017 added 2026-05-22 via issue #396 F2; +2 BC-3.4.018..019 added 2026-06-01 via issue #331 F2)
 
-_Note: BC-INDEX.md `total_bcs` header updated to 583 to match this file. CANONICAL-COUNTS.md carries the per-file sum as the primary source of truth. (+0 BC count change since last verified — issue #407 F2 added EC-3.4.017-14 only; the prior +3 was BC-3.4.015..017 from #396 F2 2026-05-22)_
+_Note: BC-INDEX.md `total_bcs` header updated to 585 to match this file. CANONICAL-COUNTS.md carries the per-file sum as the primary source of truth. (+2 BC count change since last verified — BC-3.4.018..019 added via issue #331 F2 2026-06-01)_
 
 Breakdown:
-- 583 = sum of per-file `total_bcs` values (canonical; see per-file table above)
-- 351 of 583 are individually-bodied (have a `#### BC-` heading)
+- 585 = sum of per-file `total_bcs` values (canonical; see per-file table above)
+- 353 of 585 are individually-bodied (have a `#### BC-` heading)
 - 232 are range-collapsed (counted in cumulative claim, no individual heading)
 - BC-X.4.009 (ADV-P1-029) is a `#### BC-` heading in cross-cutting.md; it is
   included in cross-cutting's `total_bcs: 140` and in the **583 sum**.
@@ -75,7 +75,7 @@ bc_count in L2 represents the same cumulative claim (individually-bodied + range
 |---------|----------------------------|---------|--------------|----------|
 | bc-01-auth-identity.md | 57 | bc-1-auth-identity.md | 57 | YES |
 | bc-02-issue-read.md | 92 | bc-2-issue-read.md | 93 | PENDING (L2 bc_count not yet bumped; L3 +1 BC-2.6.051 added 2026-05-14) |
-| bc-03-issue-write.md | 77 | bc-3-issue-write.md | 103 | PENDING (L2 bc_count not yet bumped; L3 +1 BC-3.4.009 2026-05-15; +10 BC-3.8.001-010 2026-05-18; +3 BC-3.8.011-013 2026-05-19; +2 BC-3.8.014-015 2026-05-19; +2 BC-3.8.016-017 2026-05-20; +2 BC-3.4.010-011 2026-05-20; +3 BC-3.4.012-014 2026-05-21; +3 BC-3.4.015-017 2026-05-22) |
+| bc-03-issue-write.md | 77 | bc-3-issue-write.md | 105 | PENDING (L2 bc_count not yet bumped; L3 +1 BC-3.4.009 2026-05-15; +10 BC-3.8.001-010 2026-05-18; +3 BC-3.8.011-013 2026-05-19; +2 BC-3.8.014-015 2026-05-19; +2 BC-3.8.016-017 2026-05-20; +2 BC-3.4.010-011 2026-05-20; +3 BC-3.4.012-014 2026-05-21; +3 BC-3.4.015-017 2026-05-22; +2 BC-3.4.018-019 2026-06-01) |
 | bc-04-assets-cmdb.md | 32 | bc-4-assets-cmdb.md | 32 | YES (was 44) |
 | bc-05-boards-sprints.md | 35 | bc-5-boards-sprints.md | 35 | YES |
 | bc-06-config-cache.md | 39 | bc-6-config-cache.md | 39 | YES (was 38) |

@@ -1,13 +1,13 @@
 ---
 context: bc-index
 title: "BC Master Index"
-total_bcs: 583  # cumulative claim (incl. range-collapsed) — see preamble below; +4 added 2026-05-08 (BC-7.4.013-016, Fix-PR A); +1 added 2026-05-13 (BC-2.6.050, issue #350); +1 added 2026-05-14 (BC-2.6.051, issue #365); +1 added 2026-05-15 (BC-3.4.009, issue #340 F2); +18 added 2026-05-18 (BC-3.8.001..010 + BC-X.12.001..008, issue #288 F2+F1d); +3 added 2026-05-19 (BC-3.8.011..013, issue #288 F1d + issue #383 F2); +4 added 2026-05-19 (BC-3.8.014..015 + BC-X.8.006..007, issue #384 F2); +2 added 2026-05-20 (BC-3.8.016..017, issue #385 F2); +2 added 2026-05-20 (BC-3.4.010..011, issue #388 F2); +3 added 2026-05-21 (BC-3.4.012..014, issue #398 F2); +3 added 2026-05-22 (BC-3.4.015..017, issue #396 F2); BC-1.3.023, BC-3.3.001, BC-X.8.004, BC-3.8.009, BC-X.3.002, BC-3.8.002, BC-3.8.010, BC-3.8.011, BC-3.4.003 modified
+total_bcs: 585  # cumulative claim (incl. range-collapsed) — see preamble below; +4 added 2026-05-08 (BC-7.4.013-016, Fix-PR A); +1 added 2026-05-13 (BC-2.6.050, issue #350); +1 added 2026-05-14 (BC-2.6.051, issue #365); +1 added 2026-05-15 (BC-3.4.009, issue #340 F2); +18 added 2026-05-18 (BC-3.8.001..010 + BC-X.12.001..008, issue #288 F2+F1d); +3 added 2026-05-19 (BC-3.8.011..013, issue #288 F1d + issue #383 F2); +4 added 2026-05-19 (BC-3.8.014..015 + BC-X.8.006..007, issue #384 F2); +2 added 2026-05-20 (BC-3.8.016..017, issue #385 F2); +2 added 2026-05-20 (BC-3.4.010..011, issue #388 F2); +3 added 2026-05-21 (BC-3.4.012..014, issue #398 F2); +3 added 2026-05-22 (BC-3.4.015..017, issue #396 F2); +2 added 2026-06-01 (BC-3.4.018..019, issue #331 F2); BC-1.3.023, BC-3.3.001, BC-X.8.004, BC-3.8.009, BC-X.3.002, BC-3.8.002, BC-3.8.010, BC-3.8.011, BC-3.4.003 modified
 last_updated: 2026-05-25
 source_pass: 3
 sections:
   - bc-1-auth-identity.md (57 BCs cumulative; 46 individually-bodied)
   - bc-2-issue-read.md (93 BCs cumulative; 51 individually-bodied)
-  - bc-3-issue-write.md (103 BCs cumulative; 74 individually-bodied)
+  - bc-3-issue-write.md (105 BCs cumulative; 76 individually-bodied)
   - bc-4-assets-cmdb.md (32 BCs cumulative; 22 individually-bodied)
   - bc-5-boards-sprints.md (35 BCs cumulative; 17 individually-bodied)
   - bc-6-config-cache.md (39 BCs cumulative; 29 individually-bodied)
@@ -212,7 +212,7 @@ R1/R4 prefix = deepening round that introduced it.
 
 ---
 
-## Section 3: Issue Write (bc-3-issue-write.md) — 103 BCs cumulative; 74 individually-bodied
+## Section 3: Issue Write (bc-3-issue-write.md) — 105 BCs cumulative; 76 individually-bodied
 
 ### 3.1 Assign (9 BCs: BC-3.1.001..009)
 
@@ -259,7 +259,7 @@ R1/R4 prefix = deepening round that introduced it.
 | BC-3.3.008 | `issue create --markdown -d '...'` converts markdown to ADF before POST | BC-212 | tests/issue_create_json.rs | MEDIUM |
 | BC-3.3.009 | `create_issue` browse URL uses `client.instance_url()` (NOT `client.base_url()`) | BC-1076 (R4) | tests/issue_commands.rs:1606-1644 | HIGH |
 
-### 3.4 Edit and Open (17 BCs: BC-3.4.001..017) [BC-3.4.010..011 added 2026-05-20 issue #388 F2; BC-3.4.012..014 added 2026-05-21 issue #398 F2; BC-3.4.015..017 added 2026-05-22 issue #396 F2; BC-3.4.003 modified 2026-05-20 issue #388 F2 annotation; BC-3.4.003 modified 2026-05-21 issue #398 F2 annotation]
+### 3.4 Edit and Open (19 BCs: BC-3.4.001..019) [BC-3.4.010..011 added 2026-05-20 issue #388 F2; BC-3.4.012..014 added 2026-05-21 issue #398 F2; BC-3.4.015..017 added 2026-05-22 issue #396 F2; BC-3.4.018..019 added 2026-06-01 issue #331 F2; BC-3.4.003 modified 2026-05-20 issue #388 F2 annotation; BC-3.4.003 modified 2026-05-21 issue #398 F2 annotation]
 
 | L3 BC ID | Summary | Pass 3 BC ID | Source | Confidence |
 |---|---|---|---|---|
@@ -280,6 +280,8 @@ R1/R4 prefix = deepening round that introduced it.
 | BC-3.4.015 | `issue edit KEY --field NAME=VALUE` (string/number/date/datetime/user field, single-key path) — resolves field name via `list_fields()`, validates against `editmeta`, serializes per type, PUTs; success echoes in `changed_fields` (human name as key); `customfield_NNNNN` literal bypasses name resolution; field absent from `editmeta` → exit 64 with Edit-screen hint; unsupported types (`array`, `any`) → exit 64 | — (issue #396 F2) | src/cli/issue/create.rs::handle_edit; src/api/jira/issues.rs::get_editmeta (new); src/cli/issue/helpers.rs::resolve_edit_fields (new) | HIGH |
 | BC-3.4.016 | `issue edit KEY --field NAME=VALUE` (single-select `option` field) — resolves human option value to `allowedValues[].id`; wire payload `{"customfield_NNNNN": {"id": "<id>"}}`; `changed_fields` echo shows human label (not id); case-insensitive matching; unknown option value → exit 64 listing allowed values | — (issue #396 F2) | src/cli/issue/create.rs::handle_edit; src/api/jira/issues.rs::get_editmeta (new) | HIGH |
 | BC-3.4.017 | `--field` multi-key/`--jql`-multi-issue rejection (C-1 guard, exit 64); flag-overlap hard error for `summary`/`description`/`issuetype`/`priority` (exit 64, no HTTP); `--jql` matching exactly 1 issue is allowed (single-key path); `--field` added to `REJECTED_IN_BULK` set | — (issue #396 F2) | src/cli/issue/create.rs::handle_edit (REJECTED_IN_BULK update; Gate B overlap check) | HIGH |
+| BC-3.4.018 | `issue edit KEY1 KEY2 --type <NAME>` multi-key bulk path — `editedFieldsInput["issueType"] = {"issueTypeId": "<id-string>"}` (camelCase key, string id); `selectedActions: ["issuetype"]` (lowercase, intentionally asymmetric); name resolved case-insensitively via `GET /rest/api/3/issue/createmeta/{proj}/issuetypes` (no cache); unknown name → exit 64 listing valid types; dry-run builder uses camelCase key with bare-string value (simplified, same model as priority) | — (issue #331 F2) | src/cli/issue/create.rs::handle_edit_bulk_fields; src/api/jira/issues.rs::get_issue_types_for_project (new); tests/issue_bulk_pr2.rs | HIGH |
+| BC-3.4.019 | `issue edit KEY1 KEY2 --type <NAME>` cross-project guard — when keys span >1 distinct Jira project (extracted by last-hyphen split), exit 64 with actionable message naming `--type` and the detected project keys, BEFORE any API call (no createmeta lookup, no bulk POST); per-project grouping is explicitly deferred to a future issue | — (issue #331 F2) | src/cli/issue/create.rs::handle_edit_bulk_fields (cross-project guard, pre-resolution); tests/issue_bulk_pr2.rs | HIGH |
 
 ### 3.5 Comments (1 BC: BC-3.5.001)
 
