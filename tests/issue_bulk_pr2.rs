@@ -778,6 +778,83 @@ async fn test_multi_key_summary_update_uses_bulk_fields_endpoint() {
 }
 
 // ---------------------------------------------------------------------------
+// EC-3.4.019-4: cross-project keys WITHOUT --type must NOT trip the type guard
+// ---------------------------------------------------------------------------
+
+/// `jr issue edit FOO-1 BAR-2 --summary "X" --no-input`
+/// (cross-project keys, NO --type flag)
+///
+/// EC-3.4.019-4 (BC-3.4.019 invariant 4): the cross-project guard fires ONLY
+/// when `--type` is present (`issue_type.is_some()`). A cross-project
+/// `--summary`-only bulk edit MUST succeed — the guard must be a no-op.
+///
+/// MUTATION COVERAGE: kills mutant B — `&&`→`||` in the guard condition
+/// `if issue_type.is_some() && effective_keys.len() > 1`.
+/// Under the `||` mutant the guard would evaluate to `true` even when
+/// `issue_type.is_none()`, causing this test to exit 64 instead of 0.
+///
+/// Asserts:
+///   - exit 0 (guard does NOT fire — no --type flag)
+///   - bulk POST received exactly 1 request (edit went through)
+///   - no createmeta GET was called (guard never reached resolution)
+#[tokio::test]
+async fn test_bulk_summary_cross_project_keys_does_not_trip_type_guard() {
+    let server = MockServer::start().await;
+
+    // Bulk POST: the summary edit must go through for cross-project keys when
+    // --type is absent. Expect exactly 1 call.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/fields"))
+        .and(body_string_contains("summary"))
+        .and(body_string_contains("selectedActions"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(bulk_enqueued("task-cross-proj-sum-001")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    mount_poll_complete(&server, "task-cross-proj-sum-001", &["FOO-1", "BAR-2"]).await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1", // project FOO
+            "BAR-2", // project BAR — different project
+            "--summary",
+            "X",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for cross-project --summary (no --type); \
+         the cross-project guard must NOT fire when issue_type.is_none(); \
+         stderr={stderr} stdout={stdout}"
+    );
+    // wiremock .expect(1) on bulk POST confirms the edit went through.
+    // Verifying no createmeta call was made (guard never reached resolution code).
+    let received = server.received_requests().await.unwrap();
+    assert!(
+        received
+            .iter()
+            .all(|r| !r.url.path().contains("createmeta")),
+        "Expected no createmeta GET call for --summary-only bulk edit; \
+         got: {:?}",
+        received
+            .iter()
+            .map(|r| format!("{} {}", r.method, r.url))
+            .collect::<Vec<_>>()
+    );
+}
+
+// ---------------------------------------------------------------------------
 // AC-001 extension: non-label multi-key --priority bulk edit.
 // ---------------------------------------------------------------------------
 
