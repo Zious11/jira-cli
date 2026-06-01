@@ -17,6 +17,19 @@ Superseded checkpoints are archived here when STATE.md is updated with a newer o
 
 ---
 
+## Checkpoint archived 2026-06-01 (develop @ f418bf5; #331 issueType LIVE-GREEN; createmeta schema fix #454+#455; run 26779732719 66/0; DRIFT-E2E-ALT RESOLVED)
+
+_Was the active checkpoint after #331 CYCLE CLOSED (PR #453 @ 6494e27). Superseded when live-validation cycle-close updated SESSION-HANDOFF to f418bf5._
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-01 |
+| **Position** | **#331 CYCLE CLOSED.** PR #453 squash-merged → develop @ 6494e27. Issue #331 CLOSED. Worktree + branch removed. No active worktrees. Dev release v0.5.0-dev.12 @ 432f381 (PR #451). Last live e2e: 65/0 run 26767211620 (develop @ 4fd91f1). |
+| **Convergence counter** | BC corpus: 585 BCs. NFR corpus: 41 NFRs. Story corpus: 59 stories. #331 F5 trajectory: P1 BLOCKED→fix affc33a→P2/P3 CLEAN→P4 BLOCKED→fix ee3dbeb→P5/P6/P7 CLEAN. develop HEAD: 6494e27. |
+| **Resume prompt** | `Read .factory/STATE.md. develop HEAD = 6494e27 (PR #453, #331 issueType bulk merged). #331 CLOSED. No active worktrees. factory-artifacts HEAD = git -C .factory log -1 --format='%h'. Last live e2e: 65/0 (run 26767211620, develop @ 4fd91f1). Dev release v0.5.0-dev.12 @ 432f381. 59 stories / 41 NFRs / 585 BCs. Do NOT close #429 (human decision, DEC-029). Held Dependabot PRs #404/#422–#426. OQ-5 open. DRIFT-E2E-ALT: issueType E2E gated test awaits JR_E2E_ISSUE_TYPE_ALT in jira-e2e env.` |
+
+---
+
 ## Checkpoint archived 2026-06-01 (develop @ 4fd91f1; E2E-PG-4 priority/worklog/unassign DONE; label chain DONE; dev.12 shipped)
 
 _Was the active checkpoint after PR #452 merged (bulk-priority fix + priority/worklog/unassign E2E). Superseded when session-resume checkpoint refreshed at session close._

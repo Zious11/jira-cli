@@ -2752,3 +2752,82 @@ or explicitly filed as `deferred-pending-live-validation` with a tracking issue.
 _Discovered: E2E-PG-4 label fix chain (#447-#450), 2026-06-01. Status: [process-gap].
 Reference: DEC-052. Live-run sequence: 26730687481 → 26733056812 → 26733998365 →
 26735034015 → 26735722804 (61/0 ALL GREEN, develop @ cff86d2)._
+
+---
+
+## L-331-LIVE-1 [codified] Pre-research RESPONSE schemas before implementing a deserializer — wiremock encoding your own assumed shape gives false confidence
+
+**Date:** 2026-06-01
+**Cycle:** #331 issueType live-validation close-out
+**Tag:** [codified] [process-gap] — second documented instance; first was L-E2E-12 (label chain, 4-layer bug family)
+
+### What happened
+
+PR #453 (issueType bulk fix, full VSDD F1–F7, 3 clean F5 passes, 91.7% mutation kill, 1568/0 regression)
+merged to develop @ 6494e27. First live e2e run post-merge (run 26777755130, develop @ 6494e27) = 65/1:
+sole failure was `test_e2e_issue_edit_issuetype_multikey_bulk_roundtrip` with `Error: missing field \`values\``
+in `get_issue_types_for_project`.
+
+Root cause: the implementation deserialized the createmeta response using a `values` field name derived
+from the implementer's assumption about the Atlassian API shape. The actual field returned by
+`GET /rest/api/3/issue/createmeta/{proj}/issuetypes` is `issueTypes` (not `values`), and the
+pagination model is offset-based (`startAt`/`maxResults`/`total`) — there is no `isLast` flag.
+The wiremock mock for the integration test encoded the WRONG assumed response shape (`{"values":[...]}`)
+and the test passed because the mock answered with whatever the client expected to receive.
+
+Three adversarial passes (F5 P5/P6/P7), 91.7% mutation testing, and green CI all missed this because
+they all relied on the same wrong mock. The live E2E backstop (gated `#[ignore]`, nightly e2e.yml) was
+the first execution against real Jira.
+
+Re-research: Perplexity + Atlassian OpenAPI confirmed the correct schema. Research report:
+`.factory/research/issue-331-createmeta-response-schema.md`. Fix: PR #454 (ci: wire
+`JR_E2E_ISSUE_TYPE_ALT` into e2e.yml, @ 1ee7040) + PR #455 (fix: correct field name `issueTypes` +
+offset pagination advancing by `maxResults`, @ f418bf5). Live re-run 26779732719 = 66/0 SUCCESS.
+
+### Lesson
+
+**PRE-RESEARCH exact Atlassian RESPONSE schemas against the OpenAPI spec BEFORE implementing a
+deserializer for a new or unfamiliar endpoint.** The failure mode is:
+
+1. Implementer ASSUMES the response shape (field name, pagination model, nesting depth).
+2. Wiremock mock is constructed from that assumption.
+3. Tests pass (mock returns exactly what the client expects).
+4. Adversarial review, mutation testing, and CI all validate correctness against the mock — not against reality.
+5. First live run reveals the schema was wrong.
+
+This is NOT a failure of the test quality — it is a structural property. A mock constructed from client
+assumptions cannot catch errors in those assumptions. This was already established in L-E2E-12 (label
+chain: `processedAccessibleIssues`, `taskId` types, `editedFieldsInput` schema). The #331 cycle is the
+second documented recurrence.
+
+### Rule
+
+For any new API endpoint integration:
+
+1. **Before writing the deserializer type or the wiremock mock,** locate the Atlassian OpenAPI spec for
+   that endpoint. Run `mcp__perplexity__search` with a targeted query: "Atlassian Jira Cloud REST API v3
+   GET /rest/api/3/issue/createmeta/{project}/issuetypes response schema". Read the actual JSON response
+   shape from the spec or a primary source.
+2. **Verify field names** (the response `{"issueTypes":[...]}` vs assumed `{"values":[...]}`).
+3. **Verify pagination model** (offset startAt/maxResults/total vs cursor isLast vs no pagination).
+4. **Then** implement the deserializer struct and wiremock mock, both derived from the verified spec.
+5. **For any existing endpoint where the mock was constructed from assumption** (signposted by
+   `SCHEMA NOTES` or `best-guess` comments in the code): add a gated live E2E test that exercises
+   the actual wire shape before declaring the feature complete.
+
+### Reinforced standing rule from L-E2E-12
+
+Any code path that talks to a real external API MUST have at least one gated live or integration test
+against the real service before it is considered validated. Mock fidelity must be derived from a
+captured real response or a primary API spec source — NOT from the client's outgoing request or
+expected-response assumptions.
+
+### Status
+
+[codified] — second documented instance (first: L-E2E-12, 2026-06-01). Reinforces the
+`deferred-pending-live-validation` tracking discipline and the pre-research response-schema rule.
+This lesson now appears as Key Lesson (a) in the Session Resume Checkpoint.
+
+_Discovered: #331 first live e2e run (run 26777755130, develop @ 6494e27), 2026-06-01._
+_Reference: DEC-058, research `.factory/research/issue-331-createmeta-response-schema.md`._
+_Fix-forward: PR #454 (e2e wiring @ 1ee7040) + PR #455 (schema fix @ f418bf5) → live run 26779732719 (66/0)._
