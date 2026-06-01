@@ -10,6 +10,36 @@ All notable changes to jr will be documented here.
 
 ### Changed
 
+## [0.5.0-dev.13] - 2026-06-01
+
+### Fixed
+
+- **`jr issue edit --priority` (bulk / multi-key) now sends the correct `{"priorityId":"<id>"}` schema**,
+  resolving the priority name to its id via `GET /rest/api/3/priority` and validating against real
+  Jira Cloud. Adds live E2E coverage for priority (single + multi-key bulk), `worklog add`, and
+  `issue` unassign. (#452, E2E-PG-4)
+- **`jr issue edit --type` (bulk / multi-key) now uses the verified Jira Bulk Ops schema** — camelCase
+  `issueType` in `editedFieldsInput`, project-scoped name→`issueTypeId` resolution via createmeta, and a
+  cross-project exit-64 guard before any API call. (#331, #453)
+- **`createmeta` issue-types response is parsed correctly** — the deserializer now reads the `issueTypes`
+  field (not `values`) with offset-based pagination, fixing live issueType bulk-edit resolution that the
+  mock-only tests had masked. (#331, #455)
+
+### Changed
+
+- Wired `JR_E2E_ISSUE_TYPE_ALT` into the live E2E workflow so the issueType bulk round-trip test runs in
+  CI (`jira-e2e` environment). (#331, #454)
+- Compacted `CLAUDE.md` gotchas / AI-agent-notes (~36% smaller) with no loss of load-bearing guidance. (#456)
+- Dependency bumps (each cleared a 7-day soak measured from the dependency's version publish date):
+  - `serde_json` 1.0.149 → 1.0.150 (#404)
+  - `ossf/scorecard-action` 2.4.0 → 2.4.3 (#424)
+  - `actions/dependency-review-action` 4.9.0 → 5.0.0 (#422)
+  - `github/codeql-action` 3.35.5 → 4.35.5 (#423)
+  - `actions/upload-artifact` 4.6.2 → 7.0.1 (#426)
+  - `actions/checkout` 4.3.1 → 6.0.2 (#425)
+  These four GitHub Actions majors move all workflows onto the Node.js 24 runtime; GitHub-hosted runners
+  satisfy the new minimum runner requirement.
+
 ## [0.5.0-dev.12] - 2026-06-01
 
 ### Added
