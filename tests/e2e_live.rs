@@ -4278,6 +4278,206 @@ fn test_e2e_issue_edit_label_add_remove_roundtrip() {
     );
 }
 
+/// E2E: multi-key `jr issue edit K1 K2 --label add:<probe>` / `--label remove:<probe>`
+/// round-trip using the corrected `labelsFields` bulk schema (issue #446).
+///
+/// Seeds TWO throwaway issues, adds a probe label to both via a single multi-key
+/// bulk edit, verifies via poll_view that the probe appears on BOTH, then removes
+/// the probe from both, and verifies it is absent from BOTH.
+///
+/// - Clean-skip on HTTP 403 OR 404 from the bulk endpoint:
+///   - 403 = caller lacks "Make bulk changes" global permission (all tiers, esp. Free).
+///   - 404 = bulk-changes endpoint not available on this plan.
+///   Only 403/404 trigger a skip; any other non-zero exit panics so a payload
+///   regression fails loudly rather than skipping.
+///
+/// - The bulk endpoint is async (returns taskId); `jr` polls until COMPLETE.
+///   `poll_view` retries GET for eventual-consistency after the bulk task completes.
+///
+/// Traces to: issue #446, design spec §6.4.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
+fn test_e2e_issue_edit_label_multikey_bulk_roundtrip() {
+    if !e2e_enabled() {
+        return;
+    }
+    let label = run_label();
+    let proj = project();
+    let itype = issue_type();
+    let h = e2e_harness();
+
+    // Seed two throwaway issues, both tagged with run_label() for sweeper teardown.
+    let make_issue = |suffix: &str| -> String {
+        let summary = format!("[e2e {label}] multikey-label-{suffix}");
+        let create_out = h
+            .cmd()
+            .args([
+                "issue",
+                "create",
+                "--project",
+                &proj,
+                "--type",
+                &itype,
+                "--summary",
+                &summary,
+                "--label",
+                &label,
+                "--output",
+                "json",
+            ])
+            .output()
+            .expect("failed to spawn jr for issue create (multikey label seed)");
+        assert!(
+            create_out.status.success(),
+            "issue create ({suffix}) failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&create_out.stdout),
+            String::from_utf8_lossy(&create_out.stderr)
+        );
+        serde_json::from_slice::<Value>(&create_out.stdout)
+            .expect("issue create output must be valid JSON")
+            .get("key")
+            .and_then(Value::as_str)
+            .expect("issue create JSON must contain a 'key' field")
+            .to_string()
+    };
+
+    let key1 = make_issue("a");
+    let key2 = make_issue("b");
+
+    // Probe label: unique per run, no spaces, no special characters (label constraints).
+    let probe = format!("{label}-mk");
+
+    // Assert probe is ABSENT on both issues before adding.
+    for key in [&key1, &key2] {
+        let before = poll_view(key, &h);
+        let before_labels: Vec<String> = before
+            .get("fields")
+            .and_then(|f| f.get("labels"))
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert!(
+            !before_labels.contains(&probe),
+            "probe '{probe}' must be ABSENT on {key} before add; got: {before_labels:?}"
+        );
+    }
+
+    // ADD the probe label to BOTH keys in one bulk call.
+    let add_out = h
+        .cmd()
+        .args([
+            "issue",
+            "edit",
+            &key1,
+            &key2,
+            "--label",
+            &format!("add:{probe}"),
+        ])
+        .output()
+        .expect("failed to spawn jr for multi-key issue edit --label add");
+
+    if !add_out.status.success() {
+        let stderr = String::from_utf8_lossy(&add_out.stderr);
+        // Skip only on 403 (permission denied) or 404 (endpoint unavailable).
+        if add_out.status.code() == Some(1)
+            && (stderr.contains("403") || stderr.contains("404"))
+        {
+            eprintln!(
+                "SKIP: bulk-edit {code} — 'Make bulk changes' permission not available \
+                 on this site; skipping multi-key label round-trip test.\nstderr: {stderr}",
+                code = if stderr.contains("403") { "403" } else { "404" }
+            );
+            return;
+        }
+        panic!(
+            "multi-key issue edit --label add failed (non-403/404 — not a permission skip):\n\
+             exit: {:?}\nstdout: {}\nstderr: {}",
+            add_out.status.code(),
+            String::from_utf8_lossy(&add_out.stdout),
+            stderr,
+        );
+    }
+
+    // Assert probe IS PRESENT on both issues after add.
+    for key in [&key1, &key2] {
+        let after_add = poll_view(key, &h);
+        let labels: Vec<String> = after_add
+            .get("fields")
+            .and_then(|f| f.get("labels"))
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert!(
+            labels.contains(&probe),
+            "probe '{probe}' must be PRESENT on {key} after add; got: {labels:?}"
+        );
+    }
+
+    // REMOVE the probe label from BOTH keys in one bulk call.
+    let remove_out = h
+        .cmd()
+        .args([
+            "issue",
+            "edit",
+            &key1,
+            &key2,
+            "--label",
+            &format!("remove:{probe}"),
+        ])
+        .output()
+        .expect("failed to spawn jr for multi-key issue edit --label remove");
+
+    if !remove_out.status.success() {
+        let stderr = String::from_utf8_lossy(&remove_out.stderr);
+        if remove_out.status.code() == Some(1)
+            && (stderr.contains("403") || stderr.contains("404"))
+        {
+            eprintln!(
+                "SKIP: bulk-edit {code} on remove — skipping.\nstderr: {stderr}",
+                code = if stderr.contains("403") { "403" } else { "404" }
+            );
+            return;
+        }
+        panic!(
+            "multi-key issue edit --label remove failed (non-403/404):\n\
+             exit: {:?}\nstdout: {}\nstderr: {}",
+            remove_out.status.code(),
+            String::from_utf8_lossy(&remove_out.stdout),
+            stderr,
+        );
+    }
+
+    // Assert probe is ABSENT on both issues after remove.
+    for key in [&key1, &key2] {
+        let after_remove = poll_view(key, &h);
+        let labels: Vec<String> = after_remove
+            .get("fields")
+            .and_then(|f| f.get("labels"))
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert!(
+            !labels.contains(&probe),
+            "probe '{probe}' must be ABSENT on {key} after remove; got: {labels:?}"
+        );
+    }
+}
+
 /// E2E: `jr issue link A B --type <T>` / `jr issue unlink A B --type <T>` round-trip
 /// using a dynamically-discovered link type that is NOT "Relates".
 ///

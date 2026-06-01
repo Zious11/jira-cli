@@ -17,10 +17,9 @@ use std::collections::HashMap;
 ///     as a best-guess and may receive 400 from real Jira tenants.
 ///     issueType → `{"issueTypeId": "..."}` per docs (camelCase key); we currently
 ///     ship `{"issuetype": {"name": "..."}}` (lowercase, name) as a best-guess.
-///     labels → `{"labelsFields": [{"fieldId":"labels","labels":[...],
-///     "bulkEditMultiSelectFieldOption":"ADD|REMOVE"}]}` per docs; we currently ship
-///     the simpler `{"labels": ...}` shapes (single object for ADD-only/REMOVE-only,
-///     array for ADD+REMOVE coalesced) as a best-guess.
+///     labels → `{"labelsFields": [{"fieldId":"labels","bulkEditMultiSelectFieldOption":"ADD|REMOVE","labels":[{"name":"..."}]}]}`
+///     per Atlassian Bulk Operations FAQ (verified, issue #446). Each action (ADD / REMOVE)
+///     is a separate element. Label items are `{"name":...}` objects.
 ///     Empirical verification against a live Jira sandbox + name→ID resolution
 ///     (priorities + issue types per project) is tracked at issue #331.
 #[derive(serde::Serialize, Debug)]

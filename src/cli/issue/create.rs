@@ -1090,56 +1090,56 @@ pub(super) async fn handle_edit(
     Ok(())
 }
 
-/// Build the edited-fields JSON object for a bulk-labels edit.
+/// Build the `editedFieldsInput` JSON object for a multi-key bulk-labels edit.
 ///
-/// Returns the complete `editedFieldsInput` object (with a top-level `"labels"` key)
-/// to be passed directly to `bulk_edit_fields`. JSON shapes per BC-3.4.006:
-/// - Single-action ADD: object-form
-///   `{"labels": {"labelsAction": "ADD", "labels": [{"name": "foo"}]}}`
-/// - Single-action REMOVE: object-form
-///   `{"labels": {"labelsAction": "REMOVE", "labels": [{"name": "bar"}]}}`
-/// - Both-action (ADD + REMOVE): array-form with ADD at index 0, REMOVE at index 1
-///   `{"labels": [{"labelsAction": "ADD", "labels": [{"name": "foo"}]}, {"labelsAction": "REMOVE", "labels": [{"name": "bar"}]}]}`
+/// Returns the complete `editedFieldsInput` object to be passed directly to
+/// `bulk_edit_fields`. Implements the verified Atlassian Bulk Operations schema:
+///
+/// ```json
+/// {
+///   "labelsFields": [
+///     {"fieldId":"labels","bulkEditMultiSelectFieldOption":"ADD","labels":[{"name":"foo"}]},
+///     {"fieldId":"labels","bulkEditMultiSelectFieldOption":"REMOVE","labels":[{"name":"bar"}]}
+///   ]
+/// }
+/// ```
+///
+/// - Each action (ADD / REMOVE) is a separate element in the `labelsFields` array.
+/// - Label items are `{"name": <string>}` objects — NOT bare strings.
+///   (Bare strings are the PUT /rest/api/3/issue single-key path; see `update_issue_labels`.)
+/// - `selectedActions: ["labels"]` is the caller's responsibility (passed to `bulk_edit_fields`).
 ///
 /// Caller MUST bail BEFORE calling this if both inputs are empty.
 ///
-/// Pure function — no I/O, no async, no client refs. Enables proptest coverage
-/// of the JSON shape invariants without wiremock.
+/// Pure function — no I/O, no async, no client refs.
 ///
-/// Shape is best-guess (unverified against live Atlassian API; tracked at #331).
-/// PR2 test asserts .expect(1) on bulk POST to ensure ADD+REMOVE coalesce into ONE call,
-/// but the exact JSON nesting matches a loose `body_string_contains` matcher — schema
-/// accuracy is the work being deferred to #331.
+/// Verified schema source: Atlassian Bulk Operations FAQ,
+/// https://developer.atlassian.com/cloud/jira/platform/bulk-operation-additional-examples-and-faqs/
+/// (issue #446).
 fn build_labels_edited_fields(adds: &[String], removes: &[String]) -> serde_json::Value {
     debug_assert!(
         !adds.is_empty() || !removes.is_empty(),
         "build_labels_edited_fields: caller MUST bail when both inputs are empty (BC-3.4.006)",
     );
-    let mut label_ops: Vec<serde_json::Value> = Vec::new();
+    let mut labels_fields: Vec<serde_json::Value> = Vec::new();
     if !adds.is_empty() {
         let add_entries: Vec<serde_json::Value> = adds.iter().map(|n| json!({"name": n})).collect();
-        label_ops.push(json!({
-            "labelsAction": "ADD",
+        labels_fields.push(json!({
+            "fieldId": "labels",
+            "bulkEditMultiSelectFieldOption": "ADD",
             "labels": add_entries
         }));
     }
     if !removes.is_empty() {
         let remove_entries: Vec<serde_json::Value> =
             removes.iter().map(|n| json!({"name": n})).collect();
-        label_ops.push(json!({
-            "labelsAction": "REMOVE",
+        labels_fields.push(json!({
+            "fieldId": "labels",
+            "bulkEditMultiSelectFieldOption": "REMOVE",
             "labels": remove_entries
         }));
     }
-
-    // Single-action: object-form (backward-compat with PR1 tests).
-    // Both-action: coalesced array-form (single bulk POST for ADD+REMOVE).
-    if label_ops.len() == 1 {
-        let op = label_ops.remove(0);
-        json!({ "labels": op })
-    } else {
-        json!({ "labels": label_ops })
-    }
+    json!({ "labelsFields": labels_fields })
 }
 
 /// Route label edits through the Atlassian Bulk Fields API.
@@ -1149,32 +1149,23 @@ fn build_labels_edited_fields(adds: &[String], removes: &[String]) -> serde_json
 /// NOTE: The `--dry-run --output json` `plannedChanges.labels` shape (built in the
 /// dry-run block of `handle_edit` above) is a SIMPLIFIED preview using `{action, name}`
 /// pairs in a flat array, NOT a byte-for-byte snapshot of the POST body built here.
-/// Dry-run is a human-and-tool-friendly diff; the POST body is constructed by
-/// `build_labels_edited_fields` (BC-3.4.006) and represents the current best-guess
-/// Atlassian shape (still unverified, pending #331). Once #331 confirms the
-/// canonical wire shape, both paths can converge.
+/// Dry-run is a human-and-tool-friendly diff.
 ///
-/// editedFieldsInput shape (best-guess pending #331 empirical verification):
-/// - When BOTH ADD and REMOVE labels are present, coalesced into ONE bulk POST
-///   with an array of operations:
+/// editedFieldsInput shape (verified against Atlassian Bulk Operations FAQ, issue #446):
 ///   ```json
 ///   {
-///     "labels": [
-///       {"labelsAction": "ADD",    "labels": [{"name": "foo"}]},
-///       {"labelsAction": "REMOVE", "labels": [{"name": "bar"}]}
+///     "labelsFields": [
+///       {"fieldId":"labels","bulkEditMultiSelectFieldOption":"ADD","labels":[{"name":"foo"}]},
+///       {"fieldId":"labels","bulkEditMultiSelectFieldOption":"REMOVE","labels":[{"name":"bar"}]}
 ///     ]
 ///   }
 ///   ```
-/// - When only ADD or only REMOVE labels are present, an object form (NOT a
-///   single-entry array) is sent for backward compatibility with PR1 tests:
-///   ```json
-///   {"labels": {"labelsAction": "ADD", "labels": [{"name": "foo"}]}}
-///   ```
-/// Tests use `body_string_contains` matchers to tolerate the shape difference;
-/// per #331's Perplexity research, the canonical Atlassian schema is documented
-/// to use a top-level `labelsFields` array — that's the long-term target for
-/// both code paths once #331's empirical sandbox verification confirms it.
-/// `.expect(1)` enforces ONE bulk POST even when both ADD+REMOVE are specified.
+/// ADD and REMOVE are separate elements in the `labelsFields` array.
+/// ADD+REMOVE coalesces into ONE bulk POST (`.expect(1)` enforced).
+/// Label items are `{"name":...}` objects — NOT bare strings.
+/// (Bare strings apply only to `PUT /rest/api/3/issue` single-key path.)
+///
+/// Source: https://developer.atlassian.com/cloud/jira/platform/bulk-operation-additional-examples-and-faqs/
 ///
 /// Output:
 /// - Table mode: per-key success/error lines.
@@ -2025,15 +2016,22 @@ pub enum IssueCommand {
 mod build_labels_proptests {
     use super::build_labels_edited_fields;
     use proptest::prelude::*;
-    use serde_json::Value;
 
     proptest! {
-        /// BC-3.4.006 invariants: top-level "labels" key always present; ADD/REMOVE
-        /// entries appear iff respective input non-empty; single-action uses object-form;
-        /// both-action uses array-form with ADD-at-index-0, REMOVE-at-index-1.
+        /// Invariants for `build_labels_edited_fields` (verified labelsFields schema, issue #446).
+        ///
+        /// Schema: `editedFieldsInput` is `{"labelsFields": [...]}` where each element has:
+        ///   - `fieldId`: `"labels"`
+        ///   - `bulkEditMultiSelectFieldOption`: `"ADD"` or `"REMOVE"`
+        ///   - `labels`: array of `{"name": <string>}` objects
+        ///
+        /// ADD entries appear iff `adds` is non-empty; REMOVE entries iff `removes` is non-empty.
+        /// Both present → two elements (ADD first, REMOVE second).
         ///
         /// `prop_assume!` filters out the empty/empty case because the caller
         /// (`handle_edit_bulk_labels`) bails on `adds.is_empty() && removes.is_empty()`.
+        ///
+        /// Source: https://developer.atlassian.com/cloud/jira/platform/bulk-operation-additional-examples-and-faqs/
         #[test]
         fn build_labels_edited_fields_invariants(
             adds in proptest::collection::vec("[a-z]{1,10}", 0..5),
@@ -2043,49 +2041,55 @@ mod build_labels_proptests {
 
             let result = build_labels_edited_fields(&adds, &removes);
 
-            // Invariant 0: top-level value MUST be a JSON object with EXACTLY one key ("labels").
-            let obj = result.as_object().expect("BC-3.4.006: top-level value MUST be a JSON object");
-            prop_assert_eq!(obj.len(), 1, "BC-3.4.006: top-level object MUST have exactly one key ('labels')");
+            // Invariant 0: top-level value is a JSON object with exactly one key ("labelsFields").
+            let obj = result.as_object().expect("top-level value MUST be a JSON object");
+            prop_assert_eq!(obj.len(), 1, "top-level object MUST have exactly one key ('labelsFields')");
 
-            // Invariant 1: top-level "labels" key is always present.
-            let labels = result.get("labels").expect("BC-3.4.006: top-level 'labels' key MUST be present");
+            // Invariant 1: top-level "labelsFields" key is always present and is an array.
+            let labels_fields = result
+                .get("labelsFields")
+                .and_then(|v| v.as_array())
+                .expect("'labelsFields' MUST be a JSON array");
 
-            // Strict shape-pinning helper — panics with BC-3.4.006 message on any
-            // key-set deviation so a regression that emits {"WRONG_KEY": "foo"} instead
-            // of {"name": "foo"} fails loudly rather than being silently dropped.
-            let extract_action_and_names = |action_obj: &Value| -> (String, Vec<String>) {
-                let obj = action_obj.as_object().expect(
-                    "BC-3.4.006: each action entry MUST be a JSON object",
-                );
+            // Expected number of elements: 1 if only adds or only removes; 2 if both.
+            let expected_len = match (adds.is_empty(), removes.is_empty()) {
+                (false, false) => 2,
+                _ => 1,
+            };
+            prop_assert_eq!(
+                labels_fields.len(),
+                expected_len,
+                "labelsFields MUST have {} element(s)",
+                expected_len
+            );
+
+            // Helper: extract (bulkEditMultiSelectFieldOption, label names) from one element.
+            let extract_elem = |elem: &serde_json::Value| -> (String, Vec<String>) {
+                let e = elem.as_object().expect("labelsFields element MUST be an object");
+                // fieldId MUST be "labels"
                 assert_eq!(
-                    obj.len(), 2,
-                    "BC-3.4.006: each action entry MUST have EXACTLY 2 keys (labelsAction + labels), got: {:?}",
-                    obj.keys().collect::<Vec<_>>()
+                    e.get("fieldId").and_then(|v| v.as_str()),
+                    Some("labels"),
+                    "labelsFields[].fieldId MUST equal \"labels\""
                 );
-                let action = obj
-                    .get("labelsAction")
+                let action = e
+                    .get("bulkEditMultiSelectFieldOption")
                     .and_then(|v| v.as_str())
-                    .expect("BC-3.4.006: action entry MUST have labelsAction: String")
+                    .expect("labelsFields element MUST have bulkEditMultiSelectFieldOption: String")
                     .to_string();
-                let inner_labels = obj
+                let inner = e
                     .get("labels")
                     .and_then(|v| v.as_array())
-                    .expect("BC-3.4.006: action entry MUST have labels: Array");
-                let names: Vec<String> = inner_labels
+                    .expect("labelsFields element MUST have labels: Array");
+                let names: Vec<String> = inner
                     .iter()
                     .map(|item| {
-                        let item_obj = item.as_object().expect(
-                            "BC-3.4.006: each label entry MUST be a JSON object",
-                        );
-                        assert_eq!(
-                            item_obj.len(), 1,
-                            "BC-3.4.006: each label entry MUST have EXACTLY 1 key (name), got: {:?}",
-                            item_obj.keys().collect::<Vec<_>>()
-                        );
+                        let item_obj = item.as_object().expect("label item MUST be an object");
+                        assert_eq!(item_obj.len(), 1, "label item MUST have exactly 1 key (name)");
                         item_obj
                             .get("name")
                             .and_then(|v| v.as_str())
-                            .expect("BC-3.4.006: each label entry MUST have name: String")
+                            .expect("label item MUST have name: String")
                             .to_string()
                     })
                     .collect();
@@ -2093,46 +2097,26 @@ mod build_labels_proptests {
             };
 
             match (adds.is_empty(), removes.is_empty()) {
-                // Both-action: array-form with ADD then REMOVE.
+                // Both present: ADD at index 0, REMOVE at index 1.
                 (false, false) => {
-                    let arr = labels.as_array().expect(
-                        "BC-3.4.006: both-action MUST produce array-form (not object-form)",
-                    );
-                    prop_assert_eq!(arr.len(), 2, "BC-3.4.006: array-form MUST have exactly 2 entries (ADD + REMOVE)");
-                    let (a0_action, a0_names) = extract_action_and_names(&arr[0]);
-                    let (a1_action, a1_names) = extract_action_and_names(&arr[1]);
-                    prop_assert_eq!(a0_action, "ADD",    "BC-3.4.006: array index 0 MUST be ADD");
-                    prop_assert_eq!(a1_action, "REMOVE", "BC-3.4.006: array index 1 MUST be REMOVE");
-                    prop_assert_eq!(a0_names, adds.clone(),    "BC-3.4.006: ADD names MUST match input");
-                    prop_assert_eq!(a1_names, removes.clone(), "BC-3.4.006: REMOVE names MUST match input");
+                    let (a0_action, a0_names) = extract_elem(&labels_fields[0]);
+                    let (a1_action, a1_names) = extract_elem(&labels_fields[1]);
+                    prop_assert_eq!(a0_action, "ADD",    "labelsFields[0] MUST be ADD");
+                    prop_assert_eq!(a1_action, "REMOVE", "labelsFields[1] MUST be REMOVE");
+                    prop_assert_eq!(a0_names, adds.clone(),    "ADD names MUST match input");
+                    prop_assert_eq!(a1_names, removes.clone(), "REMOVE names MUST match input");
                 }
-                // Single-action ADD: object-form, labelsAction=ADD.
+                // ADD only.
                 (false, true) => {
-                    let obj = labels.as_object().expect(
-                        "BC-3.4.006: single-action ADD MUST produce object-form (not array-form)",
-                    );
-                    prop_assert_eq!(
-                        obj.len(), 2,
-                        "BC-3.4.006: single-ADD labels object MUST have EXACTLY 2 keys (labelsAction + labels), got: {:?}",
-                        obj.keys().collect::<Vec<_>>()
-                    );
-                    let (action, names) = extract_action_and_names(&Value::Object(obj.clone()));
-                    prop_assert_eq!(action, "ADD", "BC-3.4.006: single-ADD MUST set labelsAction=ADD");
-                    prop_assert_eq!(names, adds.clone(), "BC-3.4.006: ADD names MUST match input");
+                    let (action, names) = extract_elem(&labels_fields[0]);
+                    prop_assert_eq!(action, "ADD", "single-ADD MUST set bulkEditMultiSelectFieldOption=ADD");
+                    prop_assert_eq!(names, adds.clone(), "ADD names MUST match input");
                 }
-                // Single-action REMOVE: object-form, labelsAction=REMOVE.
+                // REMOVE only.
                 (true, false) => {
-                    let obj = labels.as_object().expect(
-                        "BC-3.4.006: single-action REMOVE MUST produce object-form (not array-form)",
-                    );
-                    prop_assert_eq!(
-                        obj.len(), 2,
-                        "BC-3.4.006: single-REMOVE labels object MUST have EXACTLY 2 keys (labelsAction + labels), got: {:?}",
-                        obj.keys().collect::<Vec<_>>()
-                    );
-                    let (action, names) = extract_action_and_names(&Value::Object(obj.clone()));
-                    prop_assert_eq!(action, "REMOVE", "BC-3.4.006: single-REMOVE MUST set labelsAction=REMOVE");
-                    prop_assert_eq!(names, removes.clone(), "BC-3.4.006: REMOVE names MUST match input");
+                    let (action, names) = extract_elem(&labels_fields[0]);
+                    prop_assert_eq!(action, "REMOVE", "single-REMOVE MUST set bulkEditMultiSelectFieldOption=REMOVE");
+                    prop_assert_eq!(names, removes.clone(), "REMOVE names MUST match input");
                 }
                 // Both empty: filtered by prop_assume!; unreachable.
                 (true, true) => unreachable!("filtered by prop_assume! above"),

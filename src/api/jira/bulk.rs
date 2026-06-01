@@ -247,12 +247,15 @@ impl JiraClient {
     ///     the API returns 400. Mirrors keys used inside `edited_fields`.
     ///   - `edited_fields` — per-field edit payload (shape varies by field type).
     ///
-    /// `edited_fields` shape (labels example, labelsAction casing best-guess "ADD"/"REMOVE";
-    /// see SCHEMA NOTES in `types/jira/bulk.rs::BulkEditRequest` for the canonical
-    /// production shape and the schema-empirical-verification follow-up issue):
+    /// `edited_fields` shape (labels example — verified schema, issue #446):
     /// ```json
-    /// {"labels": {"labelsAction": "ADD", "labels": [{"name": "foo"}]}}
+    /// {
+    ///   "labelsFields": [
+    ///     {"fieldId":"labels","bulkEditMultiSelectFieldOption":"ADD","labels":[{"name":"foo"}]}
+    ///   ]
+    /// }
     /// ```
+    /// Source: https://developer.atlassian.com/cloud/jira/platform/bulk-operation-additional-examples-and-faqs/
     pub async fn bulk_edit_fields(
         &self,
         keys: &[String],
