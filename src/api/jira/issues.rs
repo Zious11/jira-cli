@@ -650,6 +650,53 @@ impl JiraClient {
         }
         Ok(all)
     }
+
+    /// Resolve the available issue types for a project via the createmeta issuetypes endpoint.
+    ///
+    /// Calls `GET /rest/api/3/issue/createmeta/{projectKey}/issuetypes` and returns the
+    /// list of `IssueTypeEntry` values (id + name).
+    ///
+    /// # Usage
+    /// - No cache — one HTTP call per `--type` bulk invocation (matches priority resolver model).
+    /// - Project-scoped: the same type name can have different IDs in different projects.
+    /// - Call site: `handle_edit_bulk_fields` in `src/cli/issue/create.rs` only.
+    ///
+    /// Source: Atlassian createmeta issuetypes endpoint docs (issue #331).
+    pub(crate) async fn get_issue_types_for_project(
+        &self,
+        project_key: &str,
+    ) -> Result<Vec<IssueTypeEntry>> {
+        // Reuse IssueTypeMetadata from projects.rs is not possible here — that struct
+        // lacks an `id` field (it has name/description/subtask only). We define a
+        // separate IssueTypeEntry with id + name for createmeta resolution.
+        let response: CreametaIssueTypesResponse = self
+            .get(&format!(
+                "/rest/api/3/issue/createmeta/{}/issuetypes",
+                urlencoding::encode(project_key)
+            ))
+            .await?;
+        Ok(response.values)
+    }
+}
+
+/// Issue type entry returned by `GET /rest/api/3/issue/createmeta/{projectKey}/issuetypes`.
+///
+/// Contains the `id` (string) and `name` fields needed for bulk issue-type resolution.
+/// The `id` field is the value used as `issueTypeId` in the bulk edit payload.
+///
+/// Note: `IssueTypeMetadata` in `src/api/jira/projects.rs` lacks the `id` field
+/// (it has name/description/subtask only); this struct is a separate, minimal type
+/// scoped to the createmeta resolution path.
+#[derive(Debug, serde::Deserialize)]
+pub(crate) struct IssueTypeEntry {
+    pub id: String,
+    pub name: String,
+}
+
+/// Response wrapper for `GET /rest/api/3/issue/createmeta/{projectKey}/issuetypes`.
+#[derive(Debug, serde::Deserialize)]
+struct CreametaIssueTypesResponse {
+    pub values: Vec<IssueTypeEntry>,
 }
 
 #[cfg(test)]
