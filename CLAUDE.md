@@ -336,6 +336,7 @@ When adding a new feature:
   Without this guard the `--label` routing fork at `src/cli/issue/create.rs::handle_edit § "Route: labels → bulk API"` (the `// --- Route: labels → bulk API. ---` comment) would silently drop
   the `--field` write (exit 0, data loss). Combined label + custom-field bulk edits are
   tracked at #331. [FIX-F5-001]
+- **`issue edit --label` endpoint fork (single-key vs bulk, BUG-LABEL-400):** `handle_edit_bulk_labels` in `src/cli/issue/create.rs` routes on key count after `effective_keys` is resolved (positional or `--jql`-matched). Exactly ONE key → `PUT /rest/api/3/issue/{key}` with `{"update":{"labels":[{"add":"x"},{"remove":"y"}]}}` (synchronous 204 No Content); label values are **bare strings**, via `JiraClient::update_issue_labels` in `src/api/jira/issues.rs`. TWO OR MORE keys → `POST /rest/api/3/bulk/issues/fields` (async task-poll); label items in the bulk payload are `{"name":...}` objects structured via `build_labels_edited_fields`. The two endpoints use **asymmetric** label payload shapes — do not unify them. The single-key path was added in the BUG-LABEL-400 fix after live E2E run 26730687481 proved the bulk endpoint's `labelsFields`-array schema returns HTTP 400 on real Jira; the canonical `labelsFields` bulk schema is the long-term target pending empirical sandbox verification in #331. A `--jql`-resolved set that matches exactly one issue takes the single-key PUT path (documented in the `// Routing for non-label edits:` comment in `handle_edit`).
 
 ## AI Agent Notes
 
