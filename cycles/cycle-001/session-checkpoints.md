@@ -17,6 +17,19 @@ Superseded checkpoints are archived here when STATE.md is updated with a newer o
 
 ---
 
+## Checkpoint archived 2026-06-01 (develop @ 4fd91f1; E2E-PG-4 priority/worklog/unassign DONE; label chain DONE; dev.12 shipped)
+
+_Was the active checkpoint after PR #452 merged (bulk-priority fix + priority/worklog/unassign E2E). Superseded when session-resume checkpoint refreshed at session close._
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-01 |
+| **Position** | **[VERIFIED] Priority/worklog/unassign E2E + bulk-priority fix CLOSED. PR #452 squash-merged to develop @ 4fd91f1. Live run 26767211620 = 65/0; all 4 new gated tests green. Bulk `issue edit --priority` now uses priorityId schema (name→id via GET /rest/api/3/priority), validated live first-try. DEC-054 CLOSED. 58 stories / 41 NFRs / 583 BCs.** |
+| **Convergence counter** | E2E-PG-4 priority/worklog/unassign complete. Live run 26767211620 = 65/0. BUG-LABEL-400 RESOLVED. Dev release v0.5.0-dev.12 @ 432f381 (DEC-053). Bulk priorityId schema live-green (DEC-054). BC corpus: 583 BCs (unchanged). NFR corpus: 41 NFRs. Story corpus: 58 stories. |
+| **Resume prompt** | `Read .factory/STATE.md. PR #452 merged → develop @ 4fd91f1: priority/worklog/unassign E2E + bulk-priority fix. Live run 26767211620 = 65/0 (all 4 new tests green). Bulk issue edit --priority → {priorityId} schema validated live first-try. Remaining E2E-PG-4 sub-gaps: assign to specific other user, remote-link round-back (blocked on jr remote-link read), issueType bulk schema (#331 deferred). Dev release v0.5.0-dev.12 @ 432f381 (tag, DEC-053). Open backlog: #210, #331, #368, #372, #387, #400 (Story B), #429. Dependabot PRs #404/#422/#423/#424/#425/#426 held. DEC-029 deferred to human (do NOT close #429). OQ-5 open (NFR-O-N doc drift). 58 stories / 41 NFRs / 583 BCs.` |
+
+---
+
 ## Checkpoint archived 2026-05-12 (PR #357 CONVERGED @ 144aaff, awaiting human merge)
 
 _Was the active checkpoint after PR #357 R2 returned 0 new comments. Superseded when PR #357 merged @ d208a6d._
