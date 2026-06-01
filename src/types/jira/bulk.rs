@@ -13,8 +13,11 @@ use std::collections::HashMap;
 /// receive a consistent type. "10110" is a valid `validate_task_id` input
 /// (all ASCII alphanumeric).
 ///
-/// Rejects floats, booleans, arrays, objects, and nulls with a serde error —
-/// only `String` and integer types are plausible taskId representations.
+/// Rejects floats, booleans, arrays, objects, and **null** with a serde error —
+/// only `String` and integer types are plausible taskId representations. This
+/// variant is used for required (`String`) fields; `null` or absent values are
+/// therefore an error. For optional taskId fields that should map `null`/absent
+/// → `None`, use `deserialize_opt_task_id_string_or_int` instead.
 fn deserialize_task_id_string_or_int<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -428,6 +431,56 @@ mod tests {
         let prog: BulkOperationProgress =
             serde_json::from_str(json).expect("BulkOperationProgress should allow absent taskId");
         assert_eq!(prog.task_id, None);
+    }
+
+    // --- Rejection contract: floats and bools must never be silently accepted ---
+    //
+    // These tests pin the rustdoc claim that `deserialize_task_id_string_or_int`
+    // (required-field variant) rejects floats and booleans with a serde error.
+    // A future refactor that widens the visitor (e.g. accepting `visit_f64` to
+    // "be lenient") would silently break callers that depend on strict typing;
+    // these tests catch that regression at the unit level.
+
+    /// BulkSubmitResponse: float taskId must be rejected.
+    #[test]
+    fn test_deserialize_bulk_submit_response_rejects_float_task_id() {
+        assert!(
+            serde_json::from_str::<BulkSubmitResponse>(r#"{"taskId": 1.5}"#).is_err(),
+            "BulkSubmitResponse must reject a float taskId"
+        );
+    }
+
+    /// BulkSubmitResponse: bool taskId must be rejected.
+    #[test]
+    fn test_deserialize_bulk_submit_response_rejects_bool_task_id() {
+        assert!(
+            serde_json::from_str::<BulkSubmitResponse>(r#"{"taskId": true}"#).is_err(),
+            "BulkSubmitResponse must reject a bool taskId"
+        );
+    }
+
+    /// BulkOperationProgress: float taskId must be rejected.
+    #[test]
+    fn test_deserialize_bulk_operation_progress_rejects_float_task_id() {
+        assert!(
+            serde_json::from_str::<BulkOperationProgress>(
+                r#"{"taskId": 1.5, "status": "ENQUEUED"}"#
+            )
+            .is_err(),
+            "BulkOperationProgress must reject a float taskId"
+        );
+    }
+
+    /// BulkOperationProgress: bool taskId must be rejected.
+    #[test]
+    fn test_deserialize_bulk_operation_progress_rejects_bool_task_id() {
+        assert!(
+            serde_json::from_str::<BulkOperationProgress>(
+                r#"{"taskId": false, "status": "ENQUEUED"}"#
+            )
+            .is_err(),
+            "BulkOperationProgress must reject a bool taskId"
+        );
     }
 
     #[test]
