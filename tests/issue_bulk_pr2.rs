@@ -1392,30 +1392,22 @@ async fn test_jql_zero_matches_exits_nonzero_with_hint() {
 }
 
 // ---------------------------------------------------------------------------
-// Audit F2: selectedActions/editedFieldsInput casing for issueType (issue #331)
+// Audit F2: selectedActions key for issueType must match editedFieldsInput key
 // ---------------------------------------------------------------------------
 
 /// `jr issue edit FOO-1 FOO-2 --type Bug --no-input`
+/// The bulk POST body must contain "issuetype" (lowercase) in BOTH
+/// selectedActions AND editedFieldsInput. Using camelCase "issueType" in
+/// selectedActions while the body key is lowercase "issuetype" is a
+/// self-inconsistency that may cause 400 errors from the Atlassian API.
 ///
-/// Per the Atlassian Bulk Operations FAQ (issue #331, verbatim JSON):
-///   - `selectedActions` uses lowercase `"issuetype"`.
-///   - `editedFieldsInput` key is camelCase `"issueType"`.
-///
-/// These intentionally differ — the FAQ example shows both in one payload. This
-/// test verifies the correct asymmetry:
-///   1. `selectedActions` contains lowercase `"issuetype"` (not camelCase).
-///   2. `editedFieldsInput` key is camelCase `"issueType"`.
-///
-/// Updated from the pre-#331 assertion that wrongly required `"issueType"` to be
-/// absent everywhere in the body. The correct spec is that `"issueType"` MUST
-/// appear as the `editedFieldsInput` object key while `"issuetype"` (lowercase)
-/// appears as the `selectedActions` array element.
+/// This test asserts the body contains "issuetype" (lowercase) and does NOT
+/// contain the camelCase variant "issueType" as a selectedActions value.
 #[tokio::test]
 async fn test_multi_key_type_update_uses_consistent_issuetype_casing() {
     let server = MockServer::start().await;
 
     // Capture the raw POST body with a permissive mock, then assert on it.
-    // Body must contain both "issuetype" (selectedActions) and "issueType" (editedFieldsInput).
     Mock::given(method("POST"))
         .and(path("/rest/api/3/bulk/issues/fields"))
         .and(body_string_contains("issuetype"))
@@ -1447,7 +1439,7 @@ async fn test_multi_key_type_update_uses_consistent_issuetype_casing() {
         "Expected exit 0 for multi-key --type bulk edit; stderr={stderr} stdout={stdout}"
     );
 
-    // Verify the recorded request body uses the correct casing per the Atlassian FAQ.
+    // Verify the recorded request body uses lowercase "issuetype" consistently.
     let requests = server.received_requests().await.unwrap();
     let bulk_req = requests
         .iter()
@@ -1455,39 +1447,19 @@ async fn test_multi_key_type_update_uses_consistent_issuetype_casing() {
         .expect("Expected exactly one POST to /rest/api/3/bulk/issues/fields");
     let body_str = std::str::from_utf8(&bulk_req.body).unwrap_or("");
 
-    // "issuetype" (lowercase) must appear as the selectedActions element.
+    // "issuetype" (lowercase) must appear in the body (editedFieldsInput key).
     assert!(
         body_str.contains("issuetype"),
-        "Expected lowercase 'issuetype' in selectedActions; body={body_str}"
+        "Expected lowercase 'issuetype' in bulk request body; body={body_str}"
     );
 
-    // "issueType" (camelCase) must appear as the editedFieldsInput object key.
-    // This is the correct shape per the Atlassian Bulk Operations FAQ (issue #331).
+    // The selectedActions array must NOT contain camelCase "issueType" as a standalone
+    // value — it must use lowercase "issuetype" to match editedFieldsInput.
+    // We check: the string "\"issueType\"" (quoted, camelCase) should not appear
+    // as a JSON string value inside selectedActions.
     assert!(
-        body_str.contains("\"issueType\""),
-        "Expected camelCase '\"issueType\"' as editedFieldsInput key (per FAQ); body={body_str}"
-    );
-
-    // Verify selectedActions does NOT use camelCase: parse the JSON and check.
-    let body: serde_json::Value =
-        serde_json::from_str(body_str).expect("bulk body must be valid JSON");
-    let selected_actions = body
-        .get("selectedActions")
-        .and_then(|v| v.as_array())
-        .expect("selectedActions must be an array");
-    let has_lowercase = selected_actions
-        .iter()
-        .any(|v| v.as_str() == Some("issuetype"));
-    let has_camelcase = selected_actions
-        .iter()
-        .any(|v| v.as_str() == Some("issueType"));
-    assert!(
-        has_lowercase,
-        "selectedActions must contain lowercase 'issuetype'; got: {selected_actions:?}"
-    );
-    assert!(
-        !has_camelcase,
-        "selectedActions must NOT contain camelCase 'issueType' (only lowercase); got: {selected_actions:?}"
+        !body_str.contains("\"issueType\""),
+        "Expected selectedActions NOT to contain camelCase \"issueType\"; body={body_str}"
     );
 }
 

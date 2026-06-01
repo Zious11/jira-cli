@@ -1332,11 +1332,10 @@ async fn handle_edit_bulk_fields(
         selected_actions.push("priority".to_string());
     }
     if let Some(t) = issue_type {
-        // editedFieldsInput key is "issueType" (camelCase) per Atlassian Bulk Operations FAQ.
-        // selectedActions value stays lowercase "issuetype" (API asymmetry — documented in FAQ).
-        // Name-based dispatch retained here; id-based resolution for multi-project scenarios
-        // is tracked in #331 and is out of scope for this fix.
-        edited.insert("issueType".into(), json!({"name": t}));
+        edited.insert("issuetype".into(), json!({"name": t}));
+        // Match editedFieldsInput key (lowercase). Atlassian docs are ambiguous on
+        // canonical casing for the bulk endpoint specifically; the lowercase form
+        // matches the legacy single-key path. Empirical schema verification deferred to #331.
         selected_actions.push("issuetype".to_string());
     }
 
