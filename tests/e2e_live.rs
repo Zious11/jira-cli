@@ -4288,8 +4288,8 @@ fn test_e2e_issue_edit_label_add_remove_roundtrip() {
 /// - Clean-skip on HTTP 403 OR 404 from the bulk endpoint:
 ///   - 403 = caller lacks "Make bulk changes" global permission (all tiers, esp. Free).
 ///   - 404 = bulk-changes endpoint not available on this plan.
-///   Only 403/404 trigger a skip; any other non-zero exit panics so a payload
-///   regression fails loudly rather than skipping.
+///     Only 403/404 trigger a skip; any other non-zero exit panics so a payload
+///     regression fails loudly rather than skipping.
 ///
 /// - The bulk endpoint is async (returns taskId); `jr` polls until COMPLETE.
 ///   `poll_view` retries GET for eventual-consistency after the bulk task completes.
@@ -4384,9 +4384,7 @@ fn test_e2e_issue_edit_label_multikey_bulk_roundtrip() {
     if !add_out.status.success() {
         let stderr = String::from_utf8_lossy(&add_out.stderr);
         // Skip only on 403 (permission denied) or 404 (endpoint unavailable).
-        if add_out.status.code() == Some(1)
-            && (stderr.contains("403") || stderr.contains("404"))
-        {
+        if add_out.status.code() == Some(1) && (stderr.contains("403") || stderr.contains("404")) {
             eprintln!(
                 "SKIP: bulk-edit {code} — 'Make bulk changes' permission not available \
                  on this site; skipping multi-key label round-trip test.\nstderr: {stderr}",
@@ -4439,8 +4437,7 @@ fn test_e2e_issue_edit_label_multikey_bulk_roundtrip() {
 
     if !remove_out.status.success() {
         let stderr = String::from_utf8_lossy(&remove_out.stderr);
-        if remove_out.status.code() == Some(1)
-            && (stderr.contains("403") || stderr.contains("404"))
+        if remove_out.status.code() == Some(1) && (stderr.contains("403") || stderr.contains("404"))
         {
             eprintln!(
                 "SKIP: bulk-edit {code} on remove — skipping.\nstderr: {stderr}",
