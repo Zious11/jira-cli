@@ -1,0 +1,4 @@
+.github/workflows/e2e.yml
+README.md
+CLAUDE.md
+docs/specs/e2e-live-jira-testing.md

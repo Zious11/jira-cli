@@ -7,6 +7,48 @@ project: "jr (jira-cli)"
 
 Track all spec version changes. Most recent version first.
 
+## [1.3.1] - 2026-06-01
+
+### Type: PATCH
+
+### Summary
+
+Fork-safe E2E CI enablement flag + README E2E status badge (F2 spec evolution). New
+per-feature design spec added at `docs/specs/e2e-fork-safe-ci-enablement.md`. Zero BC
+change; zero NFR change. BC corpus remains 585; NFR corpus remains 41. This is a CI
+infrastructure and documentation feature only — no product behavior is altered.
+
+### New Requirements
+
+None. BC corpus (585) and NFR corpus (41) are explicitly unchanged.
+
+### Modified Requirements
+
+None.
+
+### New Spec Artifacts
+
+| File | Description |
+|------|-------------|
+| `docs/specs/e2e-fork-safe-ci-enablement.md` | Per-feature design spec for the fork-safe E2E CI enablement flag (`JR_E2E_ENABLED`) and README badge. Covers: problem and context, the two-layer model (repo-var gate vs test-binary gate), job-level gate expression, `JR_E2E_ENABLED` MUST-BE-repository-variable requirement with GitHub-docs citation, preflight step specification, badge markdown, rollout and operational notes, verification properties (VER-E2E-FORK-1..4), and F4 touch-point list. |
+
+### Impact Assessment
+
+| Dimension | Before | After | Delta |
+|-----------|--------|-------|-------|
+| BC corpus (BC-INDEX.md total_bcs) | 585 | 585 | 0 |
+| NFR corpus (nfr-catalog.md total_nfrs) | 41 | 41 | 0 |
+| New per-feature specs | — | `docs/specs/e2e-fork-safe-ci-enablement.md` | +1 file |
+
+### Feature Scope
+
+CI infrastructure only. F4 delivery touches: `.github/workflows/e2e.yml` (job `if:`
+gate + preflight step), `README.md` (E2E badge), `CLAUDE.md` (JR_* table entry + two-
+layer model note), `docs/specs/e2e-live-jira-testing.md` (§5 YAML, §6 secret safety,
+§8 config table). Zero `src/` change; zero `tests/` change.
+
+---
+
 ## [1.3.0] - 2026-05-20
 
 ### Type: MINOR

@@ -3551,3 +3551,25 @@ Validated against single-user instance (own account) — no second user required
 | Step | Agent | Status | Output |
 |------|-------|--------|--------|
 | E2E-enh SHIPPED to develop + LIVE-GREEN 2026-05-31 (PR #440+#441+#442 @ fef44bd; live e2e 57/0 run 26719160283) | orchestrator (gh/git-verified) | complete | Full VSDD F1-F7 + 2 live-fix rounds complete. Feature #440 (d1fdca7); live-fix #441 (46be96e) fixed no_secret+team-list (54/3→56/1); live-fix #442 (fef44bd) fixed bad-auth portability (56/1→57/0). develop @ fef44bd. Live e2e run 26719160283 SUCCESS: 57 passed/0 failed. e2e-sweeper.yml live. E2E-ENH CYCLE CLOSED. |
+
+---
+
+## Burst N+12 (2026-06-02) — E2E fork-safe CI enablement feature — F1 APPROVED + F2 COMPLETE
+
+**Agents dispatched:** orchestrator (brainstorm/architect), human (F1 gate), state-manager
+**Files touched:** .factory/STATE.md, .factory/cycles/cycle-001/burst-log.md, .factory/cycles/cycle-001/session-checkpoints.md
+**Versions bumped:** (none — zero src/ changes; feature is CI+docs only)
+
+### Summary
+
+New Feature Mode cycle opened: "Fork-safe E2E CI enablement (`JR_E2E_ENABLED` repo-variable gate) + README E2E status badge". BROWNFIELD. Zero-src/, zero-tests scope (CI workflow YAML + README + CLAUDE.md + docs/specs only). 1 story, ~3 SP (bumped from 2 for preflight). No new BC (585 unchanged). No new formal VP-NNN (zero Rust). NFR corpus 41 unchanged.
+
+F1 brainstorming + delta-analysis APPROVED by human at gate. F2 feature design spec created at docs/specs/e2e-fork-safe-ci-enablement.md (per-feature spec, ADR-0004). Verification properties VER-E2E-FORK-1..4 defined (fork-skip / canonical-runs / skipped-run-passing-badge / preflight-fails-loud) — empirical CI checks for F4/F6. spec-changelog.md entry [1.3.1] added. develop HEAD unchanged at d45ec88 — no code merged yet.
+
+DEC-062 recorded capturing gate decisions: `JR_E2E_ENABLED` as REPOSITORY-level variable (not environment-scoped, not secrets); preflight step INCLUDED; badge at 2nd position in README.
+
+### Archived Current Phase Step (from STATE.md, superseded by E2E fork-safe F2 row)
+
+| Step | Agent | Status | Output |
+|------|-------|--------|--------|
+| #331 issueType bulk CYCLE CLOSED 2026-06-01 — PR #453 squash-merged to develop @ 6494e27; #331 CLOSED | orchestrator (gh/git-verified) | complete | Full VSDD F1-F7: F1 APPROVED (DEC-055) → F2 BC-3.4.018/019 (585 BCs) → F3 S-331 (12 ACs) → F4 TDD → F5 CONVERGED (3 clean P5/P6/P7; 7 findings) → F6 PASS (91.7% mutation, Mutant B killed 723ccd7, regression 1568/0) → F7 5-dim MET. Issue #331 CLOSED. Worktree + branch removed. E2E gated test clean-skips until JR_E2E_ISSUE_TYPE_ALT set (DRIFT-E2E-ALT). PG-331-1/2 deferred (DEC-056). First live e2e run 26777755130 revealed createmeta response-schema defect. |

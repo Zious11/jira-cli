@@ -17,6 +17,19 @@ Superseded checkpoints are archived here when STATE.md is updated with a newer o
 
 ---
 
+## Checkpoint archived 2026-06-02 (develop @ d45ec88; assign-by-query E2E LIVE-GREEN; DEC-061; feature mode opened for E2E fork-safe CI)
+
+_Was the active checkpoint after assign-by-query E2E (PR #458 → develop @ d45ec88; live run 26790203429 67/0). Superseded when E2E fork-safe CI enablement feature cycle opened (F1 APPROVED + F2 COMPLETE)._
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-02 |
+| **Position** | **assign-by-query E2E LIVE-GREEN.** PR #458 → develop @ d45ec88; live run 26790203429 = 67/0. E2E-PG-4 assign-specific-user sub-gap RESOLVED. No active worktrees. |
+| **Convergence counter** | BC corpus: 585 BCs. NFR corpus: 41 NFRs. Story corpus: 59 stories. develop HEAD: d45ec88. jira-e2e env: JR_E2E_ISSUE_TYPE_ALT=Bug. DRIFT-331-PAGINATION tracked (deferred). |
+| **Resume prompt** | `Read .factory/STATE.md. develop HEAD = d45ec88 (PR #458, assign-by-query E2E; DEC-061). Live e2e run 26790203429 = 67/0. No active worktrees. factory-artifacts HEAD = git -C .factory log -1 --format='%h'. jira-e2e env: JR_E2E_ISSUE_TYPE_ALT=Bug. 59 stories / 41 NFRs / 585 BCs. Do NOT close #429 (human decision, DEC-029). OQ-5 open. DRIFT-331-PAGINATION: log-only (deferred). E2E-PG-4 remaining sub-gap: remote-link round-back ONLY (blocked on jr remote-link read).` |
+
+---
+
 ## Checkpoint archived 2026-06-02 (develop @ ec8f6be; dev release v0.5.0-dev.13 SHIPPED; DEC-060)
 
 _Was the active checkpoint after dev.13 release (PR #457 @ ec8f6be). Superseded when assign-by-query E2E live-green updated STATE.md to d45ec88._
