@@ -3573,3 +3573,9 @@ DEC-062 recorded capturing gate decisions: `JR_E2E_ENABLED` as REPOSITORY-level 
 | Step | Agent | Status | Output |
 |------|-------|--------|--------|
 | #331 issueType bulk CYCLE CLOSED 2026-06-01 — PR #453 squash-merged to develop @ 6494e27; #331 CLOSED | orchestrator (gh/git-verified) | complete | Full VSDD F1-F7: F1 APPROVED (DEC-055) → F2 BC-3.4.018/019 (585 BCs) → F3 S-331 (12 ACs) → F4 TDD → F5 CONVERGED (3 clean P5/P6/P7; 7 findings) → F6 PASS (91.7% mutation, Mutant B killed 723ccd7, regression 1568/0) → F7 5-dim MET. Issue #331 CLOSED. Worktree + branch removed. E2E gated test clean-skips until JR_E2E_ISSUE_TYPE_ALT set (DRIFT-E2E-ALT). PG-331-1/2 deferred (DEC-056). First live e2e run 26777755130 revealed createmeta response-schema defect. |
+
+### Archived Current Phase Step (from STATE.md, superseded by S-E2E-FORK-1 CYCLE CLOSED row)
+
+| Step | Agent | Status | Output |
+|------|-------|--------|--------|
+| #331 issueType live-validation CLOSED 2026-06-01 — PR #454 + PR #455 → develop @ f418bf5; live run 26779732719 = 66/0 ALL GREEN | orchestrator + implementer + pr-manager (gh/git-verified) | complete | Perplexity + OpenAPI: issueTypes field + offset pagination. PR #454: wire JR_E2E_ISSUE_TYPE_ALT into e2e.yml. PR #455: fix get_issue_types_for_project. DRIFT-E2E-ALT RESOLVED. DEC-058. |

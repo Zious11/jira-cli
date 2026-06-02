@@ -660,3 +660,48 @@ Trajectory shorthand: `1C→1M→CLEAN→CLEAN→CLEAN`
 **Key meta-lesson (L-458-1):** This is the first documented case where the SAME defect (C-1 bare-positional) survived 3 consecutive adversarial passes from different fresh contexts before being caught in passes 4-5. The surface guard's lack of positional-arity checking is the structural gap that allowed C-1 to reach the adversarial loop at all. Multiple fresh-context passes remain load-bearing even for test-only features with no production surface to review.
 
 **Note:** Research-first (Perplexity-validated): Jira `GET /rest/api/3/user/assignable/search?query=<email>` matches `emailAddress` server-side even under GDPR (accountId is returned; email is the search key, not returned). Own-account validation: the test assigned to `JR_E2E_EMAIL` (own account) — no second Jira user required in a single-user instance.
+
+---
+
+## E2E Fork-Safe CI Enablement (S-E2E-FORK-1) — F5 Scoped Adversarial Convergence (2026-06-02)
+
+**Story:** S-E2E-FORK-1 — `JR_E2E_ENABLED` repository variable gate + README badge
+**Cycle:** ci/e2e-fork-safe-enablement → PR #459 → develop @ afa12570
+**F5 Adversarial passes:** Multiple rounds (fix rounds interleaved) — then 3 fresh-context CLEAN passes.
+**Live e2e:** run 26793560680 = 67/0 GREEN post-merge (VER-E2E-FORK-2 + VER-E2E-FORK-4 confirmed)
+
+### F5 Convergence Narrative
+
+**Phase 1 — Fix rounds:**
+- Pass 1: Adversary caught MISSED SIBLING WORKFLOW — e2e.yml had the gate added but `e2e-sweeper.yml` was left unguarded. Scope-completeness win: a sibling workflow omission that would have re-enabled fork runs via the sweeper path. Fixed: gate added to e2e-sweeper.yml.
+- Pass 2: Adversary caught OFF-BRANCH SPEC ARTIFACT — `docs/specs/e2e-fork-safe-ci-enablement.md` was authored in the main checkout during F2 (untracked) and was ABSENT from the feature branch `ci/e2e-fork-safe-enablement` which was branched off origin/develop @ d45ec88. This left ×4 dangling references (CLAUDE.md, CHANGELOG.md, e2e-live-jira-testing.md, README.md all cited the spec file by path). Fixed: spec file committed onto the feature branch.
+
+**Phase 2 — Polish-induced idiom drift:**
+- After adversary declared clean, orchestrator polish switched the preflight approach from `${VAR:?}` (fail-on-empty-var) to `collect-all` (collect all missing vars, fail once). This introduced drift: spec tables, VP comment text, sibling-pseudocode in e2e-sweeper.yml, and CLAUDE.md all referenced the old `${VAR:?}` idiom while the implementation used `collect-all`.
+- Pass after polish: Adversary found idiom-drift — `${VAR:?}` still in spec and comment text while workflow used collect-all.
+- Sweep: all 8 citation sites updated to describe collect-all semantics.
+
+**Phase 3 — 3 consecutive fresh-context CLEAN passes:**
+
+| Pass | Date | CRIT | HIGH | MED | LOW | Counter | Verdict |
+|------|------|------|------|-----|-----|---------|---------|
+| Fresh-1 | 2026-06-02 | 0 | 0 | 0 | 0 | 1/3 | CLEAN-PASS |
+| Fresh-2 | 2026-06-02 | 0 | 0 | 0 | 0 | 2/3 | CLEAN-PASS |
+| Fresh-3 | 2026-06-02 | 0 | 0 | 0 | 0 | 3/3 | FULL CONVERGENCE |
+
+Trajectory shorthand: `1C(sibling-omission)→fix→1C(off-branch-spec)→fix→polish→idiom-drift→sweep→CLEAN→CLEAN→CLEAN`
+
+**Key catches:**
+1. **Missed sibling workflow (e2e-sweeper.yml):** Scope-completeness class finding — the adversary verified ALL files touched by the feature against the spec's "files to change" list. Without this, fork PRs could still trigger the sweeper.
+2. **Off-branch F2 artifact:** The spec file authored during F2 in the main checkout was absent from the feature branch. Lesson: F-cycle artifacts authored outside `.factory/` must be brought onto the feature branch before the adversary pass.
+3. **Polish-introduced idiom drift:** Orchestrator changed a key idiom (`${VAR:?}` → collect-all) post-F5-pass without re-sweeping all citation sites. Lesson: when changing an idiom/approach, sweep ALL references (spec tables, comments, sibling pseudocode, docs) in the same commit.
+
+**VER-E2E-FORK verification outcomes:**
+- VER-E2E-FORK-1 (fork skip): verified by gate semantics + research (docs.github.com: `vars` available in job-level `if:`, forks don't have repo vars set).
+- VER-E2E-FORK-2 (canonical repo with var set runs): LIVE-CONFIRMED via post-merge e2e.yml run 26793560680 = 67/0.
+- VER-E2E-FORK-3 (badge green): LIVE-CONFIRMED (passing run 26793560680 on develop branch).
+- VER-E2E-FORK-4 (preflight loud): LIVE-CONFIRMED — "E2E preflight OK — all required config present." printed in run 26793560680.
+
+**Scope:** 7 files — .github/workflows/e2e.yml, .github/workflows/e2e-sweeper.yml, README.md, CLAUDE.md, CHANGELOG.md, docs/specs/e2e-fork-safe-ci-enablement.md (new), docs/specs/e2e-live-jira-testing.md. Zero src/, zero Rust tests.
+
+**Cycle CLOSED 2026-06-02.** PR #459 squash-merged → develop @ afa12570. DEC-063.

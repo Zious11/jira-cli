@@ -2898,3 +2898,37 @@ first (i.e., all gated `#[ignore]` live-E2E tests).
 _Discovered: E2E-PG-4 assign-by-query adversarial convergence, 2026-06-02._
 _Reference: DEC-061. PR #458 → develop @ d45ec88. Live run 26790203429 (67/0)._
 _Structural gap: PG-458-1 (positional-arity not validated by surface guard)._
+
+---
+
+## L-459-1: F-cycle artifacts authored outside `.factory/` must be committed onto the feature branch before the adversary pass (2026-06-02)
+
+**Context:** S-E2E-FORK-1 F2 spec (`docs/specs/e2e-fork-safe-ci-enablement.md`) was authored in the main checkout during F2 (untracked). The feature branch `ci/e2e-fork-safe-enablement` was created off `origin/develop @ d45ec88` AFTER the spec was written in the main tree, so the spec file was never committed onto the branch. The adversary (F5) caught ×4 dangling references in files that cited the spec path — CLAUDE.md, CHANGELOG.md, e2e-live-jira-testing.md, and README.md all referenced `docs/specs/e2e-fork-safe-ci-enablement.md` but the file didn't exist on the branch.
+
+**Lesson:** Any spec, design document, or F-cycle artifact authored in the main checkout during F1/F2 MUST be committed onto the feature branch before F4 starts, or it will be absent from the branch and from any PR diff. Preferred approach: create the feature worktree BEFORE F2 authoring begins, or `git add` the artifact to the feature branch immediately after authoring.
+
+**Process gap codified (PG-459-3):** No workflow check enforces that all files cited by CLAUDE.md entries, CHANGELOG.md, and spec cross-references are present on the active feature branch. Target: maintenance sweep.
+
+### Status
+
+[codified] — applies to all future Feature Mode cycles that author design specs or supporting documents during F1/F2 before the feature worktree/branch is created.
+
+_Discovered: S-E2E-FORK-1 F5 adversarial review, 2026-06-02._
+_Reference: DEC-063. PR #459 → develop @ afa12570._
+
+---
+
+## L-459-2: Changing a key idiom/approach after F5 convergence requires a full-sweep re-pass of all citation sites (2026-06-02)
+
+**Context:** During S-E2E-FORK-1, the orchestrator introduced a polish change after an adversary CLEAN pass — switching the preflight approach from individual `${VAR:?}` (fail on first missing var) to `collect-all` (collect all missing vars, print them all, then fail once). This is a strictly better UX behavior. However, the idiom change was not propagated to all citation sites: the spec's implementation-detail table, the VP comment text, the sibling workflow pseudocode in e2e-sweeper.yml, and a CLAUDE.md note all still described the old `${VAR:?}` approach while the workflow YAML used collect-all. The adversary on the next pass caught all 8 drift sites.
+
+**Lesson:** When changing an idiom or approach in an implementation file, sweep ALL reference sites in the SAME commit: spec tables, inline comments, sibling workflow pseudocode, documentation, and CLAUDE.md. The pattern from the `doc-fallout` lesson (L-PR-357: update docs atomically with behavior) applies equally to post-F5 polish changes — if you change an approach after convergence, treat it as a new F5 pass.
+
+**Process gap codified (PG-459-2):** No spec-vs-workflow drift check enforces that fenced bash/yaml in `docs/specs/*.md` matches `.github/workflows/*.yml`. The `${VAR:?}` drift survived into a same-PR new spec. Target: maintenance sweep.
+
+### Status
+
+[codified] — applies to all future Feature Mode cycles that introduce polish/refinement after F5 convergence, and to all changes that switch an implementation idiom across multiple files.
+
+_Discovered: S-E2E-FORK-1 F5 adversarial review, 2026-06-02._
+_Reference: DEC-063. PR #459 → develop @ afa12570._

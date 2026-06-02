@@ -17,6 +17,19 @@ Superseded checkpoints are archived here when STATE.md is updated with a newer o
 
 ---
 
+## Checkpoint archived 2026-06-02 (develop @ afa12570; S-E2E-FORK-1 CYCLE CLOSED + LIVE-GREEN; DEC-063)
+
+_Was the active checkpoint at E2E fork-safe CI F2-complete / F3-pending. Superseded when S-E2E-FORK-1 completed F3–F7, PR #459 squash-merged to develop @ afa12570, and LIVE-GREEN confirmed (run 26793560680, 67/0)._
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-02 |
+| **Position** | **E2E fork-safe CI enablement feature at F2-complete / F3-pending.** Brainstorming + F1 delta-analysis APPROVED (DEC-062); F2 spec written (docs/specs/e2e-fork-safe-ci-enablement.md; VER-E2E-FORK-1..4). develop HEAD: d45ec88 (no code merged for this feature yet). No active worktrees. |
+| **Convergence counter** | BC corpus: 585 BCs. NFR corpus: 41 NFRs. Story corpus: 59 stories. develop HEAD: d45ec88. jira-e2e env: JR_E2E_ISSUE_TYPE_ALT=Bug. DRIFT-331-PAGINATION tracked (deferred). |
+| **Resume prompt** | `Read .factory/STATE.md. develop HEAD = d45ec88 (PR #458, assign-by-query E2E; DEC-061). E2E fork-safe CI feature: F1 APPROVED + F2 COMPLETE (DEC-062); F3 pending. Spec: docs/specs/e2e-fork-safe-ci-enablement.md. No active worktrees. factory-artifacts HEAD = git -C .factory log -1 --format='%h'. jira-e2e env: JR_E2E_ISSUE_TYPE_ALT=Bug. 59 stories / 41 NFRs / 585 BCs. Do NOT close #429 (human decision, DEC-029). OQ-5 open. DRIFT-331-PAGINATION: log-only (deferred). E2E-PG-4 remaining sub-gap: remote-link round-back ONLY (blocked on jr remote-link read).` |
+
+---
+
 ## Checkpoint archived 2026-06-02 (develop @ d45ec88; assign-by-query E2E LIVE-GREEN; DEC-061; feature mode opened for E2E fork-safe CI)
 
 _Was the active checkpoint after assign-by-query E2E (PR #458 → develop @ d45ec88; live run 26790203429 67/0). Superseded when E2E fork-safe CI enablement feature cycle opened (F1 APPROVED + F2 COMPLETE)._
