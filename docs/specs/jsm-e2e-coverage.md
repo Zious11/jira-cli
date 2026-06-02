@@ -424,30 +424,97 @@ guard regression where the wrong error (not exit-64 + JSM-guard message) is retu
 
 ## 6. Teardown Design and Orphan-Risk Documentation
 
-### 6.1 Self-Close in Test Body
+> **§6 revised by S-JSM-E2E-2 (2026-06-02):** §6.1 corrected to use dynamic
+> close-transition discovery (`statusCategory.key == "done"`) instead of the
+> hardcoded `status_done()` name. Live run 26839267723 confirmed the original design
+> left ~2 open EJ tickets because the EJ JSM workflow has no transition named "Done".
 
-Scenarios 5 and 6 create JSM requests on EJ and MUST self-close them in the test body.
+### 6.1 Self-Close in Test Body (Revised by S-JSM-E2E-2)
 
-The pattern is: capture `key` from `--output json` stdout immediately after create; run
-all assertions; unconditionally attempt `jr issue move <key> <JR_E2E_STATUS_DONE:-Done>`
-at the end of the function. If the move fails (e.g. workflow does not have a transition to
-Done, or the issue is already Done), emit a warning (`eprintln!`) but do NOT fail the test
-on close failure — the close step is best-effort cleanup, not an assertion.
+Scenarios 5 and 6 create JSM requests on EJ and MUST self-close them in the test body
+via the `jsm_self_close(key, &h)` helper (added in S-JSM-E2E-2).
+
+**Wrong assumption from S-JSM-E2E-1 (corrected here):** The original design called
+`jr issue move <key> <status_done()>` where `status_done()` defaults to `"Done"`. This
+works for the ES Scrum project, which has a transition literally named "Done". The EJ JSM
+service-desk project does NOT — JSM workflows use names such as Resolved, Closed, or
+Canceled. The hardcoded name caused silent teardown failures and orphaned EJ tickets.
+
+**Corrected design — dynamic close-transition discovery:**
+
+The `jsm_self_close(key, &h)` helper:
+1. Runs `jr issue transitions <key> --output json` and parses the transitions array.
+   Each transition has the shape `{id, name, to: {name, statusCategory: {name, key}}}`
+   (per `src/types/jira/issue.rs` `Transition` / `Status` / `StatusCategory` types).
+2. Selects a transition where `to.statusCategory.key == "done"` — the stable, Jira-wide
+   machine constant for a closing/green status. This covers Resolved, Closed, Done,
+   Canceled, and any custom done-category status regardless of workflow name.
+   If multiple done-category transitions exist, prefer name in `["Resolved", "Closed",
+   "Done"]` for determinism; otherwise take the first.
+3. Calls `jr issue move <key> <to.name>` using the discovered name.
+4. On any failure (transitions command non-zero, JSON parse error, no done-category
+   transition found, move command non-zero): emit `eprintln!("[WARN] jsm_self_close: …")`
+   and return. NEVER `panic!` or `assert!` inside the helper.
+
+See the canonical implementation `tests/e2e_live.rs::jsm_self_close` — outlined here for
+reference only (the source file is authoritative):
 
 ```rust
-// Always attempt close at end of test
-let close_out = e2e_cmd()
-    .args(["issue", "move", &key, &status_done])
-    .output()
-    .expect("close command");
-if !close_out.status.success() {
-    eprintln!("[WARN] Failed to close EJ issue {key}: {:?}", close_out.status);
+// jsm_self_close — best-effort teardown using statusCategory discovery
+// Canonical source: tests/e2e_live.rs::jsm_self_close
+fn jsm_self_close(key: &str, h: &E2eHarness) {
+    // 1. Fetch transitions — no panic on spawn failure.
+    let out = match h.cmd().args(["issue", "transitions", key, "--output", "json"]).output() {
+        Ok(o) => o,
+        Err(e) => { eprintln!("[WARN] jsm_self_close: spawn failed for {key}: {e}"); return; }
+    };
+    if !out.status.success() {
+        eprintln!("[WARN] jsm_self_close: transitions fetch failed for {key}"); return;
+    }
+    // 2. Parse bare JSON array: [{id, name, to: {name, statusCategory: {name, key}}}].
+    let transitions: serde_json::Value = match serde_json::from_slice(&out.stdout) {
+        Ok(v) => v,
+        Err(e) => { eprintln!("[WARN] jsm_self_close: JSON parse error for {key}: {e}"); return; }
+    };
+    // 3. Select target STATUS name (to.name) from a done-category transition.
+    //    Preference order: Resolved > Closed > Done > first-any-done.
+    //    NOTE: use t["to"]["name"] (status noun), NOT t["name"] (transition verb).
+    let preferred = ["Resolved", "Closed", "Done"];
+    let done_status_name = transitions.as_array().and_then(|arr| {
+        for pref in &preferred {
+            if arr.iter().any(|t| {
+                t["to"]["statusCategory"]["key"].as_str() == Some("done")
+                    && t["to"]["name"].as_str() == Some(*pref)
+            }) { return Some(pref.to_string()); }
+        }
+        arr.iter()
+            .find(|t| t["to"]["statusCategory"]["key"].as_str() == Some("done"))
+            .and_then(|t| t["to"]["name"].as_str().map(str::to_owned))
+    });
+    let name = match done_status_name {
+        Some(n) => n,
+        None => { eprintln!("[WARN] jsm_self_close: no done-category transition for {key}"); return; }
+    };
+    // 4. Move — no panic on spawn failure; warn on non-zero exit.
+    let close_out = match h.cmd().args(["issue", "move", key, &name]).output() {
+        Ok(o) => o,
+        Err(e) => { eprintln!("[WARN] jsm_self_close: spawn move failed for {key}: {e}"); return; }
+    };
+    if !close_out.status.success() {
+        eprintln!("[WARN] jsm_self_close: move to {name:?} failed for {key} — orphan risk LOW");
+    }
 }
 ```
 
-`jr issue move <EJ-key> <Done>` calls `POST /rest/api/3/issue/{key}/transitions` (the
-platform transitions endpoint), which is valid for JSM issues — they are standard Jira
-issues underneath the service management layer.
+`jr issue move <EJ-key> <discovered-name>` calls `POST /rest/api/3/issue/{key}/transitions`
+(the platform transitions endpoint), which is valid for JSM issues — they are standard
+Jira issues underneath the service management layer.
+
+**Residual caveat:** A JSM "Resolve" transition that requires a mandatory Resolution field
+on its transition screen may still fail via `jr issue move` (which has no
+`--field-on-transition` path). If the EJ workflow enforces a Resolution screen, the helper
+will warn and return — leaving the issue open. This is a documented LOW residual orphan
+risk. The `--field-on-transition` path is out of scope for this feature.
 
 ### 6.2 Labels Do NOT Propagate to JSM Requests — Sweeper Cannot Cover EJ
 
@@ -466,15 +533,24 @@ would not be caught without extending the sweeper.
 
 ### 6.3 Residual Orphan Risk
 
-If a test panics mid-flight (between `create` and the self-close step), the EJ issue stays
-open. This is LOW risk:
+Orphan risk has been reduced by S-JSM-E2E-2 (dynamic close-transition discovery) but
+not eliminated. Remaining sources:
+
+1. **Mid-flight panic:** If a test panics between `create` and the `jsm_self_close` call,
+   the EJ issue stays open.
+2. **Resolution-screen guard:** If the EJ workflow's done-category transition requires a
+   mandatory Resolution field on its screen, `jr issue move` will receive a 400 or similar
+   error and `jsm_self_close` will warn and return without closing.
+
+Both cases are LOW risk:
 
 - EJ issues do not affect the platform project ES or any other test.
 - Free Jira Cloud sites have no issue quota concern.
 - Nightly runs will create and close fresh issues — orphans accumulate but are inert.
 - The CI sweeper does NOT cover EJ and labels do not propagate from the JSM create path —
   this is an explicit accepted gap. If orphan accumulation becomes a problem, extend the
-  sweeper as a separate maintenance task outside this feature scope.
+  sweeper or add a `--field-on-transition` path to `jr issue move` as a separate maintenance
+  task outside this feature scope.
 
 This orphan risk is documented explicitly here and must be noted in the implementing story's
 ACs.
@@ -581,8 +657,9 @@ internal comment and absent (or not set to `true`) on the public comment.
 
 **Scenario:** 6 (§5, Scenario 6)
 **Condition:** `jr issue create --project EJ --request-type <id> --summary "..." --output
-json` exits 0, returns `{"key": "EJ-N"}`, `poll_view(key)` resolves, and `jr issue move
-<key> Done` succeeds.
+json` exits 0, returns `{"key": "EJ-N"}`, `poll_view(key)` resolves, and the issue is
+closed via `jsm_self_close` (a dynamically-discovered `statusCategory.key == "done"`
+transition; best-effort, warn-and-return on failure).
 **Verification method (F6):** Inspect the CI E2E run log for
 `test_e2e_jsm_create_request_roundtrip`. Confirm the ADR-0014 dispatch fork is exercised
 (POST to servicedeskapi endpoint, not to `/rest/api/3/issue`), the key is returned, and

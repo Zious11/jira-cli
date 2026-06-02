@@ -29,6 +29,14 @@ All notable changes to jr will be documented here.
 
 ### Fixed
 
+- **JSM E2E self-close teardown (S-JSM-E2E-2):** the comment-visibility and
+  create-request live tests now self-close their EJ tickets by dynamically discovering a
+  closing transition (`statusCategory.key == "done"`, preferring Resolved/Closed/Done)
+  instead of the hardcoded `"Done"` status name, which the EJ JSM workflow rejects —
+  created EJ tickets were being left open on every nightly run. Best-effort teardown
+  preserved (warn-and-return on failure, never fails the test). Zero `src/` change.
+  (S-JSM-E2E-2)
+
 ### Changed
 
 ## [0.5.0-dev.13] - 2026-06-01

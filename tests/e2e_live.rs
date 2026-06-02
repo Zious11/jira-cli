@@ -178,6 +178,102 @@ fn status_done() -> String {
     }
 }
 
+/// Best-effort self-close for a JSM issue.
+///
+/// JSM workflows have no "Done" status (unlike ES Scrum), so this helper
+/// discovers a closing transition dynamically using `jr issue transitions
+/// --output json` and selects the first transition whose target
+/// `statusCategory.key == "done"` — the stable, Jira-wide machine constant
+/// for a closing/green status, covering Resolved, Closed, Canceled, and any
+/// custom done-category status regardless of workflow name.
+///
+/// Never fails the test: all failure branches emit `eprintln!("[WARN] …")`
+/// and return `()`. No `panic!`, `assert!`, `unwrap()`, or `expect()` on the
+/// transitions-fetch or move steps.
+///
+/// Design: S-JSM-E2E-2 (dynamic close-transition discovery).
+/// Root cause fixed: `jr issue move <key> "Done"` fails on EJ JSM workflows
+/// that have no transition named "Done" (live-run 26839267723, 2026-06-02).
+fn jsm_self_close(key: &str, h: &E2eHarness) {
+    let out = match h
+        .cmd()
+        .args(["issue", "transitions", key, "--output", "json"])
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("[WARN] jsm_self_close: failed to spawn transitions command for {key}: {e}");
+            return;
+        }
+    };
+
+    if !out.status.success() {
+        eprintln!(
+            "[WARN] jsm_self_close: transitions fetch failed for {key} (exit {:?}) — orphan risk LOW",
+            out.status.code()
+        );
+        return;
+    }
+
+    // `jr issue transitions --output json` emits a bare JSON array of Transition objects.
+    // Each element shape: {id, name, to: {name, statusCategory: {name, key}}}.
+    let transitions: serde_json::Value = match serde_json::from_slice(&out.stdout) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[WARN] jsm_self_close: JSON parse error for {key}: {e} — orphan risk LOW");
+            return;
+        }
+    };
+
+    // Preference order: Resolved > Closed > Done > any other done-category target status.
+    // Match against to.name (the target STATUS name, e.g. "Resolved"), not t.name
+    // (the transition verb, e.g. "Resolve") — jr issue move takes a status name.
+    let preferred = ["Resolved", "Closed", "Done"];
+    let done_name = transitions.as_array().and_then(|arr| {
+        // Try preferred target-status names first for determinism.
+        for pref in &preferred {
+            if arr.iter().any(|t| {
+                t["to"]["statusCategory"]["key"].as_str() == Some("done")
+                    && t["to"]["name"].as_str() == Some(*pref)
+            }) {
+                return Some(pref.to_string());
+            }
+        }
+        // Fall back to the first done-category transition's target status name.
+        arr.iter()
+            .find(|t| t["to"]["statusCategory"]["key"].as_str() == Some("done"))
+            .and_then(|t| t["to"]["name"].as_str().map(str::to_owned))
+    });
+
+    let name = match done_name {
+        Some(n) => n,
+        None => {
+            eprintln!(
+                "[WARN] jsm_self_close: no done-category transition found for {key} — orphan risk LOW"
+            );
+            return;
+        }
+    };
+
+    let close_out = match h.cmd().args(["issue", "move", key, &name]).output() {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!(
+                "[WARN] jsm_self_close: failed to spawn move command for {key} (transition '{name}'): {e}"
+            );
+            return;
+        }
+    };
+
+    if !close_out.status.success() {
+        eprintln!(
+            "[WARN] jsm_self_close: move to {name:?} failed for {key} (exit {:?}) — \
+             orphan risk LOW (Resolution-screen-required transition possible; see spec §6.3)",
+            close_out.status.code()
+        );
+    }
+}
+
 /// Returns the configured "In Progress" status name (default: `"In Progress"`).
 ///
 /// Treats an empty or whitespace-only env value as absent and falls back to
@@ -2061,7 +2157,6 @@ fn test_e2e_jsm_comment_visibility() {
     };
     let h = e2e_harness();
     let run_id = run_label();
-    let status_done = status_done();
 
     // Step 1: list request types to discover the fixture dynamically.
     let list_out = h
@@ -2172,7 +2267,7 @@ fn test_e2e_jsm_comment_visibility() {
     if !pub_out.status.success() {
         // FIX 3a: ANY comment-add failure → best-effort close + skip (not just 403).
         // Close always runs once a key is captured so no code path can orphan the issue.
-        let _ = h.cmd().args(["issue", "move", &key, &status_done]).output();
+        jsm_self_close(&key, &h);
         eprintln!(
             "[SKIP] issue comment (public) failed (non-fatal, exit {:?}) — \
              skipping comment visibility test\nstdout: {}\nstderr: {pub_stderr}",
@@ -2200,7 +2295,7 @@ fn test_e2e_jsm_comment_visibility() {
     let int_stderr = String::from_utf8_lossy(&int_out.stderr).to_string();
     if !int_out.status.success() {
         // FIX 3a: ANY comment-add failure → best-effort close + skip (not just 403).
-        let _ = h.cmd().args(["issue", "move", &key, &status_done]).output();
+        jsm_self_close(&key, &h);
         eprintln!(
             "[SKIP] issue comment --internal failed (non-fatal, exit {:?}) — \
              skipping comment visibility test\nstdout: {}\nstderr: {int_stderr}",
@@ -2221,22 +2316,10 @@ fn test_e2e_jsm_comment_visibility() {
     // cannot orphan because no issue key was obtained — nothing to close.
     //
     // Step 9 (executed here, before assertions): self-close (spec §6.1 best-effort).
-    let close_out = h
-        .cmd()
-        .args(["issue", "move", &key, &status_done])
-        .output()
-        .expect("close command");
-    if !close_out.status.success() {
-        let close_stderr = String::from_utf8_lossy(&close_out.stderr);
-        if close_stderr.contains("403") {
-            eprintln!("[SKIP] issue move (close) returned 403 — skipping comment visibility test");
-            return;
-        }
-        eprintln!(
-            "[WARN] Failed to close JSM issue {key}: {:?} — orphan risk LOW (see spec §6.3)",
-            close_out.status
-        );
-    }
+    // Uses jsm_self_close which discovers a done-category transition dynamically
+    // (statusCategory.key == "done") rather than hardcoding "Done" — the EJ JSM
+    // workflow has no transition named "Done". (S-JSM-E2E-2 fix.)
+    jsm_self_close(&key, &h);
 
     // F-3: bounded retry on read-back + property assertions.
     // Property expansion can lag on a cold free-tier site; retry the full
@@ -2426,7 +2509,6 @@ fn test_e2e_jsm_create_request_roundtrip() {
     };
     let h = e2e_harness();
     let run_id = run_label();
-    let status_done = status_done();
 
     // Step 1: list request types to discover the fixture dynamically (spec §4.2).
     let list_out = h
@@ -2564,18 +2646,11 @@ fn test_e2e_jsm_create_request_roundtrip() {
 
     // Step 6: self-close BEFORE any remaining assertions (F-2b: close-always-runs).
     // Performing the self-close here guarantees that poll exhaustion or a prefix-
-    // assertion panic below cannot leave the EJ issue open.
-    let close_out = h
-        .cmd()
-        .args(["issue", "move", &key, &status_done])
-        .output()
-        .expect("close command");
-    if !close_out.status.success() {
-        eprintln!(
-            "[WARN] Failed to close JSM issue {key}: {:?} — orphan risk LOW (see spec §6.3)",
-            close_out.status
-        );
-    }
+    // assertion panic below cannot leave the EJ issue open. Uses jsm_self_close
+    // which discovers a done-category transition dynamically (statusCategory.key ==
+    // "done") rather than hardcoding "Done" — the EJ JSM workflow has no transition
+    // named "Done". (S-JSM-E2E-2 fix.)
+    jsm_self_close(&key, &h);
 
     // Step 7: assert key prefix matches the JSM project (in-memory, no network).
     let expected_prefix = format!("{jsm_project}-");
