@@ -115,7 +115,11 @@ concurrency: { group: jira-e2e, cancel-in-progress: false }   # serialize on sha
 
 jobs:
   e2e:
-    if: github.event_name != 'pull_request'   # belt: never on PRs
+    # Combined gate: never on PRs AND require JR_E2E_ENABLED repo variable.
+    # JR_E2E_ENABLED MUST be a repository variable (not environment-scoped):
+    # environment variables are not available in jobs.<id>.if at scheduling time.
+    # Forks without this variable set receive empty string → job skips cleanly.
+    if: github.event_name != 'pull_request' && vars.JR_E2E_ENABLED == 'true'
     runs-on: ubuntu-latest
     environment: jira-e2e                      # secrets gated to this env + branch policy
     timeout-minutes: 20
@@ -128,6 +132,29 @@ jobs:
           # calls (those are the OAuth 3LO path, not exercised here).
       - checkout
       - install Rust
+      - name: Preflight — assert required E2E config
+        # Collects ALL missing required values before failing, so an operator fixing
+        # a fresh environment sees every gap at once rather than one re-run at a time.
+        # env: sources each var from its secret/variable (using ${{ secrets.X }} /
+        #      ${{ vars.X }} expressions — shown as bare names here for readability).
+        env: { JR_E2E_BASE_URL: ${{ secrets.JR_E2E_BASE_URL }},
+               JR_E2E_PROJECT: ${{ vars.JR_E2E_PROJECT }},
+               JR_E2E_EMAIL: ${{ secrets.JR_E2E_EMAIL }},
+               JR_E2E_API_TOKEN: ${{ secrets.JR_E2E_API_TOKEN }} }
+        # Canonical implementation: see .github/workflows/e2e.yml and
+        # docs/specs/e2e-fork-safe-ci-enablement.md §2.4 for the normative form.
+        run: |
+          missing=()
+          [ -z "${JR_E2E_BASE_URL:-}" ]  && missing+=("JR_E2E_BASE_URL (secret, jira-e2e environment)")
+          [ -z "${JR_E2E_PROJECT:-}" ]   && missing+=("JR_E2E_PROJECT (variable)")
+          [ -z "${JR_E2E_EMAIL:-}" ]     && missing+=("JR_E2E_EMAIL (secret)")
+          [ -z "${JR_E2E_API_TOKEN:-}" ] && missing+=("JR_E2E_API_TOKEN (secret)")
+          if [ ${#missing[@]} -gt 0 ]; then
+            printf '::error::E2E preflight failed — missing required config:\n'
+            printf '  - %s\n' "${missing[@]}"
+            exit 1
+          fi
+          echo "E2E preflight OK — all required config present."
       - compose JR_AUTH_HEADER from secrets:
           JR_AUTH_HEADER="Basic $(printf '%s:%s' "$EMAIL" "$TOKEN" | base64 | tr -d '\n')"
       - cargo test --test e2e_live -- --include-ignored --test-threads=1
@@ -154,12 +181,22 @@ jobs:
 - GitHub already withholds repo/environment secrets from `pull_request` runs triggered by
   **forks** (only `GITHUB_TOKEN`, downgraded to read-only, is passed). Fork PRs therefore can
   never read the Jira credential.
+- **Primary fork-safety mechanism — `JR_E2E_ENABLED` repository variable:** the `e2e:` job
+  is gated at scheduling time by `vars.JR_E2E_ENABLED == 'true'`. This variable must be set
+  as a **repository-level variable** (not an environment variable scoped to `jira-e2e`).
+  Environment-scoped variables are not available in `jobs.<id>.if` expressions, which are
+  evaluated before the job starts. On any fork that has not explicitly created this repository
+  variable, `vars.JR_E2E_ENABLED` evaluates to an empty string → condition false → job is
+  skipped (not failed). This prevents fork contributors from seeing red CI runs they cannot
+  fix. See `docs/specs/e2e-fork-safe-ci-enablement.md §2.3` for the full architectural
+  rationale. The canonical repo (`Zious11/jira-cli`) sets `JR_E2E_ENABLED=true` as a
+  repository variable at `https://github.com/Zious11/jira-cli/settings/variables/actions`.
 - **Defense-in-depth:** the job is bound to a GitHub **Environment** named `jira-e2e` whose
   **deployment-branch policy** is restricted to `develop` and `main`. Even a same-repo feature
   branch cannot read the environment's secrets. Optionally add **required reviewers** on the
   environment for an approval gate.
 - The workflow is `push`/`schedule`/`workflow_dispatch` only and guarded by
-  `if: github.event_name != 'pull_request'`. **`pull_request_target` is never used.**
+  `if: github.event_name != 'pull_request' && vars.JR_E2E_ENABLED == 'true'`. **`pull_request_target` is never used.**
 
 ## 7. Isolation & cleanup
 
@@ -175,6 +212,10 @@ jobs:
   `api/client.rs`); the suite does not add a competing retry layer and keeps request volume modest.
 
 ## 8. Configuration inventory (GitHub Environment `jira-e2e`)
+
+| Name | Kind | Where Set | Required | Notes |
+|---|---|---|---|---|
+| `JR_E2E_ENABLED` | Repository variable (`vars.*`) | **Repository level** (not environment-scoped) | Yes — canonical repo; forks default OFF | `vars.JR_E2E_ENABLED == 'true'` gates **both** the `e2e:` job (e2e.yml) and the `sweep:` job (e2e-sweeper.yml) at scheduling time. MUST be a repository variable, not an environment variable (environment variables are not available in `jobs.<id>.if:`). Forks with this variable unset receive empty string → both jobs skip cleanly. Create via Settings → Secrets and variables → Actions → Variables → Repository variables (see §10 step 7). See `docs/specs/e2e-fork-safe-ci-enablement.md §2.3`. |
 
 | Name | Kind | Example | Notes |
 |---|---|---|---|
@@ -207,6 +248,17 @@ jobs:
 5. Mint a 365-day API token for the service account.
 6. In the repo: create Environment `jira-e2e`, set deployment-branch policy to `develop`/`main`,
    add the secrets/variables from §8.
+7. **Create the repository variable to enable the E2E workflows:**
+   Navigate to Settings → Secrets and variables → Actions → **Variables** tab →
+   **Repository variables** section → click "New repository variable".
+   Name: `JR_E2E_ENABLED`, Value: `true`.
+   **This is a repository-level variable, NOT an environment variable.** Do not create it
+   inside the `jira-e2e` Environment settings page — environment-scoped variables are not
+   available in `jobs.<id>.if:` at scheduling time (see §6). Without this step, both the
+   `e2e:` and `sweep:` jobs will skip on every trigger (green-but-skipped), and the README
+   badge will reflect a skipped run rather than real test results.
+8. Verify: trigger a `workflow_dispatch` run on `develop`; confirm the `e2e:` job starts
+   (not skipped) and the preflight step passes.
 
 ## 11. Testing strategy
 

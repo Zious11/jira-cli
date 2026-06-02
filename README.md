@@ -1,6 +1,7 @@
 # jr
 
 [![CI](https://github.com/Zious11/jira-cli/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/Zious11/jira-cli/actions/workflows/ci.yml)
+[![E2E](https://github.com/Zious11/jira-cli/actions/workflows/e2e.yml/badge.svg?branch=develop)](https://github.com/Zious11/jira-cli/actions/workflows/e2e.yml)
 [![Release](https://img.shields.io/github/v/release/Zious11/jira-cli?label=release)](https://github.com/Zious11/jira-cli/releases/latest)
 [![Pre-release](https://img.shields.io/github/v/release/Zious11/jira-cli?include_prereleases&label=dev)](https://github.com/Zious11/jira-cli/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)

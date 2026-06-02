@@ -6,6 +6,18 @@ All notable changes to jr will be documented here.
 
 ### Added
 
+- **Fork-safe E2E CI gate:** `e2e.yml` and `e2e-sweeper.yml` are now gated by a repository
+  variable `JR_E2E_ENABLED`. Both workflow jobs skip cleanly on forks and any repo where the
+  variable is not set (empty string `!= 'true'`). A preflight step in `e2e.yml` asserts all
+  required secrets/variables are present before consuming runner minutes building Rust.
+  **Maintainers:** after merging, create a repository variable `JR_E2E_ENABLED=true` at
+  Settings → Secrets and variables → Actions → Variables (repository scope, NOT
+  environment scope) to re-enable nightly E2E on the canonical repo. Without this step both
+  workflows skip on every trigger. See `docs/specs/e2e-fork-safe-ci-enablement.md §5.1`.
+- **README E2E status badge:** `[![E2E](...e2e.yml/badge.svg?branch=develop)]` added as the
+  second badge in the badge row. Shows green for passing or skipped runs (skipped = no
+  `JR_E2E_ENABLED`); shows red when tests fail. Badge is pinned to the canonical repo.
+
 ### Fixed
 
 ### Changed

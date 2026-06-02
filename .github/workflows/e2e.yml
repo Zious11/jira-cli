@@ -18,7 +18,10 @@ jobs:
     # Belt-and-suspenders guard: this workflow has no pull_request trigger, but
     # this if: ensures we never accidentally run against a Jira site from a PR
     # even if the on: block is later modified.
-    if: github.event_name != 'pull_request'
+    # JR_E2E_ENABLED must be a repository-level variable (not environment-scoped):
+    # environment variables are not available in jobs.<id>.if at scheduling time.
+    # Forks without this variable set receive empty string → job skips cleanly.
+    if: github.event_name != 'pull_request' && vars.JR_E2E_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -61,7 +64,27 @@ jobs:
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
 
+      - name: Preflight — assert required E2E config
+        env:
+          JR_E2E_BASE_URL: ${{ secrets.JR_E2E_BASE_URL }}
+          JR_E2E_PROJECT: ${{ vars.JR_E2E_PROJECT }}
+          JR_E2E_EMAIL: ${{ secrets.JR_E2E_EMAIL }}
+          JR_E2E_API_TOKEN: ${{ secrets.JR_E2E_API_TOKEN }}
+        run: |
+          missing=()
+          [ -z "${JR_E2E_BASE_URL:-}" ]  && missing+=("JR_E2E_BASE_URL (secret, jira-e2e environment)")
+          [ -z "${JR_E2E_PROJECT:-}" ]   && missing+=("JR_E2E_PROJECT (variable)")
+          [ -z "${JR_E2E_EMAIL:-}" ]     && missing+=("JR_E2E_EMAIL (secret)")
+          [ -z "${JR_E2E_API_TOKEN:-}" ] && missing+=("JR_E2E_API_TOKEN (secret)")
+          if [ ${#missing[@]} -gt 0 ]; then
+            printf '::error::E2E preflight failed — missing required config:\n'
+            printf '  - %s\n' "${missing[@]}"
+            exit 1
+          fi
+          echo "E2E preflight OK — all required config present."
+
       - name: Run live E2E tests
+        id: run_e2e
         env:
           JR_RUN_E2E: "1"
           # JR_E2E_BASE_URL is read by the test harness (E2eHarness::cmd()), which
@@ -94,8 +117,12 @@ jobs:
 
           cargo test --test e2e_live -- --include-ignored --test-threads=1
 
-      - name: Classify failure (runs only when the test step fails)
-        if: failure()
+      - name: Classify failure (runs only when the test step itself fails)
+        # Gated on the test step's outcome, not blanket failure(), so that a preflight
+        # abort (missing config) does not trigger this step — the binary was never built
+        # and ./target/debug/jr does not exist, which would produce a misleading
+        # "UNKNOWN FAILURE" instead of the clear ::error:: preflight annotation.
+        if: failure() && steps.run_e2e.conclusion == 'failure'
         env:
           JR_BASE_URL: ${{ secrets.JR_E2E_BASE_URL }}
           JR_E2E_PROJECT: ${{ vars.JR_E2E_PROJECT }}

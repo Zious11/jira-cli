@@ -36,7 +36,11 @@ jobs:
   sweep:
     # Belt-and-suspenders guard: no pull_request trigger exists, but this if:
     # ensures we never accidentally sweep from a PR even if on: is later modified.
-    if: github.event_name != 'pull_request'
+    # JR_E2E_ENABLED must be a repository-level variable (not environment-scoped):
+    # environment variables are not available in jobs.<id>.if at scheduling time.
+    # Forks without this variable set receive empty string → job skips cleanly.
+    # Mirrors e2e.yml's gate exactly — both workflows share the same opt-in variable.
+    if: github.event_name != 'pull_request' && vars.JR_E2E_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
