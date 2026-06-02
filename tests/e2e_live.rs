@@ -34,7 +34,7 @@
 //! | `JR_E2E_PROJECT`            | yes      | Scrum project key (e.g. `E2E`)                               |
 //! | `JR_E2E_BOARD_ID`           | no       | Board ID; enables sprint list/current tests                   |
 //! | `JR_E2E_JSM_PROJECT`        | no       | JSM project key; enables queue/requesttype tests              |
-//! | `JR_E2E_EMAIL`              | no       | Service account email; used by user-search test               |
+//! | `JR_E2E_EMAIL`              | no       | Service account email; used by user-search and assign-by-query tests |
 //! | `JR_E2E_STATUS_DONE`        | no       | Status name for "closed"; default `"Done"`                    |
 //! | `JR_E2E_STATUS_IN_PROGRESS` | no       | Status name for "in progress"; default `"In Progress"`        |
 //! | `JR_E2E_ISSUE_TYPE`         | no       | Issue type for test-created issues; default `"Task"` (F-12)   |
@@ -3760,6 +3760,399 @@ fn test_e2e_issue_assign_self() {
         "after self-assignment, fields.assignee.accountId must be a non-null non-empty string; \
          fields.assignee: {:?}",
         view.get("fields").and_then(|f| f.get("assignee"))
+    );
+}
+
+/// E2E: `jr issue assign <key> --to <email>` — assign-by-query (email primary, display-name fallback).
+///
+/// This test covers the assign-BY-QUERY resolution path: the `--to <query>` flag
+/// triggers `resolve_assignee` → `search_assignable_users` → `GET …/assignable/search?query=…`,
+/// which is a distinct code path from the no-arg self-assign that calls `/myself`.
+/// (`--to` is the only way to pass a user query; there is no positional for the assignee.)
+///
+/// LOAD-BEARING INVARIANT: The `--to` value MUST NOT be the literal string `me` —
+/// `resolve_assignee` routes `me` to the /myself fast-path BEFORE the assignable-user
+/// search, which would bypass the query-resolution path under test. `JR_E2E_EMAIL` is
+/// an email address, so this holds in all intended configurations.
+///
+/// Strategy:
+/// 1. Self-assign (no args) to capture `me_account_id` and `me_display_name` as ground truth.
+/// 2. Unassign so the next assign is a real state change.
+/// 3. Assign by email (primary). Failure modes:
+///    - Exit 0 + `changed: true` + accountId == me_account_id (after bounded RYW wait) → PASS.
+///    - Exit 0 + `changed: true` + accountId empty after RYW wait → `panic!` citing
+///      propagation lag (NOT a resolver defect); mirrors the display-name branch.
+///    - Exit 0 + `changed: true` + accountId non-empty but != me_account_id → `panic!`
+///      citing resolver defect (wrong account resolved).
+///    - Exit non-zero + stderr contains "No assignable user matching" OR
+///      "No assignable user with a name matching" → instance privacy policy suppresses email
+///      match (`resolve_assignee` emits two distinct no-match forms); fall back to display-name.
+///    - Exit non-zero + any other stderr → HARD FAIL (unexpected jr error).
+/// 4. Display-name fallback (privacy-locked instances only):
+///    - If `me_display_name` is None (also hidden by privacy) → clean-skip with loud
+///      eprintln! (instance policy condition, not a jr defect).
+///    - Otherwise re-unassign (verified null), then assign by display name (`changed: true`
+///      asserted). After a bounded RYW wait: empty accountId → `panic!` citing propagation
+///      lag (NOT a resolver defect); non-empty → fall through to final assert.
+/// 5. Final assert: effective assignee.accountId == me_account_id.
+///
+/// COVERAGE LIMITATION: In a single-account E2E instance, `me_account_id` is the only
+/// assignable account. This test proves the query→resolve→PUT plumbing round-trips
+/// correctly, but cannot detect a resolver that returns the WRONG user among multiple
+/// candidates (that would require a second seeded account in the instance).
+///
+/// Clean-skip: `JR_E2E_EMAIL` not set or empty (email query is the target of this test;
+/// without it, there is nothing meaningful to exercise — skipping is correct).
+///
+/// Traces to: AC-009, BC-3.1.003, design spec §6.2.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
+fn test_e2e_issue_assign_by_query() {
+    if !e2e_enabled() {
+        return;
+    }
+
+    // Clean-skip when JR_E2E_EMAIL is not set or empty — the email query is the
+    // primary subject of this test; without it there is nothing to exercise.
+    let email = match std::env::var("JR_E2E_EMAIL") {
+        Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
+        _ => {
+            eprintln!(
+                "SKIP: JR_E2E_EMAIL not set — skipping assign-by-query test \
+                 (email is the primary query under test)."
+            );
+            return;
+        }
+    };
+
+    let label = run_label();
+    let proj = project();
+    let itype = issue_type();
+    let h = e2e_harness();
+
+    // --- Seed one issue ---
+    let summary = format!("[e2e {label}] assign-by-query-seed");
+    let create_output = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &proj,
+            "--type",
+            &itype,
+            "--summary",
+            &summary,
+            "--label",
+            &label,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for issue create (assign-by-query seed)");
+
+    assert!(
+        create_output.status.success(),
+        "issue create (assign-by-query seed) failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&create_output.stdout),
+        String::from_utf8_lossy(&create_output.stderr)
+    );
+
+    let create_json: Value = serde_json::from_slice(&create_output.stdout)
+        .expect("issue create output must be valid JSON");
+    let key = create_json
+        .get("key")
+        .and_then(Value::as_str)
+        .expect("issue create JSON must contain a 'key' field")
+        .to_string();
+
+    // Confirm GET-consistency before proceeding.
+    poll_view(&key, &h);
+
+    // --- Ground truth: self-assign (no args) to capture me_account_id ---
+    let self_assign_output = h
+        .cmd()
+        .args(["issue", "assign", &key, "--output", "json"])
+        .output()
+        .expect("failed to spawn jr for issue assign (self, ground-truth step)");
+
+    assert!(
+        self_assign_output.status.success(),
+        "issue assign (self) failed for {key}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&self_assign_output.stdout),
+        String::from_utf8_lossy(&self_assign_output.stderr)
+    );
+
+    let view_after_self = poll_view(&key, &h);
+    let me_account_id = view_after_self
+        .get("fields")
+        .and_then(|f| f.get("assignee"))
+        .and_then(|a| a.get("accountId"))
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .expect("after self-assign, fields.assignee.accountId must be non-empty")
+        .to_string();
+
+    let me_display_name: Option<String> = view_after_self
+        .get("fields")
+        .and_then(|f| f.get("assignee"))
+        .and_then(|a| a.get("displayName"))
+        .and_then(Value::as_str)
+        .map(|s| s.to_string());
+
+    // --- Unassign so the email-based assign is a real state change ---
+    let unassign_output = h
+        .cmd()
+        .args(["issue", "assign", &key, "--unassign", "--output", "json"])
+        .output()
+        .expect("failed to spawn jr for issue assign --unassign");
+
+    assert!(
+        unassign_output.status.success(),
+        "issue assign --unassign failed for {key}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&unassign_output.stdout),
+        String::from_utf8_lossy(&unassign_output.stderr)
+    );
+
+    let view_after_unassign = poll_view(&key, &h);
+    assert!(
+        view_after_unassign
+            .get("fields")
+            .and_then(|f| f.get("assignee"))
+            .map(|a| a.is_null())
+            .unwrap_or(true),
+        "after --unassign, fields.assignee must be null; got: {:?}",
+        view_after_unassign
+            .get("fields")
+            .and_then(|f| f.get("assignee"))
+    );
+
+    // --- Primary path: assign by email query ---
+    let email_assign_output = h
+        .cmd()
+        .args(["issue", "assign", &key, "--to", &email, "--output", "json"])
+        .output()
+        .expect("failed to spawn jr for issue assign (by email)");
+
+    let email_path_ok: bool;
+    let effective_account_id: String;
+
+    // M-2: bounded read-your-writes backoff constants — shared by both the email and
+    // display-name assign result reads. Must be declared outside the if/else so the
+    // display-name fallback branch can reference them.
+    const RYW_MAX: u32 = 5;
+    const RYW_BACKOFF_MS: [u64; 4] = [250, 500, 1_000, 2_000];
+
+    if email_assign_output.status.success() {
+        // M-1: assert the command JSON reports `changed: true` — proves the resolve→PUT
+        // actually ran rather than hitting the idempotent short-circuit (which emits
+        // `changed: false`). We unassigned immediately before, so unchanged is a defect.
+        let email_assign_json: Value = serde_json::from_slice(&email_assign_output.stdout)
+            .expect("assign-by-email stdout must be valid JSON");
+        assert_eq!(
+            email_assign_json.get("changed"),
+            Some(&Value::Bool(true)),
+            "assign-by-email JSON must carry `changed: true` (issue was unassigned before this \
+             call; `changed: false` means the idempotent short-circuit fired, bypassing the \
+             query-resolve→PUT path under test); stdout: {}",
+            String::from_utf8_lossy(&email_assign_output.stdout)
+        );
+
+        // M-2: bounded read-your-writes wait — poll until assignee.accountId is non-empty
+        // (up to 5 attempts with 250 ms → 2 s backoff), then compare. A bare poll_view
+        // can return the stale null from the preceding unassign before the PUT propagates,
+        // which would trigger a false "resolver defect" panic.
+        let mut resulting_id = String::new();
+        for attempt in 1..=RYW_MAX {
+            let v = poll_view(&key, &h);
+            let id = v
+                .get("fields")
+                .and_then(|f| f.get("assignee"))
+                .and_then(|a| a.get("accountId"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            if !id.is_empty() {
+                resulting_id = id;
+                break;
+            }
+            if attempt < RYW_MAX {
+                std::thread::sleep(Duration::from_millis(
+                    RYW_BACKOFF_MS[(attempt - 1) as usize],
+                ));
+            }
+        }
+
+        if resulting_id.is_empty() {
+            // Exit 0 + changed:true but accountId still empty after the full RYW budget —
+            // this is a read-your-writes propagation lag, NOT a resolver defect. Mirror the
+            // display-name branch's terminal check so the two paths are visibly parallel.
+            panic!(
+                "assign-by-email exited 0 with changed:true but assignee.accountId \
+                 never propagated after the bounded read-your-writes wait \
+                 ({RYW_MAX} attempts); this is a read-your-writes propagation lag, \
+                 NOT a resolver defect. email={email:?}, me_account_id={me_account_id:?}"
+            );
+        } else if resulting_id != me_account_id {
+            // Exit 0, accountId propagated, but resolved to the WRONG account — genuine
+            // resolver defect, not propagation lag and not an instance-policy condition.
+            panic!(
+                "assign-by-email exited 0 but resolved to the WRONG account (resolver defect); \
+                 email={email:?}, expected me_account_id={me_account_id:?}, \
+                 got accountId={resulting_id:?}"
+            );
+        } else {
+            // Email path succeeded and resolved to the correct account.
+            email_path_ok = true;
+            effective_account_id = resulting_id;
+        }
+    } else {
+        // Non-zero exit. Discriminate by stderr content:
+        // - "No assignable user matching" (zero search results) OR
+        //   "No assignable user with a name matching" (results present but no substring hit)
+        //   → `resolve_assignee` emits both forms; both indicate instance privacy policy
+        //   suppresses email matching. This is the ONLY case where display-name fallback
+        //   is valid.
+        // - Anything else → unexpected jr error; hard-fail so we don't silently hide bugs.
+        let stderr_str = String::from_utf8_lossy(&email_assign_output.stderr);
+        let is_resolver_no_match = stderr_str.contains("No assignable user matching")
+            || stderr_str.contains("No assignable user with a name matching");
+
+        assert!(
+            is_resolver_no_match,
+            "assign-by-email failed with an unexpected error (neither resolver no-match form); \
+             this is a jr defect, not an instance-configuration condition. \
+             email={email:?}, exit={:?}, stderr={}",
+            email_assign_output.status.code(),
+            stderr_str
+        );
+
+        // Legitimate privacy-policy case: email match suppressed by instance settings.
+        // Fall back to display-name. If displayName is also hidden, clean-skip.
+        eprintln!(
+            "test_e2e_issue_assign_by_query: instance privacy policy suppresses email \
+             matching (resolver no-match); falling back to display-name query. \
+             email={email:?}"
+        );
+
+        email_path_ok = false;
+
+        // O-2: if displayName is also hidden by privacy, we cannot validate on this
+        // instance — clean-skip rather than hard-fail (instance-policy condition, not
+        // a jr defect).
+        let dn = match me_display_name.as_deref().filter(|d| !d.is_empty()) {
+            Some(d) => d,
+            None => {
+                eprintln!(
+                    "test_e2e_issue_assign_by_query: email match disabled by instance policy \
+                     AND displayName hidden; cannot validate assign-by-query on this instance \
+                     — skipping. email={email:?}"
+                );
+                return;
+            }
+        };
+
+        // Re-unassign before display-name fallback and verify null (O-1).
+        let re_unassign_output = h
+            .cmd()
+            .args(["issue", "assign", &key, "--unassign", "--output", "json"])
+            .output()
+            .expect("failed to spawn jr for re-unassign before display-name fallback");
+        assert!(
+            re_unassign_output.status.success(),
+            "re-unassign before display-name fallback failed for {key}:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&re_unassign_output.stdout),
+            String::from_utf8_lossy(&re_unassign_output.stderr)
+        );
+        let view_re_unassigned = poll_view(&key, &h);
+        assert!(
+            view_re_unassigned
+                .get("fields")
+                .and_then(|f| f.get("assignee"))
+                .map(|a| a.is_null())
+                .unwrap_or(true),
+            "after re-unassign before display-name fallback, fields.assignee must be null; \
+             got: {:?}",
+            view_re_unassigned
+                .get("fields")
+                .and_then(|f| f.get("assignee"))
+        );
+
+        eprintln!("test_e2e_issue_assign_by_query: retrying with display-name query {dn:?}");
+
+        let dn_assign_output = h
+            .cmd()
+            .args(["issue", "assign", &key, "--to", dn, "--output", "json"])
+            .output()
+            .expect("failed to spawn jr for issue assign (display-name fallback)");
+
+        assert!(
+            dn_assign_output.status.success(),
+            "assign-by-display-name fallback failed for {key}: \
+             display_name={dn:?}, email={email:?};\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&dn_assign_output.stdout),
+            String::from_utf8_lossy(&dn_assign_output.stderr)
+        );
+
+        // M-1: display-name assign must also report `changed: true`.
+        let dn_assign_json: Value = serde_json::from_slice(&dn_assign_output.stdout)
+            .expect("assign-by-display-name stdout must be valid JSON");
+        assert_eq!(
+            dn_assign_json.get("changed"),
+            Some(&Value::Bool(true)),
+            "assign-by-display-name JSON must carry `changed: true` (issue was re-unassigned \
+             before this call); stdout: {}",
+            String::from_utf8_lossy(&dn_assign_output.stdout)
+        );
+
+        // M-2: bounded read-your-writes wait before reading the resulting accountId.
+        let mut dn_resulting_id = String::new();
+        for attempt in 1..=RYW_MAX {
+            let v = poll_view(&key, &h);
+            let id = v
+                .get("fields")
+                .and_then(|f| f.get("assignee"))
+                .and_then(|a| a.get("accountId"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            if !id.is_empty() {
+                dn_resulting_id = id;
+                break;
+            }
+            if attempt < RYW_MAX {
+                std::thread::sleep(Duration::from_millis(
+                    RYW_BACKOFF_MS[(attempt - 1) as usize],
+                ));
+            }
+        }
+
+        // Mirror the email-path terminal check: distinguish propagation lag from a
+        // resolver defect. The display-name assign exited 0 with changed:true, so if
+        // the accountId is still empty after the full RYW budget it is an
+        // eventual-consistency propagation timeout — NOT a resolver defect. Panic with
+        // the precise cause so the failure is not misattributed at triage.
+        if dn_resulting_id.is_empty() {
+            panic!(
+                "assign-by-display-name exited 0 with changed:true but assignee.accountId \
+                 never propagated after the bounded read-your-writes wait \
+                 ({RYW_MAX} attempts); this is a read-your-writes propagation lag, \
+                 NOT a resolver defect. display_name={dn:?}, email={email:?}, \
+                 me_account_id={me_account_id:?}"
+            );
+        }
+
+        effective_account_id = dn_resulting_id;
+    }
+
+    // COVERAGE LIMITATION: see rustdoc above — single-account instances cannot detect
+    // a resolver that returns the wrong user among multiple candidates.
+    assert_eq!(
+        effective_account_id, me_account_id,
+        "assign-by-query MUST resolve to me_account_id={me_account_id:?}; \
+         email={email:?}, email_path_ok={email_path_ok}, \
+         fallback_display_name={me_display_name:?}, \
+         effective_account_id={effective_account_id:?}"
     );
 }
 

@@ -95,8 +95,8 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     (&["issue", "comments"], &["--output"]),
     // issue move  (positional: key + status-name — no flags beyond --output)
     (&["issue", "move"], &["--output"]),
-    // issue assign  (positional: key — no --me flag; --unassign added in E2E-PG-4)
-    (&["issue", "assign"], &["--output", "--unassign"]),
+    // issue assign  (positional: key; --to <query> for assignee resolution; --unassign added in E2E-PG-4)
+    (&["issue", "assign"], &["--output", "--unassign", "--to"]),
     // issue link  (--type is used in E2E-PG-4 typed-link test)
     (&["issue", "link"], &["--type", "--output"]),
     // issue unlink  (--type is used in E2E-PG-4 typed-link test)
