@@ -1,0 +1,48 @@
+# Affected Files — JSM E2E Coverage Expansion
+# Generated: 2026-06-01
+# Feature: jsm-e2e-expansion
+# src/ delta: ZERO
+# tests/ delta: NON-ZERO
+
+## MODIFIED (code)
+tests/e2e_live.rs
+tests/e2e_cli_surface_guard.rs
+
+## MODIFIED (docs)
+docs/specs/e2e-live-jira-testing.md
+CLAUDE.md
+
+## NOT CHANGED (confirmed)
+src/
+.github/workflows/e2e.yml
+.github/workflows/ci.yml
+.github/workflows/release.yml
+.github/workflows/e2e-sweeper.yml
+Cargo.toml
+Cargo.lock
+deny.toml
+.cargo/mutants.toml
+.factory/specs/ (all files)
+
+## ADMIN OPERATION (not a code change)
+# GitHub Environment variable: jira-e2e / JR_E2E_JSM_PROJECT = EJ
+# Already wired in .github/workflows/e2e.yml line 100; only the value needs to be set.
+
+## SOURCE FILES READ IN THIS ANALYSIS (grounding)
+src/cli/queue.rs
+src/api/jsm/queues.rs
+src/cli/requesttype.rs
+src/api/jsm/request_types.rs
+src/cli/issue/create.rs  (handle_jsm_create, JsmCreateArgs, handle_create)
+src/api/jsm/requests.rs  (JsmRequestBuilder, create_jsm_request)
+src/api/jsm/servicedesks.rs  (require_service_desk)
+src/cli/issue/workflow.rs  (add_comment dispatch)
+src/api/jira/issues.rs  (add_comment, list_comments)
+src/types/jira/issue.rs  (Comment, EntityProperty, properties field)
+src/cli/issue/comments.rs  (handle_comments, JSON output path)
+src/cli/issue/format.rs  (comment_visibility)
+src/types/jsm/request_type.rs  (JsmRequestCreated.issue_key)
+tests/e2e_live.rs  (existing JSM tests ~lines 1615-1710, write-flow teardown pattern)
+tests/e2e_cli_surface_guard.rs  (SURFACE table, existing queue/requesttype rows)
+.github/workflows/e2e.yml  (teardown sweeper JQL, JR_E2E_JSM_PROJECT wiring)
+.factory/planning/brainstorming-report-jsm-e2e.md  (primary input)

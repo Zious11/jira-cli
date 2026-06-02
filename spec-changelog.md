@@ -7,6 +7,52 @@ project: "jr (jira-cli)"
 
 Track all spec version changes. Most recent version first.
 
+## [1.3.2] - 2026-06-01
+
+### Type: PATCH
+
+### Summary
+
+JSM E2E coverage expansion (project EJ) — F2 spec evolution. New per-feature design spec
+added at `docs/specs/jsm-e2e-coverage.md`. Zero BC change; zero NFR change. BC corpus
+remains 585; NFR corpus remains 41. This is a test-scope expansion only — zero `src/`
+change; all JSM commands already exist. F4 delivery touches `tests/e2e_live.rs`,
+`tests/e2e_cli_surface_guard.rs`, `docs/specs/e2e-live-jira-testing.md`, and `CLAUDE.md`.
+
+### New Requirements
+
+None. BC corpus (585) and NFR corpus (41) are explicitly unchanged.
+
+### Modified Requirements
+
+None.
+
+### New Spec Artifacts
+
+| File | Description |
+|------|-------------|
+| `docs/specs/jsm-e2e-coverage.md` | Per-feature design spec for JSM E2E coverage expansion (project EJ). Covers: problem and context (shallow JSM coverage + false-confidence history); 7 test scenarios (queue list/view shape, requesttype list/fields shape + numeric-bypass pin, comment internal/external visibility round-trip, issue create --request-type write round-trip, non-JSM guard); dynamic-discovery design (queue/RT fixtures from list output, no new env var); self-close teardown design + explicit residual-orphan caveat (sweeper does not cover EJ, labels do not propagate); sd.public.comment property round-trip detail; BC-X.8.004 non-JSM guard scenario; clean-skip policy (unset JR_E2E_JSM_PROJECT, empty list, 403); deferred sub-gaps (--on-behalf-of, scope-stripped-token 401); rollout (set JR_E2E_JSM_PROJECT=EJ in jira-e2e env; no workflow code change needed); verification properties VER-JSM-E2E-1..7 (one per scenario); F4 touch-point list. |
+
+### Impact Assessment
+
+| Dimension | Before | After | Delta |
+|-----------|--------|-------|-------|
+| BC corpus (BC-INDEX.md total_bcs) | 585 | 585 | 0 |
+| NFR corpus (nfr-catalog.md total_nfrs) | 41 | 41 | 0 |
+| New per-feature specs | — | `docs/specs/jsm-e2e-coverage.md` | +1 file |
+
+### Feature Scope
+
+Test-scope expansion. Zero `src/` change; zero BC/NFR change. F4 delivery touches:
+`tests/e2e_live.rs` (7 new `#[ignore]`-gated JSM test functions), `tests/e2e_cli_surface_guard.rs`
+(4 new SURFACE rows: `queue view` + `--id`, `requesttype fields`, `issue comment` + `--internal`,
+`issue create` + `--request-type`), `docs/specs/e2e-live-jira-testing.md` (§4/§8 JSM
+updates), `CLAUDE.md` (JSM E2E env var + teardown convention note). Rollout: set
+`JR_E2E_JSM_PROJECT=EJ` as an environment variable in the `jira-e2e` GitHub Environment
+(already wired in e2e.yml; no workflow code change needed).
+
+---
+
 ## [1.3.1] - 2026-06-01
 
 ### Type: PATCH
