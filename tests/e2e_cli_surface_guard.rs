@@ -71,12 +71,19 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     (&["issue", "list"], &["--jql", "--output"]),
     // issue view
     (&["issue", "view"], &["--output"]),
-    // issue create
+    // issue create  (--request-type added in S-JSM-E2E-1 Scenarios 5+6)
     (
         &["issue", "create"],
-        &["--project", "--type", "--summary", "--label", "--output"],
+        &[
+            "--project",
+            "--type",
+            "--summary",
+            "--label",
+            "--output",
+            "--request-type",
+        ],
     ),
-    // issue edit
+    // issue edit  (--priority added: used in e2e_live.rs priority round-trip test)
     (
         &["issue", "edit"],
         &[
@@ -85,12 +92,13 @@ const SURFACE: &[(&[&str], &[&str])] = &[
             "--dry-run",
             "--label",
             "--output",
+            "--priority",
             "--type",
             "--no-input",
         ],
     ),
-    // issue comment
-    (&["issue", "comment"], &["--output"]),
+    // issue comment  (--internal added in S-JSM-E2E-1 Scenario 5)
+    (&["issue", "comment"], &["--output", "--internal"]),
     // issue comments
     (&["issue", "comments"], &["--output"]),
     // issue move  (positional: key + status-name — no flags beyond --output)
@@ -127,8 +135,12 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     (&["project", "fields"], &["--project", "--output"]),
     // queue list
     (&["queue", "list"], &["--project", "--output"]),
+    // queue view  (added in S-JSM-E2E-1 Scenario 3)
+    (&["queue", "view"], &["--project", "--output", "--id"]),
     // requesttype list
     (&["requesttype", "list"], &["--project", "--output"]),
+    // requesttype fields  (added in S-JSM-E2E-1 Scenario 4)
+    (&["requesttype", "fields"], &["--project", "--output"]),
     // worklog add  (positional: key + duration)
     (&["worklog", "add"], &["--output"]),
     // worklog list  (positional: key)
@@ -560,5 +572,94 @@ fn test_parser_paths_are_subset_of_surface_table() {
          `test_e2e_cli_surface_all_paths_and_flags_exist` will then validate \
          them automatically.",
         missing.join("\n")
+    );
+}
+
+/// Verifies that every `--flag` literally referenced in `tests/e2e_live.rs` for a
+/// given subcommand path is present in that path's SURFACE row.
+///
+/// # Why this matters
+///
+/// `test_parser_paths_are_subset_of_surface_table` checks that every SUBCOMMAND PATH
+/// used in e2e_live.rs appears in SURFACE — but it deliberately skips flag comparison
+/// (the parser is path-focused). This test closes the complementary gap: a flag used
+/// in e2e_live.rs but absent from its SURFACE row escapes both earlier guards and
+/// won't be validated by `test_e2e_cli_surface_all_paths_and_flags_exist` either.
+///
+/// # Parser behaviour
+///
+/// The parser aggregates flags per-path across ALL `.args([...])` blocks in e2e_live.rs.
+/// Because e2e_live.rs can invoke the same path multiple times with different flag
+/// combinations (e.g. `issue edit` with `--summary` in one test and `--priority` in
+/// another), the union of all flags for a path is compared against the SURFACE row.
+///
+/// # Suppression policy
+///
+/// Do NOT weaken the SURFACE row to make this test pass. If a flag is genuinely used
+/// in e2e_live.rs for a path, add it to the SURFACE row and verify it exists in the
+/// clap tree via `jr <path> --help` (the existing
+/// `test_e2e_cli_surface_all_paths_and_flags_exist` then validates it automatically).
+///
+/// Implements E2E-PG-1 flag-coverage extension (F5 Pass 3, F-2).
+#[test]
+fn test_e2e_live_flags_are_subset_of_surface_table() {
+    let source = include_str!("e2e_live.rs");
+    let parsed = parse_e2e_invocations(source);
+
+    // Build a (path → flags) lookup from SURFACE for fast comparison.
+    // Convert &[&str] slices to Vec<String> for owned comparison.
+    use std::collections::HashMap;
+    let surface_map: HashMap<Vec<String>, Vec<String>> = SURFACE
+        .iter()
+        .map(|(path, flags)| {
+            (
+                path.iter().map(|s| s.to_string()).collect(),
+                flags.iter().map(|s| s.to_string()).collect(),
+            )
+        })
+        .collect();
+
+    // Aggregate: for each path, collect the union of all flags seen in e2e_live.rs.
+    let mut path_to_used_flags: HashMap<Vec<String>, Vec<String>> = HashMap::new();
+    for (path, flags) in &parsed {
+        let entry = path_to_used_flags.entry(path.clone()).or_default();
+        for flag in flags {
+            if !entry.contains(flag) {
+                entry.push(flag.clone());
+            }
+        }
+    }
+
+    let mut violations: Vec<String> = Vec::new();
+    for (path, used_flags) in &path_to_used_flags {
+        // Only check paths that are in SURFACE — unknown paths are caught by
+        // test_parser_paths_are_subset_of_surface_table.
+        let Some(surface_flags) = surface_map.get(path) else {
+            continue;
+        };
+        for flag in used_flags {
+            if !surface_flags.contains(flag) {
+                violations.push(format!(
+                    "  `jr {} {}` — flag used in tests/e2e_live.rs but absent from \
+                     its SURFACE row (add it to SURFACE so the clap-existence guard \
+                     validates it automatically)",
+                    path.join(" "),
+                    flag
+                ));
+            }
+        }
+    }
+
+    violations.sort();
+    assert!(
+        violations.is_empty(),
+        "SURFACE FLAG GAP: flags used in tests/e2e_live.rs but missing from SURFACE \
+         ({} total):\n\n{}\n\n\
+         Fix: add the listed flag(s) to the correct SURFACE row. The guard \
+         `test_e2e_cli_surface_all_paths_and_flags_exist` will then verify they \
+         exist in the `jr` clap tree. Do NOT remove the flag from e2e_live.rs to \
+         suppress this — the flag is genuinely exercised and must be declared.",
+        violations.len(),
+        violations.join("\n")
     );
 }

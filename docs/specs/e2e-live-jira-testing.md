@@ -99,8 +99,18 @@ GET succeeding immediately.
 7. Best-effort in-test close; **guaranteed** close handled by the workflow teardown (§5).
 
 ### Optional / feature-flagged
-- **JSM** (`queue list`, `requesttype list`): only run if `JR_E2E_JSM_PROJECT` is set; skip
-  cleanly otherwise (free-tier JSM feature gating is uncertain).
+- **JSM** (gated on `JR_E2E_JSM_PROJECT`; value `EJ`; skip cleanly when unset): seven test
+  functions covering queue list/view, requesttype list/fields, comment visibility, create
+  round-trip, and the non-JSM guard. All tests use dynamic fixture discovery from list output
+  (no hardcoded queue/RT id env vars). Scenarios 5 and 6 create JSM requests and self-close in
+  the test body (see §6-teardown note). Added in S-JSM-E2E-1 (spec `docs/specs/jsm-e2e-coverage.md`).
+  - `test_e2e_jsm_queue_list_shape` — queue list shape; per-item `id`+`name` assertions
+  - `test_e2e_jsm_requesttype_list_shape` — requesttype list shape; per-item `id`+`name` assertions
+  - `test_e2e_jsm_queue_view` — exercises by-name and `--id` routing; asserts issue-array shape on both paths (`queue view` returns the queue's issues, not a queue identity object)
+  - `test_e2e_jsm_requesttype_fields` — requesttype fields shape; top-level `"fields"` key; numeric-bypass pin
+  - `test_e2e_jsm_comment_visibility` — create request; add public + `--internal` comment; assert `sd.public.comment` property round-trip; self-close
+  - `test_e2e_jsm_create_request_roundtrip` — `issue create --request-type` (ADR-0014 fork); assert `{"key":"EJ-N"}`; `poll_view`; self-close
+  - `test_e2e_jsm_non_jsm_guard` — `queue list --project <ES>` exits 64; stderr contains `"Jira Service Management project"` (does NOT require `JR_E2E_JSM_PROJECT`)
 - **Sprint mutation** (`sprint add/remove`): only if `JR_E2E_BOARD_ID` is set.
 
 ## 5. CI workflow — `.github/workflows/e2e.yml`
@@ -224,7 +234,7 @@ jobs:
 | `JR_E2E_API_TOKEN` | secret | `<365-day token>` | annual rotation (§9) |
 | `JR_E2E_PROJECT` | variable | `E2E` | Scrum project key |
 | `JR_E2E_BOARD_ID` | variable (optional) | `1` | enables sprint mutation |
-| `JR_E2E_JSM_PROJECT` | variable (optional) | `HELP` | enables JSM read tests |
+| `JR_E2E_JSM_PROJECT` | variable (optional) | `EJ` | enables JSM tests (7 test functions added in S-JSM-E2E-1). Teardown for write tests (Scenarios 5+6) is self-close in the test body — NOT the label-based CI sweeper, because labels do not propagate from `servicedeskapi` to Jira issue labels. Orphan risk is LOW and accepted (spec §6.3). Activate post-merge by setting `JR_E2E_JSM_PROJECT=EJ` as an environment variable in the `jira-e2e` GitHub Environment. |
 | `JR_E2E_STATUS_DONE` | variable (optional) | `Done` | workflow status name for "closed/done"; default `"Done"`. Set if the provisioned Scrum project uses a different status name (e.g. `"Closed"`). Used in write-flow step 6 and teardown. |
 | `JR_E2E_STATUS_IN_PROGRESS` | variable (optional) | `In Progress` | workflow status name for "in progress"; default `"In Progress"`. Set if the provisioned Scrum project uses a different status name. Used in write-flow step 6. |
 

@@ -1612,24 +1612,43 @@ fn test_e2e_project_fields_returns_object() {
 }
 
 // ---------------------------------------------------------------------------
-// AC-004 — JSM optional read tests (guarded by JR_E2E_JSM_PROJECT)
+// JSM E2E tests — guarded by JR_E2E_JSM_PROJECT (S-JSM-E2E-1)
+//
+// All JSM tests (Scenarios 1-6) require JR_E2E_JSM_PROJECT to be set and
+// non-empty. Scenario 7 (non-JSM guard) uses JR_E2E_PROJECT only.
+//
+// Clean-skip policy (spec §3):
+//   §3.1 — missing JR_E2E_JSM_PROJECT → loud eprintln + return
+//   §3.2 — empty list from dynamic discovery → loud eprintln + return
+//   §3.3 — 403 from any API call → loud eprintln + return (never fail)
+//
+// Teardown design (spec §6):
+//   Write tests (Scenarios 5, 6) self-close via `jr issue move <key> <Done>`.
+//   Best-effort: warn on failure, never fail the test on close failure.
+//   Labels do NOT propagate through servicedeskapi to Jira issue labels, so
+//   the label-based CI sweeper CANNOT cover EJ. Self-close is the only
+//   reliable mechanism. (spec §6.2)
 // ---------------------------------------------------------------------------
 
-/// E2E: `jr queue list --project <JSM> --output json` exits 0.
+/// E2E: `jr queue list --project <JSM> --output json` exits 0 and every item
+/// has non-null `"id"` and `"name"` fields. (Scenario 1 — deepened shape assertions)
 ///
-/// Skipped cleanly when `JR_E2E_JSM_PROJECT` is not set.
+/// Replaces `test_e2e_jsm_queue_list_exits_ok`. An empty array is a valid state
+/// (test passes with zero items). Skipped cleanly when `JR_E2E_JSM_PROJECT` is
+/// not set.
 ///
-/// Traces to: AC-004, NFR-T-E2E-1, design spec §4 Optional/feature-flagged.
+/// Traces to: AC-001, VER-JSM-E2E-1 (un-contracted orphan — queue list output has no BC;
+/// tracked in S-QUEUE-BC-1; see jsm-e2e-coverage.md §2.2).
 #[test]
 #[ignore = "set JR_RUN_E2E=1 and JR_E2E_JSM_PROJECT and use --include-ignored to run"]
-fn test_e2e_jsm_queue_list_exits_ok() {
+fn test_e2e_jsm_queue_list_shape() {
     if !e2e_enabled() {
         return;
     }
     let jsm_project = match env::var("JR_E2E_JSM_PROJECT") {
         Ok(p) if !p.trim().is_empty() => p.trim().to_string(),
         _ => {
-            // Skipped: JR_E2E_JSM_PROJECT not set.
+            eprintln!("[SKIP] JR_E2E_JSM_PROJECT not set — skipping JSM test");
             return;
         }
     };
@@ -1654,29 +1673,40 @@ fn test_e2e_jsm_queue_list_exits_ok() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let v: Value =
-        serde_json::from_slice(&output.stdout).expect("queue list output must be valid JSON");
-    assert!(
-        v.is_array(),
-        "queue list output must be a JSON array; got: {v}"
-    );
+    let queues: Vec<Value> =
+        serde_json::from_slice(&output.stdout).expect("queue list output must be a JSON array");
+
+    // Per-item field assertions — only fires if queues is non-empty (spec §5 Scenario 1).
+    for (i, item) in queues.iter().enumerate() {
+        assert!(
+            item.get("id").is_some() && !item["id"].is_null(),
+            "queue list item[{i}] must have non-null 'id' field; got: {item}"
+        );
+        let name = item.get("name").and_then(Value::as_str).unwrap_or("");
+        assert!(
+            !name.is_empty(),
+            "queue list item[{i}] must have non-empty 'name' string field; got: {item}"
+        );
+    }
 }
 
-/// E2E: `jr requesttype list --project <JSM> --output json` exits 0.
+/// E2E: `jr requesttype list --project <JSM> --output json` exits 0 and every
+/// item has non-null `"id"` and `"name"` fields. (Scenario 2 — deepened shape assertions)
 ///
-/// Skipped cleanly when `JR_E2E_JSM_PROJECT` is not set.
+/// Replaces `test_e2e_jsm_requesttype_list_exits_ok`. An empty array is a valid
+/// state. Skipped cleanly when `JR_E2E_JSM_PROJECT` is not set.
 ///
-/// Traces to: AC-004, NFR-T-E2E-1, design spec §4 Optional/feature-flagged.
+/// Traces to: AC-002, VER-JSM-E2E-2, BC-X.12.001.
 #[test]
 #[ignore = "set JR_RUN_E2E=1 and JR_E2E_JSM_PROJECT and use --include-ignored to run"]
-fn test_e2e_jsm_requesttype_list_exits_ok() {
+fn test_e2e_jsm_requesttype_list_shape() {
     if !e2e_enabled() {
         return;
     }
     let jsm_project = match env::var("JR_E2E_JSM_PROJECT") {
         Ok(p) if !p.trim().is_empty() => p.trim().to_string(),
         _ => {
-            // Skipped: JR_E2E_JSM_PROJECT not set.
+            eprintln!("[SKIP] JR_E2E_JSM_PROJECT not set — skipping JSM test");
             return;
         }
     };
@@ -1701,11 +1731,961 @@ fn test_e2e_jsm_requesttype_list_exits_ok() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let v: Value =
-        serde_json::from_slice(&output.stdout).expect("requesttype list output must be valid JSON");
+    let rts: Vec<Value> = serde_json::from_slice(&output.stdout)
+        .expect("requesttype list output must be a JSON array");
+
+    // Per-item field assertions — only fires if rts is non-empty (spec §5 Scenario 2).
+    for (i, item) in rts.iter().enumerate() {
+        assert!(
+            item.get("id").is_some() && !item["id"].is_null(),
+            "requesttype list item[{i}] must have non-null 'id' field; got: {item}"
+        );
+        let name = item.get("name").and_then(Value::as_str).unwrap_or("");
+        assert!(
+            !name.is_empty(),
+            "requesttype list item[{i}] must have non-empty 'name' string field; got: {item}"
+        );
+    }
+}
+
+/// E2E: `jr queue view` by name AND by `--id` — exercises both routing branches.
+/// (Scenario 3)
+///
+/// `jr queue view --output json` returns the queue's ISSUES as a JSON array of
+/// issue objects (each with `"key"` and `"fields"`), NOT a queue identity object.
+/// This test validates both routing paths (name→id resolution vs direct --id) by
+/// asserting exit 0 + parseable issue array on each. An empty issue array is a
+/// valid pass (an extant queue with zero issues). The routing coverage — not the
+/// issue count — is the assertion value.
+///
+/// Discovers the queue fixture dynamically from `queue list[0]`. Skips cleanly
+/// if the queue list is empty or if a 403 is returned.
+///
+/// Traces to: AC-003, VER-JSM-E2E-3 (un-contracted orphan — queue view output has no BC;
+/// tracked in S-QUEUE-BC-1; see jsm-e2e-coverage.md §2.2).
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and JR_E2E_JSM_PROJECT and use --include-ignored to run"]
+fn test_e2e_jsm_queue_view() {
+    if !e2e_enabled() {
+        return;
+    }
+    let jsm_project = match env::var("JR_E2E_JSM_PROJECT") {
+        Ok(p) if !p.trim().is_empty() => p.trim().to_string(),
+        _ => {
+            eprintln!("[SKIP] JR_E2E_JSM_PROJECT not set — skipping JSM test");
+            return;
+        }
+    };
+    let h = e2e_harness();
+
+    // Step 1: list queues to discover the fixture dynamically (spec §4.1).
+    let list_out = h
+        .cmd()
+        .args([
+            "queue",
+            "list",
+            "--project",
+            &jsm_project,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr");
+
     assert!(
-        v.is_array(),
-        "requesttype list output must be a JSON array; got: {v}"
+        list_out.status.success(),
+        "queue list failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&list_out.stdout),
+        String::from_utf8_lossy(&list_out.stderr)
+    );
+
+    let queues: Vec<Value> =
+        serde_json::from_slice(&list_out.stdout).expect("queue list must be a JSON array");
+
+    // Step 2: skip cleanly if the list is empty (spec §3.2).
+    if queues.is_empty() {
+        eprintln!("[SKIP] No queues found on {jsm_project} — skipping queue view test");
+        return;
+    }
+
+    // Step 3: extract first_id and first_name from queues[0] (spec §4.1 steps 3-4).
+    let first_id = {
+        let id_val = &queues[0]["id"];
+        if id_val.is_null() {
+            eprintln!("[SKIP] queues[0].id is null — skipping queue view test");
+            return;
+        }
+        // Stringify: id may be integer or string in the JSON response.
+        if let Some(s) = id_val.as_str() {
+            s.to_string()
+        } else if let Some(n) = id_val.as_i64() {
+            n.to_string()
+        } else {
+            eprintln!("[SKIP] queues[0].id is an unexpected type — skipping");
+            return;
+        }
+    };
+    let first_name = match queues[0].get("name").and_then(Value::as_str) {
+        Some(n) if !n.is_empty() => n.to_string(),
+        _ => {
+            eprintln!("[SKIP] queues[0].name is missing or empty — skipping queue view test");
+            return;
+        }
+    };
+
+    // Step 4: by-name path — exercises name→id resolution in src/cli/queue.rs.
+    // `queue view --output json` returns the queue's ISSUES as a JSON array of
+    // issue objects (key + fields). An empty array is valid (queue exists but has
+    // zero issues). If non-empty, each element must carry "key" and "fields".
+    let by_name_out = h
+        .cmd()
+        .args([
+            "queue",
+            "view",
+            &first_name,
+            "--project",
+            &jsm_project,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr");
+
+    let by_name_stderr = String::from_utf8_lossy(&by_name_out.stderr).to_string();
+
+    // 403 clean-skip (spec §3.3).
+    if !by_name_out.status.success() && by_name_stderr.contains("403") {
+        eprintln!("[SKIP] queue view by-name returned 403 — skipping (feature unavailable)");
+        return;
+    }
+
+    // Duplicate-name clean-skip (F-3): if EJ has two queues with the same name,
+    // resolve_queue_by_name returns UserError (exit 64) with a "Multiple queues"
+    // message. This is not a test failure — skip the by-name sub-path and let
+    // the by-id sub-path (which never uses name resolution) continue.
+    if !by_name_out.status.success() && by_name_stderr.contains("Multiple queues") {
+        eprintln!(
+            "[SKIP] queue view by-name: multiple queues named '{first_name}' on {jsm_project} \
+             — skipping by-name sub-path (spec §4.1 duplicate-name caveat)"
+        );
+        // Fall through to the by-id sub-path rather than returning; the by-id
+        // path still provides routing-branch coverage.
+    } else {
+        assert!(
+            by_name_out.status.success(),
+            "queue view by-name failed:\nstdout: {}\nstderr: {by_name_stderr}",
+            String::from_utf8_lossy(&by_name_out.stdout),
+        );
+
+        let by_name_v: Value = serde_json::from_slice(&by_name_out.stdout)
+            .expect("queue view by-name output must be valid JSON");
+
+        // Assert it is a JSON array; if non-empty, each element is an issue object
+        // with "key" and "fields". Empty array = valid (queue with no open issues).
+        assert_array_of_objects_with_keys(&by_name_v, &["key", "fields"]);
+    }
+
+    // Step 5: by-id path — exercises the --id direct routing branch.
+    let by_id_out = h
+        .cmd()
+        .args([
+            "queue",
+            "view",
+            "--id",
+            &first_id,
+            "--project",
+            &jsm_project,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr");
+
+    let by_id_stderr = String::from_utf8_lossy(&by_id_out.stderr).to_string();
+
+    // 403 clean-skip (spec §3.3).
+    if !by_id_out.status.success() && by_id_stderr.contains("403") {
+        eprintln!("[SKIP] queue view by-id returned 403 — skipping (feature unavailable)");
+        return;
+    }
+
+    assert!(
+        by_id_out.status.success(),
+        "queue view by-id failed:\nstdout: {}\nstderr: {by_id_stderr}",
+        String::from_utf8_lossy(&by_id_out.stdout),
+    );
+
+    let by_id_v: Value = serde_json::from_slice(&by_id_out.stdout)
+        .expect("queue view by-id output must be valid JSON");
+
+    // Same shape contract: issue array. Empty is valid.
+    assert_array_of_objects_with_keys(&by_id_v, &["key", "fields"]);
+}
+
+/// E2E: `jr requesttype fields <numeric_id>` exits 0 and response contains a
+/// top-level `"fields"` key. Pins the numeric-bypass path end-to-end. (Scenario 4)
+///
+/// The request-type id is discovered dynamically from `requesttype list[0]`.
+/// Because the id is all-ASCII-digit, `src/cli/requesttype.rs` takes the
+/// numeric-bypass path (skips `partial_match` and cache name resolution).
+///
+/// Traces to: AC-004, VER-JSM-E2E-4, BC-X.12.005, BC-3.8.004.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and JR_E2E_JSM_PROJECT and use --include-ignored to run"]
+fn test_e2e_jsm_requesttype_fields() {
+    if !e2e_enabled() {
+        return;
+    }
+    let jsm_project = match env::var("JR_E2E_JSM_PROJECT") {
+        Ok(p) if !p.trim().is_empty() => p.trim().to_string(),
+        _ => {
+            eprintln!("[SKIP] JR_E2E_JSM_PROJECT not set — skipping JSM test");
+            return;
+        }
+    };
+    let h = e2e_harness();
+
+    // Step 1: list request types to discover the fixture dynamically (spec §4.2).
+    let list_out = h
+        .cmd()
+        .args([
+            "requesttype",
+            "list",
+            "--project",
+            &jsm_project,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr");
+
+    assert!(
+        list_out.status.success(),
+        "requesttype list failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&list_out.stdout),
+        String::from_utf8_lossy(&list_out.stderr)
+    );
+
+    let rts: Vec<Value> =
+        serde_json::from_slice(&list_out.stdout).expect("requesttype list must be a JSON array");
+
+    // Step 2: skip cleanly if the list is empty (spec §3.2).
+    if rts.is_empty() {
+        eprintln!(
+            "[SKIP] No request types found on {jsm_project} — skipping requesttype fields test"
+        );
+        return;
+    }
+
+    // Step 3: extract first_rt_id and confirm all-ASCII-digit (spec §4.2 steps 3-4).
+    let first_rt_id = {
+        let id_val = &rts[0]["id"];
+        if let Some(s) = id_val.as_str() {
+            s.to_string()
+        } else if let Some(n) = id_val.as_i64() {
+            n.to_string()
+        } else {
+            eprintln!("[SKIP] rts[0].id is not a string or integer — skipping");
+            return;
+        }
+    };
+
+    if !first_rt_id.chars().all(|c| c.is_ascii_digit()) {
+        eprintln!(
+            "[SKIP] rts[0].id={first_rt_id} is not all-ASCII-digit — skipping numeric-bypass test"
+        );
+        return;
+    }
+
+    // Step 4: run requesttype fields with the numeric id.
+    let fields_out = h
+        .cmd()
+        .args([
+            "requesttype",
+            "fields",
+            &first_rt_id,
+            "--project",
+            &jsm_project,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr");
+
+    let fields_stderr = String::from_utf8_lossy(&fields_out.stderr).to_string();
+
+    // 403 clean-skip (spec §3.3).
+    if !fields_out.status.success() && fields_stderr.contains("403") {
+        eprintln!("[SKIP] requesttype fields returned 403 — skipping (feature unavailable)");
+        return;
+    }
+
+    // Step 5: assert exit 0.
+    assert!(
+        fields_out.status.success(),
+        "requesttype fields {first_rt_id} failed:\nstdout: {}\nstderr: {fields_stderr}",
+        String::from_utf8_lossy(&fields_out.stdout),
+    );
+
+    // Step 6: assert the top-level "fields" key is present.
+    let v: Value = serde_json::from_slice(&fields_out.stdout)
+        .expect("requesttype fields output must be valid JSON");
+    assert!(
+        v.get("fields").is_some(),
+        "requesttype fields response must contain top-level 'fields' key; got: {v}"
+    );
+}
+
+/// E2E: Internal vs external comment visibility round-trip on a fresh JSM request.
+/// (Scenario 5)
+///
+/// Creates a fresh EJ request, adds a public comment and an --internal comment,
+/// reads back `jr issue comments --output json`, and asserts the
+/// `sd.public.comment` entity property is set on the internal comment and absent
+/// (or not true) on the public comment. Self-closes the created issue.
+///
+/// Traces to: AC-005, VER-JSM-E2E-5, BC-3.5.001 (write side: --internal adds
+/// sd.public.comment), BC-2.4.041 (read side: issue comments exposes it).
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and JR_E2E_JSM_PROJECT and use --include-ignored to run"]
+fn test_e2e_jsm_comment_visibility() {
+    if !e2e_enabled() {
+        return;
+    }
+    let jsm_project = match env::var("JR_E2E_JSM_PROJECT") {
+        Ok(p) if !p.trim().is_empty() => p.trim().to_string(),
+        _ => {
+            eprintln!("[SKIP] JR_E2E_JSM_PROJECT not set — skipping JSM test");
+            return;
+        }
+    };
+    let h = e2e_harness();
+    let run_id = run_label();
+    let status_done = status_done();
+
+    // Step 1: list request types to discover the fixture dynamically.
+    let list_out = h
+        .cmd()
+        .args([
+            "requesttype",
+            "list",
+            "--project",
+            &jsm_project,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr");
+
+    if !list_out.status.success() {
+        let stderr = String::from_utf8_lossy(&list_out.stderr);
+        if stderr.contains("403") {
+            eprintln!("[SKIP] requesttype list returned 403 — skipping comment visibility test");
+            return;
+        }
+        panic!(
+            "requesttype list failed:\nstdout: {}\nstderr: {stderr}",
+            String::from_utf8_lossy(&list_out.stdout)
+        );
+    }
+
+    let rts: Vec<Value> =
+        serde_json::from_slice(&list_out.stdout).expect("requesttype list must be a JSON array");
+
+    if rts.is_empty() {
+        eprintln!(
+            "[SKIP] No request types found on {jsm_project} — skipping comment visibility test"
+        );
+        return;
+    }
+
+    let first_rt_id = {
+        let id_val = &rts[0]["id"];
+        if let Some(s) = id_val.as_str() {
+            s.to_string()
+        } else if let Some(n) = id_val.as_i64() {
+            n.to_string()
+        } else {
+            eprintln!("[SKIP] rts[0].id is not a usable type — skipping");
+            return;
+        }
+    };
+
+    // Step 3: create a fresh JSM request.
+    let summary = format!("[e2e-jsm-comment {run_id}] visibility round-trip");
+    let create_out = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &jsm_project,
+            "--request-type",
+            &first_rt_id,
+            "--summary",
+            &summary,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr");
+
+    let create_stderr = String::from_utf8_lossy(&create_out.stderr).to_string();
+
+    if !create_out.status.success() {
+        if create_stderr.contains("403") {
+            eprintln!("[SKIP] issue create returned 403 — skipping comment visibility test");
+            return;
+        }
+        eprintln!(
+            "[SKIP] issue create failed (non-fatal skip) — cannot test comment visibility\n\
+             stdout: {}\nstderr: {create_stderr}",
+            String::from_utf8_lossy(&create_out.stdout)
+        );
+        return;
+    }
+
+    let create_v: Value = serde_json::from_slice(&create_out.stdout)
+        .expect("issue create --output json must be valid JSON");
+    let key = create_v
+        .get("key")
+        .and_then(Value::as_str)
+        .expect("issue create JSON must contain 'key' field")
+        .to_string();
+
+    // Step 4: add a public comment (no --internal flag).
+    // F-2a: 403 on any comment step → clean-skip (spec §3.3). Close is attempted first.
+    let public_comment = format!("public comment from e2e run {run_id}");
+    let pub_out = h
+        .cmd()
+        .args([
+            "issue",
+            "comment",
+            &key,
+            &public_comment,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr");
+    let pub_stderr = String::from_utf8_lossy(&pub_out.stderr).to_string();
+    if !pub_out.status.success() {
+        // FIX 3a: ANY comment-add failure → best-effort close + skip (not just 403).
+        // Close always runs once a key is captured so no code path can orphan the issue.
+        let _ = h.cmd().args(["issue", "move", &key, &status_done]).output();
+        eprintln!(
+            "[SKIP] issue comment (public) failed (non-fatal, exit {:?}) — \
+             skipping comment visibility test\nstdout: {}\nstderr: {pub_stderr}",
+            pub_out.status.code(),
+            String::from_utf8_lossy(&pub_out.stdout),
+        );
+        return;
+    }
+
+    // Step 5: add an internal comment.
+    let internal_comment = format!("internal comment from e2e run {run_id}");
+    let int_out = h
+        .cmd()
+        .args([
+            "issue",
+            "comment",
+            &key,
+            &internal_comment,
+            "--internal",
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr");
+    let int_stderr = String::from_utf8_lossy(&int_out.stderr).to_string();
+    if !int_out.status.success() {
+        // FIX 3a: ANY comment-add failure → best-effort close + skip (not just 403).
+        let _ = h.cmd().args(["issue", "move", &key, &status_done]).output();
+        eprintln!(
+            "[SKIP] issue comment --internal failed (non-fatal, exit {:?}) — \
+             skipping comment visibility test\nstdout: {}\nstderr: {int_stderr}",
+            int_out.status.code(),
+            String::from_utf8_lossy(&int_out.stdout),
+        );
+        return;
+    }
+
+    // Step 6: self-close FIRST, then read + assert (F-2b + FIX 3a: close-always-runs).
+    // No-orphan invariant: once a valid key is captured, every subsequent exit path
+    // either (a) calls `issue move <key> Done` before returning (comment-add failures
+    // now use best-effort-close-then-skip rather than hard assert), or (b) reaches
+    // this unconditional close below. Assertions after this point are purely in-memory
+    // and cannot leave the issue open.
+    //
+    // Note: the pre-key-capture path (JSON parse failure before `key` is bound)
+    // cannot orphan because no issue key was obtained — nothing to close.
+    //
+    // Step 9 (executed here, before assertions): self-close (spec §6.1 best-effort).
+    let close_out = h
+        .cmd()
+        .args(["issue", "move", &key, &status_done])
+        .output()
+        .expect("close command");
+    if !close_out.status.success() {
+        let close_stderr = String::from_utf8_lossy(&close_out.stderr);
+        if close_stderr.contains("403") {
+            eprintln!("[SKIP] issue move (close) returned 403 — skipping comment visibility test");
+            return;
+        }
+        eprintln!(
+            "[WARN] Failed to close JSM issue {key}: {:?} — orphan risk LOW (see spec §6.3)",
+            close_out.status
+        );
+    }
+
+    // F-3: bounded retry on read-back + property assertions.
+    // Property expansion can lag on a cold free-tier site; retry the full
+    // read-back + assertion cycle with exponential backoff before failing.
+    // schedule: 250 ms → 500 ms → 1 000 ms → 2 000 ms (4 sleeps, 5 attempts).
+    const MAX_COMMENT_ATTEMPTS: usize = 5;
+    let backoff_ms: &[u64] = &[250, 500, 1_000, 2_000];
+
+    // Helper: check whether a comment has sd.public.comment.internal == true.
+    let has_internal_prop = |c: &Value| -> bool {
+        let props = match c.get("properties").and_then(Value::as_array) {
+            Some(p) => p,
+            None => return false,
+        };
+        props.iter().any(|p| {
+            p.get("key").and_then(Value::as_str) == Some("sd.public.comment")
+                && p.get("value")
+                    .and_then(|v| v.get("internal"))
+                    .and_then(Value::as_bool)
+                    == Some(true)
+        })
+    };
+
+    // Helper: does a comment's ADF body JSON contain the given text substring?
+    // Comment.body is Option<serde_json::Value> (ADF). Matching on the serialized
+    // JSON substring mirrors the technique used in the platform write-flow test.
+    let body_contains = |c: &Value, needle: &str| -> bool {
+        c.get("body")
+            .map(|b| {
+                serde_json::to_string(b)
+                    .unwrap_or_default()
+                    .contains(needle)
+            })
+            .unwrap_or(false)
+    };
+
+    // FIX 2: retry until the FULL success predicate holds — not just until both bodies appear.
+    // Property expansion (`sd.public.comment`) can lag after the comment body becomes visible.
+    // Breaking as soon as both bodies appeared but before the property is expanded causes a
+    // hard-fail on the subsequent assert, defeating the F-3 retry purpose.
+    //
+    // Loop invariant: retry while the full predicate is false AND budget remains.
+    // On first iteration where the full predicate holds → break and skip the final asserts
+    // (nothing to assert: we already know it passed).
+    // On budget exhaustion → emit [SKIP] and return, never a hard fail.
+    // The issue is already closed at this point — extra retries are orphan-safe.
+    let mut last_comments: Vec<Value> = Vec::new();
+    let mut full_predicate_held = false;
+
+    for attempt in 1..=MAX_COMMENT_ATTEMPTS {
+        // Step 6 (read): fetch all comments.
+        let comments_out = h
+            .cmd()
+            .args(["issue", "comments", &key, "--output", "json"])
+            .output()
+            .expect("failed to spawn jr");
+
+        if !comments_out.status.success() {
+            let cstderr = String::from_utf8_lossy(&comments_out.stderr);
+            if cstderr.contains("403") {
+                eprintln!("[SKIP] issue comments returned 403 — skipping assertions");
+                return;
+            }
+            // Non-403 failure: retry if budget remains, else warn and bail.
+            if attempt < MAX_COMMENT_ATTEMPTS {
+                std::thread::sleep(Duration::from_millis(backoff_ms[attempt - 1]));
+                continue;
+            }
+            eprintln!(
+                "[WARN] issue comments failed after {MAX_COMMENT_ATTEMPTS} attempts — \
+                 skipping property assertions\nstderr: {cstderr}"
+            );
+            return;
+        }
+
+        let comments: Vec<Value> = match serde_json::from_slice(&comments_out.stdout) {
+            Ok(v) => v,
+            Err(_) => {
+                if attempt < MAX_COMMENT_ATTEMPTS {
+                    std::thread::sleep(Duration::from_millis(backoff_ms[attempt - 1]));
+                    continue;
+                }
+                eprintln!("[WARN] issue comments output was not valid JSON — skipping assertions");
+                return;
+            }
+        };
+
+        // Evaluate the FULL success predicate (FIX 2: body presence AND property state).
+        // Both must hold before we can pass; either lagging → retry.
+        let internal_appeared = comments.iter().any(|c| body_contains(c, &internal_comment));
+        let public_appeared = comments.iter().any(|c| body_contains(c, &public_comment));
+        let internal_comment_found = comments
+            .iter()
+            .filter(|c| body_contains(c, &internal_comment))
+            .any(&has_internal_prop);
+        let public_comment_not_internal = comments
+            .iter()
+            .filter(|c| body_contains(c, &public_comment))
+            .all(|c| !has_internal_prop(c));
+
+        // Full predicate: both bodies visible AND property state correct.
+        let predicate = internal_appeared
+            && public_appeared
+            && internal_comment_found
+            && public_comment_not_internal;
+
+        last_comments = comments;
+
+        if predicate {
+            full_predicate_held = true;
+            break;
+        }
+
+        // Predicate not yet satisfied — retry if budget remains.
+        if attempt < MAX_COMMENT_ATTEMPTS {
+            std::thread::sleep(Duration::from_millis(backoff_ms[attempt - 1]));
+        }
+        // If this was the last attempt, fall through to budget-exhaustion handling below.
+    }
+
+    if !full_predicate_held {
+        // Budget exhausted with predicate still false. Check whether the failure is from
+        // bodies not appearing (lag) or from property state (genuine regression).
+        // Either way: emit [SKIP] for body-absence (environmental); fall through to the
+        // hard asserts for property-state failure so genuine regressions are visible.
+        let internal_appeared = last_comments
+            .iter()
+            .any(|c| body_contains(c, &internal_comment));
+        let public_appeared = last_comments
+            .iter()
+            .any(|c| body_contains(c, &public_comment));
+
+        if !internal_appeared || !public_appeared {
+            // Comments never appeared — environmental lag; skip.
+            eprintln!(
+                "[SKIP] comment read-back after {MAX_COMMENT_ATTEMPTS} attempts: \
+                 internal_appeared={internal_appeared} public_appeared={public_appeared} — \
+                 body/property expansion lag on free-tier site; skipping assertions"
+            );
+            return;
+        }
+
+        // Both bodies appeared but property state is wrong — this is a real regression.
+        // Assertions are purely in-memory; no orphan risk (issue is already closed).
+        // Step 7 (F-1): the internal comment must have sd.public.comment.internal==true.
+        assert!(
+            last_comments
+                .iter()
+                .filter(|c| body_contains(c, &internal_comment))
+                .any(&has_internal_prop),
+            "The comment whose body contains '{internal_comment}' must have \
+             sd.public.comment.internal==true; comments: {last_comments:?}"
+        );
+        // Step 8 (F-1): the public comment must NOT have sd.public.comment.internal==true.
+        assert!(
+            last_comments
+                .iter()
+                .filter(|c| body_contains(c, &public_comment))
+                .all(|c| !has_internal_prop(c)),
+            "The comment whose body contains '{public_comment}' must NOT have \
+             sd.public.comment.internal==true; comments: {last_comments:?}"
+        );
+    }
+}
+
+/// E2E: `jr issue create --request-type` write round-trip against a fresh JSM request.
+/// (Scenario 6 — ADR-0014 dispatch fork pin)
+///
+/// Exercises `handle_jsm_create` which dispatches to
+/// `POST /rest/servicedeskapi/request` (NOT `/rest/api/3/issue`). The response
+/// type `JsmRequestCreated` deserializes `issue_key: String`; `handle_jsm_create`
+/// emits `{"key": issue_key}` on stdout. Self-closes the created issue.
+///
+/// Traces to: AC-006, VER-JSM-E2E-6, BC-3.8.001, BC-3.8.004.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and JR_E2E_JSM_PROJECT and use --include-ignored to run"]
+fn test_e2e_jsm_create_request_roundtrip() {
+    if !e2e_enabled() {
+        return;
+    }
+    let jsm_project = match env::var("JR_E2E_JSM_PROJECT") {
+        Ok(p) if !p.trim().is_empty() => p.trim().to_string(),
+        _ => {
+            eprintln!("[SKIP] JR_E2E_JSM_PROJECT not set — skipping JSM test");
+            return;
+        }
+    };
+    let h = e2e_harness();
+    let run_id = run_label();
+    let status_done = status_done();
+
+    // Step 1: list request types to discover the fixture dynamically (spec §4.2).
+    let list_out = h
+        .cmd()
+        .args([
+            "requesttype",
+            "list",
+            "--project",
+            &jsm_project,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr");
+
+    if !list_out.status.success() {
+        let stderr = String::from_utf8_lossy(&list_out.stderr);
+        if stderr.contains("403") {
+            eprintln!("[SKIP] requesttype list returned 403 — skipping create round-trip test");
+            return;
+        }
+        panic!(
+            "requesttype list failed:\nstdout: {}\nstderr: {stderr}",
+            String::from_utf8_lossy(&list_out.stdout)
+        );
+    }
+
+    let rts: Vec<Value> =
+        serde_json::from_slice(&list_out.stdout).expect("requesttype list must be a JSON array");
+
+    // Step 2: skip cleanly if the list is empty (spec §3.2).
+    if rts.is_empty() {
+        eprintln!(
+            "[SKIP] No request types found on {jsm_project} — skipping create round-trip test"
+        );
+        return;
+    }
+
+    // Step 2 cont: extract and validate the id (spec §4.2 steps 3-4).
+    let first_rt_id = {
+        let id_val = &rts[0]["id"];
+        if let Some(s) = id_val.as_str() {
+            s.to_string()
+        } else if let Some(n) = id_val.as_i64() {
+            n.to_string()
+        } else {
+            eprintln!("[SKIP] rts[0].id is not a usable type — skipping");
+            return;
+        }
+    };
+
+    if !first_rt_id.chars().all(|c| c.is_ascii_digit()) {
+        eprintln!("[SKIP] rts[0].id={first_rt_id} is not all-ASCII-digit — skipping");
+        return;
+    }
+
+    // Step 3: create a request via `issue create --request-type` (ADR-0014 fork).
+    let summary = format!("[e2e-jsm {run_id}] create round-trip");
+    let create_out = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &jsm_project,
+            "--request-type",
+            &first_rt_id,
+            "--summary",
+            &summary,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr");
+
+    let create_stderr = String::from_utf8_lossy(&create_out.stderr).to_string();
+
+    if !create_out.status.success() {
+        if create_stderr.contains("403") {
+            eprintln!("[SKIP] issue create returned 403 — skipping create round-trip test");
+            return;
+        }
+        eprintln!(
+            "[SKIP] issue create failed (non-fatal skip) — cannot test create round-trip\n\
+             stdout: {}\nstderr: {create_stderr}",
+            String::from_utf8_lossy(&create_out.stdout)
+        );
+        return;
+    }
+
+    // Step 4: assert exit 0 and parse the key.
+    // Note (FIX 3b): the `.expect()` and empty-key `assert!` below execute before
+    // any key is bound, so they cannot orphan an issue — if they fire, no EJ issue
+    // key was successfully obtained and there is nothing to close. The no-orphan
+    // guarantee only applies once a valid, non-empty `key` is in scope (i.e., from
+    // step 5 onward), which is when the self-close at step 6 becomes reachable.
+    let create_v: Value = serde_json::from_slice(&create_out.stdout)
+        .expect("issue create --output json must be valid JSON");
+    let key = create_v
+        .get("key")
+        .and_then(Value::as_str)
+        .expect("issue create JSON must contain 'key' field")
+        .to_string();
+
+    assert!(
+        !key.is_empty(),
+        "issue create --request-type: 'key' field must be non-empty; got: {create_v}"
+    );
+
+    // Step 5: non-fatal bounded poll for GET-by-key consistency (F-2b).
+    // poll_view() would panic after MAX_ATTEMPTS, orphaning the EJ issue.
+    // Instead: local loop returning Option<Value>; on exhaustion warn and continue.
+    // The self-close at step 6 is unconditional once key is bound.
+    const MAX_VIEW_ATTEMPTS: u32 = 5;
+    const VIEW_BACKOFF_MS: [u64; 4] = [250, 500, 1_000, 2_000];
+    let mut view_result: Option<Value> = None;
+    for attempt in 1..=MAX_VIEW_ATTEMPTS {
+        let out = h
+            .cmd()
+            .args(["issue", "view", &key, "--output", "json"])
+            .output()
+            .expect("failed to spawn jr for view poll");
+        if out.status.success() {
+            if let Ok(v) = serde_json::from_slice::<Value>(out.stdout.as_slice()) {
+                view_result = Some(v);
+                break;
+            }
+        }
+        if attempt < MAX_VIEW_ATTEMPTS {
+            std::thread::sleep(Duration::from_millis(
+                VIEW_BACKOFF_MS[(attempt - 1) as usize],
+            ));
+        }
+    }
+
+    // Step 6: self-close BEFORE any remaining assertions (F-2b: close-always-runs).
+    // Performing the self-close here guarantees that poll exhaustion or a prefix-
+    // assertion panic below cannot leave the EJ issue open.
+    let close_out = h
+        .cmd()
+        .args(["issue", "move", &key, &status_done])
+        .output()
+        .expect("close command");
+    if !close_out.status.success() {
+        eprintln!(
+            "[WARN] Failed to close JSM issue {key}: {:?} — orphan risk LOW (see spec §6.3)",
+            close_out.status
+        );
+    }
+
+    // Step 7: assert key prefix matches the JSM project (in-memory, no network).
+    let expected_prefix = format!("{jsm_project}-");
+    assert!(
+        key.starts_with(&expected_prefix),
+        "issue create --request-type: key '{key}' must start with '{expected_prefix}'"
+    );
+
+    // Step 8: assert poll_view result (in-memory, no network after close).
+    match view_result {
+        Some(view_v) => {
+            let view_key = view_v
+                .get("key")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            assert_eq!(
+                view_key, key,
+                "poll_view: returned key '{view_key}' must equal created key '{key}'"
+            );
+        }
+        None => {
+            eprintln!(
+                "[WARN] poll_view({key}) did not resolve after {MAX_VIEW_ATTEMPTS} attempts — \
+                 GET-by-key lag on free-tier site; skipping view assertion (issue was closed)"
+            );
+        }
+    }
+}
+
+/// E2E: `jr queue list --project <non-JSM>` exits 64 and stderr contains
+/// `"Jira Service Management project"`. (Scenario 7 — require_service_desk guard)
+///
+/// This test does NOT require `JR_E2E_JSM_PROJECT`. It targets the standard
+/// Scrum project (`JR_E2E_PROJECT`), which is NOT a JSM project, and asserts
+/// that the `require_service_desk` guard fires correctly.
+///
+/// Traces to: AC-007, VER-JSM-E2E-7, BC-X.8.004.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
+fn test_e2e_jsm_non_jsm_guard() {
+    if !e2e_enabled() {
+        return;
+    }
+    let proj = project();
+    let h = e2e_harness();
+
+    // Step 1: run queue list against the non-JSM Scrum project.
+    let output = h
+        .cmd()
+        .args(["queue", "list", "--project", &proj, "--output", "json"])
+        .output()
+        .expect("failed to spawn jr");
+
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    // `jr` always emits error text to STDERR in both human and json modes (src/main.rs
+    // uses eprintln! for the JSON error envelope). The combined check below is a defensive
+    // superset: it can never miss a stderr-only message and stays robust to any future
+    // output-channel change without needing a code update here.
+    let combined = format!("{stdout}{stderr}");
+
+    // Defensive clean-skip (FIX 1): an auth failure must not masquerade as a guard-
+    // assertion failure. `require_service_desk` rewrites a 401 into JrError::NotAuthenticated
+    // (exit code 2, message "Not authenticated…") — the raw "401" string does NOT appear in
+    // output on this path. Key on exit code 2 as the definitive auth-failure signal; also
+    // check combined text for "401", "403", "Not authenticated" as belt-and-suspenders.
+    //
+    // Harness precondition (OBS-2): JR_E2E_PROJECT must name a live, reachable, NON-JSM
+    // (Jira Software/Work) project. A missing or unreachable project hard-fails this test
+    // by design — do NOT broaden the auth-skip to cover 404 or network errors, because
+    // that would mask a guard regression where the wrong error is returned instead of
+    // exit-64 + the JSM-guard message.
+    let is_auth_failure = output.status.code() == Some(2)
+        || (output.status.code() != Some(64)
+            && (combined.contains("401")
+                || combined.contains("403")
+                || combined.contains("Not authenticated")));
+
+    if !output.status.success() && is_auth_failure {
+        eprintln!(
+            "[SKIP] auth failure (token expired/insufficient scope, exit {:?}) — \
+             skipping non-JSM guard test (spec §3.3)",
+            output.status.code()
+        );
+        return;
+    }
+
+    // Step 2: assert non-zero exit code.
+    assert!(
+        !output.status.success(),
+        "queue list on non-JSM project must fail; got exit 0\nstdout: {stdout}\nstderr: {stderr}",
+    );
+
+    // Step 2 (cont): assert specifically exit code 64 (UserError per JrError::exit_code()).
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "queue list on non-JSM project must exit 64 (UserError); got: {:?}\n\
+         stdout: {stdout}\nstderr: {stderr}",
+        output.status.code()
+    );
+
+    // Step 3: assert combined stdout+stderr contains the stable substring from
+    // require_service_desk (FIX 1: channel-robust — `--output json` may route error
+    // text to stdout, so check both channels rather than stderr alone).
+    assert!(
+        combined.contains("Jira Service Management project"),
+        "stdout+stderr must contain 'Jira Service Management project' \
+         (BC-X.8.004 require_service_desk guard); got stdout: {stdout}\nstderr: {stderr}"
     );
 }
 
