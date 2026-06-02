@@ -3498,3 +3498,56 @@ aarch64-unknown-linux-gnu.tar.gz + .sha256, x86_64-unknown-linux-gnu.tar.gz + .s
 | Step | Agent | Status | Output |
 |------|-------|--------|--------|
 | E2E-enh F6 PASS + F7 CONVERGED 2026-05-31 (READY FOR MERGE) | orchestrator + formal-verifier + state-manager | complete | F6: mutation N/A (zero src/, empty mutant set per policy), Kani/fuzz N/A, security scan PASS, test-helpers unit-covered. F7: 5-dim convergence PASS (spec 3-clean, test ACs+no-vacuous, impl 3-clean 0 HIGH, verification N/A-justified+security PASS, holdout N/A product-behavior-unchanged). Regression 1521/0/58 clean (interim '8 failed' was a force-removed-worktree artifact, re-verified clean). Integration @ f19acd9. AWAITING HUMAN MERGE GATE for integration→develop PR. |
+
+---
+
+## Burst N+16 (2026-06-02) — assign-by-query E2E LIVE-GREEN (E2E-PG-4 sub-gap, DEC-061)
+
+**Agents dispatched:** test-writer, adversary (5 passes), state-manager
+**Branch:** test/e2e-assign-by-email off develop @ ec8f6be
+**Worktree:** .worktrees/e2e-assign-by-email (removed post-merge)
+**PR:** #458 (squash-merged → develop @ d45ec88)
+**Live e2e run:** 26790203429 = 67 passed / 0 failed (was 66/0; test added)
+**Files touched:** tests/e2e_live.rs (new test), tests/e2e_cli_surface_guard.rs (--to on assign row)
+**Versions bumped:** none (test-only, zero src/)
+
+### Summary
+
+Closed the E2E-PG-4 "assign to a specific user" sub-gap by delivering `test_e2e_issue_assign_by_query`
+to `tests/e2e_live.rs`. The test exercises `jr issue assign <KEY> --to <query>` (assignable-user-search
+resolution path), distinct from the existing no-arg self-assign test. Email-primary with display-name
+fallback. Both branches assert `changed: true` + bounded read-your-writes retry + a three-arm terminal
+decision (propagation-lag panic / resolver-defect panic / pass). Clean-skips when `JR_E2E_EMAIL` unset
+or displayName hidden.
+
+VSDD cycle: research-first (Perplexity-validated that Jira assignable/search query matches `emailAddress`
+server-side even under GDPR) → test-writer → adversarial convergence at 3 consecutive CLEAN fresh-context
+passes (5 total passes: passes 1/2 FINDINGS_REMAIN, passes 3/4/5 CLEAN).
+
+**Critical bug caught by adversarial convergence (C-1):** Passes 1-3 rubber-stamped a test that
+originally passed the user query as a BARE POSITIONAL. But `jr issue assign` only takes the issue key
+as a positional; the user to assign requires `--to <query>`. A bare-positional call would have
+hard-failed every live run with a clap parse error. Passes 4/5 (fresh context) caught it. The offline
+surface guard did not catch it because it does not validate positional arity per subcommand.
+
+**Additional fix:** email-vs-display-name RYW terminal-attribution asymmetry — on both email and
+display-name resolution branches, propagation-lag was originally mislabeled as resolver-defect.
+Fixed to emit the correct panic arm.
+
+Pre-PR checks: fmt/clippy -D warnings/test --no-run/surface guard 9/9 all green. PR CI: 6/6 green.
+LIVE-GREEN: develop-push e2e.yml run 26790203429 = 67/0 (new test `test_e2e_issue_assign_by_query ... ok`).
+Validated against single-user instance (own account) — no second user required.
+
+### Details
+
+| Agent | Task | Output |
+|-------|------|--------|
+| test-writer | `test_e2e_issue_assign_by_query` + surface guard `--to` registration | tests/e2e_live.rs + tests/e2e_cli_surface_guard.rs |
+| adversary | 5 passes: P1-P2 FINDINGS_REMAIN, P3-P5 CLEAN×3 | C-1 (bare-positional hard-fail) + attribution asymmetry fixed |
+| state-manager | STATE.md update + DEC-061 + cycle files | .factory/STATE.md, burst-log, convergence-trajectory, lessons |
+
+### Archived Current Phase Step (from STATE.md, superseded by assign-by-query row)
+
+| Step | Agent | Status | Output |
+|------|-------|--------|--------|
+| E2E-enh SHIPPED to develop + LIVE-GREEN 2026-05-31 (PR #440+#441+#442 @ fef44bd; live e2e 57/0 run 26719160283) | orchestrator (gh/git-verified) | complete | Full VSDD F1-F7 + 2 live-fix rounds complete. Feature #440 (d1fdca7); live-fix #441 (46be96e) fixed no_secret+team-list (54/3→56/1); live-fix #442 (fef44bd) fixed bad-auth portability (56/1→57/0). develop @ fef44bd. Live e2e run 26719160283 SUCCESS: 57 passed/0 failed. e2e-sweeper.yml live. E2E-ENH CYCLE CLOSED. |

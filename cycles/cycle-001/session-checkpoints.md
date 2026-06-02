@@ -17,6 +17,19 @@ Superseded checkpoints are archived here when STATE.md is updated with a newer o
 
 ---
 
+## Checkpoint archived 2026-06-02 (develop @ ec8f6be; dev release v0.5.0-dev.13 SHIPPED; DEC-060)
+
+_Was the active checkpoint after dev.13 release (PR #457 @ ec8f6be). Superseded when assign-by-query E2E live-green updated STATE.md to d45ec88._
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-06-01 |
+| **Position** | **Dev release v0.5.0-dev.13 SHIPPED.** Branch chore/release-v0.5.0-dev.13 → PR #457 → squash-merge develop @ ec8f6be; tag v0.5.0-dev.13; run 26785757910 SUCCESS; prerelease published 2026-06-01T22:29:16Z (8 assets). No active worktrees. |
+| **Convergence counter** | BC corpus: 585 BCs. NFR corpus: 41 NFRs. Story corpus: 59 stories. develop HEAD: ec8f6be. jira-e2e env: JR_E2E_ISSUE_TYPE_ALT=Bug. DRIFT-331-PAGINATION tracked (deferred). |
+| **Resume prompt** | `Read .factory/STATE.md. develop HEAD = ec8f6be (PR #457, dev release v0.5.0-dev.13 squash-merge; published 2026-06-01T22:29:16Z, 8 assets; DEC-060). #331 CLOSED + LIVE-GREEN (run 26779732719 66/0). No active worktrees. factory-artifacts HEAD = git -C .factory log -1 --format='%h'. jira-e2e env: JR_E2E_ISSUE_TYPE_ALT=Bug. 59 stories / 41 NFRs / 585 BCs. Do NOT close #429 (human decision, DEC-029). OQ-5 open. DRIFT-331-PAGINATION: log-only (deferred 2026-06-01). E2E-PG-4 open sub-gaps: assign-specific-user, remote-link round-back.` |
+
+---
+
 ## Checkpoint archived 2026-06-01 (develop @ f418bf5; #331 issueType LIVE-GREEN; createmeta schema fix #454+#455; run 26779732719 66/0; DRIFT-E2E-ALT RESOLVED)
 
 _Was the active checkpoint after #331 CYCLE CLOSED (PR #453 @ 6494e27). Superseded when live-validation cycle-close updated SESSION-HANDOFF to f418bf5._

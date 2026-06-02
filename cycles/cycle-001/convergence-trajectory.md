@@ -631,3 +631,32 @@ Decay pattern: bug-class findings → readability → doc-nit. Matched DEC-026 i
 **Root-cause pattern:** First-live-run failures were all about runtime environment assumptions (board type, transition name strings) that hermetic wiremock tests cannot catch. This validates running the full live suite after provisioning rather than assuming hermetic green = live green.
 
 **PR #434:** Squash-merged to develop @ 2ca9fc1 (2026-05-29). Branch fix/e2e-first-run deleted post-merge.
+
+---
+
+## E2E-PG-4 assign-by-query — adversarial convergence (test-only, 2026-06-02)
+
+**Issue:** E2E-PG-4 sub-gap — assign to a specific user via `jr issue assign <KEY> --to <query>`
+**Cycle:** test/e2e-assign-by-email → PR #458 → develop @ d45ec88
+**F5 Adversarial passes:** 5 total. Convergence at passes 3/4/5 (3 consecutive CLEAN).
+**Live e2e:** run 26790203429 = 67/0 GREEN
+
+### F5 Finding Progression
+
+| Pass | Date | CRIT | HIGH | MED | LOW | Counter | Verdict |
+|------|------|------|------|-----|-----|---------|---------|
+| 1 | 2026-06-02 | 1 | 0 | 0 | 0 | 0/3 | FINDINGS_REMAIN |
+| 2 | 2026-06-02 | 0 | 0 | 1 | 0 | 0/3 | FINDINGS_REMAIN |
+| 3 | 2026-06-02 | 0 | 0 | 0 | 0 | 1/3 | CLEAN-PASS |
+| 4 | 2026-06-02 | 0 | 0 | 0 | 0 | 2/3 | CLEAN-PASS |
+| 5 | 2026-06-02 | 0 | 0 | 0 | 0 | 3/3 | FULL CONVERGENCE |
+
+Trajectory shorthand: `1C→1M→CLEAN→CLEAN→CLEAN`
+
+**Pass 1 CRITICAL finding (C-1 — load-bearing catch):** Test originally called `jr issue assign <KEY> <query>` with the user query as a BARE POSITIONAL. The `jr issue assign` handler takes only the issue key positionally; `--to <query>` is required for user resolution. A bare-positional call would have produced a clap parse error on every live run, never reaching the actual API. Passes 1-3 under different adversarial prompts rubber-stamped this defect. Passes 4/5 with fresh context caught it. The offline CLI surface guard did not detect it because it validates flag existence but not positional arity per subcommand (PG-458-1).
+
+**Pass 2 MEDIUM finding:** Email-vs-display-name RYW terminal-attribution asymmetry — on both resolution branches (email-primary and display-name fallback), a propagation-lag timeout was emitting a "resolver-defect" panic message rather than the correct "propagation-lag" panic message. Fixed in the same commit as C-1.
+
+**Key meta-lesson (L-458-1):** This is the first documented case where the SAME defect (C-1 bare-positional) survived 3 consecutive adversarial passes from different fresh contexts before being caught in passes 4-5. The surface guard's lack of positional-arity checking is the structural gap that allowed C-1 to reach the adversarial loop at all. Multiple fresh-context passes remain load-bearing even for test-only features with no production surface to review.
+
+**Note:** Research-first (Perplexity-validated): Jira `GET /rest/api/3/user/assignable/search?query=<email>` matches `emailAddress` server-side even under GDPR (accountId is returned; email is the search key, not returned). Own-account validation: the test assigned to `JR_E2E_EMAIL` (own account) — no second Jira user required in a single-user instance.

@@ -2831,3 +2831,70 @@ This lesson now appears as Key Lesson (a) in the Session Resume Checkpoint.
 _Discovered: #331 first live e2e run (run 26777755130, develop @ 6494e27), 2026-06-01._
 _Reference: DEC-058, research `.factory/research/issue-331-createmeta-response-schema.md`._
 _Fix-forward: PR #454 (e2e wiring @ 1ee7040) + PR #455 (schema fix @ f418bf5) → live run 26779732719 (66/0)._
+
+---
+
+## L-458-1 [codified] Multiple fresh-context adversarial passes are load-bearing even for test-only features — C-1 bare-positional survived 3 passes before passes 4/5 caught it
+
+**Date:** 2026-06-02
+**Cycle:** E2E-PG-4 assign-by-query — PR #458 → develop @ d45ec88, live 67/0 (run 26790203429)
+**Tag:** [codified] [process-gap]
+
+### What happened
+
+`test_e2e_issue_assign_by_query` was written with the user query passed as a BARE POSITIONAL argument:
+`jr issue assign <KEY> <query>`. The `jr issue assign` handler's clap definition takes only the issue key
+positionally; user resolution requires `--to <query>`. A bare-positional invocation produces a clap parse
+error before any API call — the test could never have passed live.
+
+Adversarial passes 1, 2, and 3 (from different fresh contexts) all rubber-stamped this test without
+catching the positional-vs-flag mismatch. Passes 4 and 5 (also fresh contexts) caught it as CRITICAL.
+
+The offline CLI surface guard (`tests/e2e_cli_surface_guard.rs`) did not catch it either, because the
+guard validates that referenced flags exist in `--help` output but does NOT validate positional arity
+per subcommand — it has no concept of "this subcommand accepts exactly one positional argument."
+
+### Why passes 1-3 missed it
+
+Each adversarial pass reviews the test as source code. The bare-positional form `jr issue assign FOO-1
+zious@example.com` is syntactically plausible — it reads like a command that assigns issue FOO-1 to the
+user with email `zious@example.com`. Without knowing the exact clap schema for `jr issue assign`, the
+reviewer cannot catch that the second positional is rejected. Three passes in a row made the same
+inference from the same ambiguous surface.
+
+Passes 4 and 5 explicitly cross-referenced the clap argument definition in `src/cli/issue/workflow.rs`,
+confirmed `assign` accepts exactly one positional (the key), and flagged the bare email positional as
+a clap-rejected argument.
+
+### Lesson
+
+**Fresh-context adversarial convergence is load-bearing even for test-only features with no production
+surface.** The defect was not caught by:
+- 3 adversarial passes
+- The offline CLI surface guard
+- Pre-PR fmt/clippy/test-no-run checks (cargo test --no-run does not execute gated tests)
+
+It WAS caught only by passes 4/5 explicitly checking the clap schema.
+
+**Rule:** Do not declare convergence at 3 consecutive CLEAN from a single adversarial prompt variant.
+Rotate prompt framing across passes. For test-only features that exercise CLI surface, at least one
+pass MUST explicitly look up the clap argument definition in `src/cli/` to validate positional vs flag
+usage — do not infer from the test's intended semantics.
+
+### Process gaps codified
+
+- **PG-458-1:** `tests/e2e_cli_surface_guard.rs` does not validate positional arity per subcommand —
+  this is the structural gap that allowed C-1 to reach the adversarial loop without being caught
+  mechanically. Target: maintenance sweep / next surface-guard touch.
+- **PG-458-2:** Surface guard has no reverse flag-completeness check (every `--help` flag → a test
+  invocation) and does not assert clap `conflicts_with` semantics. Pre-existing; target: maintenance sweep.
+
+### Status
+
+[codified] — applies to all future test-only feature adversarial cycles. Particularly important for
+cycles that write test invocations of CLI subcommands without running them through the live handler
+first (i.e., all gated `#[ignore]` live-E2E tests).
+
+_Discovered: E2E-PG-4 assign-by-query adversarial convergence, 2026-06-02._
+_Reference: DEC-061. PR #458 → develop @ d45ec88. Live run 26790203429 (67/0)._
+_Structural gap: PG-458-1 (positional-arity not validated by surface guard)._
