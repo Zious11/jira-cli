@@ -101,8 +101,14 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     (&["issue", "comment"], &["--output", "--internal"]),
     // issue comments
     (&["issue", "comments"], &["--output"]),
-    // issue move  (positional: key + status-name — no flags beyond --output)
-    (&["issue", "move"], &["--output"]),
+    // issue move  (positional: key + status-name; --resolution added in S-JSM-E2E-3 Scenario 8;
+    //              --no-resolution + --no-input added in S-JSM-RESOLUTION-REQUIRED)
+    (
+        &["issue", "move"],
+        &["--output", "--resolution", "--no-resolution", "--no-input"],
+    ),
+    // issue resolutions  (added in S-JSM-E2E-3 Scenario 8)
+    (&["issue", "resolutions"], &["--output"]),
     // issue assign  (positional: key; --to <query> for assignee resolution; --unassign added in E2E-PG-4)
     (&["issue", "assign"], &["--output", "--unassign", "--to"]),
     // issue link  (--type is used in E2E-PG-4 typed-link test)

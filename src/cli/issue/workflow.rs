@@ -136,6 +136,171 @@ async fn load_resolutions(client: &JiraClient, refresh: bool) -> Result<Vec<Reso
     Ok(fetched)
 }
 
+// ── Pure helpers ─────────────────────────────────────────────────────
+
+/// Resolve a dialoguer selection index to `Option<String>`.
+///
+/// Returns `None` when the selected item equals `none_sentinel` — signalling
+/// "proceed without a resolution" (BC-3.2.013 OPTIONAL interactive branch).
+/// Returns `Some(name)` for any other selection.
+///
+/// This is a pure function extracted for unit-testability (O-5 fix). The
+/// security-relevant "(none)" decision is mutation-coverable without a TTY.
+///
+/// # Parameters
+/// - `options`: the full prompt list (including the sentinel as the last item).
+/// - `none_sentinel`: the sentinel string that signals "no resolution".
+/// - `selection`: the index returned by `dialoguer::Select`.
+pub fn resolve_interactive_choice(
+    options: &[String],
+    none_sentinel: &str,
+    selection: usize,
+) -> Option<String> {
+    options
+        .get(selection)
+        .filter(|name| name.as_str() != none_sentinel)
+        .cloned()
+}
+
+/// Build a resolution prompt list for `dialoguer::Select`.
+///
+/// When `allow_none` is `false` (REQUIRED branch): returns `base` unchanged —
+/// the user must pick one of the listed resolutions; no opt-out is offered.
+///
+/// When `allow_none` is `true` (OPTIONAL branch): appends `NONE_LABEL` as the
+/// final entry — the user may opt out of setting a resolution.
+///
+/// This is a pure function extracted for unit-testability (E-F2 fix). The
+/// REQUIRED-vs-OPTIONAL "(none)" sentinel inclusion is the security-relevant
+/// distinction that determines whether the POST body carries a resolution field.
+/// Both the inline interactive branches and unit tests call this function so that
+/// mutating `allow_none` is caught by tests without requiring a TTY.
+pub fn build_resolution_prompt(base: &[String], allow_none: bool) -> Vec<String> {
+    if allow_none {
+        let mut v = base.to_vec();
+        v.push(NONE_LABEL.to_string());
+        v
+    } else {
+        base.to_vec()
+    }
+}
+
+/// Sentinel label for the "no resolution" option in OPTIONAL interactive prompts.
+///
+/// Defined at module level so `build_resolution_prompt`, `resolve_interactive_choice`,
+/// and the interactive branches all share the same constant without duplication.
+pub const NONE_LABEL: &str = "(none — no resolution)";
+
+/// Decide whether to refuse an interactive prompt because the caller is non-interactive.
+///
+/// Returns `true` (refuse — emit exit 64) when either the `--no-input` flag was set
+/// OR stdin is not a TTY.  Returns `false` (allow — show the prompt) only when both
+/// conditions are clear.
+///
+/// Extracted as a pure function so tests can vary each operand independently without
+/// needing a real TTY, killing `||`→`&&`, `!`-deletion, and operand-swap mutants.
+///
+/// # Parameters
+/// - `no_input`: value of the `--no-input` CLI flag for this invocation.
+/// - `stdin_is_tty`: result of `std::io::IsTerminal::is_terminal(&std::io::stdin())`
+///   evaluated once in the caller and passed in to avoid re-checking in each branch.
+pub fn refuse_noninteractive(no_input: bool, stdin_is_tty: bool) -> bool {
+    no_input || !stdin_is_tty
+}
+
+/// Choose the base resolution name list for the interactive prompt.
+///
+/// When `allowed_from_transition` is non-empty (the transition's `fields.resolution.
+/// allowedValues` list), those names are used — they are already scoped to this
+/// transition and avoid a network call.  When empty (allowedValues absent or empty),
+/// falls back to the instance-global `instance_list` obtained from `load_resolutions`.
+///
+/// Extracted as a pure function to kill the `!`-deletion mutant on the emptiness check
+/// without requiring a live Jira API or a dialoguer prompt in the test.
+///
+/// # Parameters
+/// - `allowed_from_transition`: names from the transition's `allowedValues`; may be empty.
+/// - `instance_list`: fallback list from `load_resolutions(client, false)`.
+pub fn select_prompt_base_names<'a>(
+    allowed_from_transition: &'a [String],
+    instance_list: &'a [String],
+) -> &'a [String] {
+    if !allowed_from_transition.is_empty() {
+        allowed_from_transition
+    } else {
+        instance_list
+    }
+}
+
+/// Return the default-selected index for the OPTIONAL resolution prompt.
+///
+/// The OPTIONAL prompt places `"(none — no resolution)"` last so it is the default
+/// selection (i.e. `len - 1`).  Using `saturating_sub` means an unexpectedly empty list
+/// yields 0 rather than panicking.
+///
+/// Extracted as a pure function to kill `-`→`+` and `-`→`*` index mutants without
+/// a live dialoguer interaction.
+///
+/// # Parameters
+/// - `len`: length of the full prompt list (base names + NONE_LABEL sentinel).
+pub fn optional_prompt_default_index(len: usize) -> usize {
+    len.saturating_sub(1)
+}
+
+/// Fire the actual transition POST and render success output.
+///
+/// Extracted to avoid duplicating the POST + error handling + output block
+/// across REQUIRED interactive, OPTIONAL interactive, and F-2 allowedValues
+/// branches. BC-3.2.009 reactive handler lives here as the downstream backstop.
+async fn finish_transition(
+    client: &JiraClient,
+    key: &str,
+    selected_transition: &crate::types::jira::Transition,
+    resolution_fields: Option<&serde_json::Value>,
+    output_format: &OutputFormat,
+) -> Result<()> {
+    let transition_result = client
+        .transition_issue(key, &selected_transition.id, resolution_fields)
+        .await;
+
+    if let Err(err) = transition_result {
+        let msg = format!("{err:#}").to_lowercase();
+        if msg.contains("resolution") && msg.contains("required") {
+            let to_label = selected_transition
+                .to
+                .as_ref()
+                .map(|s| s.name.as_str())
+                .unwrap_or(&selected_transition.name);
+            return Err(JrError::UserError(format!(
+                "The \"{to_label}\" transition requires a resolution.\n\n\
+                 Try:\n    jr issue move {key} {to_label} --resolution <name>\n\n\
+                 Run `jr issue resolutions` to see available values."
+            ))
+            .into());
+        }
+        return Err(err);
+    }
+
+    let new_status = selected_transition
+        .to
+        .as_ref()
+        .map(|s| s.name.as_str())
+        .unwrap_or(&selected_transition.name);
+
+    match output_format {
+        OutputFormat::Json => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json_output::move_response(key, new_status, true))?
+            );
+        }
+        OutputFormat::Table => {
+            output::print_success(&format!("Moved {} to \"{}\"", key, new_status));
+        }
+    }
+    Ok(())
+}
+
 // ── Move (Transition) ────────────────────────────────────────────────
 
 pub(super) async fn handle_move(
@@ -148,10 +313,14 @@ pub(super) async fn handle_move(
         keys,
         to,
         resolution,
+        no_resolution,
     } = command
     else {
         unreachable!()
     };
+    // no_resolution is consumed by the enforcement gate below (single-key path).
+    // The variable is valid from here; we move it into the gate block rather than
+    // suppressing with `let _ =`.
 
     // --- Resolve (key, status) from the new Vec<String> + --to design ---
     //
@@ -207,11 +376,14 @@ pub(super) async fn handle_move(
         return handle_move_bulk(&move_keys, &target_status_input, output_format, client).await;
     }
 
-    // --- Single-key path (unchanged behavior) ---
+    // --- Single-key path ---
     let key = &move_keys[0];
 
-    // Get available transitions
-    let transitions_resp = client.get_transitions(key).await?;
+    // Get available transitions with field metadata expanded so the enforcement gate
+    // (BC-3.2.013) can inspect statusCategory and resolution field presence.
+    // `handle_transitions` (the `jr issue transitions` read command) continues to call
+    // `get_transitions` — these are DISTINCT methods per ADR-0015 §4.
+    let transitions_resp = client.get_transitions_with_fields(key).await?;
     let transitions = &transitions_resp.transitions;
 
     if transitions.is_empty() {
@@ -373,7 +545,236 @@ pub(super) async fn handle_move(
         }
     };
 
-    // Resolve --resolution if provided.
+    // ── BC-3.2.013 Proactive resolution enforcement gate ─────────────────────
+    //
+    // Applies ONLY on the single-key path (bulk excluded per EC-3.2.013-8 / ADR-0015 §6).
+    // Idempotency check (above) fires first — a no-op move never prompts.
+    //
+    // Gate condition:
+    //   is_done_category  = to.statusCategory.key == "done"
+    //   offers_resolution = fields map contains key "resolution"
+    //   is_conditional    = is_conditional == Some(true)
+    //   needs_resolution  = is_done_category && (offers_resolution || is_conditional)
+    //
+    // Conservative: if statusCategory is absent, gate does NOT fire.
+    // If done-cat but fields absent AND not conditional, gate does NOT fire.
+    {
+        let is_done_category = selected_transition
+            .to
+            .as_ref()
+            .and_then(|s| s.status_category.as_ref())
+            .is_some_and(|sc| sc.key == "done");
+
+        let offers_resolution = selected_transition
+            .fields
+            .as_ref()
+            .is_some_and(|f| f.contains_key("resolution"));
+
+        let is_conditional = selected_transition.is_conditional == Some(true);
+
+        let needs_resolution = is_done_category && (offers_resolution || is_conditional);
+
+        // Extract the transition's allowedValues for the resolution field (may be absent).
+        // Used by both the --resolution validation branch and the interactive prompt.
+        let allowed_names_from_transition: Vec<String> = selected_transition
+            .fields
+            .as_ref()
+            .and_then(|f| f.get("resolution"))
+            .and_then(|r| r.get("allowedValues"))
+            .and_then(|av| av.as_array())
+            .filter(|arr| !arr.is_empty())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.get("name").and_then(|n| n.as_str()))
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if needs_resolution {
+            // ── Branch A: --resolution <name> IS provided — validate against allowedValues.
+            // (EC-3.2.013-3, F-2 fix)
+            if let Some(ref query) = resolution {
+                if !allowed_names_from_transition.is_empty() {
+                    // Validate case-insensitively against the transition's allowedValues.
+                    // If the value is not found → exit 64 listing the allowed values.
+                    // If allowedValues absent/empty → skip validation here; fall through
+                    // to the existing instance-global resolve_resolution_by_name below.
+                    //
+                    // NOTE: we send {resolution:{name}} (not {resolution:{id}}) because
+                    // the Atlassian API accepts name-based resolution on transitions and
+                    // id-based resolution is left as a future hardening opportunity.
+                    let to_label = selected_transition
+                        .to
+                        .as_ref()
+                        .map(|s| s.name.as_str())
+                        .unwrap_or(&selected_transition.name);
+                    let matched = allowed_names_from_transition
+                        .iter()
+                        .find(|n| n.eq_ignore_ascii_case(query));
+                    let chosen_name = match matched {
+                        Some(n) => n.clone(),
+                        None => {
+                            return Err(JrError::UserError(format!(
+                                "Resolution '{}' is not allowed on the '{}' transition. \
+                                 Allowed: {}.\n\n\
+                                 Run `jr issue resolutions` to see all instance resolutions.",
+                                query,
+                                to_label,
+                                allowed_names_from_transition.join(", ")
+                            ))
+                            .into());
+                        }
+                    };
+                    // Validated — send the resolution atomically in the transition body.
+                    let resolution_fields_value = serde_json::json!({
+                        "resolution": { "name": chosen_name }
+                    });
+                    finish_transition(
+                        client,
+                        key,
+                        selected_transition,
+                        Some(&resolution_fields_value),
+                        output_format,
+                    )
+                    .await?;
+                    return Ok(());
+                }
+                // allowedValues absent/empty — fall through to the regular
+                // `resolve_resolution_by_name` path after the gate block.
+            } else {
+                // ── Branch B: resolution NOT provided — enforce / prompt.
+                let resolution_required_flag = selected_transition
+                    .fields
+                    .as_ref()
+                    .and_then(|f| f.get("resolution"))
+                    .and_then(|r| r.get("required"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let required = resolution_required_flag || is_conditional;
+
+                let to_label = selected_transition
+                    .to
+                    .as_ref()
+                    .map(|s| s.name.as_str())
+                    .unwrap_or(&selected_transition.name);
+
+                // Evaluate TTY status once so refuse_noninteractive can be called
+                // with independent operands in both branches (kills ||→&& mutant).
+                let stdin_is_tty = std::io::IsTerminal::is_terminal(&std::io::stdin());
+
+                if required {
+                    // ── REQUIRED branch ─────────────────────────────────────────
+                    if no_resolution {
+                        return Err(JrError::UserError(format!(
+                            "The transition to \"{to_label}\" requires a resolution and \
+                             --no-resolution cannot be used here.\n\n\
+                             Try:\n    jr issue move {key} {to_label} --resolution <name>\n\n\
+                             Run `jr issue resolutions` to see available values."
+                        ))
+                        .into());
+                    }
+                    if refuse_noninteractive(no_input, stdin_is_tty) {
+                        return Err(JrError::UserError(format!(
+                            "The transition to \"{to_label}\" requires a resolution.\n\n\
+                             Try:\n    jr issue move {key} {to_label} --resolution <name>\n\n\
+                             Run `jr issue resolutions` to see available values."
+                        ))
+                        .into());
+                    }
+                    // Interactive REQUIRED: prompt with no "(none)" option (allow_none=false).
+                    let instance_resolutions = load_resolutions(client, false).await?;
+                    let instance_names: Vec<String> = instance_resolutions
+                        .iter()
+                        .map(|r| r.name.clone())
+                        .collect();
+                    let base_names =
+                        select_prompt_base_names(&allowed_names_from_transition, &instance_names);
+                    let prompt_names = build_resolution_prompt(base_names, false);
+                    // OBS-1: guard against empty prompt list (no resolutions on instance).
+                    if prompt_names.is_empty() {
+                        return Err(JrError::UserError(format!(
+                            "No resolutions available on this instance; cannot satisfy \
+                             the required resolution for transition \"{to_label}\".\n\n\
+                             Contact your Jira administrator to configure resolution values."
+                        ))
+                        .into());
+                    }
+                    let selection = dialoguer::Select::new()
+                        .with_prompt("Select a resolution (required)")
+                        .items(&prompt_names)
+                        .default(0)
+                        .interact()
+                        .map_err(|_| JrError::Interrupted)?;
+                    let chosen_name = prompt_names[selection].clone();
+                    let resolution_fields_value = serde_json::json!({
+                        "resolution": { "name": chosen_name }
+                    });
+                    finish_transition(
+                        client,
+                        key,
+                        selected_transition,
+                        Some(&resolution_fields_value),
+                        output_format,
+                    )
+                    .await?;
+                    return Ok(());
+                } else {
+                    // ── OPTIONAL branch ─────────────────────────────────────────
+                    if no_resolution {
+                        // Explicit opt-out: proceed without resolution (fall through).
+                        // The POST fires after the gate with no resolution fields.
+                    } else if refuse_noninteractive(no_input, stdin_is_tty) {
+                        return Err(JrError::UserError(format!(
+                            "The transition to \"{to_label}\" offers a resolution field. \
+                             You must explicitly choose:\n\n\
+                             --resolution <name>   set a resolution\n\
+                             --no-resolution       opt out (intentional null-resolution close)\n\n\
+                             Run `jr issue resolutions` to see available values."
+                        ))
+                        .into());
+                    } else {
+                        // Interactive OPTIONAL: prompt with a "(none)" sentinel.
+                        let instance_resolutions = load_resolutions(client, false).await?;
+                        let instance_names: Vec<String> = instance_resolutions
+                            .iter()
+                            .map(|r| r.name.clone())
+                            .collect();
+                        let base_names = select_prompt_base_names(
+                            &allowed_names_from_transition,
+                            &instance_names,
+                        );
+                        let prompt_names = build_resolution_prompt(base_names, true);
+                        let default_idx = optional_prompt_default_index(prompt_names.len());
+                        let selection = dialoguer::Select::new()
+                            .with_prompt("Select a resolution (optional)")
+                            .items(&prompt_names)
+                            .default(default_idx)
+                            .interact()
+                            .map_err(|_| JrError::Interrupted)?;
+                        let chosen =
+                            resolve_interactive_choice(&prompt_names, NONE_LABEL, selection);
+                        let resolution_value = chosen
+                            .map(|name| serde_json::json!({ "resolution": { "name": name } }));
+                        finish_transition(
+                            client,
+                            key,
+                            selected_transition,
+                            resolution_value.as_ref(),
+                            output_format,
+                        )
+                        .await?;
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+    // ── End BC-3.2.013 enforcement gate ──────────────────────────────────────
+
+    // Resolve --resolution if provided (non-gate path: non-done-cat transitions,
+    // or done-cat with no resolution field, or done-cat with allowedValues absent
+    // falling through from Gate Branch A).
     let resolution_fields: Option<serde_json::Value> = match resolution.as_deref() {
         None => None,
         Some(query) => {
@@ -385,47 +786,14 @@ pub(super) async fn handle_move(
         }
     };
 
-    let transition_result = client
-        .transition_issue(key, &selected_transition.id, resolution_fields.as_ref())
-        .await;
-
-    if let Err(err) = transition_result {
-        let msg = format!("{err:#}").to_lowercase();
-        if msg.contains("resolution") && msg.contains("required") {
-            let to_label = selected_transition
-                .to
-                .as_ref()
-                .map(|s| s.name.as_str())
-                .unwrap_or(&selected_transition.name);
-            return Err(JrError::UserError(format!(
-                "The \"{to_label}\" transition requires a resolution.\n\n\
-                 Try:\n    jr issue move {key} {to_label} --resolution <name>\n\n\
-                 Run `jr issue resolutions` to see available values."
-            ))
-            .into());
-        }
-        return Err(err);
-    }
-
-    let new_status = selected_transition
-        .to
-        .as_ref()
-        .map(|s| s.name.as_str())
-        .unwrap_or(&selected_transition.name);
-
-    match output_format {
-        OutputFormat::Json => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json_output::move_response(key, new_status, true))?
-            );
-        }
-        OutputFormat::Table => {
-            output::print_success(&format!("Moved {} to \"{}\"", key, new_status));
-        }
-    }
-
-    Ok(())
+    finish_transition(
+        client,
+        key,
+        selected_transition,
+        resolution_fields.as_ref(),
+        output_format,
+    )
+    .await
 }
 
 /// Multi-key bulk transition handler.

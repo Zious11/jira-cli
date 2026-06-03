@@ -490,8 +490,15 @@ pub enum IssueCommand {
         /// Set resolution atomically with the transition (e.g. "Fixed"). Many
         /// JSM workflows require this; run `jr issue resolutions` to discover
         /// valid values. (Single-key only; ignored in multi-key bulk form.)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "no_resolution")]
         resolution: Option<String>,
+        /// Explicit opt-out from proactive resolution enforcement. Use when
+        /// moving to a done-category status where a null resolution is genuinely
+        /// intentional (e.g., "Won't Do" automation paths). Mutually exclusive
+        /// with --resolution. No effect on non-done-category transitions.
+        /// (BC-3.2.013; ADR-0015 §7)
+        #[arg(long, conflicts_with = "resolution")]
+        no_resolution: bool,
     },
     /// List available transitions without performing one
     Transitions {

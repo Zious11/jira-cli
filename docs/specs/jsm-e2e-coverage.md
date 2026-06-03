@@ -1,7 +1,7 @@
 # Feature Spec: JSM E2E Coverage Expansion (project EJ)
 
-**Status:** Approved (F1 human gate passed 2026-06-01)
-**Author:** jr maintainers (F2 spec evolution 2026-06-01)
+**Status:** Approved (F1 human gate passed 2026-06-01; §5 Scenario 8 + §6 teardown improvement + §8 VER-JSM-E2E-8 added by S-JSM-E2E-3, 2026-06-02)
+**Author:** jr maintainers (F2 spec evolution 2026-06-01; S-JSM-E2E-3 additions 2026-06-02)
 **Extends:** `docs/specs/e2e-live-jira-testing.md` — cross-reference, not duplication.
   Sections of that spec updated by this feature are called out explicitly in §10 below.
 **Research:** `.factory/planning/brainstorming-report-jsm-e2e.md` + `.factory/phase-f1-delta-analysis/jsm-e2e-expansion/delta-analysis.md`
@@ -68,6 +68,11 @@ New tests trace to existing BCs without modification:
 | BC-3.8.004 | Numeric-bypass in create test (using RT id directly). (AC-004, AC-006) |
 | BC-3.5.001 | `jr issue comment <key> --internal` write side: adds `sd.public.comment` property. (AC-005) |
 | BC-2.4.041 | `jr issue comments --output json` read side: exposes `properties[]` array including `sd.public.comment`. (AC-005) |
+| BC-3.2.011 | `jr issue move --resolution R` sends `{fields:{resolution:{name:R}}}` in the transition body — resolution set atomically. (S-JSM-E2E-3 Scenario 8 AC-001) |
+| BC-3.2.010 | `jr issue resolutions --output json` returns `[{name, id, description}]` — resolution discovery used by Scenario 8 and `jsm_self_close`. (S-JSM-E2E-3 Scenario 8 AC-001, AC-003) |
+| BC-2.3.036 | `get_issue` deserializes nullable `resolution` — non-null when set (positive path). (S-JSM-E2E-3 Scenario 8 AC-001) |
+| BC-3.2.013 | `jr issue move` proactive gate (primary): done-category transition without `--resolution` in non-interactive mode exits 64 + stderr contains `"--resolution"`. (S-JSM-E2E-3 Scenario 8 AC-002) |
+| BC-3.2.009 | `issue move` 400 "resolution required" → `--resolution` hint on stderr. Reactive backstop, preserved alongside BC-3.2.013. (S-JSM-E2E-3 Scenario 8 AC-002) |
 
 **Orphan note — AC-001 and AC-003 (queue list / queue view):**
 `jr queue list` and `jr queue view` shipped in an earlier delivery cycle with NO behavioral
@@ -179,8 +184,9 @@ independently (no shared state between test functions).
 
 ## 5. Test Scenarios
 
-Seven test scenarios are defined. All are `#[ignore]`-gated via the `e2e_enabled()` check
-and additionally gated on `JR_E2E_JSM_PROJECT` per §3.1.
+Eight test scenarios are defined. All are `#[ignore]`-gated via the `e2e_enabled()` check
+and additionally gated on `JR_E2E_JSM_PROJECT` per §3.1. Scenarios 1–7 were added by
+S-JSM-E2E-1. Scenario 8 was added by S-JSM-E2E-3 (2026-06-02).
 
 ### Scenario 1 — Deepen queue list shape assertions
 
@@ -422,6 +428,79 @@ guard regression where the wrong error (not exit-64 + JSM-guard message) is retu
 
 ---
 
+### Scenario 8 — Resolution enforcement: positive path + proactive gate
+
+> **Added by S-JSM-E2E-3 (2026-06-02). Revised from bypass-demo dual-path to enforcement model — BC-3.2.013 is now the primary anchor.**
+
+**Test function:** `test_e2e_jsm_resolution_enforcement`
+
+This scenario exercises the `--resolution` flag on `jr issue move` against a real JSM project
+and verifies that `jr` proactively blocks a done-category transition when `--resolution` is
+absent in non-interactive mode (BC-3.2.013, ADR-0015). It also confirms that the positive
+path atomically sets `fields.resolution` end-to-end (BC-3.2.011).
+
+#### Background: Proactive resolution enforcement
+
+`jr issue move` implements proactive enforcement (BC-3.2.013) for done-category transitions:
+when the resolved transition targets a done-category status (`to.statusCategory.key == "done"`)
+and the transition offers a resolution field (or `isConditional == true`), `jr` intercepts
+BEFORE the POST.
+
+- **Non-interactive (`--no-input` or stdin not a TTY):** exits 64, stderr:
+  `The transition to "<to_label>" requires a resolution.` + `--resolution` hint.
+- **Interactive (TTY):** `dialoguer::Select` prompt.
+- **`--resolution <name>` supplied:** resolves and sends atomically in transition body.
+
+The reactive BC-3.2.009 backstop (400 "resolution required" from the API) is preserved but
+is not the primary enforcement path.
+
+**Steps:**
+
+1. `JR_E2E_JSM_PROJECT` gate per §3.1.
+2. Run `jr issue resolutions --output json`; if empty → clean-skip (cannot run positive test).
+3. Pick `resolution_name = JR_E2E_JSM_RESOLUTION env var` if set, else `resolutions[0]["name"]`.
+4. Discover a done-category transition name by creating a short-lived **PROBE** EJ JSM
+   request, running `jr issue transitions <probe_key> --output json` to find a transition
+   where `to.statusCategory.key == "done"`, then immediately self-closing the probe via
+   `jsm_self_close` (before any assertion on the transitions result). If the probe create
+   fails → clean-skip. If no done-category transition exists on the probe → clean-skip.
+   (This is a dedicated probe ticket, not a reuse of `jsm_self_close`'s internal probe.)
+5. **POSITIVE path:** Create a fresh EJ JSM request; capture `key_positive`.
+   Run `jr issue move <key_positive> <transition_name> --resolution <resolution_name>`.
+   Assert exit 0.
+   Read back: `jr issue view <key_positive> --output json` in a bounded retry loop
+   (max 5 attempts, 250 ms → 2 000 ms backoff). Assert `fields["resolution"]["name"] == resolution_name`.
+   On budget exhaustion → `[WARN]` and skip the view assertion (GET-by-key lag; the
+   successful move was confirmed by the exit-0 assertion on the move command).
+6. **ENFORCEMENT path:** Create a second fresh EJ JSM request; capture `key_enforcement`.
+   Run `jr issue move <key_enforcement> <transition_name> --no-input` WITHOUT `--resolution`.
+   Assert exit 64 (BC-3.2.013 proactive gate fired).
+   Assert stderr contains `"--resolution"` (the hint from BC-3.2.013).
+   (`key_enforcement` was not transitioned and remains open — self-close via `jsm_self_close`.)
+7. **Teardown:** The probe ticket is self-closed immediately after transition discovery (step 4,
+   before any further action). `key_positive` and `key_enforcement` are self-closed via
+   `jsm_self_close` on all exit paths (including skip paths after any key was captured). Up to
+   3 EJ tickets are created per run (probe + ticket A + ticket B), all best-effort self-closed.
+
+**Clean-skip conditions:**
+- `JR_E2E_JSM_PROJECT` unset → skip.
+- `jr issue resolutions --output json` returns empty array → skip.
+- Probe create fails (including 403) → skip; no other keys captured yet.
+- Done-category transition not found on probe → skip (probe already self-closed).
+- Either ticket-A or ticket-B create fails → skip; self-close any already-captured key first.
+- 403 on any step → skip (§3.3).
+
+**BC traced:**
+- BC-3.2.013 — primary anchor: `jr issue move` proactive gate exits 64 + stderr `"--resolution"` hint when done-category transition is attempted without `--resolution` in non-interactive mode.
+- BC-3.2.011 — `--resolution` atomically sets `fields.resolution` in the transition body (positive path).
+- BC-3.2.010 — `jr issue resolutions --output json` returns `[{name, id, description}]` (resolution discovery).
+- BC-2.3.036 — `get_issue` deserializes nullable `resolution` — non-null on positive path.
+- BC-3.2.009 — reactive backstop: 400 + `--resolution` hint from API (preserved; not the primary path tested here).
+
+**Verification property:** VER-JSM-E2E-8 (§8).
+
+---
+
 ## 6. Teardown Design and Orphan-Risk Documentation
 
 > **§6 revised by S-JSM-E2E-2 (2026-06-02):** §6.1 corrected to use dynamic
@@ -510,11 +589,26 @@ fn jsm_self_close(key: &str, h: &E2eHarness) {
 (the platform transitions endpoint), which is valid for JSM issues — they are standard
 Jira issues underneath the service management layer.
 
-**Residual caveat:** A JSM "Resolve" transition that requires a mandatory Resolution field
-on its transition screen may still fail via `jr issue move` (which has no
-`--field-on-transition` path). If the EJ workflow enforces a Resolution screen, the helper
-will warn and return — leaving the issue open. This is a documented LOW residual orphan
-risk. The `--field-on-transition` path is out of scope for this feature.
+**Improvement by S-JSM-E2E-3 (2026-06-02) — resolution discovery in `jsm_self_close`:**
+After selecting the done-category transition name, `jsm_self_close` now also runs
+`jr issue resolutions --output json` to discover a resolution name and passes
+`--resolution <R>` on the final `jr issue move` call. This produces properly-resolved
+tickets rather than issues closed via API bypass (resolution=null).
+
+- Resolution name source (precedence): `JR_E2E_JSM_RESOLUTION` env var > first
+  `name` from `jr issue resolutions --output json`.
+- Best-effort: if resolution discovery fails for any reason (non-zero exit, JSON parse
+  error, empty list, missing `name` field), the helper falls back to
+  `jr issue move <key> <transition_name>` WITHOUT `--resolution` — preserving the
+  existing S-JSM-E2E-2 behavior. A `[WARN]` is emitted.
+- The best-effort contract is PRESERVED end-to-end: resolution discovery failure or
+  final move failure both emit `eprintln!("[WARN] jsm_self_close: …")` and return `()`.
+  The calling test NEVER fails on close failure.
+
+**Residual caveat:** If the EJ workflow enforces a Resolution screen AND `jr issue resolutions`
+returns an empty list (no resolutions defined on the instance), the helper falls back to
+the no-resolution path, which may still fail with a 400. This is a documented LOW residual
+orphan risk. The `--field-on-transition` path is out of scope for this feature.
 
 ### 6.2 Labels Do NOT Propagate to JSM Requests — Sweeper Cannot Cover EJ
 
@@ -682,6 +776,44 @@ not a guard-contract violation). A missing/unreachable JR_E2E_PROJECT hard-fails
 Confirm the test passes and the exit-code-64 + message assertions succeed.
 **Expected outcome:** test passes; exit 64 confirmed; `require_service_desk` error message
 confirmed against BC-X.8.004.
+
+---
+
+### VER-JSM-E2E-8: Resolution enforcement — positive path + proactive gate (BC-3.2.013)
+
+> **Added by S-JSM-E2E-3 (2026-06-02). Revised from bypass-demo dual-path to enforcement model.**
+
+**Scenario:** 8 (§5, Scenario 8)
+**BC anchor:** BC-3.2.013 (primary — proactive gate: exit 64 + `--resolution` hint when done-category
+transition attempted without `--resolution` in non-interactive mode) +
+BC-3.2.011 (positive path — `--resolution` sets resolution atomically) +
+BC-3.2.010 (`jr issue resolutions` discovery command output shape) +
+BC-2.3.036 (`get_issue` nullable resolution — non-null when set) +
+BC-3.2.009 (reactive backstop: 400 + `--resolution` hint, preserved alongside BC-3.2.013).
+ADR-0015.
+
+**Condition:**
+- **Positive path:** `jr issue move <key> <done-status> --resolution <R>` exits 0; subsequent
+  `jr issue view <key> --output json` returns `fields.resolution.name == R` (within bounded
+  retry budget — if GET-by-key lag exhausts budget, the exit-0 from the move is sufficient
+  evidence; view assertion is warn-and-skip on exhaustion, not a hard fail).
+- **Enforcement path:** `jr issue move <key_enforcement> <done-status> --no-input` (without
+  `--resolution`) exits 64 AND stderr contains `"--resolution"` (BC-3.2.013 proactive gate).
+  This is a hard assertion — both conditions must hold for the test to pass.
+- `jr issue resolutions --output json` exits 0 and returns a non-empty JSON array with
+  at least one item having a non-null `"name"` field (BC-3.2.010).
+- Both created EJ issues are self-closed via `jsm_self_close` (best-effort; warn on failure).
+
+**Verification method (F6):** Inspect the CI E2E run log for
+`test_e2e_jsm_resolution_enforcement`. Confirm the test passes (not skipped). Confirm the
+enforcement-path assertion holds: exit code 64 and stderr contains `"--resolution"`. Confirm
+the positive-path view assertion succeeded or was warn-and-skipped due to GET lag (both are
+passing outcomes).
+
+**Expected outcome:** test passes; positive path confirms `--resolution` atomically sets the
+resolution field end-to-end against real Jira (BC-3.2.011 + BC-2.3.036); enforcement path
+confirms BC-3.2.013 proactive gate fires (exit 64 + `--resolution` hint) before any API
+call is made.
 
 ---
 

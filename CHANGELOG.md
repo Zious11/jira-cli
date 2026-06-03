@@ -4,7 +4,34 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- **`jr issue move <key> <done-status>` now requires an explicit resolution on
+  done-category transitions** (BC-3.2.013, ADR-0015, S-JSM-RESOLUTION-REQUIRED).
+  When the target transition is done-category AND offers a resolution field (or has
+  `isConditional=true`), the command now enforces resolution upfront:
+  - Non-interactive (`--no-input` or no TTY): exits 64 unless `--resolution <name>`
+    or `--no-resolution` is supplied.
+  - Interactive (TTY): prompts for a resolution via `dialoguer::Select`.
+  - `--no-resolution`: explicit opt-out for intentional null-resolution closes (e.g.,
+    "Won't Do" automation paths). Mutually exclusive with `--resolution` (exit 2).
+  - Scripts relying on the silent bypass must add `--resolution <name>` (recommended)
+    or `--no-resolution` (explicit opt-out). Bulk `jr issue move` (multi-key) is NOT
+    affected — only single-key move is subject to proactive enforcement.
+  - `jr issue transitions --output json` output is byte-identical to pre-feature
+    (`skip_serializing` on `Transition.fields` and `Transition.is_conditional`).
+
 ### Added
+
+- **`--no-resolution` flag on `jr issue move`:** explicit opt-out from proactive
+  resolution enforcement (BC-3.2.013). Use when closing on done-category transitions
+  where a null resolution is genuinely intentional. Mutually exclusive with
+  `--resolution`. No effect on non-done-category transitions. (S-JSM-RESOLUTION-REQUIRED)
+- **`jr issue move` proactive resolution detection:** single-key path now calls
+  `GET .../transitions?expand=transitions.fields` to detect whether the target
+  transition offers a resolution field — no additional round-trip (replaces the plain
+  `GET .../transitions` call in `handle_move`). `jr issue transitions` read command
+  unchanged. (BC-3.2.013, ADR-0015, S-JSM-RESOLUTION-REQUIRED)
 
 - **JSM live-E2E coverage expansion (S-JSM-E2E-1):** replaces 2 shallow JSM smoke tests
   with 7 shape-asserting / round-trip live tests — queue list/view (by-name + `--id`),

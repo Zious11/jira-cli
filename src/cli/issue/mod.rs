@@ -9,7 +9,7 @@ mod json_output;
 mod links;
 mod list;
 mod view;
-mod workflow;
+pub mod workflow;
 
 pub use format::{format_issue_row, format_issue_rows_public, format_points, issue_table_headers};
 

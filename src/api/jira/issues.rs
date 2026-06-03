@@ -513,6 +513,28 @@ impl JiraClient {
         self.get(&path).await
     }
 
+    /// Get available transitions for an issue, with field metadata expanded.
+    ///
+    /// Calls `GET /rest/api/3/issue/{key}/transitions?expand=transitions.fields`.
+    /// The expanded response populates `Transition.fields` (the screen field
+    /// metadata map) and `Transition.is_conditional` for each transition.
+    ///
+    /// Called by `handle_move` (single-key path) to enable proactive resolution
+    /// enforcement (BC-3.2.013). `handle_transitions` (the `jr issue transitions`
+    /// read command) continues to call `get_transitions` — these are DISTINCT
+    /// methods with DISTINCT call sites per ADR-0015 §4.
+    ///
+    /// `Transition.fields` carries `#[serde(skip_serializing)]` so JSON
+    /// serialization of `TransitionsResponse` is byte-for-byte unchanged from
+    /// the plain `get_transitions` path. ADR-0015 §3 read-command-stability contract.
+    pub async fn get_transitions_with_fields(&self, key: &str) -> Result<TransitionsResponse> {
+        let path = format!(
+            "/rest/api/3/issue/{}/transitions?expand=transitions.fields",
+            urlencoding::encode(key)
+        );
+        self.get(&path).await
+    }
+
     /// Transition an issue to a new status, optionally setting extra fields
     /// in the same request (e.g. `resolution`). Passing `fields = None`
     /// preserves the pre-existing behaviour of sending only the transition id.

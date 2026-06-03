@@ -204,6 +204,17 @@ pub struct Transition {
     pub id: String,
     pub name: String,
     pub to: Option<Status>,
+    /// Expanded fields map from `?expand=transitions.fields`.
+    /// Populated by `get_transitions_with_fields`; absent when `get_transitions`
+    /// (no expand) is used. `skip_serializing` is LOAD-BEARING: `jr issue
+    /// transitions --output json` must be byte-identical before and after this
+    /// field is added. ADR-0015 §3.
+    #[serde(default, skip_serializing)]
+    pub fields: Option<std::collections::HashMap<String, serde_json::Value>>,
+    /// Atlassian signal that hidden validators may require fields not listed in
+    /// the screen `fields` map. `skip_serializing` keeps read-command output stable.
+    #[serde(rename = "isConditional", default, skip_serializing)]
+    pub is_conditional: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

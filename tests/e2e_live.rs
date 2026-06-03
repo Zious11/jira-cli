@@ -187,11 +187,30 @@ fn status_done() -> String {
 /// for a closing/green status, covering Resolved, Closed, Canceled, and any
 /// custom done-category status regardless of workflow name.
 ///
+/// Best-effort self-close for EJ JSM issues created during E2E tests.
+///
+/// Discovers a done-category transition dynamically via `jr issue transitions
+/// <key> --output json` (using `statusCategory.key == "done"` — the stable,
+/// Jira-wide machine constant), then issues `jr issue move <key> <transition_name>`.
+///
+/// Resolution discovery (S-JSM-E2E-3 improvement): before the final move call,
+/// this helper attempts to discover a resolution name and passes `--resolution <R>`
+/// to produce properly-resolved tickets rather than issues closed via API bypass
+/// (resolution=null). Resolution name precedence (highest first):
+///
+/// 1. `JR_E2E_JSM_RESOLUTION` env override (if set and non-empty).
+/// 2. First `name` from `jr issue resolutions --output json`.
+///
+/// If resolution discovery fails for any reason (non-zero exit, JSON parse error,
+/// empty list, missing `name` field), falls back to moving WITHOUT `--resolution`
+/// (preserving S-JSM-E2E-2 behavior). A `[WARN]` is emitted on fallback.
+///
 /// Never fails the test: all failure branches emit `eprintln!("[WARN] …")`
 /// and return `()`. No `panic!`, `assert!`, `unwrap()`, or `expect()` on the
 /// transitions-fetch or move steps.
 ///
 /// Design: S-JSM-E2E-2 (dynamic close-transition discovery).
+///         S-JSM-E2E-3 (resolution discovery added).
 /// Root cause fixed: `jr issue move <key> "Done"` fails on EJ JSM workflows
 /// that have no transition named "Done" (live-run 26839267723, 2026-06-02).
 fn jsm_self_close(key: &str, h: &E2eHarness) {
@@ -255,7 +274,21 @@ fn jsm_self_close(key: &str, h: &E2eHarness) {
         }
     };
 
-    let close_out = match h.cmd().args(["issue", "move", key, &name]).output() {
+    // Resolution discovery (S-JSM-E2E-3): attempt to find a resolution name so that the
+    // close produces a properly-resolved ticket rather than one closed via API bypass
+    // (resolution=null). Best-effort: any failure falls back to no-resolution move.
+    let resolution_name: Option<String> = jsm_discover_resolution(h);
+
+    // Build the move command args with or without --resolution.
+    let move_result = if let Some(ref res) = resolution_name {
+        h.cmd()
+            .args(["issue", "move", key, &name, "--resolution", res])
+            .output()
+    } else {
+        h.cmd().args(["issue", "move", key, &name]).output()
+    };
+
+    let close_out = match move_result {
         Ok(o) => o,
         Err(e) => {
             eprintln!(
@@ -271,6 +304,85 @@ fn jsm_self_close(key: &str, h: &E2eHarness) {
              orphan risk LOW (Resolution-screen-required transition possible; see spec §6.3)",
             close_out.status.code()
         );
+    }
+}
+
+/// Discover a resolution name for use with `--resolution` on JSM close transitions.
+///
+/// Precedence:
+///   1. `JR_E2E_JSM_RESOLUTION` env override (if set and non-empty).
+///   2. First `name` from `jr issue resolutions --output json`.
+///
+/// Returns `None` when:
+/// - `jr issue resolutions` exits non-zero.
+/// - The output cannot be parsed as a JSON array.
+/// - The array is empty.
+/// - The first element has no `"name"` string field.
+///
+/// All failure paths emit `eprintln!("[WARN] jsm_discover_resolution: …")` for
+/// observability. Callers should fall back to the no-resolution path on `None`.
+fn jsm_discover_resolution(h: &E2eHarness) -> Option<String> {
+    // 1. Check env override first.
+    if let Ok(v) = std::env::var("JR_E2E_JSM_RESOLUTION") {
+        let v = v.trim().to_string();
+        if !v.is_empty() {
+            return Some(v);
+        }
+    }
+
+    // 2. Fetch from `jr issue resolutions --output json`.
+    let out = match h
+        .cmd()
+        .args(["issue", "resolutions", "--output", "json"])
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("[WARN] jsm_discover_resolution: failed to spawn resolutions command: {e}");
+            return None;
+        }
+    };
+
+    if !out.status.success() {
+        eprintln!(
+            "[WARN] jsm_discover_resolution: resolutions fetch failed (exit {:?}) — \
+             falling back to no-resolution close",
+            out.status.code()
+        );
+        return None;
+    }
+
+    let resolutions: serde_json::Value = match serde_json::from_slice(&out.stdout) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!(
+                "[WARN] jsm_discover_resolution: JSON parse error: {e} — \
+                 falling back to no-resolution close"
+            );
+            return None;
+        }
+    };
+
+    let arr = match resolutions.as_array() {
+        Some(a) if !a.is_empty() => a,
+        _ => {
+            eprintln!(
+                "[WARN] jsm_discover_resolution: empty resolutions list — \
+                 falling back to no-resolution close"
+            );
+            return None;
+        }
+    };
+
+    match arr[0].get("name").and_then(serde_json::Value::as_str) {
+        Some(n) => Some(n.to_string()),
+        None => {
+            eprintln!(
+                "[WARN] jsm_discover_resolution: resolutions[0] has no 'name' string field — \
+                 falling back to no-resolution close"
+            );
+            None
+        }
     }
 }
 
@@ -2762,6 +2874,456 @@ fn test_e2e_jsm_non_jsm_guard() {
         "stdout+stderr must contain 'Jira Service Management project' \
          (BC-X.8.004 require_service_desk guard); got stdout: {stdout}\nstderr: {stderr}"
     );
+}
+
+/// E2E: BC-3.2.013 proactive resolution enforcement — positive path + enforcement assertion.
+/// (Scenario 8 — S-JSM-RESOLUTION-REQUIRED inverted from S-JSM-E2E-3 bypass-demo)
+///
+/// Verifies that `jr issue move` proactively enforces a resolution on done-category
+/// transitions: with `--resolution` the move succeeds and the resolution is readable
+/// back; without `--resolution` in non-interactive mode the command exits 64 with a
+/// `--resolution` hint (BC-3.2.013 enforcement gate fired).
+///
+/// Steps:
+///   a. Discover a resolution via `jr issue resolutions --output json`; pick
+///      `JR_E2E_JSM_RESOLUTION` env override if set, else `resolutions[0].name`.
+///      If the list is empty → clean-skip.
+///   b. Discover a done-category status name via `jr issue transitions --output json`
+///      on a probe issue (first discovered RT; immediately closed after probe).
+///      If none → clean-skip.
+///   c. POSITIVE (BC-3.2.011 + BC-2.3.036): create ticket A; move with --resolution;
+///      assert exit 0 (403 → skip); read back; assert `fields.resolution.name == R`.
+///   d. ENFORCE (BC-3.2.013): create ticket B; move WITHOUT --resolution in
+///      --no-input mode; assert exit 64; assert stderr contains "--resolution" hint.
+///      BC-3.2.013 enforcement gate must fire proactively (before the POST).
+///   e. TEARDOWN: both tickets self-closed via `jsm_self_close` on every exit path
+///      after the key is captured. No created ticket is left open.
+///
+/// Traces to: BC-3.2.013 (proactive enforcement gate), BC-3.2.011 (resolution body),
+///            BC-2.3.036 (read-back), BC-3.2.009 (reactive backstop retained),
+///            AC-3 (jsm_self_close resolution), AC-5 (surface guard), VER-JSM-E2E-8.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and JR_E2E_JSM_PROJECT and use --include-ignored to run"]
+fn test_e2e_jsm_resolution_enforcement() {
+    if !e2e_enabled() {
+        return;
+    }
+    let jsm_project = match env::var("JR_E2E_JSM_PROJECT") {
+        Ok(p) if !p.trim().is_empty() => p.trim().to_string(),
+        _ => {
+            eprintln!("[SKIP] JR_E2E_JSM_PROJECT not set — skipping JSM resolution test");
+            return;
+        }
+    };
+    let h = e2e_harness();
+    let run_id = run_label();
+
+    // ── Step a: discover resolution name ─────────────────────────────────────
+    let resolution_name: Option<String> = jsm_discover_resolution(&h);
+    let resolution_name = match resolution_name {
+        Some(n) => n,
+        None => {
+            eprintln!(
+                "[SKIP] jr issue resolutions returned empty or failed — \
+                 skipping resolution enforcement test"
+            );
+            return;
+        }
+    };
+    eprintln!("[INFO] resolution_enforcement: using resolution '{resolution_name}'");
+
+    // ── Step b: discover request-type id for ticket creation ─────────────────
+    let list_out = h
+        .cmd()
+        .args([
+            "requesttype",
+            "list",
+            "--project",
+            &jsm_project,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr requesttype list");
+
+    if !list_out.status.success() {
+        let stderr = String::from_utf8_lossy(&list_out.stderr);
+        if stderr.contains("403") {
+            eprintln!("[SKIP] requesttype list returned 403 — skipping resolution test");
+            return;
+        }
+        panic!(
+            "requesttype list failed:\nstdout: {}\nstderr: {stderr}",
+            String::from_utf8_lossy(&list_out.stdout)
+        );
+    }
+
+    let rts: Vec<serde_json::Value> =
+        serde_json::from_slice(&list_out.stdout).expect("requesttype list must be a JSON array");
+
+    if rts.is_empty() {
+        eprintln!("[SKIP] No request types found on {jsm_project} — skipping resolution test");
+        return;
+    }
+
+    let first_rt_id = {
+        let id_val = &rts[0]["id"];
+        if let Some(s) = id_val.as_str() {
+            s.to_string()
+        } else if let Some(n) = id_val.as_i64() {
+            n.to_string()
+        } else {
+            eprintln!("[SKIP] rts[0].id is not a usable type — skipping");
+            return;
+        }
+    };
+
+    // ── Step b (cont): discover done-category transition name via a probe ─────
+    // Create a minimal probe request, get its transitions, immediately close it.
+    let probe_summary = format!("[e2e-jsm-res-probe {run_id}] transition discovery");
+    let probe_create_out = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &jsm_project,
+            "--request-type",
+            &first_rt_id,
+            "--summary",
+            &probe_summary,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr issue create (probe)");
+
+    if !probe_create_out.status.success() {
+        let stderr = String::from_utf8_lossy(&probe_create_out.stderr);
+        if stderr.contains("403") {
+            eprintln!("[SKIP] issue create returned 403 (probe) — skipping resolution test");
+            return;
+        }
+        eprintln!(
+            "[SKIP] issue create (probe) failed — skipping resolution test\n\
+             stdout: {}\nstderr: {stderr}",
+            String::from_utf8_lossy(&probe_create_out.stdout)
+        );
+        return;
+    }
+
+    let probe_v: serde_json::Value =
+        serde_json::from_slice(&probe_create_out.stdout).expect("probe create JSON must be valid");
+    let probe_key = probe_v
+        .get("key")
+        .and_then(serde_json::Value::as_str)
+        .expect("probe create JSON must contain 'key'")
+        .to_string();
+
+    // Discover transitions on the probe key.
+    let trans_out = h
+        .cmd()
+        .args(["issue", "transitions", &probe_key, "--output", "json"])
+        .output()
+        .expect("failed to spawn jr issue transitions (probe)");
+
+    // Close the probe key before checking transitions result — ensures no orphan.
+    jsm_self_close(&probe_key, &h);
+
+    if !trans_out.status.success() {
+        eprintln!(
+            "[SKIP] transitions fetch failed for probe {probe_key} (exit {:?}) — \
+             skipping resolution test",
+            trans_out.status.code()
+        );
+        return;
+    }
+
+    let transitions_v: serde_json::Value = match serde_json::from_slice(&trans_out.stdout) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[SKIP] transitions JSON parse error for probe: {e} — skipping");
+            return;
+        }
+    };
+
+    // Pick a done-category status name (same preference order as jsm_self_close).
+    let preferred_status = ["Resolved", "Closed", "Done"];
+    let done_status: Option<String> = transitions_v.as_array().and_then(|arr| {
+        for pref in &preferred_status {
+            if arr.iter().any(|t| {
+                t["to"]["statusCategory"]["key"].as_str() == Some("done")
+                    && t["to"]["name"].as_str() == Some(*pref)
+            }) {
+                return Some(pref.to_string());
+            }
+        }
+        arr.iter()
+            .find(|t| t["to"]["statusCategory"]["key"].as_str() == Some("done"))
+            .and_then(|t| t["to"]["name"].as_str().map(str::to_owned))
+    });
+
+    let done_status = match done_status {
+        Some(s) => s,
+        None => {
+            eprintln!(
+                "[SKIP] no done-category transition found on {probe_key} — \
+                 skipping resolution enforcement test"
+            );
+            return;
+        }
+    };
+    eprintln!("[INFO] resolution_enforcement: done status name is '{done_status}'");
+
+    // ── Step c: POSITIVE path (BC-3.2.011 + BC-2.3.036) ─────────────────────
+    // Create ticket A and move with --resolution.
+    let summary_a = format!("[e2e-jsm-res-pos {run_id}] resolution positive path");
+    let create_a_out = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &jsm_project,
+            "--request-type",
+            &first_rt_id,
+            "--summary",
+            &summary_a,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr issue create (ticket A)");
+
+    if !create_a_out.status.success() {
+        let stderr = String::from_utf8_lossy(&create_a_out.stderr);
+        if stderr.contains("403") {
+            eprintln!("[SKIP] issue create (A) returned 403 — skipping positive path");
+            return;
+        }
+        eprintln!(
+            "[SKIP] issue create (A) failed — skipping positive path\n\
+             stdout: {}\nstderr: {stderr}",
+            String::from_utf8_lossy(&create_a_out.stdout)
+        );
+        return;
+    }
+
+    let create_a_v: serde_json::Value =
+        serde_json::from_slice(&create_a_out.stdout).expect("ticket A create JSON must be valid");
+    let key_a = create_a_v
+        .get("key")
+        .and_then(serde_json::Value::as_str)
+        .expect("ticket A create JSON must contain 'key'")
+        .to_string();
+
+    // Move ticket A with --resolution.
+    let move_a_out = h
+        .cmd()
+        .args([
+            "issue",
+            "move",
+            &key_a,
+            &done_status,
+            "--resolution",
+            &resolution_name,
+        ])
+        .output()
+        .expect("failed to spawn jr issue move (ticket A)");
+
+    let move_a_stderr = String::from_utf8_lossy(&move_a_out.stderr).to_string();
+
+    if !move_a_out.status.success() {
+        // FIX 3: distinguish known clean-skip conditions from genuine failures.
+        if move_a_stderr.contains("403") {
+            // 403 → permission issue; close best-effort and skip.
+            jsm_self_close(&key_a, &h);
+            eprintln!("[SKIP] issue move (A) returned 403 — skipping positive path");
+            return;
+        }
+        if move_a_stderr
+            .to_lowercase()
+            .contains("multiple resolutions")
+        {
+            // Ambiguous resolution name (exit 64, BC resolver fires before API call).
+            // This happens when the instance has two resolutions with the same name.
+            // Not a --resolution bug; clean-skip.
+            jsm_self_close(&key_a, &h);
+            eprintln!(
+                "[SKIP] issue move (A) returned 'Multiple resolutions' (exit {:?}) — \
+                 ambiguous resolution name '{resolution_name}'; skipping positive path",
+                move_a_out.status.code()
+            );
+            return;
+        }
+        // Any other failure is a genuine --resolution regression worth surfacing.
+        jsm_self_close(&key_a, &h);
+        panic!(
+            "issue move {key_a} {done_status} --resolution {resolution_name} failed \
+             (unexpected; this is the positive path):\n\
+             exit: {:?}\nstdout: {}\nstderr: {move_a_stderr}",
+            move_a_out.status.code(),
+            String::from_utf8_lossy(&move_a_out.stdout),
+        );
+    }
+
+    // FIX 2: predicate-driven retry — only break when fields.resolution.name is populated.
+    // Breaking on first exit-0 + parseable JSON (old behavior) false-fails on cold sites
+    // where the issue body returns before the resolution field propagates (same anti-pattern
+    // fixed for Scenario 5 comment-property lag). The predicate: retry while the name is
+    // absent or empty; break as soon as it is non-empty.
+    const MAX_VIEW_ATTEMPTS: u32 = 5;
+    const VIEW_BACKOFF_MS: [u64; 4] = [250, 500, 1_000, 2_000];
+    // `view_a` holds the FINAL view value where the resolution field was confirmed
+    // non-empty (predicate satisfied). `None` means budget was exhausted without
+    // the field appearing.
+    let mut view_a: Option<serde_json::Value> = None;
+    for attempt in 1..=MAX_VIEW_ATTEMPTS {
+        let vout = h
+            .cmd()
+            .args(["issue", "view", &key_a, "--output", "json"])
+            .output()
+            .expect("failed to spawn jr issue view (ticket A)");
+        if vout.status.success() {
+            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&vout.stdout) {
+                // Predicate: fields.resolution.name is present and non-empty.
+                let has_resolution = v
+                    .get("fields")
+                    .and_then(|f| f.get("resolution"))
+                    .and_then(|r| r.get("name"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(|s| !s.is_empty())
+                    .unwrap_or(false);
+                if has_resolution {
+                    view_a = Some(v);
+                    break;
+                }
+            }
+        }
+        if attempt < MAX_VIEW_ATTEMPTS {
+            std::thread::sleep(Duration::from_millis(
+                VIEW_BACKOFF_MS[(attempt - 1) as usize],
+            ));
+        }
+    }
+
+    match &view_a {
+        Some(v) => {
+            let res_name = v
+                .get("fields")
+                .and_then(|f| f.get("resolution"))
+                .and_then(|r| r.get("name"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            // FIX 1: case-insensitive comparison — jr resolves the name case-insensitively
+            // and Jira persists the canonical casing. A JR_E2E_JSM_RESOLUTION=done override
+            // (canonical "Done") must not false-fail.
+            assert!(
+                res_name.eq_ignore_ascii_case(&resolution_name),
+                "AC-1 (BC-3.2.011 + BC-2.3.036): after move with --resolution '{resolution_name}', \
+                 fields.resolution.name must match '{resolution_name}' (case-insensitive); \
+                 got '{res_name}'. full issue view: {v}"
+            );
+            eprintln!(
+                "[INFO] resolution_enforcement POSITIVE: fields.resolution.name '{res_name}' \
+                 matches '{resolution_name}' (case-insensitive; BC-3.2.011 confirmed)"
+            );
+        }
+        None => {
+            // FIX 2: budget exhausted without the field appearing → skip read-back assertion.
+            // The move already returned exit 0, which is the atomic API acceptance evidence
+            // for BC-3.2.011. GET-by-key resolution-field lag on a cold free-tier site is
+            // environmental, not a jr bug.
+            eprintln!(
+                "[WARN] resolution_enforcement POSITIVE: fields.resolution.name did not appear \
+                 in {MAX_VIEW_ATTEMPTS} view attempts — GET-by-key resolution lag on free-tier \
+                 site; skipping read-back assertion. move accepted --resolution (exit 0) is \
+                 sufficient evidence per spec §8 (BC-3.2.011 floor satisfied)"
+            );
+        }
+    }
+
+    // ── Step d: ENFORCEMENT assertion (BC-3.2.013) ────────────────────────────
+    // S-JSM-RESOLUTION-REQUIRED: inverted from bypass-demo to hard enforcement assertion.
+    // Create ticket B and attempt move WITHOUT --resolution in --no-input mode.
+    // BC-3.2.013 requires jr to exit 64 and include "--resolution" in stderr.
+    let summary_b = format!("[e2e-jsm-res-enforce {run_id}] resolution enforcement path");
+    let create_b_out = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &jsm_project,
+            "--request-type",
+            &first_rt_id,
+            "--summary",
+            &summary_b,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr issue create (ticket B)");
+
+    if !create_b_out.status.success() {
+        let stderr = String::from_utf8_lossy(&create_b_out.stderr);
+        jsm_self_close(&key_a, &h); // A was already moved (done-category) — jsm_self_close is idempotent
+        if stderr.contains("403") {
+            eprintln!("[SKIP] issue create (B) returned 403 — skipping enforcement path");
+            return;
+        }
+        eprintln!(
+            "[SKIP] issue create (B) failed — skipping enforcement path\n\
+             stdout: {}\nstderr: {stderr}",
+            String::from_utf8_lossy(&create_b_out.stdout)
+        );
+        return;
+    }
+
+    let create_b_v: serde_json::Value =
+        serde_json::from_slice(&create_b_out.stdout).expect("ticket B create JSON must be valid");
+    let key_b = create_b_v
+        .get("key")
+        .and_then(serde_json::Value::as_str)
+        .expect("ticket B create JSON must contain 'key'")
+        .to_string();
+
+    // Attempt move WITHOUT --resolution in --no-input mode.
+    // BC-3.2.013: proactive gate must exit 64 + stderr contains "--resolution".
+    let move_b_out = h
+        .cmd()
+        .args(["issue", "move", &key_b, &done_status, "--no-input"])
+        .output()
+        .expect("failed to spawn jr issue move (ticket B)");
+
+    let move_b_stderr = String::from_utf8_lossy(&move_b_out.stderr).to_string();
+
+    if move_b_out.status.code() == Some(403) || move_b_stderr.contains("403") {
+        // 403 on move B — clean-skip after teardown.
+        jsm_self_close(&key_b, &h);
+        eprintln!("[SKIP] issue move (B) returned 403 — enforcement path skipped");
+        return;
+    }
+
+    assert_eq!(
+        move_b_out.status.code(),
+        Some(64),
+        "BC-3.2.013: proactive gate must exit 64 for no-resolution done-category move \
+         in --no-input mode; got {:?}\nstderr: {move_b_stderr}",
+        move_b_out.status.code()
+    );
+    assert!(
+        move_b_stderr.contains("--resolution"),
+        "BC-3.2.013: stderr must contain '--resolution' hint; got stderr: {move_b_stderr}"
+    );
+    eprintln!(
+        "[INFO] ENFORCE: BC-3.2.013 proactive gate fired — jr refused no-resolution \
+         done-category move (exit 64, '--resolution' in stderr)"
+    );
+
+    // Ticket B was NOT moved — proactive gate blocked the POST. Self-close it now.
+    jsm_self_close(&key_b, &h);
 }
 
 // ---------------------------------------------------------------------------
