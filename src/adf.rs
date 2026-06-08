@@ -416,7 +416,7 @@ fn flatten_table_to_paragraphs(table: &Value) -> Vec<Value> {
                         }
                     } else {
                         let doc = json!({ "type": "doc", "version": 1, "content": [block] });
-                        let text = adf_to_text(&doc).trim_end().replace('\n', " ");
+                        let text = adf_to_text(&doc).trim_end().replace(['\n', '\r'], " ");
                         if !text.is_empty() {
                             content.push(json!({ "type": "text", "text": text }));
                         }
@@ -1191,6 +1191,45 @@ mod tests {
         assert_eq!(
             bold_a["marks"][0]["type"], "strong",
             "bold cell text must retain its strong mark: {bold_a}"
+        );
+    }
+
+    #[test]
+    fn test_flatten_table_non_paragraph_cell_block_renders_as_plain_text() {
+        // Defensive branch: the ADF tableCell schema permits non-paragraph blocks
+        // (here a codeBlock with an embedded newline) even though markdown_to_adf
+        // never produces them. flatten_table_to_paragraphs must NOT splice such a
+        // block as inline (that would be invalid `paragraph > codeBlock`); it
+        // renders to a single newline-free text node. Tests the private fn directly
+        // since the branch is unreachable through the parser.
+        let table = json!({
+            "type": "table",
+            "content": [{
+                "type": "tableRow",
+                "content": [{
+                    "type": "tableCell",
+                    "content": [{
+                        "type": "codeBlock",
+                        "content": [{ "type": "text", "text": "line1\nline2" }]
+                    }]
+                }]
+            }]
+        });
+        let paras = flatten_table_to_paragraphs(&table);
+        assert_eq!(paras.len(), 1, "one row → one paragraph: {paras:?}");
+        let content = paras[0]["content"].as_array().unwrap();
+        // No block node smuggled into the paragraph; every child is a text node.
+        for node in content {
+            assert_eq!(node["type"], "text", "paragraph child must be text: {node}");
+            assert!(
+                !node["text"].as_str().unwrap().contains(['\n', '\r']),
+                "flattened text must be newline-free: {node}"
+            );
+        }
+        let joined: String = content.iter().filter_map(|n| n["text"].as_str()).collect();
+        assert!(
+            joined.contains("line1 line2"),
+            "code text must survive: {joined:?}"
         );
     }
 
