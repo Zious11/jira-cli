@@ -102,10 +102,17 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     // issue comments
     (&["issue", "comments"], &["--output"]),
     // issue move  (positional: key + status-name; --resolution added in S-JSM-E2E-3 Scenario 8;
-    //              --no-resolution + --no-input added in S-JSM-RESOLUTION-REQUIRED)
+    //              --no-resolution + --no-input added in S-JSM-RESOLUTION-REQUIRED;
+    //              --to added in E2E-HV-1 multi-key bulk-move test)
     (
         &["issue", "move"],
-        &["--output", "--resolution", "--no-resolution", "--no-input"],
+        &[
+            "--output",
+            "--resolution",
+            "--no-resolution",
+            "--no-input",
+            "--to",
+        ],
     ),
     // issue resolutions  (added in S-JSM-E2E-3 Scenario 8)
     (&["issue", "resolutions"], &["--output"]),
@@ -131,12 +138,20 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     (&["sprint", "list"], &["--board", "--output"]),
     // sprint current
     (&["sprint", "current"], &["--board", "--output"]),
+    // sprint add  (positional: issue keys; added in E2E-HV-1 add/remove round-trip)
+    (&["sprint", "add"], &["--sprint", "--output"]),
+    // sprint remove  (positional: issue keys; added in E2E-HV-1 add/remove round-trip)
+    (&["sprint", "remove"], &["--output"]),
     // team list
     (&["team", "list"], &["--output"]),
     // user search  (positional: query)
     (&["user", "search"], &["--output"]),
+    // user list  (added in E2E-HV-1 assignable-users test)
+    (&["user", "list"], &["--project", "--output"]),
     // user view  (positional: accountId)
     (&["user", "view"], &["--output"]),
+    // project list  (added in E2E-HV-1 project-list test)
+    (&["project", "list"], &["--output"]),
     // project fields
     (&["project", "fields"], &["--project", "--output"]),
     // queue list

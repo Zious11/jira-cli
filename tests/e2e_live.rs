@@ -470,6 +470,93 @@ fn issue_type() -> String {
     }
 }
 
+/// Create a throwaway Task issue in the E2E project and return its key.
+///
+/// The issue carries the `e2e-<run_label>` label so the `if: always()`
+/// teardown step in `e2e.yml` closes it even if the test panics before its
+/// own best-effort close runs. Polls via `poll_view` for GET-consistency
+/// before returning so callers can immediately operate on the key.
+///
+/// Panics (fails the test) only on `issue create` non-zero exit or malformed
+/// JSON — a seed failure is a genuine harness/site fault, not a clean skip.
+///
+/// Shared by the sprint add/remove and multi-key move round-trip tests
+/// (E2E-HV-1) to avoid duplicating the create+poll pattern.
+fn seed_issue(h: &E2eHarness, label: &str, summary: &str) -> String {
+    let itype = issue_type();
+    let out = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &project(),
+            "--type",
+            &itype,
+            "--summary",
+            summary,
+            "--label",
+            label,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for seed issue create");
+    assert!(
+        out.status.success(),
+        "seed issue create failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: Value =
+        serde_json::from_slice(&out.stdout).expect("seed issue create output must be valid JSON");
+    let key = json
+        .get("key")
+        .and_then(Value::as_str)
+        .expect("seed issue create JSON must contain a 'key' field")
+        .to_string();
+    assert_key_format(&key);
+    // Block until the issue is GET-visible so callers can act on it immediately.
+    let _ = poll_view(&key, h);
+    key
+}
+
+/// Best-effort teardown: move an issue to the configured "Done" status.
+///
+/// Never fails the test — any non-zero exit emits a `[WARN]` and returns.
+/// The `e2e-<run_label>` label on seeded issues is the authoritative safety
+/// net; this is a courtesy close so the live project stays tidy between runs.
+///
+/// Passes `--no-resolution` so the close is robust against workflows whose
+/// Done transition requires a resolution: without it, ADR-0015 / BC-3.2.013
+/// proactive enforcement would exit 64 in non-interactive mode and leave the
+/// issue open. `--no-resolution` is a silent no-op on transitions that do not
+/// require a resolution, so it is always safe here.
+fn best_effort_close(h: &E2eHarness, key: &str) {
+    match h
+        .cmd()
+        .args([
+            "issue",
+            "move",
+            key,
+            &status_done(),
+            "--no-resolution",
+            "--output",
+            "json",
+        ])
+        .output()
+    {
+        Ok(o) if o.status.success() => {}
+        Ok(o) => eprintln!(
+            "[WARN] best_effort_close: move {key} to {:?} failed (exit {:?}) — \
+             label sweeper will reap; orphan risk LOW",
+            status_done(),
+            o.status.code()
+        ),
+        Err(e) => eprintln!("[WARN] best_effort_close: failed to spawn move for {key}: {e}"),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // §4 Foundation helpers — poll_jql, shape matchers, transient classifier
 // (S-E2E-3 AC-001 through AC-004)
@@ -3967,6 +4054,268 @@ fn test_e2e_issue_view_returns_key_field() {
         view_json.get("key").is_some(),
         "issue view JSON must contain a 'key' field; got: {view_json}"
     );
+}
+
+// ===========================================================================
+// E2E-HV-1 — high-value coverage gap closure
+//   1. project list           (read; pagination surface)
+//   2. user list --project    (read; assignable-users path)
+//   3. sprint add / remove     (write round-trip)
+//   4. issue move multi-key    (bulk transition path — non-idempotent per CLAUDE.md)
+// ===========================================================================
+
+/// E2E: `jr project list --output json` returns a JSON array of projects.
+///
+/// When non-empty, each element has `key` + `name` (presence + type, not value
+/// equality — project inventory varies per site). The authenticated service
+/// account always has at least the E2E project visible, but the "if non-empty"
+/// contract stays portable across sites (lesson from S-398 over-fitting).
+///
+/// Traces to: E2E-HV-1, NFR-T-E2E-1.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
+fn test_e2e_project_list_returns_array() {
+    if !e2e_enabled() {
+        return;
+    }
+    let h = e2e_harness();
+    let output = h
+        .cmd()
+        .args(["project", "list", "--output", "json"])
+        .output()
+        .expect("failed to spawn jr for project list");
+
+    assert!(
+        output.status.success(),
+        "project list failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let v: Value =
+        serde_json::from_slice(&output.stdout).expect("project list output must be valid JSON");
+    let arr = v
+        .as_array()
+        .unwrap_or_else(|| panic!("project list output must be a JSON array; got: {v}"));
+    // The authenticated account always has access to at least its own project,
+    // so an empty array is a genuine defect (e.g. pagination dropping the only
+    // page or a serde regression), NOT a portable "if non-empty" case. Assert
+    // non-empty so the test cannot pass vacuously.
+    assert!(
+        !arr.is_empty(),
+        "project list must return at least one accessible project; got an empty array"
+    );
+    // Each element exposes key + name.
+    assert_array_of_objects_with_keys(&v, &["key", "name"]);
+}
+
+/// E2E: `jr user list --project <P> --output json` returns a JSON array.
+///
+/// Lists users assignable to the E2E project. When non-empty, each element has
+/// `accountId` + `displayName` (same serde-confirmed keys as `user search`).
+/// Depends on the "Browse users and groups" permission, so an empty array is a
+/// valid result — the "if non-empty" contract avoids permission-coupling.
+///
+/// Traces to: E2E-HV-1, BC-2.2.028, NFR-T-E2E-1.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
+fn test_e2e_user_list_assignable_returns_array() {
+    if !e2e_enabled() {
+        return;
+    }
+    let proj = project();
+    let h = e2e_harness();
+    let output = h
+        .cmd()
+        .args(["user", "list", "--project", &proj, "--output", "json"])
+        .output()
+        .expect("failed to spawn jr for user list");
+
+    assert!(
+        output.status.success(),
+        "user list failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let v: Value =
+        serde_json::from_slice(&output.stdout).expect("user list output must be valid JSON");
+    assert!(
+        v.is_array(),
+        "user list output must be a JSON array; got: {v}"
+    );
+    assert_array_of_objects_with_keys(&v, &["accountId", "displayName"]);
+}
+
+/// E2E: `jr sprint add --sprint <ID> <KEY>` then `jr sprint remove <KEY>` round-trip.
+///
+/// Clean-skips when:
+/// - `JR_E2E_BOARD_ID` is unset (no board to resolve a sprint from), OR
+/// - the board is not a scrum board (`"only available for scrum boards"`), OR
+/// - the board has no active sprint (`"No active sprint"`).
+///
+/// On the happy path: seeds a throwaway issue, adds it to the active sprint
+/// (asserts `added: true`), removes it back to the backlog (asserts
+/// `removed: true`), then best-effort closes the seed issue. The active sprint
+/// id is discovered via `jr sprint current` rather than hard-coded (S-398
+/// over-fitting lesson).
+///
+/// Traces to: E2E-HV-1, NFR-T-E2E-1.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
+fn test_e2e_sprint_add_remove_roundtrip() {
+    if !e2e_enabled() {
+        return;
+    }
+    let board_id = match env::var("JR_E2E_BOARD_ID") {
+        Ok(id) if !id.trim().is_empty() => id.trim().to_string(),
+        _ => return, // clean skip: no board configured
+    };
+    let h = e2e_harness();
+
+    // Discover the active sprint id via `jr sprint current` (do not hard-code).
+    let current = h
+        .cmd()
+        .args([
+            "sprint", "current", "--board", &board_id, "--output", "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for sprint current");
+    if !current.status.success() {
+        let stderr = String::from_utf8_lossy(&current.stderr);
+        if stderr.contains("No active sprint") || stderr.contains("only available for scrum boards")
+        {
+            return; // clean skip: no sprint capability / no active sprint
+        }
+        panic!("sprint current failed unexpectedly:\nstderr: {stderr}");
+    }
+    let current_json: Value =
+        serde_json::from_slice(&current.stdout).expect("sprint current output must be valid JSON");
+    let sprint_id = current_json
+        .get("sprint")
+        .and_then(|s| s.get("id"))
+        .and_then(Value::as_u64)
+        .expect("sprint current JSON must contain sprint.id");
+
+    let label = run_label();
+    let key = seed_issue(&h, &label, &format!("[e2e {label}] sprint round-trip"));
+
+    // Add to the active sprint.
+    let add = h
+        .cmd()
+        .args([
+            "sprint",
+            "add",
+            "--sprint",
+            &sprint_id.to_string(),
+            &key,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for sprint add");
+    assert!(
+        add.status.success(),
+        "sprint add failed for {key}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&add.stdout),
+        String::from_utf8_lossy(&add.stderr)
+    );
+    let add_json: Value =
+        serde_json::from_slice(&add.stdout).expect("sprint add output must be valid JSON");
+    assert_eq!(
+        add_json.get("added"),
+        Some(&Value::Bool(true)),
+        "sprint add JSON must have added: true; got: {add_json}"
+    );
+
+    // Remove back to the backlog.
+    let remove = h
+        .cmd()
+        .args(["sprint", "remove", &key, "--output", "json"])
+        .output()
+        .expect("failed to spawn jr for sprint remove");
+    assert!(
+        remove.status.success(),
+        "sprint remove failed for {key}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&remove.stdout),
+        String::from_utf8_lossy(&remove.stderr)
+    );
+    let remove_json: Value =
+        serde_json::from_slice(&remove.stdout).expect("sprint remove output must be valid JSON");
+    assert_eq!(
+        remove_json.get("removed"),
+        Some(&Value::Bool(true)),
+        "sprint remove JSON must have removed: true; got: {remove_json}"
+    );
+
+    best_effort_close(&h, &key);
+}
+
+/// E2E: `jr issue move <K1> <K2> --to <STATUS> --output json` (multi-key bulk).
+///
+/// The single-key move path is covered by the write-flow test; this exercises
+/// the distinct bulk path (`POST .../bulk` + async poll), which is documented
+/// as non-idempotent in CLAUDE.md and previously had no live coverage.
+///
+/// Seeds two throwaway issues, bulk-moves both to "In Progress" (a non-done
+/// status, so the bulk path is not subject to single-key resolution
+/// enforcement), and asserts the `{taskId, results: [...]}` payload reports
+/// `status: "success"` for each key. Then best-effort closes both seeds.
+///
+/// Traces to: E2E-HV-1, BC-3.2.009, NFR-T-E2E-1.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
+fn test_e2e_issue_move_multikey_bulk() {
+    if !e2e_enabled() {
+        return;
+    }
+    let h = e2e_harness();
+    let label = run_label();
+    let target = status_in_progress();
+
+    let key1 = seed_issue(&h, &label, &format!("[e2e {label}] bulk-move A"));
+    let key2 = seed_issue(&h, &label, &format!("[e2e {label}] bulk-move B"));
+
+    let output = h
+        .cmd()
+        .args([
+            "issue", "move", &key1, &key2, "--to", &target, "--output", "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for multi-key issue move");
+
+    assert!(
+        output.status.success(),
+        "multi-key issue move failed for [{key1}, {key2}]:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let v: Value =
+        serde_json::from_slice(&output.stdout).expect("multi-key move output must be valid JSON");
+    let results = v
+        .get("results")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("multi-key move JSON must contain 'results' array; got: {v}"));
+    assert_eq!(
+        results.len(),
+        2,
+        "multi-key move must report a result per key; got: {v}"
+    );
+    for key in [&key1, &key2] {
+        let entry = results
+            .iter()
+            .find(|r| r.get("key").and_then(Value::as_str) == Some(key.as_str()))
+            .unwrap_or_else(|| panic!("multi-key move results must include {key}; got: {v}"));
+        assert_eq!(
+            entry.get("status").and_then(Value::as_str),
+            Some("success"),
+            "multi-key move must report success for {key}; got: {entry}"
+        );
+    }
+
+    best_effort_close(&h, &key1);
+    best_effort_close(&h, &key2);
 }
 
 // ---------------------------------------------------------------------------
