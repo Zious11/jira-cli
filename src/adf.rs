@@ -19,7 +19,8 @@ pub fn text_to_adf(text: &str) -> Value {
 }
 
 pub fn markdown_to_adf(markdown: &str) -> Value {
-    let options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH;
+    let options =
+        Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_FOOTNOTES;
     let parser = TextMergeStream::new(Parser::new_ext(markdown, options));
     let mut builder = AdfBuilder::new();
     for event in parser {
@@ -37,6 +38,15 @@ struct AdfBuilder {
     stack: Vec<PartialNode>,
     active_marks: Vec<Value>,
     in_table_head: bool,
+    // ADF has no native footnote node. Definition bodies are collected here and
+    // flushed at `finish()` into an appended footnotes section (a `rule` divider
+    // followed by one labelled paragraph per definition), so authored content is
+    // preserved rather than silently dropped (issue #472).
+    footnote_defs: Vec<Value>,
+    // Labels already collected, so a duplicate `[^1]: ...` definition line keeps
+    // only the first occurrence instead of emitting two identically-labelled
+    // paragraphs.
+    footnote_labels_seen: std::collections::HashSet<String>,
 }
 
 struct PartialNode {
@@ -59,6 +69,9 @@ enum NodeKind {
     Table,
     TableRow,
     TableCell { is_header: bool },
+    // Captures a footnote definition's block content. On End the content is
+    // moved into `footnote_defs` (label-prefixed) instead of the parent flow.
+    FootnoteDefinition { label: String },
 }
 
 impl AdfBuilder {
@@ -68,6 +81,8 @@ impl AdfBuilder {
             stack: Vec::new(),
             active_marks: Vec::new(),
             in_table_head: false,
+            footnote_defs: Vec::new(),
+            footnote_labels_seen: std::collections::HashSet::new(),
         }
     }
 
@@ -81,6 +96,15 @@ impl AdfBuilder {
             Event::SoftBreak => self.push_text(" "),
             Event::HardBreak => self.append_child(json!({ "type": "hardBreak" })),
             Event::Rule => self.append_child(json!({ "type": "rule" })),
+            // ADF has no footnote-reference node. Render the reference inline as a
+            // plain `[label]` marker so the caret form `[^label]` never survives as
+            // literal text (#472). The marker is a *structural* reference, not
+            // content, so it deliberately does NOT inherit the active inline marks
+            // (a `[^1]` inside `**bold**` must not produce a bold marker); this also
+            // keeps it consistent with the unmarked definition-side marker.
+            // Note: pulldown-cmark only emits this event for references that have a
+            // matching definition; an undefined `[^x]` stays literal text upstream.
+            Event::FootnoteReference(label) => self.push_footnote_marker(label.as_ref()),
             _ => {}
         }
     }
@@ -126,6 +150,11 @@ impl AdfBuilder {
             // but images are visibly named as intentionally suppressed per the
             // spec's Feature Mapping (ADF `media` nodes require pre-upload).
             Tag::Image { .. } => self.push(NodeKind::Sink),
+            Tag::FootnoteDefinition(label) => {
+                self.push(NodeKind::FootnoteDefinition {
+                    label: label.into_string(),
+                });
+            }
             _ => self.push(NodeKind::Sink),
         }
     }
@@ -219,10 +248,53 @@ impl AdfBuilder {
                 }
                 None
             }
+            NodeKind::FootnoteDefinition { label } => {
+                // Keep only the first definition per label; a duplicate
+                // `[^1]: ...` line is an authoring error and would otherwise emit
+                // two identically-labelled paragraphs.
+                if self.footnote_labels_seen.insert(label.clone()) {
+                    // Move the definition's blocks into the deferred footnotes
+                    // section, prefixing the body with a `[label] ` marker. The
+                    // definition is almost always a single paragraph; if its first
+                    // block is not a paragraph (e.g. a list body), prepend a
+                    // standalone label paragraph instead of mutating it.
+                    let mut blocks = children;
+                    let marker = json!({ "type": "text", "text": format!("[{label}] ") });
+                    match blocks.first_mut() {
+                        Some(first) if first["type"] == "paragraph" => {
+                            match first["content"].as_array_mut() {
+                                Some(content) => content.insert(0, marker),
+                                None => first["content"] = json!([marker]),
+                            }
+                        }
+                        Some(_) => {
+                            blocks.insert(0, json!({ "type": "paragraph", "content": [marker] }));
+                        }
+                        None => {
+                            // Empty definition body — still emit the bare label.
+                            blocks.push(json!({ "type": "paragraph", "content": [marker] }));
+                        }
+                    }
+                    self.footnote_defs.extend(blocks);
+                }
+                None
+            }
             NodeKind::Sink => None,
         };
         if let Some(node) = node {
-            self.append_child(node);
+            // Drop block containers left with empty `content` (invalid ADF that
+            // Jira rejects with HTTP 400). Two ways this arises:
+            //   * pulldown-cmark hoists a footnote definition out of an enclosing
+            //     block, leaving an empty shell (`> [^1]: x` -> empty blockquote);
+            //   * a contentless heading from a bare `#` line.
+            // End events fire inner-first, so if a future transform emptied a
+            // nested container it would be pruned before its parent finalizes.
+            // (In practice today the only reachable empties are a direct
+            // blockquote and a bare heading; the list path keeps a valid empty
+            // placeholder paragraph and is never pruned — see is_empty_block_container.)
+            if !is_empty_block_container(&node) {
+                self.append_child(node);
+            }
         }
     }
 
@@ -250,6 +322,20 @@ impl AdfBuilder {
         } else {
             self.root.push(node);
         }
+    }
+
+    /// Append a footnote reference marker `[label]` as a plain, unmarked text
+    /// node. Unlike `push_text` it never applies `active_marks` (a footnote
+    /// reference is structural, not styled content), but it still honors a Sink
+    /// (e.g. inside image alt text) so the marker is dropped there like any other
+    /// inline content.
+    fn push_footnote_marker(&mut self, label: &str) {
+        if let Some(top) = self.stack.last() {
+            if matches!(top.kind, NodeKind::Sink) {
+                return;
+            }
+        }
+        self.append_child(json!({ "type": "text", "text": format!("[{label}]") }));
     }
 
     fn push_text(&mut self, text: &str) {
@@ -286,9 +372,64 @@ impl AdfBuilder {
         }));
     }
 
-    fn finish(self) -> Vec<Value> {
+    fn finish(mut self) -> Vec<Value> {
+        // Flush collected footnote definitions into an appended section,
+        // separated from the body by a single `rule` divider. Only emitted when
+        // at least one definition exists (a bare reference adds no section).
+        if !self.footnote_defs.is_empty() {
+            // Add the divider only when there is body content to divide from, and
+            // never when the body already ends in a rule — otherwise a doc that is
+            // footnote-only gets a leading rule, and a doc ending in `---` gets two
+            // adjacent rules.
+            let ends_with_rule = self
+                .root
+                .last()
+                .and_then(|n| n.get("type"))
+                .and_then(Value::as_str)
+                == Some("rule");
+            if !self.root.is_empty() && !ends_with_rule {
+                self.root.push(json!({ "type": "rule" }));
+            }
+            self.root.append(&mut self.footnote_defs);
+        }
         self.root
     }
+}
+
+/// True for block container nodes left with an empty `content` array. ADF
+/// rejects an empty `content` on these with HTTP 400, so they must be pruned
+/// rather than emitted.
+///
+/// Excluded by design:
+/// - `paragraph` / `codeBlock`: ADF permits them to be empty, and
+///   `wrap_inlines_as_blocks` relies on an empty paragraph as a valid
+///   placeholder inside otherwise-empty table cells and list items.
+/// - `tableCell` / `tableHeader`: dropping a cell would break column alignment;
+///   they always receive that placeholder paragraph instead, so they are never
+///   actually empty.
+///
+/// `heading` IS included: unlike paragraph, an empty heading (e.g. a bare `#`
+/// line) carries no content and the ADF schema treats heading content as
+/// required.
+fn is_empty_block_container(node: &Value) -> bool {
+    const REQUIRES_CONTENT: [&str; 7] = [
+        "blockquote",
+        "heading",
+        "listItem",
+        "bulletList",
+        "orderedList",
+        "table",
+        "tableRow",
+    ];
+    let is_required = node
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|t| REQUIRES_CONTENT.contains(&t));
+    let is_empty = node
+        .get("content")
+        .and_then(Value::as_array)
+        .is_some_and(|c| c.is_empty());
+    is_required && is_empty
 }
 
 /// Group a mixed list of inline and block nodes into pure block-level output.
@@ -1532,6 +1673,316 @@ mod tests {
         assert!(text(&items[0]).contains("done task"));
         assert!(text(&items[1]).contains("[ ]"));
         assert!(text(&items[1]).contains("pending task"));
+    }
+
+    // --- Footnotes (issue #472) -------------------------------------------
+    // Before the fix, ENABLE_FOOTNOTES was off, so `[^1]` survived as literal
+    // text and `[^1]: ...` became a stray paragraph — visibly broken output.
+    // The fix parses footnotes and renders references as a plain `[label]`
+    // marker, collecting definitions into an appended footnotes section
+    // (a `rule` divider + one labelled paragraph per definition). This
+    // preserves authored content rather than silently dropping it.
+
+    /// Collect all `text` node strings from a paragraph node, in order.
+    fn para_text_of(node: &Value) -> String {
+        node["content"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|n| n["text"].as_str())
+                    .collect::<String>()
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn test_markdown_footnote_reference_renders_marker_not_literal_caret() {
+        let adf = markdown_to_adf("See note.[^1]\n\n[^1]: The note body.");
+        let s = adf.to_string();
+        assert!(
+            !s.contains("[^1]"),
+            "literal footnote caret must not survive: {s}"
+        );
+        let first_para = &adf["content"][0];
+        assert_eq!(first_para["type"], "paragraph");
+        let para_text = para_text_of(first_para);
+        assert!(para_text.contains("See note."), "got: {para_text:?}");
+        assert!(
+            para_text.contains("[1]"),
+            "reference marker missing: {para_text:?}"
+        );
+    }
+
+    #[test]
+    fn test_markdown_footnote_definition_appended_after_rule_with_label() {
+        let adf = markdown_to_adf("Body.[^1]\n\n[^1]: Definition text.");
+        let content = adf["content"].as_array().unwrap();
+        let rule_idx = content
+            .iter()
+            .position(|n| n["type"] == "rule")
+            .expect("a rule divider must precede the footnotes section");
+        let def = &content[rule_idx + 1];
+        assert_eq!(def["type"], "paragraph");
+        let def_text = para_text_of(def);
+        assert!(
+            def_text.starts_with("[1] "),
+            "definition must be prefixed with its [label] marker: {def_text:?}"
+        );
+        assert!(
+            def_text.contains("Definition text."),
+            "definition body missing: {def_text:?}"
+        );
+    }
+
+    #[test]
+    fn test_markdown_footnote_definition_not_stray_broken_paragraph() {
+        let adf = markdown_to_adf("Body.[^1]\n\n[^1]: Definition text.");
+        let s = adf.to_string();
+        assert!(
+            !s.contains("[^1]:"),
+            "stray `[^1]:` definition remnant must not survive: {s}"
+        );
+    }
+
+    #[test]
+    fn test_markdown_multiple_footnotes_share_single_divider() {
+        let adf = markdown_to_adf("First.[^a] Second.[^b]\n\n[^a]: Alpha.\n[^b]: Beta.");
+        let s = adf.to_string();
+        assert!(!s.contains("[^"), "no literal carets: {s}");
+        let content = adf["content"].as_array().unwrap();
+        let rules = content.iter().filter(|n| n["type"] == "rule").count();
+        assert_eq!(rules, 1, "exactly one footnotes divider expected: {s}");
+        assert!(s.contains("Alpha."), "alpha def body missing: {s}");
+        assert!(s.contains("Beta."), "beta def body missing: {s}");
+        let first_para_text = para_text_of(&content[0]);
+        assert!(
+            first_para_text.contains("[a]"),
+            "ref [a] missing: {first_para_text}"
+        );
+        assert!(
+            first_para_text.contains("[b]"),
+            "ref [b] missing: {first_para_text}"
+        );
+    }
+
+    #[test]
+    fn test_markdown_footnote_undefined_reference_stays_literal_no_section() {
+        // pulldown-cmark only emits a `FootnoteReference` event for references
+        // that have a matching definition. An *undefined* `[^x]` is never
+        // recognized as a footnote — it remains the literal text the user typed
+        // and produces no footnotes section. This is documented pulldown
+        // behavior, not the #472 malformed-output bug (which required a
+        // definition to manifest). Pinning it guards against a silent change.
+        let adf = markdown_to_adf("Dangling.[^x]");
+        let content = adf["content"].as_array().unwrap();
+        assert!(
+            content.iter().all(|n| n["type"] != "rule"),
+            "no rule divider without any definition"
+        );
+        let para_text = para_text_of(&content[0]);
+        assert_eq!(para_text, "Dangling.[^x]", "undefined ref left verbatim");
+    }
+
+    // Adversarial-review-driven edge cases (issue #472 hybrid review): the
+    // dual (Claude + Gemini) adversary passes found that pulldown-cmark hoists
+    // footnote definitions out of enclosing blocks (leaving empty containers
+    // that ADF rejects with HTTP 400), and several rendering edge cases.
+
+    /// Recursively assert no *required-content* container carries an empty
+    /// `content` array — Jira rejects the whole payload with 400. `paragraph`,
+    /// `heading`, and `codeBlock` MAY be empty in ADF and are excluded.
+    fn assert_no_invalid_empty_container(adf: &Value) {
+        const REQUIRES_CONTENT: &[&str] = &[
+            "blockquote",
+            "heading",
+            "listItem",
+            "bulletList",
+            "orderedList",
+            "table",
+            "tableRow",
+            "tableCell",
+            "tableHeader",
+        ];
+        fn walk(n: &Value) {
+            if let Some(t) = n["type"].as_str() {
+                if REQUIRES_CONTENT.contains(&t) {
+                    let empty = n["content"].as_array().is_some_and(|c| c.is_empty());
+                    assert!(!empty, "invalid empty `{t}` content (Jira 400): {n}");
+                }
+            }
+            if let Some(arr) = n["content"].as_array() {
+                arr.iter().for_each(walk);
+            }
+        }
+        walk(adf);
+    }
+
+    #[test]
+    fn test_markdown_footnote_definition_in_blockquote_no_empty_container() {
+        // `> [^1]: x` hoists the definition out, leaving an empty blockquote.
+        let adf = markdown_to_adf("Body.[^1]\n\n> [^1]: quoted note");
+        assert_no_invalid_empty_container(&adf);
+        assert!(
+            adf.to_string().contains("quoted note"),
+            "def body preserved"
+        );
+    }
+
+    #[test]
+    fn test_markdown_footnote_definition_in_list_no_empty_container() {
+        // `- [^1]: x` hoists the definition out, leaving the list item holding
+        // only a placeholder *empty paragraph*. That paragraph is valid ADF (so
+        // it is NOT pruned), which keeps the listItem/bulletList non-empty and
+        // valid. The point of this test: the hoist must never yield an
+        // empty-`content` listItem/bulletList (a 400), and the body survives.
+        let adf = markdown_to_adf("Body.[^1]\n\n- [^1]: listed note");
+        assert_no_invalid_empty_container(&adf);
+        assert!(
+            adf.to_string().contains("listed note"),
+            "def body preserved"
+        );
+    }
+
+    #[test]
+    fn test_markdown_footnote_reference_marker_does_not_inherit_marks() {
+        // A reference inside `**bold**` must render a PLAIN `[1]` marker — the
+        // marker is structural, not styled content.
+        let adf = markdown_to_adf("**bold[^1]**\n\n[^1]: note");
+        let first_para = &adf["content"][0];
+        let marker = first_para["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["text"] == "[1]")
+            .expect("reference marker [1] present");
+        assert!(
+            marker.get("marks").is_none(),
+            "footnote marker must not inherit surrounding marks: {marker}"
+        );
+        // The neighbouring real content still carries its mark.
+        let bold = first_para["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["text"] == "bold")
+            .unwrap();
+        assert_eq!(
+            bold["marks"][0]["type"], "strong",
+            "bold text keeps its mark"
+        );
+    }
+
+    #[test]
+    fn test_markdown_footnote_duplicate_definition_kept_once() {
+        let adf = markdown_to_adf("Body.[^1]\n\n[^1]: first\n[^1]: second");
+        let content = adf["content"].as_array().unwrap();
+        let def_paras = content
+            .iter()
+            .filter(|n| n["type"] == "paragraph" && para_text_of(n).starts_with("[1] "))
+            .count();
+        assert_eq!(
+            def_paras, 1,
+            "duplicate definition must collapse to one: {adf}"
+        );
+        let s = adf.to_string();
+        assert!(s.contains("first"), "first definition kept: {s}");
+        assert!(
+            !s.contains("second"),
+            "duplicate (second) definition dropped: {s}"
+        );
+    }
+
+    #[test]
+    fn test_markdown_footnote_no_double_rule_when_body_ends_with_rule() {
+        let adf = markdown_to_adf("Body.[^1]\n\n---\n\n[^1]: note");
+        let rules = adf["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|n| n["type"] == "rule")
+            .count();
+        assert_eq!(rules, 1, "must not emit two adjacent rule dividers: {adf}");
+    }
+
+    #[test]
+    fn test_markdown_footnote_only_document_has_no_leading_rule() {
+        // A definition with no body content and no reference still preserves the
+        // text but must not produce a leading rule divider.
+        let adf = markdown_to_adf("[^1]: orphan definition");
+        let content = adf["content"].as_array().unwrap();
+        assert_ne!(content[0]["type"], "rule", "no leading rule: {adf}");
+        assert!(
+            adf.to_string().contains("orphan definition"),
+            "orphan definition body preserved: {adf}"
+        );
+    }
+
+    #[test]
+    fn test_markdown_footnote_definition_body_list_preserved() {
+        // A definition whose body is a list exercises the non-paragraph branch:
+        // a standalone `[1]` label paragraph is prepended, then the list blocks.
+        let adf = markdown_to_adf("Body.[^1]\n\n[^1]:\n    - alpha\n    - beta");
+        assert_no_invalid_empty_container(&adf);
+        let content = adf["content"].as_array().unwrap();
+        let has_label = content
+            .iter()
+            .any(|n| n["type"] == "paragraph" && para_text_of(n).starts_with("[1]"));
+        assert!(has_label, "label paragraph present: {adf}");
+        let s = adf.to_string();
+        assert!(
+            s.contains("alpha") && s.contains("beta"),
+            "list body preserved: {s}"
+        );
+    }
+
+    #[test]
+    fn test_is_empty_block_container_membership() {
+        // Pin the REQUIRES_CONTENT set directly, so the prune coverage does not
+        // rely on a particular markdown input reaching each container type.
+        for ty in [
+            "blockquote",
+            "heading",
+            "listItem",
+            "bulletList",
+            "orderedList",
+            "table",
+            "tableRow",
+        ] {
+            assert!(
+                is_empty_block_container(&json!({ "type": ty, "content": [] })),
+                "{ty} with empty content must be pruned"
+            );
+            assert!(
+                !is_empty_block_container(
+                    &json!({ "type": ty, "content": [{ "type": "text", "text": "x" }] })
+                ),
+                "{ty} with content must be kept"
+            );
+        }
+        // Excluded types: empty is valid ADF (or pruning would break structure).
+        for ty in ["paragraph", "codeBlock", "tableCell", "tableHeader"] {
+            assert!(
+                !is_empty_block_container(&json!({ "type": ty, "content": [] })),
+                "{ty} with empty content must NOT be pruned"
+            );
+        }
+    }
+
+    #[test]
+    fn test_markdown_bare_heading_pruned_no_empty_container() {
+        // A contentless `#` line yields an empty heading; it must be pruned, not
+        // emitted as an invalid empty-content node.
+        let adf = markdown_to_adf("#\n\nbody text");
+        assert_no_invalid_empty_container(&adf);
+        let content = adf["content"].as_array().unwrap();
+        assert!(
+            content.iter().all(|n| n["type"] != "heading"),
+            "empty heading must be pruned: {adf}"
+        );
+        assert!(
+            adf.to_string().contains("body text"),
+            "body preserved: {adf}"
+        );
     }
 
     #[test]
