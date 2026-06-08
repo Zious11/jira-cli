@@ -277,12 +277,18 @@ async fn test_move_multi_key_issues_one_bulk_transition_post_then_polls() {
         .await;
 
     // The bulk transition POST: expect exactly 1 call.
-    // CONFIRMED schema: selectedIssueIdsOrKeys + transitionId (top-level, not nested).
+    // CONFIRMED schema (Atlassian community 2026-02-19 + live run 27156639337):
+    // keys and transitionId are nested inside bulkTransitionInputs — NOT top-level.
+    // [FIX-BULK-TRANSITION-001]
     Mock::given(method("POST"))
         .and(path("/rest/api/3/bulk/issues/transition"))
         .and(body_partial_json(serde_json::json!({
-            "selectedIssueIdsOrKeys": ["BAR-10", "BAR-11", "BAR-12"],
-            "transitionId": "31"
+            "bulkTransitionInputs": [
+                {
+                    "selectedIssueIdsOrKeys": ["BAR-10", "BAR-11", "BAR-12"],
+                    "transitionId": "31"
+                }
+            ]
         })))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(bulk_task_enqueued_response("task-trans-001")),
@@ -790,6 +796,116 @@ async fn test_edit_multi_key_output_json_returns_results_array() {
         2,
         "Expected 2 result entries for 2 keys; got: {stdout}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// BC-FIX-BULK-TRANSITION: multi-key `jr issue move` MUST wrap the transition
+// payload in a `bulkTransitionInputs` array.
+//
+// Bug: current code sends a FLAT body:
+//   { "selectedIssueIdsOrKeys": [...], "transitionId": "31" }
+// Live Jira Cloud requires the NESTED shape:
+//   { "bulkTransitionInputs": [ { "selectedIssueIdsOrKeys": [...], "transitionId": "31" } ],
+//     "sendBulkNotification": true }
+// Live error on flat body: 400 "bulkTransitionInputs must not be empty"
+//
+// Source: Atlassian developer community (2026-02-19) + live E2E run 27156639337
+// (`test_e2e_issue_move_multikey_bulk`).
+//
+// Red Gate: this test MUST FAIL before the fix because:
+//   - The POST mock uses `body_string_contains("bulkTransitionInputs")` — the flat
+//     body does NOT contain that key, so the mock goes unmatched.
+//   - wiremock `.expect(1)` fires on drop when the POST is never satisfied.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_move_multikey_bulk_transition_uses_bulktransitioninputs_wrapper() {
+    let server = MockServer::start().await;
+
+    // Transition lookup: resolve "Done" → id "31" from first key.
+    // StatusCategory requires both `name` and `key` fields (Status struct in types/jira/issue.rs).
+    Mock::given(method("GET"))
+        .and(path_regex(r"^/rest/api/3/issue/[A-Z]+-\d+/transitions$"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "transitions": [
+                {"id": "31", "name": "Done",        "to": {"name": "Done",        "statusCategory": {"key": "done",          "name": "Done"}}},
+                {"id": "11", "name": "To Do",        "to": {"name": "To Do",       "statusCategory": {"key": "new",           "name": "To Do"}}},
+                {"id": "21", "name": "In Progress",  "to": {"name": "In Progress", "statusCategory": {"key": "indeterminate", "name": "In Progress"}}}
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    // The bulk transition POST MUST use the nested `bulkTransitionInputs` wrapper shape.
+    //
+    // body_partial_json asserts the nested structure is present.
+    // body_string_contains("bulkTransitionInputs") acts as a closed-failure guard:
+    //   if the wrapper key is absent (flat body), the mock is not matched and
+    //   .expect(1) fires on drop — proving Red Gate.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/transition"))
+        .and(body_string_contains("bulkTransitionInputs"))
+        .and(body_partial_json(serde_json::json!({
+            "bulkTransitionInputs": [
+                {
+                    "selectedIssueIdsOrKeys": ["BAR-10", "BAR-11", "BAR-12"],
+                    "transitionId": "31"
+                }
+            ]
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(bulk_task_enqueued_response("task-btinputs-001")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Poll: in-progress then complete.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/bulk/queue/task-btinputs-001"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(bulk_task_in_progress_response("task-btinputs-001")),
+        )
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/bulk/queue/task-btinputs-001"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(bulk_task_complete_response(
+                "task-btinputs-001",
+                vec!["BAR-10", "BAR-11", "BAR-12"],
+            )),
+        )
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "move",
+            "BAR-10",
+            "BAR-11",
+            "BAR-12",
+            "--to",
+            "Done",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for multi-key bulk move with bulkTransitionInputs wrapper; \
+         stderr={stderr} stdout={stdout}"
+    );
+    // wiremock .expect(1) on the bulk POST fires on drop — verifies the POST was made
+    // with the correct nested body shape.
 }
 
 // ---------------------------------------------------------------------------

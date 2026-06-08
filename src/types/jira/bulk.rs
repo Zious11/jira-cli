@@ -264,16 +264,39 @@ pub struct BulkEditRequest {
     pub edited_fields_input: serde_json::Value,
 }
 
+/// One entry in the `bulkTransitionInputs` array for POST /rest/api/3/bulk/issues/transition.
+///
+/// When all keys share the same workflow, send ONE entry with every key and the single
+/// transitionId — exactly what `bulk_transition` in `src/api/jira/bulk.rs` does.
+///
+/// Schema confirmed: Atlassian community post 2026-02-19 + live run 27156639337.
+/// The OpenAPI JSON (2026-05-09) described a flat top-level shape, but live Jira
+/// rejects that with 400 "bulkTransitionInputs must not be empty". The nested
+/// wrapper is the correct wire format. [FIX-BULK-TRANSITION-001]
+#[derive(serde::Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkTransitionInput {
+    pub selected_issue_ids_or_keys: Vec<String>,
+    pub transition_id: String,
+}
+
 /// Request body for POST /rest/api/3/bulk/issues/transition (bulk transition).
 ///
-/// CONFIRMED from OpenAPI JSON (2026-05-09):
-///   - selectedIssueIdsOrKeys: string[], required, writeOnly
-///   - transitionId: string, required, writeOnly (top-level, NOT nested)
+/// CONFIRMED schema (Atlassian community 2026-02-19 + live run 27156639337):
+///   `selectedIssueIdsOrKeys` and `transitionId` are NESTED inside a
+///   `bulkTransitionInputs` array — NOT at the top level. The flat
+///   top-level shape from the OpenAPI JSON (2026-05-09) is wrong; live Jira
+///   returns 400 "bulkTransitionInputs must not be empty" for the flat shape.
+///
+/// Same-workflow issues are sent as ONE `BulkTransitionInput` entry (all keys + one
+/// transitionId). `sendBulkNotification: false` mirrors the bulk-edit default.
+///
+/// [FIX-BULK-TRANSITION-001]
 #[derive(serde::Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct BulkTransitionRequest {
-    pub selected_issue_ids_or_keys: Vec<String>,
-    pub transition_id: String,
+    pub bulk_transition_inputs: Vec<BulkTransitionInput>,
+    pub send_bulk_notification: bool,
 }
 
 /// Response from POST /rest/api/3/bulk/issues/fields or POST /rest/api/3/bulk/issues/transition.

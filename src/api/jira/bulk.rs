@@ -24,7 +24,8 @@ use std::time::{Duration, Instant};
 
 use crate::api::client::JiraClient;
 use crate::types::jira::bulk::{
-    BulkEditRequest, BulkOperationProgress, BulkSubmitResponse, BulkTransitionRequest,
+    BulkEditRequest, BulkOperationProgress, BulkSubmitResponse, BulkTransitionInput,
+    BulkTransitionRequest,
 };
 
 /// Maximum number of issue keys allowed in a single bulk operation call.
@@ -278,15 +279,22 @@ impl JiraClient {
     /// Returns taskId for polling via `await_bulk_task`.
     ///
     /// `transition_id` is a numeric string (e.g., "31").
-    /// CONFIRMED schema: top-level `transitionId` field (not nested).
+    ///
+    /// CONFIRMED wire schema (Atlassian community 2026-02-19 + live run 27156639337):
+    /// keys and transitionId are wrapped in a `bulkTransitionInputs` array — NOT
+    /// sent at the top level. `sendBulkNotification` mirrors the bulk-edit default
+    /// (false). [FIX-BULK-TRANSITION-001]
     pub async fn bulk_transition(
         &self,
         keys: &[String],
         transition_id: &str,
     ) -> anyhow::Result<String> {
         let body = BulkTransitionRequest {
-            selected_issue_ids_or_keys: keys.to_vec(),
-            transition_id: transition_id.to_string(),
+            bulk_transition_inputs: vec![BulkTransitionInput {
+                selected_issue_ids_or_keys: keys.to_vec(),
+                transition_id: transition_id.to_string(),
+            }],
+            send_bulk_notification: false,
         };
         let resp: BulkSubmitResponse = self
             .post("/rest/api/3/bulk/issues/transition", &body)
