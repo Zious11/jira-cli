@@ -51,7 +51,7 @@ them to be mis-grouped and the disallowed blocks themselves to be wrapped into a
 |---|---|---|
 | `blockquote` | **Unwrap** — splice the blockquote's own child blocks directly into the listItem, **recursively** normalized | Lossless; preserves paragraph structure and inline marks. `blockquote`'s children are themselves block-level (paragraphs etc.), all listItem-legal after recursion. |
 | `heading` | **Convert to `paragraph`**, preserving the heading's inline `content` (text nodes + marks) verbatim; drop the `level` attr | In-spec; text and inline emphasis preserved. No added `strong` mark (predictable, lossless). |
-| `table` | **Flatten** — render the table via `adf_to_text` and emit **one `paragraph` per non-empty output line** (`\| a \| b \|` row text) | No data loss; text nodes stay newline-free (each row → its own paragraph). Extreme edge case (requires loose list + indented table). |
+| `table` | **Flatten** — emit **one `paragraph` per `tableRow`**, joining cells in `\| a \| b \|` form by splicing each cell's inline nodes in directly (`flatten_table_to_paragraphs`) | Cell text and inline **marks are preserved** (real ADF `strong`/`em`/`link` nodes — NOT routed through `adf_to_text`, which would emit literal `**`/`[]()` markdown that Jira shows verbatim). The table **grid structure is lost** — no ADF node nests a table inside a listItem. Extreme edge case (requires loose list + indented table). |
 | `rule` | **Drop** | A `rule` is an empty leaf with no content and no meaning inside a list item. |
 
 Permitted children (`paragraph`, `bulletList`, `orderedList`, `codeBlock`,
@@ -102,6 +102,6 @@ Unit tests in `src/adf.rs` (`cargo test --lib adf`):
 - [ ] `- ### deep **bold** head` → `listItem > paragraph` preserving the `strong` mark on "bold"
 - [ ] `- > # quoted heading` (recursive) → `listItem > paragraph`, no `blockquote`/`heading`
 - [ ] `- item\n\n  ---` → `listItem` with the paragraph kept and **no** `rule` node
-- [ ] table inside a list item → `listItem` with one `paragraph` per row line, no `table` node, cell text preserved
+- [ ] table inside a list item → `listItem` with one `paragraph` per row, no `table` node, cell text preserved, and a marked cell keeps its ADF mark (e.g. `strong`)
 - [ ] regression: a plain `- a\n- b` bullet list and nested `- a\n  - b` still produce correct `paragraph`/`bulletList` shapes
 - [ ] regression: top-level `> quote`, `# heading`, `---`, and a standalone table are unchanged

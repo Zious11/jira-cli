@@ -342,8 +342,9 @@ fn wrap_inlines_as_blocks(children: Vec<Value>, block_types: &[&str]) -> Vec<Val
 ///   normalized (handles e.g. `- > # heading`).
 /// - `heading` → converted to `paragraph`, preserving inline content and dropping
 ///   the `level` attr.
-/// - `table` → flattened to one `paragraph` per rendered row line via
-///   `adf_to_text` (keeps each text node newline-free).
+/// - `table` → flattened to one `paragraph` per row, joining cells in `| a | b |`
+///   form while preserving each cell's inline content and ADF marks
+///   (`flatten_table_to_paragraphs`). The grid structure is not preserved.
 /// - `rule` → dropped (empty leaf, meaningless inside a list item).
 ///
 /// Permitted blocks and loose inline nodes (`text`, `hardBreak`) pass through
@@ -365,20 +366,57 @@ fn normalize_list_item_content(children: Vec<Value>) -> Vec<Value> {
                 let content = child.get("content").cloned().unwrap_or_else(|| json!([]));
                 out.push(json!({ "type": "paragraph", "content": content }));
             }
-            Some("table") => {
-                let doc = json!({ "type": "doc", "version": 1, "content": [child] });
-                for line in adf_to_text(&doc).lines().filter(|l| !l.trim().is_empty()) {
-                    out.push(json!({
-                        "type": "paragraph",
-                        "content": [{ "type": "text", "text": line }],
-                    }));
-                }
-            }
+            Some("table") => out.extend(flatten_table_to_paragraphs(&child)),
             Some("rule") => { /* dropped — no content, invalid inside listItem */ }
             _ => out.push(child),
         }
     }
     out
+}
+
+/// Flatten an ADF `table` node into one `paragraph` per row, for embedding inside
+/// a `listItem` (which the ADF content model forbids from containing a table).
+///
+/// Cells are joined in `| a | b |` form. Each cell's inline content is spliced in
+/// as real ADF nodes, so marks (`strong`, `em`, `link`, …) are **preserved** — we
+/// do NOT route through `adf_to_text`, which would render marks as literal
+/// markdown syntax (`**bold**`, `[label](url)`) that Jira would then display
+/// verbatim. The table's grid structure is necessarily lost (there is no ADF node
+/// nesting a table inside a listItem); only the per-row pipe layout and cell
+/// content survive.
+fn flatten_table_to_paragraphs(table: &Value) -> Vec<Value> {
+    let mut paragraphs: Vec<Value> = Vec::new();
+    let Some(rows) = table.get("content").and_then(|c| c.as_array()) else {
+        return paragraphs;
+    };
+    for row in rows {
+        if row.get("type").and_then(Value::as_str) != Some("tableRow") {
+            continue;
+        }
+        let Some(cells) = row.get("content").and_then(|c| c.as_array()) else {
+            continue;
+        };
+        let mut content: Vec<Value> = Vec::new();
+        for cell in cells {
+            let sep = if content.is_empty() { "| " } else { " | " };
+            content.push(json!({ "type": "text", "text": sep }));
+            // A cell's content is block-level (paragraphs); splice each block's
+            // inline children in, preserving their marks.
+            if let Some(blocks) = cell.get("content").and_then(|c| c.as_array()) {
+                for block in blocks {
+                    if let Some(inlines) = block.get("content").and_then(|c| c.as_array()) {
+                        content.extend(inlines.iter().cloned());
+                    }
+                }
+            }
+        }
+        if content.is_empty() {
+            continue; // a row with no cells contributes nothing
+        }
+        content.push(json!({ "type": "text", "text": " |" }));
+        paragraphs.push(json!({ "type": "paragraph", "content": content }));
+    }
+    paragraphs
 }
 
 fn heading_level_to_u8(level: HeadingLevel) -> u8 {
@@ -1072,9 +1110,10 @@ mod tests {
     #[test]
     fn test_markdown_table_inside_list_item_flattens_to_paragraphs() {
         // ADF `listItem` does not permit `table`. The table is flattened to one
-        // paragraph per rendered row line; no `table` node survives, and cell
-        // text is preserved.
-        let adf = markdown_to_adf("- intro\n\n  | a | b |\n  | - | - |\n  | 1 | 2 |");
+        // paragraph per row (`| a | b |` form); no `table`/`tableRow` node
+        // survives. The header cell is bold to verify inline marks are preserved
+        // as real ADF marks (NOT serialized to literal `**` markdown).
+        let adf = markdown_to_adf("- intro\n\n  | **a** | b |\n  | - | - |\n  | 1 | 2 |");
         let item = &adf["content"][0]["content"][0];
         assert_eq!(item["type"], "listItem");
         let children = item["content"].as_array().unwrap();
@@ -1097,33 +1136,45 @@ mod tests {
             !contains_node_type(&adf, "table") && !contains_node_type(&adf, "tableRow"),
             "no table node may appear inside listItem: {adf}"
         );
-        // Each flattened paragraph is a single newline-free text node holding one
-        // rendered row line; the header and data rows are preserved verbatim. (The
-        // `| --- | --- |` separator row is also emitted — documented as acceptable
-        // for this extreme edge case.)
-        let row_texts: Vec<&str> = children
+
+        // Every text node across the flattened paragraphs is newline-free, and no
+        // literal markdown mark syntax leaked (the bold cell must NOT render as
+        // `**a**` — that would mean we routed through adf_to_text).
+        let all_texts: Vec<String> = children
             .iter()
-            .filter_map(|p| {
-                let content = p["content"].as_array()?;
-                assert_eq!(
-                    content.len(),
-                    1,
-                    "row paragraph must hold exactly one text node: {p}"
-                );
-                content[0]["text"].as_str()
-            })
+            .filter_map(|p| p["content"].as_array())
+            .flatten()
+            .filter_map(|n| n["text"].as_str().map(str::to_string))
             .collect();
         assert!(
-            row_texts.iter().all(|t| !t.contains('\n')),
-            "row text nodes must be newline-free: {row_texts:?}"
+            all_texts.iter().all(|t| !t.contains('\n')),
+            "text nodes must be newline-free: {all_texts:?}"
+        );
+        let joined = all_texts.concat();
+        assert!(
+            !joined.contains("**"),
+            "bold cell must be a real strong mark, not literal `**`: {joined:?}"
+        );
+        // The pipe layout and both rows' cell text survive.
+        assert!(
+            joined.contains("| a "),
+            "header cell 'a' missing: {joined:?}"
         );
         assert!(
-            row_texts.contains(&"| a | b |"),
-            "header row paragraph missing: {row_texts:?}"
+            joined.contains("| 1 ") && joined.contains("| 2 "),
+            "data cells missing: {joined:?}"
         );
-        assert!(
-            row_texts.contains(&"| 1 | 2 |"),
-            "data row paragraph missing: {row_texts:?}"
+
+        // The bold header cell keeps its ADF `strong` mark.
+        let bold_a = children
+            .iter()
+            .filter_map(|p| p["content"].as_array())
+            .flatten()
+            .find(|n| n["text"] == "a")
+            .expect("expected an 'a' text node from the header cell");
+        assert_eq!(
+            bold_a["marks"][0]["type"], "strong",
+            "bold cell text must retain its strong mark: {bold_a}"
         );
     }
 
