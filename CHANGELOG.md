@@ -64,7 +64,7 @@ All notable changes to jr will be documented here.
   (recursively), headings are downconverted to paragraphs (inline marks preserved),
   tables are flattened to one paragraph per row, and rules are dropped. Jira rendered the
   old out-of-spec shapes leniently, but they were fragile to renderer changes and
-  cross-product round-trips. (docs/specs/adf-listitem-content-model.md)
+  cross-product round-trips. (BC-7.2.006, docs/specs/adf-listitem-content-model.md)
 
 - **JSM E2E self-close teardown (S-JSM-E2E-2):** the comment-visibility and
   create-request live tests now self-close their EJ tickets by dynamically discovering a

@@ -2,6 +2,7 @@
 
 **Issue:** [#470](https://github.com/Zious11/jira-cli/issues/470)
 **Module:** `src/adf.rs`
+**Behavioral contract:** BC-7.2.006 (`.factory/specs/prd/bc-7-output-render.md`)
 
 ## Problem
 
@@ -57,7 +58,17 @@ them to be mis-grouped and the disallowed blocks themselves to be wrapped into a
 Permitted children (`paragraph`, `bulletList`, `orderedList`, `codeBlock`,
 `mediaSingle`) and any loose inline nodes pass through untouched; the existing
 `wrap_inlines_as_blocks` then groups remaining inline runs into paragraphs using
-the **five-type allowlist**.
+the **five-type allowlist**. Nested `bulletList`/`orderedList` items are
+normalized independently at their own `listItem` boundary, so the invariant holds
+recursively.
+
+`flatten_table_to_paragraphs` splices each cell's **inline** children into the
+row paragraph. For markdown-reachable tables every cell block is a `paragraph`;
+defensively, a non-`paragraph` cell block (which the ADF `tableCell` schema
+permits but pulldown-cmark never emits in GFM cells) is rendered to a
+newline-free plain-text node rather than spliced as a block, keeping the output
+valid. An all-empty source row collapses to bare `| | |` separators — valid ADF,
+emitted as-is.
 
 An empty resulting listItem still yields a single empty `paragraph`, preserving
 ADF's "at least one block" requirement (existing `wrap_inlines_as_blocks`
@@ -97,11 +108,17 @@ allows rich blocks).
 
 Unit tests in `src/adf.rs` (`cargo test --lib adf`):
 
-- [ ] `- > quoted text` → `listItem > paragraph[text "quoted text"]`, no `blockquote` node anywhere
-- [ ] `- # Heading text` → `listItem > paragraph[text "Heading text"]`, no `heading` node, no `level` attr
-- [ ] `- ### deep **bold** head` → `listItem > paragraph` preserving the `strong` mark on "bold"
-- [ ] `- > # quoted heading` (recursive) → `listItem > paragraph`, no `blockquote`/`heading`
-- [ ] `- item\n\n  ---` → `listItem` with the paragraph kept and **no** `rule` node
-- [ ] table inside a list item → `listItem` with one `paragraph` per row, no `table` node, cell text preserved, and a marked cell keeps its ADF mark (e.g. `strong`)
-- [ ] regression: a plain `- a\n- b` bullet list and nested `- a\n  - b` still produce correct `paragraph`/`bulletList` shapes
-- [ ] regression: top-level `> quote`, `# heading`, `---`, and a standalone table are unchanged
+- [x] `- > quoted text` → `listItem > paragraph[text "quoted text"]`, no `blockquote` node anywhere
+- [x] `- # Heading text` → `listItem > paragraph[text "Heading text"]`, no `heading` node, no `level` attr
+- [x] `- ### deep **bold** head` → `listItem > paragraph` preserving the `strong` mark on "bold"
+- [x] `- > # quoted heading` (recursive) → `listItem > paragraph`, no `blockquote`/`heading`
+- [x] `- item\n\n  ---` → `listItem` with the paragraph kept and **no** `rule` node
+- [x] rule-only item (`-   \n\n    ---`) → `listItem` with a single empty `paragraph`, no `rule` node
+- [x] table inside a list item → `listItem` with one `paragraph` per row, no `table` node, cell text preserved, and a marked cell keeps its ADF mark (e.g. `strong`)
+- [x] `codeBlock` and nested `orderedList` inside a list item pass through unmodified (permitted children)
+- [x] regression: a plain `- a\n- b` bullet list and nested `- a\n  - b` still produce correct `paragraph`/`bulletList` shapes
+- [x] regression: top-level `> quote`, `# heading`, `---`, and a standalone table are unchanged
+
+Negative assertions use a structural `contains_node_type()` walk over the ADF
+tree (not serialized-string `contains`), so a text node whose literal text
+contains a type name cannot false-positive.

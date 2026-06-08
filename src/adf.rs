@@ -400,16 +400,32 @@ fn flatten_table_to_paragraphs(table: &Value) -> Vec<Value> {
         for cell in cells {
             let sep = if content.is_empty() { "| " } else { " | " };
             content.push(json!({ "type": "text", "text": sep }));
-            // A cell's content is block-level (paragraphs); splice each block's
-            // inline children in, preserving their marks.
+            // For markdown tables a cell's content is always `paragraph` blocks,
+            // so we splice their inline children in, preserving marks. The ADF
+            // `tableCell` schema also permits richer blocks (bulletList, codeBlock,
+            // …); a non-paragraph block must NOT be spliced as inline — that would
+            // emit invalid `paragraph > <block>`. Render any such block to a
+            // newline-free plain-text node instead. This branch is unreachable from
+            // `markdown_to_adf` today (pulldown-cmark emits only inline events in
+            // GFM cells) but keeps the function total and ADF-valid.
             if let Some(blocks) = cell.get("content").and_then(|c| c.as_array()) {
                 for block in blocks {
-                    if let Some(inlines) = block.get("content").and_then(|c| c.as_array()) {
-                        content.extend(inlines.iter().cloned());
+                    if block.get("type").and_then(Value::as_str) == Some("paragraph") {
+                        if let Some(inlines) = block.get("content").and_then(|c| c.as_array()) {
+                            content.extend(inlines.iter().cloned());
+                        }
+                    } else {
+                        let doc = json!({ "type": "doc", "version": 1, "content": [block] });
+                        let text = adf_to_text(&doc).trim_end().replace('\n', " ");
+                        if !text.is_empty() {
+                            content.push(json!({ "type": "text", "text": text }));
+                        }
                     }
                 }
             }
         }
+        // An all-empty row collapses to bare separators (`| | |`) — valid ADF, and
+        // a faithful (if sparse) rendering of an empty source row; emitted as-is.
         if content.is_empty() {
             continue; // a row with no cells contributes nothing
         }
@@ -1176,6 +1192,69 @@ mod tests {
             bold_a["marks"][0]["type"], "strong",
             "bold cell text must retain its strong mark: {bold_a}"
         );
+    }
+
+    #[test]
+    fn test_markdown_rule_only_list_item_yields_empty_paragraph() {
+        // A list item whose only content is a rule: the rule is dropped, leaving
+        // the item empty, so `wrap_inlines_as_blocks` supplies a single empty
+        // paragraph to satisfy ADF's "at least one block" rule (BC-7.2.006 edge
+        // case). No `rule` node survives.
+        let adf = markdown_to_adf("-   \n\n    ---");
+        let item = &adf["content"][0]["content"][0];
+        assert_eq!(item["type"], "listItem");
+        let children = item["content"].as_array().unwrap();
+        assert_eq!(children.len(), 1, "expected exactly one child: {item}");
+        assert_eq!(children[0]["type"], "paragraph");
+        assert_eq!(
+            children[0]["content"].as_array().map(Vec::len),
+            Some(0),
+            "the fallback paragraph must be empty: {item}"
+        );
+        assert!(
+            !contains_node_type(&adf, "rule"),
+            "rule must not survive inside listItem: {adf}"
+        );
+    }
+
+    #[test]
+    fn test_markdown_codeblock_inside_list_item_passes_through() {
+        // `codeBlock` is a permitted listItem child and must pass through the
+        // normalization untouched (BC-7.2.006).
+        let adf = markdown_to_adf("- ```\n  let x = 1;\n  ```");
+        let item = &adf["content"][0]["content"][0];
+        assert_eq!(item["type"], "listItem");
+        let code = &item["content"][0];
+        assert_eq!(code["type"], "codeBlock");
+        assert!(
+            code["content"][0]["text"]
+                .as_str()
+                .is_some_and(|t| t.contains("let x = 1;")),
+            "codeBlock content must be preserved verbatim: {item}"
+        );
+    }
+
+    #[test]
+    fn test_markdown_ordered_list_inside_list_item_passes_through() {
+        // A nested `orderedList` is a permitted listItem child and passes through;
+        // its own items are normalized at their own listItem boundary.
+        let adf = markdown_to_adf("- outer\n  1. a\n  2. b");
+        let item = &adf["content"][0]["content"][0];
+        assert_eq!(item["type"], "listItem");
+        let nested = item["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["type"] == "orderedList")
+            .expect("expected a nested orderedList child");
+        let inner_items = nested["content"].as_array().unwrap();
+        assert_eq!(
+            inner_items.len(),
+            2,
+            "nested ordered list must keep both items"
+        );
+        assert_eq!(inner_items[0]["type"], "listItem");
+        assert_eq!(inner_items[0]["content"][0]["type"], "paragraph");
     }
 
     #[test]
