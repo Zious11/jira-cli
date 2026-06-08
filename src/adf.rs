@@ -744,6 +744,21 @@ fn apply_marks(text: &str, marks: Option<&Vec<Value>>) -> String {
 mod tests {
     use super::*;
 
+    /// Recursively check whether any node in an ADF value (or its `content`
+    /// subtrees) has the given `type`. Structural — unlike a serialized-string
+    /// substring search, it cannot false-positive on a text node whose literal
+    /// text happens to contain the type name.
+    fn contains_node_type(value: &Value, node_type: &str) -> bool {
+        if value.get("type").and_then(Value::as_str) == Some(node_type) {
+            return true;
+        }
+        match value {
+            Value::Array(items) => items.iter().any(|v| contains_node_type(v, node_type)),
+            Value::Object(map) => map.values().any(|v| contains_node_type(v, node_type)),
+            _ => false,
+        }
+    }
+
     #[test]
     fn test_text_to_adf() {
         let adf = text_to_adf("Hello world");
@@ -983,7 +998,7 @@ mod tests {
         assert_eq!(first_child["content"][0]["text"], "quoted text");
         // No blockquote node anywhere in the document.
         assert!(
-            !adf.to_string().contains("\"blockquote\""),
+            !contains_node_type(&adf, "blockquote"),
             "blockquote must not appear inside listItem: {adf}"
         );
     }
@@ -1003,7 +1018,7 @@ mod tests {
             "downconverted paragraph must not carry the heading's level attr: {first_child}"
         );
         assert!(
-            !adf.to_string().contains("\"heading\""),
+            !contains_node_type(&adf, "heading"),
             "heading must not appear inside listItem: {adf}"
         );
     }
@@ -1033,9 +1048,8 @@ mod tests {
         let first_child = &item["content"][0];
         assert_eq!(first_child["type"], "paragraph");
         assert_eq!(first_child["content"][0]["text"], "quoted heading");
-        let s = adf.to_string();
         assert!(
-            !s.contains("\"blockquote\"") && !s.contains("\"heading\""),
+            !contains_node_type(&adf, "blockquote") && !contains_node_type(&adf, "heading"),
             "neither blockquote nor heading may appear inside listItem: {adf}"
         );
     }
@@ -1050,7 +1064,7 @@ mod tests {
         assert_eq!(item["content"][0]["type"], "paragraph");
         assert_eq!(item["content"][0]["content"][0]["text"], "item");
         assert!(
-            !adf.to_string().contains("\"rule\""),
+            !contains_node_type(&adf, "rule"),
             "rule must not appear inside listItem: {adf}"
         );
     }
@@ -1079,9 +1093,8 @@ mod tests {
                 "unexpected listItem child type {t:?}: {item}"
             );
         }
-        let s = adf.to_string();
         assert!(
-            !s.contains("\"table\"") && !s.contains("\"tableRow\""),
+            !contains_node_type(&adf, "table") && !contains_node_type(&adf, "tableRow"),
             "no table node may appear inside listItem: {adf}"
         );
         // Each flattened paragraph is a single newline-free text node holding one
