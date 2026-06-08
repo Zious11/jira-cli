@@ -62,6 +62,8 @@ New tests trace to existing BCs without modification:
 | BC | What the new test exercises |
 |----|----------------------------|
 | BC-X.8.004 | Non-JSM guard: `require_service_desk` error message shape + exit code when a JSM command targets ES (a Jira Software project). (AC-007) |
+| BC-X.8.008 | `jr queue list` output shape — JSON array where each item has non-null `id` and non-null, non-empty `name`. Authored document-as-is by S-QUEUE-BC-1. (AC-001) |
+| BC-X.8.009 | `jr queue view` output shape — issues JSON array (each element has `key` + `fields`); both by-name and `--id` routing branches succeed. Authored document-as-is by S-QUEUE-BC-1. (AC-003) |
 | BC-X.12.001 | `jr requesttype list` — deepened to assert per-item `id` + `name` fields. (AC-002) |
 | BC-X.12.005 | `jr requesttype fields <ID>` — GET `.../requesttype/{id}/field`; asserts `fields` array shape. (AC-004) |
 | BC-3.8.001 | `jr issue create --request-type` write round-trip — `POST /rest/servicedeskapi/request`; asserts `{"key": "EJ-N"}` on stdout. (AC-006) |
@@ -74,16 +76,17 @@ New tests trace to existing BCs without modification:
 | BC-3.2.013 | `jr issue move` proactive gate (primary): done-category transition without `--resolution` in non-interactive mode exits 64 + stderr contains `"--resolution"`. (S-JSM-E2E-3 Scenario 8 AC-002) |
 | BC-3.2.009 | `issue move` 400 "resolution required" → `--resolution` hint on stderr. Reactive backstop, preserved alongside BC-3.2.013. (S-JSM-E2E-3 Scenario 8 AC-002) |
 
-**Orphan note — AC-001 and AC-003 (queue list / queue view):**
-`jr queue list` and `jr queue view` shipped in an earlier delivery cycle with NO behavioral
-contracts in the BC corpus. Anchoring these E2E tests to BC-X.12.001 (a `requesttype`
-contract) would be a semantically-invalid traceability link — a recognized "false coverage"
-anti-pattern. AC-001 and AC-003 are therefore explicitly logged as un-contracted (orphan)
-acceptance criteria. This is a pre-existing corpus gap, not introduced by this story. The
-resolution is tracked follow-up story S-QUEUE-BC-1, which will author document-as-is BCs
-(proposed: BC-X.8.008 / BC-X.8.009) for the queue command family in section X.8 "Projects
-& Queues", in parity with how requesttype commands got X.12.001-008. Research justification:
-`.factory/research/jsm-e2e-queue-bc-anchoring-validation.md`.
+**Orphan resolved (2026-06-08, S-QUEUE-BC-1) — AC-001 and AC-003 (queue list / queue view):**
+BC-X.8.008 (`jr queue list` output shape) and BC-X.8.009 (`jr queue view` output shape)
+were authored document-as-is by product-owner in cross-cutting.md §X.8, completing
+follow-up story S-QUEUE-BC-1. AC-001 now traces to BC-X.8.008; AC-003 now traces to
+BC-X.8.009. The pre-existing corpus gap is closed.
+
+Historical context (retained for record): anchoring AC-001 and AC-003 to BC-X.12.001 (a
+`requesttype` contract) would have been a semantically-invalid traceability link — a
+recognized "false coverage" anti-pattern. That approach was explicitly rejected (see
+`.factory/research/jsm-e2e-queue-bc-anchoring-validation.md`). The correct resolution was
+to author dedicated queue BCs, which is now done.
 
 ---
 
@@ -204,8 +207,9 @@ shallow `test_e2e_jsm_queue_list_exits_ok`)
 **Clean-skip condition:** None (an empty array is asserted as a valid state; the test
 passes even with zero queues, since the per-item assertion only fires if items exist).
 
-**BC traced:** NONE (explicitly logged orphan). `jr queue list` shipped without a behavioral
-contract — see §2.2 orphan note. Tracked in follow-up story S-QUEUE-BC-1.
+**BC traced:** BC-X.8.008. `jr queue list` output shape is now contracted via BC-X.8.008,
+authored document-as-is by product-owner in cross-cutting.md §X.8 (S-QUEUE-BC-1,
+2026-06-08). Orphan resolved — see §2.2.
 
 ---
 
@@ -253,10 +257,9 @@ belong to the queue list endpoint, not the queue view endpoint.
 
 **Clean-skip condition:** Skip when the queue list is empty (§3.2). Skip on 403 (§3.3).
 
-**BC traced:** NONE (explicitly logged orphan). `jr queue view` shipped without a behavioral
-contract — see §2.2 orphan note. Tracked in follow-up story S-QUEUE-BC-1. The `--id` flag
-path exercises the distinct routing branch in `src/cli/queue.rs`; this behavior will be
-contracted in S-QUEUE-BC-1.
+**BC traced:** BC-X.8.009. `jr queue view` output shape (issues array) and `--id` routing
+branch are now contracted via BC-X.8.009, authored document-as-is by product-owner in
+cross-cutting.md §X.8 (S-QUEUE-BC-1, 2026-06-08). Orphan resolved — see §2.2.
 
 ---
 
@@ -674,9 +677,9 @@ hardening) by inspecting CI run output after `JR_E2E_JSM_PROJECT=EJ` is activate
 ### VER-JSM-E2E-1: Queue list shape
 
 **Scenario:** 1 (§5, Scenario 1)
-**BC anchor:** NONE — `jr queue list` is currently un-contracted (explicitly logged orphan;
-see §2.2 orphan note). This verification property verifies empirical behavior; contract
-authoring is tracked in follow-up story S-QUEUE-BC-1.
+**BC anchor:** BC-X.8.008 — `jr queue list` output shape. Contract authored document-as-is
+by product-owner in cross-cutting.md §X.8 via S-QUEUE-BC-1 (2026-06-08). Orphan resolved;
+see §2.2.
 **Condition:** `jr queue list --project EJ --output json` exits 0 and returns a JSON array
 where every item has non-null `"id"` and `"name"` fields.
 **Verification method (F6):** Inspect the CI E2E run log entry for
@@ -700,10 +703,9 @@ array where every item has non-null `"id"` and `"name"` fields.
 ### VER-JSM-E2E-3: Queue view by name and by --id (issues array)
 
 **Scenario:** 3 (§5, Scenario 3)
-**BC anchor:** NONE — `jr queue view` is currently un-contracted (explicitly logged orphan;
-see §2.2 orphan note). This verification property verifies empirical behavior including both
-the by-name and `--id` routing branches; contract authoring is tracked in follow-up story
-S-QUEUE-BC-1.
+**BC anchor:** BC-X.8.009 — `jr queue view` output shape (issues array) and `--id` routing
+branch. Contract authored document-as-is by product-owner in cross-cutting.md §X.8 via
+S-QUEUE-BC-1 (2026-06-08). Orphan resolved; see §2.2.
 **Condition:** `jr queue view "<name>" --project EJ --output json` exits 0 and returns a
 JSON array of issue objects (each with `"key"` and `"fields"` if non-empty);
 `jr queue view --id <id> --project EJ --output json` exits 0 and returns the same shape.
