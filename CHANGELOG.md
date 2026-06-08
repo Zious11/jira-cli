@@ -56,6 +56,16 @@ All notable changes to jr will be documented here.
 
 ### Fixed
 
+- **`markdown_to_adf` listItem content-model conformance (#470):** markdown like
+  `- > quote`, `- # heading`, `- ---`, and indented tables inside list items no longer
+  emit `blockquote`/`heading`/`table`/`rule` nodes as direct `listItem` children, which
+  violates the ADF `listItem` content model (only `paragraph`, `bulletList`,
+  `orderedList`, `codeBlock`, `mediaSingle` are permitted). Blockquotes are unwrapped
+  (recursively), headings are downconverted to paragraphs (inline marks preserved),
+  tables are flattened to one paragraph per row, and rules are dropped. Jira rendered the
+  old out-of-spec shapes leniently, but they were fragile to renderer changes and
+  cross-product round-trips. (docs/specs/adf-listitem-content-model.md)
+
 - **JSM E2E self-close teardown (S-JSM-E2E-2):** the comment-visibility and
   create-request live tests now self-close their EJ tickets by dynamically discovering a
   closing transition (`statusCategory.key == "done"`, preferring Resolved/Closed/Done)
