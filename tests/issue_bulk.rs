@@ -37,13 +37,27 @@
 //
 // === POST /rest/api/3/bulk/issues/transition ===
 //
-// Schema name: BulkTransitionSubmitInput — CONFIRMED from OpenAPI JSON:
-//   selectedIssueIdsOrKeys  string[]  required  writeOnly — issue IDs or keys
-//   transitionId            string    required  writeOnly — transition ID (NOT "id" or
-//                                                           "transition.id"; direct top-level
-//                                                           field named "transitionId")
+// Schema name: BulkTransitionSubmitInput — OpenAPI JSON documents a FLAT top-level shape
+//   (selectedIssueIdsOrKeys + transitionId at root), but that shape is WRONG.
 //
-// CONFIRMED: NOT "issueIds" (that was from an early secondary source, now refuted).
+// REFUTED by live run 27156639337: flat body → 400 "bulkTransitionInputs must not be empty".
+//
+// CORRECT wire format (CONFIRMED: Atlassian community 2026-02-19 + live run 27156639337):
+//   {
+//     "bulkTransitionInputs": [
+//       {
+//         "selectedIssueIdsOrKeys": [...],
+//         "transitionId": "31"
+//       }
+//     ],
+//     "sendBulkNotification": false
+//   }
+//
+// `selectedIssueIdsOrKeys` and `transitionId` are NESTED inside `bulkTransitionInputs`
+// array elements, NOT direct top-level fields. Same asymmetry class as
+// `labelsFields`/`"labels"` and `issueType`/`"issuetype"`.
+//
+// See: BC-3.2.014, [FIX-BULK-TRANSITION-001].
 // Response: HTTP 200 with BulkOperationProgress (same shape as fields endpoint).
 //
 // === GET /rest/api/3/bulk/queue/{taskId} ===
@@ -79,7 +93,8 @@
 //   1. [RESOLVED] Label schema uses labelsFields array with bulkEditMultiSelectFieldOption
 //      (verified against Atlassian Bulk Operations FAQ; old labelsAction shape was incorrect)
 //   2. Whether "COMPLETE" or "COMPLETED" is the actual live API status string
-//   3. Whether sendBulkNotification is a real field
+//   3. [RESOLVED] sendBulkNotification IS a real field — sent as `false` to suppress
+//      notification spam across many issues. See BC-3.2.014, [FIX-BULK-TRANSITION-001].
 //   4. Whether jql is an accepted optional field on /bulk/issues/fields
 //   5. Exact nesting of editedFieldsInput for non-label fields (priority, assignee, etc.)
 //
@@ -806,7 +821,7 @@ async fn test_edit_multi_key_output_json_returns_results_array() {
 //   { "selectedIssueIdsOrKeys": [...], "transitionId": "31" }
 // Live Jira Cloud requires the NESTED shape:
 //   { "bulkTransitionInputs": [ { "selectedIssueIdsOrKeys": [...], "transitionId": "31" } ],
-//     "sendBulkNotification": true }
+//     "sendBulkNotification": false }
 // Live error on flat body: 400 "bulkTransitionInputs must not be empty"
 //
 // Source: Atlassian developer community (2026-02-19) + live E2E run 27156639337
@@ -851,7 +866,8 @@ async fn test_move_multikey_bulk_transition_uses_bulktransitioninputs_wrapper() 
                     "selectedIssueIdsOrKeys": ["BAR-10", "BAR-11", "BAR-12"],
                     "transitionId": "31"
                 }
-            ]
+            ],
+            "sendBulkNotification": false
         })))
         .respond_with(
             ResponseTemplate::new(200)
