@@ -71,7 +71,8 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     (&["issue", "list"], &["--jql", "--output"]),
     // issue view
     (&["issue", "view"], &["--output"]),
-    // issue create  (--request-type added in S-JSM-E2E-1 Scenarios 5+6)
+    // issue create  (--request-type added in S-JSM-E2E-1 Scenarios 5+6;
+    //                --description/--description-stdin/--markdown/--points/--parent added in E2E-HV-2)
     (
         &["issue", "create"],
         &[
@@ -81,9 +82,16 @@ const SURFACE: &[(&[&str], &[&str])] = &[
             "--label",
             "--output",
             "--request-type",
+            "--description",
+            "--description-stdin",
+            "--markdown",
+            "--points",
+            "--parent",
         ],
     ),
-    // issue edit  (--priority added: used in e2e_live.rs priority round-trip test)
+    // issue edit  (--priority added: used in e2e_live.rs priority round-trip test;
+    //              --description-stdin/--markdown/--points/--no-points/--parent/--no-parent/--field
+    //              added in E2E-HV-2)
     (
         &["issue", "edit"],
         &[
@@ -95,10 +103,21 @@ const SURFACE: &[(&[&str], &[&str])] = &[
             "--priority",
             "--type",
             "--no-input",
+            "--description-stdin",
+            "--markdown",
+            "--points",
+            "--no-points",
+            "--parent",
+            "--no-parent",
+            "--field",
         ],
     ),
-    // issue comment  (--internal added in S-JSM-E2E-1 Scenario 5)
-    (&["issue", "comment"], &["--output", "--internal"]),
+    // issue comment  (--internal added in S-JSM-E2E-1 Scenario 5;
+    //                 --file/--stdin/--markdown added in E2E-HV-2 comment-channels test)
+    (
+        &["issue", "comment"],
+        &["--output", "--internal", "--file", "--stdin", "--markdown"],
+    ),
     // issue comments
     (&["issue", "comments"], &["--output"]),
     // issue move  (positional: key + status-name; --resolution added in S-JSM-E2E-3 Scenario 8;
@@ -166,6 +185,8 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     (&["worklog", "add"], &["--output"]),
     // worklog list  (positional: key)
     (&["worklog", "list"], &["--output"]),
+    // api  (positional: path; used by E2E-HV-2 story-points field discovery)
+    (&["api"], &[]),
 ];
 
 // ---------------------------------------------------------------------------
