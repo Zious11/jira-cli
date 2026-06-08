@@ -4321,6 +4321,39 @@ fn test_e2e_issue_move_multikey_bulk() {
     let key1 = seed_issue(&h, &label, &format!("[e2e {label}] bulk-move A"));
     let key2 = seed_issue(&h, &label, &format!("[e2e {label}] bulk-move B"));
 
+    // Block until BOTH seeds are SEARCH-INDEX-visible before firing the bulk move.
+    //
+    // seed_issue only guarantees GET-consistency (poll_view). The async
+    // bulk-transition task, however, resolves issues through the search index,
+    // which lags independently: a GET-visible-but-not-yet-indexed issue is
+    // excluded from the task's processed *and* failed sets and reported
+    // `inaccessible`. That is the flake this guards against (live run
+    // 27159962721 reported ES-1049 as inaccessible). poll_jql with
+    // FailOnShort(2) absorbs the lag with the same idiom as
+    // test_e2e_pagination_dedup: 0 results = pure index lag (clean-skip),
+    // 1 result after full budget = fail loud, 2 = proceed. An exact `key in`
+    // probe queries the same index subsystem the bulk task uses, so a positive
+    // result is the strongest available "the move will not report inaccessible"
+    // gate.
+    let settle_jql = format!("key in ({key1}, {key2})");
+    let settled = poll_jql(
+        &settle_jql,
+        |v| v.as_array().is_some_and(|a| a.len() == 2),
+        PollJqlMode::FailOnShort(2),
+        &h,
+    );
+    if settled.is_none() {
+        // 0 results after full budget — pure index lag; clean-skip rather than
+        // fire a move that is guaranteed to report `inaccessible`.
+        eprintln!(
+            "test_e2e_issue_move_multikey_bulk: seeds never reached search-index \
+             visibility (0 results after full poll budget) — clean-skip"
+        );
+        best_effort_close(&h, &key1);
+        best_effort_close(&h, &key2);
+        return;
+    }
+
     let output = h
         .cmd()
         .args([
