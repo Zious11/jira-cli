@@ -3574,6 +3574,138 @@ mod tests {
         }
     }
 
+    // --- Missing path coverage (issue #476) ---------------------------------
+    // Three characterization/pinning tests for code paths that markdown_to_adf
+    // actively exercises but had no dedicated assertion.
+
+    /// 1. Nested ordered list: outer `orderedList` → `listItem` containing both
+    ///    a text paragraph and an inner `orderedList`.
+    #[test]
+    fn test_convert_nested_ordered_list_produces_inner_ordered_list() {
+        // "1. a\n   1. b" — three-space indent is what pulldown-cmark requires
+        // for a sub-list inside an ordered item (mirrors "- outer\n  - inner"
+        // for bullets but with 3-space indent because the "1. " prefix is 3 chars).
+        let adf = markdown_to_adf("1. a\n   1. b");
+
+        // Outer list is an orderedList at doc root.
+        let outer_list = &adf["content"][0];
+        assert_eq!(
+            outer_list["type"], "orderedList",
+            "outer must be orderedList: {adf}"
+        );
+
+        // The outer listItem wraps a paragraph "a" and the nested orderedList.
+        let outer_item = &outer_list["content"][0];
+        assert_eq!(outer_item["type"], "listItem");
+
+        // The inner orderedList must be a direct child of the outer listItem.
+        let inner_list = outer_item["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["type"] == "orderedList")
+            .expect("outer listItem must contain a nested orderedList");
+
+        // The inner orderedList contains exactly one listItem with text "b".
+        let inner_items = inner_list["content"].as_array().unwrap();
+        assert_eq!(
+            inner_items.len(),
+            1,
+            "inner orderedList has one item: {inner_list}"
+        );
+        assert_eq!(inner_items[0]["type"], "listItem");
+        // pulldown-cmark wraps tight inner items in a paragraph via wrap_inlines_as_blocks.
+        let inner_text = inner_items[0]["content"][0]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_else(|| {
+                panic!("inner listItem must have paragraph > text: {inner_items:?}")
+            });
+        assert_eq!(
+            inner_text, "b",
+            "inner item text must be 'b': {inner_items:?}"
+        );
+    }
+
+    /// 2. Block-level HTML: `<div>x</div>` on its own line triggers
+    ///    `Tag::HtmlBlock` (Start + End), which hits the `_ => push(NodeKind::Sink)`
+    ///    catch-all in `start()`. The subsequent `Event::Html` text goes through
+    ///    `push_text`, but `push_text`'s Sink guard discards it. The End pops the
+    ///    Sink, returning `None` — the whole block is silently dropped.
+    ///
+    ///    Inline HTML (`Event::InlineHtml`) arrives via the identical
+    ///    `Event::Html(html) | Event::InlineHtml(html) => self.push_text(...)` arm,
+    ///    but WITHOUT a surrounding Start/End Sink wrapper, so `push_text` runs
+    ///    normally and the literal HTML is preserved as text (see
+    ///    `test_markdown_inline_html_becomes_literal_text`).
+    #[test]
+    fn test_convert_block_html_is_silently_dropped() {
+        // `<div>x</div>` on its own line: pulldown-cmark emits
+        //   Start(HtmlBlock) → Html("<div>x</div>") → End(HtmlBlock).
+        // Start(HtmlBlock) → Sink catch-all; push_text Sink guard discards the
+        // Html event; End pops Sink returning None. Result: empty doc.
+        let adf = markdown_to_adf("<div>x</div>");
+        let content = adf["content"].as_array().unwrap();
+        assert!(
+            content.is_empty(),
+            "block HTML must be silently dropped (HtmlBlock wraps it in a Sink): {adf}"
+        );
+    }
+
+    /// 3. `hardBreak` inside a mark span: `**line one  \nline two**` (two
+    ///    trailing spaces before `\n` = markdown hard break, inside bold).
+    ///
+    ///    The `InlineMark` end handler splices children into the parent paragraph.
+    ///    The produced paragraph content is:
+    ///    text("line one", marks=[strong]), hardBreak, text("line two", marks=[strong])
+    #[test]
+    fn test_convert_hard_break_inside_mark_span_preserves_mark_and_break() {
+        // Two trailing spaces before the newline produce a hard break within the
+        // bold span. The InlineMark end handler (NodeKind::InlineMark branch in
+        // `end()`) splices already-marked children — including the hardBreak node
+        // pushed by `Event::HardBreak` — back into the parent paragraph.
+        let adf = markdown_to_adf("**line one  \nline two**");
+
+        let para = &adf["content"][0];
+        assert_eq!(
+            para["type"], "paragraph",
+            "outer node must be paragraph: {adf}"
+        );
+
+        let children = para["content"].as_array().unwrap();
+        // Must contain: text("line one"), hardBreak, text("line two").
+        assert_eq!(
+            children.len(),
+            3,
+            "paragraph must have exactly 3 children (text, hardBreak, text): {children:?}"
+        );
+
+        // First child: text "line one" with strong mark.
+        assert_eq!(children[0]["type"], "text");
+        assert_eq!(children[0]["text"], "line one");
+        assert_eq!(
+            children[0]["marks"][0]["type"], "strong",
+            "first text must carry strong mark: {:?}",
+            children[0]
+        );
+
+        // Second child: hardBreak (no marks — hardBreak nodes never carry marks
+        // in ADF; they are emitted by Event::HardBreak → append_child directly).
+        assert_eq!(
+            children[1]["type"], "hardBreak",
+            "middle child must be hardBreak: {:?}",
+            children[1]
+        );
+
+        // Third child: text "line two" with strong mark.
+        assert_eq!(children[2]["type"], "text");
+        assert_eq!(children[2]["text"], "line two");
+        assert_eq!(
+            children[2]["marks"][0]["type"], "strong",
+            "second text must carry strong mark: {:?}",
+            children[2]
+        );
+    }
+
     #[test]
     fn test_normalize_panel_content_strips_paragraph_marks() {
         // panel.content requires `paragraph (no marks)`. markdown_to_adf does not
