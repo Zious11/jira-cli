@@ -116,6 +116,13 @@ enum NodeKind {
     BulletList,
     OrderedList { start: u64 },
     ListItem,
+    // Block-level HTML (`<div>x</div>` on its own line). ADF has no raw-HTML
+    // node, so the verbatim source lines are preserved as literal text inside a
+    // paragraph — symmetric with inline HTML — rather than silently dropped
+    // (issue #489). The inner `Event::Html` lines accumulate as text children;
+    // on End they are concatenated, the single trailing block newline trimmed,
+    // and emitted as one `paragraph`.
+    HtmlBlock,
     Sink,
     // Container for inline marks. Has no ADF node; just manages the active_marks stack
     // so End events pop cleanly.
@@ -213,6 +220,10 @@ impl AdfBuilder {
             // but images are visibly named as intentionally suppressed per the
             // spec's Feature Mapping (ADF `media` nodes require pre-upload).
             Tag::Image { .. } => self.push(NodeKind::Sink),
+            // Block HTML: preserve the verbatim source as literal text rather
+            // than discarding it (issue #489). The wrapped `Event::Html` lines
+            // flow into this node via `push_text` and are finalized on End.
+            Tag::HtmlBlock => self.push(NodeKind::HtmlBlock),
             Tag::FootnoteDefinition(label) => {
                 self.push(NodeKind::FootnoteDefinition {
                     label: label.into_string(),
@@ -375,6 +386,30 @@ impl AdfBuilder {
                     self.footnote_defs.extend(blocks);
                 }
                 None
+            }
+            NodeKind::HtmlBlock => {
+                // ADF has no raw-HTML node. Concatenate the block's verbatim
+                // `Event::Html` lines (each carries a trailing newline from the
+                // source) into a single literal text node, trimming only the one
+                // trailing block newline so a one-line `<div>x</div>` doesn't
+                // leave a dangling break. Interior newlines are kept as the
+                // honest literal representation (issue #489). Symmetric with the
+                // inline-HTML path, which preserves tags as literal text.
+                let mut text = String::new();
+                for child in &children {
+                    if let Some(s) = child.get("text").and_then(Value::as_str) {
+                        text.push_str(s);
+                    }
+                }
+                let trimmed = text.strip_suffix('\n').unwrap_or(&text);
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(json!({
+                        "type": "paragraph",
+                        "content": [{ "type": "text", "text": trimmed }],
+                    }))
+                }
             }
             NodeKind::Sink => None,
         };
@@ -3627,27 +3662,70 @@ mod tests {
     }
 
     /// 2. Block-level HTML: `<div>x</div>` on its own line triggers
-    ///    `Tag::HtmlBlock` (Start + End), which hits the `_ => push(NodeKind::Sink)`
-    ///    catch-all in `start()`. The subsequent `Event::Html` text goes through
-    ///    `push_text`, but `push_text`'s Sink guard discards it. The End pops the
-    ///    Sink, returning `None` — the whole block is silently dropped.
-    ///
-    ///    Inline HTML (`Event::InlineHtml`) arrives via the identical
-    ///    `Event::Html(html) | Event::InlineHtml(html) => self.push_text(...)` arm,
-    ///    but WITHOUT a surrounding Start/End Sink wrapper, so `push_text` runs
-    ///    normally and the literal HTML is preserved as text (see
-    ///    `test_markdown_inline_html_becomes_literal_text`).
+    ///    `Tag::HtmlBlock` (Start + End) wrapping `Event::Html` line events. ADF
+    ///    has no raw-HTML node, but silently discarding the source is data loss,
+    ///    so we preserve the verbatim block as literal text inside a paragraph —
+    ///    symmetric with inline HTML (`Event::InlineHtml`, see
+    ///    `test_markdown_inline_html_becomes_literal_text`). Issue #489.
     #[test]
-    fn test_convert_block_html_is_silently_dropped() {
+    fn test_convert_block_html_is_preserved_as_literal_text() {
         // `<div>x</div>` on its own line: pulldown-cmark emits
-        //   Start(HtmlBlock) → Html("<div>x</div>") → End(HtmlBlock).
-        // Start(HtmlBlock) → Sink catch-all; push_text Sink guard discards the
-        // Html event; End pops Sink returning None. Result: empty doc.
+        //   Start(HtmlBlock) → Html("<div>x</div>\n") → End(HtmlBlock).
+        // The HtmlBlock end handler concatenates the inner Html lines, trims the
+        // single trailing block newline, and emits a paragraph of literal text.
         let adf = markdown_to_adf("<div>x</div>");
         let content = adf["content"].as_array().unwrap();
+        assert_eq!(
+            content.len(),
+            1,
+            "block HTML must be preserved as one paragraph, not dropped: {adf}"
+        );
+        assert_eq!(
+            content[0]["type"], "paragraph",
+            "block HTML wraps in a paragraph: {adf}"
+        );
+        assert_eq!(
+            content[0]["content"][0]["type"], "text",
+            "block HTML body is a literal text node: {adf}"
+        );
+        assert_eq!(
+            content[0]["content"][0]["text"], "<div>x</div>",
+            "block HTML preserved verbatim (trailing block newline trimmed): {adf}"
+        );
+        // No styling marks on raw-HTML literal text.
         assert!(
-            content.is_empty(),
-            "block HTML must be silently dropped (HtmlBlock wraps it in a Sink): {adf}"
+            content[0]["content"][0].get("marks").is_none(),
+            "literal HTML text must carry no marks: {adf}"
+        );
+    }
+
+    /// A multi-line block HTML run preserves the interior newlines verbatim (the
+    /// honest literal representation) and trims only the single trailing block
+    /// newline. Issue #489.
+    #[test]
+    fn test_convert_multiline_block_html_preserves_interior_newlines() {
+        let adf = markdown_to_adf("<div>\n  <span>x</span>\n</div>");
+        let content = adf["content"].as_array().unwrap();
+        assert_eq!(
+            content.len(),
+            1,
+            "multi-line block HTML must be one paragraph: {adf}"
+        );
+        assert_eq!(
+            content[0]["content"][0]["text"], "<div>\n  <span>x</span>\n</div>",
+            "interior newlines preserved, single trailing newline trimmed: {adf}"
+        );
+    }
+
+    /// Block HTML round-trips through `adf_to_text` without loss or duplication.
+    /// Issue #489 acceptance: "round-trip / adf_to_text behavior considered".
+    #[test]
+    fn test_block_html_round_trips_through_adf_to_text() {
+        let adf = markdown_to_adf("<div>x</div>");
+        let text = adf_to_text(&adf);
+        assert_eq!(
+            text, "<div>x</div>",
+            "block HTML must survive the ADF→text round trip verbatim: {text:?}"
         );
     }
 
