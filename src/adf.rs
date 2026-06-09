@@ -19,8 +19,21 @@ pub fn text_to_adf(text: &str) -> Value {
 }
 
 pub fn markdown_to_adf(markdown: &str) -> Value {
-    let options =
-        Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_FOOTNOTES;
+    let options = Options::ENABLE_TABLES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_FOOTNOTES
+        // `^x^` / `~x~` -> ADF subsup mark. ENABLE_SUBSCRIPT reassigns single-tilde
+        // `~x~` from strikethrough to subscript; double-tilde `~~x~~` stays strike.
+        | Options::ENABLE_SUPERSCRIPT
+        | Options::ENABLE_SUBSCRIPT
+        // Consume `## Title {#id}` attribute syntax instead of leaking `{#id}` into
+        // the heading text. ADF headings have no id attr, so the value is dropped.
+        | Options::ENABLE_HEADING_ATTRIBUTES;
+    // NOTE: GFM alert blockquotes (`> [!NOTE]` -> ADF `panel`) are intentionally
+    // NOT enabled here. ADF's `panel` content model forbids nested `panel`, `table`,
+    // and `blockquote`, and `listItem` forbids `panel` entirely, so a faithful
+    // mapping needs the same content-model normalization as listItem (#470). Tracked
+    // as a follow-up; until then `> [!NOTE]` stays a plain blockquote (#474).
     let parser = TextMergeStream::new(Parser::new_ext(markdown, options));
     let mut builder = AdfBuilder::new();
     for event in parser {
@@ -127,6 +140,12 @@ impl AdfBuilder {
             Tag::Strong => self.push_mark(json!({ "type": "strong" })),
             Tag::Emphasis => self.push_mark(json!({ "type": "em" })),
             Tag::Strikethrough => self.push_mark(json!({ "type": "strike" })),
+            Tag::Superscript => {
+                self.push_mark(json!({ "type": "subsup", "attrs": { "type": "sup" } }))
+            }
+            Tag::Subscript => {
+                self.push_mark(json!({ "type": "subsup", "attrs": { "type": "sub" } }))
+            }
             Tag::Link {
                 dest_url, title, ..
             } => {
@@ -349,7 +368,7 @@ impl AdfBuilder {
         }
         let mut node = json!({ "type": "text", "text": text });
         if !self.active_marks.is_empty() {
-            node["marks"] = json!(self.active_marks);
+            node["marks"] = json!(dedup_marks_by_type(&self.active_marks));
         }
         self.append_child(node);
     }
@@ -368,7 +387,7 @@ impl AdfBuilder {
         self.append_child(json!({
             "type": "text",
             "text": text,
-            "marks": marks,
+            "marks": dedup_marks_by_type(&marks),
         }));
     }
 
@@ -394,6 +413,23 @@ impl AdfBuilder {
         }
         self.root
     }
+}
+
+/// Keep only the first mark of each `type`. ADF (ProseMirror) treats a text
+/// node's marks as a set keyed by type, so two marks of the same type are
+/// invalid. This arises with nested same-type spans — e.g. `^a ~b~ c^` puts both
+/// a `subsup` sup and a `subsup` sub on the inner text; we keep the outer one.
+fn dedup_marks_by_type(marks: &[Value]) -> Vec<Value> {
+    let mut seen: Vec<&str> = Vec::new();
+    let mut out: Vec<Value> = Vec::new();
+    for mark in marks {
+        let ty = mark.get("type").and_then(Value::as_str).unwrap_or_default();
+        if !seen.contains(&ty) {
+            seen.push(ty);
+            out.push(mark.clone());
+        }
+    }
+    out
 }
 
 /// True for block container nodes left with an empty `content` array. ADF
@@ -921,6 +957,19 @@ fn apply_marks(text: &str, marks: Option<&Vec<Value>>) -> String {
             "em" => format!("*{result}*"),
             "strong" => format!("**{result}**"),
             "strike" => format!("~~{result}~~"),
+            "subsup" => {
+                // Reverse of the markdown mapping: `^x^` (sup) / `~x~` (sub).
+                let sub = mark
+                    .get("attrs")
+                    .and_then(|a| a.get("type"))
+                    .and_then(|t| t.as_str())
+                    == Some("sub");
+                if sub {
+                    format!("~{result}~")
+                } else {
+                    format!("^{result}^")
+                }
+            }
             "link" => {
                 let href = mark
                     .get("attrs")
@@ -1983,6 +2032,331 @@ mod tests {
             adf.to_string().contains("body text"),
             "body preserved: {adf}"
         );
+    }
+
+    // --- Minor markdown constructs (issue #474) ---------------------------
+    // subsup (^x^/~x~) and heading attribute stripping (## Title {#id}).
+    // GFM alert blockquotes (> [!NOTE]) -> panel are descoped to #483 and stay
+    // plain blockquotes here.
+
+    /// First text node of the first paragraph, with its marks.
+    fn first_para_first_text(adf: &Value) -> Value {
+        adf["content"][0]["content"][0].clone()
+    }
+
+    #[test]
+    fn test_markdown_superscript_to_subsup_sup() {
+        let adf = markdown_to_adf("a ^sup^ b");
+        let nodes = adf["content"][0]["content"].as_array().unwrap();
+        let sup = nodes
+            .iter()
+            .find(|n| n["text"] == "sup")
+            .expect("superscript text node present");
+        assert_eq!(sup["marks"][0]["type"], "subsup");
+        assert_eq!(sup["marks"][0]["attrs"]["type"], "sup");
+    }
+
+    #[test]
+    fn test_markdown_subscript_to_subsup_sub() {
+        let adf = markdown_to_adf("a ~sub~ b");
+        let nodes = adf["content"][0]["content"].as_array().unwrap();
+        let sub = nodes
+            .iter()
+            .find(|n| n["text"] == "sub")
+            .expect("subscript text node present");
+        assert_eq!(sub["marks"][0]["type"], "subsup");
+        assert_eq!(sub["marks"][0]["attrs"]["type"], "sub");
+    }
+
+    #[test]
+    fn test_markdown_intraword_superscript_stays_literal() {
+        // pulldown-cmark does not open a superscript when the `^` is tight against
+        // a preceding word char, so the common `mc^2^` exponent form is NOT
+        // converted — it stays literal. Documented limitation (#474); use a
+        // boundary like `mc ^2^` to get a subsup mark.
+        let adf = markdown_to_adf("mc^2^");
+        let t = adf["content"][0]["content"][0].clone();
+        assert_eq!(t["text"], "mc^2^", "intraword caret stays literal: {t}");
+        assert!(t["marks"].is_null(), "no subsup mark applied: {t}");
+    }
+
+    #[test]
+    fn test_markdown_double_tilde_still_strikethrough_not_subscript() {
+        // Enabling ENABLE_SUBSCRIPT must not steal `~~x~~` from strikethrough.
+        let adf = markdown_to_adf("~~struck~~");
+        let t = first_para_first_text(&adf);
+        assert_eq!(t["text"], "struck");
+        assert_eq!(t["marks"][0]["type"], "strike", "got: {t}");
+    }
+
+    #[test]
+    fn test_render_subsup_mark_reverse_path() {
+        // adf_to_text must render a subsup mark back to `^x^` / `~x~` so a fetched
+        // Jira issue containing subsup is not silently flattened, and the
+        // markdown -> ADF -> text round-trip is lossless.
+        let sup = json!({
+            "type": "doc",
+            "content": [{ "type": "paragraph", "content": [
+                { "type": "text", "text": "x", "marks": [{ "type": "subsup", "attrs": { "type": "sup" } }] }
+            ]}]
+        });
+        assert_eq!(adf_to_text(&sup).trim(), "^x^");
+        let sub = json!({
+            "type": "doc",
+            "content": [{ "type": "paragraph", "content": [
+                { "type": "text", "text": "y", "marks": [{ "type": "subsup", "attrs": { "type": "sub" } }] }
+            ]}]
+        });
+        assert_eq!(adf_to_text(&sub).trim(), "~y~");
+    }
+
+    #[test]
+    fn test_subsup_markdown_to_text_roundtrip() {
+        let text = adf_to_text(&markdown_to_adf("a ^sup^ and ~sub~ b"));
+        assert!(text.contains("^sup^"), "sup round-trip: {text:?}");
+        assert!(text.contains("~sub~"), "sub round-trip: {text:?}");
+    }
+
+    #[test]
+    fn test_subsup_composes_with_strong() {
+        // subsup must compose with another mark on the same span: `**^x^**` keeps
+        // both `strong` and `subsup`, and a markdown -> ADF -> text -> ADF
+        // round-trip preserves both (reverse path renders `^**x**^`).
+        let marks_of = |adf: &Value| -> Vec<String> {
+            adf["content"][0]["content"][0]["marks"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|m| m["type"].as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let adf = markdown_to_adf("**^x^**");
+        let marks = marks_of(&adf);
+        assert!(
+            marks.contains(&"strong".to_string()),
+            "strong present: {adf}"
+        );
+        assert!(
+            marks.contains(&"subsup".to_string()),
+            "subsup present: {adf}"
+        );
+        // Reverse + re-parse: both marks survive the text representation.
+        let reparsed = markdown_to_adf(&adf_to_text(&adf));
+        let rt = marks_of(&reparsed);
+        assert!(
+            rt.contains(&"strong".to_string()) && rt.contains(&"subsup".to_string()),
+            "round-trip preserves both marks: {reparsed}"
+        );
+    }
+
+    #[test]
+    fn test_markdown_strike_sub_sup_coexist() {
+        let adf = markdown_to_adf("~~s~~ ~b~ ^p^");
+        let nodes = adf["content"][0]["content"].as_array().unwrap();
+        let mark_of = |text: &str| -> String {
+            nodes
+                .iter()
+                .find(|n| n["text"] == text)
+                .and_then(|n| n["marks"][0]["type"].as_str().map(str::to_string))
+                .unwrap_or_else(|| panic!("text {text:?} missing/markless in {nodes:?}"))
+        };
+        assert_eq!(mark_of("s"), "strike");
+        assert_eq!(mark_of("b"), "subsup");
+        assert_eq!(mark_of("p"), "subsup");
+    }
+
+    #[test]
+    fn test_markdown_nested_sub_in_sup_dedupes_subsup_mark() {
+        // `^ ~x~ ^` nests a subscript inside a superscript; the inner text would
+        // otherwise carry two `subsup` marks, which ADF rejects (duplicate mark
+        // type). dedup_marks_by_type keeps the first (outer sup).
+        let adf = markdown_to_adf("a ^b ~c~ d^ e");
+        let nodes = adf["content"][0]["content"].as_array().unwrap();
+        let inner = nodes
+            .iter()
+            .find(|n| n["text"] == "c")
+            .expect("inner text node present");
+        let marks = inner["marks"].as_array().expect("inner has marks");
+        let subsup_count = marks.iter().filter(|m| m["type"] == "subsup").count();
+        assert_eq!(subsup_count, 1, "at most one subsup mark per node: {inner}");
+    }
+
+    #[test]
+    fn test_markdown_nested_sub_in_sup_keeps_outer_sup() {
+        // F-2 / BC-7.2.007 EC-3: dedup_marks_by_type is first-wins.
+        // For input `a ^b ~c~ d^ e`, node `c` sits inside BOTH the outer `^…^`
+        // (sup) and the inner `~…~` (sub), so it would otherwise carry two
+        // `subsup` marks. The outer `^` opens `subsup { type: "sup" }` first;
+        // the inner `~` opens `subsup { type: "sub" }` second. After dedup the
+        // text node `c` must carry the outer (sup) mark, NOT the inner (sub).
+        // Node `b` is inside only the outer `^…^` and never receives a duplicate,
+        // so it is not the interesting target here. This test fails if dedup is
+        // changed to last-wins.
+        let adf = markdown_to_adf("a ^b ~c~ d^ e");
+        let nodes = adf["content"][0]["content"].as_array().unwrap();
+        let inner = nodes
+            .iter()
+            .find(|n| n["text"] == "c")
+            .expect("inner text node 'c' must be present");
+        let marks = inner["marks"]
+            .as_array()
+            .expect("inner node must have marks");
+        let subsup_mark = marks
+            .iter()
+            .find(|m| m["type"] == "subsup")
+            .expect("exactly one subsup mark must survive dedup");
+        let survivor_type = subsup_mark["attrs"]["type"]
+            .as_str()
+            .expect("subsup mark must have attrs.type");
+        assert_eq!(
+            survivor_type, "sup",
+            "outer sup must win dedup over inner sub: {inner}"
+        );
+    }
+
+    #[test]
+    fn test_markdown_superscript_no_mark_leak_to_trailing_text() {
+        // Regression: Tag::Superscript / Tag::Subscript push a `subsup` mark via
+        // push_mark (which pushes a NodeKind::InlineMark stack frame). The generic
+        // end() handler must pop it via pop_mark when the closing tag fires.
+        // If the pop is ever omitted the subsup mark bleeds onto nodes that follow
+        // the closing `^`/`~`, so text after the span incorrectly inherits the mark.
+        //
+        // This test directly asserts the no-leak guarantee that previously rested
+        // only on structural reasoning: both that the superscript span node carries
+        // the correct mark AND that the trailing text node carries NO mark.
+        // Covers superscript and subscript in a single test because the pop path is
+        // identical for both (same push_mark / NodeKind::InlineMark mechanism).
+
+        // --- Superscript: "a ^sup^ b" ---
+        let adf_sup = markdown_to_adf("a ^sup^ b");
+        let nodes_sup = adf_sup["content"][0]["content"]
+            .as_array()
+            .expect("paragraph must have content nodes");
+
+        let sup_node = nodes_sup
+            .iter()
+            .find(|n| n["text"] == "sup")
+            .expect("superscript text node 'sup' must be present");
+        assert_eq!(
+            sup_node["marks"][0]["type"], "subsup",
+            "sup node must carry subsup mark: {sup_node}"
+        );
+        assert_eq!(
+            sup_node["marks"][0]["attrs"]["type"], "sup",
+            "subsup mark must be sup variant: {sup_node}"
+        );
+
+        // The trailing node must NOT carry any marks. The text after the closing `^`
+        // is " b" (space + b). We find the node whose text comes after the "sup" node
+        // in document order (i.e. the last node in the paragraph).
+        let trailing_sup = nodes_sup
+            .last()
+            .expect("paragraph must have at least one trailing node after the span");
+        assert_ne!(
+            trailing_sup["text"], "sup",
+            "last node must be the trailing text, not the span: {nodes_sup:?}"
+        );
+        assert!(
+            trailing_sup["marks"].is_null()
+                || trailing_sup["marks"]
+                    .as_array()
+                    .map(|a| a.is_empty())
+                    .unwrap_or(false),
+            "subsup mark must not leak onto trailing text after closing `^`: {trailing_sup}"
+        );
+
+        // --- Subscript: "a ~sub~ b" ---
+        let adf_sub = markdown_to_adf("a ~sub~ b");
+        let nodes_sub = adf_sub["content"][0]["content"]
+            .as_array()
+            .expect("paragraph must have content nodes");
+
+        let sub_node = nodes_sub
+            .iter()
+            .find(|n| n["text"] == "sub")
+            .expect("subscript text node 'sub' must be present");
+        assert_eq!(
+            sub_node["marks"][0]["type"], "subsup",
+            "sub node must carry subsup mark: {sub_node}"
+        );
+        assert_eq!(
+            sub_node["marks"][0]["attrs"]["type"], "sub",
+            "subsup mark must be sub variant: {sub_node}"
+        );
+
+        let trailing_sub = nodes_sub
+            .last()
+            .expect("paragraph must have at least one trailing node after the span");
+        assert_ne!(
+            trailing_sub["text"], "sub",
+            "last node must be the trailing text, not the span: {nodes_sub:?}"
+        );
+        assert!(
+            trailing_sub["marks"].is_null()
+                || trailing_sub["marks"]
+                    .as_array()
+                    .map(|a| a.is_empty())
+                    .unwrap_or(false),
+            "subsup mark must not leak onto trailing text after closing `~`: {trailing_sub}"
+        );
+    }
+
+    #[test]
+    fn test_markdown_heading_non_attribute_brace_stripped() {
+        // BC-7.2.008 EC-2: `## Foo {bar}` (no `#`/`.`/`key=val` — a plain word
+        // in braces) produces heading text "Foo", not "Foo {bar}".
+        // pulldown-cmark with ENABLE_HEADING_ATTRIBUTES treats any `{…}` block at
+        // end-of-heading as a potential attribute container and silently drops
+        // unrecognised tokens inside it, so `{bar}` is stripped alongside valid
+        // forms like `{#id}` and `{.cls}`.
+        let adf = markdown_to_adf("## Foo {bar}");
+        let heading = &adf["content"][0];
+        assert_eq!(heading["type"], "heading", "must be a heading: {adf}");
+        assert_eq!(heading["attrs"]["level"], 2, "must be level 2: {adf}");
+        let text: String = heading["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|n| n["text"].as_str())
+            .collect();
+        // pulldown-cmark strips `{bar}` — the surviving text is "Foo", not "Foo {bar}".
+        // Consistent with BC-7.2.008 EC-2 (corrected): a plain-word brace such as
+        // `{bar}` at end-of-heading is silently dropped by the parser alongside valid
+        // attribute syntax. This assertion pins that behavior so a future
+        // pulldown-cmark upgrade that changes it is caught immediately.
+        assert_eq!(
+            text, "Foo",
+            "pulldown-cmark strips {{bar}} even without valid attr syntax: {adf}"
+        );
+    }
+
+    #[test]
+    fn test_markdown_heading_attributes_stripped() {
+        // id, class, key=value, and combined forms are all consumed by
+        // ENABLE_HEADING_ATTRIBUTES — none leak into the heading text.
+        for src in [
+            "## Title {#myid}",
+            "## Title {.cls}",
+            "## Title {#id .cls}",
+            "## Title {key=val}",
+        ] {
+            let adf = markdown_to_adf(src);
+            let heading = &adf["content"][0];
+            assert_eq!(heading["type"], "heading", "{src}: {adf}");
+            assert_eq!(heading["attrs"]["level"], 2, "{src}: {adf}");
+            let text: String = heading["content"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|n| n["text"].as_str())
+                .collect();
+            // Exact equality is the leak check: any `{#id}`/`{.cls}`/`{key=val}`
+            // remnant would make `text` != "Title".
+            assert_eq!(text, "Title", "{src}: attr must not leak into text");
+        }
     }
 
     #[test]
