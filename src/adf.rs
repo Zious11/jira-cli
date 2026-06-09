@@ -1,5 +1,6 @@
 use pulldown_cmark::{
-    CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd, TextMergeStream,
+    BlockQuoteKind, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
+    TextMergeStream,
 };
 use serde_json::{Value, json};
 
@@ -28,12 +29,16 @@ pub fn markdown_to_adf(markdown: &str) -> Value {
         | Options::ENABLE_SUBSCRIPT
         // Consume `## Title {#id}` attribute syntax instead of leaking `{#id}` into
         // the heading text. ADF headings have no id attr, so the value is dropped.
-        | Options::ENABLE_HEADING_ATTRIBUTES;
-    // NOTE: GFM alert blockquotes (`> [!NOTE]` -> ADF `panel`) are intentionally
-    // NOT enabled here. ADF's `panel` content model forbids nested `panel`, `table`,
-    // and `blockquote`, and `listItem` forbids `panel` entirely, so a faithful
-    // mapping needs the same content-model normalization as listItem (#470). Tracked
-    // as a follow-up; until then `> [!NOTE]` stays a plain blockquote (#474).
+        | Options::ENABLE_HEADING_ATTRIBUTES
+        // GFM alert blockquotes (`> [!NOTE|TIP|IMPORTANT|WARNING|CAUTION]`) ->
+        // ADF `panel`. In pulldown-cmark 0.13 ENABLE_GFM gates ONLY the alert
+        // blockquote tags (it does not double-enable tables/strike/footnotes set
+        // above). Tagged alerts arrive as `Tag::BlockQuote(Some(kind))`; plain
+        // quotes as `BlockQuote(None)`. ADF's `panel` content model forbids
+        // nested `panel`, `table`, and `blockquote`, and `listItem` forbids
+        // `panel`, so the mapping runs the same content-model normalization as
+        // listItem (#470). See docs/specs/adf-panel-content-model.md (#483).
+        | Options::ENABLE_GFM;
     let parser = TextMergeStream::new(Parser::new_ext(markdown, options));
     let mut builder = AdfBuilder::new();
     for event in parser {
@@ -44,6 +49,39 @@ pub fn markdown_to_adf(markdown: &str) -> Value {
         "type": "doc",
         "content": builder.finish(),
     })
+}
+
+/// Map a GFM alert kind to a portable ADF `panelType`.
+///
+/// Only the five always-safe panelTypes are used (`info`/`note`/`warning`/
+/// `error`/`success`); the schema also permits `tip`/`custom`, but those are
+/// editor-feature-gated and render inconsistently across Jira Cloud surfaces, so
+/// they are avoided for REST portability. The match is exhaustive (no `_` arm)
+/// so a future pulldown-cmark `BlockQuoteKind` variant is a compile error rather
+/// than a silent default. See docs/specs/adf-panel-content-model.md (#483).
+fn panel_type_for(kind: BlockQuoteKind) -> &'static str {
+    match kind {
+        BlockQuoteKind::Note => "info",
+        BlockQuoteKind::Tip => "success",
+        BlockQuoteKind::Important => "note",
+        BlockQuoteKind::Warning => "warning",
+        BlockQuoteKind::Caution => "error",
+    }
+}
+
+/// Inverse of [`panel_type_for`]: map an ADF `panelType` back to the GFM alert
+/// label for the `> [!KIND]` reverse render. Unknown/unmapped types (e.g.
+/// `tip`/`custom`, or a panel from another source) return `None`, so
+/// `adf_to_text` falls back to a plain blockquote with no marker.
+fn gfm_label_for_panel_type(panel_type: &str) -> Option<&'static str> {
+    match panel_type {
+        "info" => Some("NOTE"),
+        "success" => Some("TIP"),
+        "note" => Some("IMPORTANT"),
+        "warning" => Some("WARNING"),
+        "error" => Some("CAUTION"),
+        _ => None,
+    }
 }
 
 struct AdfBuilder {
@@ -71,6 +109,9 @@ enum NodeKind {
     Paragraph,
     Heading(u8),
     BlockQuote,
+    // GFM alert (`> [!NOTE]` etc.) -> ADF `panel`. `panel_type` is the mapped,
+    // portable panelType string (info/note/warning/error/success).
+    Panel { panel_type: &'static str },
     CodeBlock { language: Option<String> },
     BulletList,
     OrderedList { start: u64 },
@@ -126,7 +167,10 @@ impl AdfBuilder {
         match tag {
             Tag::Paragraph => self.push(NodeKind::Paragraph),
             Tag::Heading { level, .. } => self.push(NodeKind::Heading(heading_level_to_u8(level))),
-            Tag::BlockQuote(_) => self.push(NodeKind::BlockQuote),
+            Tag::BlockQuote(None) => self.push(NodeKind::BlockQuote),
+            Tag::BlockQuote(Some(kind)) => self.push(NodeKind::Panel {
+                panel_type: panel_type_for(kind),
+            }),
             Tag::CodeBlock(kind) => {
                 let language = match kind {
                     CodeBlockKind::Fenced(lang) if !lang.is_empty() => Some(lang.into_string()),
@@ -194,6 +238,40 @@ impl AdfBuilder {
                 "content": children,
             })),
             NodeKind::BlockQuote => Some(json!({ "type": "blockquote", "content": children })),
+            NodeKind::Panel { panel_type } => {
+                // ADF `panel.content` forbids nested `panel`, `table`, and
+                // `blockquote`; normalize_panel_content transforms each into the
+                // permitted set BEFORE wrapping loose inline runs (mirrors the
+                // listItem path #470). See docs/specs/adf-panel-content-model.md.
+                let normalized = normalize_panel_content(children);
+                // A body-less alert (`> [!NOTE]` with no content) emits empty
+                // panel content so `is_empty_block_container` prunes the whole
+                // panel below — an empty `panel` is invalid ADF (Jira 400).
+                // Unlike `listItem` (which must stay non-empty, so it keeps a
+                // placeholder paragraph), a top-level panel can be dropped
+                // entirely; do NOT route empties through `wrap_inlines_as_blocks`,
+                // which would inject a placeholder paragraph and defeat pruning.
+                let content = if normalized.is_empty() {
+                    Vec::new()
+                } else {
+                    wrap_inlines_as_blocks(
+                        normalized,
+                        &[
+                            "paragraph",
+                            "heading",
+                            "bulletList",
+                            "orderedList",
+                            "codeBlock",
+                            "rule",
+                        ],
+                    )
+                };
+                Some(json!({
+                    "type": "panel",
+                    "attrs": { "panelType": panel_type },
+                    "content": content,
+                }))
+            }
             NodeKind::CodeBlock { language } => {
                 let mut node = json!({ "type": "codeBlock", "content": children });
                 if let Some(lang) = language {
@@ -448,8 +526,9 @@ fn dedup_marks_by_type(marks: &[Value]) -> Vec<Value> {
 /// line) carries no content and the ADF schema treats heading content as
 /// required.
 fn is_empty_block_container(node: &Value) -> bool {
-    const REQUIRES_CONTENT: [&str; 7] = [
+    const REQUIRES_CONTENT: [&str; 8] = [
         "blockquote",
+        "panel",
         "heading",
         "listItem",
         "bulletList",
@@ -531,7 +610,11 @@ fn normalize_list_item_content(children: Vec<Value>) -> Vec<Value> {
     let mut out: Vec<Value> = Vec::new();
     for child in children {
         match child["type"].as_str() {
-            Some("blockquote") => {
+            Some("blockquote") | Some("panel") => {
+                // `listItem.content` permits neither `blockquote` nor `panel`.
+                // Unwrap and recursively normalize the inner blocks (the panel's
+                // panelType is discarded — ADF cannot represent a panel inside a
+                // listItem). #483.
                 let inner = child
                     .get("content")
                     .and_then(|c| c.as_array())
@@ -545,6 +628,55 @@ fn normalize_list_item_content(children: Vec<Value>) -> Vec<Value> {
             }
             Some("table") => out.extend(flatten_table_to_paragraphs(&child)),
             Some("rule") => { /* dropped — no content, invalid inside listItem */ }
+            _ => out.push(child),
+        }
+    }
+    out
+}
+
+/// Normalize the children of a `panel` to the ADF-permitted content model.
+///
+/// ADF `panel.content` permits `paragraph`/`heading` (both no-marks),
+/// `bulletList`, `orderedList`, `codeBlock`, `rule`, `taskList`, and several
+/// media/card/decision nodes — but **forbids** nested `panel`, `table`, and
+/// `blockquote`. pulldown-cmark can emit all three inside an alert blockquote
+/// (nested alerts, an alert wrapping a table, an alert wrapping a plain quote),
+/// so this pass transforms each into the permitted set BEFORE the caller's
+/// `wrap_inlines_as_blocks` groups loose inline runs (issue #483,
+/// `docs/specs/adf-panel-content-model.md`):
+///
+/// - `panel` → unwrapped: child blocks spliced in and recursively normalized
+///   (the inner panelType is discarded; `panel > panel` is invalid).
+/// - `blockquote` → unwrapped: child blocks spliced in and recursively normalized.
+/// - `table` → flattened to one `paragraph` per row via
+///   `flatten_table_to_paragraphs` (marks preserved; grid structure lost).
+/// - `heading` → kept, but stripped of any node-level `marks` to satisfy
+///   `heading (no marks)`.
+/// - `paragraph` → kept, with any node-level `marks` stripped (`paragraph
+///   (no marks)`); defense-in-depth — block nodes don't carry marks today.
+///
+/// Permitted blocks and loose inline nodes pass through untouched.
+fn normalize_panel_content(children: Vec<Value>) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    for mut child in children {
+        match child["type"].as_str() {
+            Some("panel") | Some("blockquote") => {
+                let inner = child
+                    .get("content")
+                    .and_then(|c| c.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                out.extend(normalize_panel_content(inner));
+            }
+            Some("table") => out.extend(flatten_table_to_paragraphs(&child)),
+            Some("heading") | Some("paragraph") => {
+                // panel.content requires `paragraph (no marks)` / `heading (no
+                // marks)`: strip any node-level marks array.
+                if let Some(obj) = child.as_object_mut() {
+                    obj.remove("marks");
+                }
+                out.push(child);
+            }
             _ => out.push(child),
         }
     }
@@ -767,6 +899,49 @@ impl AdfRenderer {
                     }
                 }
                 if !lines.is_empty() {
+                    self.output.push('\n');
+                }
+            }
+            "panel" => {
+                // Render a panel back to a GFM alert `> [!KIND]\n> body`. A
+                // known panelType emits the alert marker as the first quoted
+                // line; an unmapped type (tip/custom/foreign) falls back to a
+                // plain blockquote with no marker. Line-prefixing mirrors the
+                // `blockquote` arm. #483.
+                let label = node
+                    .get("attrs")
+                    .and_then(|a| a.get("panelType"))
+                    .and_then(|p| p.as_str())
+                    .and_then(gfm_label_for_panel_type);
+                let start = self.output.len();
+                self.render_children(node);
+                let rendered = self.output.split_off(start);
+                let mut lines: Vec<&str> = rendered.split('\n').collect();
+                while lines.last() == Some(&"") {
+                    lines.pop();
+                }
+                let marker = label.map(|l| format!("[!{l}]"));
+                // First emit the marker line (if any), then the body lines, all
+                // prefixed with "> ".
+                let mut first = true;
+                if let Some(marker) = &marker {
+                    self.output.push_str("> ");
+                    self.output.push_str(marker);
+                    first = false;
+                }
+                for line in &lines {
+                    if !first {
+                        self.output.push('\n');
+                    }
+                    first = false;
+                    if line.is_empty() {
+                        self.output.push('>');
+                    } else {
+                        self.output.push_str("> ");
+                        self.output.push_str(line);
+                    }
+                }
+                if marker.is_some() || !lines.is_empty() {
                     self.output.push('\n');
                 }
             }
@@ -1843,6 +2018,7 @@ mod tests {
     fn assert_no_invalid_empty_container(adf: &Value) {
         const REQUIRES_CONTENT: &[&str] = &[
             "blockquote",
+            "panel",
             "heading",
             "listItem",
             "bulletList",
@@ -1990,6 +2166,7 @@ mod tests {
         // rely on a particular markdown input reaching each container type.
         for ty in [
             "blockquote",
+            "panel",
             "heading",
             "listItem",
             "bulletList",
@@ -3018,5 +3195,403 @@ mod tests {
         });
         let text = adf_to_text(&adf);
         assert!(text.contains("| line wrap |"), "got: {text:?}");
+    }
+
+    // --- GFM alerts -> ADF panel (issue #483) ----------------------------
+    // `> [!NOTE|TIP|IMPORTANT|WARNING|CAUTION]` maps to an ADF `panel` with a
+    // portable panelType, normalizing the panel content model (no nested panel,
+    // table, or blockquote) the way #470 did for listItem.
+    // See docs/specs/adf-panel-content-model.md.
+
+    /// First top-level node of the document.
+    fn first_block(adf: &Value) -> Value {
+        adf["content"][0].clone()
+    }
+
+    /// Assert the document's first block is a `panel` with the given panelType,
+    /// and return its `content` array.
+    fn assert_panel(adf: &Value, panel_type: &str) -> Vec<Value> {
+        let block = first_block(adf);
+        assert_eq!(block["type"], "panel", "expected panel, got: {block}");
+        assert_eq!(
+            block["attrs"]["panelType"], panel_type,
+            "panelType mismatch: {block}"
+        );
+        block["content"].as_array().cloned().unwrap_or_default()
+    }
+
+    /// Recursively collect every node `type` that appears inside any `panel` in
+    /// the document (the panel's direct and transitive content).
+    fn panel_descendant_types(adf: &Value) -> Vec<String> {
+        fn walk(node: &Value, in_panel: bool, acc: &mut Vec<String>) {
+            if in_panel {
+                if let Some(t) = node.get("type").and_then(Value::as_str) {
+                    acc.push(t.to_string());
+                }
+            }
+            let now_in_panel =
+                in_panel || node.get("type").and_then(Value::as_str) == Some("panel");
+            if let Some(children) = node.get("content").and_then(Value::as_array) {
+                for child in children {
+                    walk(child, now_in_panel, acc);
+                }
+            }
+        }
+        let mut acc = Vec::new();
+        if let Some(content) = adf.get("content").and_then(Value::as_array) {
+            for node in content {
+                walk(node, false, &mut acc);
+            }
+        }
+        acc
+    }
+
+    #[test]
+    fn test_markdown_alert_note_maps_to_panel_info() {
+        let adf = markdown_to_adf("> [!NOTE]\n> useful info");
+        let content = assert_panel(&adf, "info");
+        assert_eq!(content[0]["type"], "paragraph", "got: {content:?}");
+        assert!(
+            adf.to_string().contains("useful info"),
+            "body preserved: {adf}"
+        );
+        // The `[!NOTE]` marker must NOT survive as literal text.
+        assert!(
+            !adf.to_string().contains("[!NOTE]"),
+            "marker leaked into content: {adf}"
+        );
+    }
+
+    #[test]
+    fn test_markdown_alert_tip_maps_to_panel_success() {
+        let adf = markdown_to_adf("> [!TIP]\n> a tip");
+        assert_panel(&adf, "success");
+    }
+
+    #[test]
+    fn test_markdown_alert_important_maps_to_panel_note() {
+        let adf = markdown_to_adf("> [!IMPORTANT]\n> key point");
+        assert_panel(&adf, "note");
+    }
+
+    #[test]
+    fn test_markdown_alert_warning_maps_to_panel_warning() {
+        let adf = markdown_to_adf("> [!WARNING]\n> careful");
+        assert_panel(&adf, "warning");
+    }
+
+    #[test]
+    fn test_markdown_alert_caution_maps_to_panel_error() {
+        let adf = markdown_to_adf("> [!CAUTION]\n> danger");
+        assert_panel(&adf, "error");
+    }
+
+    #[test]
+    fn test_markdown_alert_marker_with_trailing_text_stays_literal_blockquote() {
+        // pulldown-cmark 0.13 requires the alert marker to be the SOLE content of
+        // the first line. Trailing text on the marker line (`> [!NOTE] extra`)
+        // disqualifies it -> stays a plain blockquote with the marker as literal
+        // text. (Note: pulldown is otherwise lenient — a missing space `>[!NOTE]`
+        // and any-case `[!note]`/`[!Note]` ARE still recognized as alerts.)
+        let adf = markdown_to_adf("> [!NOTE] extra\n> text");
+        let block = first_block(&adf);
+        assert_eq!(block["type"], "blockquote", "got: {block}");
+        assert!(
+            adf.to_string().contains("[!NOTE]"),
+            "marker stays literal: {adf}"
+        );
+    }
+
+    #[test]
+    fn test_markdown_unknown_alert_kind_stays_literal_blockquote() {
+        let adf = markdown_to_adf("> [!FOO]\n> text");
+        let block = first_block(&adf);
+        assert_eq!(block["type"], "blockquote", "got: {block}");
+        assert!(
+            adf.to_string().contains("[!FOO]"),
+            "unknown marker stays literal: {adf}"
+        );
+    }
+
+    #[test]
+    fn test_markdown_plain_blockquote_unchanged() {
+        let adf = markdown_to_adf("> just a quote");
+        let block = first_block(&adf);
+        assert_eq!(block["type"], "blockquote", "got: {block}");
+    }
+
+    #[test]
+    fn test_markdown_nested_alert_unwraps_inner_panel() {
+        // `panel > panel` is invalid ADF; the inner alert is unwrapped, its blocks
+        // spliced into the outer panel. No panel may contain a nested panel.
+        let adf = markdown_to_adf("> [!NOTE]\n> outer\n> > [!TIP]\n> > inner");
+        let content = assert_panel(&adf, "info");
+        let types: Vec<&str> = content.iter().filter_map(|n| n["type"].as_str()).collect();
+        assert!(
+            !types.contains(&"panel"),
+            "inner panel must be unwrapped: {content:?}"
+        );
+        assert!(
+            !panel_descendant_types(&adf).contains(&"panel".to_string()),
+            "no nested panel anywhere: {adf}"
+        );
+        assert!(
+            adf.to_string().contains("inner"),
+            "inner text preserved: {adf}"
+        );
+    }
+
+    #[test]
+    fn test_markdown_alert_with_table_flattens_to_paragraphs() {
+        let md = "> [!NOTE]\n> | a | b |\n> | --- | --- |\n> | 1 | 2 |";
+        let adf = markdown_to_adf(md);
+        assert_panel(&adf, "info");
+        let descendants = panel_descendant_types(&adf);
+        assert!(
+            !descendants.contains(&"table".to_string()),
+            "table must be flattened out of panel: {adf}"
+        );
+        // Flattened, not dropped: the cell data must survive (one paragraph per
+        // row in `| a | b |` form).
+        let s = adf.to_string();
+        for cell in ["a", "b", "1", "2"] {
+            assert!(s.contains(cell), "cell `{cell}` lost on flatten: {adf}");
+        }
+        assert!(
+            descendants.contains(&"paragraph".to_string()),
+            "rows must become paragraphs: {adf}"
+        );
+    }
+
+    #[test]
+    fn test_markdown_alert_in_listitem_unwraps_panel() {
+        // `listItem > panel` is invalid ADF; the panel is unwrapped inside the item.
+        let md = "- item\n\n  > [!NOTE]\n  > nested";
+        let adf = markdown_to_adf(md);
+        let descendants_have_panel = {
+            fn has_panel_in_listitem(node: &Value) -> bool {
+                let is_li = node.get("type").and_then(Value::as_str) == Some("listItem");
+                if is_li {
+                    if let Some(c) = node.get("content").and_then(Value::as_array) {
+                        if c.iter().any(|n| n["type"] == "panel") {
+                            return true;
+                        }
+                    }
+                }
+                node.get("content")
+                    .and_then(Value::as_array)
+                    .is_some_and(|c| c.iter().any(has_panel_in_listitem))
+            }
+            adf.get("content")
+                .and_then(Value::as_array)
+                .is_some_and(|c| c.iter().any(has_panel_in_listitem))
+        };
+        assert!(
+            !descendants_have_panel,
+            "listItem must not contain a panel: {adf}"
+        );
+        assert!(adf.to_string().contains("nested"), "text preserved: {adf}");
+    }
+
+    #[test]
+    fn test_markdown_alert_heading_child_has_no_marks() {
+        // panel.content requires `heading (no marks)`. A heading inside an alert
+        // must not carry a node-level `marks` array.
+        let adf = markdown_to_adf("> [!NOTE]\n> # Title");
+        let content = assert_panel(&adf, "info");
+        let heading = content
+            .iter()
+            .find(|n| n["type"] == "heading")
+            .expect("heading preserved in panel");
+        assert!(
+            heading.get("marks").is_none(),
+            "heading must have no node-level marks: {heading}"
+        );
+    }
+
+    #[test]
+    fn test_markdown_empty_alert_pruned() {
+        // An alert with no body would produce an empty panel shell (invalid ADF,
+        // Jira 400). It must be pruned entirely by is_empty_block_container — NOT
+        // kept as a panel holding a placeholder paragraph. Positively assert the
+        // panel node is absent from the whole document (not vacuously true on a
+        // non-empty-content panel).
+        let adf = markdown_to_adf("> [!NOTE]");
+        assert_no_invalid_empty_container(&adf);
+        fn has_panel(n: &Value) -> bool {
+            n["type"] == "panel"
+                || n["content"]
+                    .as_array()
+                    .is_some_and(|c| c.iter().any(has_panel))
+        }
+        assert!(
+            !has_panel(&adf),
+            "empty panel must be pruned entirely: {adf}"
+        );
+    }
+
+    #[test]
+    fn test_panel_content_only_permitted_node_types() {
+        // Invariant: no panel anywhere contains a disallowed child node type.
+        let md = "> [!NOTE]\n> outer\n> > [!TIP]\n> > | a | b |\n> > | - | - |\n> > | 1 | 2 |";
+        let adf = markdown_to_adf(md);
+        const FORBIDDEN: [&str; 3] = ["panel", "table", "blockquote"];
+        for t in panel_descendant_types(&adf) {
+            assert!(
+                !FORBIDDEN.contains(&t.as_str()),
+                "forbidden node `{t}` inside panel: {adf}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_render_panel_info_to_note_alert() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "panel",
+                "attrs": {"panelType": "info"},
+                "content": [
+                    {"type": "paragraph", "content": [{"type": "text", "text": "useful"}]}
+                ]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        // The marker line itself must be quoted (`> [!NOTE]`), not a bare
+        // `[!NOTE]` (which would be a malformed alert), and the body line quoted.
+        assert!(
+            text.contains("> [!NOTE]"),
+            "marker line must be quoted: {text:?}"
+        );
+        assert!(text.contains("> useful"), "body quoted: {text:?}");
+    }
+
+    #[test]
+    fn test_render_panel_multiline_body_quotes_every_line() {
+        // Each body line of a panel must get its own `> ` prefix (the per-line
+        // logic shared with the blockquote arm).
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "panel",
+                "attrs": {"panelType": "warning"},
+                "content": [
+                    {"type": "paragraph", "content": [{"type": "text", "text": "line one"}]},
+                    {"type": "paragraph", "content": [{"type": "text", "text": "line two"}]}
+                ]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        assert!(text.contains("> [!WARNING]"), "marker quoted: {text:?}");
+        assert!(text.contains("> line one"), "first line quoted: {text:?}");
+        assert!(text.contains("> line two"), "second line quoted: {text:?}");
+    }
+
+    #[test]
+    fn test_render_panel_tip_type_renders_no_marker() {
+        // `markdown_to_adf` never emits panelType `tip`, but `adf_to_text` may
+        // receive it from another source; it has no GFM label, so it renders as
+        // a plain quoted blockquote with no marker (same arm as `custom`).
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "panel",
+                "attrs": {"panelType": "tip"},
+                "content": [
+                    {"type": "paragraph", "content": [{"type": "text", "text": "y"}]}
+                ]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        assert!(!text.contains("[!"), "no alert marker for `tip`: {text:?}");
+        assert!(text.contains("> y"), "still quoted: {text:?}");
+    }
+
+    #[test]
+    fn test_render_panel_unknown_type_to_plain_blockquote() {
+        let adf = json!({
+            "type": "doc",
+            "content": [{
+                "type": "panel",
+                "attrs": {"panelType": "custom"},
+                "content": [
+                    {"type": "paragraph", "content": [{"type": "text", "text": "x"}]}
+                ]
+            }]
+        });
+        let text = adf_to_text(&adf);
+        assert!(
+            !text.contains("[!"),
+            "no alert marker for unknown type: {text:?}"
+        );
+        assert!(text.contains("> x"), "still quoted: {text:?}");
+    }
+
+    #[test]
+    fn test_alert_markdown_to_text_roundtrip_all_kinds() {
+        for (marker, body) in [
+            ("NOTE", "n"),
+            ("TIP", "t"),
+            ("IMPORTANT", "i"),
+            ("WARNING", "w"),
+            ("CAUTION", "c"),
+        ] {
+            let md = format!("> [!{marker}]\n> {body}");
+            let adf = markdown_to_adf(&md);
+            let text = adf_to_text(&adf);
+            assert!(
+                text.contains(&format!("[!{marker}]")),
+                "round-trip lost marker for {marker}: {text:?}"
+            );
+            assert!(
+                text.contains(&format!("> {body}")),
+                "round-trip lost body for {marker}: {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_markdown_alert_marker_without_leading_space_still_panel() {
+        // pulldown-cmark 0.13 is lenient: a missing space after `>` (`>[!NOTE]`)
+        // is still recognized as an alert. This pins an upstream-dependency
+        // behavior the mapping relies on — a future bump narrowing recognition
+        // would otherwise silently leak `[!NOTE]` as a plain blockquote.
+        let adf = markdown_to_adf(">[!NOTE]\n>body");
+        assert_panel(&adf, "info");
+    }
+
+    #[test]
+    fn test_markdown_alert_marker_case_insensitive_still_panel() {
+        // pulldown-cmark recognizes the marker case-insensitively (`[!note]`,
+        // `[!Note]`). Pin it so a dependency bump can't silently regress it.
+        for md in ["> [!note]\n> b", "> [!Note]\n> b", "> [!WaRnInG]\n> b"] {
+            let adf = markdown_to_adf(md);
+            let block = first_block(&adf);
+            assert_eq!(
+                block["type"], "panel",
+                "case-insensitive marker must map to panel: {md:?} -> {block}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_normalize_panel_content_strips_paragraph_marks() {
+        // panel.content requires `paragraph (no marks)`. markdown_to_adf does not
+        // emit block-level marks today, so exercise the defense-in-depth strip
+        // directly with a synthetic marked paragraph.
+        let children = vec![json!({
+            "type": "paragraph",
+            "marks": [{ "type": "strong" }],
+            "content": [{ "type": "text", "text": "x" }]
+        })];
+        let out = normalize_panel_content(children);
+        assert_eq!(out.len(), 1, "paragraph kept: {out:?}");
+        assert!(
+            out[0].get("marks").is_none(),
+            "node-level marks stripped from panel paragraph: {:?}",
+            out[0]
+        );
+        // Inline content (and its marks) is untouched — only node-level marks go.
+        assert_eq!(out[0]["content"][0]["text"], "x");
     }
 }
