@@ -179,7 +179,7 @@ catch-all, which recurses into `content` and renders the inner blocks as bare
 text (the `[!NOTE]` marker is lost). Add an explicit `panel` arm that:
 
 1. Reads `attrs.panelType`, maps it back to a GFM kind label via
-   `gfm_kind_for_panel_type` (inverse of the forward table).
+   `gfm_label_for_panel_type` (inverse of the forward table).
 2. Renders children into a buffer, then prefixes the first line with
    `[!KIND]\n` and quotes every line with `> ` — reusing the exact
    line-prefixing logic already proven in the `blockquote` arm.
