@@ -3797,21 +3797,22 @@ mod tests {
     #[test]
     fn test_task_list_roundtrip_adf_to_text() {
         // BC-7.2.010 EC-10: round-trip stability.
-        // adf_to_text(markdown_to_adf(...)) must produce a string containing
-        // `- [ ] pending` and `- [x] done`.
-        // Re-parsing must produce semantically equivalent ADF.
+        // adf_to_text(markdown_to_adf(...)) must produce the exact string
+        // `"- [ ] pending\n- [x] done\n"` (taskItem renderer appends `\n`
+        // per each item; no trailing blank line). Re-parsing must produce
+        // semantically equivalent ADF.
         // localId values are NOT asserted across the text round-trip (they are
         // re-derived from the counter; identical input yields identical IDs).
+        //
+        // CR-004: strengthened from presence-only `contains` to assert_eq on
+        // the trimmed full output, so extraneous-content regressions are caught.
         let input = "- [ ] pending\n- [x] done";
         let adf = markdown_to_adf(input);
         let rendered = adf_to_text(&adf);
-        assert!(
-            rendered.contains("- [ ] pending"),
-            "TODO item must render as `- [ ] pending`, got: {rendered:?}"
-        );
-        assert!(
-            rendered.contains("- [x] done"),
-            "DONE item must render as `- [x] done`, got: {rendered:?}"
+        assert_eq!(
+            rendered.trim(),
+            "- [ ] pending\n- [x] done",
+            "adf_to_text must render exact task list output, got: {rendered:?}"
         );
         // Re-parse must produce taskList (not bulletList)
         let adf2 = markdown_to_adf(&rendered);
@@ -3821,6 +3822,7 @@ mod tests {
             "re-parsed output must still be taskList: {list2}"
         );
         let items2 = list2["content"].as_array().expect("items");
+        assert_eq!(items2.len(), 2, "re-parsed taskList must have 2 items: {list2}");
         assert_eq!(
             items2[0]["attrs"]["state"], "TODO",
             "re-parsed pending item must be TODO: {:?}",
