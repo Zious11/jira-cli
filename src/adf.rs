@@ -6985,12 +6985,12 @@ mod tests {
         );
     }
 
-    #[test]
     // --- F-1 (F5-pass6): loose task item with nested sublist preserves doc order ---
     // Mirror of the already-fixed tight-path bug (F-PASS4-C1).
     // Before the fix, the loose branch called append_child(hoist) BEFORE returning
     // Single(taskItem), so BulletList children became [bulletList(inner), taskItem(outer)]
     // → reclassified as [bulletList(inner), taskList(outer)] — inverted order.
+
     #[test]
     fn test_loose_task_item_with_nested_sublist_preserves_order() {
         // F-1 regression: `- [ ] outer\n\n  - inner`
