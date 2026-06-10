@@ -1049,7 +1049,13 @@ impl AdfBuilder {
                     self.append_child(node);
                 }
                 for hoist in hoists {
-                    self.append_child(hoist);
+                    // CR-002: prune individual hoists just as the primary node
+                    // is pruned. No-op today (hoists are bulletList/orderedList/
+                    // taskList — none empty in current paths), but guards future
+                    // paths that might generate empty hoist containers.
+                    if !is_empty_block_container(&hoist) {
+                        self.append_child(hoist);
+                    }
                 }
             }
         }
