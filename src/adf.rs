@@ -1219,7 +1219,28 @@ fn reclassify_as_task_list(children: Vec<Value>) -> Option<EndResult> {
 
     for seg in segments {
         match seg {
-            Segment::Task(node) => current_task_run.push(node),
+            Segment::Task(node) => {
+                // ADF tuple-lead rule: a `taskList`'s first child MUST be a
+                // `taskItem` (taskList = (taskItem, (taskItem|taskList)*)). A
+                // nested `taskList` segment may therefore only ATTACH to a run
+                // that already has a leading `taskItem` — it can never START one.
+                //
+                // F6-P1 fix: when a bare `taskList` segment arrives while the
+                // current run is empty (no leading taskItem yet), wrapping it in
+                // `flush_task_run` would emit an invalid `taskList > taskList`
+                // (first child is a taskList). Instead hoist it as a sibling
+                // block — a nested taskList is itself a valid stand-alone block.
+                // This surfaces from compositions like
+                //   `- [ ] o\n  - p\n    - [ ] deep\n  - [ ] sib`
+                // where a plain item's nested task-sublist hoists a lone
+                // `taskList` ahead of the next taskItem run.
+                let is_task_list = node.get("type").and_then(Value::as_str) == Some("taskList");
+                if is_task_list && current_task_run.is_empty() {
+                    output_nodes.push(node);
+                } else {
+                    current_task_run.push(node);
+                }
+            }
             Segment::Hoist(block) => {
                 flush_task_run(&mut current_task_run, &mut output_nodes);
                 output_nodes.push(block);
@@ -4891,6 +4912,25 @@ mod tests {
                 "F-PASS4-C1: real task then empty with nested task",
                 "- [x] real\n- [ ]\n  - [ ] nested\n",
             ),
+            // F6-P1 (proptest-minimized): a plain item carrying a nested
+            // task-sublist, followed by a sibling task item. The nested sublist
+            // hoists a lone `taskList` ahead of the next task run; without the
+            // tuple-lead guard in reclassify_as_task_list this produced an
+            // invalid `taskList > taskList` (first child a taskList, not a
+            // taskItem). Both the panel-wrapped (original minimized) and bare
+            // forms are pinned.
+            (
+                "F6-P1: nested plain-task then task (bare)",
+                "- [ ] o\n  - p\n    - [ ] deep\n  - [ ] sib\n",
+            ),
+            (
+                "F6-P1: nested plain-task then task (in panel)",
+                "> [!NOTE]\n> - [ ] x\n>   - x\n>     - [ ] x\n>   - [ ] x\n",
+            ),
+            (
+                "F6-P1: minimal lone-taskList-before-task",
+                "- p\n    - [ ] deep\n- [ ] sib\n",
+            ),
         ];
         for (label, md) in inputs {
             let adf = markdown_to_adf(md);
@@ -4905,6 +4945,55 @@ mod tests {
             // Additionally verify no empty content arrays for list nodes
             // (empty bulletList/taskList are invalid ADF)
             assert_no_empty_list_content(&adf, label);
+        }
+    }
+
+    #[test]
+    fn test_task_list_no_tasklist_leading_child_f6_p1() {
+        // F6-P1 regression (proptest-minimized). A plain item carrying a nested
+        // task-sublist, followed by a sibling task item, hoists a lone
+        // `taskList` ahead of the next task run. Before the tuple-lead guard in
+        // `reclassify_as_task_list`, this wrapped the lone taskList into a fresh
+        // `taskList` — producing the invalid `taskList > taskList` (first child
+        // a taskList instead of a taskItem), which Jira rejects with HTTP 400.
+        //
+        // Pin the precise invariant: every `taskList` node's FIRST child is a
+        // `taskItem`, on the exact minimized inputs proptest discovered.
+        let inputs = [
+            "- [ ] o\n  - p\n    - [ ] deep\n  - [ ] sib\n",
+            "> [!NOTE]\n> - [ ] x\n>   - x\n>     - [ ] x\n>   - [ ] x\n",
+            "- p\n    - [ ] deep\n- [ ] sib\n",
+        ];
+        for md in inputs {
+            let adf = markdown_to_adf(md);
+            assert_every_tasklist_leads_with_taskitem(&adf, md);
+            // Defense in depth: the full structural validator must also pass.
+            assert_valid_adf_structure(&adf);
+        }
+    }
+
+    /// Assert the ADF taskList tuple-lead rule on every taskList in the tree:
+    /// `taskList = (taskItem, (taskItem | taskList)*)` — the FIRST child must be
+    /// a `taskItem`, never a `taskList`.
+    fn assert_every_tasklist_leads_with_taskitem(v: &Value, md: &str) {
+        if v.get("type").and_then(Value::as_str) == Some("taskList") {
+            let first_ty = v
+                .get("content")
+                .and_then(Value::as_array)
+                .and_then(|c| c.first())
+                .and_then(|n| n.get("type"))
+                .and_then(Value::as_str);
+            assert_eq!(
+                first_ty,
+                Some("taskItem"),
+                "taskList first child must be taskItem (input {md:?}): {}",
+                serde_json::to_string(v).unwrap_or_default()
+            );
+        }
+        if let Some(children) = v.get("content").and_then(Value::as_array) {
+            for child in children {
+                assert_every_tasklist_leads_with_taskitem(child, md);
+            }
         }
     }
 
@@ -7204,7 +7293,7 @@ mod tests {
 
         let doc_children = adf["content"].as_array().expect("doc must have content");
         assert!(
-            doc_children.len() >= 1,
+            !doc_children.is_empty(),
             "doc must have at least one child: {adf}"
         );
         // The taskList must come FIRST (outer item).
@@ -7653,6 +7742,247 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    // --- F6: property-based hardening for task-list markdown→ADF -------------
+    //
+    // F6 deliverable (#471). The F5 adversarial loop converged at 16 passes, but
+    // the recurring defect class was *compositional* invalid-ADF: deep nesting,
+    // ordered-list task markers, and empty-body items combined in ways that
+    // hand-written example tests kept missing (e.g. `orderedList > taskItem`,
+    // `bulletList > bulletList`, empty `taskList`, block-in-`taskItem`). A
+    // generative property test is the right tool: it explores the composition
+    // space that examples cannot enumerate.
+    //
+    // The strategy below builds RANDOM markdown biased toward task lists and
+    // their compositions, then for each input asserts four invariants:
+    //   (a) markdown_to_adf NEVER panics.
+    //   (b) the produced ADF ALWAYS passes assert_valid_adf_structure (the F5
+    //       recursive parent→child content-model validator) AND has no empty
+    //       list/taskList content.
+    //   (c) no temp underscore-prefixed keys leak (assert_no_underscore_keys).
+    //   (d) adf_to_text(markdown_to_adf(input)) is total (never panics).
+    //
+    // Any failing input is auto-minimized by proptest; the minimized case is
+    // then added as a deterministic regression unit test above and the
+    // IMPLEMENTATION is fixed (via the shared helpers reclassify_as_task_list /
+    // split_stray_blocks_end_result / normalize_*) — never by weakening the
+    // property.
+
+    use proptest::prelude::*;
+
+    /// One generated markdown line item, before indentation/marker rendering.
+    #[derive(Debug, Clone)]
+    enum GenItem {
+        /// Unchecked task item: `- [ ] body` / `1. [ ] body`.
+        TaskUnchecked(String),
+        /// Checked task item: `- [x] body` / `1. [x] body`.
+        TaskChecked(String),
+        /// Plain bullet/ordered item with no task marker.
+        Plain(String),
+        /// Empty-body task item (`- [ ]` with nothing after the marker) — the
+        /// F-PASS3-C1 / F-471-M1 trigger class.
+        EmptyTask(bool),
+    }
+
+    /// Marker style for a generated list: bullet (`-`) vs ordered (`1.`).
+    #[derive(Debug, Clone, Copy)]
+    enum GenMarker {
+        Bullet,
+        Ordered,
+    }
+
+    /// A wrapper applied to the whole generated block.
+    #[derive(Debug, Clone, Copy)]
+    enum GenWrap {
+        None,
+        Blockquote,
+        PanelNote,
+        PanelWarning,
+    }
+
+    /// A recursive tree of list items with optional nested sublists, plus a
+    /// loose/tight flag and a per-item marker style.
+    #[derive(Debug, Clone)]
+    struct GenNode {
+        item: GenItem,
+        marker: GenMarker,
+        /// Nested children, rendered at +2 indent. May be empty.
+        children: Vec<GenNode>,
+        /// Loose list → a trailing blank line after the item body.
+        loose: bool,
+    }
+
+    /// Render a small inline-mark fragment for an item body. Kept short and
+    /// deterministic-per-seed so the generated markdown stays human-plausible.
+    fn render_body(words: &[u8]) -> String {
+        if words.is_empty() {
+            return "x".to_string();
+        }
+        let mut s = String::new();
+        for (i, w) in words.iter().enumerate() {
+            if i > 0 {
+                s.push(' ');
+            }
+            match w % 5 {
+                0 => s.push_str(&format!("**b{i}**")),
+                1 => s.push_str(&format!("*i{i}*")),
+                2 => s.push_str(&format!("`c{i}`")),
+                3 => s.push_str(&format!("w{i}")),
+                _ => s.push_str(&format!("[l{i}](https://e.x/{i})")),
+            }
+        }
+        s
+    }
+
+    /// Recursively render a GenNode (and its children) into markdown lines at
+    /// the given indentation depth.
+    fn render_node(node: &GenNode, depth: usize, out: &mut String) {
+        let indent = "  ".repeat(depth);
+        let marker = match node.marker {
+            GenMarker::Bullet => "-".to_string(),
+            GenMarker::Ordered => "1.".to_string(),
+        };
+        match &node.item {
+            GenItem::TaskUnchecked(body) => {
+                out.push_str(&format!("{indent}{marker} [ ] {body}\n"));
+            }
+            GenItem::TaskChecked(body) => {
+                out.push_str(&format!("{indent}{marker} [x] {body}\n"));
+            }
+            GenItem::Plain(body) => {
+                out.push_str(&format!("{indent}{marker} {body}\n"));
+            }
+            GenItem::EmptyTask(checked) => {
+                let box_ = if *checked { "[x]" } else { "[ ]" };
+                // Empty body: marker + checkbox + nothing.
+                out.push_str(&format!("{indent}{marker} {box_}\n"));
+            }
+        }
+        for child in &node.children {
+            render_node(child, depth + 1, out);
+        }
+        if node.loose {
+            out.push('\n');
+        }
+    }
+
+    /// Apply a block-level wrapper (blockquote / GFM-alert panel) to a rendered
+    /// markdown block by prefixing each line with `> `.
+    fn apply_wrap(wrap: GenWrap, body: &str) -> String {
+        let prefixed = || {
+            body.lines()
+                .map(|l| {
+                    if l.is_empty() {
+                        ">".to_string()
+                    } else {
+                        format!("> {l}")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        match wrap {
+            GenWrap::None => body.to_string(),
+            GenWrap::Blockquote => format!("{}\n", prefixed()),
+            GenWrap::PanelNote => format!("> [!NOTE]\n{}\n", prefixed()),
+            GenWrap::PanelWarning => format!("> [!WARNING]\n{}\n", prefixed()),
+        }
+    }
+
+    /// proptest strategy for a single GenItem.
+    fn gen_item() -> impl Strategy<Value = GenItem> {
+        prop_oneof![
+            // Bias toward task items (the feature under test) but keep plain and
+            // empty-body items well represented because they are the boundary
+            // classes that produced the recurring invalid-ADF defects.
+            3 => proptest::collection::vec(any::<u8>(), 0..4)
+                .prop_map(|w| GenItem::TaskUnchecked(render_body(&w))),
+            3 => proptest::collection::vec(any::<u8>(), 0..4)
+                .prop_map(|w| GenItem::TaskChecked(render_body(&w))),
+            2 => proptest::collection::vec(any::<u8>(), 0..4)
+                .prop_map(|w| GenItem::Plain(render_body(&w))),
+            2 => any::<bool>().prop_map(GenItem::EmptyTask),
+        ]
+    }
+
+    fn gen_marker() -> impl Strategy<Value = GenMarker> {
+        prop_oneof![Just(GenMarker::Bullet), Just(GenMarker::Ordered)]
+    }
+
+    /// Recursive proptest strategy for a GenNode tree, nesting up to depth 5.
+    fn gen_node() -> impl Strategy<Value = GenNode> {
+        let leaf =
+            (gen_item(), gen_marker(), any::<bool>()).prop_map(|(item, marker, loose)| GenNode {
+                item,
+                marker,
+                children: vec![],
+                loose,
+            });
+        // depth 5, up to 3 children per level, up to ~24 total nodes.
+        leaf.prop_recursive(5, 24, 3, |inner| {
+            (
+                gen_item(),
+                gen_marker(),
+                proptest::collection::vec(inner, 0..3),
+                any::<bool>(),
+            )
+                .prop_map(|(item, marker, children, loose)| GenNode {
+                    item,
+                    marker,
+                    children,
+                    loose,
+                })
+        })
+    }
+
+    fn gen_wrap() -> impl Strategy<Value = GenWrap> {
+        prop_oneof![
+            3 => Just(GenWrap::None),
+            1 => Just(GenWrap::Blockquote),
+            1 => Just(GenWrap::PanelNote),
+            1 => Just(GenWrap::PanelWarning),
+        ]
+    }
+
+    /// Top-level strategy: 1-4 sibling top-level nodes plus an optional wrapper.
+    fn gen_markdown() -> impl Strategy<Value = String> {
+        (proptest::collection::vec(gen_node(), 1..4), gen_wrap()).prop_map(|(nodes, wrap)| {
+            let mut body = String::new();
+            for node in &nodes {
+                render_node(node, 0, &mut body);
+            }
+            apply_wrap(wrap, &body)
+        })
+    }
+
+    proptest! {
+        // 512 cases keeps CI bounded (~a few seconds) while exploring the deep
+        // nesting / ordered / empty-body composition space that example tests
+        // missed. Bump locally for a longer soak.
+        #![proptest_config(ProptestConfig::with_cases(512))]
+
+        #[test]
+        fn prop_task_list_markdown_always_valid_adf(md in gen_markdown()) {
+            // (a) markdown_to_adf is total (never panics). If it panicked,
+            // proptest would catch it here and minimize.
+            let adf = markdown_to_adf(&md);
+
+            // (b) structural validity: parent→child content-model legality for
+            // every node touched by the task-list feature (bulletList/orderedList
+            // children are listItem; taskList tuple-lead + taskItem/taskList only;
+            // taskItem is inline-only; listItem/blockquote/panel allowlists).
+            assert_valid_adf_structure(&adf);
+            // ...and no empty list/taskList content (minItems:1).
+            assert_no_empty_list_content(&adf, "proptest");
+
+            // (c) no temp underscore-prefixed keys leak into the output (a leak
+            // would cause Jira HTTP 400 via additionalProperties:false).
+            assert_no_underscore_keys(&adf, "root");
+
+            // (d) the reverse render is total too.
+            let _ = adf_to_text(&adf);
         }
     }
 }
