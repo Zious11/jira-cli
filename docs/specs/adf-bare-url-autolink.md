@@ -31,7 +31,10 @@ needed, and double-linking risk on the API path is low.
 
 In scope:
 
-- `https://…` and `http://…`
+- `https://…` and `http://…` — the scheme is matched **case-insensitively**
+  (`HTTPS://`, `Http://`, `httpS://` all link, per RFC 3986 / GFM). The produced
+  `href` preserves the user's original casing (the scheme and path are not
+  normalized).
 
 Out of scope (documented limitation):
 

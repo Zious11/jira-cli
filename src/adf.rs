@@ -157,21 +157,28 @@ fn split_text_node_on_urls(node: &Value) -> Option<Vec<Value>> {
 /// Locate bare `http(s)://` URL byte-spans within `text`, applying GFM autolink
 /// boundary and extent rules (explicit-scheme subset, #473).
 fn find_bare_url_spans(text: &str) -> Vec<(usize, usize)> {
+    // Scheme detection is case-insensitive (RFC 3986 / GFM treat URL schemes
+    // case-insensitively, so `HTTPS://`, `Http://`, `httpS://` are all valid).
+    // Search a lowercased copy: `to_ascii_lowercase` is a 1:1 byte-length-
+    // preserving map (only ASCII A–Z fold; non-ASCII bytes are untouched), so
+    // every offset into `lower` is a valid offset into `text`. Spans and hrefs
+    // are sliced from the ORIGINAL `text`, preserving the user's path case.
+    let lower = text.to_ascii_lowercase();
     let mut spans = Vec::new();
     let mut search = 0;
-    while let Some(rel) = text[search..].find("http") {
+    while let Some(rel) = lower[search..].find("http") {
         let start = search + rel;
-        let rest = &text[start..];
-        let scheme_len = if rest.starts_with("https://") {
+        let scheme_len = if lower[start..].starts_with("https://") {
             8
-        } else if rest.starts_with("http://") {
+        } else if lower[start..].starts_with("http://") {
             7
         } else {
             search = start + 4;
             continue;
         };
         // GFM boundary: an autolink starts only at text-node start, or after
-        // whitespace or one of `*`, `_`, `~`, `(`.
+        // whitespace or one of `*`, `_`, `~`, `(`. (ASCII whitespace/punctuation
+        // are identical in `text` and `lower`, so checking either is equivalent.)
         let boundary_ok = start == 0
             || text[..start]
                 .chars()
@@ -183,7 +190,7 @@ fn find_bare_url_spans(text: &str) -> Vec<(usize, usize)> {
         }
         // Extent: consume non-whitespace, non-`<` characters after the scheme.
         let mut end = start + scheme_len;
-        for ch in rest[scheme_len..].chars() {
+        for ch in text[start + scheme_len..].chars() {
             if ch.is_whitespace() || ch == '<' {
                 break;
             }
@@ -2056,6 +2063,42 @@ mod tests {
         assert_eq!(
             joined, "ping user@example.com please",
             "email text preserved: {adf}"
+        );
+    }
+
+    #[test]
+    fn test_uppercase_https_scheme_is_linkified() {
+        // RFC 3986 / GFM treat schemes case-insensitively. The href preserves the
+        // user's original case (we do not normalize the scheme or path).
+        let adf = markdown_to_adf("see HTTPS://example.com now");
+        let para = &adf["content"][0];
+        assert_eq!(
+            link_href_for_text(para, "HTTPS://example.com"),
+            Some("HTTPS://example.com"),
+            "uppercase HTTPS scheme must be linkified, href preserves case: {adf}"
+        );
+    }
+
+    #[test]
+    fn test_mixed_case_scheme_is_linkified_and_path_case_preserved() {
+        let adf = markdown_to_adf("Http://Example.com/Path");
+        let para = &adf["content"][0];
+        assert_eq!(
+            link_href_for_text(para, "Http://Example.com/Path"),
+            Some("Http://Example.com/Path"),
+            "mixed-case scheme linkified; path case preserved verbatim: {adf}"
+        );
+    }
+
+    #[test]
+    fn test_trailing_uppercase_in_scheme_is_linkified() {
+        // `httpS://` matches `http` then the case-insensitive `https://` check.
+        let adf = markdown_to_adf("httpS://example.com");
+        let para = &adf["content"][0];
+        assert_eq!(
+            link_href_for_text(para, "httpS://example.com"),
+            Some("httpS://example.com"),
+            "partial-uppercase scheme must still match: {adf}"
         );
     }
 
