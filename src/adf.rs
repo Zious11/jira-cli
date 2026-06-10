@@ -2452,40 +2452,771 @@ mod tests {
         assert!(!has_image, "no image/media nodes should be emitted: {adf}");
     }
 
+    // --- GFM task lists → ADF taskList/taskItem (issue #471) ----------------
+    //
+    // BEHAVIOR CHANGE from pre-#471: previously `ENABLE_TASKLISTS` was NOT set,
+    // so `- [x]`/`- [ ]` passed through as literal text inside a `bulletList`.
+    // The old pinning test was `test_markdown_task_list_syntax_preserved_as_text`.
+    // With #471 adding `Options::ENABLE_TASKLISTS`, that literal-text behavior is
+    // superseded: GFM task syntax now maps to ADF `taskList`/`taskItem` nodes.
+    // The old test is REPLACED (not deleted) with the new tests below — parallel
+    // to how #474 replaced `test_markdown_double_tilde_still_strikethrough_not_subscript`
+    // when `ENABLE_SUBSCRIPT` changed the single-tilde meaning.
+    //
+    // BC-7.2.010; S-471; docs/specs/adf-task-list.md
+
+    // --- AC-001 / AC-017 (replacement) : basic forward path -----------------
+
     #[test]
-    fn test_markdown_task_list_syntax_preserved_as_text() {
-        // ENABLE_TASKLISTS is not set, so `[x]` renders as literal text inside a bullet item.
-        // pulldown-cmark emits text directly inside the listItem (no paragraph wrapper
-        // for tight lists), so we collect text nodes from the item's direct children.
-        let adf = markdown_to_adf("- [x] done task\n- [ ] pending task");
-        let list = &adf["content"][0];
-        assert_eq!(list["type"], "bulletList");
-        let items = list["content"].as_array().unwrap();
-        let text = |item: &Value| -> String {
-            item["content"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter_map(|n| {
-                    // Tight list: text nodes sit directly inside listItem.
-                    // Loose list: text nodes are wrapped in a paragraph.
-                    if let Some(t) = n["text"].as_str() {
-                        Some(t.to_string())
-                    } else {
-                        n["content"].as_array().map(|children| {
-                            children
-                                .iter()
-                                .filter_map(|c| c["text"].as_str())
-                                .collect::<String>()
-                        })
-                    }
-                })
-                .collect()
-        };
-        assert!(text(&items[0]).contains("[x]"), "got: {}", text(&items[0]));
-        assert!(text(&items[0]).contains("done task"));
-        assert!(text(&items[1]).contains("[ ]"));
-        assert!(text(&items[1]).contains("pending task"));
+    fn test_markdown_task_list_emits_task_list_node() {
+        // BC-7.2.010 postcondition: `- [ ] unchecked item` → `taskList` containing one
+        // `taskItem` with state "TODO". No `bulletList` node in the output.
+        // Replaces the pre-#471 test `test_markdown_task_list_syntax_preserved_as_text`
+        // which pinned literal-text behavior when ENABLE_TASKLISTS was off.
+        let adf = markdown_to_adf("- [ ] unchecked item");
+        let list = first_block(&adf);
+        assert_eq!(
+            list["type"], "taskList",
+            "expected taskList, got: {list}"
+        );
+        // localId must be a non-empty string
+        let local_id = list["attrs"]["localId"].as_str().unwrap_or("");
+        assert!(!local_id.is_empty(), "taskList.attrs.localId must be non-empty: {list}");
+        // No bulletList should appear
+        assert!(
+            !adf.to_string().contains("\"bulletList\""),
+            "bulletList must not appear when ENABLE_TASKLISTS is set: {adf}"
+        );
+        // First (and only) item must be taskItem with state TODO
+        let item = &list["content"][0];
+        assert_eq!(item["type"], "taskItem", "got: {item}");
+        assert_eq!(item["attrs"]["state"], "TODO", "got: {item}");
+        // Content text must contain the item text
+        assert!(
+            adf.to_string().contains("unchecked item"),
+            "item text must be preserved: {adf}"
+        );
+    }
+
+    // --- AC-002 : checked item -----------------------------------------------
+
+    #[test]
+    fn test_markdown_task_checked_item_emits_done_state() {
+        // BC-7.2.010 EC-1: `- [x] done item` → taskItem with attrs.state == "DONE" (uppercase).
+        let adf = markdown_to_adf("- [x] done item");
+        let list = first_block(&adf);
+        assert_eq!(list["type"], "taskList", "got: {list}");
+        let item = &list["content"][0];
+        assert_eq!(item["type"], "taskItem", "got: {item}");
+        assert_eq!(
+            item["attrs"]["state"], "DONE",
+            "checked item must have state DONE (uppercase): {item}"
+        );
+    }
+
+    // --- AC-003 : uppercase [X] recognized + reverse renders [x] -------------
+
+    #[test]
+    fn test_markdown_task_uppercase_x_emits_done_state() {
+        // BC-7.2.010 EC-2: `- [X]` uppercase is recognized as checked.
+        // Forward: state must be "DONE" (not "done" or "Done").
+        // Reverse (AC-003b): adf_to_text always emits `- [x]` (lowercase) for DONE state.
+        // Casing normalization is documented lossiness (EC-10(f)).
+        let adf = markdown_to_adf("- [X] uppercase");
+        let list = first_block(&adf);
+        assert_eq!(list["type"], "taskList", "got: {list}");
+        let item = &list["content"][0];
+        assert_eq!(
+            item["attrs"]["state"], "DONE",
+            "uppercase [X] must produce state DONE: {item}"
+        );
+        // Reverse path: must render as `- [x]` (lowercase), never `- [X]`
+        let rendered = adf_to_text(&adf);
+        assert!(
+            rendered.contains("- [x] "),
+            "DONE state must render as `- [x]` (lowercase), got: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("- [X] "),
+            "`- [X]` must not appear in rendered output (casing normalized): {rendered:?}"
+        );
+    }
+
+    // --- AC-004 : mixed task + plain list promoted ----------------------------
+
+    #[test]
+    fn test_markdown_mixed_task_plain_list_promotes_container() {
+        // BC-7.2.010 EC-3: a list containing both task and plain items must have
+        // the whole container promoted to `taskList`. Plain items get state "TODO".
+        // ADF does not permit mixing `listItem` and `taskItem` in one container.
+        let adf = markdown_to_adf("- [ ] checkbox\n- plain item");
+        let list = first_block(&adf);
+        assert_eq!(
+            list["type"], "taskList",
+            "mixed list must be promoted to taskList: {list}"
+        );
+        let items = list["content"].as_array().expect("taskList must have content");
+        // Both items must be taskItem (no listItem)
+        for (i, item) in items.iter().enumerate() {
+            assert_eq!(
+                item["type"], "taskItem",
+                "item[{i}] must be taskItem (not listItem): {item}"
+            );
+        }
+        // Plain item promoted to state TODO
+        let plain_item = &items[1];
+        assert_eq!(
+            plain_item["attrs"]["state"], "TODO",
+            "plain item promoted to taskItem must have state TODO: {plain_item}"
+        );
+        // No listItem nodes anywhere
+        assert!(
+            !adf.to_string().contains("\"listItem\""),
+            "listItem must not appear in mixed task list: {adf}"
+        );
+    }
+
+    // --- AC-005 : inline marks preserved in task item -------------------------
+
+    #[test]
+    fn test_markdown_task_item_inline_marks_preserved() {
+        // BC-7.2.010 EC-4: inline marks (strong, em) are preserved inside taskItem.content.
+        // Content goes directly in taskItem.content — NOT wrapped in a paragraph.
+        let adf = markdown_to_adf("- [x] **bold** and _em_");
+        let list = first_block(&adf);
+        assert_eq!(list["type"], "taskList", "got: {list}");
+        let item = &list["content"][0];
+        assert_eq!(item["type"], "taskItem", "got: {item}");
+        // Content should NOT be wrapped in a paragraph node
+        let content = item["content"].as_array().expect("taskItem must have content");
+        for child in content {
+            assert_ne!(
+                child["type"], "paragraph",
+                "taskItem content must NOT have paragraph wrapper, got: {child}"
+            );
+        }
+        // Strong mark must appear
+        let adf_str = adf.to_string();
+        assert!(adf_str.contains("\"strong\""), "strong mark must be preserved: {adf}");
+        // Em mark must appear
+        assert!(adf_str.contains("\"em\""), "em mark must be preserved: {adf}");
+    }
+
+    // --- AC-006 : task list inside listItem normalized -------------------------
+
+    #[test]
+    fn test_task_list_in_list_item_normalized_to_nested_bullet_list() {
+        // BC-7.2.010 obligation #1 / EC-5: a task list nested inside a regular list item
+        // is normalized by `normalize_list_item_content`'s "taskList" arm.
+        // Valid ADF shape: listItem > [bulletList > [listItem > paragraph(...)]]
+        // The inner nodes must be `listItem` (NOT `taskItem`).
+        // The inner `listItem` must NOT carry a `state` attribute.
+        // The checkbox state (TODO/DONE) is dropped — documented lossiness EC-10(b).
+        //
+        // Anchor assertion: top-level task list (no outer bullet) DOES produce taskList.
+        // This fails without ENABLE_TASKLISTS and distinguishes the normalization test
+        // from "no taskList because the feature is off" vacuousness.
+        let adf_anchor = markdown_to_adf("- [ ] top level");
+        assert_eq!(
+            first_block(&adf_anchor)["type"], "taskList",
+            "top-level task list must produce taskList (ENABLE_TASKLISTS required): {adf_anchor}"
+        );
+        let adf = markdown_to_adf("- outer\n  - [ ] inner task");
+        let outer_list = first_block(&adf);
+        // Outer list stays as bulletList (not taskList — the outer item has no checkbox)
+        assert_eq!(
+            outer_list["type"], "bulletList",
+            "outer list must be bulletList: {outer_list}"
+        );
+        let outer_item = &outer_list["content"][0];
+        assert_eq!(outer_item["type"], "listItem", "got: {outer_item}");
+        // Find the nested bulletList inside the outer listItem
+        let inner_list = outer_item["content"]
+            .as_array()
+            .expect("outer listItem must have content")
+            .iter()
+            .find(|n| n["type"] == "bulletList")
+            .cloned()
+            .expect("outer listItem must contain a bulletList (normalized from taskList)");
+        // Inner list items must be listItem (NOT taskItem)
+        let inner_items = inner_list["content"].as_array().expect("inner list must have content");
+        for (i, inner_item) in inner_items.iter().enumerate() {
+            assert_eq!(
+                inner_item["type"], "listItem",
+                "inner item[{i}] must be listItem (not taskItem): {inner_item}"
+            );
+            // Must NOT carry a state attribute
+            assert!(
+                inner_item.get("attrs").and_then(|a| a.get("state")).is_none(),
+                "inner listItem must not have state attr: {inner_item}"
+            );
+        }
+        // No taskList node should appear anywhere in the output
+        assert!(
+            !adf.to_string().contains("\"taskList\""),
+            "taskList must not appear inside a listItem: {adf}"
+        );
+        // No taskItem node anywhere
+        assert!(
+            !adf.to_string().contains("\"taskItem\""),
+            "taskItem must not appear inside a listItem: {adf}"
+        );
+    }
+
+    // --- AC-007 : task list inside blockquote normalized to paragraphs --------
+
+    #[test]
+    fn test_task_list_in_blockquote_normalized_to_paragraphs() {
+        // BC-7.2.010 obligation #2 / EC-6: unconditional normalization.
+        // pulldown-cmark 0.13.3 DOES emit blockquote > taskList for `> - [ ] item`
+        // (confirmed by direct source read of firstpass.rs — container-agnostic scan).
+        // ADF blockquote.content forbids taskList → normalize to paragraphs.
+        //
+        // Anchor assertion: top-level task list DOES produce taskList node.
+        // This fails without ENABLE_TASKLISTS and guards against vacuous pass
+        // ("no taskList in blockquote because the feature is off").
+        let adf_anchor = markdown_to_adf("- [ ] top level");
+        assert_eq!(
+            first_block(&adf_anchor)["type"], "taskList",
+            "top-level task list must produce taskList (ENABLE_TASKLISTS required): {adf_anchor}"
+        );
+        let adf = markdown_to_adf("> - [ ] item");
+        let block = first_block(&adf);
+        assert_eq!(
+            block["type"], "blockquote",
+            "blockquote must be preserved: {block}"
+        );
+        // All children of blockquote must be paragraphs (not taskList)
+        let children = block["content"].as_array().expect("blockquote must have content");
+        for (i, child) in children.iter().enumerate() {
+            assert_ne!(
+                child["type"], "taskList",
+                "taskList must NOT appear inside blockquote (child[{i}]): {adf}"
+            );
+            assert_ne!(
+                child["type"], "taskItem",
+                "taskItem must NOT appear inside blockquote (child[{i}]): {adf}"
+            );
+        }
+        // Item text must still be preserved
+        assert!(
+            adf.to_string().contains("item"),
+            "item text must be preserved in blockquote normalization: {adf}"
+        );
+    }
+
+    // --- AC-008 : task list inside panel passes through -----------------------
+
+    #[test]
+    fn test_task_list_in_panel_passes_through() {
+        // BC-7.2.010 obligation #3 / EC-7.
+        // LOCKED expected shape: panel(info) > [taskList > [taskItem(state:TODO, content:[text("item")])]]
+        //
+        // This test also pins the REQUIRED one-line implementation fix (AC-008):
+        // the Panel arm's wrap_inlines_as_blocks allowlist (~lines 451-459) must include
+        // "taskList". Without it, a surviving taskList is misclassified as inline and
+        // wrapped into panel > paragraph > taskList — INVALID ADF (Jira 400).
+        // Source: .factory/research/issue-471-panel-tasklist-shape.md §D.
+        let adf = markdown_to_adf("> [!NOTE]\n> - [ ] item");
+        // Must be a panel (from the GFM alert, per #483)
+        let panel = first_block(&adf);
+        assert_eq!(panel["type"], "panel", "got: {panel}");
+        assert_eq!(
+            panel["attrs"]["panelType"], "info",
+            "[!NOTE] must map to panelType info: {panel}"
+        );
+        // Panel content must contain a taskList (not paragraph > taskList)
+        let panel_children = panel["content"].as_array().expect("panel must have content");
+        // The FIRST child of the panel must be a taskList (not a paragraph)
+        let first_child = &panel_children[0];
+        assert_eq!(
+            first_child["type"], "taskList",
+            "panel's first child must be taskList, got: {}. \
+             If this is 'paragraph', the wrap_inlines_as_blocks allowlist is missing \"taskList\".",
+            first_child["type"]
+        );
+        // taskList must contain a taskItem with state TODO and text "item"
+        let task_item = &first_child["content"][0];
+        assert_eq!(task_item["type"], "taskItem", "got: {task_item}");
+        assert_eq!(
+            task_item["attrs"]["state"], "TODO",
+            "task item in panel must have state TODO: {task_item}"
+        );
+        assert!(
+            adf.to_string().contains("\"item\""),
+            "item text must be preserved in panel task list: {adf}"
+        );
+    }
+
+    // --- AC-009 : empty task item / task list / hardBreak-only pruned ---------
+
+    #[test]
+    fn test_empty_task_item_pruned() {
+        // BC-7.2.010 EC-8: `- [ ]` with no text → taskItem has empty content → pruned.
+        // The test requires ENABLE_TASKLISTS to be set: first verify that a non-empty
+        // task item DOES produce a taskList node (this assertion fails without the feature),
+        // then verify the empty item is pruned.
+        let adf_nonempty = markdown_to_adf("- [ ] has text");
+        assert_eq!(
+            first_block(&adf_nonempty)["type"], "taskList",
+            "non-empty task item must produce taskList (requires ENABLE_TASKLISTS): {adf_nonempty}"
+        );
+        // Now the actual pruning assertion:
+        let adf = markdown_to_adf("- [ ]");
+        let adf_str = adf.to_string();
+        assert!(
+            !adf_str.contains("\"taskItem\""),
+            "empty taskItem must be pruned: {adf}"
+        );
+    }
+
+    #[test]
+    fn test_empty_task_list_pruned() {
+        // BC-7.2.010 EC-9: all taskItems pruned → empty taskList → also pruned.
+        // Two empty items — both pruned → the enclosing taskList must also be absent.
+        // Anchor: a non-empty task list DOES produce a taskList node.
+        let adf_nonempty = markdown_to_adf("- [ ] has text");
+        assert_eq!(
+            first_block(&adf_nonempty)["type"], "taskList",
+            "non-empty task item must produce taskList (requires ENABLE_TASKLISTS): {adf_nonempty}"
+        );
+        // Empty items: both pruned → taskList also pruned
+        let adf = markdown_to_adf("- [ ]\n- [ ]");
+        let adf_str = adf.to_string();
+        assert!(
+            !adf_str.contains("\"taskList\""),
+            "empty taskList (all items pruned) must be pruned: {adf}"
+        );
+        assert!(
+            !adf_str.contains("\"taskItem\""),
+            "empty taskItem must be pruned: {adf}"
+        );
+    }
+
+    #[test]
+    fn test_hardbreak_only_task_item_pruned() {
+        // BC-7.2.010 deliberate product choice (EC-008b): a taskItem containing ONLY a
+        // hardBreak node is treated as structurally empty and pruned.
+        // `- [ ] \\\n` — GFM backslash hard-break produces taskItem.content:[hardBreak]
+        // The taskList must also be absent if no items survive.
+        //
+        // Implementation note (AC-009): adding "taskItem" to REQUIRES_CONTENT is necessary
+        // but INSUFFICIENT — a hardBreak-only item has a non-empty content array and will
+        // NOT be pruned by the structural membership check alone. A second
+        // "structurally-empty inline content" branch (scoped to taskItem only) is required:
+        // treat as empty when ALL nodes are hardBreak or whitespace-only text.
+        //
+        // Anchor: a non-empty task item DOES produce a taskList node (requires ENABLE_TASKLISTS).
+        let adf_anchor = markdown_to_adf("- [ ] has text");
+        assert_eq!(
+            first_block(&adf_anchor)["type"], "taskList",
+            "non-empty task item must produce taskList (requires ENABLE_TASKLISTS): {adf_anchor}"
+        );
+        let adf = markdown_to_adf("- [ ] \\\n");
+        let adf_str = adf.to_string();
+        assert!(
+            !adf_str.contains("\"taskItem\""),
+            "hardBreak-only taskItem must be pruned (deliberate product choice): {adf}"
+        );
+        assert!(
+            !adf_str.contains("\"taskList\""),
+            "taskList must also be pruned when all items are pruned: {adf}"
+        );
+    }
+
+    // --- AC-010 : round-trip stability ----------------------------------------
+
+    #[test]
+    fn test_task_list_roundtrip_adf_to_text() {
+        // BC-7.2.010 EC-10: round-trip stability.
+        // adf_to_text(markdown_to_adf(...)) must produce a string containing
+        // `- [ ] pending` and `- [x] done`.
+        // Re-parsing must produce semantically equivalent ADF.
+        // localId values are NOT asserted across the text round-trip (they are
+        // re-derived from the counter; identical input yields identical IDs).
+        let input = "- [ ] pending\n- [x] done";
+        let adf = markdown_to_adf(input);
+        let rendered = adf_to_text(&adf);
+        assert!(
+            rendered.contains("- [ ] pending"),
+            "TODO item must render as `- [ ] pending`, got: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("- [x] done"),
+            "DONE item must render as `- [x] done`, got: {rendered:?}"
+        );
+        // Re-parse must produce taskList (not bulletList)
+        let adf2 = markdown_to_adf(&rendered);
+        let list2 = first_block(&adf2);
+        assert_eq!(
+            list2["type"], "taskList",
+            "re-parsed output must still be taskList: {list2}"
+        );
+        let items2 = list2["content"].as_array().expect("items");
+        assert_eq!(
+            items2[0]["attrs"]["state"], "TODO",
+            "re-parsed pending item must be TODO: {:?}", items2[0]
+        );
+        assert_eq!(
+            items2[1]["attrs"]["state"], "DONE",
+            "re-parsed done item must be DONE: {:?}", items2[1]
+        );
+    }
+
+    // --- AC-011 : adf_to_text tolerates lowercase state from external ADF -----
+
+    #[test]
+    fn test_adf_to_text_external_lowercase_state() {
+        // BC-7.2.010 EC-12: an externally-authored ADF taskItem with state "done"
+        // (lowercase) must render as `- [x]`. Comparison is case-insensitive.
+        let adf = json!({
+            "version": 1,
+            "type": "doc",
+            "content": [{
+                "type": "taskList",
+                "attrs": { "localId": "1" },
+                "content": [{
+                    "type": "taskItem",
+                    "attrs": { "localId": "2", "state": "done" },
+                    "content": [{ "type": "text", "text": "a task" }]
+                }]
+            }]
+        });
+        let rendered = adf_to_text(&adf);
+        assert!(
+            rendered.contains("- [x]"),
+            "lowercase state 'done' must render as `- [x]`, got: {rendered:?}"
+        );
+    }
+
+    // --- AC-012 : nested task list (task-in-task) placement + reverse indent --
+
+    #[test]
+    fn test_nested_task_list_preserved() {
+        // BC-7.2.010 EC-13: `- [ ] outer\n  - [x] nested` →
+        // Forward: nested taskList placed as sibling AFTER parent taskItem in parent
+        // taskList.content. NOT inside taskItem.content (inline-only).
+        // Reverse: adf_to_text renders with exactly 2-space indentation per nesting level.
+        let adf = markdown_to_adf("- [ ] outer\n  - [x] nested");
+        let outer_list = first_block(&adf);
+        assert_eq!(outer_list["type"], "taskList", "got: {outer_list}");
+        let outer_content = outer_list["content"].as_array().expect("taskList.content");
+        // Must have at least 2 elements: the outer taskItem + the nested taskList
+        assert!(
+            outer_content.len() >= 2,
+            "outer taskList.content must contain the outer taskItem AND the nested taskList as siblings: {outer_content:?}"
+        );
+        // First element must be a taskItem
+        assert_eq!(
+            outer_content[0]["type"], "taskItem",
+            "first element must be taskItem: {:?}", outer_content[0]
+        );
+        // There must be a nested taskList as a sibling (not inside taskItem.content)
+        let has_nested_task_list = outer_content.iter().any(|n| n["type"] == "taskList");
+        assert!(
+            has_nested_task_list,
+            "nested taskList must appear as sibling in parent taskList.content: {outer_content:?}"
+        );
+        // The outer taskItem's content must NOT contain a taskList
+        let empty_vec = vec![];
+        let outer_item_content = outer_content[0]["content"].as_array().unwrap_or(&empty_vec);
+        for child in outer_item_content {
+            assert_ne!(
+                child["type"], "taskList",
+                "taskList must NOT be inside taskItem.content (inline-only): {child}"
+            );
+        }
+        // Reverse path: 2-space indentation pinned
+        let rendered = adf_to_text(&adf);
+        assert!(
+            rendered.contains("\n  - [x] nested") || rendered.contains("  - [x] nested"),
+            "nested task item must render with exactly 2-space indent, got: {rendered:?}"
+        );
+    }
+
+    // --- AC-013 : malformed bracket forms stay literal text -------------------
+
+    #[test]
+    fn test_malformed_task_markers_stay_literal_text() {
+        // BC-7.2.010 EC-14: only `[ ]`, `[x]`, `[X]` are recognized by pulldown-cmark.
+        // `[]`, `[*]`, `[-]`, `[  ]`, `[ x]`, `[X ]` produce NO TaskListMarker event
+        // → stay as literal text inside a bulletList.
+        //
+        // Counter-assertion (requires ENABLE_TASKLISTS to be set): the VALID forms DO
+        // produce taskList nodes. This assertion fails without the feature and distinguishes
+        // "malformed stays as bulletList because feature is off" from
+        // "malformed stays as bulletList because pulldown correctly rejects it".
+        let valid_forms = [
+            ("- [ ] unchecked", "TODO"),
+            ("- [x] checked lowercase", "DONE"),
+            ("- [X] checked uppercase", "DONE"),
+        ];
+        for (md, expected_state) in valid_forms {
+            let adf = markdown_to_adf(md);
+            let list = first_block(&adf);
+            assert_eq!(
+                list["type"], "taskList",
+                "valid form {md:?} must produce taskList (ENABLE_TASKLISTS required): {list}"
+            );
+            assert_eq!(
+                list["content"][0]["attrs"]["state"], expected_state,
+                "valid form {md:?} must produce state {expected_state}: {:?}", list["content"][0]
+            );
+        }
+        // The actual malformed-form assertions:
+        let malformed = [
+            "- [] no space",
+            "- [*] asterisk",
+            "- [-] dash",
+            "- [  ] double space",
+            "- [ x] space before letter",
+            "- [X ] trailing space",
+        ];
+        for md in malformed {
+            let adf = markdown_to_adf(md);
+            let list = first_block(&adf);
+            assert_ne!(
+                list["type"], "taskList",
+                "malformed marker {md:?} must not produce taskList, got: {list}"
+            );
+            assert_eq!(
+                list["type"], "bulletList",
+                "malformed marker {md:?} must produce bulletList: {list}"
+            );
+            assert!(
+                !adf.to_string().contains("\"taskItem\""),
+                "malformed marker {md:?} must not produce taskItem: {adf}"
+            );
+        }
+    }
+
+    // --- AC-014 : plain list nested inside task item → hoisted ---------------
+
+    #[test]
+    fn test_task_item_with_nested_plain_list_hoists_block_sibling() {
+        // BC-7.2.010 obligation #4 / EC-15: a plain bulletList nested inside a task
+        // item cannot be placed in taskItem.content (inline-only) or as a sibling in
+        // taskList.content (only taskItem/taskList permitted). The builder hoists the
+        // nested list to the grandparent block level (doc root in this case).
+        // Output at grandparent level: [taskList > [taskItem("outer")], bulletList(...)]
+        let adf = markdown_to_adf("- [ ] outer\n  - plain inner");
+        // Must have at least 2 top-level blocks: taskList + hoisted bulletList
+        let doc_content = adf["content"].as_array().expect("doc must have content");
+        assert!(
+            doc_content.len() >= 2,
+            "doc must have at least 2 top-level blocks after hoist (taskList + bulletList): {doc_content:?}"
+        );
+        // First block must be the taskList
+        assert_eq!(
+            doc_content[0]["type"], "taskList",
+            "first top-level block must be taskList: {:?}", doc_content[0]
+        );
+        // Second block must be the hoisted bulletList
+        assert_eq!(
+            doc_content[1]["type"], "bulletList",
+            "second top-level block must be hoisted bulletList: {:?}", doc_content[1]
+        );
+        // The taskList's taskItem must NOT contain a bulletList
+        let task_item = &doc_content[0]["content"][0];
+        assert_eq!(task_item["type"], "taskItem", "got: {task_item}");
+        let empty_vec2 = vec![];
+        let item_content = task_item["content"].as_array().unwrap_or(&empty_vec2);
+        for child in item_content {
+            assert_ne!(
+                child["type"], "bulletList",
+                "bulletList must NOT appear inside taskItem.content: {child}"
+            );
+        }
+    }
+
+    // --- AC-015 : multi-paragraph task item flattened to inline ---------------
+
+    #[test]
+    fn test_task_item_multi_paragraph_flattened_to_inline() {
+        // BC-7.2.010 EC-16: paragraph wrappers stripped; hardBreak separator injected.
+        // EC-16 runs INSIDE NodeKind::TaskItem arm of end()'s match kind block
+        // (before returning to the prune gate), NOT in a post-finish() pass.
+        //
+        // Sub-assertion 1: normal two-paragraph case
+        // `- [ ] line1\n\n  line2` → taskItem.content: [text("line1"), hardBreak, text("line2")]
+        let adf1 = markdown_to_adf("- [ ] line1\n\n  line2");
+        let list1 = first_block(&adf1);
+        assert_eq!(list1["type"], "taskList", "got: {list1}");
+        let item1 = &list1["content"][0];
+        assert_eq!(item1["type"], "taskItem", "got: {item1}");
+        // No paragraph wrapper inside taskItem
+        let content1 = item1["content"].as_array().expect("taskItem must have content");
+        for child in content1 {
+            assert_ne!(
+                child["type"], "paragraph",
+                "taskItem must NOT contain paragraph wrapper: {child}"
+            );
+        }
+        // Must contain a hardBreak separator
+        let has_hardbreak = content1.iter().any(|n| n["type"] == "hardBreak");
+        assert!(
+            has_hardbreak,
+            "two-paragraph task item must have hardBreak separator: {content1:?}"
+        );
+        // Must contain both text nodes
+        let text_content: String = content1
+            .iter()
+            .filter_map(|n| n["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(
+            text_content.contains("line1") && text_content.contains("line2"),
+            "both paragraph texts must be present: {text_content:?}"
+        );
+
+        // Sub-assertion 2: trailing-empty-paragraph trim
+        // `- [ ] x\n\n  ` → taskItem.content: [text("x")] — NO trailing hardBreak
+        let adf2 = markdown_to_adf("- [ ] x\n\n  ");
+        let list2 = first_block(&adf2);
+        assert_eq!(list2["type"], "taskList", "got: {list2}");
+        let item2 = &list2["content"][0];
+        assert_eq!(item2["type"], "taskItem", "got: {item2}");
+        let content2 = item2["content"].as_array().expect("taskItem must have content");
+        // Must NOT end with a hardBreak (trim rule)
+        if let Some(last) = content2.last() {
+            assert_ne!(
+                last["type"], "hardBreak",
+                "taskItem must NOT end with hardBreak (trim rule): {content2:?}"
+            );
+        }
+        // Must contain the text "x"
+        assert!(
+            content2.iter().any(|n| n["text"] == "x"),
+            "text 'x' must be present: {content2:?}"
+        );
+
+        // Sub-assertion 3: both-empty → flatten produces [] → prune fires → taskItem ABSENT
+        // EC-16-before-EC-8 ordering: flatten runs first (inside NodeKind::TaskItem arm),
+        // producing empty content [], then prune gate fires.
+        // If prune runs BEFORE flatten (bug), the unflattened [paragraph(""), paragraph("")]
+        // has non-empty content → NOT pruned → stray taskItem PRESENT → this assertion fails.
+        let adf3 = markdown_to_adf("- [ ]\n\n  ");
+        let adf3_str = adf3.to_string();
+        assert!(
+            !adf3_str.contains("\"taskItem\""),
+            "both-empty task item must be pruned (EC-16 flatten before EC-8 prune): {adf3}"
+        );
+        assert!(
+            !adf3_str.contains("\"taskList\""),
+            "taskList must also be pruned when only item is pruned: {adf3}"
+        );
+    }
+
+    // --- AC-016 : native hardBreak inside task item is lossy ------------------
+
+    #[test]
+    fn test_task_item_native_hardbreak_inline_is_roundtrip_lossy() {
+        // BC-7.2.010 EC-11: a hardBreak is schema-valid in taskItem.content.
+        // Round-trip is lossy: adf_to_text renders hardBreak as a newline continuation,
+        // but re-parsing a bare newline inside a task item does NOT produce a hardBreak
+        // (GFM hardBreak requires two trailing spaces or a backslash).
+        //
+        // The reverse path MUST emit `- [ ] ` prefix for the TODO taskItem. Without a
+        // dedicated taskItem arm in adf_to_text, the renderer falls through to the
+        // generic recurse-children path and never emits the `- [ ] ` marker prefix —
+        // this assertion will FAIL until the feature is implemented.
+        let adf = json!({
+            "version": 1,
+            "type": "doc",
+            "content": [{
+                "type": "taskList",
+                "attrs": { "localId": "1" },
+                "content": [{
+                    "type": "taskItem",
+                    "attrs": { "localId": "2", "state": "TODO" },
+                    "content": [
+                        { "type": "text", "text": "before" },
+                        { "type": "hardBreak" },
+                        { "type": "text", "text": "after" }
+                    ]
+                }]
+            }]
+        });
+        // Reverse path: renders taskItem with `- [ ] ` prefix (requires taskItem arm in renderer)
+        let rendered = adf_to_text(&adf);
+        assert!(
+            rendered.contains("- [ ] "),
+            "TODO taskItem must render with `- [ ] ` prefix (requires taskList/taskItem arm in adf_to_text): {rendered:?}"
+        );
+        assert!(
+            rendered.contains("before"),
+            "text before hardBreak must appear: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("after"),
+            "text after hardBreak must appear: {rendered:?}"
+        );
+        // Round-trip is lossy: re-parsing the rendered text does NOT produce a hardBreak
+        // (bare newline inside `- [ ] item` re-parses as item terminator, not hardBreak)
+        let adf2 = markdown_to_adf(&rendered);
+        let adf2_str = adf2.to_string();
+        // The re-parsed ADF is expected to NOT contain a hardBreak inside the task item
+        // (this is the documented lossiness — do NOT treat absence as a bug)
+        let _ = adf2_str; // Lossiness acknowledged; no assertion on re-parsed hardBreak
+    }
+
+    // --- AC-018 : localId DFS preorder assignment ----------------------------
+
+    #[test]
+    fn test_task_list_localid_dfs_preorder_assignment() {
+        // BC-7.2.010 Required attributes: localIds are assigned in a single
+        // post-normalization DFS pre-order walk, 1-based, monotonically increasing,
+        // container-before-children. No uuid crate; deterministic.
+
+        // Sub-assertion 1: concrete values for a 2-item list
+        // Input: `- [ ] first\n- [x] second`
+        // Expected: taskList.localId="1", taskItem[0].localId="2", taskItem[1].localId="3"
+        let adf = markdown_to_adf("- [ ] first\n- [x] second");
+        let task_list = first_block(&adf);
+        assert_eq!(task_list["type"], "taskList", "got: {task_list}");
+        assert_eq!(
+            task_list["attrs"]["localId"], "1",
+            "taskList must have localId '1' (container first in DFS preorder): {}",
+            task_list["attrs"]["localId"]
+        );
+        let items = task_list["content"].as_array().expect("taskList.content");
+        assert_eq!(
+            items[0]["attrs"]["localId"], "2",
+            "first taskItem must have localId '2': {}",
+            items[0]["attrs"]["localId"]
+        );
+        assert_eq!(
+            items[1]["attrs"]["localId"], "3",
+            "second taskItem must have localId '3': {}",
+            items[1]["attrs"]["localId"]
+        );
+
+        // Sub-assertion 2: dense assignment after pruning (pruned nodes skip counter)
+        // Input: `- [ ] keep\n- [ ]\n- [ ] also`
+        // Middle item has no text → pruned. Remaining IDs must be dense: "1","2","3"
+        let adf2 = markdown_to_adf("- [ ] keep\n- [ ]\n- [ ] also");
+        let task_list2 = first_block(&adf2);
+        assert_eq!(task_list2["type"], "taskList", "got: {task_list2}");
+        assert_eq!(
+            task_list2["attrs"]["localId"], "1",
+            "taskList must have localId '1': {}",
+            task_list2["attrs"]["localId"]
+        );
+        let items2 = task_list2["content"].as_array().expect("taskList2.content");
+        assert_eq!(
+            items2.len(), 2,
+            "pruned middle item must reduce item count to 2: {items2:?}"
+        );
+        assert_eq!(
+            items2[0]["attrs"]["localId"], "2",
+            "first surviving taskItem must have localId '2' (dense, pruned node skips slot): {}",
+            items2[0]["attrs"]["localId"]
+        );
+        assert_eq!(
+            items2[1]["attrs"]["localId"], "3",
+            "second surviving taskItem must have localId '3': {}",
+            items2[1]["attrs"]["localId"]
+        );
     }
 
     // --- Footnotes (issue #472) -------------------------------------------
