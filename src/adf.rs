@@ -637,7 +637,48 @@ impl AdfBuilder {
                         }
                     }
                 } else {
-                    EndResult::Single(json!({ "type": "bulletList", "content": children }))
+                    // Plain bulletList (no task items). However, when an empty
+                    // taskItem was pruned by is_empty_block_container, its hoisted
+                    // block children (e.g. a nested bulletList or taskList) were
+                    // appended directly to OUR children via append_child — these are
+                    // NOT valid bulletList children (only listItem is). Split them out
+                    // and hoist past this list so the grandparent receives them as
+                    // siblings, rather than producing `bulletList > bulletList` or
+                    // `bulletList > taskList` (both invalid ADF — Jira HTTP 400).
+                    //
+                    // BC-7.2.010 EC-13/EC-15 with empty outer body (F-PASS3-C1):
+                    // `- [ ]\n  - plain inner`  → [bulletList{inner}] hoisted to doc
+                    // `- [ ]\n  - [x] nested`   → [taskList{inner}] hoisted to doc
+                    // The outer list itself is dropped (no valid listItem children).
+                    let mut list_items: Vec<Value> = Vec::new();
+                    let mut stray_blocks: Vec<Value> = Vec::new();
+                    for child in children {
+                        let ty = child.get("type").and_then(Value::as_str).unwrap_or("");
+                        if ty == "listItem" {
+                            list_items.push(child);
+                        } else {
+                            stray_blocks.push(child);
+                        }
+                    }
+                    if list_items.is_empty() && stray_blocks.is_empty() {
+                        EndResult::Empty
+                    } else if stray_blocks.is_empty() {
+                        EndResult::Single(json!({ "type": "bulletList", "content": list_items }))
+                    } else if list_items.is_empty() {
+                        // No valid list items at all — the whole list dissolves; hoist
+                        // the stray blocks to the grandparent individually.
+                        for block in stray_blocks {
+                            self.append_child(block);
+                        }
+                        EndResult::Empty
+                    } else {
+                        // Mix: some real listItems + some stray blocks. Produce the
+                        // bulletList for the valid items and hoist the stray blocks.
+                        EndResult::WithHoists {
+                            node: json!({ "type": "bulletList", "content": list_items }),
+                            hoists: stray_blocks,
+                        }
+                    }
                 }
             }
             NodeKind::OrderedList { start } => {
@@ -4099,38 +4140,94 @@ mod tests {
 
     #[test]
     fn test_empty_task_body_with_nested_task_list_survives() {
-        // F-471-M1 / EC-13: outer task body empty, nested taskList must survive.
-        // `- [ ]\n  - [x] nested`
+        // F-471-M1 / EC-13 + F-PASS3-C1: outer task body empty, nested taskList must
+        // survive AND land at a VALID parent (not inside bulletList, which would be
+        // `bulletList > taskList` — invalid ADF).
+        //
+        // Input: `- [ ]\n  - [x] nested`
+        // Expected valid shape: doc > taskList{taskItem{"nested"}}
+        //   — the empty outer task wrapper is dropped; the nested taskList is
+        //     lifted to doc level as a direct child (valid ADF).
         let md = "- [ ]\n  - [x] nested\n";
         let adf = markdown_to_adf(md);
-        let serialized = serde_json::to_string(&adf).unwrap();
+        let serialized = serde_json::to_string_pretty(&adf).unwrap();
 
-        // The nested task list must appear somewhere in the output
-        assert!(
-            contains_node_type(&adf, "taskList"),
-            "nested taskList must survive even when outer task body is empty: {}",
+        // Structural validity: no invalid parent→child relationships.
+        assert_valid_adf_structure(&adf);
+
+        // The nested taskList must appear at doc level, not inside a bulletList.
+        let doc_children = adf["content"].as_array().expect("doc must have content");
+        let first = &doc_children[0];
+        assert_eq!(
+            first["type"].as_str(),
+            Some("taskList"),
+            "taskList must be a direct doc child (not wrapped in bulletList): {}",
             serialized
         );
-        // The nested task item with "nested" text must be present
-        assert!(
-            contains_node_type(&adf, "taskItem"),
-            "nested taskItem must be present: {}",
+
+        // The taskItem with "nested" text must be present inside the taskList.
+        let task_children = first["content"]
+            .as_array()
+            .expect("taskList must have content");
+        let task_item = &task_children[0];
+        assert_eq!(
+            task_item["type"].as_str(),
+            Some("taskItem"),
+            "first child of taskList must be taskItem: {}",
+            serialized
+        );
+        let text = task_item["content"][0]["text"].as_str().unwrap_or("");
+        assert_eq!(
+            text, "nested",
+            "taskItem must contain 'nested' text: {}",
             serialized
         );
     }
 
     #[test]
     fn test_empty_task_body_with_nested_plain_list_survives() {
-        // F-471-M1 / EC-15: outer task body empty, nested plain bulletList must survive.
-        // `- [ ]\n  - plain inner`
+        // F-471-M1 / EC-15 + F-PASS3-C1: outer task body empty, nested bulletList must
+        // survive AND land at a VALID parent (not inside bulletList, which would be
+        // `bulletList > bulletList` — invalid ADF).
+        //
+        // Input: `- [ ]\n  - plain inner`
+        // Expected valid shape: doc > bulletList{listItem{paragraph{"plain inner"}}}
+        //   — the empty outer task wrapper + outer list dissolve; the nested bulletList
+        //     is lifted to doc level as a direct child (valid ADF).
         let md = "- [ ]\n  - plain inner\n";
         let adf = markdown_to_adf(md);
-        let serialized = serde_json::to_string(&adf).unwrap();
+        let serialized = serde_json::to_string_pretty(&adf).unwrap();
 
-        // A bulletList (from the nested plain list) must appear somewhere
-        assert!(
-            contains_node_type(&adf, "bulletList"),
-            "nested bulletList must survive even when outer task body is empty: {}",
+        // Structural validity: no invalid parent→child relationships.
+        assert_valid_adf_structure(&adf);
+
+        // The nested bulletList must appear at doc level, not inside another bulletList.
+        let doc_children = adf["content"].as_array().expect("doc must have content");
+        let first = &doc_children[0];
+        assert_eq!(
+            first["type"].as_str(),
+            Some("bulletList"),
+            "bulletList must be a direct doc child (not wrapped in another bulletList): {}",
+            serialized
+        );
+
+        // It must contain a listItem with "plain inner" text.
+        let list_children = first["content"]
+            .as_array()
+            .expect("bulletList must have content");
+        let list_item = &list_children[0];
+        assert_eq!(
+            list_item["type"].as_str(),
+            Some("listItem"),
+            "bulletList child must be listItem: {}",
+            serialized
+        );
+        let text_val = list_item["content"][0]["content"][0]["text"]
+            .as_str()
+            .unwrap_or("");
+        assert_eq!(
+            text_val, "plain inner",
+            "listItem must contain 'plain inner' text: {}",
             serialized
         );
     }
@@ -4163,6 +4260,224 @@ mod tests {
                 }
             }
             _ => {}
+        }
+    }
+
+    // --- F-PASS3-I1: structural-validity (parent→child content-model legality) ---
+    // A recursive walker that asserts ADF content-model legality for the node
+    // types touched by the task-list feature. Runs over the full task-list
+    // corpus to permanently guard the parent→child legality class.
+    //
+    // Rules checked (ADF schema):
+    //   • bulletList / orderedList content: every child MUST be `listItem`.
+    //   • taskList content:
+    //       - first child MUST be `taskItem`.
+    //       - subsequent children MUST be `taskItem` or `taskList`.
+    //       - NOT bulletList / orderedList / paragraph / etc.
+    //   • taskItem content: inline-only — every child MUST be `text` or `hardBreak`.
+    //       - NO block nodes (paragraph, bulletList, taskList, codeBlock, …).
+    //   • listItem content: must NOT contain `taskList` as a direct child
+    //       (taskList is always normalized out during list construction).
+    //   • blockquote content: must NOT contain `taskList` as a direct child
+    //       (taskList inside a blockquote is flattened to paragraphs).
+
+    /// Recursively validate ADF content-model legality for node types touched
+    /// by the task-list feature. Panics with a descriptive message on violation.
+    fn assert_valid_adf_structure(v: &Value) {
+        assert_valid_adf_node(v, "root");
+    }
+
+    fn assert_valid_adf_node(v: &Value, path: &str) {
+        let ty = v.get("type").and_then(Value::as_str).unwrap_or("<no-type>");
+        if let Some(children) = v.get("content").and_then(Value::as_array) {
+            match ty {
+                "bulletList" | "orderedList" => {
+                    for (i, child) in children.iter().enumerate() {
+                        let child_ty = child
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .unwrap_or("<unknown>");
+                        assert_eq!(
+                            child_ty,
+                            "listItem",
+                            "{ty} child[{i}] must be listItem but got '{child_ty}' \
+                             (path: {path}[{i}]): {}",
+                            serde_json::to_string(v).unwrap_or_default()
+                        );
+                    }
+                }
+                "taskList" => {
+                    for (i, child) in children.iter().enumerate() {
+                        let child_ty = child
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .unwrap_or("<unknown>");
+                        if i == 0 {
+                            assert_eq!(
+                                child_ty,
+                                "taskItem",
+                                "taskList first child must be taskItem but got '{child_ty}' \
+                                 (path: {path}[0]): {}",
+                                serde_json::to_string(v).unwrap_or_default()
+                            );
+                        } else {
+                            assert!(
+                                child_ty == "taskItem" || child_ty == "taskList",
+                                "taskList child[{i}] must be taskItem or taskList but \
+                                 got '{child_ty}' (path: {path}[{i}]): {}",
+                                serde_json::to_string(v).unwrap_or_default()
+                            );
+                        }
+                    }
+                }
+                "taskItem" => {
+                    // taskItem.content is inline-only: text, hardBreak, and inline
+                    // marks (which are represented as text nodes with marks). No
+                    // block-level nodes are permitted.
+                    const BLOCK_TYPES: &[&str] = &[
+                        "paragraph",
+                        "bulletList",
+                        "orderedList",
+                        "taskList",
+                        "codeBlock",
+                        "blockquote",
+                        "table",
+                        "panel",
+                        "rule",
+                        "heading",
+                        "mediaSingle",
+                        "listItem",
+                    ];
+                    for (i, child) in children.iter().enumerate() {
+                        let child_ty = child
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .unwrap_or("<unknown>");
+                        assert!(
+                            !BLOCK_TYPES.contains(&child_ty),
+                            "taskItem must not contain block node '{child_ty}' at \
+                             child[{i}] (path: {path}[{i}]): {}",
+                            serde_json::to_string(v).unwrap_or_default()
+                        );
+                    }
+                }
+                "listItem" => {
+                    for (i, child) in children.iter().enumerate() {
+                        let child_ty = child
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .unwrap_or("<unknown>");
+                        assert_ne!(
+                            child_ty,
+                            "taskList",
+                            "listItem must not contain taskList as direct child \
+                             (path: {path}[{i}]): {}",
+                            serde_json::to_string(v).unwrap_or_default()
+                        );
+                    }
+                }
+                "blockquote" => {
+                    for (i, child) in children.iter().enumerate() {
+                        let child_ty = child
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .unwrap_or("<unknown>");
+                        assert_ne!(
+                            child_ty,
+                            "taskList",
+                            "blockquote must not contain taskList as direct child \
+                             (path: {path}[{i}]): {}",
+                            serde_json::to_string(v).unwrap_or_default()
+                        );
+                    }
+                }
+                _ => {}
+            }
+            // Recurse into all children regardless of node type.
+            for (i, child) in children.iter().enumerate() {
+                assert_valid_adf_node(child, &format!("{path}.{ty}[{i}]"));
+            }
+        }
+    }
+
+    #[test]
+    fn test_adf_structural_validity_task_list_corpus() {
+        // F-PASS3-I1: structural-validity corpus test.
+        // Run assert_valid_adf_structure across ALL task-list inputs: basic,
+        // nested, mixed, panel, blockquote, multi-paragraph, empty-body cases,
+        // and the F-PASS3-C1 trigger inputs.
+        let inputs: &[(&str, &str)] = &[
+            // Basic task list
+            ("basic task unchecked", "- [ ] task\n"),
+            ("basic task checked", "- [x] done\n"),
+            // Multiple items
+            ("two tasks", "- [ ] first\n- [x] second\n"),
+            // EC-3: mixed task + plain items
+            ("mixed task+plain", "- [ ] task\n- plain\n"),
+            // EC-13: nested taskList inside task item
+            ("nested task list", "- [ ] outer\n  - [x] nested\n"),
+            // EC-15: nested plain list inside task item
+            ("nested plain in task", "- [ ] outer\n  - plain inner\n"),
+            // F-PASS3-C1 trigger inputs (empty task body + nested sub-list)
+            ("empty task + nested task (C1)", "- [ ]\n  - [x] nested\n"),
+            ("empty task + nested plain (C1)", "- [ ]\n  - plain inner\n"),
+            // F-471-M1: empty outer + nested checked task
+            ("empty task body + nested checked", "- [ ]\n  - [x] done\n"),
+            // Loose task lists (EC-16)
+            ("loose task", "- [ ] line1\n\n  line2\n"),
+            // Block inside tight task item (F-471-H1)
+            ("blockquote inside task", "- [ ] x\n  > quote\n"),
+            ("codeblock inside task", "- [ ] x\n\n  ```\n  code\n  ```\n"),
+            // Panel containing task list
+            ("panel with task", "> [!NOTE]\n> - [ ] in panel\n"),
+            // Blockquote with task list (normalized to paragraphs)
+            ("blockquote with task", "> - [ ] in blockquote\n"),
+            // Ordered list (not reclassified)
+            ("ordered list", "1. first\n2. second\n"),
+            // Nested ordered list inside plain list
+            ("nested ordered in plain", "- item\n  1. sub\n"),
+            // Deeply nested: task inside task inside task
+            ("triple nested task", "- [ ] a\n  - [ ] b\n    - [x] c\n"),
+            // Task with URL (bare URL autolinking should not break structure)
+            ("task with url", "- [ ] see https://example.com\n"),
+            // Multi-paragraph loose task item (EC-16)
+            (
+                "multi-para loose task",
+                "- [ ] para one\n\n  para two\n\n  para three\n",
+            ),
+        ];
+        for (label, md) in inputs {
+            let adf = markdown_to_adf(md);
+            // No underscore keys (F-471-M2)
+            assert_no_underscore_keys(&adf, "root");
+            // Structural validity (F-PASS3-I1)
+            // Wrap in a catch to emit label on failure
+            // assert_valid_adf_structure panics on violation; the panic message
+            // includes the path + node JSON.  We call it directly — the label
+            // is captured via `assert_no_empty_list_content` below.
+            assert_valid_adf_structure(&adf);
+            // Additionally verify no empty content arrays for list nodes
+            // (empty bulletList/taskList are invalid ADF)
+            assert_no_empty_list_content(&adf, label);
+        }
+    }
+
+    /// Walk the ADF and assert that no bulletList, orderedList, or taskList has
+    /// an empty content array (empty list containers are invalid ADF).
+    fn assert_no_empty_list_content(v: &Value, label: &str) {
+        let ty = v.get("type").and_then(Value::as_str).unwrap_or("");
+        if matches!(ty, "bulletList" | "orderedList" | "taskList") {
+            let content = v.get("content").and_then(Value::as_array);
+            assert!(
+                content.map(|c| !c.is_empty()).unwrap_or(false),
+                "[{label}] {ty} must not have empty content: {}",
+                serde_json::to_string(v).unwrap_or_default()
+            );
+        }
+        if let Some(children) = v.get("content").and_then(Value::as_array) {
+            for child in children {
+                assert_no_empty_list_content(child, label);
+            }
         }
     }
 
