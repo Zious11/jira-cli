@@ -310,6 +310,22 @@ struct PartialNode {
     children: Vec<Value>,
 }
 
+/// Typed return value for the `end()` match arm. Replaces the old
+/// `_pending_hoists`/`_post_hoists` JSON side-channel that embedded
+/// coordination state directly in the ADF value tree (a risk: any code path
+/// that skipped stripping would leak a temp field → Jira 400 via
+/// `additionalProperties: false`).
+///
+/// - `Single(node)` — emit one node, no siblings.
+/// - `WithHoists { node, hoists }` — emit `node` FIRST, then each hoist in
+///   order as siblings at the same parent level.
+/// - `Empty` — emit nothing.
+enum EndResult {
+    Single(Value),
+    WithHoists { node: Value, hoists: Vec<Value> },
+    Empty,
+}
+
 enum NodeKind {
     Paragraph,
     Heading(u8),
@@ -464,9 +480,14 @@ impl AdfBuilder {
             return;
         };
         let PartialNode { kind, children } = partial;
-        let node = match kind {
-            NodeKind::Paragraph => Some(json!({ "type": "paragraph", "content": children })),
-            NodeKind::Heading(level) => Some(json!({
+        // `result` carries the node(s) to emit. Using a typed `EndResult` instead
+        // of embedding coordination state in the JSON avoids the risk of
+        // `additionalProperties: false` Jira-400 from a leaked temp field.
+        let result: EndResult = match kind {
+            NodeKind::Paragraph => {
+                EndResult::Single(json!({ "type": "paragraph", "content": children }))
+            }
+            NodeKind::Heading(level) => EndResult::Single(json!({
                 "type": "heading",
                 "attrs": { "level": level },
                 "content": children,
@@ -478,7 +499,7 @@ impl AdfBuilder {
                 // children → each taskItem's inline content becomes a paragraph inside the
                 // blockquote. (BC-7.2.010 obligation #2 / EC-6, unconditional.)
                 let normalized = normalize_blockquote_content(children);
-                Some(json!({ "type": "blockquote", "content": normalized }))
+                EndResult::Single(json!({ "type": "blockquote", "content": normalized }))
             }
             NodeKind::Panel { panel_type } => {
                 // ADF `panel.content` forbids nested `panel`, `table`, and
@@ -514,7 +535,7 @@ impl AdfBuilder {
                         ],
                     )
                 };
-                Some(json!({
+                EndResult::Single(json!({
                     "type": "panel",
                     "attrs": { "panelType": panel_type },
                     "content": content,
@@ -525,7 +546,7 @@ impl AdfBuilder {
                 if let Some(lang) = language {
                     node["attrs"] = json!({ "language": lang });
                 }
-                Some(node)
+                EndResult::Single(node)
             }
             NodeKind::BulletList => {
                 // Approach B post-hoc reclassification (BC-7.2.010): inspect
@@ -536,46 +557,24 @@ impl AdfBuilder {
                     .iter()
                     .any(|c| c.get("type").and_then(Value::as_str) == Some("taskItem"));
                 if has_task_items {
-                    // Reclassify to taskList. Also extract pending hoist nodes from
-                    // taskItem entries (nested taskList/bulletList captured via
-                    // _pending_hoists) and place them correctly after their parent
-                    // taskItem in task_children (EC-13) or in the hoisted set (EC-15).
+                    // Reclassify to taskList.
                     //
                     // taskList.content permits only taskItem and nested taskList nodes.
-                    // Any bulletList/orderedList must be hoisted to the parent.
+                    // Any other block child (bulletList, orderedList, or any other block
+                    // that was a sibling of a taskItem in the BulletList's children
+                    // because it was hoisted from inside a TaskItem via EndResult::WithHoists)
+                    // must be hoisted to the parent level AFTER the taskList.
+                    //
+                    // Ordering invariant (EC-15):
+                    //   parent receives [taskList{outer}, bulletList{inner}]
+                    // Achieved via EndResult::WithHoists: `end()` appends the taskList
+                    // FIRST, then each hoist in order (no JSON side-channel needed).
                     let mut task_children: Vec<Value> = Vec::new();
                     let mut hoisted: Vec<Value> = Vec::new();
-                    for mut child in children {
-                        let ty = child
-                            .get("type")
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .to_owned();
-                        match ty.as_str() {
-                            "taskItem" => {
-                                // Extract pending hoist nodes (nested sublists) that
-                                // were tagged by TaskItem finalization. These must be
-                                // ordered AFTER the taskItem in the final output.
-                                let pending: Vec<Value> = child
-                                    .get("_pending_hoists")
-                                    .and_then(|v| v.as_array())
-                                    .cloned()
-                                    .unwrap_or_default();
-                                // Remove the temporary field before storing the node.
-                                child.as_object_mut().map(|m| m.remove("_pending_hoists"));
-                                task_children.push(child);
-                                // Now handle each pending hoist in order:
-                                // - nested taskList → sibling in task_children (EC-13)
-                                // - nested bulletList/orderedList → hoisted (EC-15)
-                                for hoist in pending {
-                                    let hty =
-                                        hoist.get("type").and_then(Value::as_str).unwrap_or("");
-                                    match hty {
-                                        "taskList" => task_children.push(hoist),
-                                        _ => hoisted.push(hoist),
-                                    }
-                                }
-                            }
+                    for child in children {
+                        let ty = child.get("type").and_then(Value::as_str).unwrap_or("");
+                        match ty {
+                            "taskItem" => task_children.push(child),
                             "taskList" => task_children.push(child),
                             "listItem" => {
                                 // Plain item in a mixed list — promote to taskItem TODO.
@@ -590,72 +589,38 @@ impl AdfBuilder {
                                     "content": trimmed,
                                 }));
                             }
-                            // bulletList/orderedList as top-level siblings when the
-                            // enclosing list is reclassified — hoist to parent.
+                            // Everything else (bulletList, orderedList, or any other block
+                            // sibling propagated from a TaskItem via WithHoists) is hoisted
+                            // to the parent container after the taskList (EC-15).
                             _ => hoisted.push(child),
                         }
                     }
-                    // Build the taskList node first, THEN hoist the non-task children
-                    // to the parent level AFTER it. This ordering ensures the taskList
-                    // appears before hoisted bulletLists in the parent container output
-                    // (EC-15: `[taskList{outer}, bulletList{inner}]`).
-                    // `self.append_child` is called in BulletList's return path via
-                    // the hoist mechanism below; the taskList node itself is returned
-                    // as `Some(...)` and appended by the caller's append_child at
-                    // line ~863, AFTER any children the caller appended during this
-                    // arm's execution. So we must NOT hoist here — instead, collect
-                    // hoists and let the built taskList be returned first.
-                    // NOTE: because `self.append_child` appends BEFORE the returned
-                    // node (which is appended at ~863), we must delay the hoist.
-                    // Use the same `_pending_hoists` trick on the taskList node itself
-                    // so the pruning gate at ~851 can pass it through, and post-process
-                    // to extract and append hoisted nodes immediately after append.
-                    // SIMPLER: append_child inserts into the STACK TOP's children.
-                    // At this point in `end()`, the outer BulletList has been popped
-                    // (it IS the `partial` we're processing). The stack top is the
-                    // PARENT of the BulletList. So `self.append_child(hoisted_node)`
-                    // will insert into the parent, but BEFORE the taskList returned
-                    // from this arm (which gets appended at ~863). To get the correct
-                    // order [taskList, bulletList] we must NOT call append_child here.
-                    // Instead, store hoists in the returned node and handle post-emit.
-                    //
-                    // The cleanest solution: encode the pending hoists in the returned
-                    // taskList node, then strip and append them in the prune+append
-                    // block (~851). This requires modifying that block. Instead, use
-                    // a field `_post_hoists` on the taskList and handle it there.
-                    //
-                    // For now: hoist BEFORE building the taskList so the taskList
-                    // gets appended after them — but that's wrong order.
-                    // ACTUAL CORRECT order: the returned taskList (from Some()) is
-                    // appended at ~863. Any append_child calls inside this arm run
-                    // FIRST (before ~863). So: if we call append_child for hoisted
-                    // nodes HERE, they end up BEFORE the taskList in the parent.
-                    // To get taskList FIRST: DON'T call append_child here. Return
-                    // a node that encodes hoists and process them after appending.
                     if task_children.is_empty() {
-                        // All items were hoisted — nothing left for the task list.
+                        // All children were non-task blocks; nothing to build a taskList
+                        // around. Propagate each hoist to the parent directly.
                         for h in hoisted {
                             self.append_child(h);
                         }
-                        None
-                    } else if hoisted.is_empty() {
-                        Some(json!({
-                            "type": "taskList",
-                            "attrs": { "localId": "" },
-                            "content": task_children,
-                        }))
+                        EndResult::Empty
                     } else {
-                        // Encode hoists in the taskList node; the append block will
-                        // strip and append them after the taskList itself.
-                        Some(json!({
+                        let task_list = json!({
                             "type": "taskList",
                             "attrs": { "localId": "" },
                             "content": task_children,
-                            "_post_hoists": hoisted,
-                        }))
+                        });
+                        if hoisted.is_empty() {
+                            EndResult::Single(task_list)
+                        } else {
+                            // WithHoists: taskList emitted first, then hoists appended
+                            // as siblings (EC-15 correct ordering: [taskList, bulletList]).
+                            EndResult::WithHoists {
+                                node: task_list,
+                                hoists: hoisted,
+                            }
+                        }
                     }
                 } else {
-                    Some(json!({ "type": "bulletList", "content": children }))
+                    EndResult::Single(json!({ "type": "bulletList", "content": children }))
                 }
             }
             NodeKind::OrderedList { start } => {
@@ -663,7 +628,7 @@ impl AdfBuilder {
                 if start != 1 {
                     node["attrs"] = json!({ "order": start });
                 }
-                Some(node)
+                EndResult::Single(node)
             }
             NodeKind::ListItem => {
                 // ADF `listItem.content` permits ONLY paragraph, bulletList,
@@ -700,6 +665,15 @@ impl AdfBuilder {
                     // content, then unwrap subsequent paragraphs, separating with
                     // hardBreak nodes. Block children (taskList, bulletList, …)
                     // are hoisted to the parent (same EC-15 hoist path as below).
+                    //
+                    // Note on F-471-M3: the Paragraph-converted-to-TaskItem (the first
+                    // child here) is produced by a tight-sub-item's End(Paragraph), and
+                    // pulldown-cmark emits all block content (nested lists, blockquotes,
+                    // etc.) AFTER End(Paragraph) — so the first taskItem child has no
+                    // block siblings from the event stream. Block children appear as
+                    // separate entries in `children` (type "taskList", "bulletList", …),
+                    // not nested inside the taskItem node. The `_ => hoisted.push(child)`
+                    // arm below catches them.
                     let mut inline_parts: Vec<Vec<Value>> = Vec::new();
                     let mut hoisted: Vec<Value> = Vec::new();
                     for child in children {
@@ -738,11 +712,14 @@ impl AdfBuilder {
                         first_part = false;
                     }
                     let merged = trim_leading_trailing_hardbreaks(merged);
-                    // Hoist block siblings to the parent container.
+                    // Hoist block siblings to the parent container (append_child targets
+                    // the stack-top, which at this point is the outer BulletList — so
+                    // the hoists become siblings in BulletList.children, visible to the
+                    // reclassification arm).
                     for hoist_node in hoisted {
                         self.append_child(hoist_node);
                     }
-                    Some(json!({
+                    EndResult::Single(json!({
                         "type": "taskItem",
                         "attrs": { "localId": "", "state": state },
                         "content": merged,
@@ -759,7 +736,7 @@ impl AdfBuilder {
                             "mediaSingle",
                         ],
                     );
-                    Some(json!({ "type": "listItem", "content": wrapped }))
+                    EndResult::Single(json!({ "type": "listItem", "content": wrapped }))
                 }
             }
             NodeKind::TaskItem { checked } => {
@@ -772,54 +749,64 @@ impl AdfBuilder {
                 // hardBreak adjacent to a pruned-empty paragraph (which contributes
                 // zero inline nodes). This MUST run before the prune gate below.
                 //
-                // Block children (nested taskList / bulletList / orderedList) from
-                // nested sublists arrive here because pulldown-cmark emits nested
-                // lists inside the item before End(Item). taskItem.content is
-                // inline-only, so block children are separated from inline/paragraph
-                // content. The inline/paragraph content goes through EC-16 flattening.
-                // The block children are KEPT in the returned node's content temporarily
-                // (using a special wrapper key "pending_hoists") so the parent
-                // BulletList reclassification arm can extract and order them correctly
-                // (taskItem BEFORE its nested taskList/bulletList siblings).
-                // The BulletList reclassification arm handles the actual hoist.
+                // Block children from nested sublists or other block constructs in
+                // a tight task item arrive here as direct children (pulldown-cmark
+                // emits them inside the item before End(Item) when the item body is
+                // NOT wrapped in a paragraph — i.e. tight lists).
+                //
+                // Only `text` and `hardBreak` are valid inline nodes in
+                // taskItem.content. ANY other node type (including codeBlock,
+                // blockquote, heading, table, rule, panel, bulletList, orderedList,
+                // taskList) is a block sibling that must be hoisted out. Using
+                // EndResult::WithHoists, hoists are appended to the parent (BulletList)
+                // AFTER the taskItem — the BulletList reclassification arm then
+                // classifies them correctly (taskList → task_children for EC-13;
+                // everything else → hoisted set for EC-15 hoist-to-grandparent).
+                //
+                // This is correct for ALL block types, not just the original narrow
+                // match on taskList|bulletList|orderedList (F-471-H1 fix).
                 let mut inline_children: Vec<Value> = Vec::new();
                 let mut block_siblings: Vec<Value> = Vec::new();
                 for child in children {
                     let ty = child.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                    // `text` and `hardBreak` are the only truly inline ADF node types
+                    // valid in taskItem.content. Everything else is a block that must
+                    // be hoisted to the parent container.
                     match ty {
-                        "taskList" | "bulletList" | "orderedList" => {
-                            block_siblings.push(child);
-                        }
-                        _ => inline_children.push(child),
+                        "text" | "hardBreak" => inline_children.push(child),
+                        _ => block_siblings.push(child),
                     }
                 }
                 let inline_content = flatten_task_item_to_inline(inline_children);
                 let trimmed = trim_leading_trailing_hardbreaks(inline_content);
                 let state = if checked { "DONE" } else { "TODO" };
-                let mut node = json!({
+                let node = json!({
                     "type": "taskItem",
                     "attrs": { "localId": "", "state": state },
                     "content": trimmed,
                 });
-                // Attach pending block siblings as a temporary field so BulletList
-                // reclassification can extract them in the correct order.
-                // This field is stripped during reclassification.
-                if !block_siblings.is_empty() {
-                    node["_pending_hoists"] = json!(block_siblings);
+                // Return via typed channel: the node (possibly empty) plus any block
+                // siblings. The dispatch block below handles the prune-but-still-hoist
+                // case (F-471-M1): even if the taskItem body is empty (and will be
+                // pruned), its block siblings (nested sublists) must still reach the
+                // parent BulletList so EC-13/EC-15 can process them.
+                if block_siblings.is_empty() {
+                    EndResult::Single(node)
+                } else {
+                    EndResult::WithHoists { node, hoists: block_siblings }
                 }
-                Some(node)
             }
-            NodeKind::Table => Some(json!({ "type": "table", "content": children })),
-            NodeKind::TableRow => Some(json!({ "type": "tableRow", "content": children })),
+            NodeKind::Table => {
+                EndResult::Single(json!({ "type": "table", "content": children }))
+            }
+            NodeKind::TableRow => {
+                EndResult::Single(json!({ "type": "tableRow", "content": children }))
+            }
             NodeKind::TableCell { is_header } => {
                 // ADF requires cells to wrap content in a block. pulldown-cmark
                 // emits Text events directly inside TableCell without a Paragraph
                 // wrapper, so we wrap here.
-                let cell_type = if is_header {
-                    "tableHeader"
-                } else {
-                    "tableCell"
-                };
+                let cell_type = if is_header { "tableHeader" } else { "tableCell" };
                 let wrapped = wrap_inlines_as_blocks(
                     children,
                     &[
@@ -831,7 +818,7 @@ impl AdfBuilder {
                         "heading",
                     ],
                 );
-                Some(json!({ "type": cell_type, "content": wrapped }))
+                EndResult::Single(json!({ "type": cell_type, "content": wrapped }))
             }
             NodeKind::InlineMark => {
                 self.pop_mark();
@@ -841,7 +828,7 @@ impl AdfBuilder {
                 for child in children {
                     self.append_child(child);
                 }
-                None
+                EndResult::Empty
             }
             NodeKind::FootnoteDefinition { label } => {
                 // Keep only the first definition per label; a duplicate
@@ -872,7 +859,7 @@ impl AdfBuilder {
                     }
                     self.footnote_defs.extend(blocks);
                 }
-                None
+                EndResult::Empty
             }
             NodeKind::HtmlBlock => {
                 // ADF has no raw-HTML node. Concatenate the block's verbatim
@@ -890,48 +877,49 @@ impl AdfBuilder {
                 }
                 let trimmed = text.strip_suffix('\n').unwrap_or(&text);
                 if trimmed.is_empty() {
-                    None
+                    EndResult::Empty
                 } else {
-                    Some(json!({
+                    EndResult::Single(json!({
                         "type": "paragraph",
                         "content": [{ "type": "text", "text": trimmed }],
                     }))
                 }
             }
-            NodeKind::Sink => None,
+            NodeKind::Sink => EndResult::Empty,
         };
-        if let Some(mut node) = node {
-            // Drop block containers left with empty `content` (invalid ADF that
-            // Jira rejects with HTTP 400). Two ways this arises:
-            //   * pulldown-cmark hoists a footnote definition out of an enclosing
-            //     block, leaving an empty shell (`> [^1]: x` -> empty blockquote);
-            //   * a contentless heading from a bare `#` line.
-            // End events fire inner-first, so if a future transform emptied a
-            // nested container it would be pruned before its parent finalizes.
-            // (In practice today the only reachable empties are a direct
-            // blockquote and a bare heading; the list path keeps a valid empty
-            // placeholder paragraph and is never pruned — see is_empty_block_container.)
-            if !is_empty_block_container(&node) {
-                // Extract and strip any `_post_hoists` from the node before
-                // appending. `_post_hoists` is set by the BulletList reclassification
-                // arm when it needs to hoist block siblings (e.g. a plain bulletList
-                // nested inside a task item, EC-15) to the parent container AFTER the
-                // taskList itself. We append the taskList first, then the hoists, to
-                // achieve [taskList, bulletList] ordering at the parent level.
-                let post_hoists: Vec<Value> = node
-                    .get("_post_hoists")
-                    .and_then(|v| v.as_array())
-                    .cloned()
-                    .unwrap_or_default();
-                if !post_hoists.is_empty() {
-                    // Strip the temporary field from the node before appending.
-                    if let Some(obj) = node.as_object_mut() {
-                        obj.remove("_post_hoists");
-                    }
+        // Dispatch: emit node(s) to the parent container.
+        //
+        // For `Single` / `WithHoists`: drop block containers left with empty
+        // `content` (invalid ADF that Jira rejects with HTTP 400). Two ways this
+        // arises:
+        //   * pulldown-cmark hoists a footnote definition out of an enclosing
+        //     block, leaving an empty shell (`> [^1]: x` -> empty blockquote);
+        //   * a contentless heading from a bare `#` line.
+        // End events fire inner-first, so if a future transform emptied a nested
+        // container it would be pruned before its parent finalizes. (In practice
+        // today the only reachable empties are a direct blockquote and a bare
+        // heading; the list path keeps a valid empty placeholder paragraph and is
+        // never pruned — see is_empty_block_container.)
+        //
+        // For `WithHoists` specifically: if the node itself is pruned (empty body
+        // — e.g. `- [ ]` with an empty task body but a nested sub-list), the hoists
+        // STILL propagate to the parent (F-471-M1 fix). This preserves nested sub-
+        // lists even when the outer task item had no text.
+        match result {
+            EndResult::Empty => {}
+            EndResult::Single(node) => {
+                if !is_empty_block_container(&node) {
+                    self.append_child(node);
                 }
-                self.append_child(node);
-                // Append hoisted siblings AFTER the taskList.
-                for hoist in post_hoists {
+            }
+            EndResult::WithHoists { node, hoists } => {
+                // Append the primary node first (if non-empty), then hoists.
+                // The order [node, hoist1, hoist2, …] is preserved regardless of
+                // whether the node itself is pruned.
+                if !is_empty_block_container(&node) {
+                    self.append_child(node);
+                }
+                for hoist in hoists {
                     self.append_child(hoist);
                 }
             }
@@ -5750,4 +5738,5 @@ mod tests {
         // Inline content (and its marks) is untouched — only node-level marks go.
         assert_eq!(out[0]["content"][0]["text"], "x");
     }
+
 }
