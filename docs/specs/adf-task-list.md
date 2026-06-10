@@ -68,25 +68,34 @@ ADF `taskList.content` permits nested `taskList` as a SIBLING of `taskItem`
 nodes (not nested inside `taskItem.content`). pulldown-cmark emits nested
 sublists inside the parent item, so:
 
-1. `TaskItem` finalization: block children (`taskList`, `bulletList`,
-   `orderedList`) are separated from inline/paragraph children. Block children
-   are stored in a temporary `_pending_hoists` field on the returned node.
-2. `BulletList` reclassification: extracts `_pending_hoists` from each
-   `taskItem`. Nested `taskList` nodes become siblings in `task_children`
-   (ordered after their parent taskItem). Nested `bulletList`/`orderedList`
-   go into the `hoisted` set for EC-15.
+1. `TaskItem` finalization (`NodeKind::TaskItem` arm in `end()`): block children
+   (`taskList`, `bulletList`, `orderedList`, and any other non-inline type) are
+   separated from inline children (`text`/`hardBreak`). Inline children become
+   `taskItem.content` directly. Block children are returned via
+   `EndResult::WithHoists { node: taskItem, hoists: block_siblings }` — a typed
+   channel that carries both the task item node and its hoisted siblings without
+   any JSON side-channel field.
+2. `BulletList` reclassification: sees `WithHoists`-originated block siblings
+   as plain children of the BulletList (appended by the `WithHoists` dispatch at
+   `end()`). Nested `taskList` children become part of `task_children` (siblings
+   in the final `taskList.content`). Nested `bulletList`/`orderedList` go into
+   the `hoisted` set for EC-15.
 
 ## EC-15: Plain BulletList Nested Inside Task Item (hoist to grandparent)
 
 A plain bullet list nested inside a task item is invalid in `taskList.content`
 and in `taskItem.content`. The hoist path:
 
-1. `TaskItem` finalization stores `bulletList` in `_pending_hoists`
-2. `BulletList` reclassification puts plain `bulletList` in the `hoisted` set
-3. The returned `taskList` node carries a `_post_hoists` field
-4. The `end()` append block (at ~line 937) strips `_post_hoists`, appends the
-   `taskList` first, then appends hoisted nodes — yielding correct parent-level
-   ordering: `[taskList{outer}, bulletList{inner}]`
+1. `TaskItem` finalization returns `EndResult::WithHoists { node: taskItem,
+   hoists: [bulletList, …] }` (typed channel — no JSON `_pending_hoists` field).
+2. The `end()` dispatch appends `taskItem` first, then each hoist, so all hoists
+   become siblings in the BulletList's children.
+3. `BulletList` reclassification puts plain `bulletList`/`orderedList` in the
+   `hoisted` set and returns `EndResult::WithHoists { node: taskList, hoists }`.
+4. The outer `end()` append appends the `taskList` first, then the hoisted nodes
+   — yielding correct parent-level ordering: `[taskList{outer}, bulletList{inner}]`.
+   No JSON `_post_hoists` field is used; the typed `EndResult::WithHoists` carries
+   both the primary node and its siblings cleanly.
 
 ## EC-5: `listItem > taskList` normalization
 
