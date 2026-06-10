@@ -361,6 +361,22 @@ enum NodeKind {
     FootnoteDefinition { label: String },
 }
 
+/// Typed segment in a mixed task/plain-item list during BulletList reclassification.
+///
+/// Used by the `NodeKind::BulletList` arm of `AdfBuilder::end()` to preserve
+/// source document order when task items and hoisted blocks are interleaved.
+/// - `Task`: a `taskItem` or nested `taskList` — accumulated into a contiguous
+///   `taskList` run.
+/// - `Hoist`: any other block (e.g. `bulletList`, `orderedList`) — emitted as
+///   a sibling, flushing any pending task run first.
+#[derive(Debug)]
+enum Segment {
+    /// task-compatible node — goes into a taskList run
+    Task(serde_json::Value),
+    /// non-task block sibling — emitted as-is, flushing any pending task run
+    Hoist(serde_json::Value),
+}
+
 impl AdfBuilder {
     fn new() -> Self {
         Self {
@@ -595,11 +611,7 @@ impl AdfBuilder {
                     // separated by the interposed hoisted block(s).
 
                     // Typed ordered sequence: task-compatible OR hoist block.
-                    enum Segment {
-                        Task(Value),  // taskItem or taskList — goes into a taskList
-                        Hoist(Value), // any other block — emitted as a sibling
-                    }
-
+                    // (Segment is defined at module scope above impl AdfBuilder.)
                     let mut segments: Vec<Segment> = Vec::new();
                     for child in children {
                         let ty = child.get("type").and_then(Value::as_str).unwrap_or("");
