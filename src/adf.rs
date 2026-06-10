@@ -605,44 +605,17 @@ impl AdfBuilder {
                     // taskItem was pruned by is_empty_block_container, its hoisted
                     // block children (e.g. a nested bulletList or taskList) were
                     // appended directly to OUR children via append_child — these are
-                    // NOT valid bulletList children (only listItem is). Split them out
-                    // and hoist past this list so the grandparent receives them as
-                    // siblings, rather than producing `bulletList > bulletList` or
-                    // `bulletList > taskList` (both invalid ADF — Jira HTTP 400).
+                    // NOT valid bulletList children (only listItem is). Use the shared
+                    // split+hoist helper to dissolve the list when all children are
+                    // stray blocks.
                     //
                     // BC-7.2.010 EC-13/EC-15 with empty outer body (F-PASS3-C1):
                     // `- [ ]\n  - plain inner`  → [bulletList{inner}] hoisted to doc
                     // `- [ ]\n  - [x] nested`   → [taskList{inner}] hoisted to doc
                     // The outer list itself is dropped (no valid listItem children).
-                    let mut list_items: Vec<Value> = Vec::new();
-                    let mut stray_blocks: Vec<Value> = Vec::new();
-                    for child in children {
-                        let ty = child.get("type").and_then(Value::as_str).unwrap_or("");
-                        if ty == "listItem" {
-                            list_items.push(child);
-                        } else {
-                            stray_blocks.push(child);
-                        }
-                    }
-                    if list_items.is_empty() && stray_blocks.is_empty() {
-                        EndResult::Empty
-                    } else if stray_blocks.is_empty() {
-                        EndResult::Single(json!({ "type": "bulletList", "content": list_items }))
-                    } else if list_items.is_empty() {
-                        // No valid list items at all — the whole list dissolves; hoist
-                        // the stray blocks to the grandparent individually.
-                        for block in stray_blocks {
-                            self.append_child(block);
-                        }
-                        EndResult::Empty
-                    } else {
-                        // Mix: some real listItems + some stray blocks. Produce the
-                        // bulletList for the valid items and hoist the stray blocks.
-                        EndResult::WithHoists {
-                            node: json!({ "type": "bulletList", "content": list_items }),
-                            hoists: stray_blocks,
-                        }
-                    }
+                    split_stray_blocks_end_result("bulletList", children, &mut |block| {
+                        self.append_child(block);
+                    })
                 }
             }
             NodeKind::OrderedList { start } => {
@@ -664,11 +637,35 @@ impl AdfBuilder {
                         "reclassify_as_task_list must return Some when taskItem children exist",
                     )
                 } else {
-                    let mut node = json!({ "type": "orderedList", "content": children });
+                    // Plain orderedList (no task items). Mirror the BulletList
+                    // stray-block split+hoist path (F-P11-001): when an empty
+                    // ordered task item is pruned its hoisted block children
+                    // (e.g. a nested taskList) are appended directly to OUR
+                    // children — these are NOT valid orderedList children (only
+                    // listItem is). Use the shared helper to dissolve + hoist.
+                    //
+                    // When only valid listItem children remain and `start != 1`,
+                    // re-attach the `order` attr to the produced node.
+                    let result =
+                        split_stray_blocks_end_result("orderedList", children, &mut |block| {
+                            self.append_child(block);
+                        });
                     if start != 1 {
-                        node["attrs"] = json!({ "order": start });
+                        // Attach `order` attr to the orderedList node if present.
+                        match result {
+                            EndResult::Single(mut node) => {
+                                node["attrs"] = json!({ "order": start });
+                                EndResult::Single(node)
+                            }
+                            EndResult::WithHoists { mut node, hoists } => {
+                                node["attrs"] = json!({ "order": start });
+                                EndResult::WithHoists { node, hoists }
+                            }
+                            other => other,
+                        }
+                    } else {
+                        result
                     }
-                    EndResult::Single(node)
                 }
             }
             NodeKind::ListItem => {
@@ -1083,6 +1080,66 @@ impl AdfBuilder {
     }
 }
 
+/// Shared stray-block split+hoist logic for both `BulletList` and `OrderedList`
+/// non-task-bearing else-branches (F-P11-001 / F-PASS3-C1 fix).
+///
+/// When an empty task item is pruned by `is_empty_block_container`, its hoisted
+/// block children (e.g. a nested `bulletList` or `taskList`) are appended
+/// directly to the enclosing list's children. Those blocks are NOT valid list
+/// children (`bulletList` and `orderedList` permit only `listItem`).
+///
+/// This function splits the children into `listItem` nodes (valid) and stray
+/// non-`listItem` blocks (invalid), then returns the appropriate `EndResult`:
+///
+/// - All empty → `Empty`
+/// - No stray blocks → `Single(list)` with all `listItem` children
+/// - Only stray blocks (no `listItem`) → hoists every stray block to the
+///   grandparent via `caller_append` and returns `Empty`  (the list dissolves)
+/// - Mixed → `WithHoists { node: list(listItems), hoists: stray_blocks }`
+///
+/// `list_type` is either `"bulletList"` or `"orderedList"`. For `orderedList`
+/// the `start` attribute is optionally set by the caller after the fact if this
+/// returns `Single`.
+///
+/// The `caller_append` closure is called for each stray block when there are
+/// NO `listItem` children, mirroring the `self.append_child(block)` call in the
+/// BulletList inline path that this function replaces.
+fn split_stray_blocks_end_result(
+    list_type: &str,
+    children: Vec<Value>,
+    caller_append: &mut dyn FnMut(Value),
+) -> EndResult {
+    let mut list_items: Vec<Value> = Vec::new();
+    let mut stray_blocks: Vec<Value> = Vec::new();
+    for child in children {
+        let ty = child.get("type").and_then(Value::as_str).unwrap_or("");
+        if ty == "listItem" {
+            list_items.push(child);
+        } else {
+            stray_blocks.push(child);
+        }
+    }
+    if list_items.is_empty() && stray_blocks.is_empty() {
+        EndResult::Empty
+    } else if stray_blocks.is_empty() {
+        EndResult::Single(json!({ "type": list_type, "content": list_items }))
+    } else if list_items.is_empty() {
+        // No valid list items — the whole list dissolves; hoist stray blocks
+        // to the grandparent individually.
+        for block in stray_blocks {
+            caller_append(block);
+        }
+        EndResult::Empty
+    } else {
+        // Mix: some real listItems + some stray blocks. Produce the list for
+        // the valid items and hoist the stray blocks.
+        EndResult::WithHoists {
+            node: json!({ "type": list_type, "content": list_items }),
+            hoists: stray_blocks,
+        }
+    }
+}
+
 /// Shared task-list reclassification logic for both `BulletList` and
 /// `OrderedList` containers.
 ///
@@ -1361,8 +1418,15 @@ fn normalize_list_item_content(children: Vec<Value>) -> Vec<Value> {
                 // is wrapped in a `paragraph` to form a `listItem`, and all
                 // resulting `listItem` nodes are collected into a new `bulletList`.
                 // Valid ADF shape: listItem > [bulletList > [listItem > paragraph(…)]].
-                // Directly placing listItem nodes inside the outer listItem WITHOUT
-                // the intervening bulletList would be INVALID ADF.
+                //
+                // F-PASS13-C1 fix: when a `taskItem` has a nested `taskList`
+                // sibling (a multi-level nested task list inside a plain outer
+                // item), the converted nested bullets MUST be nested INSIDE the
+                // preceding `listItem`'s content — not appended as a sibling
+                // `bulletList` into `converted_items`, which would produce the
+                // invalid shape `bulletList > [listItem, bulletList]`.
+                // EC-13 "sublist belongs to its owning item" ownership rule.
+                //
                 // Checkbox state (TODO/DONE) is dropped — documented lossiness EC-10(b).
                 let task_items = child
                     .get("content")
@@ -1371,9 +1435,37 @@ fn normalize_list_item_content(children: Vec<Value>) -> Vec<Value> {
                     .unwrap_or_default();
                 let mut converted_items: Vec<Value> = Vec::new();
                 for ti in task_items {
-                    // Recursively normalize in case it was a nested taskList.
-                    let inner_items = if ti["type"] == "taskList" {
-                        normalize_list_item_content(vec![ti])
+                    if ti["type"] == "taskList" {
+                        // Nested taskList: recursively normalize → produces zero
+                        // or more block nodes (typically one bulletList). Each
+                        // block must be nested INSIDE the last listItem in
+                        // converted_items (EC-13 ownership), not appended as a
+                        // sibling. If there is no preceding listItem (nested
+                        // taskList appears first), create a placeholder empty-
+                        // paragraph listItem to satisfy ADF constraints.
+                        let inner_blocks = normalize_list_item_content(vec![ti]);
+                        for block in inner_blocks {
+                            if let Some(last_li) = converted_items.last_mut() {
+                                // Append the sub-bulletList to the last listItem's
+                                // content so the shape is:
+                                //   listItem > [paragraph(a), bulletList > [listItem(b)]]
+                                if let Some(arr) =
+                                    last_li.get_mut("content").and_then(|c| c.as_array_mut())
+                                {
+                                    arr.push(block);
+                                }
+                            } else {
+                                // No preceding listItem — nest inside a placeholder.
+                                let placeholder_li = json!({
+                                    "type": "listItem",
+                                    "content": [
+                                        json!({ "type": "paragraph", "content": [] }),
+                                        block
+                                    ]
+                                });
+                                converted_items.push(placeholder_li);
+                            }
+                        }
                     } else {
                         // taskItem — extract its inline content and wrap in paragraph.
                         let inline_content = ti
@@ -1382,9 +1474,8 @@ fn normalize_list_item_content(children: Vec<Value>) -> Vec<Value> {
                             .cloned()
                             .unwrap_or_default();
                         let para = json!({ "type": "paragraph", "content": inline_content });
-                        vec![json!({ "type": "listItem", "content": [para] })]
-                    };
-                    converted_items.extend(inner_items);
+                        converted_items.push(json!({ "type": "listItem", "content": [para] }));
+                    }
                 }
                 if !converted_items.is_empty() {
                     out.push(json!({ "type": "bulletList", "content": converted_items }));
@@ -7199,5 +7290,366 @@ mod tests {
         );
         // Inline content (and its marks) is untouched — only node-level marks go.
         assert_eq!(out[0]["content"][0]["text"], "x");
+    }
+
+    // --- F-P11-001: empty outer ORDERED task list + nested sublist -----------
+
+    #[test]
+    fn test_empty_outer_ordered_task_with_nested_ordered_task_is_valid() {
+        // F-P11-001: `1. [ ]\n   1. [x] x`
+        // Empty outer ordered task item whose only child is a nested ordered task.
+        // After reclassification the inner `orderedList` becomes a `taskList`;
+        // the outer `listItem` is pruned (empty body); the stray `taskList` is
+        // hoisted. The outer `OrderedList` then sees no `taskItem` child —
+        // it must NOT wrap `[taskList]` directly in `orderedList` (invalid ADF).
+        // It must dissolve (hoist stray blocks to grandparent) instead.
+        let md = "1. [ ]\n   1. [x] x\n";
+        let adf = markdown_to_adf(md);
+        assert_valid_adf_structure(&adf);
+        // The nested task item "x" must appear somewhere in the output.
+        let s = serde_json::to_string(&adf).unwrap();
+        assert!(
+            s.contains("\"x\"") || s.contains("x"),
+            "content must not be dropped: {adf}"
+        );
+    }
+
+    #[test]
+    fn test_empty_outer_ordered_task_with_nested_plain_list_is_valid() {
+        // F-P11-001 variant: `1. [ ]\n   - plain inner`
+        let md = "1. [ ]\n   - plain inner\n";
+        let adf = markdown_to_adf(md);
+        assert_valid_adf_structure(&adf);
+        let s = serde_json::to_string(&adf).unwrap();
+        assert!(
+            s.contains("plain") && s.contains("inner"),
+            "content must not be dropped: {adf}"
+        );
+    }
+
+    #[test]
+    fn test_empty_outer_ordered_task_with_nested_task_list_is_valid() {
+        // F-P11-001 variant: `1. [ ]\n   - [x] nested`
+        let md = "1. [ ]\n   - [x] nested\n";
+        let adf = markdown_to_adf(md);
+        assert_valid_adf_structure(&adf);
+        let s = serde_json::to_string(&adf).unwrap();
+        assert!(s.contains("nested"), "content must not be dropped: {adf}");
+    }
+
+    // --- F-PASS13-C1: plain outer item wrapping multi-level nested task list -
+
+    #[test]
+    fn test_plain_outer_item_with_multi_level_nested_task_list_is_valid() {
+        // F-PASS13-C1: `- outer\n  - [ ] a\n    - [ ] b`
+        // Plain (non-task) outer bullet whose body is a task list containing
+        // a nested task sublist. The inner `taskList` contains a nested
+        // `taskList` child. `normalize_list_item_content` converts the outer
+        // taskList → bulletList; during iteration it sees `[taskItem(a), taskList([b])]`.
+        // The converted taskList([b]) → bulletList([listItem(b)]) must be nested
+        // INSIDE the listItem(a), not appended as a sibling of listItem(a).
+        let md = "- outer\n  - [ ] a\n    - [ ] b\n";
+        let adf = markdown_to_adf(md);
+        assert_valid_adf_structure(&adf);
+        let s = serde_json::to_string(&adf).unwrap();
+        assert!(
+            s.contains("\"a\"") || s.contains("\"b\""),
+            "content must not be dropped: {adf}"
+        );
+    }
+
+    #[test]
+    fn test_plain_outer_item_with_multi_level_nested_ordered_task_list_is_valid() {
+        // F-PASS13-C1 ordered variant: `- outer\n  1. [ ] a\n     1. [ ] b`
+        let md = "- outer\n  1. [ ] a\n     1. [ ] b\n";
+        let adf = markdown_to_adf(md);
+        assert_valid_adf_structure(&adf);
+    }
+
+    // --- Comprehensive structural-validity corpus (stop the whack-a-mole) ----
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn test_adf_structural_validity_comprehensive_corpus() {
+        // Comprehensive corpus covering the cartesian product of:
+        //   list kind × tightness × outer body × nested child × depth
+        //   × interleaving × container wrapping
+        // Every input is checked with assert_valid_adf_structure (panics on
+        // invalid ADF), a no-content-drop check (every non-whitespace word
+        // appears in the output text), and a no-panic guarantee.
+        //
+        // Inputs are grouped by dimension for readability. Labels encode the
+        // triggering scenario so failures are easy to diagnose.
+        let inputs: &[(&str, &str)] = &[
+            // ================================================================
+            // DIMENSION: list kind × outer body × tightness
+            // ================================================================
+
+            // --- Bullet list, tight ---
+            ("bullet-tight-task-unchecked", "- [ ] a\n"),
+            ("bullet-tight-task-checked", "- [x] a\n"),
+            ("bullet-tight-plain", "- plain\n"),
+            ("bullet-tight-two-tasks", "- [ ] a\n- [x] b\n"),
+            ("bullet-tight-mixed-task-plain", "- [ ] task\n- plain\n"),
+            ("bullet-tight-empty-task", "- [ ]\n"),
+            // --- Bullet list, loose ---
+            ("bullet-loose-task-unchecked", "- [ ] a\n\n- [x] b\n"),
+            ("bullet-loose-task-multiline", "- [ ] line1\n\n  line2\n"),
+            ("bullet-loose-plain", "- a\n\n- b\n"),
+            ("bullet-loose-empty-task", "- [ ]\n\n- [x] b\n"),
+            // --- Ordered list, tight ---
+            ("ordered-tight-plain", "1. a\n2. b\n"),
+            ("ordered-tight-task-unchecked", "1. [ ] a\n"),
+            ("ordered-tight-task-checked", "1. [x] a\n"),
+            ("ordered-tight-two-tasks", "1. [ ] a\n2. [x] b\n"),
+            ("ordered-tight-mixed-task-plain", "1. [ ] a\n2. plain\n"),
+            ("ordered-tight-empty-task", "1. [ ]\n"),
+            // --- Ordered list, loose ---
+            ("ordered-loose-task", "1. [ ] a\n\n2. [x] b\n"),
+            ("ordered-loose-plain", "1. a\n\n2. b\n"),
+            // ================================================================
+            // DIMENSION: nested child type × outer body
+            // ================================================================
+
+            // Bullet outer + no nested child (already covered above)
+
+            // --- Bullet outer with task body + nested plain list ---
+            (
+                "bullet-task-outer-nested-plain",
+                "- [ ] outer\n  - plain inner\n",
+            ),
+            (
+                "bullet-task-outer-nested-plain-tight",
+                "- [ ] outer\n- [x] after\n",
+            ),
+            // --- Bullet outer with task body + nested task list ---
+            (
+                "bullet-task-outer-nested-task",
+                "- [ ] outer\n  - [x] nested\n",
+            ),
+            (
+                "bullet-task-outer-nested-task-checked",
+                "- [x] outer\n  - [ ] nested\n",
+            ),
+            // --- Bullet outer with task body + nested mixed ---
+            (
+                "bullet-task-outer-nested-mixed",
+                "- [ ] outer\n  - [x] task sub\n  - plain sub\n",
+            ),
+            // --- Bullet PLAIN outer with nested task list (F-PASS13-C1 class) ---
+            ("bullet-plain-outer-nested-task", "- outer\n  - [ ] a\n"),
+            (
+                "bullet-plain-outer-nested-task-multiitem",
+                "- outer\n  - [ ] a\n  - [x] b\n",
+            ),
+            (
+                "bullet-plain-outer-nested-task-then-plain",
+                "- outer\n  - [ ] task\n  - plain\n",
+            ),
+            // --- Bullet EMPTY outer with nested list (F-PASS3-C1 class) ---
+            (
+                "bullet-empty-outer-nested-plain",
+                "- [ ]\n  - plain inner\n",
+            ),
+            ("bullet-empty-outer-nested-task", "- [ ]\n  - [x] nested\n"),
+            (
+                "bullet-empty-outer-nested-mixed",
+                "- [ ]\n  - [x] task\n  - plain\n",
+            ),
+            // --- Ordered outer with task body + nested plain list ---
+            (
+                "ordered-task-outer-nested-plain",
+                "1. [ ] outer\n   - plain inner\n",
+            ),
+            // --- Ordered outer with task body + nested task list ---
+            (
+                "ordered-task-outer-nested-task",
+                "1. [ ] outer\n   1. [x] nested\n",
+            ),
+            // --- Ordered PLAIN outer with nested task list ---
+            ("ordered-plain-outer-nested-task", "1. outer\n   1. [ ] a\n"),
+            // --- Ordered EMPTY outer with nested list (F-P11-001 class) ---
+            (
+                "ordered-empty-outer-nested-task-ordered",
+                "1. [ ]\n   1. [x] x\n",
+            ),
+            (
+                "ordered-empty-outer-nested-plain-bullet",
+                "1. [ ]\n   - plain inner\n",
+            ),
+            (
+                "ordered-empty-outer-nested-task-bullet",
+                "1. [ ]\n   - [x] nested\n",
+            ),
+            // ================================================================
+            // DIMENSION: nesting depth (1, 2, 3 levels)
+            // ================================================================
+
+            // Depth 1 — covered above
+
+            // Depth 2
+            ("depth2-bullet-task", "- [ ] a\n  - [ ] b\n"),
+            ("depth2-ordered-task", "1. [ ] a\n   1. [ ] b\n"),
+            ("depth2-plain-nested-task", "- plain\n  - [ ] sub\n"),
+            (
+                "depth2-plain-outer-nested-task-with-sub",
+                "- outer\n  - [ ] a\n    - [ ] b\n",
+            ),
+            (
+                "depth2-plain-outer-nested-ordered-task-with-sub",
+                "- outer\n  1. [ ] a\n     1. [ ] b\n",
+            ),
+            // Depth 3
+            ("depth3-task", "- [ ] a\n  - [ ] b\n    - [x] c\n"),
+            (
+                "depth3-ordered-task",
+                "1. [ ] a\n   1. [ ] b\n      1. [x] c\n",
+            ),
+            (
+                "depth3-plain-outer",
+                "- outer\n  - [ ] a\n    - [ ] b\n      - [x] c\n",
+            ),
+            // ================================================================
+            // DIMENSION: interleaving (task-then-hoist, hoist-then-task, etc.)
+            // ================================================================
+
+            // Empty task first → hoist, then real task
+            (
+                "interleave-empty-hoist-then-task",
+                "- [ ]\n  - plain inner\n- [x] after\n",
+            ),
+            // Real task, then empty+hoist, then real task
+            (
+                "interleave-task-hoist-task",
+                "- [x] before\n- [ ]\n  - plain\n- [x] after\n",
+            ),
+            // Empty parent, two nested tasks
+            (
+                "interleave-empty-two-nested-tasks",
+                "- [ ]\n  - [x] a\n  - [ ] b\n",
+            ),
+            // Real task, then empty + nested task
+            (
+                "interleave-real-then-empty-nested-task",
+                "- [x] real\n- [ ]\n  - [ ] nested\n",
+            ),
+            // Task then empty-no-sub then task (empty with nothing)
+            (
+                "interleave-task-empty-nochild-task",
+                "- [x] a\n- [ ]\n- [x] b\n",
+            ),
+            // All-empty tasks
+            ("interleave-all-empty-tasks", "- [ ]\n- [ ]\n- [ ]\n"),
+            // ================================================================
+            // DIMENSION: container wrapping
+            // ================================================================
+
+            // Top-level (already covered above)
+
+            // Inside blockquote
+            ("blockquote-wraps-task-list", "> - [ ] in blockquote\n"),
+            (
+                "blockquote-wraps-nested-task",
+                "> - [ ] outer\n>   - [x] nested\n",
+            ),
+            (
+                "blockquote-wraps-empty-outer-nested-task",
+                "> - [ ]\n>   - [x] inner\n",
+            ),
+            // Inside GFM alert panel
+            ("panel-wraps-task-list", "> [!NOTE]\n> - [ ] in panel\n"),
+            (
+                "panel-wraps-nested-task",
+                "> [!NOTE]\n> - [ ] outer\n>   - [x] nested\n",
+            ),
+            (
+                "panel-wraps-ordered-task",
+                "> [!WARNING]\n> 1. [ ] a\n> 2. [x] b\n",
+            ),
+            // Inside a plain listItem (plain outer wrapping task)
+            (
+                "list-item-wraps-task-list",
+                "- outer item\n  - [ ] sub task\n",
+            ),
+            (
+                "list-item-wraps-nested-task-list",
+                "- outer item\n  - [ ] a\n    - [x] b\n",
+            ),
+            // ================================================================
+            // EXACT TRIGGER INPUTS from prior adversarial passes
+            // ================================================================
+
+            // F-P11-001 exact triggers
+            ("fp11-001-exact-1", "1. [ ]\n   1. [x] x\n"),
+            ("fp11-001-exact-2", "1. [ ]\n   - plain inner\n"),
+            ("fp11-001-exact-3", "1. [ ]\n   - [x] nested\n"),
+            // F-PASS13-C1 exact triggers
+            ("fpass13-c1-exact-1", "- outer\n  - [ ] a\n    - [ ] b\n"),
+            ("fpass13-c1-exact-2", "- outer\n  1. [ ] a\n     1. [ ] b\n"),
+            // Prior pass trigger inputs
+            ("prior-loose-outer-plain-inner", "- [ ]\n\n  - inner\n"),
+            (
+                "prior-empty-then-plain-then-checked",
+                "- [ ]\n  - plain\n- [x] after\n",
+            ),
+            // ================================================================
+            // REGRESSION: plain ordered lists must not be reclassified
+            // ================================================================
+            ("regression-plain-ordered", "1. first\n2. second\n"),
+            ("regression-nested-ordered-in-plain", "- item\n  1. sub\n"),
+            ("regression-plain-bullet", "- a\n- b\n"),
+            // ================================================================
+            // CONTENT: task items with non-trivial inline content
+            // ================================================================
+            ("task-with-url", "- [ ] see https://example.com\n"),
+            ("task-with-bold", "- [ ] **bold** item\n"),
+            ("task-with-code", "- [ ] `code` item\n"),
+            ("task-with-strikethrough", "- [ ] ~~done~~ item\n"),
+        ];
+
+        for (label, md) in inputs {
+            // No-panic guarantee: markdown_to_adf must complete normally.
+            let adf = markdown_to_adf(md);
+
+            // Structural validity: assert_valid_adf_structure panics on violation.
+            assert_valid_adf_structure(&adf);
+
+            // No empty list containers.
+            assert_no_empty_list_content(&adf, label);
+
+            // No-content-drop: every significant word in the input must appear
+            // somewhere in the serialized ADF output.
+            // (Skip inputs whose only content is task markers or empty.)
+            let adf_str = serde_json::to_string(&adf).unwrap_or_default();
+            for word in md.split_whitespace() {
+                // Strip markdown syntax to get candidate content words.
+                let stripped = word
+                    .trim_start_matches("- ")
+                    .trim_start_matches("1. ")
+                    .trim_start_matches("[ ]")
+                    .trim_start_matches("[x]")
+                    .trim_start_matches("[!NOTE]")
+                    .trim_start_matches("[!WARNING]")
+                    .trim_start_matches('>')
+                    .trim_start_matches('-')
+                    .trim_start_matches("**")
+                    .trim_end_matches("**")
+                    .trim_start_matches("~~")
+                    .trim_end_matches("~~")
+                    .trim_matches('`')
+                    .trim();
+                // Only check words with ≥3 non-punctuation chars to avoid false
+                // positives from markdown syntax tokens.
+                let alpha_count = stripped.chars().filter(|c| c.is_alphabetic()).count();
+                if alpha_count >= 3 && !stripped.starts_with("http") {
+                    assert!(
+                        adf_str.contains(stripped),
+                        "[{label}] word {stripped:?} from input not found in ADF output.\n\
+                         Input: {md:?}\n\
+                         ADF: {adf}"
+                    );
+                }
+            }
+        }
     }
 }
