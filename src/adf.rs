@@ -559,23 +559,53 @@ impl AdfBuilder {
                 if has_task_items {
                     // Reclassify to taskList.
                     //
+                    // ORDER-PRESERVING reclassification (F-PASS4-C1 fix):
+                    //
                     // taskList.content permits only taskItem and nested taskList nodes.
                     // Any other block child (bulletList, orderedList, or any other block
                     // that was a sibling of a taskItem in the BulletList's children
                     // because it was hoisted from inside a TaskItem via EndResult::WithHoists)
-                    // must be hoisted to the parent level AFTER the taskList.
+                    // must be hoisted to the parent level.
                     //
-                    // Ordering invariant (EC-15):
-                    //   parent receives [taskList{outer}, bulletList{inner}]
-                    // Achieved via EndResult::WithHoists: `end()` appends the taskList
-                    // FIRST, then each hoist in order (no JSON side-channel needed).
-                    let mut task_children: Vec<Value> = Vec::new();
-                    let mut hoisted: Vec<Value> = Vec::new();
+                    // The previous implementation collected all task children and all
+                    // hoisted blocks into flat Vecs and emitted [taskList, hoists], which
+                    // inverted source order when a hoisted block appeared BEFORE a task
+                    // item in source position.
+                    //
+                    // The fix: walk children in document order and build an ordered
+                    // sequence of output segments. Each segment is either a taskList
+                    // (from a contiguous run of task-compatible items) or a standalone
+                    // hoist block. When a hoisted block is encountered, the current
+                    // task run is flushed as a taskList segment first, then the hoisted
+                    // block is appended as a sibling segment — preserving source order.
+                    //
+                    // Shape examples (order invariant: preserve document order):
+                    //   `- [ ]\n  - plain\n- [x] after`
+                    //     → [bulletList(plain), taskList([after])]
+                    //   `- [x] before\n- [ ]\n  - plain\n- [x] after`
+                    //     → [taskList([before]), bulletList(plain), taskList([after])]
+                    //   `- [ ] outer\n  - plain inner`
+                    //     → [taskList([outer]), bulletList(inner)] (EC-15, unchanged)
+                    //
+                    // BC back-propagation note: BC-7.2.010 does not specify the
+                    // interleaved shape. The implemented invariant is: output preserves
+                    // source document order; valid ADF; does not drop content. When task
+                    // items and hoisted blocks are interleaved, one taskList node is
+                    // emitted per contiguous run of task-compatible items, each run
+                    // separated by the interposed hoisted block(s).
+
+                    // Typed ordered sequence: task-compatible OR hoist block.
+                    enum Segment {
+                        Task(Value),  // taskItem or taskList — goes into a taskList
+                        Hoist(Value), // any other block — emitted as a sibling
+                    }
+
+                    let mut segments: Vec<Segment> = Vec::new();
                     for child in children {
                         let ty = child.get("type").and_then(Value::as_str).unwrap_or("");
                         match ty {
-                            "taskItem" => task_children.push(child),
-                            "taskList" => task_children.push(child),
+                            "taskItem" => segments.push(Segment::Task(child)),
+                            "taskList" => segments.push(Segment::Task(child)),
                             "listItem" => {
                                 // Plain item in a mixed list — promote to taskItem TODO.
                                 // EC-3: its content is already wrapped in paragraph/block
@@ -587,13 +617,13 @@ impl AdfBuilder {
                                 // preserve-not-drop invariant from #472/#489).
                                 let inline_content = extract_inline_from_list_item_content(&child);
                                 let trimmed = trim_leading_trailing_hardbreaks(inline_content);
-                                task_children.push(json!({
+                                segments.push(Segment::Task(json!({
                                     "type": "taskItem",
                                     "attrs": { "localId": "", "state": "TODO" },
                                     "content": trimmed,
-                                }));
+                                })));
                                 // Hoist non-paragraph blocks (e.g. nested bulletList) from
-                                // the plain listItem to the outer container after the taskList.
+                                // the plain listItem immediately after their source taskItem.
                                 if let Some(blocks) =
                                     child.get("content").and_then(|c| c.as_array())
                                 {
@@ -601,39 +631,63 @@ impl AdfBuilder {
                                         if block.get("type").and_then(Value::as_str)
                                             != Some("paragraph")
                                         {
-                                            hoisted.push(block.clone());
+                                            segments.push(Segment::Hoist(block.clone()));
                                         }
                                     }
                                 }
                             }
                             // Everything else (bulletList, orderedList, or any other block
                             // sibling propagated from a TaskItem via WithHoists) is hoisted
-                            // to the parent container after the taskList (EC-15).
-                            _ => hoisted.push(child),
+                            // to the parent container (EC-15).
+                            _ => segments.push(Segment::Hoist(child)),
                         }
                     }
-                    if task_children.is_empty() {
-                        // All children were non-task blocks; nothing to build a taskList
-                        // around. Propagate each hoist to the parent directly.
-                        for h in hoisted {
-                            self.append_child(h);
+
+                    // Walk segments in order, flushing task runs into taskList nodes
+                    // and emitting hoist blocks as siblings in source order.
+                    // Collect all output nodes in document order.
+                    let mut output_nodes: Vec<Value> = Vec::new();
+                    let mut current_task_run: Vec<Value> = Vec::new();
+
+                    let flush_task_run = |run: &mut Vec<Value>, out: &mut Vec<Value>| {
+                        if !run.is_empty() {
+                            let task_list = json!({
+                                "type": "taskList",
+                                "attrs": { "localId": "" },
+                                "content": std::mem::take(run),
+                            });
+                            out.push(task_list);
                         }
-                        EndResult::Empty
-                    } else {
-                        let task_list = json!({
-                            "type": "taskList",
-                            "attrs": { "localId": "" },
-                            "content": task_children,
-                        });
-                        if hoisted.is_empty() {
-                            EndResult::Single(task_list)
-                        } else {
-                            // WithHoists: taskList emitted first, then hoists appended
-                            // as siblings (EC-15 correct ordering: [taskList, bulletList]).
-                            EndResult::WithHoists {
-                                node: task_list,
-                                hoists: hoisted,
+                    };
+
+                    for seg in segments {
+                        match seg {
+                            Segment::Task(node) => current_task_run.push(node),
+                            Segment::Hoist(block) => {
+                                // Flush the pending task run before emitting the hoist,
+                                // preserving source order.
+                                flush_task_run(&mut current_task_run, &mut output_nodes);
+                                output_nodes.push(block);
                             }
+                        }
+                    }
+                    // Flush any remaining task run.
+                    flush_task_run(&mut current_task_run, &mut output_nodes);
+
+                    if output_nodes.is_empty() {
+                        // All children were non-task blocks that were empty after
+                        // promotion; nothing survived.
+                        EndResult::Empty
+                    } else if output_nodes.len() == 1 {
+                        EndResult::Single(output_nodes.remove(0))
+                    } else {
+                        // Multiple ordered segments. Emit the first as the primary
+                        // node and the rest as hoists via WithHoists so the parent
+                        // receives them all in order.
+                        let first = output_nodes.remove(0);
+                        EndResult::WithHoists {
+                            node: first,
+                            hoists: output_nodes,
                         }
                     }
                 } else {
@@ -4292,6 +4346,13 @@ mod tests {
         if let Some(children) = v.get("content").and_then(Value::as_array) {
             match ty {
                 "bulletList" | "orderedList" => {
+                    // F-PASS4-I1: minItems:1 — empty list is invalid ADF.
+                    assert!(
+                        !children.is_empty(),
+                        "{ty} must not be empty (minItems:1) \
+                         (path: {path}): {}",
+                        serde_json::to_string(v).unwrap_or_default()
+                    );
                     for (i, child) in children.iter().enumerate() {
                         let child_ty = child
                             .get("type")
@@ -4307,6 +4368,13 @@ mod tests {
                     }
                 }
                 "taskList" => {
+                    // F-PASS4-I1: minItems:1 — empty taskList is invalid ADF.
+                    assert!(
+                        !children.is_empty(),
+                        "taskList must not be empty (minItems:1) \
+                         (path: {path}): {}",
+                        serde_json::to_string(v).unwrap_or_default()
+                    );
                     for (i, child) in children.iter().enumerate() {
                         let child_ty = child
                             .get("type")
@@ -4362,31 +4430,83 @@ mod tests {
                     }
                 }
                 "listItem" => {
+                    // F-PASS4-I2: allowlist-based check for listItem children.
+                    // ADF listItem.content permits: paragraph, bulletList,
+                    // orderedList, codeBlock, mediaSingle.
+                    // taskList, heading, blockquote, table, panel, rule, taskItem,
+                    // and all other block types are NOT permitted.
+                    const ALLOWED: &[&str] = &[
+                        "paragraph",
+                        "bulletList",
+                        "orderedList",
+                        "codeBlock",
+                        "mediaSingle",
+                    ];
                     for (i, child) in children.iter().enumerate() {
                         let child_ty = child
                             .get("type")
                             .and_then(Value::as_str)
                             .unwrap_or("<unknown>");
-                        assert_ne!(
-                            child_ty,
-                            "taskList",
-                            "listItem must not contain taskList as direct child \
-                             (path: {path}[{i}]): {}",
+                        assert!(
+                            ALLOWED.contains(&child_ty),
+                            "listItem child[{i}] must be one of {ALLOWED:?} but got \
+                             '{child_ty}' (path: {path}[{i}]): {}",
                             serde_json::to_string(v).unwrap_or_default()
                         );
                     }
                 }
                 "blockquote" => {
+                    // F-PASS4-I2: allowlist-based check for blockquote children.
+                    // ADF blockquote.content permits: paragraph, heading,
+                    // bulletList, orderedList, codeBlock, rule, mediaSingle,
+                    // blockquote. NOT: taskList, table, panel, taskItem, listItem.
+                    const ALLOWED: &[&str] = &[
+                        "paragraph",
+                        "heading",
+                        "bulletList",
+                        "orderedList",
+                        "codeBlock",
+                        "rule",
+                        "mediaSingle",
+                        "blockquote",
+                    ];
                     for (i, child) in children.iter().enumerate() {
                         let child_ty = child
                             .get("type")
                             .and_then(Value::as_str)
                             .unwrap_or("<unknown>");
-                        assert_ne!(
-                            child_ty,
-                            "taskList",
-                            "blockquote must not contain taskList as direct child \
-                             (path: {path}[{i}]): {}",
+                        assert!(
+                            ALLOWED.contains(&child_ty),
+                            "blockquote child[{i}] must be one of {ALLOWED:?} but got \
+                             '{child_ty}' (path: {path}[{i}]): {}",
+                            serde_json::to_string(v).unwrap_or_default()
+                        );
+                    }
+                }
+                "panel" => {
+                    // F-PASS4-I2: allowlist-based check for panel children.
+                    // ADF panel.content permits: paragraph, heading, bulletList,
+                    // orderedList, taskList, codeBlock, rule, mediaSingle.
+                    // NOT: table, panel (nested), blockquote, listItem, taskItem.
+                    const ALLOWED: &[&str] = &[
+                        "paragraph",
+                        "heading",
+                        "bulletList",
+                        "orderedList",
+                        "taskList",
+                        "codeBlock",
+                        "rule",
+                        "mediaSingle",
+                    ];
+                    for (i, child) in children.iter().enumerate() {
+                        let child_ty = child
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .unwrap_or("<unknown>");
+                        assert!(
+                            ALLOWED.contains(&child_ty),
+                            "panel child[{i}] must be one of {ALLOWED:?} but got \
+                             '{child_ty}' (path: {path}[{i}]): {}",
                             serde_json::to_string(v).unwrap_or_default()
                         );
                     }
@@ -4402,10 +4522,11 @@ mod tests {
 
     #[test]
     fn test_adf_structural_validity_task_list_corpus() {
-        // F-PASS3-I1: structural-validity corpus test.
+        // F-PASS3-I1 + F-PASS4-C1: structural-validity corpus test.
         // Run assert_valid_adf_structure across ALL task-list inputs: basic,
         // nested, mixed, panel, blockquote, multi-paragraph, empty-body cases,
-        // and the F-PASS3-C1 trigger inputs.
+        // the F-PASS3-C1 trigger inputs, and the F-PASS4-C1 order-composition
+        // inputs (hoisted blocks interleaved with task items in various orders).
         let inputs: &[(&str, &str)] = &[
             // Basic task list
             ("basic task unchecked", "- [ ] task\n"),
@@ -4444,6 +4565,31 @@ mod tests {
             (
                 "multi-para loose task",
                 "- [ ] para one\n\n  para two\n\n  para three\n",
+            ),
+            // F-PASS4-C1: order-composition inputs (hoisted blocks interleaved)
+            // Empty task first, plain nested, then real task item.
+            // Expected: [bulletList(plain), taskList([after])]
+            (
+                "F-PASS4-C1: empty+plain hoist before task",
+                "- [ ]\n  - plain inner\n- [x] after\n",
+            ),
+            // Real task, then empty with plain nested, then real task.
+            // Expected: [taskList([before]), bulletList(plain), taskList([after])]
+            (
+                "F-PASS4-C1: task hoist task interleaved",
+                "- [x] before\n- [ ]\n  - plain\n- [x] after\n",
+            ),
+            // Empty parent, two nested task items.
+            // Expected: [taskList([a, b])]
+            (
+                "F-PASS4-C1: empty parent two nested tasks",
+                "- [ ]\n  - [x] a\n  - [ ] b\n",
+            ),
+            // Real task, then empty with nested task.
+            // Expected: both 'real' and 'nested' present in order.
+            (
+                "F-PASS4-C1: real task then empty with nested task",
+                "- [x] real\n- [ ]\n  - [ ] nested\n",
             ),
         ];
         for (label, md) in inputs {
@@ -6388,6 +6534,354 @@ mod tests {
             children[2]["marks"][0]["type"], "strong",
             "second text must carry strong mark: {:?}",
             children[2]
+        );
+    }
+
+    // --- F-PASS4-C1: document-order preservation for hoisted blocks --------
+    // When a hoisted block from an empty-bodied task item precedes a real task
+    // item in SOURCE ORDER, the output must preserve that order (hoisted block
+    // BEFORE the taskList that contains the following task items).
+    //
+    // These tests assert the EXACT top-level sequence and MUST FAIL before the
+    // order-preserving reclassification fix and PASS after.
+    //
+    // Order invariant: the output sequence mirrors source order; a hoisted block
+    // that appeared BEFORE a task item in source order must appear before the
+    // taskList containing that task item in the output.
+
+    #[test]
+    fn test_order_preserving_hoist_empty_task_then_plain_then_real_task() {
+        // F-PASS4-C1 trigger: `- [ ]\n  - plain inner\n- [x] after`
+        // Source order: plain inner (item1 nested content), after (item2 task).
+        // Expected output doc-level: [bulletList(plain inner), taskList([after])]
+        // (NOT [taskList([after]), bulletList(plain inner)] — that is inverted.)
+        let md = "- [ ]\n  - plain inner\n- [x] after\n";
+        let adf = markdown_to_adf(md);
+        let serialized = serde_json::to_string_pretty(&adf).unwrap();
+
+        assert_valid_adf_structure(&adf);
+
+        let doc_children = adf["content"].as_array().expect("doc must have content");
+        assert!(
+            doc_children.len() >= 2,
+            "expected at least 2 top-level nodes but got {}: {}",
+            doc_children.len(),
+            serialized
+        );
+
+        // First node must be bulletList (the hoisted plain sublist from item1)
+        assert_eq!(
+            doc_children[0]["type"].as_str(),
+            Some("bulletList"),
+            "doc[0] must be bulletList (source order: plain before task) but got '{}': {}",
+            doc_children[0]["type"].as_str().unwrap_or("?"),
+            serialized
+        );
+
+        // Second node must be taskList (containing the 'after' item from item2)
+        assert_eq!(
+            doc_children[1]["type"].as_str(),
+            Some("taskList"),
+            "doc[1] must be taskList but got '{}': {}",
+            doc_children[1]["type"].as_str().unwrap_or("?"),
+            serialized
+        );
+
+        // The taskList must contain 'after'
+        let task_items = doc_children[1]["content"]
+            .as_array()
+            .expect("taskList must have content");
+        let text = task_items[0]["content"][0]["text"].as_str().unwrap_or("");
+        assert_eq!(
+            text, "after",
+            "taskList must contain 'after' text: {}",
+            serialized
+        );
+    }
+
+    #[test]
+    fn test_order_preserving_hoist_real_task_then_empty_then_real_task() {
+        // F-PASS4-C1: `- [x] before\n- [ ]\n  - plain\n- [x] after`
+        // Source order: before (task), plain (hoisted nested content), after (task).
+        //
+        // Schema-valid order-preserving shape chosen:
+        //   [taskList([before]), bulletList([plain]), taskList([after])]
+        //
+        // Splitting the taskList around the interposed bulletList is the only
+        // way to preserve source order with valid ADF. A single merged taskList
+        // would require reordering 'before' and 'after' (skipping 'plain')
+        // which violates the order invariant.
+        //
+        // BC back-propagation note: BC-7.2.010 does not specify this interleaving
+        // shape. The implemented invariant is: output preserves source document
+        // order; valid ADF; does not drop content. When task items and hoisted
+        // blocks are interleaved, one taskList node is emitted per contiguous run
+        // of task items, each run separated by the interposed hoisted block(s).
+        let md = "- [x] before\n- [ ]\n  - plain\n- [x] after\n";
+        let adf = markdown_to_adf(md);
+        let serialized = serde_json::to_string_pretty(&adf).unwrap();
+
+        assert_valid_adf_structure(&adf);
+
+        let doc_children = adf["content"].as_array().expect("doc must have content");
+        assert_eq!(
+            doc_children.len(),
+            3,
+            "expected [taskList(before), bulletList(plain), taskList(after)] but got {}: {}",
+            doc_children.len(),
+            serialized
+        );
+
+        // [0]: taskList with 'before'
+        assert_eq!(
+            doc_children[0]["type"].as_str(),
+            Some("taskList"),
+            "doc[0] must be taskList (before): {}",
+            serialized
+        );
+        let before_text = doc_children[0]["content"][0]["content"][0]["text"]
+            .as_str()
+            .unwrap_or("");
+        assert_eq!(
+            before_text, "before",
+            "doc[0] taskList must contain 'before': {}",
+            serialized
+        );
+
+        // [1]: bulletList with 'plain'
+        assert_eq!(
+            doc_children[1]["type"].as_str(),
+            Some("bulletList"),
+            "doc[1] must be bulletList (plain): {}",
+            serialized
+        );
+
+        // [2]: taskList with 'after'
+        assert_eq!(
+            doc_children[2]["type"].as_str(),
+            Some("taskList"),
+            "doc[2] must be taskList (after): {}",
+            serialized
+        );
+        let after_text = doc_children[2]["content"][0]["content"][0]["text"]
+            .as_str()
+            .unwrap_or("");
+        assert_eq!(
+            after_text, "after",
+            "doc[2] taskList must contain 'after': {}",
+            serialized
+        );
+    }
+
+    #[test]
+    fn test_order_preserving_hoist_empty_task_two_nested_task_items() {
+        // F-PASS4-C1: `- [ ]\n  - [x] a\n  - [ ] b`
+        // Empty parent task, TWO nested task items. Both must survive in order.
+        // Expected: doc > taskList{taskItem(a), taskItem(b)}
+        let md = "- [ ]\n  - [x] a\n  - [ ] b\n";
+        let adf = markdown_to_adf(md);
+        let serialized = serde_json::to_string_pretty(&adf).unwrap();
+
+        assert_valid_adf_structure(&adf);
+
+        let doc_children = adf["content"].as_array().expect("doc must have content");
+        assert_eq!(
+            doc_children.len(),
+            1,
+            "expected 1 top-level taskList but got {}: {}",
+            doc_children.len(),
+            serialized
+        );
+
+        let task_list = &doc_children[0];
+        assert_eq!(
+            task_list["type"].as_str(),
+            Some("taskList"),
+            "doc[0] must be taskList: {}",
+            serialized
+        );
+
+        let items = task_list["content"]
+            .as_array()
+            .expect("taskList must have content");
+        assert_eq!(
+            items.len(),
+            2,
+            "taskList must have 2 items (a, b) but got {}: {}",
+            items.len(),
+            serialized
+        );
+
+        // Item order: a first, b second
+        let text_a = items[0]["content"][0]["text"].as_str().unwrap_or("");
+        assert_eq!(text_a, "a", "first taskItem must be 'a': {}", serialized);
+        let text_b = items[1]["content"][0]["text"].as_str().unwrap_or("");
+        assert_eq!(text_b, "b", "second taskItem must be 'b': {}", serialized);
+    }
+
+    #[test]
+    fn test_order_preserving_hoist_real_task_then_empty_with_nested_task() {
+        // F-PASS4-C1: `- [x] real\n- [ ]\n  - [ ] nested`
+        // Source order: real (task), nested (from empty parent's sublist).
+        // Expected: real appears before nested in output.
+        //
+        // Shape: [taskList([real, nested])] if the nested sublist reclassifies
+        // to a task run that can be appended, OR
+        // [taskList([real]), taskList([nested])] if split across the empty item.
+        //
+        // The key invariant: 'real' must appear at or before 'nested' in the
+        // output — NOT after.
+        let md = "- [x] real\n- [ ]\n  - [ ] nested\n";
+        let adf = markdown_to_adf(md);
+        let serialized = serde_json::to_string_pretty(&adf).unwrap();
+
+        assert_valid_adf_structure(&adf);
+
+        let doc_children = adf["content"].as_array().expect("doc must have content");
+        assert!(
+            !doc_children.is_empty(),
+            "doc must have content: {}",
+            serialized
+        );
+
+        // Find 'real' and 'nested' positions in the flattened task item sequence.
+        // Walk all taskList nodes in order and collect taskItem text values.
+        fn collect_task_item_texts(node: &Value, out: &mut Vec<String>) {
+            let ty = node["type"].as_str().unwrap_or("");
+            if ty == "taskItem" {
+                let text = node["content"][0]["text"].as_str().unwrap_or("");
+                out.push(text.to_owned());
+            }
+            if let Some(children) = node["content"].as_array() {
+                for child in children {
+                    collect_task_item_texts(child, out);
+                }
+            }
+        }
+        let mut texts = Vec::new();
+        for child in doc_children {
+            collect_task_item_texts(child, &mut texts);
+        }
+        let real_pos = texts.iter().position(|t| t == "real");
+        let nested_pos = texts.iter().position(|t| t == "nested");
+        assert!(
+            real_pos.is_some(),
+            "'real' task item must appear in output: {}",
+            serialized
+        );
+        assert!(
+            nested_pos.is_some(),
+            "'nested' task item must appear in output: {}",
+            serialized
+        );
+        assert!(
+            real_pos.unwrap() < nested_pos.unwrap(),
+            "'real' (pos {}) must come before 'nested' (pos {}) in output: {}",
+            real_pos.unwrap(),
+            nested_pos.unwrap(),
+            serialized
+        );
+    }
+
+    // --- F-PASS4-I1: empty-list check in assert_valid_adf_structure ---------
+    // Verify the strengthened validator rejects empty list nodes directly
+    // (not just via the separate assert_no_empty_list_content path).
+
+    #[test]
+    fn test_validator_rejects_empty_bullet_list() {
+        // F-PASS4-I1: assert_valid_adf_structure must reject empty bulletList.
+        let bad = serde_json::json!({
+            "type": "doc",
+            "content": [{ "type": "bulletList", "content": [] }]
+        });
+        let result = std::panic::catch_unwind(|| assert_valid_adf_structure(&bad));
+        assert!(
+            result.is_err(),
+            "assert_valid_adf_structure must panic on empty bulletList"
+        );
+    }
+
+    #[test]
+    fn test_validator_rejects_empty_task_list() {
+        // F-PASS4-I1: assert_valid_adf_structure must reject empty taskList.
+        let bad = serde_json::json!({
+            "type": "doc",
+            "content": [{ "type": "taskList", "content": [] }]
+        });
+        let result = std::panic::catch_unwind(|| assert_valid_adf_structure(&bad));
+        assert!(
+            result.is_err(),
+            "assert_valid_adf_structure must panic on empty taskList"
+        );
+    }
+
+    // --- F-PASS4-I2: allowlist-based validator arms --------------------------
+    // The listItem, blockquote, and panel arms must use allowlists (not denylists)
+    // so illegal direct children are caught even if not previously anticipated.
+
+    #[test]
+    fn test_validator_rejects_heading_inside_list_item() {
+        // F-PASS4-I2: listItem may NOT contain heading as a direct child.
+        // (allowlist: paragraph, bulletList, orderedList, codeBlock, mediaSingle)
+        let bad = serde_json::json!({
+            "type": "doc",
+            "content": [{
+                "type": "bulletList",
+                "content": [{
+                    "type": "listItem",
+                    "content": [{ "type": "heading", "attrs": { "level": 1 }, "content": [{ "type": "text", "text": "h" }] }]
+                }]
+            }]
+        });
+        let result = std::panic::catch_unwind(|| assert_valid_adf_structure(&bad));
+        assert!(
+            result.is_err(),
+            "assert_valid_adf_structure must panic on heading inside listItem"
+        );
+    }
+
+    #[test]
+    fn test_validator_rejects_table_inside_blockquote() {
+        // F-PASS4-I2: blockquote may NOT contain table as a direct child.
+        // (allowlist: paragraph, heading, bulletList, orderedList, taskList,
+        //  codeBlock, rule, mediaSingle, blockquote — NOT table)
+        let bad = serde_json::json!({
+            "type": "doc",
+            "content": [{
+                "type": "blockquote",
+                "content": [{
+                    "type": "table",
+                    "content": []
+                }]
+            }]
+        });
+        let result = std::panic::catch_unwind(|| assert_valid_adf_structure(&bad));
+        assert!(
+            result.is_err(),
+            "assert_valid_adf_structure must panic on table inside blockquote"
+        );
+    }
+
+    #[test]
+    fn test_validator_rejects_blockquote_inside_panel() {
+        // F-PASS4-I2: panel may NOT contain blockquote as a direct child.
+        // (allowlist: paragraph, heading, bulletList, orderedList, taskList,
+        //  codeBlock, rule, mediaSingle — NOT blockquote, panel, table)
+        let bad = serde_json::json!({
+            "type": "doc",
+            "content": [{
+                "type": "panel",
+                "attrs": { "panelType": "info" },
+                "content": [{
+                    "type": "blockquote",
+                    "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "x" }] }]
+                }]
+            }]
+        });
+        let result = std::panic::catch_unwind(|| assert_valid_adf_structure(&bad));
+        assert!(
+            result.is_err(),
+            "assert_valid_adf_structure must panic on blockquote inside panel"
         );
     }
 
