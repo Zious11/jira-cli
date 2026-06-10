@@ -3868,6 +3868,189 @@ mod tests {
         );
     }
 
+    // --- F-471-H1: block nodes must not leak into taskItem.content -----------
+    // ANY non-inline node that pulldown-cmark emits inside a tight task item
+    // (codeBlock, blockquote, heading, table, rule, panel/alert) must be hoisted
+    // to a valid sibling level and MUST NOT appear inside taskItem.content.
+
+    /// Helper: recursively assert no node of the given `block_type` appears
+    /// anywhere inside any `taskItem.content` in the ADF value tree.
+    fn assert_no_block_in_task_item_content(v: &Value, block_type: &str) {
+        if v.get("type").and_then(Value::as_str) == Some("taskItem") {
+            if let Some(content) = v.get("content").and_then(|c| c.as_array()) {
+                for child in content {
+                    assert_ne!(
+                        child["type"],
+                        block_type,
+                        "block node type '{}' must NOT appear inside taskItem.content: {}",
+                        block_type,
+                        child
+                    );
+                    // Recurse into child in case of deep nesting
+                    assert_no_block_in_task_item_content(child, block_type);
+                }
+            }
+        }
+        // Recurse into all children/content arrays
+        if let Some(arr) = v.get("content").and_then(|c| c.as_array()) {
+            for child in arr {
+                assert_no_block_in_task_item_content(child, block_type);
+            }
+        }
+    }
+
+    #[test]
+    fn test_block_in_tight_task_item_blockquote_hoisted() {
+        // F-471-H1: `- [ ] x\n  > quote` — blockquote inside tight task item.
+        // The blockquote arrives as a child of the TaskItem in the event stream
+        // (tight list, item body is not paragraph-wrapped). It must NOT appear
+        // inside taskItem.content (inline-only); it must be hoisted.
+        //
+        // pulldown-cmark 0.13.3 event stream (verified):
+        //   Start(Item) → TaskListMarker(false) → Text("x") →
+        //   Start(BlockQuote(None)) → … → End(BlockQuote) → End(Item)
+        // So blockquote IS a child of the tight TaskItem node.
+        let md = "- [ ] x\n  > quote\n";
+        let adf = markdown_to_adf(md);
+        let serialized = serde_json::to_string(&adf).unwrap();
+
+        // The blockquote must not appear inside any taskItem.content
+        assert_no_block_in_task_item_content(&adf, "blockquote");
+
+        // The content must still be valid ADF (taskList present)
+        assert!(
+            contains_node_type(&adf, "taskList"),
+            "result must contain a taskList: {}",
+            serialized
+        );
+    }
+
+    #[test]
+    fn test_block_in_loose_task_item_blockquote_hoisted() {
+        // F-471-H1: `- [ ] x\n\n  > quote` — blockquote in a loose task item.
+        // In a loose list the blockquote appears in ListItem.children (not
+        // inside the Paragraph-converted-to-TaskItem), so the loose-ListItem
+        // path handles the hoist. The invariant is the same: no blockquote
+        // inside taskItem.content.
+        let md = "- [ ] x\n\n  > quote\n";
+        let adf = markdown_to_adf(md);
+
+        assert_no_block_in_task_item_content(&adf, "blockquote");
+        assert!(contains_node_type(&adf, "taskList"), "must have taskList");
+    }
+
+    #[test]
+    fn test_block_in_loose_task_item_code_block_hoisted() {
+        // F-471-H1: `- [ ] x\n\n  ```\n  code\n  ```\n` — codeBlock in loose task.
+        let md = "- [ ] x\n\n  ```\n  code\n  ```\n";
+        let adf = markdown_to_adf(md);
+
+        assert_no_block_in_task_item_content(&adf, "codeBlock");
+        assert!(contains_node_type(&adf, "taskList"), "must have taskList");
+    }
+
+    // --- F-471-M1: empty task body must not prune nested sub-list ----------
+    // `- [ ]\n  - [x] nested` (EC-13 with empty outer body) and
+    // `- [ ]\n  - plain inner` (EC-15 with empty outer body).
+    // Before the fix, is_empty_block_container pruned the empty taskItem
+    // BEFORE its hoists were extracted, silently dropping the nested list.
+
+    #[test]
+    fn test_empty_task_body_with_nested_task_list_survives() {
+        // F-471-M1 / EC-13: outer task body empty, nested taskList must survive.
+        // `- [ ]\n  - [x] nested`
+        let md = "- [ ]\n  - [x] nested\n";
+        let adf = markdown_to_adf(md);
+        let serialized = serde_json::to_string(&adf).unwrap();
+
+        // The nested task list must appear somewhere in the output
+        assert!(
+            contains_node_type(&adf, "taskList"),
+            "nested taskList must survive even when outer task body is empty: {}",
+            serialized
+        );
+        // The nested task item with "nested" text must be present
+        assert!(
+            contains_node_type(&adf, "taskItem"),
+            "nested taskItem must be present: {}",
+            serialized
+        );
+    }
+
+    #[test]
+    fn test_empty_task_body_with_nested_plain_list_survives() {
+        // F-471-M1 / EC-15: outer task body empty, nested plain bulletList must survive.
+        // `- [ ]\n  - plain inner`
+        let md = "- [ ]\n  - plain inner\n";
+        let adf = markdown_to_adf(md);
+        let serialized = serde_json::to_string(&adf).unwrap();
+
+        // A bulletList (from the nested plain list) must appear somewhere
+        assert!(
+            contains_node_type(&adf, "bulletList"),
+            "nested bulletList must survive even when outer task body is empty: {}",
+            serialized
+        );
+    }
+
+    // --- F-471-M2: no underscore-prefixed temp keys in ADF output -----------
+    // Guards the invariant that no JSON side-channel field (e.g. _pending_hoists,
+    // _post_hoists, or any future temp key) leaks into the serialized ADF.
+    // A leak would cause Jira HTTP 400 (additionalProperties: false).
+
+    /// Recursively assert that no JSON object key starts with `_` in the value.
+    fn assert_no_underscore_keys(v: &Value, path: &str) {
+        match v {
+            Value::Object(map) => {
+                for key in map.keys() {
+                    assert!(
+                        !key.starts_with('_'),
+                        "temp underscore key '{}' must not appear in ADF output (at {}: {})",
+                        key,
+                        path,
+                        serde_json::to_string(v).unwrap_or_default()
+                    );
+                }
+                for (k, child) in map {
+                    assert_no_underscore_keys(child, &format!("{path}.{k}"));
+                }
+            }
+            Value::Array(arr) => {
+                for (i, child) in arr.iter().enumerate() {
+                    assert_no_underscore_keys(child, &format!("{path}[{i}]"));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn test_no_temp_underscore_keys_in_adf_output() {
+        // F-471-M2: leak guard. Run a representative set of task-list inputs that
+        // exercise both the EC-13 nested-taskList path and the EC-15 hoist path,
+        // plus panel+task and blockquote+task, and assert zero underscore keys.
+        let inputs = [
+            // EC-13: nested task list sibling
+            "- [ ] outer\n  - [x] nested\n",
+            // EC-15: nested plain list inside task item
+            "- [ ] outer\n  - plain inner\n",
+            // F-471-M1: empty outer task body with nested task list
+            "- [ ]\n  - [x] nested\n",
+            // F-471-M1: empty outer task body with nested plain list
+            "- [ ]\n  - plain inner\n",
+            // Panel containing task list
+            "> [!NOTE]\n> - [ ] in panel\n",
+            // Blockquote containing task list (normalized to paragraphs)
+            "> - [ ] in blockquote\n",
+            // Mixed task+plain list (EC-3)
+            "- [ ] task\n- plain\n",
+        ];
+        for md in &inputs {
+            let adf = markdown_to_adf(md);
+            assert_no_underscore_keys(&adf, "root");
+        }
+    }
+
     // --- Footnotes (issue #472) -------------------------------------------
     // Before the fix, ENABLE_FOOTNOTES was off, so `[^1]` survived as literal
     // text and `[^1]: ...` became a stray paragraph — visibly broken output.
