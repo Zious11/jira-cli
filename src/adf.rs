@@ -850,7 +850,10 @@ impl AdfBuilder {
                     if hoisted.is_empty() {
                         EndResult::Single(node)
                     } else {
-                        EndResult::WithHoists { node, hoists: hoisted }
+                        EndResult::WithHoists {
+                            node,
+                            hoists: hoisted,
+                        }
                     }
                 } else {
                     let normalized = normalize_list_item_content(children);
@@ -3822,7 +3825,11 @@ mod tests {
             "re-parsed output must still be taskList: {list2}"
         );
         let items2 = list2["content"].as_array().expect("items");
-        assert_eq!(items2.len(), 2, "re-parsed taskList must have 2 items: {list2}");
+        assert_eq!(
+            items2.len(),
+            2,
+            "re-parsed taskList must have 2 items: {list2}"
+        );
         assert_eq!(
             items2[0]["attrs"]["state"], "TODO",
             "re-parsed pending item must be TODO: {:?}",
@@ -6984,7 +6991,6 @@ mod tests {
     // Before the fix, the loose branch called append_child(hoist) BEFORE returning
     // Single(taskItem), so BulletList children became [bulletList(inner), taskItem(outer)]
     // → reclassified as [bulletList(inner), taskList(outer)] — inverted order.
-
     #[test]
     fn test_loose_task_item_with_nested_sublist_preserves_order() {
         // F-1 regression: `- [ ] outer\n\n  - inner`
@@ -7007,7 +7013,9 @@ mod tests {
             "first doc child must be taskList (outer), got doc: {adf}"
         );
         // The taskList must contain the outer taskItem.
-        let task_items = doc_children[0]["content"].as_array().expect("taskList content");
+        let task_items = doc_children[0]["content"]
+            .as_array()
+            .expect("taskList content");
         assert_eq!(
             task_items[0]["type"], "taskItem",
             "taskList first child must be taskItem: {adf}"
@@ -7045,17 +7053,16 @@ mod tests {
         assert_valid_adf_structure(&adf);
 
         let doc_children = adf["content"].as_array().expect("doc must have content");
-        assert!(
-            !doc_children.is_empty(),
-            "doc must not be empty: {adf}"
-        );
+        assert!(!doc_children.is_empty(), "doc must not be empty: {adf}");
         // The first doc child must be a taskList (not bulletList or taskItem).
         assert_eq!(
             doc_children[0]["type"], "taskList",
             "first doc child must be taskList, got: {adf}"
         );
         // The taskList must lead with the outer taskItem (first child is taskItem per schema).
-        let task_content = doc_children[0]["content"].as_array().expect("taskList content");
+        let task_content = doc_children[0]["content"]
+            .as_array()
+            .expect("taskList content");
         assert_eq!(
             task_content[0]["type"], "taskItem",
             "taskList first child must be taskItem (outer), not nested list: {adf}"
