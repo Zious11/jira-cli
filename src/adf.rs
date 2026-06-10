@@ -38,13 +38,37 @@ pub fn markdown_to_adf(markdown: &str) -> Value {
         // nested `panel`, `table`, and `blockquote`, and `listItem` forbids
         // `panel`, so the mapping runs the same content-model normalization as
         // listItem (#470). See docs/specs/adf-panel-content-model.md (#483).
-        | Options::ENABLE_GFM;
+        | Options::ENABLE_GFM
+        // GFM task lists (`- [ ] …` / `- [x] …`) → ADF `taskList`/`taskItem`
+        // nodes with `state: "TODO"/"DONE"` and mandatory `localId` attrs.
+        // pulldown emits `Event::TaskListMarker(bool)` after Start(Tag::Item):
+        // in a TIGHT list it fires directly (item body is inline-only);
+        // in a LOOSE list it fires inside Start(Paragraph) (item body is
+        // paragraph-wrapped). The builder uses Approach B (post-hoc
+        // reclassification): the retroactive stack mutation converts the
+        // current Paragraph or ListItem to TaskItem when TaskListMarker fires;
+        // at End(Tag::List) the BulletList inspects children for taskItem
+        // candidates and reclassifies the whole container to `taskList`.
+        // `taskItem.content` is inline-only (NO paragraph wrapper) — EC-16
+        // inline-flattening strips paragraph wrappers for loose items.
+        // Normalization: `listItem > taskList` is unwrapped; `blockquote >
+        // taskList` is unwrapped to `blockquote > [paragraph, …]`. `panel >
+        // taskList` passes through (panel.content permits taskList).
+        // localIds assigned post-normalization via DFS pre-order walk (#471).
+        // See docs/specs/adf-task-list.md.
+        | Options::ENABLE_TASKLISTS;
     let parser = TextMergeStream::new(Parser::new_ext(markdown, options));
     let mut builder = AdfBuilder::new();
     for event in parser {
         builder.process(event);
     }
     let mut content = builder.finish();
+    // Post-normalization DFS pre-order walk: assign monotonically increasing
+    // 1-based counter strings ("1", "2", …) to all taskList.attrs.localId and
+    // taskItem.attrs.localId fields. The walk runs AFTER finish() so that pruned
+    // nodes (whose counter slots are reclaimed) do not participate. Container
+    // nodes are numbered before their children (pre-order). No uuid crate (#471).
+    assign_local_ids(&mut content);
     // pulldown-cmark 0.13 has no autolink extension (ENABLE_GFM only adds alert
     // blockquotes), so bare URLs arrive as plain text. Post-process the built
     // tree to apply `link` marks to explicit-scheme `http(s)://` runs — Jira's
@@ -297,6 +321,11 @@ enum NodeKind {
     BulletList,
     OrderedList { start: u64 },
     ListItem,
+    // ADF `taskItem` node. `checked` carries the `TaskListMarker(bool)` state:
+    // `true` → `"DONE"`, `false` → `"TODO"` (uppercase). `is_task` marks that
+    // this item received a `TaskListMarker` event; items without a marker are
+    // promoted to `taskItem { state: "TODO" }` in mixed lists (EC-3).
+    TaskItem { checked: bool },
     // Block-level HTML (`<div>x</div>` on its own line). ADF has no raw-HTML
     // node, so the verbatim source lines are preserved as literal text inside a
     // paragraph — symmetric with inline HTML — rather than silently dropped
@@ -347,6 +376,19 @@ impl AdfBuilder {
             // Note: pulldown-cmark only emits this event for references that have a
             // matching definition; an undefined `[^x]` stays literal text upstream.
             Event::FootnoteReference(label) => self.push_footnote_marker(label.as_ref()),
+            // GFM task-list marker: arrives as the FIRST child event INSIDE
+            // `Start(Tag::Item)` — i.e. AFTER `Start(Item)` has already been
+            // processed. The ordering is:
+            //   Start(Item) → TaskListMarker(bool) → Text(…) → End(Item)
+            // So at this point the stack top is a `ListItem` node (just pushed
+            // by `start(Tag::Item)`). Retroactively convert it to a `TaskItem`
+            // by mutating the kind on the stack.
+            // `true` → DONE, `false` → TODO. (#471, BC-7.2.010)
+            Event::TaskListMarker(checked) => {
+                if let Some(top) = self.stack.last_mut() {
+                    top.kind = NodeKind::TaskItem { checked };
+                }
+            }
             _ => {}
         }
     }
@@ -429,7 +471,15 @@ impl AdfBuilder {
                 "attrs": { "level": level },
                 "content": children,
             })),
-            NodeKind::BlockQuote => Some(json!({ "type": "blockquote", "content": children })),
+            NodeKind::BlockQuote => {
+                // ADF `blockquote.content` forbids `taskList`. pulldown-cmark 0.13.3
+                // DOES emit `blockquote > taskList` for `> - [ ] item` — the task-marker
+                // scan in firstpass.rs is container-agnostic. Normalize: unwrap taskList
+                // children → each taskItem's inline content becomes a paragraph inside the
+                // blockquote. (BC-7.2.010 obligation #2 / EC-6, unconditional.)
+                let normalized = normalize_blockquote_content(children);
+                Some(json!({ "type": "blockquote", "content": normalized }))
+            }
             NodeKind::Panel { panel_type } => {
                 // ADF `panel.content` forbids nested `panel`, `table`, and
                 // `blockquote`; normalize_panel_content transforms each into the
@@ -455,6 +505,12 @@ impl AdfBuilder {
                             "orderedList",
                             "codeBlock",
                             "rule",
+                            // REQUIRED (#471 AC-008): panel.content permits taskList as a
+                            // direct child (canonical @atlaskit/adf-schema full.json).
+                            // Without this entry, a surviving taskList is misclassified as
+                            // inline → wrapped into paragraph > taskList (INVALID ADF,
+                            // Jira 400). Source: .factory/research/issue-471-panel-tasklist-shape.md §D.
+                            "taskList",
                         ],
                     )
                 };
@@ -471,7 +527,137 @@ impl AdfBuilder {
                 }
                 Some(node)
             }
-            NodeKind::BulletList => Some(json!({ "type": "bulletList", "content": children })),
+            NodeKind::BulletList => {
+                // Approach B post-hoc reclassification (BC-7.2.010): inspect
+                // children for any `taskItem` nodes. If found, reclassify the
+                // whole container to `taskList` and promote any plain `listItem`
+                // children (from mixed lists, EC-3) to `taskItem { state: "TODO" }`.
+                let has_task_items = children
+                    .iter()
+                    .any(|c| c.get("type").and_then(Value::as_str) == Some("taskItem"));
+                if has_task_items {
+                    // Reclassify to taskList. Also extract pending hoist nodes from
+                    // taskItem entries (nested taskList/bulletList captured via
+                    // _pending_hoists) and place them correctly after their parent
+                    // taskItem in task_children (EC-13) or in the hoisted set (EC-15).
+                    //
+                    // taskList.content permits only taskItem and nested taskList nodes.
+                    // Any bulletList/orderedList must be hoisted to the parent.
+                    let mut task_children: Vec<Value> = Vec::new();
+                    let mut hoisted: Vec<Value> = Vec::new();
+                    for mut child in children {
+                        let ty = child
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_owned();
+                        match ty.as_str() {
+                            "taskItem" => {
+                                // Extract pending hoist nodes (nested sublists) that
+                                // were tagged by TaskItem finalization. These must be
+                                // ordered AFTER the taskItem in the final output.
+                                let pending: Vec<Value> = child
+                                    .get("_pending_hoists")
+                                    .and_then(|v| v.as_array())
+                                    .cloned()
+                                    .unwrap_or_default();
+                                // Remove the temporary field before storing the node.
+                                child.as_object_mut().map(|m| m.remove("_pending_hoists"));
+                                task_children.push(child);
+                                // Now handle each pending hoist in order:
+                                // - nested taskList → sibling in task_children (EC-13)
+                                // - nested bulletList/orderedList → hoisted (EC-15)
+                                for hoist in pending {
+                                    let hty =
+                                        hoist.get("type").and_then(Value::as_str).unwrap_or("");
+                                    match hty {
+                                        "taskList" => task_children.push(hoist),
+                                        _ => hoisted.push(hoist),
+                                    }
+                                }
+                            }
+                            "taskList" => task_children.push(child),
+                            "listItem" => {
+                                // Plain item in a mixed list — promote to taskItem TODO.
+                                // EC-3: its content is already inline-only (the listItem
+                                // finalization already ran wrap_inlines_as_blocks; we need
+                                // to extract the inline content from any paragraph wrapper).
+                                let inline_content = extract_inline_from_list_item_content(&child);
+                                let trimmed = trim_leading_trailing_hardbreaks(inline_content);
+                                task_children.push(json!({
+                                    "type": "taskItem",
+                                    "attrs": { "localId": "", "state": "TODO" },
+                                    "content": trimmed,
+                                }));
+                            }
+                            // bulletList/orderedList as top-level siblings when the
+                            // enclosing list is reclassified — hoist to parent.
+                            _ => hoisted.push(child),
+                        }
+                    }
+                    // Build the taskList node first, THEN hoist the non-task children
+                    // to the parent level AFTER it. This ordering ensures the taskList
+                    // appears before hoisted bulletLists in the parent container output
+                    // (EC-15: `[taskList{outer}, bulletList{inner}]`).
+                    // `self.append_child` is called in BulletList's return path via
+                    // the hoist mechanism below; the taskList node itself is returned
+                    // as `Some(...)` and appended by the caller's append_child at
+                    // line ~863, AFTER any children the caller appended during this
+                    // arm's execution. So we must NOT hoist here — instead, collect
+                    // hoists and let the built taskList be returned first.
+                    // NOTE: because `self.append_child` appends BEFORE the returned
+                    // node (which is appended at ~863), we must delay the hoist.
+                    // Use the same `_pending_hoists` trick on the taskList node itself
+                    // so the pruning gate at ~851 can pass it through, and post-process
+                    // to extract and append hoisted nodes immediately after append.
+                    // SIMPLER: append_child inserts into the STACK TOP's children.
+                    // At this point in `end()`, the outer BulletList has been popped
+                    // (it IS the `partial` we're processing). The stack top is the
+                    // PARENT of the BulletList. So `self.append_child(hoisted_node)`
+                    // will insert into the parent, but BEFORE the taskList returned
+                    // from this arm (which gets appended at ~863). To get the correct
+                    // order [taskList, bulletList] we must NOT call append_child here.
+                    // Instead, store hoists in the returned node and handle post-emit.
+                    //
+                    // The cleanest solution: encode the pending hoists in the returned
+                    // taskList node, then strip and append them in the prune+append
+                    // block (~851). This requires modifying that block. Instead, use
+                    // a field `_post_hoists` on the taskList and handle it there.
+                    //
+                    // For now: hoist BEFORE building the taskList so the taskList
+                    // gets appended after them — but that's wrong order.
+                    // ACTUAL CORRECT order: the returned taskList (from Some()) is
+                    // appended at ~863. Any append_child calls inside this arm run
+                    // FIRST (before ~863). So: if we call append_child for hoisted
+                    // nodes HERE, they end up BEFORE the taskList in the parent.
+                    // To get taskList FIRST: DON'T call append_child here. Return
+                    // a node that encodes hoists and process them after appending.
+                    if task_children.is_empty() {
+                        // All items were hoisted — nothing left for the task list.
+                        for h in hoisted {
+                            self.append_child(h);
+                        }
+                        None
+                    } else if hoisted.is_empty() {
+                        Some(json!({
+                            "type": "taskList",
+                            "attrs": { "localId": "" },
+                            "content": task_children,
+                        }))
+                    } else {
+                        // Encode hoists in the taskList node; the append block will
+                        // strip and append them after the taskList itself.
+                        Some(json!({
+                            "type": "taskList",
+                            "attrs": { "localId": "" },
+                            "content": task_children,
+                            "_post_hoists": hoisted,
+                        }))
+                    }
+                } else {
+                    Some(json!({ "type": "bulletList", "content": children }))
+                }
+            }
             NodeKind::OrderedList { start } => {
                 let mut node = json!({ "type": "orderedList", "content": children });
                 if start != 1 {
@@ -490,18 +676,138 @@ impl AdfBuilder {
                 // wrapping loose inline runs — shrinking the allowlist alone would
                 // instead wrap them into a paragraph, producing the equally-invalid
                 // `paragraph > blockquote` shape.
-                let normalized = normalize_list_item_content(children);
-                let wrapped = wrap_inlines_as_blocks(
-                    normalized,
-                    &[
-                        "paragraph",
-                        "bulletList",
-                        "orderedList",
-                        "codeBlock",
-                        "mediaSingle",
-                    ],
-                );
-                Some(json!({ "type": "listItem", "content": wrapped }))
+                //
+                // Loose task-list items (EC-16 loose case): in a loose list
+                // (`- [ ] line1\n\n  line2`), pulldown-cmark wraps the task marker
+                // AND the first paragraph body in `Tag::Paragraph`. The retroactive
+                // stack mutation converts that `Paragraph` to `TaskItem`, so the
+                // first child of this `ListItem` is already a `taskItem` JSON node.
+                // Remaining paragraphs are plain `paragraph` children that need
+                // EC-16 inline-flattening. Detect this case and produce a merged
+                // `taskItem` directly (bypassing the listItem wrapping path).
+                let is_loose_task = children
+                    .first()
+                    .and_then(|c| c.get("type"))
+                    .and_then(|t| t.as_str())
+                    == Some("taskItem");
+                if is_loose_task {
+                    // Extract state from the first (task) child.
+                    let state = children[0]["attrs"]["state"]
+                        .as_str()
+                        .unwrap_or("TODO")
+                        .to_owned();
+                    // Collect all inline content: unwrap the first taskItem's
+                    // content, then unwrap subsequent paragraphs, separating with
+                    // hardBreak nodes. Block children (taskList, bulletList, …)
+                    // are hoisted to the parent (same EC-15 hoist path as below).
+                    let mut inline_parts: Vec<Vec<Value>> = Vec::new();
+                    let mut hoisted: Vec<Value> = Vec::new();
+                    for child in children {
+                        let ty = child.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                        match ty {
+                            "taskItem" => {
+                                let part = child
+                                    .get("content")
+                                    .and_then(|c| c.as_array())
+                                    .cloned()
+                                    .unwrap_or_default();
+                                if !part.is_empty() {
+                                    inline_parts.push(part);
+                                }
+                            }
+                            "paragraph" => {
+                                let part = child
+                                    .get("content")
+                                    .and_then(|c| c.as_array())
+                                    .cloned()
+                                    .unwrap_or_default();
+                                if !part.is_empty() {
+                                    inline_parts.push(part);
+                                }
+                            }
+                            _ => hoisted.push(child),
+                        }
+                    }
+                    let mut merged: Vec<Value> = Vec::new();
+                    let mut first_part = true;
+                    for part in inline_parts {
+                        if !first_part {
+                            merged.push(json!({ "type": "hardBreak" }));
+                        }
+                        merged.extend(part);
+                        first_part = false;
+                    }
+                    let merged = trim_leading_trailing_hardbreaks(merged);
+                    // Hoist block siblings to the parent container.
+                    for hoist_node in hoisted {
+                        self.append_child(hoist_node);
+                    }
+                    Some(json!({
+                        "type": "taskItem",
+                        "attrs": { "localId": "", "state": state },
+                        "content": merged,
+                    }))
+                } else {
+                    let normalized = normalize_list_item_content(children);
+                    let wrapped = wrap_inlines_as_blocks(
+                        normalized,
+                        &[
+                            "paragraph",
+                            "bulletList",
+                            "orderedList",
+                            "codeBlock",
+                            "mediaSingle",
+                        ],
+                    );
+                    Some(json!({ "type": "listItem", "content": wrapped }))
+                }
+            }
+            NodeKind::TaskItem { checked } => {
+                // EC-16 inline-flattening: taskItem.content is inline-only.
+                // pulldown-cmark wraps item bodies in `Tag::Paragraph`, producing
+                // `paragraph` children. Strip paragraph wrappers; concatenate
+                // inline content from multiple paragraphs with a `hardBreak`
+                // separator between them. Then apply the hardBreak-trim rule:
+                // remove any leading or trailing hardBreak nodes, and any
+                // hardBreak adjacent to a pruned-empty paragraph (which contributes
+                // zero inline nodes). This MUST run before the prune gate below.
+                //
+                // Block children (nested taskList / bulletList / orderedList) from
+                // nested sublists arrive here because pulldown-cmark emits nested
+                // lists inside the item before End(Item). taskItem.content is
+                // inline-only, so block children are separated from inline/paragraph
+                // content. The inline/paragraph content goes through EC-16 flattening.
+                // The block children are KEPT in the returned node's content temporarily
+                // (using a special wrapper key "pending_hoists") so the parent
+                // BulletList reclassification arm can extract and order them correctly
+                // (taskItem BEFORE its nested taskList/bulletList siblings).
+                // The BulletList reclassification arm handles the actual hoist.
+                let mut inline_children: Vec<Value> = Vec::new();
+                let mut block_siblings: Vec<Value> = Vec::new();
+                for child in children {
+                    let ty = child.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                    match ty {
+                        "taskList" | "bulletList" | "orderedList" => {
+                            block_siblings.push(child);
+                        }
+                        _ => inline_children.push(child),
+                    }
+                }
+                let inline_content = flatten_task_item_to_inline(inline_children);
+                let trimmed = trim_leading_trailing_hardbreaks(inline_content);
+                let state = if checked { "DONE" } else { "TODO" };
+                let mut node = json!({
+                    "type": "taskItem",
+                    "attrs": { "localId": "", "state": state },
+                    "content": trimmed,
+                });
+                // Attach pending block siblings as a temporary field so BulletList
+                // reclassification can extract them in the correct order.
+                // This field is stripped during reclassification.
+                if !block_siblings.is_empty() {
+                    node["_pending_hoists"] = json!(block_siblings);
+                }
+                Some(node)
             }
             NodeKind::Table => Some(json!({ "type": "table", "content": children })),
             NodeKind::TableRow => Some(json!({ "type": "tableRow", "content": children })),
@@ -594,7 +900,7 @@ impl AdfBuilder {
             }
             NodeKind::Sink => None,
         };
-        if let Some(node) = node {
+        if let Some(mut node) = node {
             // Drop block containers left with empty `content` (invalid ADF that
             // Jira rejects with HTTP 400). Two ways this arises:
             //   * pulldown-cmark hoists a footnote definition out of an enclosing
@@ -606,7 +912,28 @@ impl AdfBuilder {
             // blockquote and a bare heading; the list path keeps a valid empty
             // placeholder paragraph and is never pruned — see is_empty_block_container.)
             if !is_empty_block_container(&node) {
+                // Extract and strip any `_post_hoists` from the node before
+                // appending. `_post_hoists` is set by the BulletList reclassification
+                // arm when it needs to hoist block siblings (e.g. a plain bulletList
+                // nested inside a task item, EC-15) to the parent container AFTER the
+                // taskList itself. We append the taskList first, then the hoists, to
+                // achieve [taskList, bulletList] ordering at the parent level.
+                let post_hoists: Vec<Value> = node
+                    .get("_post_hoists")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                if !post_hoists.is_empty() {
+                    // Strip the temporary field from the node before appending.
+                    if let Some(obj) = node.as_object_mut() {
+                        obj.remove("_post_hoists");
+                    }
+                }
                 self.append_child(node);
+                // Append hoisted siblings AFTER the taskList.
+                for hoist in post_hoists {
+                    self.append_child(hoist);
+                }
             }
         }
     }
@@ -742,7 +1069,7 @@ fn dedup_marks_by_type(marks: &[Value]) -> Vec<Value> {
 /// line) carries no content and the ADF schema treats heading content as
 /// required.
 fn is_empty_block_container(node: &Value) -> bool {
-    const REQUIRES_CONTENT: [&str; 8] = [
+    const REQUIRES_CONTENT: [&str; 10] = [
         "blockquote",
         "panel",
         "heading",
@@ -751,16 +1078,52 @@ fn is_empty_block_container(node: &Value) -> bool {
         "orderedList",
         "table",
         "tableRow",
+        // taskList: minItems:1 (schema-required); empty taskList is invalid ADF.
+        "taskList",
+        // taskItem: see structurally-empty branch below for the extended check.
+        "taskItem",
     ];
-    let is_required = node
-        .get("type")
-        .and_then(Value::as_str)
-        .is_some_and(|t| REQUIRES_CONTENT.contains(&t));
-    let is_empty = node
-        .get("content")
-        .and_then(Value::as_array)
-        .is_some_and(|c| c.is_empty());
-    is_required && is_empty
+    let node_type = node.get("type").and_then(Value::as_str).unwrap_or("");
+    if !REQUIRES_CONTENT.contains(&node_type) {
+        return false;
+    }
+    let content = node.get("content").and_then(Value::as_array);
+    let Some(c) = content else {
+        return false;
+    };
+    // Standard structural-only check for all container types EXCEPT taskItem.
+    // The 8 existing types retain `c.is_empty()` semantics unchanged — this
+    // MUST NOT change (test_is_empty_block_container_membership at ~line 2753).
+    if node_type != "taskItem" {
+        return c.is_empty();
+    }
+    // taskItem extended emptiness branch (AC-009 / EC-8 deliberate product choice):
+    // treat a taskItem as structurally empty when its content array is empty OR
+    // contains ONLY whitespace-only text nodes and/or bare hardBreak nodes.
+    // A lone hardBreak is schema-valid ADF but carries no semantic content as a
+    // task-item body; pruning it is the correct UX behavior (BC-7.2.010 EC-8).
+    // The structural membership alone is INSUFFICIENT for hardBreak-only items —
+    // `content: [hardBreak]` has a non-empty array and would NOT be pruned without
+    // this branch. This branch is SCOPED TO taskItem ONLY (see above comment).
+    //
+    // Backslash-escape artifact: pulldown-cmark 0.13.3 does NOT produce a `HardBreak`
+    // event for `- [ ] \\\n` in a tight list; instead it emits `Text(Borrowed("\\"))`.
+    // A lone backslash is the failed-escape residue that carries no semantic task
+    // content (same deliberate product choice as the hardBreak-only prune). Extend the
+    // "empty text" check to also treat text nodes containing only ASCII backslashes
+    // (possibly with surrounding whitespace) as structurally empty.
+    c.is_empty()
+        || c.iter().all(|n| {
+            let ty = n.get("type").and_then(Value::as_str).unwrap_or("");
+            match ty {
+                "hardBreak" => true,
+                "text" => n
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .is_some_and(|t| t.trim_matches('\\').trim().is_empty()),
+                _ => false,
+            }
+        })
 }
 
 /// Group a mixed list of inline and block nodes into pure block-level output.
@@ -838,6 +1201,41 @@ fn normalize_list_item_content(children: Vec<Value>) -> Vec<Value> {
                     .unwrap_or_default();
                 out.extend(normalize_list_item_content(inner));
             }
+            Some("taskList") => {
+                // `listItem.content` does NOT permit `taskList` (BC-7.2.010
+                // obligation #1 / EC-5). Unwrap: each taskItem's inline content
+                // is wrapped in a `paragraph` to form a `listItem`, and all
+                // resulting `listItem` nodes are collected into a new `bulletList`.
+                // Valid ADF shape: listItem > [bulletList > [listItem > paragraph(…)]].
+                // Directly placing listItem nodes inside the outer listItem WITHOUT
+                // the intervening bulletList would be INVALID ADF.
+                // Checkbox state (TODO/DONE) is dropped — documented lossiness EC-10(b).
+                let task_items = child
+                    .get("content")
+                    .and_then(|c| c.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                let mut converted_items: Vec<Value> = Vec::new();
+                for ti in task_items {
+                    // Recursively normalize in case it was a nested taskList.
+                    let inner_items = if ti["type"] == "taskList" {
+                        normalize_list_item_content(vec![ti])
+                    } else {
+                        // taskItem — extract its inline content and wrap in paragraph.
+                        let inline_content = ti
+                            .get("content")
+                            .and_then(|c| c.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+                        let para = json!({ "type": "paragraph", "content": inline_content });
+                        vec![json!({ "type": "listItem", "content": [para] })]
+                    };
+                    converted_items.extend(inner_items);
+                }
+                if !converted_items.is_empty() {
+                    out.push(json!({ "type": "bulletList", "content": converted_items }));
+                }
+            }
             Some("heading") => {
                 let content = child.get("content").cloned().unwrap_or_else(|| json!([]));
                 out.push(json!({ "type": "paragraph", "content": content }));
@@ -845,6 +1243,60 @@ fn normalize_list_item_content(children: Vec<Value>) -> Vec<Value> {
             Some("table") => out.extend(flatten_table_to_paragraphs(&child)),
             Some("rule") => { /* dropped — no content, invalid inside listItem */ }
             _ => out.push(child),
+        }
+    }
+    out
+}
+
+/// Normalize the children of a `blockquote` to the ADF-permitted content model.
+///
+/// ADF `blockquote.content` forbids `taskList`. pulldown-cmark 0.13.3 DOES emit
+/// `blockquote > taskList` for `> - [ ] item` — the task-marker scan in
+/// `firstpass.rs:128–160` is container-agnostic (the `>` prefix is stripped on a
+/// prior loop iteration; the task scan then runs identically to the top-level case).
+/// This normalization is therefore **required and unconditional** (#471, BC-7.2.010
+/// obligation #2 / EC-6).
+///
+/// `taskList` → unwrapped: each `taskItem`'s inline content is promoted to a
+/// `paragraph` inside the blockquote. Checkbox state is dropped — lossy (EC-10(c)).
+///
+/// All other node types pass through unchanged. Recursive blockquotes are NOT
+/// re-normalized here — the outer `end(BlockQuote)` arm calls this function and
+/// nesting is handled by the event-stream ordering (inner blockquotes finalize
+/// before the outer one).
+fn normalize_blockquote_content(children: Vec<Value>) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    for child in children {
+        if child.get("type").and_then(Value::as_str) == Some("taskList") {
+            // Unwrap: promote each taskItem's inline content to a paragraph.
+            let task_items = child
+                .get("content")
+                .and_then(|c| c.as_array())
+                .cloned()
+                .unwrap_or_default();
+            for ti in task_items {
+                match ti.get("type").and_then(Value::as_str) {
+                    Some("taskItem") => {
+                        let inline_content = ti
+                            .get("content")
+                            .and_then(|c| c.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+                        out.push(json!({ "type": "paragraph", "content": inline_content }));
+                    }
+                    Some("taskList") => {
+                        // Nested taskList inside the blockquote-level taskList:
+                        // recurse to unwrap its items too.
+                        out.extend(normalize_blockquote_content(vec![ti]));
+                    }
+                    _ => {
+                        // Unexpected node inside taskList — pass through defensively.
+                        out.push(ti);
+                    }
+                }
+            }
+        } else {
+            out.push(child);
         }
     }
     out
@@ -960,6 +1412,143 @@ fn flatten_table_to_paragraphs(table: &Value) -> Vec<Value> {
     paragraphs
 }
 
+/// EC-16 inline-flattening for `taskItem`: strip paragraph wrappers from the
+/// children of a `taskItem` (since `taskItem.content` is inline-only), concatenating
+/// paragraphs with a `hardBreak` separator between them.
+///
+/// pulldown-cmark wraps item bodies in `Tag::Paragraph`, so a task item can have
+/// multiple paragraph children if there are blank lines between them. We flatten:
+///   [paragraph([text("line1")]), paragraph([text("line2")])]
+///   → [text("line1"), hardBreak, text("line2")]
+///
+/// Non-paragraph children (e.g. block nodes that slipped through) are passed through
+/// as-is. The caller then applies `trim_leading_trailing_hardbreaks` to remove any
+/// leading/trailing hardBreak nodes introduced by this process.
+fn flatten_task_item_to_inline(children: Vec<Value>) -> Vec<Value> {
+    let mut result: Vec<Value> = Vec::new();
+    let mut first = true;
+    for child in children {
+        if child.get("type").and_then(Value::as_str) == Some("paragraph") {
+            // Extract inline nodes from the paragraph.
+            let inline = child
+                .get("content")
+                .and_then(|c| c.as_array())
+                .cloned()
+                .unwrap_or_default();
+            // Only inject separator if the previous paragraph contributed content.
+            // If `inline` is empty, we skip the separator (prevents double hardBreaks
+            // adjacent to empty paragraphs; the trim pass handles boundary cases).
+            if !inline.is_empty() {
+                if !first {
+                    result.push(json!({ "type": "hardBreak" }));
+                }
+                result.extend(inline);
+                first = false;
+            }
+            // Empty paragraph: no separator emitted (trim pass handles trim near empties).
+        } else {
+            // Non-paragraph block (e.g. a nested list that wasn't already hoisted) —
+            // treat as a hoistable block: pass through. The BulletList reclassification
+            // arm will hoist it to the grandparent if needed (EC-15).
+            // For the inline-flatten pass we just pass it through; the prune gate will
+            // catch invalid content.
+            if !first {
+                result.push(json!({ "type": "hardBreak" }));
+            }
+            result.push(child);
+            first = false;
+        }
+    }
+    result
+}
+
+/// Remove any leading and trailing `hardBreak` nodes from an inline-content array.
+/// Also removes a hardBreak that was injected by `flatten_task_item_to_inline` but
+/// is adjacent to an empty paragraph (those produce no inline nodes, so a separator
+/// would be injected before the first real content of the next paragraph — trim it).
+///
+/// This implements the "general hardBreak trim rule" from BC-7.2.010 EC-16:
+/// `taskItem.content` must NEVER begin or end with a `hardBreak`.
+fn trim_leading_trailing_hardbreaks(mut content: Vec<Value>) -> Vec<Value> {
+    // Trim leading hardBreaks
+    while content
+        .first()
+        .map(|n| n.get("type").and_then(Value::as_str))
+        == Some(Some("hardBreak"))
+    {
+        content.remove(0);
+    }
+    // Trim trailing hardBreaks
+    while content
+        .last()
+        .map(|n| n.get("type").and_then(Value::as_str))
+        == Some(Some("hardBreak"))
+    {
+        content.pop();
+    }
+    content
+}
+
+/// Extract inline content from a `listItem` node for EC-3 mixed-list promotion.
+/// A `listItem` produced by `end(NodeKind::ListItem)` has its content wrapped in
+/// `paragraph` nodes (via `wrap_inlines_as_blocks`). For promotion to `taskItem`
+/// we need the raw inline content, not the paragraph wrappers.
+fn extract_inline_from_list_item_content(list_item: &Value) -> Vec<Value> {
+    let mut result: Vec<Value> = Vec::new();
+    let Some(blocks) = list_item.get("content").and_then(|c| c.as_array()) else {
+        return result;
+    };
+    for block in blocks {
+        if block.get("type").and_then(Value::as_str) == Some("paragraph") {
+            if let Some(inline) = block.get("content").and_then(|c| c.as_array()) {
+                result.extend(inline.iter().cloned());
+            }
+        } else {
+            // Non-paragraph block inside a listItem (e.g. nested bulletList):
+            // can't fit in taskItem.content (inline-only). Skip it — it will be
+            // hoisted by the caller's hoist path.
+        }
+    }
+    result
+}
+
+/// Post-normalization, post-pruning DFS pre-order walk: assign monotonically
+/// increasing 1-based counter strings (`"1"`, `"2"`, …) to all `taskList` and
+/// `taskItem` nodes' `attrs.localId` fields. Container nodes are numbered before
+/// their children (pre-order). Pruned nodes do not participate and do not consume
+/// counter slots. No `uuid` crate dependency (BC-7.2.010 §Required attributes).
+///
+/// The counter is document-wide and unique across all taskList/taskItem nodes.
+/// Called from `markdown_to_adf` after `finish()` and `autolink_bare_urls`.
+fn assign_local_ids(nodes: &mut [Value]) {
+    let mut counter = 0u64;
+    assign_local_ids_walk(nodes, &mut counter);
+}
+
+fn assign_local_ids_walk(nodes: &mut [Value], counter: &mut u64) {
+    for node in nodes.iter_mut() {
+        let node_type = node
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        if node_type == "taskList" || node_type == "taskItem" {
+            *counter += 1;
+            if let Some(obj) = node.as_object_mut() {
+                let attrs = obj.entry("attrs").or_insert_with(|| json!({}));
+                if let Some(a) = attrs.as_object_mut() {
+                    a.insert("localId".to_string(), json!(counter.to_string()));
+                }
+            }
+        }
+        // Recurse into content regardless of node type (task lists can be
+        // nested inside panels, blockquotes, etc.; items at any depth need IDs).
+        if let Some(content) = node.get_mut("content").and_then(Value::as_array_mut) {
+            assign_local_ids_walk(content, counter);
+        }
+    }
+}
+
 fn heading_level_to_u8(level: HeadingLevel) -> u8 {
     match level {
         HeadingLevel::H1 => 1,
@@ -985,6 +1574,9 @@ struct AdfRenderer {
 enum ListFrame {
     Bullet,
     Ordered { next_index: u64 },
+    // GFM task list frame. Used for indentation tracking in nested task lists.
+    // `adf_to_text` renders taskItem with `- [x] ` or `- [ ] ` prefix.
+    Task,
 }
 
 impl AdfRenderer {
@@ -1026,6 +1618,40 @@ impl AdfRenderer {
                 }
                 self.output.push(' ');
                 self.render_children(node);
+                self.output.push('\n');
+            }
+            "taskList" => {
+                // Recurse into task list children using ListFrame::Task for
+                // indentation tracking (2 spaces per nesting level, same as
+                // bulletList / orderedList). (BC-7.2.010 reverse path; AC-010/012)
+                self.list_stack.push(ListFrame::Task);
+                self.render_children(node);
+                self.list_stack.pop();
+            }
+            "taskItem" => {
+                // Render a task item with `- [x] ` (DONE) or `- [ ] ` (TODO/other).
+                // Indentation: 2 spaces × (nesting depth - 1), matching the listItem arm.
+                // The state comparison is case-insensitive (EC-12: external ADF may use
+                // lowercase "done"). Inline content follows directly — no paragraph wrapper.
+                let indent = "  ".repeat(self.list_stack.len().saturating_sub(1));
+                self.output.push_str(&indent);
+                let state = node
+                    .get("attrs")
+                    .and_then(|a| a.get("state"))
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("");
+                let prefix = if state.eq_ignore_ascii_case("DONE") {
+                    "- [x] "
+                } else {
+                    "- [ ] "
+                };
+                self.output.push_str(prefix);
+                // Render inline content directly (no paragraph wrapper in taskItem).
+                if let Some(content) = node.get("content").and_then(|c| c.as_array()) {
+                    for child in content {
+                        self.render_node(child);
+                    }
+                }
                 self.output.push('\n');
             }
             "bulletList" => {
@@ -2475,13 +3101,13 @@ mod tests {
         // which pinned literal-text behavior when ENABLE_TASKLISTS was off.
         let adf = markdown_to_adf("- [ ] unchecked item");
         let list = first_block(&adf);
-        assert_eq!(
-            list["type"], "taskList",
-            "expected taskList, got: {list}"
-        );
+        assert_eq!(list["type"], "taskList", "expected taskList, got: {list}");
         // localId must be a non-empty string
         let local_id = list["attrs"]["localId"].as_str().unwrap_or("");
-        assert!(!local_id.is_empty(), "taskList.attrs.localId must be non-empty: {list}");
+        assert!(
+            !local_id.is_empty(),
+            "taskList.attrs.localId must be non-empty: {list}"
+        );
         // No bulletList should appear
         assert!(
             !adf.to_string().contains("\"bulletList\""),
@@ -2555,7 +3181,9 @@ mod tests {
             list["type"], "taskList",
             "mixed list must be promoted to taskList: {list}"
         );
-        let items = list["content"].as_array().expect("taskList must have content");
+        let items = list["content"]
+            .as_array()
+            .expect("taskList must have content");
         // Both items must be taskItem (no listItem)
         for (i, item) in items.iter().enumerate() {
             assert_eq!(
@@ -2588,7 +3216,9 @@ mod tests {
         let item = &list["content"][0];
         assert_eq!(item["type"], "taskItem", "got: {item}");
         // Content should NOT be wrapped in a paragraph node
-        let content = item["content"].as_array().expect("taskItem must have content");
+        let content = item["content"]
+            .as_array()
+            .expect("taskItem must have content");
         for child in content {
             assert_ne!(
                 child["type"], "paragraph",
@@ -2597,9 +3227,15 @@ mod tests {
         }
         // Strong mark must appear
         let adf_str = adf.to_string();
-        assert!(adf_str.contains("\"strong\""), "strong mark must be preserved: {adf}");
+        assert!(
+            adf_str.contains("\"strong\""),
+            "strong mark must be preserved: {adf}"
+        );
         // Em mark must appear
-        assert!(adf_str.contains("\"em\""), "em mark must be preserved: {adf}");
+        assert!(
+            adf_str.contains("\"em\""),
+            "em mark must be preserved: {adf}"
+        );
     }
 
     // --- AC-006 : task list inside listItem normalized -------------------------
@@ -2618,7 +3254,8 @@ mod tests {
         // from "no taskList because the feature is off" vacuousness.
         let adf_anchor = markdown_to_adf("- [ ] top level");
         assert_eq!(
-            first_block(&adf_anchor)["type"], "taskList",
+            first_block(&adf_anchor)["type"],
+            "taskList",
             "top-level task list must produce taskList (ENABLE_TASKLISTS required): {adf_anchor}"
         );
         let adf = markdown_to_adf("- outer\n  - [ ] inner task");
@@ -2639,7 +3276,9 @@ mod tests {
             .cloned()
             .expect("outer listItem must contain a bulletList (normalized from taskList)");
         // Inner list items must be listItem (NOT taskItem)
-        let inner_items = inner_list["content"].as_array().expect("inner list must have content");
+        let inner_items = inner_list["content"]
+            .as_array()
+            .expect("inner list must have content");
         for (i, inner_item) in inner_items.iter().enumerate() {
             assert_eq!(
                 inner_item["type"], "listItem",
@@ -2647,7 +3286,10 @@ mod tests {
             );
             // Must NOT carry a state attribute
             assert!(
-                inner_item.get("attrs").and_then(|a| a.get("state")).is_none(),
+                inner_item
+                    .get("attrs")
+                    .and_then(|a| a.get("state"))
+                    .is_none(),
                 "inner listItem must not have state attr: {inner_item}"
             );
         }
@@ -2677,7 +3319,8 @@ mod tests {
         // ("no taskList in blockquote because the feature is off").
         let adf_anchor = markdown_to_adf("- [ ] top level");
         assert_eq!(
-            first_block(&adf_anchor)["type"], "taskList",
+            first_block(&adf_anchor)["type"],
+            "taskList",
             "top-level task list must produce taskList (ENABLE_TASKLISTS required): {adf_anchor}"
         );
         let adf = markdown_to_adf("> - [ ] item");
@@ -2687,7 +3330,9 @@ mod tests {
             "blockquote must be preserved: {block}"
         );
         // All children of blockquote must be paragraphs (not taskList)
-        let children = block["content"].as_array().expect("blockquote must have content");
+        let children = block["content"]
+            .as_array()
+            .expect("blockquote must have content");
         for (i, child) in children.iter().enumerate() {
             assert_ne!(
                 child["type"], "taskList",
@@ -2726,7 +3371,9 @@ mod tests {
             "[!NOTE] must map to panelType info: {panel}"
         );
         // Panel content must contain a taskList (not paragraph > taskList)
-        let panel_children = panel["content"].as_array().expect("panel must have content");
+        let panel_children = panel["content"]
+            .as_array()
+            .expect("panel must have content");
         // The FIRST child of the panel must be a taskList (not a paragraph)
         let first_child = &panel_children[0];
         assert_eq!(
@@ -2758,7 +3405,8 @@ mod tests {
         // then verify the empty item is pruned.
         let adf_nonempty = markdown_to_adf("- [ ] has text");
         assert_eq!(
-            first_block(&adf_nonempty)["type"], "taskList",
+            first_block(&adf_nonempty)["type"],
+            "taskList",
             "non-empty task item must produce taskList (requires ENABLE_TASKLISTS): {adf_nonempty}"
         );
         // Now the actual pruning assertion:
@@ -2777,7 +3425,8 @@ mod tests {
         // Anchor: a non-empty task list DOES produce a taskList node.
         let adf_nonempty = markdown_to_adf("- [ ] has text");
         assert_eq!(
-            first_block(&adf_nonempty)["type"], "taskList",
+            first_block(&adf_nonempty)["type"],
+            "taskList",
             "non-empty task item must produce taskList (requires ENABLE_TASKLISTS): {adf_nonempty}"
         );
         // Empty items: both pruned → taskList also pruned
@@ -2809,7 +3458,8 @@ mod tests {
         // Anchor: a non-empty task item DOES produce a taskList node (requires ENABLE_TASKLISTS).
         let adf_anchor = markdown_to_adf("- [ ] has text");
         assert_eq!(
-            first_block(&adf_anchor)["type"], "taskList",
+            first_block(&adf_anchor)["type"],
+            "taskList",
             "non-empty task item must produce taskList (requires ENABLE_TASKLISTS): {adf_anchor}"
         );
         let adf = markdown_to_adf("- [ ] \\\n");
@@ -2855,11 +3505,13 @@ mod tests {
         let items2 = list2["content"].as_array().expect("items");
         assert_eq!(
             items2[0]["attrs"]["state"], "TODO",
-            "re-parsed pending item must be TODO: {:?}", items2[0]
+            "re-parsed pending item must be TODO: {:?}",
+            items2[0]
         );
         assert_eq!(
             items2[1]["attrs"]["state"], "DONE",
-            "re-parsed done item must be DONE: {:?}", items2[1]
+            "re-parsed done item must be DONE: {:?}",
+            items2[1]
         );
     }
 
@@ -2909,7 +3561,8 @@ mod tests {
         // First element must be a taskItem
         assert_eq!(
             outer_content[0]["type"], "taskItem",
-            "first element must be taskItem: {:?}", outer_content[0]
+            "first element must be taskItem: {:?}",
+            outer_content[0]
         );
         // There must be a nested taskList as a sibling (not inside taskItem.content)
         let has_nested_task_list = outer_content.iter().any(|n| n["type"] == "taskList");
@@ -2960,7 +3613,8 @@ mod tests {
             );
             assert_eq!(
                 list["content"][0]["attrs"]["state"], expected_state,
-                "valid form {md:?} must produce state {expected_state}: {:?}", list["content"][0]
+                "valid form {md:?} must produce state {expected_state}: {:?}",
+                list["content"][0]
             );
         }
         // The actual malformed-form assertions:
@@ -3009,12 +3663,14 @@ mod tests {
         // First block must be the taskList
         assert_eq!(
             doc_content[0]["type"], "taskList",
-            "first top-level block must be taskList: {:?}", doc_content[0]
+            "first top-level block must be taskList: {:?}",
+            doc_content[0]
         );
         // Second block must be the hoisted bulletList
         assert_eq!(
             doc_content[1]["type"], "bulletList",
-            "second top-level block must be hoisted bulletList: {:?}", doc_content[1]
+            "second top-level block must be hoisted bulletList: {:?}",
+            doc_content[1]
         );
         // The taskList's taskItem must NOT contain a bulletList
         let task_item = &doc_content[0]["content"][0];
@@ -3045,7 +3701,9 @@ mod tests {
         let item1 = &list1["content"][0];
         assert_eq!(item1["type"], "taskItem", "got: {item1}");
         // No paragraph wrapper inside taskItem
-        let content1 = item1["content"].as_array().expect("taskItem must have content");
+        let content1 = item1["content"]
+            .as_array()
+            .expect("taskItem must have content");
         for child in content1 {
             assert_ne!(
                 child["type"], "paragraph",
@@ -3076,7 +3734,9 @@ mod tests {
         assert_eq!(list2["type"], "taskList", "got: {list2}");
         let item2 = &list2["content"][0];
         assert_eq!(item2["type"], "taskItem", "got: {item2}");
-        let content2 = item2["content"].as_array().expect("taskItem must have content");
+        let content2 = item2["content"]
+            .as_array()
+            .expect("taskItem must have content");
         // Must NOT end with a hardBreak (trim rule)
         if let Some(last) = content2.last() {
             assert_ne!(
@@ -3204,7 +3864,8 @@ mod tests {
         );
         let items2 = task_list2["content"].as_array().expect("taskList2.content");
         assert_eq!(
-            items2.len(), 2,
+            items2.len(),
+            2,
             "pruned middle item must reduce item count to 2: {items2:?}"
         );
         assert_eq!(
