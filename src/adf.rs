@@ -1775,7 +1775,10 @@ fn extract_inline_from_list_item_content(list_item: &Value) -> Vec<Value> {
 /// counter slots. No `uuid` crate dependency (BC-7.2.010 §Required attributes).
 ///
 /// The counter is document-wide and unique across all taskList/taskItem nodes.
-/// Called from `markdown_to_adf` after `finish()` and `autolink_bare_urls`.
+/// Called from `markdown_to_adf` after `finish()`, before `autolink_bare_urls`.
+/// The ordering is immaterial to correctness (`autolink_bare_urls` only adds
+/// `link` marks to text nodes and never adds or removes task-list nodes), but
+/// the source order is: `finish()` → `assign_local_ids` → `autolink_bare_urls`.
 fn assign_local_ids(nodes: &mut [Value]) {
     let mut counter = 0u64;
     assign_local_ids_walk(nodes, &mut counter);
