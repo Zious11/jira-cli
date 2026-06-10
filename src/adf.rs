@@ -73,8 +73,8 @@ pub fn markdown_to_adf(markdown: &str) -> Value {
 /// A *subset* of the GFM autolink boundary + extent rules is applied (see the
 /// "Deviations from GFM" section of `docs/specs/adf-bare-url-autolink.md`):
 /// a URL may start only at the beginning of a text node or after whitespace /
-/// `*_~(` (GFM's "before" set also admits `[`, which we deliberately omit to cut
-/// false positives); trailing punctuation (`?!.,:*_~`) is excluded; a trailing
+/// `*_~(` (GFM's "before" set also admits `[` and `]`, which we deliberately omit
+/// to cut false positives); trailing punctuation (`?!.,:*_~`) is excluded; a trailing
 /// `)` is trimmed only when unbalanced. One inherent limitation of running over
 /// the *already-built* tree: a URL whose interior contains inline markup (e.g.
 /// `https://x/a*b*c`, where `*b*` parsed as emphasis) has already been split into
@@ -2046,6 +2046,29 @@ mod tests {
         assert!(
             !contains_node_type(&adf, "link"),
             "bare email must NOT be linkified (out of scope): {adf}"
+        );
+        let joined: String = adf["content"][0]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|n| n["text"].as_str())
+            .collect();
+        assert_eq!(
+            joined, "ping user@example.com please",
+            "email text preserved: {adf}"
+        );
+    }
+
+    #[test]
+    fn test_bare_url_after_open_bracket_stays_plain_text() {
+        // Deviation #1: GFM's autolink "before" set admits `[`, but we omit it to
+        // avoid linking the inner URL of an unresolved reference shortcut. pulldown
+        // emits `[https://example.com]` as literal text; the `[` before `http`
+        // fails our boundary check, so no link is produced.
+        let adf = markdown_to_adf("[https://example.com]");
+        assert!(
+            !contains_node_type(&adf, "link"),
+            "URL after `[` (reference-shortcut form) must stay plain text: {adf}"
         );
     }
 
