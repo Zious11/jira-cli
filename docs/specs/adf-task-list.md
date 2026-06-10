@@ -136,8 +136,13 @@ level.
 ## Known Lossy Transforms
 
 - EC-3 mixed-list promotion: plain items promoted to TODO, identity lost
-- EC-5 listItem normalization: checkbox state dropped
-- EC-6 blockquote unwrapping: checkbox state dropped
+- EC-5 listItem normalization: checkbox state dropped (sub-ref EC-10(b))
+- EC-6 blockquote unwrapping: checkbox state dropped (sub-ref EC-10(c))
+- EC-10: checkbox state is dropped in several normalization paths:
+  - EC-10(b) — `listItem > taskList` unwrap (EC-5): TODO/DONE state discarded
+  - EC-10(c) — `blockquote > taskList` unwrap (EC-6): TODO/DONE state discarded
+  - EC-10(f) — casing of externally-provided state normalized on text render
+    (adf_to_text uses case-insensitive match; uppercase emitted by markdown_to_adf)
 - EC-13 nested hoist: inner taskList becomes sibling (lost nesting semantics
   if the outer container is not a taskList)
 - EC-15 hoist to grandparent: visual association between task and sub-list broken

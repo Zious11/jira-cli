@@ -674,44 +674,36 @@ impl AdfBuilder {
                     // separate entries in `children` (type "taskList", "bulletList", …),
                     // not nested inside the taskItem node. The `_ => hoisted.push(child)`
                     // arm below catches them.
-                    let mut inline_parts: Vec<Vec<Value>> = Vec::new();
+                    //
+                    // CR-003: reuse flatten_task_item_to_inline instead of a hand-rolled
+                    // copy. We normalise the input so every inline-bearing child looks
+                    // like a paragraph (flatten_task_item_to_inline unwraps paragraphs
+                    // and injects hardBreak separators). Block children go to `hoisted`.
+                    let mut flat_for_flatten: Vec<Value> = Vec::new();
                     let mut hoisted: Vec<Value> = Vec::new();
                     for child in children {
                         let ty = child.get("type").and_then(|t| t.as_str()).unwrap_or("");
                         match ty {
                             "taskItem" => {
-                                let part = child
+                                // Re-wrap the taskItem's inline content as a paragraph so
+                                // flatten_task_item_to_inline can extract it uniformly.
+                                let content = child
                                     .get("content")
                                     .and_then(|c| c.as_array())
                                     .cloned()
                                     .unwrap_or_default();
-                                if !part.is_empty() {
-                                    inline_parts.push(part);
+                                if !content.is_empty() {
+                                    flat_for_flatten
+                                        .push(json!({ "type": "paragraph", "content": content }));
                                 }
                             }
-                            "paragraph" => {
-                                let part = child
-                                    .get("content")
-                                    .and_then(|c| c.as_array())
-                                    .cloned()
-                                    .unwrap_or_default();
-                                if !part.is_empty() {
-                                    inline_parts.push(part);
-                                }
-                            }
+                            "paragraph" => flat_for_flatten.push(child),
                             _ => hoisted.push(child),
                         }
                     }
-                    let mut merged: Vec<Value> = Vec::new();
-                    let mut first_part = true;
-                    for part in inline_parts {
-                        if !first_part {
-                            merged.push(json!({ "type": "hardBreak" }));
-                        }
-                        merged.extend(part);
-                        first_part = false;
-                    }
-                    let merged = trim_leading_trailing_hardbreaks(merged);
+                    let merged = trim_leading_trailing_hardbreaks(flatten_task_item_to_inline(
+                        flat_for_flatten,
+                    ));
                     // Hoist block siblings to the parent container (append_child targets
                     // the stack-top, which at this point is the outer BulletList — so
                     // the hoists become siblings in BulletList.children, visible to the
@@ -793,12 +785,13 @@ impl AdfBuilder {
                 if block_siblings.is_empty() {
                     EndResult::Single(node)
                 } else {
-                    EndResult::WithHoists { node, hoists: block_siblings }
+                    EndResult::WithHoists {
+                        node,
+                        hoists: block_siblings,
+                    }
                 }
             }
-            NodeKind::Table => {
-                EndResult::Single(json!({ "type": "table", "content": children }))
-            }
+            NodeKind::Table => EndResult::Single(json!({ "type": "table", "content": children })),
             NodeKind::TableRow => {
                 EndResult::Single(json!({ "type": "tableRow", "content": children }))
             }
@@ -806,7 +799,11 @@ impl AdfBuilder {
                 // ADF requires cells to wrap content in a block. pulldown-cmark
                 // emits Text events directly inside TableCell without a Paragraph
                 // wrapper, so we wrap here.
-                let cell_type = if is_header { "tableHeader" } else { "tableCell" };
+                let cell_type = if is_header {
+                    "tableHeader"
+                } else {
+                    "tableCell"
+                };
                 let wrapped = wrap_inlines_as_blocks(
                     children,
                     &[
@@ -1238,20 +1235,33 @@ fn normalize_list_item_content(children: Vec<Value>) -> Vec<Value> {
 
 /// Normalize the children of a `blockquote` to the ADF-permitted content model.
 ///
-/// ADF `blockquote.content` forbids `taskList`. pulldown-cmark 0.13.3 DOES emit
-/// `blockquote > taskList` for `> - [ ] item` — the task-marker scan in
-/// `firstpass.rs:128–160` is container-agnostic (the `>` prefix is stripped on a
-/// prior loop iteration; the task scan then runs identically to the top-level case).
-/// This normalization is therefore **required and unconditional** (#471, BC-7.2.010
-/// obligation #2 / EC-6).
+/// ## What `blockquote.content` forbids
 ///
-/// `taskList` → unwrapped: each `taskItem`'s inline content is promoted to a
-/// `paragraph` inside the blockquote. Checkbox state is dropped — lossy (EC-10(c)).
+/// The ADF blockquote schema allows only `paragraph`, `bulletList`,
+/// `orderedList`, `codeBlock`, `heading`, `rule`, `table`, and several media
+/// nodes. The one forbidden type reachable from pulldown-cmark 0.13.3 is
+/// **`taskList`**: pulldown's task-marker scan is container-agnostic (the `>`
+/// prefix is stripped on a prior loop iteration; the scan then runs identically
+/// to the top-level case), so `> - [ ] item` emits `blockquote > taskList`.
+/// This normalization is therefore **required and unconditional** (#471,
+/// BC-7.2.010 obligation #2 / EC-6).
 ///
-/// All other node types pass through unchanged. Recursive blockquotes are NOT
-/// re-normalized here — the outer `end(BlockQuote)` arm calls this function and
-/// nesting is handled by the event-stream ordering (inner blockquotes finalize
-/// before the outer one).
+/// ## Handled (produced by pulldown-cmark 0.13.3)
+///
+/// - **`taskList`** → unwrapped: each `taskItem`'s inline content is promoted
+///   to a `paragraph` inside the blockquote. Checkbox state is dropped —
+///   lossy (EC-10(c)). Nested `taskList` inside a blockquote-level `taskList`
+///   is handled recursively.
+///
+/// ## Not expected from pulldown-cmark (no handling needed)
+///
+/// pulldown-cmark never emits `panel`, `table`, or another `blockquote` as a
+/// direct child of `blockquote` — those are handled by `normalize_panel_content`
+/// for the panel case and by event-stream ordering for nested blockquotes (inner
+/// blockquotes finalize before the outer one, so `end(BlockQuote)` sees only
+/// already-normalized content). No explicit guard is needed here.
+///
+/// All other node types pass through unchanged.
 fn normalize_blockquote_content(children: Vec<Value>) -> Vec<Value> {
     let mut out: Vec<Value> = Vec::new();
     for child in children {
@@ -1487,14 +1497,13 @@ fn extract_inline_from_list_item_content(list_item: &Value) -> Vec<Value> {
         return result;
     };
     for block in blocks {
+        // CR-007: non-paragraph blocks (e.g. nested bulletList) cannot fit in
+        // taskItem.content (inline-only) and are skipped — the caller's hoist
+        // path is responsible for propagating them to the parent.
         if block.get("type").and_then(Value::as_str) == Some("paragraph") {
             if let Some(inline) = block.get("content").and_then(|c| c.as_array()) {
                 result.extend(inline.iter().cloned());
             }
-        } else {
-            // Non-paragraph block inside a listItem (e.g. nested bulletList):
-            // can't fit in taskItem.content (inline-only). Skip it — it will be
-            // hoisted by the caller's hoist path.
         }
     }
     result
@@ -1515,11 +1524,8 @@ fn assign_local_ids(nodes: &mut [Value]) {
 
 fn assign_local_ids_walk(nodes: &mut [Value], counter: &mut u64) {
     for node in nodes.iter_mut() {
-        let node_type = node
-            .get("type")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_owned();
+        // CR-004: compare &str directly instead of allocating a String via to_owned().
+        let node_type = node.get("type").and_then(Value::as_str).unwrap_or("");
         if node_type == "taskList" || node_type == "taskItem" {
             *counter += 1;
             if let Some(obj) = node.as_object_mut() {
@@ -3880,11 +3886,9 @@ mod tests {
             if let Some(content) = v.get("content").and_then(|c| c.as_array()) {
                 for child in content {
                     assert_ne!(
-                        child["type"],
-                        block_type,
+                        child["type"], block_type,
                         "block node type '{}' must NOT appear inside taskItem.content: {}",
-                        block_type,
-                        child
+                        block_type, child
                     );
                     // Recurse into child in case of deep nesting
                     assert_no_block_in_task_item_content(child, block_type);
@@ -5921,5 +5925,4 @@ mod tests {
         // Inline content (and its marks) is untouched — only node-level marks go.
         assert_eq!(out[0]["content"][0]["text"], "x");
     }
-
 }
