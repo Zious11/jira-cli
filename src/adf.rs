@@ -824,18 +824,22 @@ impl AdfBuilder {
                     let merged = trim_leading_trailing_hardbreaks(flatten_task_item_to_inline(
                         flat_for_flatten,
                     ));
-                    // Hoist block siblings to the parent container (append_child targets
-                    // the stack-top, which at this point is the outer BulletList — so
-                    // the hoists become siblings in BulletList.children, visible to the
-                    // reclassification arm).
-                    for hoist_node in hoisted {
-                        self.append_child(hoist_node);
-                    }
-                    EndResult::Single(json!({
+                    let node = json!({
                         "type": "taskItem",
                         "attrs": { "localId": "", "state": state },
                         "content": merged,
-                    }))
+                    });
+                    // F-1 (F5-pass6): mirror the tight-path WithHoists pattern.
+                    // Previously this called self.append_child(hoist) BEFORE returning
+                    // Single(taskItem), which placed hoists in BulletList.children BEFORE
+                    // the taskItem (inverted order: [bulletList(inner), taskItem(outer)]).
+                    // Using WithHoists lets the end() dispatch append node FIRST, then
+                    // hoists — preserving source order: [taskItem(outer), bulletList(inner)].
+                    if hoisted.is_empty() {
+                        EndResult::Single(node)
+                    } else {
+                        EndResult::WithHoists { node, hoists: hoisted }
+                    }
                 } else {
                     let normalized = normalize_list_item_content(children);
                     let wrapped = wrap_inlines_as_blocks(
@@ -6951,6 +6955,95 @@ mod tests {
         assert!(
             result.is_err(),
             "assert_valid_adf_structure must panic on blockquote inside panel"
+        );
+    }
+
+    #[test]
+    // --- F-1 (F5-pass6): loose task item with nested sublist preserves doc order ---
+    // Mirror of the already-fixed tight-path bug (F-PASS4-C1).
+    // Before the fix, the loose branch called append_child(hoist) BEFORE returning
+    // Single(taskItem), so BulletList children became [bulletList(inner), taskItem(outer)]
+    // → reclassified as [bulletList(inner), taskList(outer)] — inverted order.
+
+    #[test]
+    fn test_loose_task_item_with_nested_sublist_preserves_order() {
+        // F-1 regression: `- [ ] outer\n\n  - inner`
+        // A loose task item (blank-line-separated) with a nested plain sub-list.
+        // Expected doc-level order: [taskList(outer), bulletList(inner)]
+        // NOT [bulletList(inner), taskList(outer)].
+        let md = "- [ ] outer\n\n  - inner\n";
+        let adf = markdown_to_adf(md);
+
+        assert_valid_adf_structure(&adf);
+
+        let doc_children = adf["content"].as_array().expect("doc must have content");
+        assert!(
+            doc_children.len() >= 1,
+            "doc must have at least one child: {adf}"
+        );
+        // The taskList must come FIRST (outer item).
+        assert_eq!(
+            doc_children[0]["type"], "taskList",
+            "first doc child must be taskList (outer), got doc: {adf}"
+        );
+        // The taskList must contain the outer taskItem.
+        let task_items = doc_children[0]["content"].as_array().expect("taskList content");
+        assert_eq!(
+            task_items[0]["type"], "taskItem",
+            "taskList first child must be taskItem: {adf}"
+        );
+        let task_text = serde_json::to_string(&task_items[0]).unwrap_or_default();
+        assert!(
+            task_text.contains("outer"),
+            "taskItem must contain 'outer' text: {adf}"
+        );
+        // The bulletList must come AFTER (nested sub-list hoisted to sibling).
+        if doc_children.len() >= 2 {
+            assert_eq!(
+                doc_children[1]["type"], "bulletList",
+                "second doc child must be bulletList (inner), got: {adf}"
+            );
+            let list_text = serde_json::to_string(&doc_children[1]).unwrap_or_default();
+            assert!(
+                list_text.contains("inner"),
+                "bulletList must contain 'inner' text: {adf}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_loose_task_item_with_nested_task_sublist_preserves_order() {
+        // F-1 regression (task sublist variant): `- [ ] outer\n\n  - [x] inner`
+        // A loose task item with a nested TASK sub-list.
+        // Per EC-13: nested taskList is a sibling within the parent taskList.
+        // Expected: the outer item and inner item are both in the same taskList
+        // (sibling semantics), OR outer taskList comes before inner taskList.
+        // Most importantly: the outer task item must NOT appear AFTER the inner list.
+        let md = "- [ ] outer\n\n  - [x] inner\n";
+        let adf = markdown_to_adf(md);
+
+        assert_valid_adf_structure(&adf);
+
+        let doc_children = adf["content"].as_array().expect("doc must have content");
+        assert!(
+            !doc_children.is_empty(),
+            "doc must not be empty: {adf}"
+        );
+        // The first doc child must be a taskList (not bulletList or taskItem).
+        assert_eq!(
+            doc_children[0]["type"], "taskList",
+            "first doc child must be taskList, got: {adf}"
+        );
+        // The taskList must lead with the outer taskItem (first child is taskItem per schema).
+        let task_content = doc_children[0]["content"].as_array().expect("taskList content");
+        assert_eq!(
+            task_content[0]["type"], "taskItem",
+            "taskList first child must be taskItem (outer), not nested list: {adf}"
+        );
+        let outer_text = serde_json::to_string(&task_content[0]).unwrap_or_default();
+        assert!(
+            outer_text.contains("outer"),
+            "first taskItem must contain 'outer': {adf}"
         );
     }
 
