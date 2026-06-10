@@ -578,9 +578,13 @@ impl AdfBuilder {
                             "taskList" => task_children.push(child),
                             "listItem" => {
                                 // Plain item in a mixed list — promote to taskItem TODO.
-                                // EC-3: its content is already inline-only (the listItem
-                                // finalization already ran wrap_inlines_as_blocks; we need
-                                // to extract the inline content from any paragraph wrapper).
+                                // EC-3: its content is already wrapped in paragraph/block
+                                // nodes (the listItem finalization already ran
+                                // wrap_inlines_as_blocks). Extract paragraph inline content
+                                // for the taskItem body; non-paragraph blocks (e.g. a nested
+                                // bulletList under the plain item) must be hoisted to the
+                                // parent so they are not silently dropped (F-P2-I1 fix:
+                                // preserve-not-drop invariant from #472/#489).
                                 let inline_content = extract_inline_from_list_item_content(&child);
                                 let trimmed = trim_leading_trailing_hardbreaks(inline_content);
                                 task_children.push(json!({
@@ -588,6 +592,19 @@ impl AdfBuilder {
                                     "attrs": { "localId": "", "state": "TODO" },
                                     "content": trimmed,
                                 }));
+                                // Hoist non-paragraph blocks (e.g. nested bulletList) from
+                                // the plain listItem to the outer container after the taskList.
+                                if let Some(blocks) =
+                                    child.get("content").and_then(|c| c.as_array())
+                                {
+                                    for block in blocks {
+                                        if block.get("type").and_then(Value::as_str)
+                                            != Some("paragraph")
+                                        {
+                                            hoisted.push(block.clone());
+                                        }
+                                    }
+                                }
                             }
                             // Everything else (bulletList, orderedList, or any other block
                             // sibling propagated from a TaskItem via WithHoists) is hoisted
@@ -769,8 +786,16 @@ impl AdfBuilder {
                         _ => block_siblings.push(child),
                     }
                 }
-                let inline_content = flatten_task_item_to_inline(inline_children);
-                let trimmed = trim_leading_trailing_hardbreaks(inline_content);
+                // F-P2-C1 fix: inline_children are ALREADY inline (text/hardBreak),
+                // NOT paragraph-wrapped. Do NOT route through flatten_task_item_to_inline
+                // — that function is for the loose/paragraph-wrapped multi-paragraph case
+                // only (handled in NodeKind::ListItem). Calling it here on bare text/
+                // hardBreak nodes caused its non-paragraph else branch to inject spurious
+                // hardBreak separators between EVERY text node (e.g. `- [x] **bold** and
+                // _em_` → [text("bold"), hardBreak, text(" and "), hardBreak, text("em")]).
+                // Bare inline nodes are used directly; only the trim pass is needed to
+                // clean any explicit hardBreak nodes at the boundaries.
+                let trimmed = trim_leading_trailing_hardbreaks(inline_children);
                 let state = if checked { "DONE" } else { "TODO" };
                 let node = json!({
                     "type": "taskItem",
@@ -1445,16 +1470,15 @@ fn flatten_task_item_to_inline(children: Vec<Value>) -> Vec<Value> {
             }
             // Empty paragraph: no separator emitted (trim pass handles trim near empties).
         } else {
-            // Non-paragraph block (e.g. a nested list that wasn't already hoisted) —
-            // treat as a hoistable block: pass through. The BulletList reclassification
-            // arm will hoist it to the grandparent if needed (EC-15).
-            // For the inline-flatten pass we just pass it through; the prune gate will
-            // catch invalid content.
-            if !first {
-                result.push(json!({ "type": "hardBreak" }));
-            }
-            result.push(child);
-            first = false;
+            // CR-014: both callers pre-filter to paragraph-only before calling this
+            // function (NodeKind::ListItem re-wraps taskItem content as paragraph at
+            // line ~706; plain paragraph children are kept as-is at line ~717; block
+            // children go to `hoisted` at line ~718 and never reach this path).
+            // A non-paragraph reaching this branch is a caller contract violation.
+            unreachable!(
+                "non-paragraph passed to flatten_task_item_to_inline; callers must pre-filter: {:?}",
+                child.get("type")
+            );
         }
     }
     result
@@ -1468,20 +1492,18 @@ fn flatten_task_item_to_inline(children: Vec<Value>) -> Vec<Value> {
 /// This implements the "general hardBreak trim rule" from BC-7.2.010 EC-16:
 /// `taskItem.content` must NEVER begin or end with a `hardBreak`.
 fn trim_leading_trailing_hardbreaks(mut content: Vec<Value>) -> Vec<Value> {
-    // Trim leading hardBreaks
-    while content
-        .first()
-        .map(|n| n.get("type").and_then(Value::as_str))
-        == Some(Some("hardBreak"))
-    {
-        content.remove(0);
+    let is_hb = |n: &Value| n.get("type").and_then(Value::as_str) == Some("hardBreak");
+    // CR-015: single-pass leading trim via drain instead of repeated O(n) remove(0).
+    let first_non_hb = content
+        .iter()
+        .position(|n| !is_hb(n))
+        .unwrap_or(content.len());
+    if first_non_hb > 0 {
+        content.drain(..first_non_hb);
     }
-    // Trim trailing hardBreaks
-    while content
-        .last()
-        .map(|n| n.get("type").and_then(Value::as_str))
-        == Some(Some("hardBreak"))
-    {
+    // Trailing trim: pop is already O(1); the while loop is fine since at most
+    // the last few nodes are removed.
+    while content.last().is_some_and(is_hb) {
         content.pop();
     }
     content
@@ -3198,37 +3220,153 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_mixed_task_plain_list_nested_sublist_under_plain_item_preserved() {
+        // F-P2-I1: a nested sublist under a plain item in a mixed task+plain list
+        // must NOT be dropped. Prior implementation silently skipped non-paragraph
+        // blocks in extract_inline_from_list_item_content, losing the sublist.
+        //
+        // Input: `- [ ] task\n- plain\n  - sub`
+        // Expected: `sub` appears in the output (hoisted to the correct level).
+        let adf = markdown_to_adf("- [ ] task\n- plain\n  - sub");
+        let adf_str = adf.to_string();
+        assert!(
+            adf_str.contains("sub"),
+            "nested sublist under plain item in mixed list must be preserved: {adf}"
+        );
+    }
+
     // --- AC-005 : inline marks preserved in task item -------------------------
 
     #[test]
     fn test_markdown_task_item_inline_marks_preserved() {
         // BC-7.2.010 EC-4: inline marks (strong, em) are preserved inside taskItem.content.
         // Content goes directly in taskItem.content — NOT wrapped in a paragraph.
+        // STRENGTHENED (F-P2-C1): asserts the EXACT content array
+        //   [text("bold",[strong]), text(" and "), text("em",[em])]
+        // with NO hardBreak nodes between runs. The prior weak version only checked
+        // `contains("strong")` and `contains("em")` and missed spurious hardBreaks.
         let adf = markdown_to_adf("- [x] **bold** and _em_");
         let list = first_block(&adf);
         assert_eq!(list["type"], "taskList", "got: {list}");
         let item = &list["content"][0];
         assert_eq!(item["type"], "taskItem", "got: {item}");
-        // Content should NOT be wrapped in a paragraph node
         let content = item["content"]
             .as_array()
             .expect("taskItem must have content");
+
+        // Content should NOT be wrapped in a paragraph node
         for child in content {
             assert_ne!(
                 child["type"], "paragraph",
                 "taskItem content must NOT have paragraph wrapper, got: {child}"
             );
         }
-        // Strong mark must appear
+
+        // Exact content array: 3 text nodes, NO hardBreak nodes at all.
+        assert_eq!(
+            content.len(),
+            3,
+            "expected exactly 3 inline nodes [bold, ' and ', em], got {}: {}",
+            content.len(),
+            item
+        );
+        // No hardBreak nodes anywhere in content (F-P2-C1 regression guard).
+        for node in content {
+            assert_ne!(
+                node["type"], "hardBreak",
+                "tight task item must NOT inject spurious hardBreak between inline runs: {}",
+                item
+            );
+        }
+        // First node: text "bold" with strong mark
+        assert_eq!(
+            content[0]["text"], "bold",
+            "first node text: {}",
+            content[0]
+        );
+        assert_eq!(
+            content[0]["marks"][0]["type"], "strong",
+            "first node must have strong mark: {}",
+            content[0]
+        );
+        // Second node: text " and " with no marks
+        assert_eq!(
+            content[1]["text"], " and ",
+            "second node text: {}",
+            content[1]
+        );
+        assert!(
+            content[1].get("marks").is_none()
+                || content[1]["marks"].as_array().map(|a| a.is_empty()) == Some(true),
+            "second node must have no marks: {}",
+            content[1]
+        );
+        // Third node: text "em" with em mark
+        assert_eq!(content[2]["text"], "em", "third node text: {}", content[2]);
+        assert_eq!(
+            content[2]["marks"][0]["type"], "em",
+            "third node must have em mark: {}",
+            content[2]
+        );
+    }
+
+    #[test]
+    fn test_tight_task_item_inline_code_no_hardbreak() {
+        // F-P2-C1 regression: `- [x] a \`code\` b` → tight task item with inline code.
+        // The three text runs (plain "a ", code "code", plain " b") must appear
+        // as consecutive text/code nodes with NO hardBreak injected between them.
+        let adf = markdown_to_adf("- [x] a `code` b");
+        let list = first_block(&adf);
+        assert_eq!(list["type"], "taskList", "got: {list}");
+        let item = &list["content"][0];
+        assert_eq!(item["type"], "taskItem", "got: {item}");
+        let content = item["content"]
+            .as_array()
+            .expect("taskItem must have content");
+        // No hardBreak nodes
+        for node in content {
+            assert_ne!(
+                node["type"], "hardBreak",
+                "tight task item with inline code must NOT inject spurious hardBreak: {}",
+                item
+            );
+        }
+        // Must contain the code text
         let adf_str = adf.to_string();
         assert!(
-            adf_str.contains("\"strong\""),
-            "strong mark must be preserved: {adf}"
+            adf_str.contains("\"code\"") && adf_str.contains("code"),
+            "inline code mark must be preserved: {adf}"
         );
-        // Em mark must appear
+    }
+
+    #[test]
+    fn test_tight_task_item_soft_break_becomes_space_no_hardbreak() {
+        // F-P2-C1 regression: `- [x] line one\n  continued` → soft break in a tight
+        // task item. pulldown-cmark emits Event::SoftBreak which is mapped to a space.
+        // The two text runs must be joined (possibly as one merged text node or two
+        // adjacent text nodes) with NO hardBreak injected between them.
+        let adf = markdown_to_adf("- [x] line one\n  continued");
+        let list = first_block(&adf);
+        assert_eq!(list["type"], "taskList", "got: {list}");
+        let item = &list["content"][0];
+        assert_eq!(item["type"], "taskItem", "got: {item}");
+        let content = item["content"]
+            .as_array()
+            .expect("taskItem must have content");
+        // No hardBreak nodes anywhere (soft break → space, not hardBreak)
+        for node in content {
+            assert_ne!(
+                node["type"], "hardBreak",
+                "soft break in tight task item must NOT become hardBreak: {}",
+                item
+            );
+        }
+        // The full text "line one continued" must be present (space may be absorbed)
+        let adf_str = adf.to_string();
         assert!(
-            adf_str.contains("\"em\""),
-            "em mark must be preserved: {adf}"
+            adf_str.contains("line one") && adf_str.contains("continued"),
+            "both text runs must be present: {adf}"
         );
     }
 
@@ -4320,6 +4458,7 @@ mod tests {
     fn test_is_empty_block_container_membership() {
         // Pin the REQUIRES_CONTENT set directly, so the prune coverage does not
         // rely on a particular markdown input reaching each container type.
+        // CR-012: also covers taskList + taskItem (the two types added in #471).
         for ty in [
             "blockquote",
             "panel",
@@ -4329,6 +4468,7 @@ mod tests {
             "orderedList",
             "table",
             "tableRow",
+            "taskList",
         ] {
             assert!(
                 is_empty_block_container(&json!({ "type": ty, "content": [] })),
@@ -4341,6 +4481,37 @@ mod tests {
                 "{ty} with content must be kept"
             );
         }
+        // taskItem has extended emptiness semantics: hardBreak-only / whitespace-only
+        // / backslash-only content is also prunable (BC-7.2.010 EC-8 deliberate choice).
+        assert!(
+            is_empty_block_container(&json!({ "type": "taskItem", "content": [] })),
+            "taskItem with empty content must be pruned"
+        );
+        assert!(
+            is_empty_block_container(
+                &json!({ "type": "taskItem", "content": [{ "type": "hardBreak" }] })
+            ),
+            "taskItem with hardBreak-only content must be pruned (extended empty)"
+        );
+        assert!(
+            is_empty_block_container(
+                &json!({ "type": "taskItem", "content": [{ "type": "text", "text": "   " }] })
+            ),
+            "taskItem with whitespace-only text must be pruned (extended empty)"
+        );
+        assert!(
+            is_empty_block_container(
+                &json!({ "type": "taskItem", "content": [{ "type": "text", "text": "\\\\" }] })
+            ),
+            "taskItem with backslash-only text must be pruned (extended empty, failed-escape artifact)"
+        );
+        // A taskItem with real text content must NOT be pruned.
+        assert!(
+            !is_empty_block_container(
+                &json!({ "type": "taskItem", "content": [{ "type": "text", "text": "x" }] })
+            ),
+            "taskItem with real text content must NOT be pruned"
+        );
         // Excluded types: empty is valid ADF (or pruning would break structure).
         for ty in ["paragraph", "codeBlock", "tableCell", "tableHeader"] {
             assert!(
