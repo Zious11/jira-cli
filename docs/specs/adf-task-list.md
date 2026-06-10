@@ -15,6 +15,15 @@ normalization obligations, and known edge cases.
     "content": ["taskItem", "taskList"],
     "minItems": 1
   },
+```
+
+**taskList TUPLE LEAD rule:** `taskList.content` is a TUPLE where the FIRST
+element MUST be a `taskItem`. Subsequent elements may be `taskItem` or nested
+`taskList`. This is the canonical `@atlaskit/adf-schema` rule (verified in
+`.factory/research/issue-471-adf-tasknode-shape.md`). The validator enforces
+this strictly at `i == 0` — it is correct and must not be relaxed.
+
+```json
   "taskItem": {
     "attrs": {
       "localId": { "type": "string", "minLength": 1 },
@@ -30,7 +39,10 @@ Key constraints:
 - `taskList.attrs.localId`: required, non-empty string
 - `taskItem.attrs.state`: uppercase `"TODO"` or `"DONE"` only
 - `taskItem.content`: **inline-only** — no paragraph wrapper
-- `taskList.content`: only `taskItem` and nested `taskList` nodes permitted
+- `taskList.content`: TUPLE — **first element MUST be `taskItem`**; subsequent
+  elements may be `taskItem` or nested `taskList`. An empty `taskList` is
+  invalid ADF (`minItems: 1`). A `taskList` leading with a `taskList` violates
+  the tuple-lead rule. (Validator enforces `i == 0` → must be `taskItem`.)
 - `additionalProperties: false` — extra keys cause Jira HTTP 400
 
 ## Implementation Strategy: Approach B (post-hoc reclassification)
