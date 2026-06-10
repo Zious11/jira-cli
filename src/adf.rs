@@ -565,151 +565,41 @@ impl AdfBuilder {
                 EndResult::Single(node)
             }
             NodeKind::BulletList => {
-                // Approach B post-hoc reclassification (BC-7.2.010): inspect
-                // children for any `taskItem` nodes. If found, reclassify the
-                // whole container to `taskList` and promote any plain `listItem`
-                // children (from mixed lists, EC-3) to `taskItem { state: "TODO" }`.
+                // Approach B post-hoc reclassification (BC-7.2.010): delegate to
+                // the shared `reclassify_as_task_list` helper when the list contains
+                // at least one `taskItem` child. The helper is symmetric with the
+                // OrderedList arm — see its doc-comment for shape examples and the
+                // decision rationale.
+                //
+                // ORDER-PRESERVING reclassification (F-PASS4-C1 fix):
+                //
+                // taskList.content permits only taskItem and nested taskList nodes.
+                // Any other block child (bulletList, orderedList, or any other block
+                // that was a sibling of a taskItem via EndResult::WithHoists) must be
+                // hoisted to the parent level. The helper preserves document order:
+                // task runs are flushed into taskList nodes and hoist blocks are
+                // emitted as siblings in source order.
+                //
+                // Shape examples (order invariant: preserve document order):
+                //   `- [ ]\n  - plain\n- [x] after`
+                //     → [bulletList(plain), taskList([after])]
+                //   `- [x] before\n- [ ]\n  - plain\n- [x] after`
+                //     → [taskList([before]), bulletList(plain), taskList([after])]
+                //   `- [ ] outer\n  - plain inner`
+                //     → [taskList([outer]), bulletList(inner)] (EC-15, unchanged)
+                //
+                // BC back-propagation note: BC-7.2.010 does not specify the
+                // interleaved shape. The implemented invariant is: output preserves
+                // source document order; valid ADF; does not drop content.
                 let has_task_items = children
                     .iter()
                     .any(|c| c.get("type").and_then(Value::as_str) == Some("taskItem"));
                 if has_task_items {
-                    // Reclassify to taskList.
-                    //
-                    // ORDER-PRESERVING reclassification (F-PASS4-C1 fix):
-                    //
-                    // taskList.content permits only taskItem and nested taskList nodes.
-                    // Any other block child (bulletList, orderedList, or any other block
-                    // that was a sibling of a taskItem in the BulletList's children
-                    // because it was hoisted from inside a TaskItem via EndResult::WithHoists)
-                    // must be hoisted to the parent level.
-                    //
-                    // The previous implementation collected all task children and all
-                    // hoisted blocks into flat Vecs and emitted [taskList, hoists], which
-                    // inverted source order when a hoisted block appeared BEFORE a task
-                    // item in source position.
-                    //
-                    // The fix: walk children in document order and build an ordered
-                    // sequence of output segments. Each segment is either a taskList
-                    // (from a contiguous run of task-compatible items) or a standalone
-                    // hoist block. When a hoisted block is encountered, the current
-                    // task run is flushed as a taskList segment first, then the hoisted
-                    // block is appended as a sibling segment — preserving source order.
-                    //
-                    // Shape examples (order invariant: preserve document order):
-                    //   `- [ ]\n  - plain\n- [x] after`
-                    //     → [bulletList(plain), taskList([after])]
-                    //   `- [x] before\n- [ ]\n  - plain\n- [x] after`
-                    //     → [taskList([before]), bulletList(plain), taskList([after])]
-                    //   `- [ ] outer\n  - plain inner`
-                    //     → [taskList([outer]), bulletList(inner)] (EC-15, unchanged)
-                    //
-                    // BC back-propagation note: BC-7.2.010 does not specify the
-                    // interleaved shape. The implemented invariant is: output preserves
-                    // source document order; valid ADF; does not drop content. When task
-                    // items and hoisted blocks are interleaved, one taskList node is
-                    // emitted per contiguous run of task-compatible items, each run
-                    // separated by the interposed hoisted block(s).
-
-                    // Typed ordered sequence: task-compatible OR hoist block.
-                    // (Segment is defined at module scope above impl AdfBuilder.)
-                    let mut segments: Vec<Segment> = Vec::new();
-                    for child in children {
-                        let ty = child.get("type").and_then(Value::as_str).unwrap_or("");
-                        match ty {
-                            "taskItem" => segments.push(Segment::Task(child)),
-                            "taskList" => segments.push(Segment::Task(child)),
-                            "listItem" => {
-                                // Plain item in a mixed list — promote to taskItem TODO.
-                                // EC-3: its content is already wrapped in paragraph/block
-                                // nodes (the listItem finalization already ran
-                                // wrap_inlines_as_blocks). Extract paragraph inline content
-                                // for the taskItem body; non-paragraph blocks (e.g. a nested
-                                // bulletList under the plain item) must be hoisted to the
-                                // parent so they are not silently dropped (F-P2-I1 fix:
-                                // preserve-not-drop invariant from #472/#489).
-                                let inline_content = extract_inline_from_list_item_content(&child);
-                                let trimmed = trim_leading_trailing_hardbreaks(inline_content);
-                                let promoted = json!({
-                                    "type": "taskItem",
-                                    "attrs": { "localId": "", "state": "TODO" },
-                                    "content": trimmed,
-                                });
-                                // EC-8 consistency: prune an empty promoted taskItem
-                                // exactly as `- [ ]` task items are pruned. A bare `-`
-                                // or `- ` plain item in a mixed list must not survive as
-                                // an empty taskItem — the deliberate product choice is that
-                                // empty task items are dropped (BC-7.2.010 EC-8).
-                                if !is_empty_block_container(&promoted) {
-                                    segments.push(Segment::Task(promoted));
-                                }
-                                // Hoist non-paragraph blocks (e.g. nested bulletList) from
-                                // the plain listItem immediately after their source taskItem.
-                                if let Some(blocks) =
-                                    child.get("content").and_then(|c| c.as_array())
-                                {
-                                    for block in blocks {
-                                        if block.get("type").and_then(Value::as_str)
-                                            != Some("paragraph")
-                                        {
-                                            segments.push(Segment::Hoist(block.clone()));
-                                        }
-                                    }
-                                }
-                            }
-                            // Everything else (bulletList, orderedList, or any other block
-                            // sibling propagated from a TaskItem via WithHoists) is hoisted
-                            // to the parent container (EC-15).
-                            _ => segments.push(Segment::Hoist(child)),
-                        }
-                    }
-
-                    // Walk segments in order, flushing task runs into taskList nodes
-                    // and emitting hoist blocks as siblings in source order.
-                    // Collect all output nodes in document order.
-                    let mut output_nodes: Vec<Value> = Vec::new();
-                    let mut current_task_run: Vec<Value> = Vec::new();
-
-                    let flush_task_run = |run: &mut Vec<Value>, out: &mut Vec<Value>| {
-                        if !run.is_empty() {
-                            let task_list = json!({
-                                "type": "taskList",
-                                "attrs": { "localId": "" },
-                                "content": std::mem::take(run),
-                            });
-                            out.push(task_list);
-                        }
-                    };
-
-                    for seg in segments {
-                        match seg {
-                            Segment::Task(node) => current_task_run.push(node),
-                            Segment::Hoist(block) => {
-                                // Flush the pending task run before emitting the hoist,
-                                // preserving source order.
-                                flush_task_run(&mut current_task_run, &mut output_nodes);
-                                output_nodes.push(block);
-                            }
-                        }
-                    }
-                    // Flush any remaining task run.
-                    flush_task_run(&mut current_task_run, &mut output_nodes);
-
-                    if output_nodes.is_empty() {
-                        // All children were non-task blocks that were empty after
-                        // promotion; nothing survived.
-                        EndResult::Empty
-                    } else if output_nodes.len() == 1 {
-                        EndResult::Single(output_nodes.remove(0))
-                    } else {
-                        // Multiple ordered segments. Emit the first as the primary
-                        // node and the rest as hoists via WithHoists so the parent
-                        // receives them all in order.
-                        let first = output_nodes.remove(0);
-                        EndResult::WithHoists {
-                            node: first,
-                            hoists: output_nodes,
-                        }
-                    }
+                    // `reclassify_as_task_list` returns `Some` when has_task_items is
+                    // true; `expect` is the idiomatic way to document the invariant.
+                    reclassify_as_task_list(children).expect(
+                        "reclassify_as_task_list must return Some when taskItem children exist",
+                    )
                 } else {
                     // Plain bulletList (no task items). However, when an empty
                     // taskItem was pruned by is_empty_block_container, its hoisted
@@ -756,11 +646,30 @@ impl AdfBuilder {
                 }
             }
             NodeKind::OrderedList { start } => {
-                let mut node = json!({ "type": "orderedList", "content": children });
-                if start != 1 {
-                    node["attrs"] = json!({ "order": start });
+                // Reclassify ordered lists containing task markers to `taskList`
+                // (shared path with BulletList via `reclassify_as_task_list`).
+                //
+                // Decision: ADF has no ordered task list; `orderedList.content`
+                // permits only `listItem` and rejects `taskItem` (Jira HTTP 400).
+                // GFM's `1. [ ] x` renders as a checkbox list — ordinal numbering
+                // is cosmetic for checked items. Promoting to `taskList` preserves
+                // the user's checkbox intent and is symmetric with the bullet rule.
+                // Ordinal numbering is dropped (lossy). A plain ordered list with
+                // no task markers is unchanged.
+                let has_task_items = children
+                    .iter()
+                    .any(|c| c.get("type").and_then(Value::as_str) == Some("taskItem"));
+                if has_task_items {
+                    reclassify_as_task_list(children).expect(
+                        "reclassify_as_task_list must return Some when taskItem children exist",
+                    )
+                } else {
+                    let mut node = json!({ "type": "orderedList", "content": children });
+                    if start != 1 {
+                        node["attrs"] = json!({ "order": start });
+                    }
+                    EndResult::Single(node)
                 }
-                EndResult::Single(node)
             }
             NodeKind::ListItem => {
                 // ADF `listItem.content` permits ONLY paragraph, bulletList,
@@ -1172,6 +1081,113 @@ impl AdfBuilder {
         }
         self.root
     }
+}
+
+/// Shared task-list reclassification logic for both `BulletList` and
+/// `OrderedList` containers.
+///
+/// When a list container (bullet OR ordered) contains at least one `taskItem`
+/// child, the entire container is reclassified to a `taskList` — ordinal
+/// numbering is dropped (lossy), but checkbox state is preserved and is
+/// consistent with how bullet task lists are handled (BC-7.2.010 EC-ordered).
+///
+/// Decision rationale: ADF has no ordered task list node — `orderedList`
+/// permits only `listItem` children and rejects `taskItem`, which causes a Jira
+/// HTTP 400 on `orderedList > taskItem`. GFM's `1. [ ] x` renders as a
+/// checkbox list on GitHub (ordinal is purely cosmetic for checked items).
+/// Promoting to `taskList` preserves the user's checkbox intent and is
+/// symmetric with the bullet-list rule, eliminating a bullet/ordered asymmetry.
+///
+/// When no `taskItem` children are present `None` is returned; the caller
+/// falls through to its own plain-list construction.
+///
+/// # Segment ordering
+///
+/// Returns an `EndResult` that preserves source document order — task runs are
+/// flushed into `taskList` nodes and non-task blocks are hoisted as siblings
+/// (identical to the BulletList path). See the BulletList arm doc-comment for
+/// shape examples.
+fn reclassify_as_task_list(children: Vec<Value>) -> Option<EndResult> {
+    let has_task_items = children
+        .iter()
+        .any(|c| c.get("type").and_then(Value::as_str) == Some("taskItem"));
+    if !has_task_items {
+        return None;
+    }
+
+    let mut segments: Vec<Segment> = Vec::new();
+    for child in children {
+        let ty = child.get("type").and_then(Value::as_str).unwrap_or("");
+        match ty {
+            "taskItem" => segments.push(Segment::Task(child)),
+            "taskList" => segments.push(Segment::Task(child)),
+            "listItem" => {
+                // Plain item in a mixed list — promote to taskItem TODO.
+                let inline_content = extract_inline_from_list_item_content(&child);
+                let trimmed = trim_leading_trailing_hardbreaks(inline_content);
+                let promoted = json!({
+                    "type": "taskItem",
+                    "attrs": { "localId": "", "state": "TODO" },
+                    "content": trimmed,
+                });
+                if !is_empty_block_container(&promoted) {
+                    segments.push(Segment::Task(promoted));
+                }
+                // Hoist non-paragraph blocks from the plain listItem.
+                if let Some(blocks) = child.get("content").and_then(|c| c.as_array()) {
+                    for block in blocks {
+                        if block.get("type").and_then(Value::as_str) != Some("paragraph") {
+                            segments.push(Segment::Hoist(block.clone()));
+                        }
+                    }
+                }
+            }
+            _ => segments.push(Segment::Hoist(child)),
+        }
+    }
+
+    let mut output_nodes: Vec<Value> = Vec::new();
+    let mut current_task_run: Vec<Value> = Vec::new();
+
+    let flush_task_run = |run: &mut Vec<Value>, out: &mut Vec<Value>| {
+        if !run.is_empty() {
+            let task_list = json!({
+                "type": "taskList",
+                "attrs": { "localId": "" },
+                "content": std::mem::take(run),
+            });
+            out.push(task_list);
+        }
+    };
+
+    for seg in segments {
+        match seg {
+            Segment::Task(node) => current_task_run.push(node),
+            Segment::Hoist(block) => {
+                flush_task_run(&mut current_task_run, &mut output_nodes);
+                output_nodes.push(block);
+            }
+        }
+    }
+    flush_task_run(&mut current_task_run, &mut output_nodes);
+
+    Some(if output_nodes.is_empty() {
+        EndResult::Empty
+    } else if output_nodes.len() == 1 {
+        EndResult::Single(
+            output_nodes
+                .into_iter()
+                .next()
+                .expect("len checked == 1 above"),
+        )
+    } else {
+        let mut iter = output_nodes.into_iter();
+        let first = iter.next().expect("len checked >= 2 above");
+        EndResult::WithHoists {
+            node: first,
+            hoists: iter.collect(),
+        }
+    })
 }
 
 /// Keep only the first mark of each `type`. ADF (ProseMirror) treats a text
@@ -2282,6 +2298,89 @@ mod tests {
         let adf = markdown_to_adf("1. alpha\n2. beta");
         assert_eq!(adf["content"][0]["type"], "orderedList");
         assert!(adf["content"][0]["attrs"].is_null());
+    }
+
+    // --- Ordered list + task markers (EC-ordered, fix for invalid orderedList > taskItem) ---
+
+    #[test]
+    fn test_markdown_ordered_task_list_produces_task_list_not_ordered_list() {
+        // `1. [ ] a\n2. [x] b` must reclassify to taskList, NOT orderedList.
+        // orderedList.content only permits listItem; taskItem would be Jira 400.
+        let adf = markdown_to_adf("1. [ ] a\n2. [x] b\n");
+        let top = &adf["content"][0];
+        assert_eq!(
+            top["type"], "taskList",
+            "ordered list with task markers must become taskList, got: {adf}"
+        );
+        let items = top["content"]
+            .as_array()
+            .expect("taskList must have content");
+        assert_eq!(items.len(), 2, "expected 2 taskItems, got: {adf}");
+        assert_eq!(items[0]["type"], "taskItem");
+        assert_eq!(items[0]["attrs"]["state"], "TODO");
+        assert_eq!(
+            items[0]["content"][0]["text"], "a",
+            "first taskItem text: {adf}"
+        );
+        assert_eq!(items[1]["type"], "taskItem");
+        assert_eq!(items[1]["attrs"]["state"], "DONE");
+        assert_eq!(
+            items[1]["content"][0]["text"], "b",
+            "second taskItem text: {adf}"
+        );
+        // ADF structural validity
+        assert_valid_adf_structure(&adf);
+    }
+
+    #[test]
+    fn test_markdown_ordered_task_list_mixed_promotes_plain_to_todo() {
+        // `1. [ ] a\n2. plain` — plain item must be promoted to taskItem TODO.
+        let adf = markdown_to_adf("1. [ ] a\n2. plain\n");
+        let top = &adf["content"][0];
+        assert_eq!(
+            top["type"], "taskList",
+            "mixed ordered list must become taskList: {adf}"
+        );
+        let items = top["content"]
+            .as_array()
+            .expect("taskList must have content");
+        assert_eq!(items.len(), 2, "expected 2 taskItems (promoted): {adf}");
+        assert_eq!(items[0]["attrs"]["state"], "TODO");
+        assert_eq!(items[1]["attrs"]["state"], "TODO");
+        assert_valid_adf_structure(&adf);
+    }
+
+    #[test]
+    fn test_markdown_ordered_task_list_nested_produces_nested_task_list() {
+        // `1. [ ] a\n   1. [ ] b` — nested ordered task list per EC-13.
+        let adf = markdown_to_adf("1. [ ] a\n   1. [ ] b\n");
+        // The outer container must be a taskList.
+        let outer = &adf["content"][0];
+        assert_eq!(outer["type"], "taskList", "outer must be taskList: {adf}");
+        // Structural validity covers the nested shape.
+        assert_valid_adf_structure(&adf);
+    }
+
+    #[test]
+    fn test_markdown_plain_ordered_list_unchanged_without_task_markers() {
+        // Plain `1. first\n2. second` (no task markers) must remain orderedList.
+        let adf = markdown_to_adf("1. first\n2. second\n");
+        let top = &adf["content"][0];
+        assert_eq!(
+            top["type"], "orderedList",
+            "plain ordered list must stay orderedList: {adf}"
+        );
+        let items = top["content"]
+            .as_array()
+            .expect("orderedList must have content");
+        assert_eq!(items.len(), 2);
+        for item in items {
+            assert_eq!(
+                item["type"], "listItem",
+                "orderedList children must be listItem: {adf}"
+            );
+        }
+        assert_valid_adf_structure(&adf);
     }
 
     #[test]
@@ -4653,10 +4752,17 @@ mod tests {
             ("panel with task", "> [!NOTE]\n> - [ ] in panel\n"),
             // Blockquote with task list (normalized to paragraphs)
             ("blockquote with task", "> - [ ] in blockquote\n"),
-            // Ordered list (not reclassified)
-            ("ordered list", "1. first\n2. second\n"),
+            // Plain ordered list — no task markers, must stay orderedList (regression guard)
+            ("ordered list plain", "1. first\n2. second\n"),
             // Nested ordered list inside plain list
             ("nested ordered in plain", "- item\n  1. sub\n"),
+            // EC-ordered: ordered list with task markers → reclassified to taskList
+            (
+                "ordered task list unchecked+checked",
+                "1. [ ] a\n2. [x] b\n",
+            ),
+            ("ordered task list mixed", "1. [ ] a\n2. plain\n"),
+            ("ordered task list nested", "1. [ ] a\n   1. [ ] b\n"),
             // Deeply nested: task inside task inside task
             ("triple nested task", "- [ ] a\n  - [ ] b\n    - [x] c\n"),
             // Task with URL (bare URL autolinking should not break structure)
