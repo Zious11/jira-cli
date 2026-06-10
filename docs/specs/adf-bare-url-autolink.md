@@ -73,6 +73,29 @@ A post-`finish()` pass over the built ADF tree, run from `markdown_to_adf`:
    `code` mark, and all `codeBlock` content, are never touched — no double-links,
    no linkification inside code.
 
+### Deviations from GFM
+
+The rules above are *GFM-derived*, not a faithful GFM autolink implementation.
+Known, deliberate divergences:
+
+1. **Boundary "before" set is narrower.** GFM (micromark `wwwAutolinkBefore`)
+   admits `[` and line/tab boundaries in addition to whitespace and `*_~(`. We
+   admit only text-node-start, whitespace, and `*_~(` — omitting `[` — to cut
+   false positives (e.g. an unresolved reference-shortcut `[https://x]` stays
+   plain text rather than linking the inner URL).
+2. **URLs split by inline markup link only the leading run.** Because the pass
+   runs over the *already-built* ADF tree, a URL whose interior contains inline
+   emphasis/strong/strike (`https://example.com/a*b*c`, where `*b*` parsed as
+   emphasis) has already been fragmented into separate text nodes. Only the
+   leading plain run (`https://example.com/a`) is linked; the emphasized tail is
+   not part of the href. Pinned by `test_bare_url_split_by_emphasis_links_only_leading_run`.
+3. **`www.`, bare email, and other schemes (`ftp://`, `mailto:`) are out of
+   scope** (see Scope decision above).
+
+These divergences are acceptable for the Jira-description use case and bias
+toward *fewer* false positives, which matters because an applied mark is written
+permanently into the user's issue.
+
 ### Round-trip note
 
 Because a bare URL now becomes a real link, `adf_to_text` renders it back in
