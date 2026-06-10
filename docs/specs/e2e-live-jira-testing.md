@@ -116,6 +116,22 @@ GET succeeding immediately.
   - `test_e2e_jsm_non_jsm_guard` — `queue list --project <ES>` exits 64; stderr contains `"Jira Service Management project"` (does NOT require `JR_E2E_JSM_PROJECT`)
 - **Sprint mutation** (`sprint add/remove`): only if `JR_E2E_BOARD_ID` is set.
 
+### ADF markdown round-trip (`--markdown` → live ADF)
+These tests prove the `--markdown` path drives `markdown_to_adf` end-to-end and
+that Jira's REST API accepts/preserves the produced ADF on read-back (no extra
+env vars; run in the default `JR_E2E_PROJECT`):
+- `test_e2e_issue_markdown_description_roundtrip` — a heading in the markdown
+  description yields a `heading` ADF node in `fields.description` (E2E-HV-2).
+- `test_e2e_markdown_bare_url_produces_link_mark` (#473) — a **bare** `http(s)://`
+  URL in a `--markdown` description round-trips as an ADF `link` mark: the test
+  creates the issue, then `poll_view`s the STORED description and asserts a `text`
+  node carries a `link` mark whose `href` is the URL. This is the live proof of
+  the autolink feature's premise — Jira does **not** auto-linkify plain-text URLs
+  in a REST-submitted ADF body, so the explicit mark is required for clickability.
+  If a live run shows Jira normalizing the `link` mark into a different node
+  (e.g. an `inlineCard` smart-link), that is itself actionable signal and the
+  assertion should be widened to accept it. Broader ADF E2E expansion: #475.
+
 ## 5. CI workflow — `.github/workflows/e2e.yml`
 
 ```yaml

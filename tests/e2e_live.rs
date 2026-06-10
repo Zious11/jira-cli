@@ -4651,6 +4651,124 @@ fn test_e2e_issue_markdown_description_roundtrip() {
     best_effort_close(&h, &key);
 }
 
+/// Recursively search an ADF value for a `text` node whose **visible text is
+/// `url`** AND which carries a `link` mark whose `href` **contains `url`**.
+/// Returns true on the first match. Used to assert a bare URL survived as a real
+/// link rather than plain text (#473).
+///
+/// Two deliberate choices (F5 review): (1) requiring the matched `text` to equal
+/// the URL proves the URL *run itself* is linked, not some neighbouring text a
+/// wrong-slice regression might have marked; (2) both `text` and `href` are
+/// compared **tolerant of trailing slash(es)** Jira may add on storage
+/// (`trim_end_matches('/')` strips any number), but otherwise EXACTLY — a
+/// `contains`-style match would wrongly accept a redirect
+/// href that merely embeds the URL in a query string (e.g.
+/// `https://evil.example?u=https://example.com/...`).
+///
+/// Recursion is unbounded by depth, which is safe here: the only input is the
+/// small, self-created issue description read back via `poll_view`, never an
+/// adversarial or pathologically deep document.
+fn adf_has_linked_url(node: &Value, url: &str) -> bool {
+    let norm = |s: &str| s.trim_end_matches('/').to_string();
+    let target = norm(url);
+    if node.get("type").and_then(Value::as_str) == Some("text")
+        && node.get("text").and_then(Value::as_str).map(&norm) == Some(target.clone())
+    {
+        if let Some(marks) = node.get("marks").and_then(Value::as_array) {
+            let hit = marks.iter().any(|m| {
+                m.get("type").and_then(Value::as_str) == Some("link")
+                    && m.get("attrs")
+                        .and_then(|a| a.get("href"))
+                        .and_then(Value::as_str)
+                        .map(&norm)
+                        == Some(target.clone())
+            });
+            if hit {
+                return true;
+            }
+        }
+    }
+    match node {
+        Value::Array(items) => items.iter().any(|v| adf_has_linked_url(v, url)),
+        Value::Object(map) => map.values().any(|v| adf_has_linked_url(v, url)),
+        _ => false,
+    }
+}
+
+/// E2E (#473): a bare `http(s)://` URL in a `--markdown` description produces an
+/// ADF `link` mark that Jira's REST API ACCEPTS and PRESERVES on read-back.
+///
+/// This is the live proof of the feature's load-bearing premise: Jira does not
+/// auto-linkify a plain-text URL in a REST-submitted ADF body (smart-link unfurl
+/// is a browser-editor, compose-time feature), so the explicit `link` mark our
+/// autolink pass adds is *required* for the URL to be clickable. We create via
+/// `--markdown`, then GET-by-key (`poll_view`) and assert the STORED description
+/// carries a `link` mark whose `href` is the URL — proving the mark survived both
+/// the create POST and Jira's server-side storage/normalization (not merely that
+/// our client built it locally before sending).
+///
+/// Traces to: #473 (bare-URL autolink), broader ADF E2E coverage (#475).
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
+fn test_e2e_markdown_bare_url_produces_link_mark() {
+    if !e2e_enabled() {
+        return;
+    }
+    let label = run_label();
+    let itype = issue_type();
+    let proj = project();
+    let h = e2e_harness();
+
+    let url = "https://example.com/e2e-autolink";
+    let md = format!("see {url} now");
+    let create = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &proj,
+            "--type",
+            &itype,
+            "--summary",
+            &format!("[e2e {label}] bare-url autolink"),
+            "--markdown",
+            "--description",
+            &md,
+            "--label",
+            &label,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for create --markdown bare-url");
+    assert!(
+        create.status.success(),
+        "create --markdown (bare url) failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&create.stdout),
+        String::from_utf8_lossy(&create.stderr)
+    );
+    let json: Value =
+        serde_json::from_slice(&create.stdout).expect("create output must be valid JSON");
+    let key = json
+        .get("key")
+        .and_then(Value::as_str)
+        .expect("create JSON must contain a 'key'")
+        .to_string();
+
+    // Read back what Jira STORED — proves the REST API accepted and preserved the
+    // link mark, not just that our client built it locally before the POST.
+    let view = poll_view(&key, &h);
+    let description = &view["fields"]["description"];
+    assert!(
+        adf_has_linked_url(description, url),
+        "bare URL must round-trip as an ADF link mark on the URL text (href \
+         containing {url}); stored description: {description}"
+    );
+
+    best_effort_close(&h, &key);
+}
+
 /// E2E: `issue comment` across all three input channels — `--file`, `--stdin`,
 /// `--markdown` (positional message).
 ///
