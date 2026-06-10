@@ -113,7 +113,8 @@ This is semantically correct (it is a link) and is pinned by
 `test_bare_url_round_trips_to_markdown_link_text`. Skips / negatives:
 `test_url_in_inline_code_not_linkified`, `test_url_in_code_block_not_linkified`,
 `test_existing_markdown_link_not_double_linkified`, `test_www_url_stays_plain_text`,
-`test_bare_email_stays_plain_text`, `test_url_tight_against_preceding_word_not_matched`.
+`test_bare_email_stays_plain_text`, `test_url_tight_against_preceding_word_not_matched`,
+`test_bare_url_after_open_bracket_stays_plain_text`.
 Deviations / container paths: `test_bare_url_split_by_emphasis_links_only_leading_run`,
 `test_bare_url_inside_emphasis_keeps_em_and_link`, `test_bare_url_in_panel_is_linkified`,
 `test_bare_url_in_table_cell_is_linkified`.
