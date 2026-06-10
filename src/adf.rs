@@ -617,11 +617,19 @@ impl AdfBuilder {
                                 // preserve-not-drop invariant from #472/#489).
                                 let inline_content = extract_inline_from_list_item_content(&child);
                                 let trimmed = trim_leading_trailing_hardbreaks(inline_content);
-                                segments.push(Segment::Task(json!({
+                                let promoted = json!({
                                     "type": "taskItem",
                                     "attrs": { "localId": "", "state": "TODO" },
                                     "content": trimmed,
-                                })));
+                                });
+                                // EC-8 consistency: prune an empty promoted taskItem
+                                // exactly as `- [ ]` task items are pruned. A bare `-`
+                                // or `- ` plain item in a mixed list must not survive as
+                                // an empty taskItem — the deliberate product choice is that
+                                // empty task items are dropped (BC-7.2.010 EC-8).
+                                if !is_empty_block_container(&promoted) {
+                                    segments.push(Segment::Task(promoted));
+                                }
                                 // Hoist non-paragraph blocks (e.g. nested bulletList) from
                                 // the plain listItem immediately after their source taskItem.
                                 if let Some(blocks) =
@@ -1357,12 +1365,14 @@ fn normalize_list_item_content(children: Vec<Value>) -> Vec<Value> {
 ///
 /// ## What `blockquote.content` forbids
 ///
-/// The ADF blockquote schema allows only `paragraph`, `bulletList`,
-/// `orderedList`, `codeBlock`, `heading`, `rule`, `table`, and several media
-/// nodes. The one forbidden type reachable from pulldown-cmark 0.13.3 is
-/// **`taskList`**: pulldown's task-marker scan is container-agnostic (the `>`
-/// prefix is stripped on a prior loop iteration; the scan then runs identically
-/// to the top-level case), so `> - [ ] item` emits `blockquote > taskList`.
+/// The ADF blockquote schema allows only `paragraph`, `heading`, `bulletList`,
+/// `orderedList`, `codeBlock`, `rule`, `mediaSingle`, and `blockquote`.
+/// Notably, **`table`**, `taskList`, `panel`, `taskItem`, and `listItem` are
+/// all forbidden. The one forbidden type reachable from pulldown-cmark 0.13.3
+/// is **`taskList`**: pulldown's task-marker scan is container-agnostic (the
+/// `>` prefix is stripped on a prior loop iteration; the scan then runs
+/// identically to the top-level case), so `> - [ ] item` emits
+/// `blockquote > taskList`.
 /// This normalization is therefore **required and unconditional** (#471,
 /// BC-7.2.010 obligation #2 / EC-6).
 ///
@@ -3328,6 +3338,65 @@ mod tests {
         assert!(
             adf_str.contains("sub"),
             "nested sublist under plain item in mixed list must be preserved: {adf}"
+        );
+    }
+
+    #[test]
+    fn test_mixed_task_empty_promoted_plain_item_is_pruned() {
+        // EC-8 / O-2 consistency: an empty plain item promoted to taskItem in a
+        // mixed list must be pruned — identical to how `- [ ]` (an explicit empty
+        // task item) is pruned. Before this fix, a bare `- ` plain item in a mixed
+        // list would survive as `taskItem { content: [] }` while `- [ ]` was dropped.
+        //
+        // Input: "- [x] a\n- " — pulldown-cmark emits a Start(Item)→End(Item) for
+        // the bare `- ` (no text inside), producing an empty listItem that the
+        // promotion arm turns into an empty taskItem. EC-8 requires it be dropped.
+        let adf = markdown_to_adf("- [x] a\n- ");
+        let adf_str = adf.to_string();
+        // The result must contain exactly one taskItem (the `[x] a` item).
+        // The empty promoted plain item must be pruned.
+        let task_list = first_block(&adf);
+        assert_eq!(task_list["type"], "taskList", "must be a taskList: {adf}");
+        let items = task_list["content"]
+            .as_array()
+            .expect("taskList must have content array");
+        assert_eq!(
+            items.len(),
+            1,
+            "empty promoted plain item must be pruned; expected 1 taskItem, got {}: {adf_str}",
+            items.len()
+        );
+        assert_eq!(items[0]["type"], "taskItem", "only item must be taskItem");
+        // Confirm no empty taskItem nodes appear anywhere in the output.
+        assert!(
+            !adf_str.contains(r#""content":[]"#),
+            "no empty-content taskItem must survive pruning: {adf_str}"
+        );
+    }
+
+    #[test]
+    fn test_mixed_task_nonempty_promoted_plain_item_survives() {
+        // EC-3 / O-2 regression guard: non-empty plain items promoted to taskItem
+        // in a mixed list must NOT be pruned by the emptiness check.
+        // Input: "- [ ] task\n- plain" — `plain` is non-empty → must survive.
+        let adf = markdown_to_adf("- [ ] task\n- plain");
+        let task_list = first_block(&adf);
+        assert_eq!(task_list["type"], "taskList", "must be taskList: {adf}");
+        let items = task_list["content"]
+            .as_array()
+            .expect("taskList must have content array");
+        assert_eq!(
+            items.len(),
+            2,
+            "both items must survive (non-empty): got {}: {adf}",
+            items.len()
+        );
+        assert_eq!(items[0]["type"], "taskItem");
+        assert_eq!(items[1]["type"], "taskItem");
+        // The promoted plain item has text "plain"
+        assert!(
+            items[1].to_string().contains("plain"),
+            "promoted plain item must contain 'plain': {adf}"
         );
     }
 
