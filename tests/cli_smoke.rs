@@ -336,13 +336,18 @@ fn test_issue_list_created_after_and_recent_conflict() {
 }
 
 // --- allow_hyphen_values regression tests (issue #471 task-list fix) ---
+//
+// Live regression anchor: tests/e2e_live.rs::test_e2e_markdown_task_list_produces_task_items
+// These hermetic parse tests and the live e2e test are intentionally paired: the unit tests
+// prove the parser does not reject the value; the live test proves ADF round-trip correctness.
 
 #[test]
 fn test_create_description_leading_dash_value_accepted() {
     // GFM task-list form: --description "- [ ] todo item\n- [x] done item"
     // Before fix: clap rejects with "unexpected argument '- '"
-    // After fix:  parses successfully
-    Cli::try_parse_from([
+    // After fix:  parses successfully and lands in description field
+    // Live anchor: test_e2e_markdown_task_list_produces_task_items (#471)
+    let cli = Cli::try_parse_from([
         "jr",
         "issue",
         "create",
@@ -356,12 +361,25 @@ fn test_create_description_leading_dash_value_accepted() {
         "- [ ] todo item\n- [x] done item",
     ])
     .expect("leading-dash description on issue create must parse (allow_hyphen_values)");
+    if let jr::cli::Command::Issue { command } = cli.command {
+        if let jr::cli::IssueCommand::Create { description, .. } = *command {
+            assert_eq!(
+                description.as_deref(),
+                Some("- [ ] todo item\n- [x] done item"),
+                "leading-dash description must land in description field, not be absorbed elsewhere"
+            );
+        } else {
+            panic!("expected IssueCommand::Create");
+        }
+    } else {
+        panic!("expected Command::Issue");
+    }
 }
 
 #[test]
 fn test_edit_description_leading_dash_value_accepted() {
-    // GFM task-list form on edit path
-    Cli::try_parse_from([
+    // GFM task-list form on edit path — value must land in description field
+    let cli = Cli::try_parse_from([
         "jr",
         "issue",
         "edit",
@@ -370,11 +388,25 @@ fn test_edit_description_leading_dash_value_accepted() {
         "- [ ] todo item",
     ])
     .expect("leading-dash description on issue edit must parse (allow_hyphen_values)");
+    if let jr::cli::Command::Issue { command } = cli.command {
+        if let jr::cli::IssueCommand::Edit { description, .. } = *command {
+            assert_eq!(
+                description.as_deref(),
+                Some("- [ ] todo item"),
+                "leading-dash description must land in description field on edit"
+            );
+        } else {
+            panic!("expected IssueCommand::Edit");
+        }
+    } else {
+        panic!("expected Command::Issue");
+    }
 }
 
 #[test]
 fn test_create_summary_leading_dash_value_accepted() {
-    Cli::try_parse_from([
+    // leading-dash summary must land in summary field, not be treated as a flag
+    let cli = Cli::try_parse_from([
         "jr",
         "issue",
         "create",
@@ -386,11 +418,25 @@ fn test_create_summary_leading_dash_value_accepted() {
         "- dash summary",
     ])
     .expect("leading-dash summary on issue create must parse (allow_hyphen_values)");
+    if let jr::cli::Command::Issue { command } = cli.command {
+        if let jr::cli::IssueCommand::Create { summary, .. } = *command {
+            assert_eq!(
+                summary.as_deref(),
+                Some("- dash summary"),
+                "leading-dash summary must land in summary field on create"
+            );
+        } else {
+            panic!("expected IssueCommand::Create");
+        }
+    } else {
+        panic!("expected Command::Issue");
+    }
 }
 
 #[test]
 fn test_edit_summary_leading_dash_value_accepted() {
-    Cli::try_parse_from([
+    // leading-dash summary on edit path
+    let cli = Cli::try_parse_from([
         "jr",
         "issue",
         "edit",
@@ -399,11 +445,25 @@ fn test_edit_summary_leading_dash_value_accepted() {
         "- dash summary",
     ])
     .expect("leading-dash summary on issue edit must parse (allow_hyphen_values)");
+    if let jr::cli::Command::Issue { command } = cli.command {
+        if let jr::cli::IssueCommand::Edit { summary, .. } = *command {
+            assert_eq!(
+                summary.as_deref(),
+                Some("- dash summary"),
+                "leading-dash summary must land in summary field on edit"
+            );
+        } else {
+            panic!("expected IssueCommand::Edit");
+        }
+    } else {
+        panic!("expected Command::Issue");
+    }
 }
 
 #[test]
 fn test_worklog_add_message_leading_dash_value_accepted() {
-    Cli::try_parse_from([
+    // leading-dash worklog message must land in message field
+    let cli = Cli::try_parse_from([
         "jr",
         "worklog",
         "add",
@@ -413,4 +473,152 @@ fn test_worklog_add_message_leading_dash_value_accepted() {
         "- dash message",
     ])
     .expect("leading-dash message on worklog add must parse (allow_hyphen_values)");
+    if let jr::cli::Command::Worklog { command } = cli.command {
+        if let jr::cli::WorklogCommand::Add { message, .. } = command {
+            assert_eq!(
+                message.as_deref(),
+                Some("- dash message"),
+                "leading-dash message must land in message field on worklog add"
+            );
+        } else {
+            panic!("expected WorklogCommand::Add");
+        }
+    } else {
+        panic!("expected Command::Worklog");
+    }
+}
+
+// F-L3: issue comment positional message accepts leading-dash values
+#[test]
+fn test_comment_message_leading_dash_value_accepted() {
+    // `jr issue comment FOO-1 "- a note"` was rejected with "unexpected argument '- '"
+    // before allow_hyphen_values was added to the message positional.
+    let cli = Cli::try_parse_from(["jr", "issue", "comment", "FOO-1", "- a note"])
+        .expect("leading-dash comment message must parse (allow_hyphen_values)");
+    if let jr::cli::Command::Issue { command } = cli.command {
+        if let jr::cli::IssueCommand::Comment { key, message, .. } = *command {
+            assert_eq!(key, "FOO-1", "key must be FOO-1");
+            assert_eq!(
+                message.as_deref(),
+                Some("- a note"),
+                "leading-dash comment message must land in message field, not be absorbed as a flag"
+            );
+        } else {
+            panic!("expected IssueCommand::Comment");
+        }
+    } else {
+        panic!("expected Command::Issue");
+    }
+}
+
+// F-L1: edge cases — exactly "-" and double-dash prefix as literal description value
+#[test]
+fn test_create_description_single_dash_accepted() {
+    // A description value of exactly "-" must parse and land in description, not be
+    // treated as a stdin sentinel or short-flag prefix.
+    let cli = Cli::try_parse_from([
+        "jr",
+        "issue",
+        "create",
+        "-p",
+        "FOO",
+        "-t",
+        "Task",
+        "-s",
+        "Summary",
+        "--description",
+        "-",
+    ])
+    .expect(r#"description value of "-" must parse (allow_hyphen_values)"#);
+    if let jr::cli::Command::Issue { command } = cli.command {
+        if let jr::cli::IssueCommand::Create { description, .. } = *command {
+            assert_eq!(
+                description.as_deref(),
+                Some("-"),
+                r#"description "-" must land in description field"#
+            );
+        } else {
+            panic!("expected IssueCommand::Create");
+        }
+    } else {
+        panic!("expected Command::Issue");
+    }
+}
+
+#[test]
+fn test_create_description_double_dash_prefix_accepted() {
+    // A description that starts with "--" (e.g. "--markdown" as literal content)
+    // must parse and land in description, not be interpreted as a flag name.
+    let cli = Cli::try_parse_from([
+        "jr",
+        "issue",
+        "create",
+        "-p",
+        "FOO",
+        "-t",
+        "Task",
+        "-s",
+        "Summary",
+        "--description",
+        "--markdown",
+    ])
+    .expect(r#"description starting with "--" must parse (allow_hyphen_values)"#);
+    if let jr::cli::Command::Issue { command } = cli.command {
+        if let jr::cli::IssueCommand::Create { description, .. } = *command {
+            assert_eq!(
+                description.as_deref(),
+                Some("--markdown"),
+                r#"description "--markdown" must land in description field, not parsed as a flag"#
+            );
+        } else {
+            panic!("expected IssueCommand::Create");
+        }
+    } else {
+        panic!("expected Command::Issue");
+    }
+}
+
+// F-M1: conflicts_with survives allow_hyphen_values — leading-dash description value
+// must NOT suppress the --description / --description-stdin mutual-exclusion guard.
+#[test]
+fn test_create_description_leading_dash_and_description_stdin_still_conflict() {
+    // Even with allow_hyphen_values, clap must still enforce conflicts_with between
+    // --description and --description-stdin. The leading-dash value must not fool clap
+    // into ignoring the conflict rule.
+    Command::cargo_bin("jr")
+        .unwrap()
+        .args([
+            "issue",
+            "create",
+            "-p",
+            "FOO",
+            "-t",
+            "Task",
+            "-s",
+            "Summary",
+            "--description",
+            "- [ ] x",
+            "--description-stdin",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
+#[test]
+fn test_edit_description_leading_dash_and_description_stdin_still_conflict() {
+    // Same conflict check on the edit path with a leading-dash description value.
+    Command::cargo_bin("jr")
+        .unwrap()
+        .args([
+            "issue",
+            "edit",
+            "FOO-1",
+            "--description",
+            "- [ ] x",
+            "--description-stdin",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be used with"));
 }
