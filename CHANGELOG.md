@@ -56,11 +56,12 @@ All notable changes to jr will be documented here.
 
 ### Fixed
 
-- **Leading-dash values now accepted for free-text CLI args (#471):** `issue create`/`edit`
-  `--summary` and `--description`, `worklog add --message`, and the `issue comment` positional
-  message now carry `allow_hyphen_values = true`. This fixes the `"unexpected argument"` clap
-  error that occurred when passing GFM markdown task lists (e.g. `--description "- [ ] todo"`)
-  or any other leading-dash content. Surfaced by the nightly E2E test
+- **Leading-dash values now accepted for all free-text write-command args (#471):** `issue create`/`edit`
+  `--summary` and `--description`, `worklog add --message`, the `issue comment` positional
+  message, and `issue remote-link --title` all carry `allow_hyphen_values = true`. This fixes the
+  `"unexpected argument"` clap error that occurred when passing GFM markdown task lists
+  (e.g. `--description "- [ ] todo"`), bullet-list content, or titled links
+  (e.g. `--title "- important ref"`) as free-text write inputs. Surfaced by the nightly E2E test
   `test_e2e_markdown_task_list_produces_task_items`. The `--description` / `--description-stdin`
   mutual-exclusion guard is unaffected. Use `--description="…"` or `--description-stdin` for
   programmatic usage where the value may start with a dash. (`src/cli/mod.rs`)

@@ -578,6 +578,108 @@ fn test_create_description_double_dash_prefix_accepted() {
     }
 }
 
+// O-3: remote-link --title accepts leading-dash values
+#[test]
+fn test_remote_link_title_leading_dash_value_accepted() {
+    // `jr issue remote-link PROJ-1 --url https://example.com --title "- important ref"`
+    // The --title field is user-authored free text; a value beginning with '-' must land
+    // in title, not be treated as an unknown flag.
+    let cli = Cli::try_parse_from([
+        "jr",
+        "issue",
+        "remote-link",
+        "PROJ-1",
+        "--url",
+        "https://example.com",
+        "--title",
+        "- important ref",
+    ])
+    .expect("leading-dash title on issue remote-link must parse (allow_hyphen_values)");
+    if let jr::cli::Command::Issue { command } = cli.command {
+        if let jr::cli::IssueCommand::RemoteLink { key, title, .. } = *command {
+            assert_eq!(key, "PROJ-1", "key must be PROJ-1");
+            assert_eq!(
+                title.as_deref(),
+                Some("- important ref"),
+                "leading-dash title must land in title field, not be absorbed as a flag"
+            );
+        } else {
+            panic!("expected IssueCommand::RemoteLink");
+        }
+    } else {
+        panic!("expected Command::Issue");
+    }
+}
+
+// O-1: positional + trailing flag interaction — leading-dash comment message followed by
+// a named flag must not cause the message to greedily swallow the flag token.
+#[test]
+fn test_comment_message_leading_dash_followed_by_flag_does_not_swallow_flag() {
+    // `jr issue comment FOO-1 "- a note" --output json`
+    // The positional message has allow_hyphen_values; the trailing --output global flag
+    // must still parse correctly (output == Json) rather than being consumed as message text.
+    let cli = Cli::try_parse_from([
+        "jr", "issue", "comment", "FOO-1", "- a note", "--output", "json",
+    ])
+    .expect("leading-dash comment message with trailing --output flag must parse");
+    assert!(
+        matches!(cli.output, jr::cli::OutputFormat::Json),
+        "--output json must parse correctly after a leading-dash positional message"
+    );
+    if let jr::cli::Command::Issue { command } = cli.command {
+        if let jr::cli::IssueCommand::Comment { key, message, .. } = *command {
+            assert_eq!(key, "FOO-1", "key must be FOO-1");
+            assert_eq!(
+                message.as_deref(),
+                Some("- a note"),
+                "message must be the dash value, not the flag token"
+            );
+        } else {
+            panic!("expected IssueCommand::Comment");
+        }
+    } else {
+        panic!("expected Command::Issue");
+    }
+}
+
+// O-2: worklog message-before-duration ordering
+// `jr worklog add FOO-1 --message "- dash msg" 1h`
+// The --message option with allow_hyphen_values precedes the required `duration` positional.
+// Clap must assign "- dash msg" to message and "1h" to duration.
+#[test]
+fn test_worklog_add_message_before_duration_leading_dash_accepted() {
+    let cli = Cli::try_parse_from([
+        "jr",
+        "worklog",
+        "add",
+        "FOO-1",
+        "--message",
+        "- dash msg",
+        "1h",
+    ])
+    .expect("worklog add: --message before duration with leading-dash value must parse");
+    if let jr::cli::Command::Worklog { command } = cli.command {
+        if let jr::cli::WorklogCommand::Add {
+            key,
+            duration,
+            message,
+        } = command
+        {
+            assert_eq!(key, "FOO-1", "key must be FOO-1");
+            assert_eq!(
+                message.as_deref(),
+                Some("- dash msg"),
+                "leading-dash message must land in message field"
+            );
+            assert_eq!(duration, "1h", "duration must be 1h");
+        } else {
+            panic!("expected WorklogCommand::Add");
+        }
+    } else {
+        panic!("expected Command::Worklog");
+    }
+}
+
 // F-M1: conflicts_with survives allow_hyphen_values — leading-dash description value
 // must NOT suppress the --description / --description-stdin mutual-exclusion guard.
 #[test]

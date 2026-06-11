@@ -649,7 +649,7 @@ pub enum IssueCommand {
         url: String,
 
         /// Label shown in the Jira UI. Defaults to the URL when omitted.
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         title: Option<String>,
     },
     /// List available link types
