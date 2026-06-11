@@ -1195,9 +1195,17 @@ fn test_every_ignored_test_has_gate_guard() {
     while i < lines.len() {
         if lines[i].trim_start().starts_with("#[ignore") {
             // Scan forward up to 5 lines to find the `fn test_` line.
+            // Also recognises `async fn test_` so that async gated tests cannot
+            // silently escape the gate-first invariant enforced below.
             let mut fn_line = None;
             for (offset, line) in lines[i..lines.len().min(i + 5)].iter().enumerate() {
-                if line.trim_start().starts_with("fn test_") {
+                let trimmed = line.trim_start();
+                // Strip an optional `async ` prefix before the `fn test_` check
+                // so both sync (`fn test_…`) and async (`async fn test_…`) forms
+                // are recognised.  Without this, an `async fn test_` line would
+                // not match and the gate check would be silently skipped.
+                let without_async = trimmed.strip_prefix("async ").unwrap_or(trimmed);
+                if without_async.starts_with("fn test_") {
                     fn_line = Some(i + offset);
                     break;
                 }
@@ -1205,13 +1213,17 @@ fn test_every_ignored_test_has_gate_guard() {
 
             if let Some(fn_start) = fn_line {
                 // Extract the function name for error messages.
-                let fn_name = lines[fn_start]
-                    .trim()
-                    .trim_start_matches("fn ")
-                    .split('(')
-                    .next()
-                    .unwrap_or("(unknown)")
-                    .to_string();
+                // Strip `async ` if present before stripping `fn `.
+                let fn_name = {
+                    let trimmed = lines[fn_start].trim();
+                    let without_async = trimmed.strip_prefix("async ").unwrap_or(trimmed);
+                    without_async
+                        .trim_start_matches("fn ")
+                        .split('(')
+                        .next()
+                        .unwrap_or("(unknown)")
+                        .to_string()
+                };
 
                 // Build the raw body string using a string-literal-aware
                 // brace-depth counter so that `{` / `}` inside `"..."` or
@@ -9522,9 +9534,9 @@ fn adf_has_blockquote_in_list_item(node: &Value) -> bool {
 /// was actually called rather than a raw passthrough.
 ///
 /// Traces to: BC-7.2.003, BC-7.2.004, BC-7.2.006, #475.
-#[tokio::test]
+#[test]
 #[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
-async fn test_e2e_adf_read_path_human_output() {
+fn test_e2e_adf_read_path_human_output() {
     if !e2e_enabled() {
         return;
     }
