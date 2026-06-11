@@ -9207,7 +9207,12 @@ fn test_e2e_markdown_subsup_produces_subsup_marks() {
 
     // Space before ^2^ is required: pulldown-cmark won't open superscript
     // tight against a preceding word char (see CLAUDE.md #474 gotcha).
-    let md = "H ~2~O and E=mc ^2^";
+    // Space after the closing ~2~ is also required: the proven-supported form
+    // (unit test `test_markdown_subscript_to_subsup_sub`) uses whitespace on
+    // both sides of the span. Tight-closing `~2~O` may not be recognized as
+    // subscript by pulldown-cmark — using `~2~ O` avoids a spurious failure on
+    // first live run (adversary MED-001).
+    let md = "H ~2~ O and E=mc ^2^";
     let create = h
         .cmd()
         .args([
@@ -9287,6 +9292,12 @@ fn test_e2e_markdown_subsup_produces_subsup_marks() {
 /// some older Jira Cloud versions). If the test fails live with the panel
 /// node absent from the stored description, check whether the site's ADF
 /// schema supports `panel` — this is a Jira-side limitation.
+///
+/// NOTE: The canonical E2E Jira site is assumed to be a modern Jira Cloud
+/// instance where `panel` nodes are supported. Assertions are hard (not
+/// skipped) because a live pass is the intended verification for #483. If
+/// the site is reconfigured to disable panels, update or skip the test and
+/// file an ops note in `docs/specs/e2e-live-jira-testing.md`.
 #[test]
 #[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
 fn test_e2e_markdown_gfm_alert_produces_panel() {
@@ -9339,12 +9350,16 @@ fn test_e2e_markdown_gfm_alert_produces_panel() {
 
     assert!(
         adf_has_panel(description, "info"),
-        "> [!NOTE] must round-trip as an ADF panel with panelType=\"info\"; \
+        "expected ADF `panel` (panelType=info) in stored description — if absent, \
+         either the markdown→ADF panel mapping regressed (#483) OR the canonical E2E \
+         Jira site lacks panel support (verify site config / panel editor flag); \
          stored description: {description}"
     );
     assert!(
         adf_has_panel(description, "warning"),
-        "> [!WARNING] must round-trip as an ADF panel with panelType=\"warning\"; \
+        "expected ADF `panel` (panelType=warning) in stored description — if absent, \
+         either the markdown→ADF panel mapping regressed (#483) OR the canonical E2E \
+         Jira site lacks panel support (verify site config / panel editor flag); \
          stored description: {description}"
     );
 
