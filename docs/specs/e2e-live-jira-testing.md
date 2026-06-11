@@ -130,7 +130,32 @@ env vars; run in the default `JR_E2E_PROJECT`):
   in a REST-submitted ADF body, so the explicit mark is required for clickability.
   If a live run shows Jira normalizing the `link` mark into a different node
   (e.g. an `inlineCard` smart-link), that is itself actionable signal and the
-  assertion should be widened to accept it. Broader ADF E2E expansion: #475.
+  assertion should be widened to accept it.
+- `test_e2e_markdown_task_list_produces_task_items` (#471) — a GFM task list
+  (`- [ ] todo item\n- [x] done item`) round-trips as ADF `taskItem` nodes with
+  `attrs.state` of `"TODO"` / `"DONE"` and a `taskList` container. Proves the
+  `ENABLE_TASKLISTS` path drives `markdown_to_adf` end-to-end and that Jira
+  accepts/preserves `taskItem`/`taskList` on read-back.
+- `test_e2e_markdown_ordered_task_list_produces_task_items` (#471 EC-17) — an
+  ordered-syntax task list (`1. [ ] …\n2. [x] …`) produces the same `taskItem`/
+  `taskList` ADF structure, not an `orderedList`. Pins EC-17 live: ordered task
+  lists promote to `taskList`. Risk: if pulldown-cmark 0.13 does not promote
+  ordered task syntax, the test will fail with an `orderedList` in the stored ADF
+  — that is actionable signal that EC-17 requires a src/ fix.
+- `test_e2e_markdown_subsup_produces_subsup_marks` (#474) — `~x~` (subscript) and
+  `^x^` (superscript, with required leading space) in a `--markdown` description
+  round-trip as ADF `subsup` marks with `attrs.type == "sub"` / `"sup"`. Risk:
+  Jira Cloud may drop unknown mark types on storage; a live failure should be
+  investigated by inspecting the raw stored description JSON.
+- `test_e2e_markdown_gfm_alert_produces_panel` (#483) — GFM alerts `> [!NOTE]`
+  and `> [!WARNING]` round-trip as ADF `panel` nodes with `panelType == "info"`
+  and `panelType == "warning"` respectively. Risk: `panel` node availability is
+  editor-flag-gated on some Jira Cloud instances; a live failure may indicate a
+  site configuration limitation rather than a jr bug.
+- `test_e2e_markdown_block_html_preserved` (#489) — block-level HTML
+  (`<div>raw block content</div>`) is preserved as literal text in the stored ADF
+  (`adf_contains_text` finds `"raw block content"`). Proves the #489 "preserve,
+  not drop" semantics work end-to-end through Jira's REST API.
 
 ## 5. CI workflow — `.github/workflows/e2e.yml`
 

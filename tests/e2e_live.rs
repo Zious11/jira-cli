@@ -8884,3 +8884,543 @@ fn test_e2e_issue_edit_issuetype_multikey_bulk_roundtrip() {
         );
     }
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// ADF markdown round-trip tests (#475)
+//
+// Each test creates an issue via `jr issue create --markdown --description <md>`
+// and then reads back the STORED ADF via `poll_view` to assert specific ADF node
+// shapes survived both the POST and Jira's server-side normalization.
+//
+// All tests use the standard e2e_enabled() / run_label() / issue_type() /
+// project() / e2e_harness() helpers and clean up via best_effort_close().
+//
+// LISTITEM NORMALIZATION (#470): `listItem` normalization-correctness assertions
+// are a lower live-value class (no observable user-facing change on read-back)
+// and are deferred as a follow-up — worth adding if a regression surfaces.
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Recursively searches an ADF JSON value for a `taskItem` node whose
+/// descendant text contains `text` (case-sensitive substring) and whose
+/// `attrs.state` equals `state` (exact, e.g. `"TODO"` or `"DONE"`).
+///
+/// Tolerates Jira-added fields such as `localId` on the node (matching is by
+/// type/state/text, not exact equality of the whole node).
+///
+/// Recursion is unbounded by depth; safe because the only input is the small,
+/// self-created issue description read back via `poll_view`.
+fn adf_has_task_item(node: &Value, text: &str, state: &str) -> bool {
+    if node.get("type").and_then(Value::as_str) == Some("taskItem") {
+        let node_state = node
+            .get("attrs")
+            .and_then(|a| a.get("state"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if node_state == state && adf_contains_text(node, text) {
+            return true;
+        }
+    }
+    match node {
+        Value::Array(items) => items.iter().any(|v| adf_has_task_item(v, text, state)),
+        Value::Object(map) => map.values().any(|v| adf_has_task_item(v, text, state)),
+        _ => false,
+    }
+}
+
+/// Returns `true` if any descendant `text` node in `node` contains `needle`
+/// as a substring.
+fn adf_contains_text(node: &Value, needle: &str) -> bool {
+    if node.get("type").and_then(Value::as_str) == Some("text") {
+        if let Some(t) = node.get("text").and_then(Value::as_str) {
+            if t.contains(needle) {
+                return true;
+            }
+        }
+    }
+    match node {
+        Value::Array(items) => items.iter().any(|v| adf_contains_text(v, needle)),
+        Value::Object(map) => map.values().any(|v| adf_contains_text(v, needle)),
+        _ => false,
+    }
+}
+
+/// Recursively searches an ADF JSON value for a `taskList` node.
+fn adf_has_task_list(node: &Value) -> bool {
+    if node.get("type").and_then(Value::as_str) == Some("taskList") {
+        return true;
+    }
+    match node {
+        Value::Array(items) => items.iter().any(adf_has_task_list),
+        Value::Object(map) => map.values().any(adf_has_task_list),
+        _ => false,
+    }
+}
+
+/// Recursively searches an ADF JSON value for a `panel` node with the given
+/// `panel_type` in its `attrs.panelType` field.
+fn adf_has_panel(node: &Value, panel_type: &str) -> bool {
+    if node.get("type").and_then(Value::as_str) == Some("panel") {
+        let pt = node
+            .get("attrs")
+            .and_then(|a| a.get("panelType"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if pt == panel_type {
+            return true;
+        }
+    }
+    match node {
+        Value::Array(items) => items.iter().any(|v| adf_has_panel(v, panel_type)),
+        Value::Object(map) => map.values().any(|v| adf_has_panel(v, panel_type)),
+        _ => false,
+    }
+}
+
+/// Recursively searches an ADF JSON value for a `text` node carrying a
+/// `subsup` mark whose `attrs.type` equals `mark_type` (e.g. `"sub"` or
+/// `"sup"`).
+fn adf_has_subsup_mark(node: &Value, mark_type: &str) -> bool {
+    if node.get("type").and_then(Value::as_str) == Some("text") {
+        if let Some(marks) = node.get("marks").and_then(Value::as_array) {
+            let hit = marks.iter().any(|m| {
+                m.get("type").and_then(Value::as_str) == Some("subsup")
+                    && m.get("attrs")
+                        .and_then(|a| a.get("type"))
+                        .and_then(Value::as_str)
+                        == Some(mark_type)
+            });
+            if hit {
+                return true;
+            }
+        }
+    }
+    match node {
+        Value::Array(items) => items.iter().any(|v| adf_has_subsup_mark(v, mark_type)),
+        Value::Object(map) => map.values().any(|v| adf_has_subsup_mark(v, mark_type)),
+        _ => false,
+    }
+}
+
+/// E2E (#471): a GFM task-list in a `--markdown` description produces ADF
+/// `taskItem` nodes with `attrs.state` of `"TODO"` / `"DONE"` that Jira
+/// accepts and preserves on read-back.
+///
+/// Description: `- [ ] todo item\n- [x] done item`
+///
+/// Asserts:
+/// - A `taskItem` whose text contains `"todo item"` has `state == "TODO"`.
+/// - A `taskItem` whose text contains `"done item"` has `state == "DONE"`.
+/// - A `taskList` container exists somewhere in the description ADF.
+///
+/// Traces to: #471 (GFM task lists → ADF taskList/taskItem), #475 (ADF E2E batch).
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
+fn test_e2e_markdown_task_list_produces_task_items() {
+    if !e2e_enabled() {
+        return;
+    }
+    let label = run_label();
+    let itype = issue_type();
+    let proj = project();
+    let h = e2e_harness();
+
+    let md = "- [ ] todo item\n- [x] done item";
+    let create = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &proj,
+            "--type",
+            &itype,
+            "--summary",
+            &format!("[e2e {label}] task-list taskItem round-trip"),
+            "--markdown",
+            "--description",
+            md,
+            "--label",
+            &label,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for create --markdown task-list");
+    assert!(
+        create.status.success(),
+        "create --markdown (task list) failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&create.stdout),
+        String::from_utf8_lossy(&create.stderr)
+    );
+    let json: Value =
+        serde_json::from_slice(&create.stdout).expect("create output must be valid JSON");
+    let key = json
+        .get("key")
+        .and_then(Value::as_str)
+        .expect("create JSON must contain a 'key'")
+        .to_string();
+
+    let view = poll_view(&key, &h);
+    let description = &view["fields"]["description"];
+
+    assert!(
+        adf_has_task_item(description, "todo item", "TODO"),
+        "unchecked task item must round-trip as taskItem with state=TODO; \
+         stored description: {description}"
+    );
+    assert!(
+        adf_has_task_item(description, "done item", "DONE"),
+        "checked task item must round-trip as taskItem with state=DONE; \
+         stored description: {description}"
+    );
+    assert!(
+        adf_has_task_list(description),
+        "description must contain a taskList container node; \
+         stored description: {description}"
+    );
+
+    best_effort_close(&h, &key);
+}
+
+/// E2E (#471 EC-17): an ordered-syntax task list (`1. [ ] …`) in a `--markdown`
+/// description produces ADF `taskItem` nodes — NOT an `orderedList`.
+///
+/// EC-17 specifies that an ordered-list task list promotes to `taskList`, so
+/// the same `taskItem`/`taskList` ADF structure is expected regardless of
+/// whether the source markdown used `- ` or `1. ` prefixes.
+///
+/// Description: `1. [ ] ordered todo\n2. [x] ordered done`
+///
+/// Asserts:
+/// - A `taskItem` with `state == "TODO"` containing `"ordered todo"`.
+/// - A `taskItem` with `state == "DONE"` containing `"ordered done"`.
+/// - A `taskList` container is present (no `orderedList`).
+///
+/// Traces to: #471 EC-17, #475 (ADF E2E batch).
+///
+/// RISK: pulldown-cmark 0.13 may or may not promote ordered task-list syntax
+/// to `Tag::TaskListMarker` the same way it does for unordered lists. If this
+/// test fails live, it means EC-17 is unimplemented or the ordered path
+/// produces `orderedList` instead of `taskList` — actionable signal.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
+fn test_e2e_markdown_ordered_task_list_produces_task_items() {
+    if !e2e_enabled() {
+        return;
+    }
+    let label = run_label();
+    let itype = issue_type();
+    let proj = project();
+    let h = e2e_harness();
+
+    let md = "1. [ ] ordered todo\n2. [x] ordered done";
+    let create = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &proj,
+            "--type",
+            &itype,
+            "--summary",
+            &format!("[e2e {label}] ordered task-list taskItem round-trip"),
+            "--markdown",
+            "--description",
+            md,
+            "--label",
+            &label,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for create --markdown ordered task-list");
+    assert!(
+        create.status.success(),
+        "create --markdown (ordered task list) failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&create.stdout),
+        String::from_utf8_lossy(&create.stderr)
+    );
+    let json: Value =
+        serde_json::from_slice(&create.stdout).expect("create output must be valid JSON");
+    let key = json
+        .get("key")
+        .and_then(Value::as_str)
+        .expect("create JSON must contain a 'key'")
+        .to_string();
+
+    let view = poll_view(&key, &h);
+    let description = &view["fields"]["description"];
+
+    assert!(
+        adf_has_task_item(description, "ordered todo", "TODO"),
+        "unchecked ordered task item must round-trip as taskItem with state=TODO \
+         (EC-17: ordered task list promotes to taskList); \
+         stored description: {description}"
+    );
+    assert!(
+        adf_has_task_item(description, "ordered done", "DONE"),
+        "checked ordered task item must round-trip as taskItem with state=DONE \
+         (EC-17: ordered task list promotes to taskList); \
+         stored description: {description}"
+    );
+    assert!(
+        adf_has_task_list(description),
+        "description must contain a taskList container (not orderedList) for \
+         ordered task-list syntax (EC-17); stored description: {description}"
+    );
+
+    best_effort_close(&h, &key);
+}
+
+/// E2E (#474): subscript `~x~` and superscript `^x^` in a `--markdown`
+/// description produce ADF `subsup` marks with the correct `attrs.type` that
+/// Jira accepts and preserves on read-back.
+///
+/// Description: `H ~2~O and E=mc ^2^`
+///
+/// Note the space before `^2^`: pulldown-cmark does not open a superscript
+/// when `^` is immediately preceded by a word character (so `mc^2^` stays
+/// literal — use `mc ^2^` instead).
+///
+/// Asserts:
+/// - A `text` node carries a `subsup` mark with `attrs.type == "sub"`.
+/// - A `text` node carries a `subsup` mark with `attrs.type == "sup"`.
+///
+/// Traces to: #474 (subsup marks), #475 (ADF E2E batch).
+///
+/// RISK: Jira Cloud may normalize `subsup` marks into something else on
+/// storage (e.g. drop unknown mark types). If the test fails live with
+/// adf_has_subsup_mark returning false, check the stored description JSON
+/// to determine whether Jira accepted the mark — if Jira silently drops it,
+/// the behavior is a Jira-side limitation, not a jr bug.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
+fn test_e2e_markdown_subsup_produces_subsup_marks() {
+    if !e2e_enabled() {
+        return;
+    }
+    let label = run_label();
+    let itype = issue_type();
+    let proj = project();
+    let h = e2e_harness();
+
+    // Space before ^2^ is required: pulldown-cmark won't open superscript
+    // tight against a preceding word char (see CLAUDE.md #474 gotcha).
+    let md = "H ~2~O and E=mc ^2^";
+    let create = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &proj,
+            "--type",
+            &itype,
+            "--summary",
+            &format!("[e2e {label}] subsup mark round-trip"),
+            "--markdown",
+            "--description",
+            md,
+            "--label",
+            &label,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for create --markdown subsup");
+    assert!(
+        create.status.success(),
+        "create --markdown (subsup) failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&create.stdout),
+        String::from_utf8_lossy(&create.stderr)
+    );
+    let json: Value =
+        serde_json::from_slice(&create.stdout).expect("create output must be valid JSON");
+    let key = json
+        .get("key")
+        .and_then(Value::as_str)
+        .expect("create JSON must contain a 'key'")
+        .to_string();
+
+    let view = poll_view(&key, &h);
+    let description = &view["fields"]["description"];
+
+    assert!(
+        adf_has_subsup_mark(description, "sub"),
+        "subscript ~2~ must round-trip as a subsup mark with attrs.type=\"sub\"; \
+         stored description: {description}"
+    );
+    assert!(
+        adf_has_subsup_mark(description, "sup"),
+        "superscript ^2^ must round-trip as a subsup mark with attrs.type=\"sup\"; \
+         stored description: {description}"
+    );
+
+    best_effort_close(&h, &key);
+}
+
+/// E2E (#483): a GFM alert blockquote (`> [!NOTE]`) in a `--markdown`
+/// description produces an ADF `panel` node with `attrs.panelType == "info"`
+/// that Jira accepts and preserves on read-back.
+///
+/// Also covers `> [!WARNING]` → `panelType == "warning"` to exercise a second
+/// kind mapping and confirm the exhaustive `panel_type_for` dispatch.
+///
+/// Description:
+/// ```text
+/// > [!NOTE]
+/// > note body
+///
+/// > [!WARNING]
+/// > warn body
+/// ```
+///
+/// Asserts:
+/// - A `panel` node with `attrs.panelType == "info"` exists (Note → info).
+/// - A `panel` node with `attrs.panelType == "warning"` exists (Warning → warning).
+///
+/// Traces to: #483 (GFM alerts → ADF panel), #475 (ADF E2E batch).
+///
+/// RISK: Jira Cloud may reject or normalize `panel` nodes submitted via REST
+/// on some site configurations (panel availability is editor-flag-gated on
+/// some older Jira Cloud versions). If the test fails live with the panel
+/// node absent from the stored description, check whether the site's ADF
+/// schema supports `panel` — this is a Jira-side limitation.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
+fn test_e2e_markdown_gfm_alert_produces_panel() {
+    if !e2e_enabled() {
+        return;
+    }
+    let label = run_label();
+    let itype = issue_type();
+    let proj = project();
+    let h = e2e_harness();
+
+    let md = "> [!NOTE]\n> note body\n\n> [!WARNING]\n> warn body";
+    let create = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &proj,
+            "--type",
+            &itype,
+            "--summary",
+            &format!("[e2e {label}] GFM alert panel round-trip"),
+            "--markdown",
+            "--description",
+            md,
+            "--label",
+            &label,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for create --markdown GFM alert");
+    assert!(
+        create.status.success(),
+        "create --markdown (GFM alert) failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&create.stdout),
+        String::from_utf8_lossy(&create.stderr)
+    );
+    let json: Value =
+        serde_json::from_slice(&create.stdout).expect("create output must be valid JSON");
+    let key = json
+        .get("key")
+        .and_then(Value::as_str)
+        .expect("create JSON must contain a 'key'")
+        .to_string();
+
+    let view = poll_view(&key, &h);
+    let description = &view["fields"]["description"];
+
+    assert!(
+        adf_has_panel(description, "info"),
+        "> [!NOTE] must round-trip as an ADF panel with panelType=\"info\"; \
+         stored description: {description}"
+    );
+    assert!(
+        adf_has_panel(description, "warning"),
+        "> [!WARNING] must round-trip as an ADF panel with panelType=\"warning\"; \
+         stored description: {description}"
+    );
+
+    best_effort_close(&h, &key);
+}
+
+/// E2E (#489): block-level HTML in a `--markdown` description is preserved as
+/// literal text rather than dropped, and that literal text survives Jira's
+/// REST API storage and read-back.
+///
+/// Description: `<div>raw block content</div>`
+///
+/// Asserts:
+/// - The text `"raw block content"` appears somewhere in the stored ADF.
+///
+/// This is the live proof that #489's "preserve, not drop" semantics work
+/// end-to-end: the block HTML is rendered as a literal-text paragraph in ADF
+/// and Jira accepts it.
+///
+/// Traces to: #489 (block HTML → literal text), #475 (ADF E2E batch).
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
+fn test_e2e_markdown_block_html_preserved() {
+    if !e2e_enabled() {
+        return;
+    }
+    let label = run_label();
+    let itype = issue_type();
+    let proj = project();
+    let h = e2e_harness();
+
+    let md = "<div>raw block content</div>";
+    let create = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &proj,
+            "--type",
+            &itype,
+            "--summary",
+            &format!("[e2e {label}] block HTML preserved as literal text"),
+            "--markdown",
+            "--description",
+            md,
+            "--label",
+            &label,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr for create --markdown block HTML");
+    assert!(
+        create.status.success(),
+        "create --markdown (block HTML) failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&create.stdout),
+        String::from_utf8_lossy(&create.stderr)
+    );
+    let json: Value =
+        serde_json::from_slice(&create.stdout).expect("create output must be valid JSON");
+    let key = json
+        .get("key")
+        .and_then(Value::as_str)
+        .expect("create JSON must contain a 'key'")
+        .to_string();
+
+    let view = poll_view(&key, &h);
+    let description = &view["fields"]["description"];
+
+    assert!(
+        adf_contains_text(description, "raw block content"),
+        "block HTML must be preserved as literal text in the stored ADF \
+         (text node containing \"raw block content\"); \
+         stored description: {description}"
+    );
+
+    best_effort_close(&h, &key);
+}
