@@ -1702,9 +1702,11 @@ fn flatten_table_to_paragraphs(table: &Value) -> Vec<Value> {
 ///   [paragraph([text("line1")]), paragraph([text("line2")])]
 ///   → [text("line1"), hardBreak, text("line2")]
 ///
-/// Non-paragraph children (e.g. block nodes that slipped through) are passed through
-/// as-is. The caller then applies `trim_leading_trailing_hardbreaks` to remove any
-/// leading/trailing hardBreak nodes introduced by this process.
+/// Non-paragraph children are silently skipped (defense-in-depth: both callers
+/// pre-filter to paragraph-only, so this branch is unreachable under normal use;
+/// skipping keeps `taskItem.content` inline-only rather than emitting invalid ADF or
+/// panicking on user input). The caller then applies `trim_leading_trailing_hardbreaks`
+/// to remove any leading/trailing hardBreak nodes introduced by this process.
 fn flatten_task_item_to_inline(children: Vec<Value>) -> Vec<Value> {
     let mut result: Vec<Value> = Vec::new();
     let mut first = true;
@@ -1728,15 +1730,17 @@ fn flatten_task_item_to_inline(children: Vec<Value>) -> Vec<Value> {
             }
             // Empty paragraph: no separator emitted (trim pass handles trim near empties).
         } else {
-            // CR-014: both callers pre-filter to paragraph-only before calling this
-            // function (NodeKind::ListItem re-wraps taskItem content as paragraph at
-            // line ~706; plain paragraph children are kept as-is at line ~717; block
-            // children go to `hoisted` at line ~718 and never reach this path).
-            // A non-paragraph reaching this branch is a caller contract violation.
-            unreachable!(
-                "non-paragraph passed to flatten_task_item_to_inline; callers must pre-filter: {:?}",
+            // SEC-002 / CWE-617: both callers pre-filter to paragraph-only (see CR-014),
+            // so this branch is a contract violation. In debug builds, assert loudly so
+            // developers catch a missed pre-filter immediately. In release builds, skip
+            // the node gracefully — emitting a non-paragraph into taskItem.content would
+            // produce invalid ADF (Jira 400), and panicking on user input is worse.
+            debug_assert!(
+                false,
+                "non-paragraph passed to flatten_task_item_to_inline: {:?}",
                 child.get("type")
             );
+            // Graceful skip: preserve taskItem.content as inline-only (ADF invariant).
         }
     }
     result
