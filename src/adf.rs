@@ -4009,6 +4009,41 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_trim_leading_trailing_hardbreaks_unit() {
+        // F6 mutation-kill (src/adf.rs:1759 `if first_non_hb > 0`). Direct unit
+        // coverage of the LEADING-trim branch, which no prior test exercised
+        // with a positive `first_non_hb` — so the surviving `== 0` and `< 0`
+        // (`<`) mutants (both of which disable the leading drain) went
+        // undetected. These assertions pin the exact contract: a content array
+        // beginning with one or more hardBreaks has them removed, interior
+        // hardBreaks are preserved, and trailing hardBreaks are removed.
+        let hb = || json!({ "type": "hardBreak" });
+        let txt = |s: &str| json!({ "type": "text", "text": s });
+
+        // Leading-only: two leading hardBreaks must be drained (kills `== 0`/`<`).
+        let out = trim_leading_trailing_hardbreaks(vec![hb(), hb(), txt("a")]);
+        assert_eq!(out, vec![txt("a")], "leading hardBreaks must be trimmed");
+
+        // Leading + interior + trailing: only boundary hardBreaks removed; the
+        // interior hardBreak between "a" and "b" is preserved.
+        let out = trim_leading_trailing_hardbreaks(vec![hb(), txt("a"), hb(), txt("b"), hb()]);
+        assert_eq!(
+            out,
+            vec![txt("a"), hb(), txt("b")],
+            "only leading/trailing hardBreaks trimmed; interior preserved"
+        );
+
+        // No leading hardBreak: content unchanged at the front (the `> 0` guard
+        // means drain is a no-op here — guards the equivalence boundary).
+        let out = trim_leading_trailing_hardbreaks(vec![txt("a"), hb()]);
+        assert_eq!(out, vec![txt("a")], "trailing-only hardBreak trimmed");
+
+        // All hardBreaks: drains to empty.
+        let out = trim_leading_trailing_hardbreaks(vec![hb(), hb()]);
+        assert!(out.is_empty(), "all-hardBreak content drains to empty");
+    }
+
     // --- AC-010 : round-trip stability ----------------------------------------
 
     #[test]
