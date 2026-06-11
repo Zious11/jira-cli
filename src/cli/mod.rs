@@ -541,6 +541,7 @@ pub enum IssueCommand {
         /// Issue key
         key: String,
         /// Comment text
+        #[arg(allow_hyphen_values = true)]
         message: Option<String>,
         /// Interpret input as Markdown
         #[arg(long)]
