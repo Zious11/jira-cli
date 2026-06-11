@@ -8944,16 +8944,23 @@ fn adf_contains_text(node: &Value, needle: &str) -> bool {
     }
 }
 
-/// Recursively searches an ADF JSON value for a `taskList` node.
-fn adf_has_task_list(node: &Value) -> bool {
-    if node.get("type").and_then(Value::as_str) == Some("taskList") {
+/// Recursively searches an ADF JSON value for a node whose `type` field equals
+/// `node_type`.  Generic counterpart to the type-specific helpers; use this
+/// when you need to assert *absence* of a node type (e.g. no `orderedList`).
+fn adf_has_node_type(node: &Value, node_type: &str) -> bool {
+    if node.get("type").and_then(Value::as_str) == Some(node_type) {
         return true;
     }
     match node {
-        Value::Array(items) => items.iter().any(adf_has_task_list),
-        Value::Object(map) => map.values().any(adf_has_task_list),
+        Value::Array(items) => items.iter().any(|v| adf_has_node_type(v, node_type)),
+        Value::Object(map) => map.values().any(|v| adf_has_node_type(v, node_type)),
         _ => false,
     }
+}
+
+/// Recursively searches an ADF JSON value for a `taskList` node.
+fn adf_has_task_list(node: &Value) -> bool {
+    adf_has_node_type(node, "taskList")
 }
 
 /// Recursively searches an ADF JSON value for a `panel` node with the given
@@ -9169,6 +9176,12 @@ fn test_e2e_markdown_ordered_task_list_produces_task_items() {
         "description must contain a taskList container (not orderedList) for \
          ordered task-list syntax (EC-17); stored description: {description}"
     );
+    assert!(
+        !adf_has_node_type(description, "orderedList"),
+        "description must NOT contain an orderedList node — ordered task-list syntax \
+         must promote to taskList, not remain as orderedList (EC-17); \
+         stored description: {description}"
+    );
 
     best_effort_close(&h, &key);
 }
@@ -9177,7 +9190,7 @@ fn test_e2e_markdown_ordered_task_list_produces_task_items() {
 /// description produce ADF `subsup` marks with the correct `attrs.type` that
 /// Jira accepts and preserves on read-back.
 ///
-/// Description: `H ~2~O and E=mc ^2^`
+/// Description: `H ~2~ O and E=mc ^2^`
 ///
 /// Note the space before `^2^`: pulldown-cmark does not open a superscript
 /// when `^` is immediately preceded by a word character (so `mc^2^` stays
