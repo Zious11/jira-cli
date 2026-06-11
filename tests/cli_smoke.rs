@@ -1,4 +1,6 @@
 use assert_cmd::Command;
+use clap::Parser;
+use jr::cli::Cli;
 use predicates::prelude::*;
 
 #[test]
@@ -331,4 +333,84 @@ fn test_issue_list_created_after_and_recent_conflict() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("cannot be used with"));
+}
+
+// --- allow_hyphen_values regression tests (issue #471 task-list fix) ---
+
+#[test]
+fn test_create_description_leading_dash_value_accepted() {
+    // GFM task-list form: --description "- [ ] todo item\n- [x] done item"
+    // Before fix: clap rejects with "unexpected argument '- '"
+    // After fix:  parses successfully
+    Cli::try_parse_from([
+        "jr",
+        "issue",
+        "create",
+        "-p",
+        "FOO",
+        "-t",
+        "Task",
+        "-s",
+        "Summary",
+        "--description",
+        "- [ ] todo item\n- [x] done item",
+    ])
+    .expect("leading-dash description on issue create must parse (allow_hyphen_values)");
+}
+
+#[test]
+fn test_edit_description_leading_dash_value_accepted() {
+    // GFM task-list form on edit path
+    Cli::try_parse_from([
+        "jr",
+        "issue",
+        "edit",
+        "FOO-1",
+        "--description",
+        "- [ ] todo item",
+    ])
+    .expect("leading-dash description on issue edit must parse (allow_hyphen_values)");
+}
+
+#[test]
+fn test_create_summary_leading_dash_value_accepted() {
+    Cli::try_parse_from([
+        "jr",
+        "issue",
+        "create",
+        "-p",
+        "FOO",
+        "-t",
+        "Task",
+        "--summary",
+        "- dash summary",
+    ])
+    .expect("leading-dash summary on issue create must parse (allow_hyphen_values)");
+}
+
+#[test]
+fn test_edit_summary_leading_dash_value_accepted() {
+    Cli::try_parse_from([
+        "jr",
+        "issue",
+        "edit",
+        "FOO-1",
+        "--summary",
+        "- dash summary",
+    ])
+    .expect("leading-dash summary on issue edit must parse (allow_hyphen_values)");
+}
+
+#[test]
+fn test_worklog_add_message_leading_dash_value_accepted() {
+    Cli::try_parse_from([
+        "jr",
+        "worklog",
+        "add",
+        "FOO-1",
+        "1h",
+        "--message",
+        "- dash message",
+    ])
+    .expect("leading-dash message on worklog add must parse (allow_hyphen_values)");
 }
