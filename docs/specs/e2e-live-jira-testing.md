@@ -120,8 +120,10 @@ GET succeeding immediately.
 These tests prove the `--markdown` path drives `markdown_to_adf` end-to-end and
 that Jira's REST API accepts/preserves the produced ADF on read-back (no extra
 env vars; run in the default `JR_E2E_PROJECT`):
-- `test_e2e_issue_markdown_description_roundtrip` — a heading in the markdown
-  description yields a `heading` ADF node in `fields.description` (E2E-HV-2).
+- `test_e2e_markdown_description_produces_heading_node` — a heading in the markdown
+  description yields a `heading` ADF node in `fields.description` (E2E-HV-2,
+  BC-7.2.003). Verifies the **forward** markdown→ADF direction only; `adf_to_text`
+  read-path coverage is in `test_e2e_adf_read_path_human_output` (#475).
 - `test_e2e_markdown_bare_url_produces_link_mark` (#473) — a **bare** `http(s)://`
   URL in a `--markdown` description round-trips as an ADF `link` mark: the test
   creates the issue, then `poll_view`s the STORED description and asserts a `text`
@@ -156,6 +158,21 @@ env vars; run in the default `JR_E2E_PROJECT`):
   (`<div>raw block content</div>`) is preserved as literal text in the stored ADF
   (`adf_contains_text` finds `"raw block content"`). Proves the #489 "preserve,
   not drop" semantics work end-to-end through Jira's REST API.
+
+### ADF Read-Path Coverage (issue #475)
+
+These tests exercise the **reverse** `adf_to_text` path (human/table mode) and
+`normalize_list_item_content` against a live Jira Cloud instance:
+
+| Test | AC | BC Anchors | Coverage |
+|------|----|------------|----------|
+| `test_e2e_adf_read_path_human_output` | AC-1 | BC-7.2.003, BC-7.2.004 | `jr issue view` human mode: `adf_to_text` output verified via single-token content-word substring matching (heading, code, blockquote prose, link anchor) |
+| `test_e2e_adf_read_path_human_output` | AC-2 | BC-7.2.006 | `normalize_list_item_content` live: blockquote-in-listItem create exits 0; JSON inspect confirms no `blockquote` node in `listItem.content` |
+| `test_e2e_adf_read_path_human_output` | AC-3 | BC-7.2.004 | `jr issue comments` human mode: seeded `_emphasis_` comment body renders as `*emphasis*` after `adf_to_text` (underscore form absent — live discriminator) |
+| `test_e2e_markdown_description_produces_heading_node` | AC-4 (rename) | BC-7.2.003 | Formerly `test_e2e_issue_markdown_description_roundtrip`; forward markdown→ADF only; name now accurate |
+
+Gate: `JR_RUN_E2E=1` + `#[ignore]` + `if !e2e_enabled() { return; }`.
+No new env vars required beyond the standard E2E set.
 
 ## 5. CI workflow — `.github/workflows/e2e.yml`
 

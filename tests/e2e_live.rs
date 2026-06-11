@@ -4577,18 +4577,25 @@ fn test_e2e_issue_description_create_edit_stdin_roundtrip() {
     best_effort_close(&h, &key);
 }
 
-/// E2E: `issue create --markdown --description <md>` converts Markdown to ADF.
+/// E2E: `issue create --markdown --description <md>` converts Markdown to ADF
+/// and the resulting ADF document contains a `heading` node.
 ///
-/// A plain-text description becomes a single paragraph node; Markdown with a
-/// heading becomes a `heading` ADF node. Asserting that the created issue's
-/// `fields.description.content` contains a `heading` node proves the
-/// `--markdown` flag drove `markdown_to_adf` (rather than `text_to_adf`),
-/// which a plain string could not produce.
+/// Verifies the **forward** markdown→ADF direction only: a Markdown heading
+/// (`# E2E Markdown Heading`) becomes a `heading` ADF node in
+/// `fields.description.content`. This proves the `--markdown` flag drove
+/// `markdown_to_adf` (rather than `text_to_adf`), which a plain string could
+/// not produce.
 ///
-/// Traces to: E2E-HV-2, NFR-T-E2E-1.
+/// Read-path (`adf_to_text`) coverage for the reverse direction is in
+/// `test_e2e_adf_read_path_human_output`.
+///
+/// Traces to: BC-7.2.003, E2E-HV-2, NFR-T-E2E-1.
 #[test]
 #[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
-fn test_e2e_issue_markdown_description_roundtrip() {
+fn test_e2e_markdown_description_produces_heading_node() {
+    // Verifies the forward markdown→ADF direction only: asserts a heading node
+    // appears in the submitted ADF. Read-path (adf_to_text) coverage is in
+    // test_e2e_adf_read_path_human_output.
     if !e2e_enabled() {
         return;
     }
@@ -9450,5 +9457,267 @@ fn test_e2e_markdown_block_html_preserved() {
          stored description: {description}"
     );
 
+    best_effort_close(&h, &key);
+}
+
+/// Returns `true` if any `listItem` node in `node` has a direct child whose
+/// `type` field equals `"blockquote"`.
+///
+/// Used by `test_e2e_adf_read_path_human_output` (AC-2) to assert that
+/// `normalize_list_item_content` stripped blockquotes from `listItem` content
+/// before submission to Jira. The check is **direct-child only**: it inspects
+/// `listItem["content"]` array entries, not arbitrary descendants, so a
+/// `blockquote` deeper in the tree (e.g. inside a `paragraph`) does not trigger
+/// a `true` return.
+///
+/// Tolerates Jira-added `localId` or other extra fields — matching is by
+/// `type` only. Recursion is unbounded by depth, safe because the only input
+/// is the small, self-created issue description read back via `poll_view`.
+fn adf_has_blockquote_in_list_item(node: &Value) -> bool {
+    if node.get("type").and_then(Value::as_str) == Some("listItem") {
+        if let Some(content) = node.get("content").and_then(Value::as_array) {
+            if content
+                .iter()
+                .any(|child| child.get("type").and_then(Value::as_str) == Some("blockquote"))
+            {
+                return true;
+            }
+        }
+    }
+    match node {
+        Value::Array(items) => items.iter().any(adf_has_blockquote_in_list_item),
+        Value::Object(map) => map.values().any(adf_has_blockquote_in_list_item),
+        _ => false,
+    }
+}
+
+/// E2E (#475): exercises the `adf_to_text` read path via `jr issue view` and
+/// `jr issue comments` in human/table mode (no `--output json`), and verifies
+/// that `normalize_list_item_content` is exercised against Jira Cloud.
+///
+/// Three AC sub-sequences within one create → view → comment → close lifecycle:
+///
+/// **AC-1 — `adf_to_text` via `jr issue view` human mode:**
+/// Creates an issue with a rich Markdown description containing a heading, a
+/// list item with a nested blockquote (`- > …`), a fenced code block, and a
+/// hyperlink. Invokes `jr issue view <key>` WITHOUT `--output json` and asserts
+/// that `adf_to_text`-rendered content words appear in stdout. Single-token
+/// words are used (not multi-word phrases) to be resilient to comfy-table
+/// `ContentArrangement::Dynamic` word-wrapping that may insert newlines between
+/// adjacent words within a cell.
+///
+/// **AC-2 — `normalize_list_item_content` live exercise:**
+/// Using the same issue and `poll_view` JSON: (a) create exit-0 proves no Jira
+/// 400 from invalid ADF (the blockquote was normalised before submission);
+/// (b) positive gate confirms `listItem` nodes are present; (c) text sanity
+/// checks the blockquote prose was not silently dropped; (d) absence assertion
+/// `!adf_has_blockquote_in_list_item` confirms no `blockquote` node is a
+/// direct child of any `listItem` in the stored ADF.
+///
+/// **AC-3 — `adf_to_text` via `jr issue comments` human mode:**
+/// Seeds a comment `"Comment **body** with _emphasis_" --markdown`. Reads back
+/// via `jr issue comments <key>` in table mode. Asserts `**body**` (strong) and
+/// `*emphasis*` (em, single-asterisk re-emit) appear in stdout, and that
+/// `_emphasis_` (the raw input syntax) does NOT appear — proving `adf_to_text`
+/// was actually called rather than a raw passthrough.
+///
+/// Traces to: BC-7.2.003, BC-7.2.004, BC-7.2.006, #475.
+#[tokio::test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run against a live Jira site"]
+async fn test_e2e_adf_read_path_human_output() {
+    if !e2e_enabled() {
+        return;
+    }
+    let label = run_label();
+    let itype = issue_type();
+    let proj = project();
+    let h = e2e_harness();
+
+    // -------------------------------------------------------------------------
+    // Setup: build a rich Markdown description and create an issue.
+    //
+    // The description contains:
+    //   - A level-2 heading           → AC-1: assert "Header" appears in view
+    //   - A list item with blockquote → AC-1: assert "blockquote" appears;
+    //                                    AC-2: assert normalization happened
+    //   - A fenced code block         → AC-1: assert "snippet" appears in view
+    //   - A hyperlink                 → AC-1: assert "link" appears in view
+    //   - Plain prose                 → padding
+    //
+    // Use `--description-stdin` + `write_stdin` so leading-dash content in the
+    // markdown (`- > nested blockquote text`) is never parsed by clap as a flag.
+    // -------------------------------------------------------------------------
+    let md = "## Section Header\n\n\
+              - > nested blockquote text\n\n\
+              ```\ncode snippet\n```\n\n\
+              [link text](https://example.com)\n\n\
+              A plain prose paragraph.";
+
+    let create = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &proj,
+            "--type",
+            &itype,
+            "--summary",
+            &format!("[e2e {label}] ADF read path E2E"),
+            "--description-stdin",
+            "--markdown",
+            "--label",
+            &label,
+            "--output",
+            "json",
+        ])
+        .write_stdin(md)
+        .output()
+        .expect("failed to spawn jr for create --description-stdin --markdown");
+
+    assert!(
+        create.status.success(),
+        "create with blockquote-in-listItem must exit 0 (AC-2 primary assertion);\
+         \nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&create.stdout),
+        String::from_utf8_lossy(&create.stderr)
+    );
+
+    let create_json: Value =
+        serde_json::from_slice(&create.stdout).expect("create output must be valid JSON");
+    let key = create_json
+        .get("key")
+        .and_then(Value::as_str)
+        .expect("create JSON must contain a 'key'")
+        .to_string();
+
+    // -------------------------------------------------------------------------
+    // AC-1: human-mode view — assert adf_to_text rendered content words appear.
+    //
+    // Single-token content words are used rather than multi-word phrases because
+    // comfy-table ContentArrangement::Dynamic may word-wrap long lines inside a
+    // cell by inserting newlines between adjacent words. Single tokens are never
+    // split by the cell-wrap algorithm.
+    // -------------------------------------------------------------------------
+    let view_human = h
+        .cmd()
+        .args(["issue", "view", &key])
+        .output()
+        .expect("jr issue view (human mode) failed");
+    assert!(
+        view_human.status.success(),
+        "jr issue view (human mode) must exit 0 for {key};\nstderr: {}",
+        String::from_utf8_lossy(&view_human.stderr)
+    );
+    let stdout_view = String::from_utf8_lossy(&view_human.stdout);
+
+    assert!(
+        stdout_view.contains("Header"),
+        "heading word 'Header' must appear in human-mode view output (AC-1);\
+         \nstdout: {stdout_view}"
+    );
+    assert!(
+        stdout_view.contains("snippet"),
+        "code-block word 'snippet' must appear in human-mode view output (AC-1);\
+         \nstdout: {stdout_view}"
+    );
+    assert!(
+        stdout_view.contains("blockquote"),
+        "blockquote prose word 'blockquote' must appear in human-mode view output after \
+         normalization (AC-1);\nstdout: {stdout_view}"
+    );
+    assert!(
+        stdout_view.contains("link"),
+        "hyperlink anchor word 'link' must appear in human-mode view output (AC-1);\
+         \nstdout: {stdout_view}"
+    );
+
+    // -------------------------------------------------------------------------
+    // AC-2: structural inspection via poll_view (JSON).
+    //
+    // Step 1 — positive gate: listItem nodes must be present (prevents vacuous
+    //           absence assertion on stale or empty ADF).
+    // Step 2 — content sanity: blockquote text was not silently dropped.
+    // Step 3 — absence assertion: no blockquote node is a direct child of any
+    //           listItem.content (proves normalize_list_item_content ran).
+    // -------------------------------------------------------------------------
+    let view_json = poll_view(&key, &h);
+    let description_json = &view_json["fields"]["description"];
+
+    assert!(
+        adf_has_node_type(description_json, "listItem"),
+        "ADF must contain listItem nodes (positive gate before absence assertion — AC-2);\
+         \ndescription: {description_json}"
+    );
+    assert!(
+        adf_contains_text(description_json, "nested blockquote text"),
+        "blockquote text content must appear somewhere in the ADF \
+         (sanity check: content not dropped — AC-2);\ndescription: {description_json}"
+    );
+    assert!(
+        !adf_has_blockquote_in_list_item(description_json),
+        "listItem.content must not contain a blockquote node after \
+         normalize_list_item_content (AC-2);\ndescription: {description_json}"
+    );
+
+    // -------------------------------------------------------------------------
+    // AC-3: comment read path — adf_to_text via `jr issue comments` human mode.
+    //
+    // Seed a comment with Markdown emphasis using underscore syntax (`_emphasis_`).
+    // After markdown_to_adf → Jira → adf_to_text:
+    //   - strong "body"    renders as **body**
+    //   - em "emphasis"    renders as *emphasis*  (single asterisk, NOT underscore)
+    //
+    // The `!contains("_emphasis_")` assertion is the key discriminator: a raw
+    // passthrough would leave the underscore form intact; the live adf_to_text
+    // path converts it to single-asterisk em rendering.
+    // -------------------------------------------------------------------------
+    let comment_out = h
+        .cmd()
+        .args([
+            "issue",
+            "comment",
+            &key,
+            "Comment **body** with _emphasis_",
+            "--markdown",
+        ])
+        .output()
+        .expect("failed to spawn jr for issue comment --markdown");
+    assert!(
+        comment_out.status.success(),
+        "issue comment --markdown must exit 0 for {key} (AC-3);\nstderr: {}",
+        String::from_utf8_lossy(&comment_out.stderr)
+    );
+
+    let comments_out = h
+        .cmd()
+        .args(["issue", "comments", &key])
+        .output()
+        .expect("failed to spawn jr for issue comments (human mode)");
+    assert!(
+        comments_out.status.success(),
+        "jr issue comments (human mode) must exit 0 for {key} (AC-3);\nstderr: {}",
+        String::from_utf8_lossy(&comments_out.stderr)
+    );
+    let stdout_comments = String::from_utf8_lossy(&comments_out.stdout);
+
+    assert!(
+        stdout_comments.contains("**body**"),
+        "strong text must render as **body** in comments human-mode output (AC-3);\
+         \nstdout: {stdout_comments}"
+    );
+    assert!(
+        stdout_comments.contains("*emphasis*"),
+        "em text must render as *emphasis* (single asterisk) in comments human-mode \
+         output (AC-3);\nstdout: {stdout_comments}"
+    );
+    assert!(
+        !stdout_comments.contains("_emphasis_"),
+        "underscore em syntax must not appear — adf_to_text re-emits em as *x*, not _x_ \
+         (AC-3 discriminator);\nstdout: {stdout_comments}"
+    );
+
+    // Teardown: label-based CI sweeper handles cleanup; best_effort_close as
+    // belt-and-suspenders for this standard (non-JSM) issue.
     best_effort_close(&h, &key);
 }
