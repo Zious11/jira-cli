@@ -586,6 +586,23 @@ mod tests {
         }
     }
 
+    /// Set `var` to `value`, run `f`, then unconditionally remove `var` — even if
+    /// `f` panics. Mirrors `with_temp_cache` so BC-6.2.017 seam tests cannot leak
+    /// `JR_CACHE_DIR` / `JR_CONFIG_DIR` into subsequent tests on panic.
+    #[cfg(debug_assertions)]
+    pub(super) fn with_env_var<F: FnOnce() -> R, R>(var: &str, value: &str, f: F) -> R {
+        let guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: ENV_MUTEX held; no concurrent env reads occur while we hold the lock.
+        unsafe { std::env::set_var(var, value) };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        unsafe { std::env::remove_var(var) };
+        drop(guard);
+        match result {
+            Ok(v) => v,
+            Err(e) => std::panic::resume_unwind(e),
+        }
+    }
+
     #[test]
     fn cache_dir_includes_v1_and_profile_subdir() {
         with_temp_cache(|| {
@@ -1125,22 +1142,15 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn test_bc_6_2_017_cache_dir_seam_overrides_path() {
-        let guard = ENV_MUTEX
-            .lock()
-            .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
         let seam_path = "/tmp/jr-seam-test-cache-dir-overrides-path";
-        // SAFETY: ENV_MUTEX held; no concurrent env reads occur while we hold the lock.
-        unsafe {
-            std::env::set_var("JR_CACHE_DIR", seam_path);
-            // Clear XDG_CACHE_HOME so the non-seam branch cannot accidentally produce
-            // the seam path via a coincidental XDG value.
-            std::env::remove_var("XDG_CACHE_HOME");
-        }
-        let result = cache_root();
-        unsafe {
-            std::env::remove_var("JR_CACHE_DIR");
-        }
-        drop(guard);
+        // Clear XDG_CACHE_HOME inside the closure so the non-seam branch cannot
+        // accidentally produce the seam path via a coincidental XDG value.
+        // ENV_MUTEX is acquired inside with_env_var for the full duration of the closure.
+        let result = with_env_var("JR_CACHE_DIR", seam_path, || {
+            // SAFETY: ENV_MUTEX held by with_env_var.
+            unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+            cache_root()
+        });
         assert_eq!(
             result,
             std::path::PathBuf::from(seam_path),
@@ -1163,22 +1173,19 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn test_bc_6_2_017_config_seam_does_not_affect_cache() {
-        let guard = ENV_MUTEX
-            .lock()
-            .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
         let config_seam_path = "/tmp/jr-seam-test-config-only-no-cache-effect";
-        // SAFETY: ENV_MUTEX held.
-        unsafe {
-            std::env::set_var("JR_CONFIG_DIR", config_seam_path);
-            std::env::remove_var("JR_CACHE_DIR");
-            // Clear XDG_CACHE_HOME for a deterministic OS-path result.
-            std::env::remove_var("XDG_CACHE_HOME");
-        }
-        let result = cache_root();
-        unsafe {
-            std::env::remove_var("JR_CONFIG_DIR");
-        }
-        drop(guard);
+        // with_env_var sets JR_CONFIG_DIR and wraps the closure in catch_unwind so
+        // the var is always removed even on panic. JR_CACHE_DIR and XDG_CACHE_HOME are
+        // cleared inside the closure while ENV_MUTEX is still held.
+        let result = with_env_var("JR_CONFIG_DIR", config_seam_path, || {
+            // SAFETY: ENV_MUTEX held by with_env_var.
+            unsafe {
+                std::env::remove_var("JR_CACHE_DIR");
+                // Clear XDG_CACHE_HOME for a deterministic OS-path result.
+                std::env::remove_var("XDG_CACHE_HOME");
+            }
+            cache_root()
+        });
         assert_ne!(
             result,
             std::path::PathBuf::from(config_seam_path),
@@ -1212,18 +1219,7 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn test_bc_6_2_017_empty_cache_dir_uses_os_path() {
-        let guard = ENV_MUTEX
-            .lock()
-            .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
-        // SAFETY: ENV_MUTEX held.
-        unsafe {
-            std::env::set_var("JR_CACHE_DIR", "");
-        }
-        let result = cache_root();
-        unsafe {
-            std::env::remove_var("JR_CACHE_DIR");
-        }
-        drop(guard);
+        let result = with_env_var("JR_CACHE_DIR", "", cache_root);
         assert_ne!(
             result,
             std::path::PathBuf::from(""),

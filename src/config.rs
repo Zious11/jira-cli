@@ -500,6 +500,30 @@ mod tests {
     /// interfere with other tests running in parallel.
     static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
+    /// Set `var` to `value`, run `f`, then unconditionally remove `var` — even if
+    /// `f` panics. Mirrors the `with_temp_cache` pattern in `cache.rs`.
+    ///
+    /// # Safety / threading
+    /// Caller must hold `ENV_MUTEX` for the duration of the call (acquired by this
+    /// helper itself). Two env-var names may need to be cleared *before* calling
+    /// `f` (e.g. XDG_CONFIG_HOME); pass a separate `unsafe { remove_var }` call
+    /// before this helper and keep it inside the same mutex guard scope.
+    #[cfg(debug_assertions)]
+    fn with_env_var<F: FnOnce() -> R, R>(var: &str, value: &str, f: F) -> R {
+        // Recover from mutex poison — a prior test that panicked inside set_var..remove_var
+        // will have poisoned the mutex; we recover so subsequent tests can still run.
+        let guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: ENV_MUTEX is held for the duration; no concurrent env access occurs.
+        unsafe { std::env::set_var(var, value) };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        unsafe { std::env::remove_var(var) };
+        drop(guard);
+        match result {
+            Ok(v) => v,
+            Err(e) => std::panic::resume_unwind(e),
+        }
+    }
+
     #[test]
     fn test_default_config() {
         let config = GlobalConfig::default();
@@ -1347,27 +1371,19 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn test_bc_6_2_017_config_dir_seam_overrides_path() {
-        // Recover from mutex poison: a prior test that panicked while holding this
-        // lock will have poisoned it.  We recover rather than propagating the poison
-        // (same pattern used by with_temp_cache in cache.rs).
-        let guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         // Use a distinctive path that cannot coincidentally match any XDG or home
         // directory the test environment might have configured.
         let seam_path = "/tmp/jr-seam-test-config-dir-overrides-path";
-        // SAFETY: ENV_MUTEX held; no concurrent env reads in this process while
-        // the lock is held, as required by the Rust threading model for set_var.
-        unsafe {
-            std::env::set_var("JR_CONFIG_DIR", seam_path);
-            // Also clear XDG_CONFIG_HOME so the non-seam branch cannot accidentally
-            // produce the seam path value via some other mechanism.
-            std::env::remove_var("XDG_CONFIG_HOME");
-        }
-        let result = global_config_dir();
-        // Clean up env BEFORE assertion so the mutex is not held across a panic.
-        unsafe {
-            std::env::remove_var("JR_CONFIG_DIR");
-        }
-        drop(guard);
+        // Clear XDG_CONFIG_HOME before entering with_env_var so the non-seam branch
+        // cannot accidentally produce the seam path value via a coincidental XDG value.
+        // ENV_MUTEX is acquired inside with_env_var; remove_var here is safe because
+        // this thread is the only one that will touch the env during this test
+        // (with_env_var's mutex acquisition guarantees mutual exclusion).
+        let result = with_env_var("JR_CONFIG_DIR", seam_path, || {
+            // SAFETY: ENV_MUTEX held by with_env_var for the duration of this closure.
+            unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
+            global_config_dir()
+        });
         assert_eq!(
             result,
             std::path::PathBuf::from(seam_path),
@@ -1392,17 +1408,7 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn test_bc_6_2_017_empty_config_dir_uses_os_path() {
-        let guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        // SAFETY: ENV_MUTEX held.
-        unsafe {
-            std::env::set_var("JR_CONFIG_DIR", "");
-        }
-        let result = global_config_dir();
-        // Clean up env BEFORE assertions so the mutex is not held across a panic.
-        unsafe {
-            std::env::remove_var("JR_CONFIG_DIR");
-        }
-        drop(guard);
+        let result = with_env_var("JR_CONFIG_DIR", "", global_config_dir);
         assert_ne!(
             result,
             std::path::PathBuf::from(""),
