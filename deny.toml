@@ -123,20 +123,39 @@ name = "toml_datetime"
 version = "1"
 reason = "toml 1.x (direct dep) requires toml_datetime 1.x; toml 0.8 (via figment) requires 0.6. Unavoidable until figment upgrades to toml 1.x."
 
+# windows-sys: FOUR versions in Cargo.lock as of S-WIN-3.
+#   0.45.0 — jni v0.21.1 (via rustls-platform-verifier/reqwest)
+#   0.52.0 — ring (cryptography dep of rustls)
+#   0.60.2 — keyring v3.6.3 windows-native feature (Win32_Security_Credentials)
+#   0.61.2 — clap, tokio, reqwest and the broad dependency graph
+#
+# THREE are skipped (0.45, 0.60, 0.61); the single canonical UN-skipped version
+# is windows-sys 0.52.0 (via ring). N-1: 4 versions − 3 skips = 1 remaining,
+# which satisfies cargo-deny's "single remaining version" requirement.
+#
+# Adding a 0.52 skip would leave ZERO un-skipped versions (unnecessary-skip
+# error). Do NOT add a 0.52 skip — 0.52.0 is the canonical un-skipped version
+# by design, parallel to windows-targets 0.52.6 documented below.
+#
+# Maintenance caveat (F-WIN3-RC-103): if ring later bumps its windows-sys minor
+# off 0.52 (or if jni drops 0.45, or a new lineage is added), the canonical
+# un-skipped version changes. The guard is `cargo deny check` in CI; a future
+# dep bump may require adding or removing skip entries here.
+
 [[bans.skip]]
 name = "windows-sys"
 version = "0.45"
-reason = "jni v0.21.1 (via rustls-platform-verifier/reqwest) requires windows-sys 0.45; the majority of the crate graph uses windows-sys 0.61. Blocked by jni not yet releasing with windows-sys 0.6x support."
+reason = "jni v0.21.1 (via rustls-platform-verifier/reqwest) requires windows-sys 0.45; ring requires 0.52, keyring windows-native requires 0.60, and the broad graph (clap/tokio/reqwest) requires 0.61. Four semver-incompatible 0.x versions; 0.45/0.60/0.61 are skipped, leaving 0.52.0 (ring) as the canonical un-skipped version."
 
 [[bans.skip]]
 name = "windows-sys"
 version = "0.60"
-reason = "keyring v3.6.3 windows-native feature requires windows-sys 0.60 (Win32_Security_Credentials); jni (via rustls-platform-verifier) requires 0.45 and the broad graph (clap/tokio/reqwest) requires 0.61. Three semver-incompatible 0.x majors; unification blocked upstream until keyring bumps windows-sys."
+reason = "keyring v3.6.3 windows-native feature requires windows-sys 0.60 (Win32_Security_Credentials); jni requires 0.45, ring requires 0.52, and the broad graph (clap/tokio/reqwest) requires 0.61. Four semver-incompatible 0.x versions; 0.45/0.60/0.61 are skipped, leaving 0.52.0 (ring) as the canonical un-skipped version. Unification blocked upstream until keyring bumps windows-sys."
 
 [[bans.skip]]
 name = "windows-sys"
 version = "0.61"
-reason = "clap, tokio, reqwest and most of the dependency graph use windows-sys 0.61; jni 0.21.1 requires 0.45. Dual version is unavoidable until jni upgrades."
+reason = "clap, tokio, reqwest and most of the dependency graph use windows-sys 0.61; jni 0.21.1 requires 0.45, ring requires 0.52, and keyring windows-native requires 0.60. Four semver-incompatible 0.x versions; 0.45/0.60/0.61 are skipped, leaving 0.52.0 (ring) as the canonical un-skipped version. Unification blocked until jni and keyring upgrade."
 
 # windows-targets and windows_* arch crates: transitive sub-deps of windows-sys.
 # S-WIN-3 adds 17 entries total (1 windows-sys 0.60 + 2 windows-targets + 14 = 7 arch crates × 2 tiers):
