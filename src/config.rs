@@ -463,6 +463,24 @@ impl Config {
     }
 }
 
+/// Pure fallback for a Windows `%APPDATA%`/`%LOCALAPPDATA%`-style env path when the
+/// `dirs` crate returns `None`. Accepts the raw `env::var(NAME).ok()` value so the
+/// logic can be tested on any platform without a `#[cfg(windows)]` gate.
+///
+/// Rules (BC-6.1.014 EC-1, EC-3):
+/// - `Some(s)` where `s` is non-empty → `PathBuf::from(s)`
+/// - `Some(s)` where `s` is empty → `PathBuf::from(".")` (treated as unset)
+/// - `None` → `PathBuf::from(".")`
+///
+/// Called from the `#[cfg(windows)]` production branch in `global_config_dir()`
+/// and directly from cross-platform unit tests.
+pub fn config_appdata_fallback(env_val: Option<String>) -> PathBuf {
+    env_val
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
 pub fn global_config_dir() -> PathBuf {
     // JR_CONFIG_DIR override is debug builds only — release binaries ignore this env
     // var to prevent path-injection attacks (BC-6.2.017). Seam must be first in body,
@@ -481,13 +499,7 @@ pub fn global_config_dir() -> PathBuf {
         // BC-6.1.014: dirs::config_dir() maps to %APPDATA% (Roaming) on Windows.
         // APPDATA fallback filters empty string: unset and empty both route to ".".
         dirs::config_dir()
-            .unwrap_or_else(|| {
-                std::env::var("APPDATA")
-                    .ok()
-                    .filter(|s| !s.is_empty())
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from("."))
-            })
+            .unwrap_or_else(|| config_appdata_fallback(std::env::var("APPDATA").ok()))
             .join("jr")
     }
 
@@ -1476,6 +1488,14 @@ mod tests {
     fn test_bc_6_1_014_windows_config_dir_uses_appdata() {
         // On Windows, dirs::config_dir() returns Some(%APPDATA% Roaming path).
         // The function under test must return dirs::config_dir().unwrap().join("jr").
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        // Scrub the debug seam vars so they cannot short-circuit global_config_dir()
+        // and perturb the assertion (RB-102).
+        // SAFETY: ENV_MUTEX is held for the duration; no concurrent env access occurs.
+        unsafe {
+            std::env::remove_var("JR_CONFIG_DIR");
+            std::env::remove_var("JR_CACHE_DIR");
+        }
         let expected_parent = dirs::config_dir()
             .expect("dirs::config_dir() must return Some on a Windows system with a user profile");
         let expected = expected_parent.join("jr");
@@ -1497,55 +1517,38 @@ mod tests {
         );
     }
 
-    /// AC-002 / BC-6.1.014 EC-1 — APPDATA env fallback when `dirs::config_dir()` fails.
+    /// AC-002 / BC-6.1.014 EC-1 — `config_appdata_fallback` pure helper.
     ///
-    /// This test exercises the env-var fallback branch by directly testing `APPDATA`
-    /// handling. We cannot force `dirs::config_dir()` to return `None` at runtime
-    /// (it's a Known Folder API call), so the test verifies the defensive fallback
-    /// independently: when APPDATA is set to a non-empty value, the Windows branch
-    /// would use it; when APPDATA is empty or unset, the result is `./jr`.
+    /// Exercises the extracted `config_appdata_fallback` helper directly so that
+    /// mutations to the production fallback (e.g. dropping `.filter(|s| !s.is_empty())`
+    /// or changing `PathBuf::from(".")`) are caught on every platform, not only on a
+    /// Windows CI runner.
     ///
-    /// The empty-string path is exercised here via env mutation under ENV_MUTEX.
-    /// The non-empty APPDATA env path is verified structurally via the postcondition
-    /// test above (dirs::config_dir() resolves %APPDATA% on any standard Windows machine).
+    /// The helper is un-gated (no `#[cfg(windows)]`) so this test compiles and runs
+    /// on macOS/Linux in CI, genuinely killing the empty-filter/default mutants.
     ///
     /// Traces: BC-6.1.014 EC-1, EC-3, AC-002.
-    #[cfg(windows)]
     #[test]
     fn test_bc_6_1_014_appdata_env_fallback() {
-        // EC-3: APPDATA set to empty string must be treated as unset → defensive ./jr
-        // We cannot set dirs::config_dir() to return None, but we can verify that
-        // the final defensive fallback expression evaluates correctly.
-        // Construct the fallback value directly as specified in BC-6.1.014 postcondition:
-        let empty_or_unset_fallback: Option<String> = Some(String::new());
-        let fallback_path = empty_or_unset_fallback
-            .filter(|s| !s.is_empty())
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("jr");
+        // EC-3: empty string → treated as unset → PathBuf::from(".")
         assert_eq!(
-            fallback_path,
-            std::path::PathBuf::from(".").join("jr"),
-            "EC-3 (BC-6.1.014 EC-1): empty APPDATA must yield PathBuf::from(\".\").join(\"jr\") \
-             as the defensive fallback. Expected: {}, got: {}",
-            std::path::PathBuf::from(".").join("jr").display(),
-            fallback_path.display()
+            config_appdata_fallback(Some(String::new())),
+            PathBuf::from("."),
+            "EC-3: empty APPDATA must yield PathBuf::from(\".\")"
         );
 
-        // EC-1: unset APPDATA (None from env::var) must also reach the defensive fallback
-        let unset_fallback: Option<String> = None;
-        let unset_path = unset_fallback
-            .filter(|s| !s.is_empty())
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("jr");
+        // EC-1: None (unset APPDATA) → PathBuf::from(".")
         assert_eq!(
-            unset_path,
-            std::path::PathBuf::from(".").join("jr"),
-            "EC-1 (BC-6.1.014 EC-1): None (unset APPDATA) must yield PathBuf::from(\".\").join(\"jr\"). \
-             Expected: {}, got: {}",
-            std::path::PathBuf::from(".").join("jr").display(),
-            unset_path.display()
+            config_appdata_fallback(None),
+            PathBuf::from("."),
+            "EC-1: None (unset APPDATA) must yield PathBuf::from(\".\")"
+        );
+
+        // Happy-path: non-empty value is passed through unchanged
+        assert_eq!(
+            config_appdata_fallback(Some("C:\\Users\\Alice\\AppData\\Roaming".into())),
+            PathBuf::from("C:\\Users\\Alice\\AppData\\Roaming"),
+            "non-empty APPDATA must be returned as-is"
         );
     }
 
@@ -1568,7 +1571,13 @@ mod tests {
         // On a Windows runner in CI we may be in release mode; use ENV_MUTEX directly.
         let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         // SAFETY: ENV_MUTEX is held for the duration; no concurrent env access occurs.
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", sentinel) };
+        // Scrub the debug seam vars so they cannot short-circuit global_config_dir()
+        // and perturb the assertion (RB-102).
+        unsafe {
+            std::env::remove_var("JR_CONFIG_DIR");
+            std::env::remove_var("JR_CACHE_DIR");
+            std::env::set_var("XDG_CONFIG_HOME", sentinel);
+        }
         let result = global_config_dir();
         // SAFETY: ENV_MUTEX still held.
         unsafe { std::env::remove_var("XDG_CONFIG_HOME") };

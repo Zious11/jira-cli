@@ -63,6 +63,21 @@ impl Expiring for TeamCache {
     }
 }
 
+/// Pure fallback for the Windows `%LOCALAPPDATA%` path when `dirs::cache_dir()` returns
+/// `None`. Accepts the raw `env::var("LOCALAPPDATA").ok()` value so the logic can be
+/// tested on any platform without a `#[cfg(windows)]` gate.
+///
+/// Rules (BC-6.2.016 EC-1, EC-4):
+/// - `Some(s)` where `s` is non-empty → `PathBuf::from(s)`
+/// - `Some(s)` where `s` is empty → `PathBuf::from(".")` (treated as unset)
+/// - `None` → `PathBuf::from(".")`
+pub fn cache_localappdata_fallback(env_val: Option<String>) -> PathBuf {
+    env_val
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
 /// Root cache directory: `%LOCALAPPDATA%\jr` on Windows, `$XDG_CACHE_HOME/jr` or
 /// `~/.cache/jr` on Unix.
 pub fn cache_root() -> PathBuf {
@@ -80,13 +95,7 @@ pub fn cache_root() -> PathBuf {
         // BC-6.2.016: dirs::cache_dir() maps to %LOCALAPPDATA% (Local) on Windows.
         // LOCALAPPDATA fallback filters empty string: unset and empty both route to ".".
         dirs::cache_dir()
-            .unwrap_or_else(|| {
-                std::env::var("LOCALAPPDATA")
-                    .ok()
-                    .filter(|s| !s.is_empty())
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from("."))
-            })
+            .unwrap_or_else(|| cache_localappdata_fallback(std::env::var("LOCALAPPDATA").ok()))
             .join("jr")
     }
 
@@ -1519,6 +1528,14 @@ mod request_type_cache_tests {
     fn test_bc_6_2_016_windows_cache_root_uses_localappdata() {
         // On Windows, dirs::cache_dir() returns Some(%LOCALAPPDATA% Local path).
         // The function under test must return dirs::cache_dir().unwrap().join("jr").
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        // Scrub the debug seam vars so they cannot short-circuit cache_root()
+        // and perturb the assertion (RB-102).
+        // SAFETY: ENV_MUTEX is held for the duration; no concurrent env access occurs.
+        unsafe {
+            std::env::remove_var("JR_CACHE_DIR");
+            std::env::remove_var("JR_CONFIG_DIR");
+        }
         let expected_parent = dirs::cache_dir()
             .expect("dirs::cache_dir() must return Some on a Windows system with a user profile");
         let expected = expected_parent.join("jr");
@@ -1548,50 +1565,38 @@ mod request_type_cache_tests {
         );
     }
 
-    /// AC-006 / BC-6.2.016 EC-1 — LOCALAPPDATA env fallback when `dirs::cache_dir()` fails.
+    /// AC-006 / BC-6.2.016 EC-1 — `cache_localappdata_fallback` pure helper.
     ///
-    /// Mirrors the config AC-002 test. Verifies that the defensive fallback expression
-    /// in the Windows branch correctly handles an empty or unset LOCALAPPDATA:
-    /// both cases must produce `PathBuf::from(".").join("jr")`.
+    /// Exercises the extracted `cache_localappdata_fallback` helper directly so that
+    /// mutations to the production fallback (e.g. dropping `.filter(|s| !s.is_empty())`
+    /// or changing `PathBuf::from(".")`) are caught on every platform, not only on a
+    /// Windows CI runner.
     ///
-    /// We cannot force `dirs::cache_dir()` to return `None` at runtime, so this test
-    /// exercises the fallback logic directly by constructing the same expression used
-    /// in the implementation.
+    /// The helper is un-gated (no `#[cfg(windows)]`) so this test compiles and runs
+    /// on macOS/Linux in CI, genuinely killing the empty-filter/default mutants.
     ///
     /// Traces: BC-6.2.016 EC-1, EC-4, AC-006.
-    #[cfg(windows)]
     #[test]
     fn test_bc_6_2_016_localappdata_env_fallback() {
-        // EC-4: LOCALAPPDATA set to empty string → treated as unset → defensive ./jr
-        let empty_or_unset_fallback: Option<String> = Some(String::new());
-        let fallback_path = empty_or_unset_fallback
-            .filter(|s| !s.is_empty())
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("jr");
+        // EC-4: empty string → treated as unset → PathBuf::from(".")
         assert_eq!(
-            fallback_path,
-            std::path::PathBuf::from(".").join("jr"),
-            "EC-4 (BC-6.2.016 EC-1): empty LOCALAPPDATA must yield PathBuf::from(\".\").join(\"jr\"). \
-             Expected: {}, got: {}",
-            std::path::PathBuf::from(".").join("jr").display(),
-            fallback_path.display()
+            cache_localappdata_fallback(Some(String::new())),
+            PathBuf::from("."),
+            "EC-4: empty LOCALAPPDATA must yield PathBuf::from(\".\")"
         );
 
-        // EC-1: unset LOCALAPPDATA (None) must also reach the defensive fallback
-        let unset_fallback: Option<String> = None;
-        let unset_path = unset_fallback
-            .filter(|s| !s.is_empty())
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("jr");
+        // EC-1: None (unset LOCALAPPDATA) → PathBuf::from(".")
         assert_eq!(
-            unset_path,
-            std::path::PathBuf::from(".").join("jr"),
-            "EC-1 (BC-6.2.016 EC-1): None (unset LOCALAPPDATA) must yield PathBuf::from(\".\").join(\"jr\"). \
-             Expected: {}, got: {}",
-            std::path::PathBuf::from(".").join("jr").display(),
-            unset_path.display()
+            cache_localappdata_fallback(None),
+            PathBuf::from("."),
+            "EC-1: None (unset LOCALAPPDATA) must yield PathBuf::from(\".\")"
+        );
+
+        // Happy-path: non-empty value is passed through unchanged
+        assert_eq!(
+            cache_localappdata_fallback(Some("C:\\Users\\Alice\\AppData\\Local".into())),
+            PathBuf::from("C:\\Users\\Alice\\AppData\\Local"),
+            "non-empty LOCALAPPDATA must be returned as-is"
         );
     }
 
@@ -1608,6 +1613,14 @@ mod request_type_cache_tests {
     #[cfg(windows)]
     #[test]
     fn test_bc_6_2_004_windows_per_profile_path_includes_v1() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        // Scrub the debug seam vars so they cannot short-circuit cache_root()
+        // and perturb the assertion (RB-102).
+        // SAFETY: ENV_MUTEX is held for the duration; no concurrent env access occurs.
+        unsafe {
+            std::env::remove_var("JR_CACHE_DIR");
+            std::env::remove_var("JR_CONFIG_DIR");
+        }
         let root = cache_root();
         let profile_dir = cache_dir("default");
 
