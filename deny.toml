@@ -139,11 +139,19 @@ version = "0.61"
 reason = "clap, tokio, reqwest and most of the dependency graph use windows-sys 0.61; jni 0.21.1 requires 0.45. Dual version is unavoidable until jni upgrades."
 
 # windows-targets and windows_* arch crates: transitive sub-deps of windows-sys.
-# windows-sys 0.45 (via jni) pulls windows-targets 0.42.2 and windows_* 0.42.2;
-# windows-sys 0.52 (via ring) pulls windows-targets 0.52.6 and windows_* 0.52.6;
-# windows-sys 0.60 (via keyring v3.6.3 windows-native) pulls windows-targets 0.53.5
-# and windows_* 0.53.1. These are unavoidable until jni and keyring converge on the
-# same windows-sys version. (S-WIN-3, C-V2(b) research finding)
+# S-WIN-3 adds 17 entries total (1 windows-sys 0.60 + 2 windows-targets + 14 = 7 arch crates × 2 tiers):
+#   windows-sys 0.45 (via jni) pulls windows-targets 0.42.2 and windows_* 0.42.2;
+#   windows-sys 0.52 (via ring) pulls windows-targets 0.52.6 and windows_* 0.52.6;
+#   windows-sys 0.60 (via keyring v3.6.3 windows-native) pulls windows-targets 0.53.5
+#   and windows_* 0.53.1. These are unavoidable until jni and keyring converge on the
+#   same windows-sys version. (S-WIN-3, C-V2(b) research finding)
+#
+# The 7 skipped arch crates are: windows_aarch64_gnullvm, windows_aarch64_msvc,
+# windows_i686_gnu, windows_i686_msvc, windows_x86_64_gnu, windows_x86_64_gnullvm,
+# windows_x86_64_msvc. windows_i686_gnullvm is deliberately NOT skipped: it exists
+# in Cargo.lock only at 0.52.6 and 0.53.1 (the i686-gnullvm stub did not exist in
+# the windows 0.42 generation), so only two versions are present and cargo-deny
+# requires no skip — skipping either would produce an `unmatched-skip` error.
 #
 # Why no `[[bans.skip]]` for windows-targets/windows_* version "0.52"?
 #
@@ -158,6 +166,14 @@ reason = "clap, tokio, reqwest and most of the dependency graph use windows-sys 
 # A future reviewer should NOT add a 0.52 skip; doing so would produce an
 # `unnecessary-skip` warning and is semantically wrong — 0.52.6 is the canonical
 # un-skipped version by design.
+#
+# Maintenance caveat (F-WIN3-RC-103): this skip set is correct for the CURRENT
+# dependency topology. A future dep bump that changes the windows-sys/windows-targets
+# version set (e.g. ring updating its windows-sys minor, or jni dropping 0.45, or a
+# new lineage being added) could leave zero canonical un-skipped versions
+# (→ unnecessary-skip warnings) or introduce a new un-skipped duplicate
+# (→ multiple-versions error). The guard is `cargo deny check` in CI; there is no
+# separate canonical-version invariant test (process-gap tracked by orchestrator).
 
 [[bans.skip]]
 name = "windows-targets"
