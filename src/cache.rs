@@ -1204,8 +1204,11 @@ mod tests {
     /// must NOT return `PathBuf::from("")`. It must proceed to OS-branch logic,
     /// returning a non-empty path. Symmetric to AC-003 for the config side.
     ///
-    /// Pre-implementation Red Gate: PASSES even without the seam (OS logic always
-    /// fires). Included as a regression guard once the seam exists.
+    /// This test is load-bearing: it pins the `.filter(|s| !s.is_empty())` guard in
+    /// `cache_root()` (AC-008, BC-6.2.017 EC-5). Without that filter, setting
+    /// `JR_CACHE_DIR=""` would cause the seam to return `PathBuf::from("")` whose
+    /// `as_os_str().is_empty()` is true — the `assert_ne!` below would then fail.
+    /// Dropping the filter is exactly the mutation this test kills.
     #[cfg(debug_assertions)]
     #[test]
     fn test_bc_6_2_017_empty_cache_dir_uses_os_path() {

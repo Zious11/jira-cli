@@ -1384,9 +1384,11 @@ mod tests {
     /// is treated as unset. `global_config_dir()` must NOT return `PathBuf::from("")`.
     /// It must proceed to OS-branch logic (XDG / home-dir), returning a non-empty path.
     ///
-    /// Pre-implementation Red Gate: There is no seam, so `JR_CONFIG_DIR` is never
-    /// read. The function never returns `PathBuf::from("")` regardless (since XDG/home
-    /// logic fires). PASSES even without the seam — included as a regression guard.
+    /// This test is load-bearing: it pins the `.filter(|s| !s.is_empty())` guard in
+    /// `global_config_dir()` (AC-003, BC-6.2.017 EC-1). Without that filter, setting
+    /// `JR_CONFIG_DIR=""` would cause the seam to return `PathBuf::from("")` whose
+    /// `as_os_str().is_empty()` is true — the `assert_ne!` below would then fail.
+    /// Dropping the filter is exactly the mutation this test kills.
     #[cfg(debug_assertions)]
     #[test]
     fn test_bc_6_2_017_empty_config_dir_uses_os_path() {
