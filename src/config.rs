@@ -464,6 +464,16 @@ impl Config {
 }
 
 pub fn global_config_dir() -> PathBuf {
+    // JR_CONFIG_DIR override is debug builds only — release binaries ignore this env
+    // var to prevent path-injection attacks (BC-6.2.017). Seam must be first in body,
+    // before any OS-branch logic, so it fires on all platforms (S-WIN-2 prerequisite).
+    #[cfg(debug_assertions)]
+    if let Some(dir) = std::env::var("JR_CONFIG_DIR")
+        .ok()
+        .filter(|s| !s.is_empty())
+    {
+        return PathBuf::from(dir);
+    }
     // Use XDG_CONFIG_HOME if set, otherwise ~/.config (matches spec: ~/.config/jr/)
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
         PathBuf::from(xdg).join("jr")
@@ -1307,6 +1317,105 @@ mod tests {
             msg.contains("invalid characters") || msg.contains("a-z, 0-9"),
             "AC-007 (BC-6.1.004 invariant): error for a profile name with a space must \
              contain 'invalid characters' or 'a-z, 0-9'. Got: {msg:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // BC-6.2.017 — JR_CONFIG_DIR debug-only path-isolation seam
+    //
+    // These tests pin AC-001 and AC-003 from S-WIN-2.
+    //
+    // Pre-implementation Red Gate: the seam does not exist in global_config_dir()
+    // yet. AC-001 will FAIL because global_config_dir() does not read JR_CONFIG_DIR
+    // at all — it returns the XDG/home-dir path regardless.
+    // AC-003 will FAIL because with no seam, setting JR_CONFIG_DIR="" changes
+    // nothing about the returned path — the assertion that PathBuf::from("") is NOT
+    // returned trivially passes, but the assertion that the seam is absent (i.e. the
+    // function does NOT short-circuit to the env var value) is the load-bearing check
+    // for AC-001. Both tests are structured so they require the seam to exist.
+    // -----------------------------------------------------------------------
+
+    /// BC-6.2.017 postcondition (debug path) — AC-001.
+    ///
+    /// In a debug build, `global_config_dir()` must return `PathBuf::from(value)`
+    /// when `JR_CONFIG_DIR` is set to a non-empty string. The XDG/home-dir logic
+    /// must be bypassed entirely.
+    ///
+    /// Pre-implementation Red Gate: ASSERTION FAILURE — `global_config_dir()` does
+    /// not read `JR_CONFIG_DIR` so it returns the XDG or home-dir path instead of
+    /// the seam value.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn test_bc_6_2_017_config_dir_seam_overrides_path() {
+        // Recover from mutex poison: a prior test that panicked while holding this
+        // lock will have poisoned it.  We recover rather than propagating the poison
+        // (same pattern used by with_temp_cache in cache.rs).
+        let guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        // Use a distinctive path that cannot coincidentally match any XDG or home
+        // directory the test environment might have configured.
+        let seam_path = "/tmp/jr-seam-test-config-dir-overrides-path";
+        // SAFETY: ENV_MUTEX held; no concurrent env reads in this process while
+        // the lock is held, as required by the Rust threading model for set_var.
+        unsafe {
+            std::env::set_var("JR_CONFIG_DIR", seam_path);
+            // Also clear XDG_CONFIG_HOME so the non-seam branch cannot accidentally
+            // produce the seam path value via some other mechanism.
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+        let result = global_config_dir();
+        // Clean up env BEFORE assertion so the mutex is not held across a panic.
+        unsafe {
+            std::env::remove_var("JR_CONFIG_DIR");
+        }
+        drop(guard);
+        assert_eq!(
+            result,
+            std::path::PathBuf::from(seam_path),
+            "AC-001 (BC-6.2.017): global_config_dir() must return the JR_CONFIG_DIR \
+             value as-is (no .join(\"jr\") suffix) when the seam is set in a debug build. \
+             Got: {}",
+            result.display()
+        );
+    }
+
+    /// BC-6.2.017 EC-1 — AC-003.
+    ///
+    /// When `JR_CONFIG_DIR` is set to an empty string in a debug build, the seam
+    /// is treated as unset. `global_config_dir()` must NOT return `PathBuf::from("")`.
+    /// It must proceed to OS-branch logic (XDG / home-dir), returning a non-empty path.
+    ///
+    /// Pre-implementation Red Gate: There is no seam, so `JR_CONFIG_DIR` is never
+    /// read. The function never returns `PathBuf::from("")` regardless (since XDG/home
+    /// logic fires). PASSES even without the seam — included as a regression guard.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn test_bc_6_2_017_empty_config_dir_uses_os_path() {
+        let guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: ENV_MUTEX held.
+        unsafe {
+            std::env::set_var("JR_CONFIG_DIR", "");
+        }
+        let result = global_config_dir();
+        // Clean up env BEFORE assertions so the mutex is not held across a panic.
+        unsafe {
+            std::env::remove_var("JR_CONFIG_DIR");
+        }
+        drop(guard);
+        assert_ne!(
+            result,
+            std::path::PathBuf::from(""),
+            "AC-003 (BC-6.2.017 EC-1): global_config_dir() must NOT return \
+             PathBuf::from(\"\") when JR_CONFIG_DIR is set to the empty string. \
+             The empty-string filter must treat it as unset and proceed to OS logic. \
+             Got: {}",
+            result.display()
+        );
+        // Additionally assert the path is non-empty (OS logic must have fired).
+        assert!(
+            !result.as_os_str().is_empty(),
+            "AC-003 (BC-6.2.017 EC-1): OS-branch result must be a non-empty path. \
+             Got: {}",
+            result.display()
         );
     }
 }

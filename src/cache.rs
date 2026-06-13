@@ -65,6 +65,13 @@ impl Expiring for TeamCache {
 
 /// Root cache directory: `$XDG_CACHE_HOME/jr` or `~/.cache/jr`.
 pub fn cache_root() -> PathBuf {
+    // JR_CACHE_DIR override is debug builds only — release binaries ignore this env
+    // var to prevent path-injection attacks (BC-6.2.017). Seam must be first in body,
+    // before any OS-branch logic, so it fires on all platforms (S-WIN-2 prerequisite).
+    #[cfg(debug_assertions)]
+    if let Some(dir) = std::env::var("JR_CACHE_DIR").ok().filter(|s| !s.is_empty()) {
+        return PathBuf::from(dir);
+    }
     if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
         PathBuf::from(xdg).join("jr")
     } else {
@@ -1092,6 +1099,142 @@ mod tests {
             let result = read_project_meta("default", "ANY").unwrap();
             assert!(result.is_none(), "wrong-shape JSON should return None");
         });
+    }
+
+    // -----------------------------------------------------------------------
+    // BC-6.2.017 — JR_CACHE_DIR debug-only path-isolation seam
+    //
+    // These tests pin AC-002, AC-004, and AC-008 from S-WIN-2.
+    //
+    // Pre-implementation Red Gate: the seam does not exist in cache_root() yet.
+    // AC-002 will FAIL because cache_root() does not read JR_CACHE_DIR at all.
+    // AC-004 is a negative (independence) test that asserts JR_CONFIG_DIR does not
+    // bleed into cache_root().
+    // AC-008 (empty-string treated as unset) mirrors AC-003 in config tests.
+    // -----------------------------------------------------------------------
+
+    /// BC-6.2.017 postcondition (debug path) — AC-002.
+    ///
+    /// In a debug build, `cache_root()` must return `PathBuf::from(value)` when
+    /// `JR_CACHE_DIR` is set to a non-empty string. The XDG/home-dir logic must
+    /// be bypassed entirely.
+    ///
+    /// Pre-implementation Red Gate: ASSERTION FAILURE — `cache_root()` does not
+    /// read `JR_CACHE_DIR` so it returns the XDG or home-dir path instead of the
+    /// seam value.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn test_bc_6_2_017_cache_dir_seam_overrides_path() {
+        let guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
+        let seam_path = "/tmp/jr-seam-test-cache-dir-overrides-path";
+        // SAFETY: ENV_MUTEX held; no concurrent env reads occur while we hold the lock.
+        unsafe {
+            std::env::set_var("JR_CACHE_DIR", seam_path);
+            // Clear XDG_CACHE_HOME so the non-seam branch cannot accidentally produce
+            // the seam path via a coincidental XDG value.
+            std::env::remove_var("XDG_CACHE_HOME");
+        }
+        let result = cache_root();
+        unsafe {
+            std::env::remove_var("JR_CACHE_DIR");
+        }
+        drop(guard);
+        assert_eq!(
+            result,
+            std::path::PathBuf::from(seam_path),
+            "AC-002 (BC-6.2.017): cache_root() must return the JR_CACHE_DIR value \
+             as-is (no suffix appended) when the seam is set in a debug build. \
+             Got: {}",
+            result.display()
+        );
+    }
+
+    /// BC-6.2.017 EC-3 — AC-004.
+    ///
+    /// When only `JR_CONFIG_DIR` is set (and `JR_CACHE_DIR` is NOT set),
+    /// `cache_root()` must return the OS-determined path, not any value derived
+    /// from `JR_CONFIG_DIR`. The two seams are independent.
+    ///
+    /// Pre-implementation Red Gate: This test PASSES even without the seam
+    /// (cache_root() never reads JR_CONFIG_DIR regardless). Included as a
+    /// regression guard once the seam exists.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn test_bc_6_2_017_config_seam_does_not_affect_cache() {
+        let guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
+        let config_seam_path = "/tmp/jr-seam-test-config-only-no-cache-effect";
+        // SAFETY: ENV_MUTEX held.
+        unsafe {
+            std::env::set_var("JR_CONFIG_DIR", config_seam_path);
+            std::env::remove_var("JR_CACHE_DIR");
+            // Clear XDG_CACHE_HOME for a deterministic OS-path result.
+            std::env::remove_var("XDG_CACHE_HOME");
+        }
+        let result = cache_root();
+        unsafe {
+            std::env::remove_var("JR_CONFIG_DIR");
+        }
+        drop(guard);
+        assert_ne!(
+            result,
+            std::path::PathBuf::from(config_seam_path),
+            "AC-004 (BC-6.2.017 EC-3): cache_root() must NOT be influenced by \
+             JR_CONFIG_DIR. When only JR_CONFIG_DIR is set, cache_root() must \
+             return the OS-determined path, not the config seam value. \
+             Got: {}",
+            result.display()
+        );
+        // The returned path must be non-empty (OS logic fired).
+        assert!(
+            !result.as_os_str().is_empty(),
+            "AC-004: cache_root() with only JR_CONFIG_DIR set must return a \
+             non-empty OS path. Got: {}",
+            result.display()
+        );
+    }
+
+    /// BC-6.2.017 EC-5 — AC-008.
+    ///
+    /// When `JR_CACHE_DIR` is set to an empty string in a debug build, the seam
+    /// is treated as unset (`.filter(|s| !s.is_empty())` fires). `cache_root()`
+    /// must NOT return `PathBuf::from("")`. It must proceed to OS-branch logic,
+    /// returning a non-empty path. Symmetric to AC-003 for the config side.
+    ///
+    /// Pre-implementation Red Gate: PASSES even without the seam (OS logic always
+    /// fires). Included as a regression guard once the seam exists.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn test_bc_6_2_017_empty_cache_dir_uses_os_path() {
+        let guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
+        // SAFETY: ENV_MUTEX held.
+        unsafe {
+            std::env::set_var("JR_CACHE_DIR", "");
+        }
+        let result = cache_root();
+        unsafe {
+            std::env::remove_var("JR_CACHE_DIR");
+        }
+        drop(guard);
+        assert_ne!(
+            result,
+            std::path::PathBuf::from(""),
+            "AC-008 (BC-6.2.017 EC-5): cache_root() must NOT return PathBuf::from(\"\") \
+             when JR_CACHE_DIR is set to the empty string. The empty-string filter must \
+             treat it as unset and proceed to OS logic. Got: {}",
+            result.display()
+        );
+        assert!(
+            !result.as_os_str().is_empty(),
+            "AC-008 (BC-6.2.017 EC-5): OS-branch result must be a non-empty path. \
+             Got: {}",
+            result.display()
+        );
     }
 }
 
