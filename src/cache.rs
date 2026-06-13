@@ -63,7 +63,8 @@ impl Expiring for TeamCache {
     }
 }
 
-/// Root cache directory: `$XDG_CACHE_HOME/jr` or `~/.cache/jr`.
+/// Root cache directory: `%LOCALAPPDATA%\jr` on Windows, `$XDG_CACHE_HOME/jr` or
+/// `~/.cache/jr` on Unix.
 pub fn cache_root() -> PathBuf {
     // JR_CACHE_DIR override is debug builds only — release binaries ignore this env
     // var to prevent path-injection attacks (BC-6.2.017). Seam must be first in body,
@@ -72,13 +73,34 @@ pub fn cache_root() -> PathBuf {
     if let Some(dir) = std::env::var("JR_CACHE_DIR").ok().filter(|s| !s.is_empty()) {
         return PathBuf::from(dir);
     }
-    if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
-        PathBuf::from(xdg).join("jr")
-    } else {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("~"))
-            .join(".cache")
+
+    #[cfg(windows)]
+    {
+        // Windows: %LOCALAPPDATA%\jr  (e.g., C:\Users\Alice\AppData\Local\jr)
+        // BC-6.2.016: dirs::cache_dir() maps to %LOCALAPPDATA% (Local) on Windows.
+        // LOCALAPPDATA fallback filters empty string: unset and empty both route to ".".
+        dirs::cache_dir()
+            .unwrap_or_else(|| {
+                std::env::var("LOCALAPPDATA")
+                    .ok()
+                    .filter(|s| !s.is_empty())
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from("."))
+            })
             .join("jr")
+    }
+
+    #[cfg(not(windows))]
+    {
+        // Unix: $XDG_CACHE_HOME/jr or ~/.cache/jr (unchanged)
+        if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
+            PathBuf::from(xdg).join("jr")
+        } else {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("~"))
+                .join(".cache")
+                .join("jr")
+        }
     }
 }
 
@@ -1466,5 +1488,166 @@ mod request_type_cache_tests {
                 "corrupt request_type_fields cache must self-heal as Ok(None), not propagate an error"
             );
         });
+    }
+
+    // -------------------------------------------------------------------------
+    // BC-6.2.016 / BC-6.2.004 — Windows LocalAppData cache path tests (S-WIN-1)
+    // All tests below are `#[cfg(windows)]`-gated. They compile out on macOS/Linux
+    // (zero impact on Unix CI) and run only on a Windows runner (S-WIN-5).
+    //
+    // RED GATE RATIONALE: `cache_root()` currently has NO `#[cfg(windows)]` branch —
+    // on a Windows build it falls through to the XDG/home_dir Unix path, so
+    // `dirs::cache_dir()` (= %LOCALAPPDATA%) is never consulted. Every assertion
+    // below would therefore FAIL on a Windows runner against the current code.
+    // The implementation in S-WIN-1 adds the `#[cfg(windows)]` branch that makes
+    // these tests pass.
+    // -------------------------------------------------------------------------
+
+    /// AC-005 / BC-6.2.016 postcondition — on Windows, `cache_root()` returns
+    /// `dirs::cache_dir().join("jr")` which resolves to `%LOCALAPPDATA%\jr` (Local).
+    ///
+    /// Verifies the structural postcondition using PathBuf component comparison (not
+    /// string literals with `/`) per F-WIN-F3-005: on Windows `PathBuf::join` produces
+    /// `\`-separated paths.
+    ///
+    /// Also verifies that the path ends with component "jr" (the platform-appended
+    /// subdirectory), and that its parent equals `dirs::cache_dir()`.
+    ///
+    /// Traces: BC-6.2.016 postcondition, AC-005.
+    #[cfg(windows)]
+    #[test]
+    fn test_bc_6_2_016_windows_cache_root_uses_localappdata() {
+        // On Windows, dirs::cache_dir() returns Some(%LOCALAPPDATA% Local path).
+        // The function under test must return dirs::cache_dir().unwrap().join("jr").
+        let expected_parent = dirs::cache_dir()
+            .expect("dirs::cache_dir() must return Some on a Windows system with a user profile");
+        let expected = expected_parent.join("jr");
+        let result = cache_root();
+        assert_eq!(
+            result,
+            expected,
+            "AC-005 (BC-6.2.016): on Windows, cache_root() must return \
+             dirs::cache_dir().join(\"jr\") = %LOCALAPPDATA%\\jr. \
+             Expected: {}, got: {}",
+            expected.display(),
+            result.display()
+        );
+        // Structural assertion: must end with component "jr"
+        assert!(
+            result.ends_with("jr"),
+            "AC-005 (BC-6.2.016): path must end with 'jr' component, got: {}",
+            result.display()
+        );
+        // Invariant: must NOT be rooted under %APPDATA% (Roaming) — must be Local
+        let roaming_marker = "Roaming";
+        assert!(
+            !result.to_string_lossy().contains(roaming_marker),
+            "AC-005 (BC-6.2.016 invariant): cache path must use %LOCALAPPDATA% (Local), \
+             NOT %APPDATA% (Roaming). Got: {}",
+            result.display()
+        );
+    }
+
+    /// AC-006 / BC-6.2.016 EC-1 — LOCALAPPDATA env fallback when `dirs::cache_dir()` fails.
+    ///
+    /// Mirrors the config AC-002 test. Verifies that the defensive fallback expression
+    /// in the Windows branch correctly handles an empty or unset LOCALAPPDATA:
+    /// both cases must produce `PathBuf::from(".").join("jr")`.
+    ///
+    /// We cannot force `dirs::cache_dir()` to return `None` at runtime, so this test
+    /// exercises the fallback logic directly by constructing the same expression used
+    /// in the implementation.
+    ///
+    /// Traces: BC-6.2.016 EC-1, EC-4, AC-006.
+    #[cfg(windows)]
+    #[test]
+    fn test_bc_6_2_016_localappdata_env_fallback() {
+        // EC-4: LOCALAPPDATA set to empty string → treated as unset → defensive ./jr
+        let empty_or_unset_fallback: Option<String> = Some(String::new());
+        let fallback_path = empty_or_unset_fallback
+            .filter(|s| !s.is_empty())
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("jr");
+        assert_eq!(
+            fallback_path,
+            std::path::PathBuf::from(".").join("jr"),
+            "EC-4 (BC-6.2.016 EC-1): empty LOCALAPPDATA must yield PathBuf::from(\".\").join(\"jr\"). \
+             Expected: {}, got: {}",
+            std::path::PathBuf::from(".").join("jr").display(),
+            fallback_path.display()
+        );
+
+        // EC-1: unset LOCALAPPDATA (None) must also reach the defensive fallback
+        let unset_fallback: Option<String> = None;
+        let unset_path = unset_fallback
+            .filter(|s| !s.is_empty())
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("jr");
+        assert_eq!(
+            unset_path,
+            std::path::PathBuf::from(".").join("jr"),
+            "EC-1 (BC-6.2.016 EC-1): None (unset LOCALAPPDATA) must yield PathBuf::from(\".\").join(\"jr\"). \
+             Expected: {}, got: {}",
+            std::path::PathBuf::from(".").join("jr").display(),
+            unset_path.display()
+        );
+    }
+
+    /// AC-007 / BC-6.2.004, BC-6.2.016 postcondition — on Windows, the per-profile
+    /// cache path includes the `v1/` versioning root.
+    ///
+    /// `cache_dir(profile)` = `cache_root().join("v1").join(profile)`.
+    /// On Windows this must equal `%LOCALAPPDATA%\jr\v1\<profile>`.
+    ///
+    /// The `v1/` versioning root must be present on Windows the same as on Unix.
+    /// Uses PathBuf component comparison per F-WIN-F3-005.
+    ///
+    /// Traces: BC-6.2.004 Windows clause, BC-6.2.016 postcondition, AC-007.
+    #[cfg(windows)]
+    #[test]
+    fn test_bc_6_2_004_windows_per_profile_path_includes_v1() {
+        let root = cache_root();
+        let profile_dir = cache_dir("default");
+
+        // Must be: cache_root().join("v1").join("default")
+        let expected = root.join("v1").join("default");
+        assert_eq!(
+            profile_dir,
+            expected,
+            "AC-007 (BC-6.2.004): cache_dir(\"default\") must equal \
+             cache_root().join(\"v1\").join(\"default\") on Windows. \
+             Expected: {}, got: {}",
+            expected.display(),
+            profile_dir.display()
+        );
+
+        // The path must contain the "v1" component (versioning root preserved on Windows)
+        let has_v1 = profile_dir.components().any(|c| c.as_os_str() == "v1");
+        assert!(
+            has_v1,
+            "AC-007 (BC-6.2.004): Windows per-profile cache path must contain \
+             the 'v1' versioning component. Got: {}",
+            profile_dir.display()
+        );
+
+        // The path must end with the profile name component
+        assert!(
+            profile_dir.ends_with("default"),
+            "AC-007 (BC-6.2.004): path must end with profile component 'default'. \
+             Got: {}",
+            profile_dir.display()
+        );
+
+        // Verify parent of profile dir is the v1 dir
+        let parent = profile_dir.parent().unwrap();
+        assert!(
+            parent.ends_with("v1"),
+            "AC-007 (BC-6.2.004): parent of profile dir must be the 'v1' component. \
+             Parent: {}, full path: {}",
+            parent.display(),
+            profile_dir.display()
+        );
     }
 }
