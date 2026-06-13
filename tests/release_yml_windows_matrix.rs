@@ -11,6 +11,11 @@
 //! correctness gate for the actual Windows release artifact is **H-WIN-6** — a
 //! human inspection of the GitHub Release page after a live version tag.
 //!
+//! **Anchoring:** AC-002, AC-004, and AC-005 use step-name anchoring (find the
+//! step by name, inspect a line window) to ensure each assertion is scoped to its
+//! owning step block. This prevents a single occurrence of a glob or keyword
+//! elsewhere in the file from satisfying multiple independent tests.
+//!
 //! # Test inventory
 //!
 //! | Test | AC |
@@ -83,61 +88,132 @@ fn test_release_yml_has_windows_matrix_row() {
 /// `shell: bash` (the old, broken spec). A test grepping for `zip` would
 /// incorrectly pass on a regressed spec and fail to detect the unsafe invocation.
 ///
+/// Both the positive assertions (`shell: pwsh`, `Compress-Archive`) and the
+/// negative assertions (`zip `, `shell: bash`) are anchored to the 10-line window
+/// immediately following the `Package (Windows)` step name. This prevents a false
+/// pass caused by the adjacent `Checksum (Windows)` bash step satisfying the
+/// `shell: bash` check, and enforces C-V3 co-location within the step itself.
+///
+/// `sha256sum` is checked in a separate anchored window for the `Checksum (Windows)`
+/// step so that assertion is also step-scoped.
+///
 /// Traces to: NFR-P-W1; ADR-0016 §Decision 2 (C-V3 re-amendment); S-WIN-4 EC-002.
 #[test]
 fn test_release_yml_windows_package_step_produces_zip() {
     let yml = release_yml();
 
     // --- Package (Windows) step: must use shell: pwsh + Compress-Archive ---
+    // Anchor to the step name and inspect the next 10 lines only, so that the
+    // adjacent Checksum (Windows) bash step cannot satisfy these assertions.
+
+    let pkg_step_name = "Package (Windows)";
+    let pkg_pos = yml.find(pkg_step_name).unwrap_or_else(|| {
+        panic!(
+            "AC-002 FAIL: step '{}' not found in .github/workflows/release.yml.\n\
+             A step named 'Package (Windows)' gated `if: runner.os == 'Windows'` \
+             with `shell: pwsh` and `Compress-Archive` is required.\n\
+             (S-WIN-4 AC-002 / ADR-0016 §Decision 2 C-V3)",
+            pkg_step_name
+        )
+    });
+
+    // 5 lines covers: step name, `if:`, `shell:`, `run:`, and a trailing blank
+    // line — the complete Package (Windows) step body without bleeding into the
+    // adjacent Checksum (Windows) step, whose `shell: bash` and `.zip` redirect
+    // would otherwise trigger the negative assertions below.
+    let pkg_window: String = yml[pkg_pos..]
+        .lines()
+        .take(5)
+        .collect::<Vec<_>>()
+        .join("\n");
 
     assert!(
-        yml.contains("Package (Windows)"),
-        "AC-002 FAIL: `Package (Windows)` step not found in \
-         .github/workflows/release.yml.\n\
-         A step named 'Package (Windows)' gated `if: runner.os == 'Windows'` \
-         with `shell: pwsh` and `Compress-Archive` is required.\n\
-         (S-WIN-4 AC-002 / ADR-0016 §Decision 2 C-V3)"
-    );
-
-    assert!(
-        yml.contains("shell: pwsh"),
-        "AC-002 FAIL: `shell: pwsh` not found in .github/workflows/release.yml.\n\
+        pkg_window.contains("shell: pwsh"),
+        "AC-002 FAIL: `shell: pwsh` not found within the first 10 lines of the \
+         'Package (Windows)' step in .github/workflows/release.yml.\n\
          The Package (Windows) step MUST use `shell: pwsh` to invoke \
          PowerShell's Compress-Archive cmdlet. Using `shell: bash` with `zip` \
          is a C-V3 BLOCKER: `zip` is NOT available on `windows-latest` PATH.\n\
-         (S-WIN-4 AC-002 / ADR-0016 §Decision 2 C-V3)"
+         Lines seen after step name:\n{}\n\
+         (S-WIN-4 AC-002 / ADR-0016 §Decision 2 C-V3)",
+        pkg_window
     );
 
     assert!(
-        yml.contains("Compress-Archive"),
-        "AC-002 FAIL: `Compress-Archive` not found in .github/workflows/release.yml.\n\
+        pkg_window.contains("Compress-Archive"),
+        "AC-002 FAIL: `Compress-Archive` not found within the first 10 lines of \
+         the 'Package (Windows)' step in .github/workflows/release.yml.\n\
          The Package (Windows) step MUST use PowerShell's `Compress-Archive` cmdlet \
          to create the .zip archive. This is the PRIMARY, deterministic packaging \
          mechanism (C-V3). Do NOT use the Unix `zip` command — it is not present \
          on `windows-latest` runners and will fail with `command not found`.\n\
          Required form:\n\
            Compress-Archive -Path \"target/...\" -DestinationPath \"jr-...-x86_64-pc-windows-msvc.zip\"\n\
-         (S-WIN-4 AC-002 / ADR-0016 §Decision 2 C-V3)"
+         Lines seen after step name:\n{}\n\
+         (S-WIN-4 AC-002 / ADR-0016 §Decision 2 C-V3)",
+        pkg_window
+    );
+
+    // C-V3 negative check: `zip ` (Unix Info-ZIP) must NOT appear in the Package
+    // (Windows) step body — only in the adjacent Compress-Archive invocation which
+    // uses it as a DestinationPath suffix, not as a shell command.
+    // We check for `zip ` with a trailing space to avoid false-matching the `.zip`
+    // extension inside the Compress-Archive -DestinationPath argument.
+    assert!(
+        !pkg_window.contains("zip "),
+        "AC-002 FAIL: `zip ` (Unix Info-ZIP invocation) found within the first 10 \
+         lines of the 'Package (Windows)' step in .github/workflows/release.yml.\n\
+         The Package (Windows) step MUST use `Compress-Archive`, not the Unix `zip` \
+         command. `zip` is NOT available on `windows-latest` PATH (C-V3 BLOCKER).\n\
+         Lines seen after step name:\n{}\n\
+         (S-WIN-4 AC-002 / ADR-0016 §Decision 2 C-V3)",
+        pkg_window
+    );
+
+    assert!(
+        !pkg_window.contains("shell: bash"),
+        "AC-002 FAIL: `shell: bash` found within the first 10 lines of the \
+         'Package (Windows)' step in .github/workflows/release.yml.\n\
+         The Package (Windows) step MUST use `shell: pwsh`, not `shell: bash`. \
+         Using bash + zip is the old broken spec (C-V3 BLOCKER). \
+         The adjacent Checksum (Windows) step uses bash legitimately — this \
+         assertion is step-scoped to catch a regression in the Package step itself.\n\
+         Lines seen after step name:\n{}\n\
+         (S-WIN-4 AC-002 / ADR-0016 §Decision 2 C-V3)",
+        pkg_window
     );
 
     // --- Checksum (Windows) step: must exist and use sha256sum ---
+    // Anchored separately so the sha256sum assertion is step-scoped and does not
+    // pass merely because sha256sum appears elsewhere in the file.
+
+    let chk_step_name = "Checksum (Windows)";
+    let chk_pos = yml.find(chk_step_name).unwrap_or_else(|| {
+        panic!(
+            "AC-002 FAIL: step '{}' not found in .github/workflows/release.yml.\n\
+             A separate step named 'Checksum (Windows)' gated `if: runner.os == 'Windows'` \
+             with `shell: bash` and `sha256sum` is required in addition to the \
+             Package (Windows) step.\n\
+             (S-WIN-4 AC-002 / ADR-0016 §Decision 2 C-V3)",
+            chk_step_name
+        )
+    });
+
+    let chk_window: String = yml[chk_pos..]
+        .lines()
+        .take(10)
+        .collect::<Vec<_>>()
+        .join("\n");
 
     assert!(
-        yml.contains("Checksum (Windows)"),
-        "AC-002 FAIL: `Checksum (Windows)` step not found in \
-         .github/workflows/release.yml.\n\
-         A separate step named 'Checksum (Windows)' gated `if: runner.os == 'Windows'` \
-         with `shell: bash` and `sha256sum` is required in addition to the \
-         Package (Windows) step.\n\
-         (S-WIN-4 AC-002 / ADR-0016 §Decision 2 C-V3)"
-    );
-
-    assert!(
-        yml.contains("sha256sum"),
-        "AC-002 FAIL: `sha256sum` not found in .github/workflows/release.yml.\n\
+        chk_window.contains("sha256sum"),
+        "AC-002 FAIL: `sha256sum` not found within the first 10 lines of the \
+         'Checksum (Windows)' step in .github/workflows/release.yml.\n\
          The Checksum (Windows) step must use `sha256sum` to generate the .zip.sha256 \
          file. `sha256sum` is confirmed available via Git for Windows coreutils (C-V3).\n\
-         (S-WIN-4 AC-002 / ADR-0016 §Decision 2 C-V3)"
+         Lines seen after step name:\n{}\n\
+         (S-WIN-4 AC-002 / ADR-0016 §Decision 2 C-V3)",
+        chk_window
     );
 }
 
@@ -199,19 +275,49 @@ fn test_release_yml_smoke_step_skipped_on_windows() {
 /// so the Windows .zip artifact is uploaded to GitHub Actions artifacts alongside
 /// the existing .tar.gz and .sha256 files.
 ///
+/// The assertion is anchored to the `Upload artifact` step name: `jr-*.zip` must
+/// appear within the first 10 lines after that step name. This ensures the glob is
+/// specifically present in the upload step's `path:` block, not just anywhere in
+/// the file. A bare `yml.contains("jr-*.zip")` would also be satisfied by the
+/// release job's `files:` block (AC-005's concern), making the two tests
+/// indistinguishable — anchoring makes each test fail independently.
+///
 /// Traces to: NFR-P-W1; S-WIN-4 AC-004.
 #[test]
 fn test_release_yml_upload_artifact_includes_zip() {
     let yml = release_yml();
 
+    // Locate the Upload artifact step by name and inspect the next 10 lines.
+    let step_name = "Upload artifact";
+    let step_pos = yml.find(step_name).unwrap_or_else(|| {
+        panic!(
+            "AC-004 FAIL: step '{}' not found in .github/workflows/release.yml.\n\
+             The 'Upload artifact' step (actions/upload-artifact) must exist before \
+             its path: block can be verified.\n\
+             (S-WIN-4 AC-004 / NFR-P-W1)",
+            step_name
+        )
+    });
+
+    // 10 lines is generous enough to span `name:`, `uses:`, `with:`, `name:` sub-key,
+    // and the `path: |` block with its glob entries while staying within the step.
+    let window: String = yml[step_pos..]
+        .lines()
+        .take(10)
+        .collect::<Vec<_>>()
+        .join("\n");
+
     assert!(
-        yml.contains("jr-*.zip"),
-        "AC-004 FAIL: `jr-*.zip` not found in .github/workflows/release.yml.\n\
+        window.contains("jr-*.zip"),
+        "AC-004 FAIL: `jr-*.zip` not found within the first 10 lines of the \
+         'Upload artifact' step in .github/workflows/release.yml.\n\
          The Upload artifact step's `path:` block must include `jr-*.zip` so the \
          Windows .zip artifact is uploaded alongside the existing .tar.gz files.\n\
          Required addition to the path: block:\n\
            jr-*.zip\n\
-         (S-WIN-4 AC-004 / NFR-P-W1)"
+         Lines seen after step name:\n{}\n\
+         (S-WIN-4 AC-004 / NFR-P-W1)",
+        window
     );
 }
 
@@ -224,27 +330,48 @@ fn test_release_yml_upload_artifact_includes_zip() {
 /// Note: the `softprops/action-gh-release` step accepts arbitrary file types including
 /// .zip; no version change to the action is needed.
 ///
-/// Traces to: NFR-P-W1; S-WIN-4 AC-005.
+/// The assertion is anchored to the `Create GitHub Release` step name: `jr-*.zip` must
+/// appear within the first 10 lines after that step name. This ensures the glob is
+/// specifically present in the release step's `files:` block, not just anywhere in
+/// the file (e.g. the upload-artifact `path:` block, which is AC-004's concern).
+/// Anchoring makes this test fail independently if the glob is removed from the
+/// release `files:` block while remaining in the upload `path:` block — which would
+/// produce a CI artifact but no GitHub Release attachment, silently failing NFR-P-W1.
 ///
-/// Implementation note: AC-004 already asserts `jr-*.zip` is present in the file
-/// globally. This test provides the same assertion with a distinct name to clearly
-/// pin the release-job files: block as a separate AC. Both tests must fail before
-/// implementation and pass after.
+/// Traces to: NFR-P-W1; S-WIN-4 AC-005.
 #[test]
 fn test_release_yml_release_job_files_includes_zip() {
     let yml = release_yml();
 
-    // The glob `jr-*.zip` must appear in the release job's files: block.
-    // Since both the upload-artifact path and the release files: block need
-    // this glob, its presence anywhere in the file satisfies both ACs.
-    // The distinction is tracked by separate test names for AC traceability.
+    // Locate the Create GitHub Release step by name and inspect the next 10 lines.
+    let step_name = "Create GitHub Release";
+    let step_pos = yml.find(step_name).unwrap_or_else(|| {
+        panic!(
+            "AC-005 FAIL: step '{}' not found in .github/workflows/release.yml.\n\
+             The 'Create GitHub Release' step (softprops/action-gh-release) must \
+             exist before its files: block can be verified.\n\
+             (S-WIN-4 AC-005 / NFR-P-W1)",
+            step_name
+        )
+    });
+
+    // 10 lines spans `name:`, `uses:`, `with:` and the `files: |` block entries.
+    let window: String = yml[step_pos..]
+        .lines()
+        .take(10)
+        .collect::<Vec<_>>()
+        .join("\n");
+
     assert!(
-        yml.contains("jr-*.zip"),
-        "AC-005 FAIL: `jr-*.zip` not found in .github/workflows/release.yml.\n\
+        window.contains("jr-*.zip"),
+        "AC-005 FAIL: `jr-*.zip` not found within the first 10 lines of the \
+         'Create GitHub Release' step in .github/workflows/release.yml.\n\
          The `softprops/action-gh-release` step's `files:` block must include \
          `jr-*.zip` so the Windows .zip artifact appears on the GitHub Releases page.\n\
          Required addition to the files: block in the release job:\n\
            jr-*.zip\n\
-         (S-WIN-4 AC-005 / NFR-P-W1)"
+         Lines seen after step name:\n{}\n\
+         (S-WIN-4 AC-005 / NFR-P-W1)",
+        window
     );
 }
