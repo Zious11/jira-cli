@@ -1266,44 +1266,6 @@ mod tests {
             result.display()
         );
     }
-}
-
-#[cfg(test)]
-mod resolution_cache_tests {
-    use super::tests::with_temp_cache;
-    use super::*;
-
-    #[test]
-    fn resolution_cache_round_trip() {
-        with_temp_cache(|| {
-            let input = vec![
-                CachedResolution {
-                    id: "10000".into(),
-                    name: "Done".into(),
-                    description: Some("Work complete".into()),
-                },
-                CachedResolution {
-                    id: "10001".into(),
-                    name: "Won't Do".into(),
-                    description: None,
-                },
-            ];
-            write_resolutions_cache("default", &input).unwrap();
-            let loaded = read_resolutions_cache("default").unwrap().unwrap();
-
-            assert_eq!(loaded.resolutions.len(), 2);
-            assert_eq!(loaded.resolutions[0].name, "Done");
-            assert_eq!(loaded.resolutions[1].description, None);
-        });
-    }
-
-    #[test]
-    fn resolution_cache_missing_returns_none() {
-        with_temp_cache(|| {
-            let loaded = read_resolutions_cache("default").unwrap();
-            assert!(loaded.is_none());
-        });
-    }
 
     // -------------------------------------------------------------------------
     // BC-6.2.016 / BC-6.2.004 — Windows LocalAppData cache path tests (S-WIN-1)
@@ -1468,6 +1430,44 @@ mod resolution_cache_tests {
             parent.display(),
             profile_dir.display()
         );
+    }
+}
+
+#[cfg(test)]
+mod resolution_cache_tests {
+    use super::tests::with_temp_cache;
+    use super::*;
+
+    #[test]
+    fn resolution_cache_round_trip() {
+        with_temp_cache(|| {
+            let input = vec![
+                CachedResolution {
+                    id: "10000".into(),
+                    name: "Done".into(),
+                    description: Some("Work complete".into()),
+                },
+                CachedResolution {
+                    id: "10001".into(),
+                    name: "Won't Do".into(),
+                    description: None,
+                },
+            ];
+            write_resolutions_cache("default", &input).unwrap();
+            let loaded = read_resolutions_cache("default").unwrap().unwrap();
+
+            assert_eq!(loaded.resolutions.len(), 2);
+            assert_eq!(loaded.resolutions[0].name, "Done");
+            assert_eq!(loaded.resolutions[1].description, None);
+        });
+    }
+
+    #[test]
+    fn resolution_cache_missing_returns_none() {
+        with_temp_cache(|| {
+            let loaded = read_resolutions_cache("default").unwrap();
+            assert!(loaded.is_none());
+        });
     }
 }
 
@@ -1663,5 +1663,4 @@ mod request_type_cache_tests {
             );
         });
     }
-
 }
