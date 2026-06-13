@@ -143,25 +143,53 @@ fn test_release_yml_windows_package_step_produces_zip() {
 
 /// AC-003 — Smoke step ("Verify embedded OAuth app present") is gated off on Windows.
 ///
-/// Verifies that `if: runner.os != 'Windows'` appears in the workflow so the
-/// embedded-OAuth smoke step is skipped on the Windows runner. The step body is
-/// bash/heredoc/XDG_CONFIG_HOME-shaped and cannot run on Windows without porting
-/// (deferred per ADR-0016 §Decision 5c).
+/// Verifies that `if: runner.os != 'Windows'` is bound to the smoke step itself,
+/// not merely present somewhere in the file. The check locates the
+/// `Verify embedded OAuth app present` step by name and then asserts the gate
+/// appears within the next 5 lines — anchoring the assertion to that specific step.
+///
+/// A bare `yml.contains("runner.os != 'Windows'")` is intentionally NOT used here
+/// because the same condition also guards `Package (Unix)`. A future edit that
+/// removed the gate from the smoke step but left it on `Package (Unix)` would
+/// pass the old test while breaking the required smoke-step invariant.
+///
+/// The step body uses bash heredocs and XDG_CONFIG_HOME which are not available in
+/// this form on Windows (deferred per ADR-0016 §Decision 5c).
 ///
 /// Traces to: ADR-0016 §Decision 5c.
 #[test]
 fn test_release_yml_smoke_step_skipped_on_windows() {
     let yml = release_yml();
 
+    // Locate the smoke step by name.
+    let step_name = "Verify embedded OAuth app present";
+    let smoke_pos = yml.find(step_name).unwrap_or_else(|| {
+        panic!(
+            "AC-003 FAIL: step '{}' not found in .github/workflows/release.yml.\n\
+             The smoke step must exist before its gate can be verified.\n\
+             (S-WIN-4 AC-003 / ADR-0016 §Decision 5c)",
+            step_name
+        )
+    });
+
+    // Inspect the next 5 lines after the step-name line for the windows-exclusion gate.
+    // 5 lines is generous enough to cover any reasonable YAML indentation or blank lines
+    // between `name:` and `if:`, while tight enough to stay within the step's own block.
+    let after_step = &yml[smoke_pos..];
+    let window: String = after_step.lines().take(5).collect::<Vec<_>>().join("\n");
+
     assert!(
-        yml.contains("runner.os != 'Windows'"),
-        "AC-003 FAIL: `runner.os != 'Windows'` not found in \
-         .github/workflows/release.yml.\n\
-         The 'Verify embedded OAuth app present' smoke step must be gated with \
-         `if: runner.os != 'Windows'` to skip it on Windows runners. The step \
-         uses bash heredocs and XDG_CONFIG_HOME which are not available in this \
-         form on Windows (deferred per ADR-0016 §Decision 5c).\n\
-         (S-WIN-4 AC-003 / ADR-0016 §Decision 5c)"
+        window.contains("runner.os != 'Windows'"),
+        "AC-003 FAIL: `if: runner.os != 'Windows'` is not present within the \
+         first 5 lines after the '{}' step name in .github/workflows/release.yml.\n\
+         The smoke step must be gated with `if: runner.os != 'Windows'` immediately \
+         after its `name:` line. The step uses bash heredocs and XDG_CONFIG_HOME \
+         which are not available in this form on Windows (deferred per ADR-0016 \
+         §Decision 5c).\n\
+         Lines seen after step name:\n{}\n\
+         (S-WIN-4 AC-003 / ADR-0016 §Decision 5c)",
+        step_name,
+        window
     );
 }
 
