@@ -1559,8 +1559,7 @@ mod tests {
     /// This test sets `XDG_CONFIG_HOME` to a sentinel value and asserts that the returned
     /// path does NOT contain that sentinel — confirming XDG is ignored on the Windows path.
     ///
-    /// Uses ENV_MUTEX to serialize env-var mutation. The `with_env_var` helper sets and
-    /// removes `XDG_CONFIG_HOME` safely under the lock.
+    /// Uses ENV_MUTEX to serialize env-var mutation.
     ///
     /// Traces: BC-6.1.014 invariant, EC-5, AC-003.
     #[cfg(windows)]
