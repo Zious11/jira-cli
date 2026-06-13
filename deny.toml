@@ -140,9 +140,24 @@ reason = "clap, tokio, reqwest and most of the dependency graph use windows-sys 
 
 # windows-targets and windows_* arch crates: transitive sub-deps of windows-sys.
 # windows-sys 0.45 (via jni) pulls windows-targets 0.42.2 and windows_* 0.42.2;
+# windows-sys 0.52 (via ring) pulls windows-targets 0.52.6 and windows_* 0.52.6;
 # windows-sys 0.60 (via keyring v3.6.3 windows-native) pulls windows-targets 0.53.5
 # and windows_* 0.53.1. These are unavoidable until jni and keyring converge on the
 # same windows-sys version. (S-WIN-3, C-V2(b) research finding)
+#
+# Why no `[[bans.skip]]` for windows-targets/windows_* version "0.52"?
+#
+# cargo-deny's multiple-versions = "deny" fires when 2+ UN-SKIPPED versions of the
+# same crate remain in the dependency graph. With three versions in Cargo.lock
+# (0.42 from jni, 0.52 from ring, 0.53 from keyring windows-native), we only need
+# to skip N-1 = 2 of them. The two skips below (0.42 and 0.53) leave exactly ONE
+# un-skipped canonical version — 0.52.6 (pulled by ring via windows-sys 0.52) —
+# which satisfies cargo-deny's "single remaining version" requirement.
+#
+# Adding a 0.52 skip would leave ZERO un-skipped versions, which is unnecessary.
+# A future reviewer should NOT add a 0.52 skip; doing so would produce an
+# `unnecessary-skip` warning and is semantically wrong — 0.52.6 is the canonical
+# un-skipped version by design.
 
 [[bans.skip]]
 name = "windows-targets"
