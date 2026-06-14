@@ -46,7 +46,9 @@ fn jr_cmd_with_xdg(
     cmd.env("JR_BASE_URL", server_uri)
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir)
+        .env("JR_CACHE_DIR", cache_dir.join("jr"))
         .env("XDG_CONFIG_HOME", config_dir)
+        .env("JR_CONFIG_DIR", config_dir.join("jr"))
         .arg("--no-input")
         .arg("--output")
         .arg("table");
@@ -726,6 +728,7 @@ async fn test_handler_list_asset_name_resolves_to_key() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .args([
             "issue",
             "list",
@@ -775,6 +778,7 @@ async fn test_handler_list_asset_name_no_match_errors() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .args([
             "issue",
             "list",
@@ -864,6 +868,7 @@ async fn test_handler_list_asset_key_passthrough_skips_assets_api() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .args([
             "issue",
             "list",

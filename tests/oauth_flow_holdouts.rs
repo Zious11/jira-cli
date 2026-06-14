@@ -82,7 +82,9 @@ fn test_s_1_06_h_001_auth_status_no_profiles() {
 
     let out = jr_cmd()
         .env("XDG_CONFIG_HOME", dir.path())
+        .env("JR_CONFIG_DIR", dir.path().join("jr"))
         .env("XDG_CACHE_HOME", dir.path())
+        .env("JR_CACHE_DIR", dir.path().join("jr"))
         .env("JR_SERVICE_NAME", "jr-jira-cli-test")
         .args(["auth", "status"])
         .output()
@@ -113,7 +115,9 @@ fn test_s_1_06_h_002_auth_list_json_no_profiles() {
 
     let out = jr_cmd()
         .env("XDG_CONFIG_HOME", dir.path())
+        .env("JR_CONFIG_DIR", dir.path().join("jr"))
         .env("XDG_CACHE_HOME", dir.path())
+        .env("JR_CACHE_DIR", dir.path().join("jr"))
         .args(["auth", "list", "--output", "json"])
         .output()
         .unwrap();
@@ -175,7 +179,9 @@ url = "https://default.example"
     let active_profile = |extra_args: &[&str], env_profile: Option<&str>| -> String {
         let mut cmd = jr_cmd();
         cmd.env("XDG_CONFIG_HOME", dir.path())
-            .env("XDG_CACHE_HOME", cache_dir.path());
+            .env("JR_CONFIG_DIR", dir.path().join("jr"))
+            .env("XDG_CACHE_HOME", cache_dir.path())
+            .env("JR_CACHE_DIR", cache_dir.path().join("jr"));
         if let Some(prof) = env_profile {
             cmd.env("JR_PROFILE", prof);
         }
@@ -268,7 +274,9 @@ fn test_s_1_06_h_004_auth_refresh_no_url_configured() {
 
     let out = jr_cmd()
         .env("XDG_CONFIG_HOME", dir.path())
+        .env("JR_CONFIG_DIR", dir.path().join("jr"))
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("JR_SERVICE_NAME", "jr-jira-cli-test")
         .args(["--no-input", "auth", "refresh"])
         .output()
@@ -340,7 +348,9 @@ fn test_s_1_06_h_005_malformed_config_exits_78_file_unchanged() {
     let out = jr_cmd()
         .current_dir(cwd_dir.path())
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("JR_SERVICE_NAME", "jr-jira-cli-test")
         .args([
             "auth",

@@ -48,7 +48,9 @@ fn jr_cmd(server_uri: &str, cache_dir: &std::path::Path, config_dir: &std::path:
     cmd.env("JR_BASE_URL", server_uri)
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir)
+        .env("JR_CACHE_DIR", cache_dir.join("jr"))
         .env("XDG_CONFIG_HOME", config_dir)
+        .env("JR_CONFIG_DIR", config_dir.join("jr"))
         .arg("--no-input");
     cmd
 }

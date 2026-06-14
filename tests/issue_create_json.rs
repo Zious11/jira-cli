@@ -68,7 +68,9 @@ async fn issue_create_json_returns_full_shape() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "--no-input",
             "issue",
@@ -169,7 +171,9 @@ async fn issue_create_json_falls_back_on_get_failure() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "--no-input",
             "issue",
@@ -271,7 +275,9 @@ async fn issue_create_table_does_not_trigger_follow_up_get() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "--no-input",
             "issue",
@@ -372,7 +378,9 @@ async fn issue_create_json_follow_up_get_passes_configured_extra_fields() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "--no-input",
             "issue",

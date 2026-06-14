@@ -815,7 +815,9 @@ async fn test_search_issue_keys_stderr_emits_jracloud_95368_literal() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .env("XDG_CACHE_HOME", config_dir.path())
+        .env("JR_CACHE_DIR", config_dir.path().join("jr"))
         .env_remove("JR_PROFILE")
         // Insulate the stderr substring assertion from locale/ANSI variation
         // in case a future change adds color to warning output.

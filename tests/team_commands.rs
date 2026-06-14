@@ -81,7 +81,9 @@ async fn team_list_server_error_surfaces_friendly_message() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args(["team", "list"])
         .output()
         .unwrap();
@@ -126,7 +128,9 @@ async fn team_list_unauthorized_dispatches_reauth_message() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args(["team", "list"])
         .output()
         .unwrap();
@@ -167,7 +171,9 @@ async fn team_list_network_drop_surfaces_reach_error() {
         .env("JR_BASE_URL", "http://127.0.0.1:1")
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args(["team", "list"])
         .output()
         .unwrap();

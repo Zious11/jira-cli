@@ -13,7 +13,9 @@ fn jr() -> Command {
     // migration unexpectedly or make assertions about empty profiles
     // fail. Pinning the list here so future JR_* additions don't
     // silently re-introduce flakiness on dev machines.
-    cmd.env_remove("JR_PROFILE")
+    cmd.env_remove("JR_CONFIG_DIR")
+        .env_remove("JR_CACHE_DIR")
+        .env_remove("JR_PROFILE")
         .env_remove("JR_DEFAULT_PROFILE")
         .env_remove("JR_INSTANCE_URL")
         .env_remove("JR_INSTANCE_AUTH_METHOD")
@@ -43,6 +45,7 @@ fn fresh_config_dir() -> (TempDir, std::path::PathBuf) {
 fn auth_switch_unknown_profile_exits_64() {
     let (dir, _path) = fresh_config_dir();
     jr().env("XDG_CONFIG_HOME", dir.path())
+        .env("JR_CONFIG_DIR", dir.path().join("jr"))
         .args(["auth", "switch", "ghost"])
         .assert()
         .failure()
@@ -53,6 +56,7 @@ fn auth_switch_unknown_profile_exits_64() {
 fn auth_list_shows_no_profiles_for_fresh_install() {
     let (dir, _path) = fresh_config_dir();
     jr().env("XDG_CONFIG_HOME", dir.path())
+        .env("JR_CONFIG_DIR", dir.path().join("jr"))
         .args(["auth", "list", "--output", "json"])
         .assert()
         .success()
@@ -68,6 +72,7 @@ fn auth_list_shows_no_profiles_for_fresh_install() {
 fn auth_status_fresh_install_no_profiles_succeeds() {
     let (dir, _path) = fresh_config_dir(); // no config.toml written
     jr().env("XDG_CONFIG_HOME", dir.path())
+        .env("JR_CONFIG_DIR", dir.path().join("jr"))
         .args(["auth", "status"])
         .assert()
         .success()
@@ -88,6 +93,7 @@ auth_method = "api_token"
     )
     .unwrap();
     jr().env("XDG_CONFIG_HOME", dir.path())
+        .env("JR_CONFIG_DIR", dir.path().join("jr"))
         .args(["auth", "status", "--profile", "ghost"])
         .assert()
         .failure()
@@ -110,6 +116,7 @@ auth_method = "api_token"
     .unwrap();
 
     jr().env("XDG_CONFIG_HOME", dir.path())
+        .env("JR_CONFIG_DIR", dir.path().join("jr"))
         .args(["auth", "logout", "--profile", "ghost"])
         .assert()
         .failure()
@@ -132,6 +139,7 @@ auth_method = "api_token"
     .unwrap();
 
     jr().env("XDG_CONFIG_HOME", dir.path())
+        .env("JR_CONFIG_DIR", dir.path().join("jr"))
         .args(["auth", "remove", "default", "--no-input"])
         .assert()
         .failure()
@@ -158,6 +166,7 @@ url = "https://from-flag.example"
 
     let out = jr()
         .env("XDG_CONFIG_HOME", dir.path())
+        .env("JR_CONFIG_DIR", dir.path().join("jr"))
         .env("JR_PROFILE", "from-env")
         .args(["--profile", "from-flag", "auth", "list", "--output", "json"])
         .output()
@@ -211,6 +220,7 @@ auth_method = "api_token"
     // Status output must reflect sandbox, not default.
     let out = jr()
         .env("XDG_CONFIG_HOME", dir.path())
+        .env("JR_CONFIG_DIR", dir.path().join("jr"))
         .args(["--profile", "sandbox", "auth", "status"])
         .output()
         .unwrap();
@@ -259,6 +269,7 @@ auth_method = "api_token"
     // login --profile newprof should succeed and create the profile,
     // even though newprof isn't in [profiles] yet at load time.
     jr().env("XDG_CONFIG_HOME", dir.path())
+        .env("JR_CONFIG_DIR", dir.path().join("jr"))
         .env("JR_EMAIL", "user@example.com")
         .env("JR_API_TOKEN", "token-value")
         .args([
@@ -313,6 +324,7 @@ auth_method = "api_token"
     Command::cargo_bin("jr")
         .unwrap()
         .env("XDG_CONFIG_HOME", dir.path())
+        .env("JR_CONFIG_DIR", dir.path().join("jr"))
         .env("JR_PROFILE", "ghost")
         .env("JR_EMAIL", "user@example.com")
         .env("JR_API_TOKEN", "token-value")

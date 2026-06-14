@@ -71,7 +71,9 @@ async fn issue_view_json_preserves_team_object_shape_without_warning() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "view",
@@ -147,7 +149,9 @@ async fn issue_view_table_renders_team_row_from_object_shape() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args(["issue", "view", "PROJ-702", "--no-input"])
         .output()
         .unwrap();
@@ -218,7 +222,9 @@ async fn issue_view_verbose_warns_on_truly_unexpected_team_shape() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         // Table output — the `team_id()` extraction happens in the table
         // render path (src/cli/issue/list.rs:983). The JSON path just
         // re-serializes the raw value and would bypass the warning branch.
