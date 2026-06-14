@@ -8,6 +8,23 @@ All notable changes to jr will be documented here.
 
 ### Added
 
+- **Windows pre-built binary:** `jr-<version>-x86_64-pc-windows-msvc.zip` (containing
+  `jr.exe`) is now published to GitHub Releases alongside the existing Unix `.tar.gz`
+  artifacts. Packaged via PowerShell `Compress-Archive`; SHA-256 checksum file included.
+  (ADR-0016)
+- **Windows credential storage:** The `keyring` crate's `windows-native` feature is
+  enabled, storing OAuth tokens and API tokens in Windows Credential Manager
+  (`CRED_TYPE_GENERIC`). Prior to this change the keyring crate silently used a null
+  backend on Windows, losing credentials across invocations. (ADR-0016, Decision 5b)
+- **Idiomatic Windows config/cache paths:** On Windows, `jr` now resolves config to
+  `%APPDATA%\jr` (`dirs::config_dir()`) and cache to `%LOCALAPPDATA%\jr`
+  (`dirs::cache_dir()`). Unix paths (`~/.config/jr`, `~/.cache/jr/v1/<profile>/`)
+  are unchanged. (BC-6.1.014, BC-6.2.016, ADR-0016 Decision 4)
+- **Windows CI coverage:** `windows-latest` is added to both the `clippy` and `test`
+  job matrices in `ci.yml`, providing per-PR regression protection for the
+  `#[cfg(windows)]` code paths in `src/config.rs` and `src/cache.rs`. (ADR-0016,
+  Decision 3)
+
 ### Fixed
 
 ### Changed

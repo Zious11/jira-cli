@@ -614,13 +614,40 @@ fn test_release_yml_verifies_embedded_oauth_on_windows() {
     /// Returns true if `block` inspects `embedded_oauth.rs` for None-constant
     /// guards (the primary Windows-compatible check that does not require executing
     /// a cross-compiled binary).
+    ///
+    /// # R5-001 hardening
+    ///
+    /// A pure symbol-presence check (`block.contains("EMBEDDED_ID")`) is too weak:
+    /// a future edit that comments out the None-match or inverts the regex would still
+    /// pass. The hardened check requires BOTH:
+    ///
+    /// (a) A None-detection pattern — `= None` present alongside one of the constant
+    ///     names, confirming the step actually tests the None case (not just that the
+    ///     constants are referenced). The current step uses:
+    ///       `$content -match 'EMBEDDED_ID\s*:\s*Option.*=\s*None'`
+    ///     which contains both `EMBEDDED_ID` (or `EMBEDDED_SECRET_XOR`) AND `= None`.
+    ///
+    /// (b) A fail-closed path — either `exit 1` or `Write-Error`, ensuring that when
+    ///     None is detected the step actually fails. A step that detects None but only
+    ///     emits a warning (or inverts the condition) would still pass without (b).
+    ///
+    /// The current release.yml "Embedded OAuth verification (Windows)" step satisfies
+    /// both criteria (verified):
+    ///   - Contains `= None` (twice, once per constant)
+    ///   - Contains `Write-Error` and `exit 1` (the fail branch for each None match)
     fn block_checks_embedded_oauth_rs(block: &str) -> bool {
-        // The Unix "Verify embedded OAuth app present" step checks for:
-        //   grep -q 'EMBEDDED_ID: Option<&str> = None' ...
-        //   grep -q 'EMBEDDED_SECRET_XOR: Option<&\[u8\]> = None' ...
-        // A Windows equivalent step should contain at least one of these patterns
-        // (applied via PowerShell Select-String or equivalent).
-        block.contains("EMBEDDED_ID") || block.contains("EMBEDDED_SECRET_XOR")
+        // Criterion (a): None-detection — the block must reference a constant name
+        // AND contain `= None`, confirming it actually checks for the None sentinel.
+        let has_none_detection = (block.contains("EMBEDDED_ID")
+            || block.contains("EMBEDDED_SECRET_XOR"))
+            && block.contains("= None");
+
+        // Criterion (b): Fail-closed path — the block must contain a hard-failure
+        // mechanism so that detecting None actually causes the step to fail rather
+        // than silently passing with a warning.
+        let has_fail_path = block.contains("exit 1") || block.contains("Write-Error");
+
+        has_none_detection && has_fail_path
     }
 
     /// Returns true if `block` runs `jr.exe auth status` and checks that the

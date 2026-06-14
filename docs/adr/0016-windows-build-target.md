@@ -371,6 +371,27 @@ step verifies that `build.rs` populated the obfuscated constants at build time. 
 Windows v1, this verification is deferred. The binary is still correct if built with the
 OAuth secrets env vars present.
 
+> **AMENDED 2026-06-14 (FIX-F5-003 R3-001):** The original decision stated that the
+> embedded-OAuth constant verification was fully deferred on Windows. This is no longer
+> accurate as of the FIX-F5-003 delivery.
+>
+> **What was added:** A dedicated `shell: pwsh` step — "Embedded OAuth verification
+> (Windows)" — now runs in `release.yml` after the Windows smoke test. It inspects the
+> generated `embedded_oauth.rs` file for non-`None` `EMBEDDED_ID` and
+> `EMBEDDED_SECRET_XOR` constants (the constants-file check), and exits 1 if either
+> constant is `None`. The step is fork-safe: it is gated on
+> `HAS_EMBED_SECRETS: ${{ (secrets.OAUTH_CLIENT_ID != '' && secrets.OAUTH_CLIENT_SECRET != '') && 'yes' || 'no' }}`
+> and skips cleanly on forks where the secrets are not available.
+>
+> **What remains deferred:** The Unix "Verify embedded OAuth app present" step additionally
+> runs `jr auth status` against a synthetic profile to confirm the binary itself reports
+> `OAuth app: embedded` at runtime (a live-binary probe). This runtime probe has NOT been
+> ported to Windows. Windows coverage is the constants-file check only; the live `jr.exe`
+> runtime probe remains deferred to a future cycle.
+>
+> In summary: Windows embedded-OAuth verification is now PERFORMED (constants-file check
+> via `pwsh`), but Windows runtime verification (`jr auth status` probe) remains deferred.
+
 ## Consequences
 
 **Positive:**
@@ -383,7 +404,9 @@ OAuth secrets env vars present.
 
 **Negative / Trade-offs:**
 - `aarch64-pc-windows-msvc` is not available this cycle (deferred).
-- The embedded-OAuth smoke step is not verified on Windows builds for v1.
+- The embedded-OAuth constants-file check IS performed on Windows builds (FIX-F5-003
+  R3-001 amendment to Decision 5c); the runtime `jr auth status` probe is not yet ported
+  to Windows.
 - Adding `windows-latest` to `ci.yml` increases runner cost (~30 min per PR at 1.0× rate).
 - Test files using `XDG_CONFIG_HOME`/`XDG_CACHE_HOME` for isolation must be migrated
   (mechanical change, tracked in F4 implementation scope).

@@ -194,3 +194,123 @@ fn test_jr_cache_dir_seam_is_debug_gated_at_cache_site() {
         preceding_gate_line
     );
 }
+
+/// Verifies that `struct GlobalConfig` in `src/config.rs` does NOT declare a field
+/// named `config_dir` or `cache_dir`.
+///
+/// # Security invariant (SEC-PATH-1 re-entry guard)
+///
+/// `JR_CONFIG_DIR` and `JR_CACHE_DIR` are intentionally debug-only seams, gated by
+/// `#[cfg(debug_assertions)]` in `global_config_dir()` and `cache_root()`.  However,
+/// figment's `Env::prefixed("JR_")` (used in `Config::load_inner`) would silently
+/// honor `JR_CONFIG_DIR` / `JR_CACHE_DIR` as RELEASE-build overrides if
+/// `GlobalConfig` gained a field of that name — because figment maps env-var suffixes
+/// to struct fields case-insensitively.  An attacker who could set
+/// `JR_CONFIG_DIR=/attacker/config` (e.g., via a compromised shell init) would
+/// redirect ALL config reads to an attacker-controlled path, re-opening SEC-PATH-1.
+///
+/// This threat is documented at `src/config.rs::load_inner` in the GUARD comment.
+/// This test makes the GUARD machine-enforceable.
+///
+/// # Scope
+///
+/// The assertion is intentionally scoped to the `struct GlobalConfig { ... }` body.
+/// It will NOT false-match:
+/// - The GUARD comment (`config_dir` / `cache_dir` appear there as prose)
+/// - The free functions `global_config_dir()` / `cache_root()` (different identifiers)
+/// - The `JR_CACHE_DIR` / `JR_CONFIG_DIR` env-var string literals
+/// - Any other struct that legitimately carries path fields (e.g., `ProjectConfig`)
+///
+/// # Pass condition
+///
+/// PASSES today — `struct GlobalConfig` has no `config_dir` or `cache_dir` field.
+/// FAILS if someone adds either field (the guard comment explicitly prohibits this;
+/// this test enforces it mechanically).
+#[test]
+fn test_global_config_struct_has_no_path_override_field() {
+    let source = include_str!("../src/config.rs");
+
+    // Locate the start of the `struct GlobalConfig` definition.
+    let struct_start = source.find("struct GlobalConfig").unwrap_or_else(|| {
+        panic!(
+            "SEC-PATH-1 GUARD: Could not locate `struct GlobalConfig` in src/config.rs.\n\
+             Has the struct been renamed? Update this test to match the new name."
+        )
+    });
+
+    // Find the closing brace of the struct body.  We scan forward from the opening
+    // brace, tracking brace depth, to correctly handle nested braces in doc-comments
+    // or attribute macros.
+    let after_name = &source[struct_start..];
+    let open_brace = after_name.find('{').unwrap_or_else(|| {
+        panic!(
+            "SEC-PATH-1 GUARD: Found `struct GlobalConfig` in src/config.rs but could \
+             not find its opening brace `{{`. Unexpected source shape."
+        )
+    });
+
+    let body_start = struct_start + open_brace;
+    let body_src = &source[body_start..];
+
+    // Walk forward counting brace depth to find the matching `}`.
+    let mut depth: usize = 0;
+    let mut body_end = body_start; // will be updated to the closing brace offset
+    for (i, ch) in body_src.char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    body_end = body_start + i + 1;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let struct_body = &source[body_start..body_end];
+
+    // Assert neither field name appears as a word boundary inside the struct body.
+    // We use a simple "field declaration" heuristic: a field name appears after
+    // optional pub/visibility and whitespace at the start of a declaration.
+    // Checking for `config_dir` and `cache_dir` as substrings is sufficient here
+    // because these identifiers do not appear elsewhere in the struct body (the GUARD
+    // comment is outside the struct body; function names use `global_config_dir` /
+    // `cache_root`, not `config_dir` or `cache_dir` bare).
+    assert!(
+        !struct_body.contains("config_dir"),
+        "SEC-PATH-1 GUARD VIOLATION: `struct GlobalConfig` in src/config.rs declares \
+         a field named `config_dir` (or a field whose name contains `config_dir`).\n\
+         \n\
+         This is PROHIBITED. If `GlobalConfig` gains a `config_dir` field, figment's \
+         `Env::prefixed(\"JR_\")` will honor `JR_CONFIG_DIR` as a RELEASE-build override, \
+         bypassing the `#[cfg(debug_assertions)]` gate in `global_config_dir()` and \
+         re-opening the path-injection vector SEC-PATH-1.\n\
+         \n\
+         The GUARD comment at src/config.rs::load_inner explains the threat in prose. \
+         This test enforces it mechanically.\n\
+         \n\
+         If you need to surface a config-dir path in GlobalConfig, do NOT use a \
+         figment-deserialized field — use a method that reads the same \
+         `#[cfg(debug_assertions)]`-gated seam as `global_config_dir()`."
+    );
+
+    assert!(
+        !struct_body.contains("cache_dir"),
+        "SEC-PATH-1 GUARD VIOLATION: `struct GlobalConfig` in src/config.rs declares \
+         a field named `cache_dir` (or a field whose name contains `cache_dir`).\n\
+         \n\
+         This is PROHIBITED. If `GlobalConfig` gains a `cache_dir` field, figment's \
+         `Env::prefixed(\"JR_\")` will honor `JR_CACHE_DIR` as a RELEASE-build override, \
+         bypassing the `#[cfg(debug_assertions)]` gate in `cache_root()` and \
+         re-opening the path-injection vector SEC-PATH-1.\n\
+         \n\
+         The GUARD comment at src/config.rs::load_inner explains the threat in prose. \
+         This test enforces it mechanically.\n\
+         \n\
+         If you need to surface a cache-dir path in GlobalConfig, do NOT use a \
+         figment-deserialized field — use a method that reads the same \
+         `#[cfg(debug_assertions)]`-gated seam as `cache_root()`."
+    );
+}
