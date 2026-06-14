@@ -27,8 +27,9 @@
 //!   test_jr_isolated_helper_sets_jr_config_dir       → AC-003
 //!   test_all_xdg_test_files_also_set_jr_seam_vars   → AC-004
 //!   test_ci_yml_has_windows_latest_in_clippy_matrix  → AC-006
-//!   test_ci_yml_fmt_deny_jobs_remain_ubuntu_only     → AC-008
-//!   test_jr_isolated_scrub_list_includes_seam_vars   → F-WIN2-C-101 guard
+//!   test_ci_yml_fmt_deny_jobs_remain_ubuntu_only         → AC-008
+//!   test_cargo_config_toml_embeds_windows_stack_size     → AC-009
+//!   test_jr_isolated_scrub_list_includes_seam_vars       → F-WIN2-C-101 guard
 
 use std::fs;
 use std::path::Path;
@@ -531,45 +532,77 @@ fn test_ci_yml_fmt_deny_jobs_remain_ubuntu_only() {
 }
 
 // ---------------------------------------------------------------------------
-// AC-009 — `test` job sets RUST_MIN_STACK=8388608 for Windows stack parity
+// AC-009 — .cargo/config.toml embeds 8 MB main-thread stack in jr.exe
 // ---------------------------------------------------------------------------
 
-/// AC-009: The `test` job's `cargo test` step must set `RUST_MIN_STACK` to
-/// `"8388608"` (8 MB).
+/// AC-009: `.cargo/config.toml` must contain a `[target.x86_64-pc-windows-msvc]`
+/// section with `rustflags` that includes the `/STACK:8388608` link-arg.
 ///
-/// Windows default main-thread stack is 1 MB; Linux/macOS default is 8 MB.
-/// Integration tests in `tests/all_flag_behavior.rs` build 30+ item mock
-/// responses on the main thread (tokio runtime + wiremock init) and overflow
-/// the 1 MB stack before any assertion runs on Windows.  Setting
-/// RUST_MIN_STACK to 8388608 provides parity with Unix defaults.  This env
-/// var is honored by the Rust runtime for the main thread and for
-/// test-harness-spawned threads; it is a no-op on Linux/macOS.
+/// Windows PE headers default to a 1 MB main-thread stack, while Linux/macOS
+/// default to 8 MB. The `#[tokio::main]` async runtime + clap dispatch +
+/// result rendering in jr.exe collectively exceed 1 MB, causing jr.exe to
+/// crash on normal commands (e.g. `jr issue list`) on Windows.  The 11
+/// `all_flag_behavior.rs` integration tests spawn jr.exe as a subprocess and
+/// the child's main thread overflows with the 1 MB default.
 ///
-/// Anchoring: assertion is made only within the `test` job block so an
-/// `RUST_MIN_STACK` string in a comment or another job cannot cause a false
-/// positive.
+/// The fix embeds the 8 MB reserve in jr.exe's PE header via the MSVC linker
+/// flag `/STACK:8388608`. This is set in `.cargo/config.toml` under the
+/// `[target.x86_64-pc-windows-msvc]` section so it applies to all builds of
+/// the Windows target without affecting Unix builds.  It is a link-time flag
+/// and is inert for `cargo check` (no link step).
+///
+/// RUST_MIN_STACK is NOT the correct fix: it only affects `std::thread::spawn`
+/// threads (test-harness workers), not a process's main thread (set by the PE
+/// header).  The /STACK linker flag is the correct mechanism.
+///
+/// Anchoring: reads `.cargo/config.toml` directly from the repo root.
 #[test]
-fn test_ci_yml_test_job_sets_rust_min_stack() {
-    let ci = read_ci_yml();
-    let test_block = extract_job_block(&ci, "test")
-        .expect("ci.yml must contain a `test:` job (two-space indent)");
-
+fn test_cargo_config_toml_embeds_windows_stack_size() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(".cargo")
+        .join("config.toml");
     assert!(
-        test_block.contains("RUST_MIN_STACK"),
-        "FAIL: The `test` job in .github/workflows/ci.yml does not set \
-         `RUST_MIN_STACK`.\n\
-         Required: add `env: RUST_MIN_STACK: \"8388608\"` to the `cargo test` \
-         step in the `test` job.\n\
-         Reason: Windows main-thread stack is 1 MB (vs 8 MB on Linux/macOS); \
-         all_flag_behavior.rs tests overflow before any assertion runs.\n\
-         Current test block:\n{test_block}"
+        path.exists(),
+        "FAIL: `.cargo/config.toml` does not exist at {}.\n\
+         Required: create `.cargo/config.toml` with a \
+         `[target.x86_64-pc-windows-msvc]` section containing \
+         `rustflags = [\"-C\", \"link-arg=/STACK:8388608\"]`.\n\
+         Reason: jr.exe needs an 8 MB main-thread stack on Windows (PE header \
+         default is 1 MB); /STACK:8388608 embeds the reserve at link time.",
+        path.display()
     );
 
+    let content = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("Could not read {}: {e}", path.display()));
+
+    // The target section header must be present.
     assert!(
-        test_block.contains("8388608"),
-        "FAIL: The `test` job sets `RUST_MIN_STACK` but not to `8388608` (8 MB).\n\
-         Required value: `\"8388608\"` (matches Linux/macOS default of 8 MB).\n\
-         Current test block:\n{test_block}"
+        content.contains("[target.x86_64-pc-windows-msvc]"),
+        "FAIL: `.cargo/config.toml` does not contain \
+         `[target.x86_64-pc-windows-msvc]`.\n\
+         Required: add `[target.x86_64-pc-windows-msvc]` section with \
+         `rustflags = [\"-C\", \"link-arg=/STACK:8388608\"]`.\n\
+         Current content:\n{content}"
+    );
+
+    // The /STACK link-arg value must be present.
+    assert!(
+        content.contains("/STACK:8388608"),
+        "FAIL: `.cargo/config.toml` has a `[target.x86_64-pc-windows-msvc]` \
+         section but does not contain `/STACK:8388608`.\n\
+         Required: `rustflags = [\"-C\", \"link-arg=/STACK:8388608\"]` under \
+         the target section.\n\
+         Current content:\n{content}"
+    );
+
+    // The link-arg form ("-C", "link-arg=...") must be present to confirm this
+    // is passed as a codegen flag, not some other rustflag form.
+    assert!(
+        content.contains("link-arg=/STACK:8388608"),
+        "FAIL: `.cargo/config.toml` contains `/STACK:8388608` but not in the \
+         expected `link-arg=/STACK:8388608` form.\n\
+         Required form: `rustflags = [\"-C\", \"link-arg=/STACK:8388608\"]`\n\
+         Current content:\n{content}"
     );
 }
 
