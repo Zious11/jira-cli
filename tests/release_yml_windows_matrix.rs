@@ -615,17 +615,25 @@ fn test_release_yml_verifies_embedded_oauth_on_windows() {
     /// guards (the primary Windows-compatible check that does not require executing
     /// a cross-compiled binary).
     ///
-    /// # R5-001 hardening
+    /// # R8-001 hardening (tightened from R5-001)
     ///
     /// A pure symbol-presence check (`block.contains("EMBEDDED_ID")`) is too weak:
     /// a future edit that comments out the None-match or inverts the regex would still
-    /// pass. The hardened check requires BOTH:
+    /// pass. R5-001 tightened this to require `= None` alongside a constant name, but
+    /// that is still insufficient: the step's `Write-Error` MESSAGE strings also contain
+    /// `= None` (e.g. `'…EMBEDDED_ID = None — build.rs…'`), so neutering the actual
+    /// `-match` detection lines while leaving the prose strings intact would produce a
+    /// false-green on the R5-001 check.
     ///
-    /// (a) A None-detection pattern — `= None` present alongside one of the constant
-    ///     names, confirming the step actually tests the None case (not just that the
-    ///     constants are referenced). The current step uses:
-    ///       `$content -match 'EMBEDDED_ID\s*:\s*Option.*=\s*None'`
-    ///     which contains both `EMBEDDED_ID` (or `EMBEDDED_SECRET_XOR`) AND `= None`.
+    /// R8-001 binds to the actual detection CONSTRUCT by requiring at least one line
+    /// that contains ALL THREE of:
+    ///   - `-match`                      (PowerShell regex-match operator)
+    ///   - `EMBEDDED_ID` OR `EMBEDDED_SECRET_XOR`  (the constant name)
+    ///   - `None`                        (the sentinel value being tested)
+    ///
+    /// This isolates the assertion to the regex-match lines
+    /// (`$content -match 'EMBEDDED_ID\s*:\s*Option.*=\s*None'`) and is immune to
+    /// the prose `Write-Error` message strings that also happen to contain `= None`.
     ///
     /// (b) A fail-closed path — either `exit 1` or `Write-Error`, ensuring that when
     ///     None is detected the step actually fails. A step that detects None but only
@@ -633,14 +641,19 @@ fn test_release_yml_verifies_embedded_oauth_on_windows() {
     ///
     /// The current release.yml "Embedded OAuth verification (Windows)" step satisfies
     /// both criteria (verified):
-    ///   - Contains `= None` (twice, once per constant)
+    ///   - Contains `-match … EMBEDDED_ID … None` on a single detection line
     ///   - Contains `Write-Error` and `exit 1` (the fail branch for each None match)
     fn block_checks_embedded_oauth_rs(block: &str) -> bool {
-        // Criterion (a): None-detection — the block must reference a constant name
-        // AND contain `= None`, confirming it actually checks for the None sentinel.
-        let has_none_detection = (block.contains("EMBEDDED_ID")
-            || block.contains("EMBEDDED_SECRET_XOR"))
-            && block.contains("= None");
+        // Criterion (a): None-detection CONSTRUCT — require at least one line in the
+        // block that contains ALL of: the `-match` operator, a constant name
+        // (EMBEDDED_ID or EMBEDDED_SECRET_XOR), and `None`. This binds to the actual
+        // PowerShell regex-match lines rather than the Write-Error prose strings that
+        // also contain `= None`, closing the R5-001 false-green vector (R8-001).
+        let has_none_detection = block.lines().any(|line| {
+            line.contains("-match")
+                && (line.contains("EMBEDDED_ID") || line.contains("EMBEDDED_SECRET_XOR"))
+                && line.contains("None")
+        });
 
         // Criterion (b): Fail-closed path — the block must contain a hard-failure
         // mechanism so that detecting None actually causes the step to fail rather
