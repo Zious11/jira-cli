@@ -361,26 +361,30 @@ fn test_release_yml_windows_has_functional_smoke_step() {
 
     // For each step, extract its block (up to the next step or EOF) and look for
     // one that both executes jr.exe AND is Windows-applicable.
-    let found_windows_smoke = step_starts.iter().enumerate().any(|(i, &start)| {
+    let mut windows_smoke_block: Option<String> = None;
+    for (i, &start) in step_starts.iter().enumerate() {
         let end = step_starts.get(i + 1).copied().unwrap_or(yml.len());
         let block = &yml[start..end];
 
         // Must EXECUTE jr.exe (not merely reference it as a file path argument).
         if !step_executes_jr_exe(block) {
-            return false;
+            continue;
         }
 
         // Must NOT be excluded on Windows.
         if block.contains("runner.os != 'Windows'") {
-            return false;
+            continue;
         }
 
         // Must be Windows-applicable: either a Windows-only guard or pwsh shell.
-        block.contains("runner.os == 'Windows'") || block.contains("shell: pwsh")
-    });
+        if block.contains("runner.os == 'Windows'") || block.contains("shell: pwsh") {
+            windows_smoke_block = Some(block.to_string());
+            break;
+        }
+    }
 
     assert!(
-        found_windows_smoke,
+        windows_smoke_block.is_some(),
         "R1-002 FAIL: no Windows-applicable smoke step invoking `jr.exe` found in \
          .github/workflows/release.yml.\n\
          \n\
@@ -407,6 +411,55 @@ fn test_release_yml_windows_has_functional_smoke_step() {
                if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}\n\
          \n\
          (FIX-F5-001 R1-002 / WIN-STACK / ADR-0016 §Decision 5c)"
+    );
+
+    // R2-001: assert the smoke step contains fail-closed exit-code plumbing.
+    //
+    // In PowerShell 7 (pwsh), `$ErrorActionPreference = 'Stop'` does NOT cause a
+    // non-zero exit code from a native executable (like jr.exe) to fail the step.
+    // The explicit `if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }` guard is
+    // load-bearing: without it, a crash in jr.exe would be silently swallowed and
+    // the smoke step would pass regardless. This assertion pins that plumbing so a
+    // mutation deleting the LASTEXITCODE/exit line turns this test RED.
+    //
+    // Both substrings must appear in the same step block already located above.
+    let smoke_block = windows_smoke_block.as_deref().unwrap();
+
+    assert!(
+        smoke_block.contains("LASTEXITCODE"),
+        "R2-001 FAIL: `LASTEXITCODE` not found in the Windows smoke step block in \
+         .github/workflows/release.yml.\n\
+         \n\
+         In PowerShell 7 (pwsh), `$ErrorActionPreference = 'Stop'` does NOT propagate \
+         a non-zero exit code from native executables — a crashing jr.exe would be \
+         silently ignored. The step MUST contain an explicit LASTEXITCODE check:\n\
+           if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}\n\
+         Without it, the smoke step passes even when jr.exe crashes (WIN-STACK).\n\
+         Step block:\n{}\n\
+         (FIX-F5-002 R2-001 / WIN-STACK / ADR-0016 §Decision 5c)",
+        smoke_block
+    );
+
+    assert!(
+        smoke_block.lines().any(|line| {
+            let t = line.trim();
+            // Match the fail-closed exit line: `if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }`
+            // Require both "LASTEXITCODE" and "exit" on the same line so a mutation that
+            // deletes this specific line (while leaving a bare `$LASTEXITCODE` reference
+            // elsewhere) still turns this assertion RED.
+            t.contains("LASTEXITCODE") && t.contains("exit")
+        }),
+        "R2-001 FAIL: no line containing both `LASTEXITCODE` and `exit` found in the \
+         Windows smoke step block in .github/workflows/release.yml.\n\
+         \n\
+         The step must contain the fail-closed exit guard on a single line:\n\
+           if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}\n\
+         This is required because pwsh does not fail the step on non-zero native-binary \
+         exit codes without it. Deleting this line causes the smoke step to silently \
+         swallow a jr.exe crash (WIN-STACK regression).\n\
+         Step block:\n{}\n\
+         (FIX-F5-002 R2-001 / WIN-STACK / ADR-0016 §Decision 5c)",
+        smoke_block
     );
 }
 

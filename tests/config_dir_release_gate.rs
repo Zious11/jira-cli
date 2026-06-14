@@ -52,13 +52,16 @@ const _: () = {
     )
 };
 
-/// Verifies that `#[cfg(debug_assertions)]` appears adjacent to the
-/// `JR_CONFIG_DIR` env-var read in `src/config.rs::global_config_dir()`.
+/// Verifies that `#[cfg(debug_assertions)]` appears on the immediately preceding
+/// non-blank, non-comment source line before the `JR_CONFIG_DIR` env-var read in
+/// `src/config.rs::global_config_dir()`.
 ///
-/// Strategy: search the source text for the `std::env::var("JR_CONFIG_DIR")`
-/// read (or a variant containing `"JR_CONFIG_DIR"` next to `std::env::var`).
-/// Then assert that `#[cfg(debug_assertions)]` appears within 5 source lines
-/// BEFORE that line. Whitespace-tolerant.
+/// Strategy: search the source text for the `std::env::var("JR_CONFIG_DIR")` read.
+/// Then walk backward from that line, skipping blank lines and comment lines
+/// (`//`-prefixed), and assert that the first non-blank non-comment line is
+/// `#[cfg(debug_assertions)]`. This prevents an unrelated `#[cfg(debug_assertions)]`
+/// elsewhere in the same function from falsely satisfying the gate check — only
+/// the attribute on the line immediately controlling this env-var read counts.
 ///
 /// Pre-implementation Red Gate: ASSERTION FAILURE — the `JR_CONFIG_DIR` env-var
 /// read does not yet exist in `src/config.rs`, so `position(...)` panics with
@@ -88,33 +91,50 @@ fn test_jr_config_dir_seam_is_debug_gated_at_config_site() {
              Implement the seam in global_config_dir() per BC-6.2.017 and S-WIN-2.",
         );
 
-    let window_start = seam_read_line.saturating_sub(5);
-    let window = &lines[window_start..=seam_read_line];
-    let gate_present = window
+    // Walk backward from the seam read line, skipping blank lines and comment lines,
+    // and find the immediately preceding non-blank, non-comment line.
+    let preceding_gate_line = lines[..seam_read_line]
         .iter()
-        .any(|l| l.contains("#[cfg(debug_assertions)]"));
+        .rev()
+        .find(|l| {
+            let t = l.trim();
+            !t.is_empty() && !t.starts_with("//")
+        })
+        .copied();
+
+    let gate_present = preceding_gate_line
+        .map(|l| l.contains("#[cfg(debug_assertions)]"))
+        .unwrap_or(false);
 
     assert!(
         gate_present,
-        "BC-6.2.017 AC-005 VIOLATION: `#[cfg(debug_assertions)]` not found within \
-         5 lines of the `JR_CONFIG_DIR` env-var read at line {} of src/config.rs.\n\
+        "BC-6.2.017 AC-005 VIOLATION: `#[cfg(debug_assertions)]` is not on the \
+         immediately preceding non-blank, non-comment source line before the \
+         `JR_CONFIG_DIR` env-var read at line {} of src/config.rs.\n\
+         The attribute must appear directly above the env-var read (skipping only \
+         blank lines and comments) — an unrelated nearby attribute does not count.\n\
          The env-var read MUST be gated with `#[cfg(debug_assertions)]` so it is \
          excluded from release binaries (path-injection prevention — BC-6.2.017).\n\
          Mirrors the JR_BASE_URL SD-002 gate (see tests/base_url_release_gate.rs).\n\
-         Relevant source window:\n{}",
+         Preceding non-blank/non-comment line found: {:?}",
         seam_read_line + 1,
-        window.join("\n")
+        preceding_gate_line
     );
 }
 
-/// Verifies that `#[cfg(debug_assertions)]` appears adjacent to the
-/// `JR_CACHE_DIR` env-var read in `src/cache.rs::cache_root()`.
+/// Verifies that `#[cfg(debug_assertions)]` appears on the immediately preceding
+/// non-blank, non-comment source line before the `JR_CACHE_DIR` env-var read in
+/// `src/cache.rs::cache_root()`.
 ///
 /// This is a SEPARATE required assertion from the config site check above.
 /// Both sites must be gated — gating only one leaves the other as an attack
 /// vector (same defect class as the dual-site JR_BASE_URL requirement).
 ///
 /// Strategy: identical to the config-site test above, applied to `src/cache.rs`.
+/// Walk backward from the seam read line, skip blank and comment lines, and
+/// assert the first non-blank non-comment line is `#[cfg(debug_assertions)]`.
+/// This prevents an unrelated nearby `#[cfg(debug_assertions)]` from falsely
+/// satisfying the gate.
 ///
 /// Pre-implementation Red Gate: ASSERTION FAILURE — the `JR_CACHE_DIR` env-var
 /// read does not yet exist in `src/cache.rs`, so `position(...)` panics with
@@ -143,22 +163,34 @@ fn test_jr_cache_dir_seam_is_debug_gated_at_cache_site() {
              Implement the seam in cache_root() per BC-6.2.017 and S-WIN-2.",
         );
 
-    let window_start = seam_read_line.saturating_sub(5);
-    let window = &lines[window_start..=seam_read_line];
-    let gate_present = window
+    // Walk backward from the seam read line, skipping blank lines and comment lines,
+    // and find the immediately preceding non-blank, non-comment line.
+    let preceding_gate_line = lines[..seam_read_line]
         .iter()
-        .any(|l| l.contains("#[cfg(debug_assertions)]"));
+        .rev()
+        .find(|l| {
+            let t = l.trim();
+            !t.is_empty() && !t.starts_with("//")
+        })
+        .copied();
+
+    let gate_present = preceding_gate_line
+        .map(|l| l.contains("#[cfg(debug_assertions)]"))
+        .unwrap_or(false);
 
     assert!(
         gate_present,
-        "BC-6.2.017 AC-006 VIOLATION: `#[cfg(debug_assertions)]` not found within \
-         5 lines of the `JR_CACHE_DIR` env-var read at line {} of src/cache.rs.\n\
+        "BC-6.2.017 AC-006 VIOLATION: `#[cfg(debug_assertions)]` is not on the \
+         immediately preceding non-blank, non-comment source line before the \
+         `JR_CACHE_DIR` env-var read at line {} of src/cache.rs.\n\
+         The attribute must appear directly above the env-var read (skipping only \
+         blank lines and comments) — an unrelated nearby attribute does not count.\n\
          The env-var read MUST be gated with `#[cfg(debug_assertions)]` so it is \
          excluded from release binaries (path-injection prevention — BC-6.2.017).\n\
          Both the config site AND the cache site must be gated — gating only one \
          leaves the other as an attack vector.\n\
-         Relevant source window:\n{}",
+         Preceding non-blank/non-comment line found: {:?}",
         seam_read_line + 1,
-        window.join("\n")
+        preceding_gate_line
     );
 }
