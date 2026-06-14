@@ -2126,14 +2126,19 @@ async fn test_jsm_create_request_type_not_found_exits_64() {
         stderr.contains("Run `jr requesttype list --project HELP`"),
         "H-04: stderr must contain actionable hint to list request types; got: {stderr}"
     );
-    // Cache-deletion path hint: the path contains /jr/v1/ and request_types_10.json.
+    // Cache-deletion path hint: assert the structural parts that are stable across
+    // platforms. The full path prefix (e.g. ~/.cache/jr/v1/ on Unix or
+    // %LOCALAPPDATA%\jr\v1\ on Windows) uses the OS separator, so we do NOT
+    // assert "/jr/v1/" — that would fail on Windows CI (backslash separators).
+    // Instead, assert the separator-agnostic prefix phrase and the filename suffix
+    // (same hardening as tests/requesttype_commands.rs::test_bc_x_12_008_*).
     assert!(
-        stderr.contains("/jr/v1/"),
-        "H-04: cache-deletion hint must contain '/jr/v1/' path segment; got: {stderr}"
+        stderr.contains("or delete the cache file at "),
+        "H-04: cache-deletion hint must contain 'or delete the cache file at'; got: {stderr}"
     );
     assert!(
         stderr.contains("request_types_10.json"),
-        "H-04: cache-deletion hint must contain 'request_types_10.json' filename; got: {stderr}"
+        "H-04: cache-deletion hint must contain 'request_types_10.json' filename (sid=10 from fixture); got: {stderr}"
     );
     // The .expect(0) on the POST mock is enforced on server drop.
 }
