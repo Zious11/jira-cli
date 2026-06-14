@@ -531,6 +531,49 @@ fn test_ci_yml_fmt_deny_jobs_remain_ubuntu_only() {
 }
 
 // ---------------------------------------------------------------------------
+// AC-009 — `test` job sets RUST_MIN_STACK=8388608 for Windows stack parity
+// ---------------------------------------------------------------------------
+
+/// AC-009: The `test` job's `cargo test` step must set `RUST_MIN_STACK` to
+/// `"8388608"` (8 MB).
+///
+/// Windows default main-thread stack is 1 MB; Linux/macOS default is 8 MB.
+/// Integration tests in `tests/all_flag_behavior.rs` build 30+ item mock
+/// responses on the main thread (tokio runtime + wiremock init) and overflow
+/// the 1 MB stack before any assertion runs on Windows.  Setting
+/// RUST_MIN_STACK to 8388608 provides parity with Unix defaults.  This env
+/// var is honored by the Rust runtime for the main thread and for
+/// test-harness-spawned threads; it is a no-op on Linux/macOS.
+///
+/// Anchoring: assertion is made only within the `test` job block so an
+/// `RUST_MIN_STACK` string in a comment or another job cannot cause a false
+/// positive.
+#[test]
+fn test_ci_yml_test_job_sets_rust_min_stack() {
+    let ci = read_ci_yml();
+    let test_block = extract_job_block(&ci, "test")
+        .expect("ci.yml must contain a `test:` job (two-space indent)");
+
+    assert!(
+        test_block.contains("RUST_MIN_STACK"),
+        "FAIL: The `test` job in .github/workflows/ci.yml does not set \
+         `RUST_MIN_STACK`.\n\
+         Required: add `env: RUST_MIN_STACK: \"8388608\"` to the `cargo test` \
+         step in the `test` job.\n\
+         Reason: Windows main-thread stack is 1 MB (vs 8 MB on Linux/macOS); \
+         all_flag_behavior.rs tests overflow before any assertion runs.\n\
+         Current test block:\n{test_block}"
+    );
+
+    assert!(
+        test_block.contains("8388608"),
+        "FAIL: The `test` job sets `RUST_MIN_STACK` but not to `8388608` (8 MB).\n\
+         Required value: `\"8388608\"` (matches Linux/macOS default of 8 MB).\n\
+         Current test block:\n{test_block}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // F-WIN2-C-101 guard — scrub list in jr_isolated() includes JR_CONFIG_DIR
 // and JR_CACHE_DIR
 // ---------------------------------------------------------------------------

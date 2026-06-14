@@ -55,6 +55,14 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
       - run: cargo test --all-features
+        env:
+          # Windows default main-thread stack is 1 MB (vs 8 MB on Linux/macOS).
+          # The integration tests in all_flag_behavior.rs build 30+ item mock
+          # responses on the main thread (tokio runtime + wiremock init) and
+          # overflow the 1 MB stack before any assertion runs.  Setting
+          # RUST_MIN_STACK to 8 MB matches Unix defaults and is a no-op on
+          # Linux/macOS where the OS already provides 8 MB.
+          RUST_MIN_STACK: "8388608"
 
   msrv:
     name: MSRV (1.85.0)
