@@ -270,6 +270,15 @@ fn test_jr_isolated_helper_sets_jr_config_dir() {
 /// The prior `||` check had this blind spot: a file could set both XDG vars
 /// but only one seam var and still pass the gate.
 ///
+/// Per-call-site count check (process-hardening): in addition to file-level
+/// presence checks (which catch subprocess `.env()` sites), this test also
+/// verifies that the COUNT of in-process `set_var("XDG_CACHE_HOME"` calls
+/// matches the count of `set_var("JR_CACHE_DIR"` calls, and similarly for
+/// the config pair. This catches in-process half-migrations where a file has
+/// one in-process `set_var` for the XDG var but not for the JR seam var,
+/// even when the file otherwise contains the JR var string (e.g. from a
+/// subprocess `.env()` call elsewhere in the same file).
+///
 /// The `ALLOWLISTED_E2E_FILES` constant must stay in sync with the
 /// Out-of-Scope declaration in the story spec: if a file is removed from the
 /// allowlist it must be migrated; if a file is added to the allowlist it must
@@ -316,12 +325,45 @@ fn test_all_xdg_test_files_also_set_jr_seam_vars() {
             continue;
         }
 
-        // Per-var correspondence: each XDG var requires its matching JR seam var.
+        // Per-var file-level check: the JR seam var must appear somewhere in the
+        // file (covers subprocess .env() sites as well as in-process set_var sites).
         if sets_xdg_config && !content.contains("JR_CONFIG_DIR") {
-            missing_jr_config_dir.push(rel_path.clone());
+            missing_jr_config_dir.push(format!("{rel_path} (missing JR_CONFIG_DIR entirely)"));
         }
         if sets_xdg_cache && !content.contains("JR_CACHE_DIR") {
-            missing_jr_cache_dir.push(rel_path);
+            missing_jr_cache_dir.push(format!("{rel_path} (missing JR_CACHE_DIR entirely)"));
+        }
+
+        // Per-call-site count check: count in-process set_var calls for XDG vars
+        // and require an equal count of set_var calls for the corresponding JR
+        // seam vars. This catches a half-migration where the file has an in-process
+        // set_var for the XDG var but not for the JR seam var, even when the file
+        // contains the JR var string from a subprocess .env() call elsewhere.
+        //
+        // Counting substring occurrences gives a conservative approximation: it may
+        // overcount if the pattern appears in comments or strings, but it cannot
+        // undercount (every real set_var call is a superset of the pattern string).
+        // A count mismatch is always a bug; a count match does not guarantee
+        // correctness but is sufficient to catch the in-process half-migration class.
+        let xdg_config_setvar_count = content.matches("set_var(\"XDG_CONFIG_HOME\"").count();
+        let jr_config_setvar_count = content.matches("set_var(\"JR_CONFIG_DIR\"").count();
+        if xdg_config_setvar_count > jr_config_setvar_count {
+            missing_jr_config_dir.push(format!(
+                "{rel_path} (per-call-site: {} set_var(\"XDG_CONFIG_HOME\") calls \
+                 but only {} set_var(\"JR_CONFIG_DIR\") calls — \
+                 each in-process XDG set_var must have a matching JR seam set_var)",
+                xdg_config_setvar_count, jr_config_setvar_count
+            ));
+        }
+        let xdg_cache_setvar_count = content.matches("set_var(\"XDG_CACHE_HOME\"").count();
+        let jr_cache_setvar_count = content.matches("set_var(\"JR_CACHE_DIR\"").count();
+        if xdg_cache_setvar_count > jr_cache_setvar_count {
+            missing_jr_cache_dir.push(format!(
+                "{rel_path} (per-call-site: {} set_var(\"XDG_CACHE_HOME\") calls \
+                 but only {} set_var(\"JR_CACHE_DIR\") calls — \
+                 each in-process XDG set_var must have a matching JR seam set_var)",
+                xdg_cache_setvar_count, jr_cache_setvar_count
+            ));
         }
     }
 
@@ -331,7 +373,7 @@ fn test_all_xdg_test_files_also_set_jr_seam_vars() {
     let mut failures: Vec<String> = Vec::new();
     if !missing_jr_config_dir.is_empty() {
         failures.push(format!(
-            "Sets \"XDG_CONFIG_HOME\" but missing JR_CONFIG_DIR ({} file{}):\n{}",
+            "XDG_CONFIG_HOME->JR_CONFIG_DIR migration issues ({} finding{}):\n{}",
             missing_jr_config_dir.len(),
             if missing_jr_config_dir.len() == 1 {
                 ""
@@ -347,7 +389,7 @@ fn test_all_xdg_test_files_also_set_jr_seam_vars() {
     }
     if !missing_jr_cache_dir.is_empty() {
         failures.push(format!(
-            "Sets \"XDG_CACHE_HOME\" but missing JR_CACHE_DIR ({} file{}):\n{}",
+            "XDG_CACHE_HOME->JR_CACHE_DIR migration issues ({} finding{}):\n{}",
             missing_jr_cache_dir.len(),
             if missing_jr_cache_dir.len() == 1 {
                 ""
@@ -370,10 +412,10 @@ fn test_all_xdg_test_files_also_set_jr_seam_vars() {
          These files will fail on Windows CI because JR_CONFIG_DIR / \
          JR_CACHE_DIR are the only isolation mechanism on Windows \
          (XDG_* is Unix-only after S-WIN-1).\n\
-         Migration: for each .env(\"XDG_CONFIG_HOME\", X) add \
-         .env(\"JR_CONFIG_DIR\", X.join(\"jr\")); for each \
-         .env(\"XDG_CACHE_HOME\", Y) add \
-         .env(\"JR_CACHE_DIR\", Y.join(\"jr\")).\n\n{}",
+         Migration: for each set_var(\"XDG_CONFIG_HOME\", X) add \
+         set_var(\"JR_CONFIG_DIR\", X.join(\"jr\")); for each \
+         set_var(\"XDG_CACHE_HOME\", Y) add \
+         set_var(\"JR_CACHE_DIR\", Y.join(\"jr\")).\n\n{}",
         failures.join("\n\n")
     );
 }
