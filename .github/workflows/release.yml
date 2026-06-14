@@ -90,9 +90,13 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
+          $ErrorActionPreference = 'Stop'   # Catches Set-Location failure (directory missing)
           Set-Location "target/${{ matrix.target }}/release"
-          jr.exe --version
+          # Use `.\jr.exe` (explicit current-directory prefix) — PowerShell does NOT
+          # search CWD for executables without it, unlike cmd.exe.
+          # NOTE: $ErrorActionPreference does NOT catch non-zero exit from native
+          # executables in PS7; the explicit LASTEXITCODE check below is load-bearing.
+          .\jr.exe --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify embedded OAuth app present

@@ -256,46 +256,52 @@ fn test_release_yml_windows_package_step_produces_zip() {
 /// R1-002 — Windows build job has a functional smoke step that executes `jr.exe`.
 ///
 /// Verifies that the `build` job contains a step that runs the freshly-built
-/// `jr.exe` on Windows (e.g. `jr.exe --version` or `jr.exe --help`), so the
-/// release binary's `/STACK:8388608` reserve and basic launchability are validated
-/// in the RELEASE path.
+/// `jr.exe` on Windows (e.g. `.\jr.exe --version`), so the release binary's
+/// `/STACK:8388608` reserve and basic launchability are validated in the RELEASE path.
 ///
-/// Currently the only smoke step ("Verify embedded OAuth app present") is gated
-/// `if: runner.os != 'Windows'`, leaving Windows with NO runtime validation.
+/// The existing "Verify embedded OAuth app present" step is gated
+/// `if: runner.os != 'Windows'` (ADR-0016 §Decision 5c), leaving Windows with
+/// no runtime validation without this dedicated step.
+///
+/// This test is a regression guard: it asserts that a Windows-applicable smoke step
+/// exists and was not accidentally removed. The step and this test were co-delivered
+/// in PR #511 (FIX-F5-001); the failing state can be reproduced locally by reverting
+/// only the release.yml hunk from that PR.
+///
 /// This test asserts the existence of a Windows-applicable step that:
-/// 1. Invokes `jr.exe` (the Windows binary name)
+/// 1. Invokes `jr.exe` (the Windows binary name, with explicit `.\` prefix for pwsh)
 /// 2. Is NOT excluded on Windows (does NOT carry `runner.os != 'Windows'`)
 /// 3. Uses `shell: pwsh` OR an explicit `runner.os == 'Windows'` condition
 ///
-/// **Red Gate:** This assertion MUST FAIL against the current release.yml, which
-/// has no such step. It will pass once a Windows smoke step is added by the
-/// implementer.
-///
-/// Traces to: WIN-STACK (jr.exe stack reservation); ADR-0016 §Decision 5; FIX-F5-001.
+/// Traces to: WIN-STACK (jr.exe stack reservation, CLAUDE.md §Gotchas);
+/// ADR-0016 §Decision 5c (OAuth smoke step gated off on Windows — motivation for
+/// this dedicated Windows step); FIX-F5-001 R1-002.
 #[test]
 fn test_release_yml_windows_has_functional_smoke_step() {
     let yml = release_yml();
 
-    // Strategy: find every step block in the build job that EXECUTES `jr.exe` as a
+    // Strategy: find every step block in the file that EXECUTES `jr.exe` as a
     // binary (not merely references it as a file path argument). For each such block,
     // check that:
     //   (a) it is NOT excluded on Windows (no `runner.os != 'Windows'` gate)
     //   (b) it is either explicitly Windows-only (`runner.os == 'Windows'`) or
     //       uses `shell: pwsh` (pwsh is Windows-native and implies a Windows step)
     //
-    // "Executes jr.exe" means a run-line that launches the binary, i.e. any trimmed
-    // line that:
-    //   - starts with `jr.exe` (direct invocation without path), OR
-    //   - starts with `$` and contains `jr.exe` on the same word boundary (PowerShell
-    //     variable-based invocation: `$bin = "…/jr.exe"` followed by `& $bin …`), OR
-    //   - contains `& ` followed by something referencing `jr.exe` (PowerShell call
-    //     operator), OR
-    //   - contains a path ending in `/jr.exe` or `\jr.exe` immediately followed by a
-    //     space, flag, or end-of-line (i.e., used as a command, not a `-Path` argument)
+    // "Executes jr.exe" means a run-line that launches the binary. The detection
+    // covers three invocation forms (note: variable-indirection `& $bin` where $bin
+    // holds a path is NOT detected — only literal callee references are):
+    //   - starts with `jr.exe`, `.\jr.exe`, or `./jr.exe` (direct/CWD-relative), OR
+    //   - contains `& ` followed by a token ending in `jr.exe` (PowerShell call
+    //     operator with a literal callee), OR
+    //   - contains a path ending in `/jr.exe` or `\jr.exe` used as a command (not
+    //     as a `-Path` or `-DestinationPath` argument to another cmdlet)
     //
     // The Compress-Archive packaging step MUST NOT match: it references `jr.exe` only
     // as a `-Path "target/.../jr.exe"` argument to Compress-Archive, not as an
     // executable invocation.
+    //
+    // Note: step_starts scans the entire YAML file (not just the build job). The
+    // release job's steps don't reference jr.exe, so this is correct in practice.
 
     let step_marker = "\n      - name:";
 
@@ -379,24 +385,28 @@ fn test_release_yml_windows_has_functional_smoke_step() {
          .github/workflows/release.yml.\n\
          \n\
          The build job must contain a step that:\n\
-           1. Invokes `jr.exe` (e.g. `jr.exe --version` or `jr.exe --help`)\n\
+           1. Invokes `jr.exe` (e.g. `.\\jr.exe --version` — use the `.\\ ` prefix\n\
+              in pwsh; PowerShell does NOT search CWD without it)\n\
            2. Is NOT excluded on Windows (no `if: runner.os != 'Windows'`)\n\
            3. Uses `shell: pwsh` or `if: runner.os == 'Windows'`\n\
          \n\
-         Currently the only smoke step ('Verify embedded OAuth app present') is \
-         gated `if: runner.os != 'Windows'`, leaving the Windows release binary \
-         with NO runtime launchability check — the /STACK:8388608 PE reserve and \
-         basic binary integrity are never exercised in CI for release builds.\n\
+         The 'Verify embedded OAuth app present' step is gated \
+         `if: runner.os != 'Windows'` (ADR-0016 §Decision 5c), leaving the \
+         Windows release binary with NO runtime launchability check — the \
+         /STACK:8388608 PE reserve and basic binary integrity are never exercised \
+         in CI for release builds without this step.\n\
          \n\
          Required: add a Windows smoke step such as:\n\
            - name: Smoke test (Windows)\n\
              if: runner.os == 'Windows'\n\
              shell: pwsh\n\
              run: |\n\
-               $bin = \"target/${{ matrix.target }}/release/jr.exe\"\n\
-               & $bin --version\n\
+               $ErrorActionPreference = 'Stop'\n\
+               Set-Location \"target/${{ matrix.target }}/release\"\n\
+               .\\jr.exe --version\n\
+               if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}\n\
          \n\
-         (FIX-F5-001 R1-002 / WIN-STACK / ADR-0016 §Decision 5)"
+         (FIX-F5-001 R1-002 / WIN-STACK / ADR-0016 §Decision 5c)"
     );
 }
 

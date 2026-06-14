@@ -1697,4 +1697,57 @@ mod tests {
             result.display()
         );
     }
+
+    // -----------------------------------------------------------------------
+    // M-6 — Unix XDG fallback branch coverage (XDG_CONFIG_HOME unset)
+    //
+    // Pins the `else` branch of `global_config_dir()` on Unix: when neither
+    // XDG_CONFIG_HOME nor JR_CONFIG_DIR is set, the function falls back to
+    // `dirs::home_dir().join(".config").join("jr")`.  A refactor that changed
+    // the fallback suffix (e.g. to ".cache/jr") would silently break without
+    // this pin test.
+    // -----------------------------------------------------------------------
+
+    /// M-6 — On Unix, `global_config_dir()` falls back to `~/.config/jr` when
+    /// `XDG_CONFIG_HOME` is unset and `JR_CONFIG_DIR` is absent.
+    ///
+    /// Removes both env vars, calls `global_config_dir()`, and asserts the
+    /// returned path ends with `.config/jr`.  The full prefix is `home_dir()`
+    /// which varies by user, so only the suffix is checked.
+    ///
+    /// Traces: `global_config_dir()` Unix else-branch (`#[cfg(not(windows))]`);
+    /// FIX-F5-001 M-6.
+    #[cfg(not(windows))]
+    #[test]
+    fn test_global_config_dir_falls_back_to_home_config_on_unix_when_xdg_unset() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
+        // SAFETY: ENV_MUTEX is held for the duration; no concurrent env access occurs.
+        // Remove both overrides so the production else-branch fires.
+        // Note: cleanup is not panic-safe (consistent with adjacent R1-003 test);
+        // global_config_dir() on a standard system cannot panic.
+        unsafe {
+            std::env::remove_var("JR_CONFIG_DIR");
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+
+        let result = global_config_dir();
+        drop(_guard);
+
+        // The fallback path must end with ".config/jr" (the Unix default).
+        // We cannot assert the full path (home dir varies), so check the suffix.
+        let result_str = result.to_string_lossy();
+        assert!(
+            result_str.ends_with("/.config/jr"),
+            "M-6: global_config_dir() fallback (XDG_CONFIG_HOME unset) must end \
+             with '/.config/jr'. Got: {}",
+            result.display()
+        );
+        // Structural invariant: path ends with 'jr' component.
+        assert!(
+            result.ends_with("jr"),
+            "M-6: resolved path must end with 'jr' component. Got: {}",
+            result.display()
+        );
+    }
 }
