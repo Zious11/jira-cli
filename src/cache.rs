@@ -605,12 +605,23 @@ mod tests {
         // even if a prior test panicked, so the guarded state is consistent.
         let guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().unwrap();
-        // SAFETY: ENV_MUTEX serialises all tests that touch XDG_CACHE_HOME;
-        // the variable is only read inside cache functions called within this
-        // lock, so no concurrent env access occurs.
-        unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+        // SAFETY: ENV_MUTEX serialises all tests that touch XDG_CACHE_HOME /
+        // JR_CACHE_DIR; the variables are only read inside cache functions called
+        // within this lock, so no concurrent env access occurs.
+        //
+        // JR_CACHE_DIR is the cross-platform debug seam (BC-6.2.017): on Windows,
+        // cache_root() uses %LOCALAPPDATA% and ignores XDG_CACHE_HOME, so we must
+        // also set JR_CACHE_DIR to dir/jr (matching what the XDG branch returns on
+        // Unix) to keep all platforms writing to the same tempdir.
+        unsafe {
+            std::env::set_var("XDG_CACHE_HOME", dir.path());
+            std::env::set_var("JR_CACHE_DIR", dir.path().join("jr"));
+        }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
-        unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+        unsafe {
+            std::env::remove_var("XDG_CACHE_HOME");
+            std::env::remove_var("JR_CACHE_DIR");
+        }
         drop(guard);
         if let Err(e) = result {
             std::panic::resume_unwind(e);
@@ -958,15 +969,28 @@ mod tests {
 
         // Acquire ENV_MUTEX to serialise env access with all other cache tests.
         let guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        // SAFETY: ENV_MUTEX serialises all tests that touch XDG_CACHE_HOME.
-        unsafe { std::env::set_var("XDG_CACHE_HOME", &fake_cache_home) };
+        // SAFETY: ENV_MUTEX serialises all tests that touch XDG_CACHE_HOME /
+        // JR_CACHE_DIR.
+        //
+        // JR_CACHE_DIR is the cross-platform seam (BC-6.2.017): on Windows,
+        // cache_root() uses %LOCALAPPDATA% and ignores XDG_CACHE_HOME.  Set
+        // JR_CACHE_DIR = fake_cache_home (the file path, without ".join(jr)")
+        // so cache_root() returns the file path on both platforms, causing the
+        // same ENOTDIR / "not a directory" I/O failure that the test validates.
+        unsafe {
+            std::env::set_var("XDG_CACHE_HOME", &fake_cache_home);
+            std::env::set_var("JR_CACHE_DIR", &fake_cache_home);
+        }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             write_fields_cache(
                 "test-m2-swallow",
                 &[("customfield_10001".to_string(), "Severity".to_string())],
             )
         }));
-        unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+        unsafe {
+            std::env::remove_var("XDG_CACHE_HOME");
+            std::env::remove_var("JR_CACHE_DIR");
+        }
         drop(guard);
 
         let result = result.expect("write_fields_cache must not panic on I/O error");

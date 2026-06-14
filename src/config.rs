@@ -580,7 +580,7 @@ mod tests {
 
     #[test]
     fn test_base_url_api_token() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let mut profiles = std::collections::BTreeMap::new();
         profiles.insert(
             "default".to_string(),
@@ -605,7 +605,7 @@ mod tests {
 
     #[test]
     fn test_base_url_oauth() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let mut profiles = std::collections::BTreeMap::new();
         profiles.insert(
             "default".to_string(),
@@ -634,7 +634,7 @@ mod tests {
 
     #[test]
     fn test_base_url_missing() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let config = Config {
             global: GlobalConfig::default(),
             project: ProjectConfig::default(),
@@ -645,7 +645,7 @@ mod tests {
 
     #[test]
     fn base_url_uses_active_profile() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let mut profiles = std::collections::BTreeMap::new();
         profiles.insert(
             "sandbox".to_string(),
@@ -669,7 +669,7 @@ mod tests {
 
     #[test]
     fn base_url_uses_active_profile_oauth_path() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let mut profiles = std::collections::BTreeMap::new();
         profiles.insert(
             "default".to_string(),
@@ -730,7 +730,7 @@ mod tests {
 
     #[test]
     fn test_base_url_env_override() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         // SAFETY: test holds ENV_MUTEX, so no concurrent env access.
         unsafe { std::env::set_var("JR_BASE_URL", "http://localhost:8080") };
         let config = Config::default();
@@ -740,7 +740,7 @@ mod tests {
 
     #[test]
     fn test_base_url_trailing_slash_trimmed() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let mut profiles = std::collections::BTreeMap::new();
         profiles.insert(
             "default".to_string(),
@@ -1104,7 +1104,7 @@ mod tests {
 
     #[test]
     fn config_load_precedence_flag_overrides_env_overrides_field() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().unwrap();
         let cfg_dir = dir.path().join("jr");
         std::fs::create_dir_all(&cfg_dir).unwrap();
@@ -1124,8 +1124,13 @@ mod tests {
         .unwrap();
 
         // SAFETY: ENV_MUTEX held across env mutations.
+        //
+        // JR_CONFIG_DIR is the cross-platform debug seam (BC-6.2.017): on Windows,
+        // global_config_dir() uses %APPDATA% and ignores XDG_CONFIG_HOME, so we must
+        // also set JR_CONFIG_DIR = dir/jr to keep all platforms reading the same config.
         unsafe {
             std::env::set_var("XDG_CONFIG_HOME", dir.path());
+            std::env::set_var("JR_CONFIG_DIR", dir.path().join("jr"));
             std::env::set_var("JR_PROFILE", "from-env");
         }
         // CLI flag wins over env var.
@@ -1145,12 +1150,13 @@ mod tests {
 
         unsafe {
             std::env::remove_var("XDG_CONFIG_HOME");
+            std::env::remove_var("JR_CONFIG_DIR");
         }
     }
 
     #[test]
     fn config_load_errors_when_jr_profile_targets_unknown_profile() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().unwrap();
         let cfg_dir = dir.path().join("jr");
         std::fs::create_dir_all(&cfg_dir).unwrap();
@@ -1165,14 +1171,19 @@ mod tests {
         .unwrap();
 
         // SAFETY: ENV_MUTEX held.
+        //
+        // JR_CONFIG_DIR is the cross-platform debug seam (BC-6.2.017): on Windows,
+        // global_config_dir() uses %APPDATA% and ignores XDG_CONFIG_HOME.
         unsafe {
             std::env::set_var("XDG_CONFIG_HOME", dir.path());
+            std::env::set_var("JR_CONFIG_DIR", dir.path().join("jr"));
             std::env::set_var("JR_PROFILE", "ghost");
         }
         let result = Config::load();
         unsafe {
             std::env::remove_var("JR_PROFILE");
             std::env::remove_var("XDG_CONFIG_HOME");
+            std::env::remove_var("JR_CONFIG_DIR");
         }
         let err = result.expect_err("ghost profile should fail Config::load");
         let je = err.downcast_ref::<JrError>().expect("should be JrError");
@@ -1188,19 +1199,24 @@ mod tests {
 
     #[test]
     fn config_load_rejects_invalid_profile_name_from_env() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().unwrap();
         let cfg_dir = dir.path().join("jr");
         std::fs::create_dir_all(&cfg_dir).unwrap();
         // SAFETY: ENV_MUTEX held.
+        //
+        // JR_CONFIG_DIR is the cross-platform debug seam (BC-6.2.017): on Windows,
+        // global_config_dir() uses %APPDATA% and ignores XDG_CONFIG_HOME.
         unsafe {
             std::env::set_var("XDG_CONFIG_HOME", dir.path());
+            std::env::set_var("JR_CONFIG_DIR", dir.path().join("jr"));
             std::env::set_var("JR_PROFILE", "evil:profile");
         }
         let result = Config::load();
         unsafe {
             std::env::remove_var("JR_PROFILE");
             std::env::remove_var("XDG_CONFIG_HOME");
+            std::env::remove_var("JR_CONFIG_DIR");
         }
         assert!(
             result.is_err(),
@@ -1210,7 +1226,7 @@ mod tests {
 
     #[test]
     fn config_load_lenient_succeeds_when_active_profile_unknown() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().unwrap();
         let cfg_dir = dir.path().join("jr");
         std::fs::create_dir_all(&cfg_dir).unwrap();
@@ -1225,8 +1241,12 @@ mod tests {
         .unwrap();
 
         // SAFETY: ENV_MUTEX held.
+        //
+        // JR_CONFIG_DIR is the cross-platform debug seam (BC-6.2.017): on Windows,
+        // global_config_dir() uses %APPDATA% and ignores XDG_CONFIG_HOME.
         unsafe {
             std::env::set_var("XDG_CONFIG_HOME", dir.path());
+            std::env::set_var("JR_CONFIG_DIR", dir.path().join("jr"));
             std::env::set_var("JR_PROFILE", "ghost");
         }
         let strict = Config::load();
@@ -1234,6 +1254,7 @@ mod tests {
         unsafe {
             std::env::remove_var("JR_PROFILE");
             std::env::remove_var("XDG_CONFIG_HOME");
+            std::env::remove_var("JR_CONFIG_DIR");
         }
 
         assert!(strict.is_err(), "strict load should reject unknown profile");
@@ -1248,7 +1269,7 @@ mod tests {
 
     #[test]
     fn config_load_rejects_invalid_profile_key_in_config() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().unwrap();
         let cfg_dir = dir.path().join("jr");
         std::fs::create_dir_all(&cfg_dir).unwrap();
@@ -1265,12 +1286,17 @@ mod tests {
         .unwrap();
 
         // SAFETY: ENV_MUTEX held.
+        //
+        // JR_CONFIG_DIR is the cross-platform debug seam (BC-6.2.017): on Windows,
+        // global_config_dir() uses %APPDATA% and ignores XDG_CONFIG_HOME.
         unsafe {
             std::env::set_var("XDG_CONFIG_HOME", dir.path());
+            std::env::set_var("JR_CONFIG_DIR", dir.path().join("jr"));
         }
         let result = Config::load();
         unsafe {
             std::env::remove_var("XDG_CONFIG_HOME");
+            std::env::remove_var("JR_CONFIG_DIR");
         }
 
         let err = result.expect_err("invalid profile key should reject");

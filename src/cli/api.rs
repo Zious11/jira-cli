@@ -331,8 +331,18 @@ mod tests {
     fn test_resolve_body_at_file_not_found() {
         let stdin: Cursor<&[u8]> = Cursor::new(b"");
         let err = resolve_body(Some("@/nonexistent/path/to/file.json"), stdin).unwrap_err();
-        // Propagated std::io::Error
-        assert!(err.to_string().to_lowercase().contains("no such file"));
+        // Propagated std::io::Error — wording differs by OS:
+        //   Unix:    "No such file or directory" (ENOENT)
+        //   Windows: "The system cannot find the file specified." (ERROR_FILE_NOT_FOUND)
+        // Match on ErrorKind when possible; fall back to OS-gated substrings.
+        let is_not_found = err
+            .downcast_ref::<std::io::Error>()
+            .map(|e| e.kind() == std::io::ErrorKind::NotFound)
+            .unwrap_or_else(|| {
+                let s = err.to_string().to_lowercase();
+                s.contains("no such file") || s.contains("cannot find")
+            });
+        assert!(is_not_found, "expected NotFound error, got: {err}");
     }
 
     #[test]
