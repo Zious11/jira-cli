@@ -20,8 +20,13 @@ static ENV_MUTEX: Mutex<()> = Mutex::new(());
 /// — making the assertions about migration shape and idempotency
 /// flaky. The guard scrubs them all on `set()` and restores prior
 /// values on drop.
+// NOTE: JR_CONFIG_DIR is intentionally absent from this list. XdgConfigGuard
+// manages it explicitly (set in `set()`, saved as `previous_jr_config_dir`,
+// restored in `Drop`). Including it here would cause `set()` to remove the
+// just-set override immediately after writing it, leaving `global_config_dir()`
+// without a seam on Windows (where XDG_CONFIG_HOME is not consulted) and
+// causing Config::load to read the real AppData path instead of the temp dir.
 const JR_ENV_VARS_TO_SCRUB: &[&str] = &[
-    "JR_CONFIG_DIR",
     "JR_PROFILE",
     "JR_DEFAULT_PROFILE",
     "JR_INSTANCE_URL",
