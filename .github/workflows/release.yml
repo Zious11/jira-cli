@@ -86,6 +86,15 @@ jobs:
         shell: bash
         run: sha256sum jr-${{ github.ref_name }}-${{ matrix.target }}.zip > jr-${{ github.ref_name }}-${{ matrix.target }}.zip.sha256
 
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-Location "target/${{ matrix.target }}/release"
+          jr.exe --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Verify embedded OAuth app present
         if: runner.os != 'Windows'
         shell: bash
