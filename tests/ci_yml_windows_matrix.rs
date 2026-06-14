@@ -39,9 +39,19 @@ use std::path::Path;
 
 /// Read .github/workflows/ci.yml relative to the repo root (the parent of
 /// the `tests/` directory).
+///
+/// CRLF normalization: on Windows, Git may check out `*.yml` files with CRLF
+/// line endings (unless `*.yml text eol=lf` is present in .gitattributes — which
+/// this repo adds, but defense-in-depth means we normalize in-test too). The
+/// `extract_job_block` helper and all assertion anchors match on `\n`-terminated
+/// strings, so CRLF in the raw file would cause `.find("  job_name:\n")` to
+/// miss `"  job_name:\r\n"`. Normalizing here keeps the rest of the matching
+/// logic platform-independent.
 fn read_ci_yml() -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows/ci.yml");
-    fs::read_to_string(&path).unwrap_or_else(|e| panic!("Could not read {}: {e}", path.display()))
+    let raw = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("Could not read {}: {e}", path.display()));
+    raw.replace("\r\n", "\n")
 }
 
 /// Extract the content of a named job block from ci.yml.

@@ -32,16 +32,23 @@
 
 /// Load the release.yml content once, panicking with a clear message if the file
 /// cannot be read (which should never happen in normal development).
+///
+/// CRLF normalization: on Windows, Git may check out `*.yml` files with CRLF
+/// line endings. The `step_block` helper searches for `"\n      - name:"` and
+/// other `\n`-terminated anchors, so CRLF in the raw file would break substring
+/// matching. Normalizing here keeps all assertions platform-independent and is
+/// consistent with the defense-in-depth applied in `ci_yml_windows_matrix.rs`.
 fn release_yml() -> String {
     let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let path = manifest_dir.join(".github/workflows/release.yml");
-    std::fs::read_to_string(&path).unwrap_or_else(|e| {
+    let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| {
         panic!(
             "Could not read .github/workflows/release.yml at {}: {}",
             path.display(),
             e
         )
-    })
+    });
+    raw.replace("\r\n", "\n")
 }
 
 /// Return the YAML text belonging to the step named `step_name`.
