@@ -257,21 +257,23 @@ fn test_jr_isolated_helper_sets_jr_config_dir() {
 // ---------------------------------------------------------------------------
 
 /// AC-004: Every test file that sets `XDG_CONFIG_HOME` or `XDG_CACHE_HOME`
-/// must ALSO set `JR_CONFIG_DIR` / `JR_CACHE_DIR`, with exactly one
-/// exception: `tests/e2e_live.rs` is fully `#[ignore]`-gated and never runs
-/// in the Windows CI matrix.
+/// must ALSO set the corresponding JR seam var with per-var correspondence:
+///   - If the file sets `XDG_CONFIG_HOME`, it MUST set `JR_CONFIG_DIR`.
+///   - If the file sets `XDG_CACHE_HOME`, it MUST set `JR_CACHE_DIR`.
 ///
-/// This is a presence-only cross-check. It verifies the string `JR_CONFIG_DIR`
-/// or `JR_CACHE_DIR` appears in each in-scope file — it does NOT verify that
-/// the seam value uses `.join("jr")` (that is AC-003 + AC-005).
+/// There is exactly one exception: `tests/e2e_live.rs` is fully
+/// `#[ignore]`-gated and never runs in the Windows CI matrix.
 ///
-/// The `ALLOWLISTED_E2E_FILES` constant must stay in sync with the Out-of-Scope
-/// declaration in the story spec: if a file is removed from the allowlist it
-/// must be migrated; if a file is added to the allowlist it must be verified
-/// as fully `#[ignore]`-gated.
+/// Per-var correspondence (not `||`) is required so that a half-migration
+/// (e.g. sets XDG_CONFIG_HOME + XDG_CACHE_HOME + JR_CACHE_DIR but not
+/// JR_CONFIG_DIR) is caught at enforcement time rather than silently passing.
+/// The prior `||` check had this blind spot: a file could set both XDG vars
+/// but only one seam var and still pass the gate.
 ///
-/// RED-GATE: None of the 37 in-scope test files currently set JR_CONFIG_DIR
-/// or JR_CACHE_DIR. This test FAILS on develop.
+/// The `ALLOWLISTED_E2E_FILES` constant must stay in sync with the
+/// Out-of-Scope declaration in the story spec: if a file is removed from the
+/// allowlist it must be migrated; if a file is added to the allowlist it must
+/// be verified as fully `#[ignore]`-gated.
 #[test]
 fn test_all_xdg_test_files_also_set_jr_seam_vars() {
     // Allowlist: files that SET XDG vars but are fully #[ignore]-gated and
@@ -281,9 +283,9 @@ fn test_all_xdg_test_files_also_set_jr_seam_vars() {
 
     let tests_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
 
-    // Collect all .rs files in tests/ that set XDG vars (quoted form, i.e.
-    // used as env var values in .env() or set_var() calls).
-    let mut missing_seam_vars: Vec<String> = Vec::new();
+    // Track per-var failures separately so the error message is actionable.
+    let mut missing_jr_config_dir: Vec<String> = Vec::new();
+    let mut missing_jr_cache_dir: Vec<String> = Vec::new();
 
     let entries = fs::read_dir(&tests_dir).unwrap_or_else(|e| panic!("Could not read tests/: {e}"));
 
@@ -298,48 +300,81 @@ fn test_all_xdg_test_files_also_set_jr_seam_vars() {
             Err(_) => continue,
         };
 
-        // Check if this file sets XDG vars (quoted string = env var value).
-        let sets_xdg =
-            content.contains("\"XDG_CONFIG_HOME\"") || content.contains("\"XDG_CACHE_HOME\"");
-        if !sets_xdg {
+        // Check if this file sets XDG vars (quoted string = env var value,
+        // as used in .env() or set_var() calls).
+        let sets_xdg_config = content.contains("\"XDG_CONFIG_HOME\"");
+        let sets_xdg_cache = content.contains("\"XDG_CACHE_HOME\"");
+        if !sets_xdg_config && !sets_xdg_cache {
             continue;
         }
 
         // Build a relative path string for comparison with the allowlist.
         let rel_path = format!("tests/{}", path.file_name().unwrap().to_string_lossy());
 
-        // Skip allowlisted files.
+        // Skip allowlisted files (fully #[ignore]-gated, never run on Windows).
         if ALLOWLISTED_E2E_FILES.contains(&rel_path.as_str()) {
             continue;
         }
 
-        // This file is in-scope: it must also set JR_CONFIG_DIR or JR_CACHE_DIR.
-        let sets_seam_vars = content.contains("JR_CONFIG_DIR") || content.contains("JR_CACHE_DIR");
-        if !sets_seam_vars {
-            missing_seam_vars.push(rel_path);
+        // Per-var correspondence: each XDG var requires its matching JR seam var.
+        if sets_xdg_config && !content.contains("JR_CONFIG_DIR") {
+            missing_jr_config_dir.push(rel_path.clone());
+        }
+        if sets_xdg_cache && !content.contains("JR_CACHE_DIR") {
+            missing_jr_cache_dir.push(rel_path);
         }
     }
 
-    missing_seam_vars.sort();
+    missing_jr_config_dir.sort();
+    missing_jr_cache_dir.sort();
+
+    let mut failures: Vec<String> = Vec::new();
+    if !missing_jr_config_dir.is_empty() {
+        failures.push(format!(
+            "Sets \"XDG_CONFIG_HOME\" but missing JR_CONFIG_DIR ({} file{}):\n{}",
+            missing_jr_config_dir.len(),
+            if missing_jr_config_dir.len() == 1 {
+                ""
+            } else {
+                "s"
+            },
+            missing_jr_config_dir
+                .iter()
+                .map(|s| format!("  - {s}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+    if !missing_jr_cache_dir.is_empty() {
+        failures.push(format!(
+            "Sets \"XDG_CACHE_HOME\" but missing JR_CACHE_DIR ({} file{}):\n{}",
+            missing_jr_cache_dir.len(),
+            if missing_jr_cache_dir.len() == 1 {
+                ""
+            } else {
+                "s"
+            },
+            missing_jr_cache_dir
+                .iter()
+                .map(|s| format!("  - {s}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
 
     assert!(
-        missing_seam_vars.is_empty(),
-        "FAIL (RED GATE): The following test files set XDG_CONFIG_HOME or \
-         XDG_CACHE_HOME but do NOT set JR_CONFIG_DIR / JR_CACHE_DIR.\n\
+        failures.is_empty(),
+        "FAIL: The following test files have a half-migrated XDG->JR seam \
+         migration. Per-var correspondence is required: \
+         XDG_CONFIG_HOME->JR_CONFIG_DIR and XDG_CACHE_HOME->JR_CACHE_DIR.\n\
          These files will fail on Windows CI because JR_CONFIG_DIR / \
          JR_CACHE_DIR are the only isolation mechanism on Windows \
          (XDG_* is Unix-only after S-WIN-1).\n\
-         Migration required: for each .env(\"XDG_CONFIG_HOME\", X) call, \
-         add .env(\"JR_CONFIG_DIR\", X.join(\"jr\")); for each \
-         .env(\"XDG_CACHE_HOME\", Y) call, add \
-         .env(\"JR_CACHE_DIR\", Y.join(\"jr\")).\n\n\
-         Files missing JR seam vars ({} total):\n{}",
-        missing_seam_vars.len(),
-        missing_seam_vars
-            .iter()
-            .map(|s| format!("  - {s}"))
-            .collect::<Vec<_>>()
-            .join("\n")
+         Migration: for each .env(\"XDG_CONFIG_HOME\", X) add \
+         .env(\"JR_CONFIG_DIR\", X.join(\"jr\")); for each \
+         .env(\"XDG_CACHE_HOME\", Y) add \
+         .env(\"JR_CACHE_DIR\", Y.join(\"jr\")).\n\n{}",
+        failures.join("\n\n")
     );
 }
 
