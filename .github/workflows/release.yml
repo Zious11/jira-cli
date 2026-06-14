@@ -99,6 +99,34 @@ jobs:
           .\jr.exe --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Embedded OAuth verification (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          # Pass the secret-presence flag in via env so the PowerShell check below
+          # can short-circuit cleanly. Forks (where Actions secrets aren't
+          # available) get OAUTH_CLIENT_ID == '' here, so we skip the smoke.
+          HAS_EMBED_SECRETS: ${{ (secrets.OAUTH_CLIENT_ID != '' && secrets.OAUTH_CLIENT_SECRET != '') && 'yes' || 'no' }}
+        run: |
+          if ($env:HAS_EMBED_SECRETS -ne 'yes') {
+            Write-Host "Skipping embedded-creds smoke: OAUTH_CLIENT_ID/_SECRET not configured."
+            Write-Host "(Fork build, or upstream secrets are missing — release will ship the unbranded BYO binary.)"
+            exit 0
+          }
+          $f = Get-ChildItem -Path "target/${{ matrix.target }}/release/build" `
+                -Filter 'embedded_oauth.rs' -Recurse | Select-Object -First 1
+          if (-not $f) { Write-Error 'embedded_oauth.rs not found at expected build output path'; exit 1 }
+          $content = Get-Content $f.FullName -Raw
+          if ($content -match 'EMBEDDED_ID\s*:\s*Option.*=\s*None') {
+            Write-Error 'embedded_oauth.rs has EMBEDDED_ID = None — build.rs did not see JR_BUILD_OAUTH_CLIENT_ID'
+            exit 1
+          }
+          if ($content -match 'EMBEDDED_SECRET_XOR\s*:\s*Option.*=\s*None') {
+            Write-Error 'embedded_oauth.rs has EMBEDDED_SECRET_XOR = None — build.rs did not see JR_BUILD_OAUTH_CLIENT_SECRET'
+            exit 1
+          }
+          Write-Host "embedded_oauth.rs at $($f.FullName) has populated constants"
+
       - name: Verify embedded OAuth app present
         if: runner.os != 'Windows'
         shell: bash

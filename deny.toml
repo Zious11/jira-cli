@@ -169,8 +169,10 @@ reason = "clap, tokio, reqwest and most of the dependency graph use windows-sys 
 # windows_i686_gnu, windows_i686_msvc, windows_x86_64_gnu, windows_x86_64_gnullvm,
 # windows_x86_64_msvc. windows_i686_gnullvm is deliberately NOT skipped: it exists
 # in Cargo.lock only at 0.52.6 and 0.53.1 (the i686-gnullvm stub did not exist in
-# the windows 0.42 generation), so only two versions are present and cargo-deny
-# requires no skip — skipping either would produce an `unmatched-skip` error.
+# the windows 0.42 generation). Because these are Windows-only crates, cargo-deny
+# does not flag them as multiple-version violations when run on Linux or macOS CI
+# (they are absent from the resolved dependency graph on those platforms). A skip
+# entry for either version would produce an `unmatched-skip` error on those runners.
 #
 # Why no `[[bans.skip]]` for windows-targets/windows_* version "0.52"?
 #
