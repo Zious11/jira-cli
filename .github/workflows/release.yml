@@ -108,6 +108,7 @@ jobs:
           # available) get OAUTH_CLIENT_ID == '' here, so we skip the smoke.
           HAS_EMBED_SECRETS: ${{ (secrets.OAUTH_CLIENT_ID != '' && secrets.OAUTH_CLIENT_SECRET != '') && 'yes' || 'no' }}
         run: |
+          $ErrorActionPreference = 'Stop'
           if ($env:HAS_EMBED_SECRETS -ne 'yes') {
             Write-Host "Skipping embedded-creds smoke: OAUTH_CLIENT_ID/_SECRET not configured."
             Write-Host "(Fork build, or upstream secrets are missing — release will ship the unbranded BYO binary.)"
