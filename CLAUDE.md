@@ -136,6 +136,7 @@ See `docs/adr/` for detailed rationale:
 - ADR-0006: Embedded `jr` OAuth app with compile-time XOR obfuscation (re-supersedes ADR-0002)
 - ADR-0015: Proactive resolution enforcement on done-category transitions (`jr issue move` requires `--resolution` or `--no-resolution`)
 - ADR-0016: Windows build target (x86_64-pc-windows-msvc, AppData config/cache paths, Windows Credential Manager keyring, .zip packaging, CI)
+- `ci-gate` (job name "CI Gate") is THE single required branch-protection status check on `develop`/`main`. New CI jobs that must be required must be added to `ci-gate.needs`, never wired directly into branch protection — this prevents the matrix-rename fragility class (DEC-096/DEC-097).
 
 ## Specs & Plans
 

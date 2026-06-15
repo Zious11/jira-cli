@@ -194,6 +194,8 @@ write to the real user profile.
 
 **Scope note for `fmt` and `deny` jobs:** These run on `ubuntu-latest` only.
 
+**CI gate (S-CIGATE-1):** `ci-gate` (job name "CI Gate") is the single required branch-protection status check for `develop` and `main`; add new mandatory CI jobs to `ci-gate.needs`, not to branch protection directly.
+
 > **AMENDED 2026-06-13 (F-WIN-F3-001):** The original scope note above contained a
 > factually false statement that was corrected by adversarial review before implementation.
 > It claimed "the `clippy` job runs on `ubuntu-latest` only; Windows clippy is folded into
