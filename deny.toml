@@ -123,15 +123,158 @@ name = "toml_datetime"
 version = "1"
 reason = "toml 1.x (direct dep) requires toml_datetime 1.x; toml 0.8 (via figment) requires 0.6. Unavoidable until figment upgrades to toml 1.x."
 
+# windows-sys: FOUR versions in Cargo.lock as of S-WIN-3.
+#   0.45.0 — jni v0.21.1 (via rustls-platform-verifier/reqwest)
+#   0.52.0 — ring (cryptography dep of rustls)
+#   0.60.2 — keyring v3.6.3 windows-native feature (Win32_Security_Credentials)
+#   0.61.2 — clap, tokio, reqwest and the broad dependency graph
+#
+# THREE are skipped (0.45, 0.60, 0.61); the single canonical UN-skipped version
+# is windows-sys 0.52.0 (via ring). N-1: 4 versions − 3 skips = 1 remaining,
+# which satisfies cargo-deny's "single remaining version" requirement.
+#
+# Adding a 0.52 skip would leave ZERO un-skipped versions (unnecessary-skip
+# error). Do NOT add a 0.52 skip — 0.52.0 is the canonical un-skipped version
+# by design, parallel to windows-targets 0.52.6 documented below.
+#
+# Maintenance caveat (F-WIN3-RC-103): if ring later bumps its windows-sys minor
+# off 0.52 (or if jni drops 0.45, or a new lineage is added), the canonical
+# un-skipped version changes. The guard is `cargo deny check` in CI; a future
+# dep bump may require adding or removing skip entries here.
+
 [[bans.skip]]
 name = "windows-sys"
 version = "0.45"
-reason = "jni v0.21.1 (via rustls-platform-verifier/reqwest) requires windows-sys 0.45; the majority of the crate graph uses windows-sys 0.61. Blocked by jni not yet releasing with windows-sys 0.6x support."
+reason = "jni v0.21.1 (via rustls-platform-verifier/reqwest) requires windows-sys 0.45; ring requires 0.52, keyring windows-native requires 0.60, and the broad graph (clap/tokio/reqwest) requires 0.61. Four semver-incompatible 0.x versions; 0.45/0.60/0.61 are skipped, leaving 0.52.0 (ring) as the canonical un-skipped version."
+
+[[bans.skip]]
+name = "windows-sys"
+version = "0.60"
+reason = "keyring v3.6.3 windows-native feature requires windows-sys 0.60 (Win32_Security_Credentials); jni requires 0.45, ring requires 0.52, and the broad graph (clap/tokio/reqwest) requires 0.61. Four semver-incompatible 0.x versions; 0.45/0.60/0.61 are skipped, leaving 0.52.0 (ring) as the canonical un-skipped version. Unification blocked upstream until keyring bumps windows-sys."
 
 [[bans.skip]]
 name = "windows-sys"
 version = "0.61"
-reason = "clap, tokio, reqwest and most of the dependency graph use windows-sys 0.61; jni 0.21.1 requires 0.45. Dual version is unavoidable until jni upgrades."
+reason = "clap, tokio, reqwest and most of the dependency graph use windows-sys 0.61; jni 0.21.1 requires 0.45, ring requires 0.52, and keyring windows-native requires 0.60. Four semver-incompatible 0.x versions; 0.45/0.60/0.61 are skipped, leaving 0.52.0 (ring) as the canonical un-skipped version. Unification blocked until jni and keyring upgrade."
+
+# windows-targets and windows_* arch crates: transitive sub-deps of windows-sys.
+# S-WIN-3 adds 17 entries total (1 windows-sys 0.60 + 2 windows-targets + 14 = 7 arch crates × 2 tiers):
+#   windows-sys 0.45 (via jni) pulls windows-targets 0.42.2 and windows_* 0.42.2;
+#   windows-sys 0.52 (via ring) pulls windows-targets 0.52.6 and windows_* 0.52.6;
+#   windows-sys 0.60 (via keyring v3.6.3 windows-native) pulls windows-targets 0.53.5
+#   and windows_* 0.53.1. These are unavoidable until jni and keyring converge on the
+#   same windows-sys version. (S-WIN-3, C-V2(b) research finding)
+#
+# The 7 skipped arch crates are: windows_aarch64_gnullvm, windows_aarch64_msvc,
+# windows_i686_gnu, windows_i686_msvc, windows_x86_64_gnu, windows_x86_64_gnullvm,
+# windows_x86_64_msvc. windows_i686_gnullvm is deliberately NOT skipped: it exists
+# in Cargo.lock only at 0.52.6 and 0.53.1 (the i686-gnullvm stub did not exist in
+# the windows 0.42 generation). Because these are Windows-only crates, cargo-deny
+# does not flag them as multiple-version violations when run on Linux or macOS CI
+# (they are absent from the resolved dependency graph on those platforms). A skip
+# entry for either version would produce an `unmatched-skip` error on those runners.
+#
+# Why no `[[bans.skip]]` for windows-targets/windows_* version "0.52"?
+#
+# cargo-deny's multiple-versions = "deny" fires when 2+ UN-SKIPPED versions of the
+# same crate remain in the dependency graph. With three versions in Cargo.lock
+# (0.42 from jni, 0.52 from ring, 0.53 from keyring windows-native), we only need
+# to skip N-1 = 2 of them. The two skips below (0.42 and 0.53) leave exactly ONE
+# un-skipped canonical version — 0.52.6 (pulled by ring via windows-sys 0.52) —
+# which satisfies cargo-deny's "single remaining version" requirement.
+#
+# Adding a 0.52 skip would leave ZERO un-skipped versions, which is unnecessary.
+# A future reviewer should NOT add a 0.52 skip; doing so would produce an
+# `unnecessary-skip` warning and is semantically wrong — 0.52.6 is the canonical
+# un-skipped version by design.
+#
+# Maintenance caveat (F-WIN3-RC-103): this skip set is correct for the CURRENT
+# dependency topology. A future dep bump that changes the windows-sys/windows-targets
+# version set (e.g. ring updating its windows-sys minor, or jni dropping 0.45, or a
+# new lineage being added) could leave zero canonical un-skipped versions
+# (→ unnecessary-skip warnings) or introduce a new un-skipped duplicate
+# (→ multiple-versions error). The guard is `cargo deny check` in CI; there is no
+# separate canonical-version invariant test (process-gap tracked by orchestrator).
+
+[[bans.skip]]
+name = "windows-targets"
+version = "0.42"
+reason = "transitive sub-dep of windows-sys 0.45 (via jni/rustls-platform-verifier); windows-sys 0.60 (via keyring windows-native) pulls windows-targets 0.53.5. Unavoidable until jni and keyring converge on the same windows-sys version."
+
+[[bans.skip]]
+name = "windows-targets"
+version = "0.53"
+reason = "transitive sub-dep of windows-sys 0.60 (via keyring v3.6.3 windows-native); windows-sys 0.45 (via jni) pulls windows-targets 0.42.2. Unavoidable until jni and keyring converge on the same windows-sys version."
+
+[[bans.skip]]
+name = "windows_aarch64_gnullvm"
+version = "0.42"
+reason = "transitive arch crate for windows-targets 0.42.2 (via windows-sys 0.45/jni); windows-sys 0.60 (via keyring windows-native) pulls 0.53.1. Unavoidable until jni and keyring converge on the same windows-sys version."
+
+[[bans.skip]]
+name = "windows_aarch64_gnullvm"
+version = "0.53"
+reason = "transitive arch crate for windows-targets 0.53.5 (via windows-sys 0.60/keyring windows-native); windows-sys 0.45 (via jni) pulls 0.42.2. Unavoidable until jni and keyring converge on the same windows-sys version."
+
+[[bans.skip]]
+name = "windows_aarch64_msvc"
+version = "0.42"
+reason = "transitive arch crate for windows-targets 0.42.2 (via windows-sys 0.45/jni); windows-sys 0.60 (via keyring windows-native) pulls 0.53.1. Unavoidable until jni and keyring converge on the same windows-sys version."
+
+[[bans.skip]]
+name = "windows_aarch64_msvc"
+version = "0.53"
+reason = "transitive arch crate for windows-targets 0.53.5 (via windows-sys 0.60/keyring windows-native); windows-sys 0.45 (via jni) pulls 0.42.2. Unavoidable until jni and keyring converge on the same windows-sys version."
+
+[[bans.skip]]
+name = "windows_i686_gnu"
+version = "0.42"
+reason = "transitive arch crate for windows-targets 0.42.2 (via windows-sys 0.45/jni); windows-sys 0.60 (via keyring windows-native) pulls 0.53.1. Unavoidable until jni and keyring converge on the same windows-sys version."
+
+[[bans.skip]]
+name = "windows_i686_gnu"
+version = "0.53"
+reason = "transitive arch crate for windows-targets 0.53.5 (via windows-sys 0.60/keyring windows-native); windows-sys 0.45 (via jni) pulls 0.42.2. Unavoidable until jni and keyring converge on the same windows-sys version."
+
+[[bans.skip]]
+name = "windows_i686_msvc"
+version = "0.42"
+reason = "transitive arch crate for windows-targets 0.42.2 (via windows-sys 0.45/jni); windows-sys 0.60 (via keyring windows-native) pulls 0.53.1. Unavoidable until jni and keyring converge on the same windows-sys version."
+
+[[bans.skip]]
+name = "windows_i686_msvc"
+version = "0.53"
+reason = "transitive arch crate for windows-targets 0.53.5 (via windows-sys 0.60/keyring windows-native); windows-sys 0.45 (via jni) pulls 0.42.2. Unavoidable until jni and keyring converge on the same windows-sys version."
+
+[[bans.skip]]
+name = "windows_x86_64_gnu"
+version = "0.42"
+reason = "transitive arch crate for windows-targets 0.42.2 (via windows-sys 0.45/jni); windows-sys 0.60 (via keyring windows-native) pulls 0.53.1. Unavoidable until jni and keyring converge on the same windows-sys version."
+
+[[bans.skip]]
+name = "windows_x86_64_gnu"
+version = "0.53"
+reason = "transitive arch crate for windows-targets 0.53.5 (via windows-sys 0.60/keyring windows-native); windows-sys 0.45 (via jni) pulls 0.42.2. Unavoidable until jni and keyring converge on the same windows-sys version."
+
+[[bans.skip]]
+name = "windows_x86_64_gnullvm"
+version = "0.42"
+reason = "transitive arch crate for windows-targets 0.42.2 (via windows-sys 0.45/jni); windows-sys 0.60 (via keyring windows-native) pulls 0.53.1. Unavoidable until jni and keyring converge on the same windows-sys version."
+
+[[bans.skip]]
+name = "windows_x86_64_gnullvm"
+version = "0.53"
+reason = "transitive arch crate for windows-targets 0.53.5 (via windows-sys 0.60/keyring windows-native); windows-sys 0.45 (via jni) pulls 0.42.2. Unavoidable until jni and keyring converge on the same windows-sys version."
+
+[[bans.skip]]
+name = "windows_x86_64_msvc"
+version = "0.42"
+reason = "transitive arch crate for windows-targets 0.42.2 (via windows-sys 0.45/jni); windows-sys 0.60 (via keyring windows-native) pulls 0.53.1. Unavoidable until jni and keyring converge on the same windows-sys version."
+
+[[bans.skip]]
+name = "windows_x86_64_msvc"
+version = "0.53"
+reason = "transitive arch crate for windows-targets 0.53.5 (via windows-sys 0.60/keyring windows-native); windows-sys 0.45 (via jni) pulls 0.42.2. Unavoidable until jni and keyring converge on the same windows-sys version."
 
 [[bans.skip]]
 name = "winnow"

@@ -37,7 +37,9 @@ fn auth_login_oauth_surfaces_malformed_config_without_overwriting() {
         .unwrap()
         .current_dir(cwd_dir.path())
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .env("JR_SERVICE_NAME", "jr-jira-cli-test")
         // Defense-in-depth env hygiene. Figment's extract() is fatal on a
         // TOML parse error, so the malformed global config above will fail

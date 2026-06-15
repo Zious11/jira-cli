@@ -63,15 +63,53 @@ impl Expiring for TeamCache {
     }
 }
 
-/// Root cache directory: `$XDG_CACHE_HOME/jr` or `~/.cache/jr`.
+/// Pure fallback for the Windows `%LOCALAPPDATA%` path when `dirs::cache_dir()` returns
+/// `None`. Accepts the raw `env::var("LOCALAPPDATA").ok()` value so the logic can be
+/// tested on any platform without a `#[cfg(windows)]` gate.
+///
+/// Rules (BC-6.2.016 EC-1, EC-4):
+/// - `Some(s)` where `s` is non-empty → `PathBuf::from(s)`
+/// - `Some(s)` where `s` is empty → `PathBuf::from(".")` (treated as unset)
+/// - `None` → `PathBuf::from(".")`
+pub fn cache_localappdata_fallback(env_val: Option<String>) -> PathBuf {
+    env_val
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Root cache directory: `%LOCALAPPDATA%\jr` on Windows, `$XDG_CACHE_HOME/jr` or
+/// `~/.cache/jr` on Unix.
 pub fn cache_root() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
-        PathBuf::from(xdg).join("jr")
-    } else {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("~"))
-            .join(".cache")
+    // JR_CACHE_DIR override is debug builds only — release binaries ignore this env
+    // var to prevent path-injection attacks (BC-6.2.017). Seam must be first in body,
+    // before any OS-branch logic, so it fires on all platforms (S-WIN-2 prerequisite).
+    #[cfg(debug_assertions)]
+    if let Some(dir) = std::env::var("JR_CACHE_DIR").ok().filter(|s| !s.is_empty()) {
+        return PathBuf::from(dir);
+    }
+
+    #[cfg(windows)]
+    {
+        // Windows: %LOCALAPPDATA%\jr  (e.g., C:\Users\Alice\AppData\Local\jr)
+        // BC-6.2.016: dirs::cache_dir() maps to %LOCALAPPDATA% (Local) on Windows.
+        // LOCALAPPDATA fallback filters empty string: unset and empty both route to ".".
+        dirs::cache_dir()
+            .unwrap_or_else(|| cache_localappdata_fallback(std::env::var("LOCALAPPDATA").ok()))
             .join("jr")
+    }
+
+    #[cfg(not(windows))]
+    {
+        // Unix: $XDG_CACHE_HOME/jr or ~/.cache/jr (unchanged)
+        if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
+            PathBuf::from(xdg).join("jr")
+        } else {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("~"))
+                .join(".cache")
+                .join("jr")
+        }
     }
 }
 
@@ -567,15 +605,43 @@ mod tests {
         // even if a prior test panicked, so the guarded state is consistent.
         let guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().unwrap();
-        // SAFETY: ENV_MUTEX serialises all tests that touch XDG_CACHE_HOME;
-        // the variable is only read inside cache functions called within this
-        // lock, so no concurrent env access occurs.
-        unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+        // SAFETY: ENV_MUTEX serialises all tests that touch XDG_CACHE_HOME /
+        // JR_CACHE_DIR; the variables are only read inside cache functions called
+        // within this lock, so no concurrent env access occurs.
+        //
+        // JR_CACHE_DIR is the cross-platform debug seam (BC-6.2.017): on Windows,
+        // cache_root() uses %LOCALAPPDATA% and ignores XDG_CACHE_HOME, so we must
+        // also set JR_CACHE_DIR to dir/jr (matching what the XDG branch returns on
+        // Unix) to keep all platforms writing to the same tempdir.
+        unsafe {
+            std::env::set_var("XDG_CACHE_HOME", dir.path());
+            std::env::set_var("JR_CACHE_DIR", dir.path().join("jr"));
+        }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
-        unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+        unsafe {
+            std::env::remove_var("XDG_CACHE_HOME");
+            std::env::remove_var("JR_CACHE_DIR");
+        }
         drop(guard);
         if let Err(e) = result {
             std::panic::resume_unwind(e);
+        }
+    }
+
+    /// Set `var` to `value`, run `f`, then unconditionally remove `var` — even if
+    /// `f` panics. Mirrors `with_temp_cache` so BC-6.2.017 seam tests cannot leak
+    /// `JR_CACHE_DIR` / `JR_CONFIG_DIR` into subsequent tests on panic.
+    #[cfg(debug_assertions)]
+    pub(super) fn with_env_var<F: FnOnce() -> R, R>(var: &str, value: &str, f: F) -> R {
+        let guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: ENV_MUTEX held; no concurrent env reads occur while we hold the lock.
+        unsafe { std::env::set_var(var, value) };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        unsafe { std::env::remove_var(var) };
+        drop(guard);
+        match result {
+            Ok(v) => v,
+            Err(e) => std::panic::resume_unwind(e),
         }
     }
 
@@ -903,15 +969,28 @@ mod tests {
 
         // Acquire ENV_MUTEX to serialise env access with all other cache tests.
         let guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        // SAFETY: ENV_MUTEX serialises all tests that touch XDG_CACHE_HOME.
-        unsafe { std::env::set_var("XDG_CACHE_HOME", &fake_cache_home) };
+        // SAFETY: ENV_MUTEX serialises all tests that touch XDG_CACHE_HOME /
+        // JR_CACHE_DIR.
+        //
+        // JR_CACHE_DIR is the cross-platform seam (BC-6.2.017): on Windows,
+        // cache_root() uses %LOCALAPPDATA% and ignores XDG_CACHE_HOME.  Set
+        // JR_CACHE_DIR = fake_cache_home (the file path, without ".join(jr)")
+        // so cache_root() returns the file path on both platforms, causing the
+        // same ENOTDIR / "not a directory" I/O failure that the test validates.
+        unsafe {
+            std::env::set_var("XDG_CACHE_HOME", &fake_cache_home);
+            std::env::set_var("JR_CACHE_DIR", &fake_cache_home);
+        }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             write_fields_cache(
                 "test-m2-swallow",
                 &[("customfield_10001".to_string(), "Severity".to_string())],
             )
         }));
-        unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+        unsafe {
+            std::env::remove_var("XDG_CACHE_HOME");
+            std::env::remove_var("JR_CACHE_DIR");
+        }
         drop(guard);
 
         let result = result.expect("write_fields_cache must not panic on I/O error");
@@ -1092,6 +1171,289 @@ mod tests {
             let result = read_project_meta("default", "ANY").unwrap();
             assert!(result.is_none(), "wrong-shape JSON should return None");
         });
+    }
+
+    // -----------------------------------------------------------------------
+    // BC-6.2.017 — JR_CACHE_DIR debug-only path-isolation seam
+    //
+    // These tests pin AC-002, AC-004, and AC-008 from S-WIN-2.
+    //
+    // Pre-implementation Red Gate: the seam does not exist in cache_root() yet.
+    // AC-002 will FAIL because cache_root() does not read JR_CACHE_DIR at all.
+    // AC-004 is a negative (independence) test that asserts JR_CONFIG_DIR does not
+    // bleed into cache_root().
+    // AC-008 (empty-string treated as unset) mirrors AC-003 in config tests.
+    // -----------------------------------------------------------------------
+
+    /// BC-6.2.017 postcondition (debug path) — AC-002.
+    ///
+    /// In a debug build, `cache_root()` must return `PathBuf::from(value)` when
+    /// `JR_CACHE_DIR` is set to a non-empty string. The XDG/home-dir logic must
+    /// be bypassed entirely.
+    ///
+    /// Pre-implementation Red Gate: ASSERTION FAILURE — `cache_root()` does not
+    /// read `JR_CACHE_DIR` so it returns the XDG or home-dir path instead of the
+    /// seam value.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn test_bc_6_2_017_cache_dir_seam_overrides_path() {
+        let seam_path = "/tmp/jr-seam-test-cache-dir-overrides-path";
+        // Clear XDG_CACHE_HOME inside the closure so the non-seam branch cannot
+        // accidentally produce the seam path via a coincidental XDG value.
+        // ENV_MUTEX is acquired inside with_env_var for the full duration of the closure.
+        let result = with_env_var("JR_CACHE_DIR", seam_path, || {
+            // SAFETY: ENV_MUTEX held by with_env_var.
+            unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+            cache_root()
+        });
+        assert_eq!(
+            result,
+            std::path::PathBuf::from(seam_path),
+            "AC-002 (BC-6.2.017): cache_root() must return the JR_CACHE_DIR value \
+             as-is (no suffix appended) when the seam is set in a debug build. \
+             Got: {}",
+            result.display()
+        );
+    }
+
+    /// BC-6.2.017 EC-3 — AC-004.
+    ///
+    /// When only `JR_CONFIG_DIR` is set (and `JR_CACHE_DIR` is NOT set),
+    /// `cache_root()` must return the OS-determined path, not any value derived
+    /// from `JR_CONFIG_DIR`. The two seams are independent.
+    ///
+    /// Pre-implementation Red Gate: This test PASSES even without the seam
+    /// (cache_root() never reads JR_CONFIG_DIR regardless). Included as a
+    /// regression guard once the seam exists.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn test_bc_6_2_017_config_seam_does_not_affect_cache() {
+        let config_seam_path = "/tmp/jr-seam-test-config-only-no-cache-effect";
+        // with_env_var sets JR_CONFIG_DIR and wraps the closure in catch_unwind so
+        // the var is always removed even on panic. JR_CACHE_DIR and XDG_CACHE_HOME are
+        // cleared inside the closure while ENV_MUTEX is still held.
+        let result = with_env_var("JR_CONFIG_DIR", config_seam_path, || {
+            // SAFETY: ENV_MUTEX held by with_env_var.
+            unsafe {
+                std::env::remove_var("JR_CACHE_DIR");
+                // Clear XDG_CACHE_HOME for a deterministic OS-path result.
+                std::env::remove_var("XDG_CACHE_HOME");
+            }
+            cache_root()
+        });
+        assert_ne!(
+            result,
+            std::path::PathBuf::from(config_seam_path),
+            "AC-004 (BC-6.2.017 EC-3): cache_root() must NOT be influenced by \
+             JR_CONFIG_DIR. When only JR_CONFIG_DIR is set, cache_root() must \
+             return the OS-determined path, not the config seam value. \
+             Got: {}",
+            result.display()
+        );
+        // The returned path must be non-empty (OS logic fired).
+        assert!(
+            !result.as_os_str().is_empty(),
+            "AC-004: cache_root() with only JR_CONFIG_DIR set must return a \
+             non-empty OS path. Got: {}",
+            result.display()
+        );
+    }
+
+    /// BC-6.2.017 EC-5 — AC-008.
+    ///
+    /// When `JR_CACHE_DIR` is set to an empty string in a debug build, the seam
+    /// is treated as unset (`.filter(|s| !s.is_empty())` fires). `cache_root()`
+    /// must NOT return `PathBuf::from("")`. It must proceed to OS-branch logic,
+    /// returning a non-empty path. Symmetric to AC-003 for the config side.
+    ///
+    /// This test is load-bearing: it pins the `.filter(|s| !s.is_empty())` guard in
+    /// `cache_root()` (AC-008, BC-6.2.017 EC-5). Without that filter, setting
+    /// `JR_CACHE_DIR=""` would cause the seam to return `PathBuf::from("")` whose
+    /// `as_os_str().is_empty()` is true — the `assert_ne!` below would then fail.
+    /// Dropping the filter is exactly the mutation this test kills.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn test_bc_6_2_017_empty_cache_dir_uses_os_path() {
+        let result = with_env_var("JR_CACHE_DIR", "", cache_root);
+        assert_ne!(
+            result,
+            std::path::PathBuf::from(""),
+            "AC-008 (BC-6.2.017 EC-5): cache_root() must NOT return PathBuf::from(\"\") \
+             when JR_CACHE_DIR is set to the empty string. The empty-string filter must \
+             treat it as unset and proceed to OS logic. Got: {}",
+            result.display()
+        );
+        assert!(
+            !result.as_os_str().is_empty(),
+            "AC-008 (BC-6.2.017 EC-5): OS-branch result must be a non-empty path. \
+             Got: {}",
+            result.display()
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // BC-6.2.016 / BC-6.2.004 — Windows LocalAppData cache path tests (S-WIN-1)
+    // All tests below are `#[cfg(windows)]`-gated. They compile out on macOS/Linux
+    // (zero impact on Unix CI) and run only on a Windows runner (S-WIN-5).
+    //
+    // RED GATE RATIONALE: `cache_root()` currently has NO `#[cfg(windows)]` branch —
+    // on a Windows build it falls through to the XDG/home_dir Unix path, so
+    // `dirs::cache_dir()` (= %LOCALAPPDATA%) is never consulted. Every assertion
+    // below would therefore FAIL on a Windows runner against the current code.
+    // The implementation in S-WIN-1 adds the `#[cfg(windows)]` branch that makes
+    // these tests pass.
+    // -------------------------------------------------------------------------
+
+    /// AC-005 / BC-6.2.016 postcondition — on Windows, `cache_root()` returns
+    /// `dirs::cache_dir().join("jr")` which resolves to `%LOCALAPPDATA%\jr` (Local).
+    ///
+    /// Verifies the structural postcondition using PathBuf component comparison (not
+    /// string literals with `/`) per F-WIN-F3-005: on Windows `PathBuf::join` produces
+    /// `\`-separated paths.
+    ///
+    /// Also verifies that the path ends with component "jr" (the platform-appended
+    /// subdirectory), and that its parent equals `dirs::cache_dir()`.
+    ///
+    /// Traces: BC-6.2.016 postcondition, AC-005.
+    #[cfg(windows)]
+    #[test]
+    fn test_bc_6_2_016_windows_cache_root_uses_localappdata() {
+        // On Windows, dirs::cache_dir() returns Some(%LOCALAPPDATA% Local path).
+        // The function under test must return dirs::cache_dir().unwrap().join("jr").
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        // Scrub the debug seam vars so they cannot short-circuit cache_root()
+        // and perturb the assertion (RB-102).
+        // SAFETY: ENV_MUTEX is held for the duration; no concurrent env access occurs.
+        unsafe {
+            std::env::remove_var("JR_CACHE_DIR");
+            std::env::remove_var("JR_CONFIG_DIR");
+        }
+        let expected_parent = dirs::cache_dir()
+            .expect("dirs::cache_dir() must return Some on a Windows system with a user profile");
+        let expected = expected_parent.join("jr");
+        let result = cache_root();
+        assert_eq!(
+            result,
+            expected,
+            "AC-005 (BC-6.2.016): on Windows, cache_root() must return \
+             dirs::cache_dir().join(\"jr\") = %LOCALAPPDATA%\\jr. \
+             Expected: {}, got: {}",
+            expected.display(),
+            result.display()
+        );
+        // Structural assertion: must end with component "jr"
+        assert!(
+            result.ends_with("jr"),
+            "AC-005 (BC-6.2.016): path must end with 'jr' component, got: {}",
+            result.display()
+        );
+        // Invariant: must NOT be rooted under %APPDATA% (Roaming) — must be Local
+        let roaming_marker = "Roaming";
+        assert!(
+            !result.to_string_lossy().contains(roaming_marker),
+            "AC-005 (BC-6.2.016 invariant): cache path must use %LOCALAPPDATA% (Local), \
+             NOT %APPDATA% (Roaming). Got: {}",
+            result.display()
+        );
+    }
+
+    /// AC-006 / BC-6.2.016 EC-1 — `cache_localappdata_fallback` pure helper.
+    ///
+    /// Exercises the extracted `cache_localappdata_fallback` helper directly so that
+    /// mutations to the production fallback (e.g. dropping `.filter(|s| !s.is_empty())`
+    /// or changing `PathBuf::from(".")`) are caught on every platform, not only on a
+    /// Windows CI runner.
+    ///
+    /// The helper is un-gated (no `#[cfg(windows)]`) so this test compiles and runs
+    /// on macOS/Linux in CI, genuinely killing the empty-filter/default mutants.
+    ///
+    /// Traces: BC-6.2.016 EC-1, EC-4, AC-006.
+    #[test]
+    fn test_bc_6_2_016_localappdata_env_fallback() {
+        // EC-4: empty string → treated as unset → PathBuf::from(".")
+        assert_eq!(
+            cache_localappdata_fallback(Some(String::new())),
+            PathBuf::from("."),
+            "EC-4: empty LOCALAPPDATA must yield PathBuf::from(\".\")"
+        );
+
+        // EC-1: None (unset LOCALAPPDATA) → PathBuf::from(".")
+        assert_eq!(
+            cache_localappdata_fallback(None),
+            PathBuf::from("."),
+            "EC-1: None (unset LOCALAPPDATA) must yield PathBuf::from(\".\")"
+        );
+
+        // Happy-path: non-empty value is passed through unchanged
+        assert_eq!(
+            cache_localappdata_fallback(Some("C:\\Users\\Alice\\AppData\\Local".into())),
+            PathBuf::from("C:\\Users\\Alice\\AppData\\Local"),
+            "non-empty LOCALAPPDATA must be returned as-is"
+        );
+    }
+
+    /// AC-007 / BC-6.2.004, BC-6.2.016 postcondition — on Windows, the per-profile
+    /// cache path includes the `v1/` versioning root.
+    ///
+    /// `cache_dir(profile)` = `cache_root().join("v1").join(profile)`.
+    /// On Windows this must equal `%LOCALAPPDATA%\jr\v1\<profile>`.
+    ///
+    /// The `v1/` versioning root must be present on Windows the same as on Unix.
+    /// Uses PathBuf component comparison per F-WIN-F3-005.
+    ///
+    /// Traces: BC-6.2.004 Windows clause, BC-6.2.016 postcondition, AC-007.
+    #[cfg(windows)]
+    #[test]
+    fn test_bc_6_2_004_windows_per_profile_path_includes_v1() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        // Scrub the debug seam vars so they cannot short-circuit cache_root()
+        // and perturb the assertion (RB-102).
+        // SAFETY: ENV_MUTEX is held for the duration; no concurrent env access occurs.
+        unsafe {
+            std::env::remove_var("JR_CACHE_DIR");
+            std::env::remove_var("JR_CONFIG_DIR");
+        }
+        let root = cache_root();
+        let profile_dir = cache_dir("default");
+
+        // Must be: cache_root().join("v1").join("default")
+        let expected = root.join("v1").join("default");
+        assert_eq!(
+            profile_dir,
+            expected,
+            "AC-007 (BC-6.2.004): cache_dir(\"default\") must equal \
+             cache_root().join(\"v1\").join(\"default\") on Windows. \
+             Expected: {}, got: {}",
+            expected.display(),
+            profile_dir.display()
+        );
+
+        // The path must contain the "v1" component (versioning root preserved on Windows)
+        let has_v1 = profile_dir.components().any(|c| c.as_os_str() == "v1");
+        assert!(
+            has_v1,
+            "AC-007 (BC-6.2.004): Windows per-profile cache path must contain \
+             the 'v1' versioning component. Got: {}",
+            profile_dir.display()
+        );
+
+        // The path must end with the profile name component
+        assert!(
+            profile_dir.ends_with("default"),
+            "AC-007 (BC-6.2.004): path must end with profile component 'default'. \
+             Got: {}",
+            profile_dir.display()
+        );
+
+        // Verify parent of profile dir is the v1 dir
+        let parent = profile_dir.parent().unwrap();
+        assert!(
+            parent.ends_with("v1"),
+            "AC-007 (BC-6.2.004): parent of profile dir must be the 'v1' component. \
+             Parent: {}, full path: {}",
+            parent.display(),
+            profile_dir.display()
+        );
     }
 }
 

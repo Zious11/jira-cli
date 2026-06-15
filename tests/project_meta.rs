@@ -11,13 +11,21 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 /// to prevent another test from changing XDG_CACHE_HOME while async work is in progress.
 static ENV_MUTEX: Mutex<()> = Mutex::const_new(());
 
-/// Acquire the env mutex and set XDG_CACHE_HOME. Caller MUST hold the returned
-/// guard for the duration of the test to prevent env var races.
+/// Acquire the env mutex and set XDG_CACHE_HOME and JR_CACHE_DIR. Caller MUST
+/// hold the returned guard for the duration of the test to prevent env var races.
+///
+/// `JR_CACHE_DIR` is the cross-platform seam (BC-6.2.017) used AS-IS by
+/// `cache_root()`. It must point to `dir.join("jr")` so it resolves to the
+/// same location that `XDG_CACHE_HOME` resolves to after `jr` appends its
+/// own "jr" suffix internally.
 async fn set_cache_dir(dir: &std::path::Path) -> tokio::sync::MutexGuard<'static, ()> {
     let guard = ENV_MUTEX.lock().await;
     // SAFETY: ENV_MUTEX guard is held by caller for the entire test duration,
     // and all tests use current_thread flavor so no concurrent env mutation.
-    unsafe { std::env::set_var("XDG_CACHE_HOME", dir) };
+    unsafe {
+        std::env::set_var("XDG_CACHE_HOME", dir);
+        std::env::set_var("JR_CACHE_DIR", dir.join("jr"));
+    }
     guard
 }
 

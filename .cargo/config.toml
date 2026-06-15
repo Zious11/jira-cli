@@ -1,0 +1,15 @@
+# Embed an 8 MB main-thread stack in jr.exe on Windows.
+#
+# Windows PE headers default to a 1 MB main-thread stack reserve, while
+# Linux/macOS default to 8 MB. The #[tokio::main] async runtime + clap
+# dispatch + wiremock in integration tests collectively exceed 1 MB, causing
+# jr.exe to crash on normal commands (and the 11 all_flag_behavior.rs tests
+# to overflow in CI) on any Windows runner.
+#
+# /STACK:8388608 = 8 MiB (0x800000) embeds the reserve in the PE header so
+# Windows gives jr.exe an 8 MB main-thread stack, matching Unix defaults.
+# This is a link-time flag so it is inert for `cargo check` (no link step).
+#
+# Affects only the x86_64-pc-windows-msvc target; Unix builds are unaffected.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-arg=/STACK:8388608"]

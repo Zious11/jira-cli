@@ -77,7 +77,9 @@ fn jr_cmd(server_uri: &str, cache_dir: &std::path::Path, config_dir: &std::path:
     cmd.env("JR_BASE_URL", server_uri)
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir)
+        .env("JR_CACHE_DIR", cache_dir.join("jr"))
         .env("XDG_CONFIG_HOME", config_dir)
+        .env("JR_CONFIG_DIR", config_dir.join("jr"))
         .arg("--no-input");
     cmd
 }
@@ -471,6 +473,10 @@ fn test_s_2_06_ac_005_bc_6_2_013_legacy_id_only_cmdb_cache_graceful_miss() {
     // SAFETY: CACHE_ENV_MUTEX serializes all tests that touch XDG_CACHE_HOME
     // in the parent process. No concurrent env access occurs within this lock.
     unsafe { std::env::set_var("XDG_CACHE_HOME", temp_dir.path()) };
+    // JR_CACHE_DIR is the cross-platform seam (BC-6.2.017): on Windows, XDG_CACHE_HOME
+    // is ignored; JR_CACHE_DIR is the only isolation mechanism. Use .join("jr") so
+    // cache_dir("default") == <temp_dir>/jr/v1/default on both platforms.
+    unsafe { std::env::set_var("JR_CACHE_DIR", temp_dir.path().join("jr")) };
 
     let result = std::panic::catch_unwind(|| {
         // Write the legacy ID-only format (a bare JSON array of strings).
@@ -493,6 +499,7 @@ fn test_s_2_06_ac_005_bc_6_2_013_legacy_id_only_cmdb_cache_graceful_miss() {
     });
 
     unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+    unsafe { std::env::remove_var("JR_CACHE_DIR") };
     drop(guard);
 
     result.expect("AC-005 FAIL: read_cmdb_fields_cache panicked on legacy ID-only format");
@@ -526,6 +533,10 @@ fn test_s_2_06_ac_006_bc_6_2_013_valid_tuple_cache_hits_no_api_call() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     unsafe { std::env::set_var("XDG_CACHE_HOME", temp_dir.path()) };
+    // JR_CACHE_DIR is the cross-platform seam (BC-6.2.017): on Windows, XDG_CACHE_HOME
+    // is ignored; JR_CACHE_DIR is the only isolation mechanism. Use .join("jr") so
+    // cache_dir("default") == <temp_dir>/jr/v1/default on both platforms.
+    unsafe { std::env::set_var("JR_CACHE_DIR", temp_dir.path().join("jr")) };
 
     let result = std::panic::catch_unwind(|| {
         // Write a valid tuple-format cache entry via the production writer.
@@ -583,6 +594,7 @@ fn test_s_2_06_ac_006_bc_6_2_013_valid_tuple_cache_hits_no_api_call() {
     });
 
     unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+    unsafe { std::env::remove_var("JR_CACHE_DIR") };
     drop(guard);
 
     result.expect("AC-006: no panic expected on valid tuple-format cache");

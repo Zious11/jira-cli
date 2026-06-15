@@ -68,8 +68,21 @@ fn write_two_profile_config(dir: &TempDir) -> std::path::PathBuf {
 /// service name. Clears all JR_* env vars that could leak from dev shells.
 fn jr_isolated(config_dir: &TempDir, cache_dir: &TempDir) -> Command {
     let mut cmd = Command::cargo_bin("jr").unwrap();
-    cmd.env("XDG_CONFIG_HOME", config_dir.path())
+    cmd
+        // F-WIN2-C-101: scrub ambient JR_CONFIG_DIR / JR_CACHE_DIR first so
+        // any dev-shell seam values cannot leak; then set the test-isolated
+        // values explicitly below. assert_cmd applies env mutations in call
+        // order (last-write-wins), so env_remove here then env() below sets
+        // the final value correctly.
+        .env_remove("JR_CONFIG_DIR")
+        .env_remove("JR_CACHE_DIR")
+        .env("XDG_CONFIG_HOME", config_dir.path())
         .env("XDG_CACHE_HOME", cache_dir.path())
+        // Cross-platform seam (BC-6.2.017): used AS-IS, so must point to the
+        // same /jr/-suffixed subdir that the XDG path resolves to after jr
+        // appends its own "jr" segment internally.
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         // Scope the keychain service to avoid touching developer's real entries
         .env("JR_SERVICE_NAME", "jr-jira-cli-test")
         // Clear env vars that could override config or inject credentials

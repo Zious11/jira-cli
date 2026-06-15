@@ -188,7 +188,9 @@ fn jr_isolated(config_dir: &TempDir, cache_dir: &TempDir) -> Command {
 fn jr_isolated_with_svc(config_dir: &TempDir, cache_dir: &TempDir, svc: &str) -> Command {
     let mut cmd = Command::cargo_bin("jr").unwrap();
     cmd.env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         // Unique-per-test service name prevents keychain "already exists"
         // errors when multiple test invocations store OAuth app credentials
         // in parallel. The JR_SERVICE_NAME env is read by service_name()

@@ -212,7 +212,9 @@ async fn test_jsm_create_happy_path_routes_to_servicedeskapi() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -289,7 +291,9 @@ async fn test_jsm_create_without_request_type_uses_platform_path() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -353,7 +357,9 @@ async fn test_jsm_create_non_jsm_project_exits_64_zero_http() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -441,7 +447,9 @@ async fn test_jsm_create_ambiguous_request_type_exits_64() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -542,7 +550,9 @@ async fn test_jsm_create_numeric_id_bypasses_name_lookup() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -602,7 +612,9 @@ async fn test_jsm_create_summary_in_requestfieldvalues() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -672,7 +684,9 @@ async fn test_jsm_create_description_is_adf_with_is_adf_request_true() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -767,7 +781,9 @@ async fn test_jsm_create_plain_description_absent_when_no_description_flag() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -850,7 +866,9 @@ async fn test_jsm_create_priority_and_labels_mapped() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -962,7 +980,9 @@ async fn test_jsm_create_field_first_equals_split_and_duplicate_last_wins() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -1050,7 +1070,9 @@ async fn test_jsm_create_field_missing_equals_exits_64() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -1113,7 +1135,9 @@ async fn test_jsm_create_on_behalf_of_injected_at_top_level() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -1192,7 +1216,9 @@ async fn test_jsm_create_on_behalf_of_absent_when_not_set() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -1261,7 +1287,9 @@ async fn test_jsm_create_type_flag_ignored_with_warning() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -1344,7 +1372,9 @@ async fn test_jsm_create_basic_auth_generic_401_surfaces_api_token_hint() {
         // Basic auth fixture — stays Basic per BC-3.8.014 / adversary-pass-9 C-01.
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -1422,7 +1452,9 @@ async fn test_platform_create_401_no_jsm_scope_hint() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -1480,7 +1512,9 @@ async fn test_jsm_create_output_json_shape_matches_platform() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -1575,7 +1609,9 @@ async fn test_jsm_create_oauth_scope_mismatch_401_surfaces_write_servicedesk_req
         // Bearer, not Basic — triggers InsufficientScope branch in client.rs.
         .env("JR_AUTH_HEADER", "Bearer test-oauth-token")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -1637,7 +1673,9 @@ async fn test_jsm_create_team_flag_emits_warning_with_request_type() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -1693,7 +1731,9 @@ async fn test_jsm_create_points_flag_emits_warning_with_request_type() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -1749,7 +1789,9 @@ async fn test_jsm_create_parent_flag_emits_warning_with_request_type() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -1805,7 +1847,9 @@ async fn test_jsm_create_to_flag_emits_warning_with_request_type() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -1861,7 +1905,9 @@ async fn test_jsm_create_account_id_flag_emits_warning_with_request_type() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -1923,7 +1969,9 @@ auth_method = "api_token"
     let output = Command::cargo_bin("jr")
         .unwrap()
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .args([
             "issue",
@@ -1987,7 +2035,9 @@ async fn test_jsm_create_missing_summary_exits_64() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -2044,7 +2094,9 @@ async fn test_jsm_create_request_type_not_found_exits_64() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -2074,14 +2126,19 @@ async fn test_jsm_create_request_type_not_found_exits_64() {
         stderr.contains("Run `jr requesttype list --project HELP`"),
         "H-04: stderr must contain actionable hint to list request types; got: {stderr}"
     );
-    // Cache-deletion path hint: the path contains /jr/v1/ and request_types_10.json.
+    // Cache-deletion path hint: assert the structural parts that are stable across
+    // platforms. The full path prefix (e.g. ~/.cache/jr/v1/ on Unix or
+    // %LOCALAPPDATA%\jr\v1\ on Windows) uses the OS separator, so we do NOT
+    // assert "/jr/v1/" — that would fail on Windows CI (backslash separators).
+    // Instead, assert the separator-agnostic prefix phrase and the filename suffix
+    // (same hardening as tests/requesttype_commands.rs::test_bc_x_12_008_*).
     assert!(
-        stderr.contains("/jr/v1/"),
-        "H-04: cache-deletion hint must contain '/jr/v1/' path segment; got: {stderr}"
+        stderr.contains("or delete the cache file at "),
+        "H-04: cache-deletion hint must contain 'or delete the cache file at'; got: {stderr}"
     );
     assert!(
         stderr.contains("request_types_10.json"),
-        "H-04: cache-deletion hint must contain 'request_types_10.json' filename; got: {stderr}"
+        "H-04: cache-deletion hint must contain 'request_types_10.json' filename (sid=10 from fixture); got: {stderr}"
     );
     // The .expect(0) on the POST mock is enforced on server drop.
 }
@@ -2122,7 +2179,9 @@ async fn test_jsm_create_field_summary_overrides_summary_flag() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -2192,7 +2251,9 @@ async fn test_jsm_create_markdown_description_yields_adf_with_strong_marks() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -2285,7 +2346,9 @@ async fn test_jsm_create_markdown_without_description_exits_64_with_platform_mes
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -2375,7 +2438,9 @@ async fn test_platform_create_field_flag_emits_warning_without_request_type() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -2445,7 +2510,9 @@ async fn test_platform_create_on_behalf_of_flag_emits_warning_without_request_ty
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -2514,7 +2581,9 @@ async fn test_platform_create_both_inverse_flags_emit_independent_warnings() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -2572,7 +2641,9 @@ async fn test_platform_create_without_inverse_flags_emits_no_new_warnings() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -2626,7 +2697,9 @@ async fn test_platform_create_field_idempotent_one_warning_per_logical_flag() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -2694,7 +2767,9 @@ async fn test_jsm_create_with_field_and_request_type_does_not_fire_bc_3_8_012() 
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -2754,7 +2829,9 @@ async fn test_platform_create_malformed_field_one_warning_no_exit_64() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -2837,7 +2914,9 @@ async fn test_jsm_create_basic_auth_scope_mismatch_401_rewrites_to_api_token_hin
         // in the client, which must be REWRITTEN to NotAuthenticated by the map_err.
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -2932,7 +3011,9 @@ async fn test_require_service_desk_basic_auth_401_surfaces_api_token_hint() {
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         // Fresh isolated cache dir — ensures cache miss and live project GET fires.
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -3026,7 +3107,9 @@ async fn test_require_service_desk_oauth_401_surfaces_read_scope_hint() {
         .env("JR_AUTH_HEADER", "Bearer test-oauth-token")
         // Fresh isolated cache dir — ensures cache miss and live project GET fires.
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -3109,7 +3192,9 @@ async fn test_jsm_create_empty_request_type_exits_64() {
             .env("JR_BASE_URL", server.uri())
             .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
             .env("XDG_CACHE_HOME", cache_dir.path())
+            .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
             .env("XDG_CONFIG_HOME", config_dir.path())
+            .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
             .args([
                 "issue",
                 "create",
@@ -3166,7 +3251,9 @@ async fn test_jsm_create_empty_request_type_exits_64() {
             .env("JR_BASE_URL", server.uri())
             .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
             .env("XDG_CACHE_HOME", cache_dir.path())
+            .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
             .env("XDG_CONFIG_HOME", config_dir.path())
+            .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
             .args([
                 "issue",
                 "create",
@@ -3240,7 +3327,9 @@ async fn test_jsm_create_markdown_field_description_conflict_exits_64() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -3339,7 +3428,9 @@ async fn test_jsm_create_markdown_field_description_conflict_negative_cases() {
             .env("JR_BASE_URL", server.uri())
             .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
             .env("XDG_CACHE_HOME", cache_dir.path())
+            .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
             .env("XDG_CONFIG_HOME", config_dir.path())
+            .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
             .args([
                 "issue",
                 "create",
@@ -3384,7 +3475,9 @@ async fn test_jsm_create_markdown_field_description_conflict_negative_cases() {
             .env("JR_BASE_URL", server.uri())
             .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
             .env("XDG_CACHE_HOME", cache_dir.path())
+            .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
             .env("XDG_CONFIG_HOME", config_dir.path())
+            .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
             .args([
                 "issue",
                 "create",
@@ -3480,7 +3573,9 @@ async fn test_jsm_create_type_flag_warning_suppressed_on_non_jsm_project() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "create",
@@ -3579,7 +3674,9 @@ async fn test_jsm_create_platform_flag_warnings_emit_once_on_success() {
             .env("JR_BASE_URL", server.uri())
             .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
             .env("XDG_CACHE_HOME", cache_dir.path())
+            .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
             .env("XDG_CONFIG_HOME", config_dir.path())
+            .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
             .args([
                 "issue",
                 "create",
@@ -3685,7 +3782,9 @@ async fn test_jsm_create_platform_flag_warnings_emit_once_on_success() {
             .env("JR_BASE_URL", server.uri())
             .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
             .env("XDG_CACHE_HOME", cache_dir.path())
+            .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
             .env("XDG_CONFIG_HOME", config_dir.path())
+            .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
             .args([
                 "issue",
                 "create",

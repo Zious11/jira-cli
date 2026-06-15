@@ -17,5 +17,5 @@ Use `reqwest` with `default-features = false` and explicitly enable rustls. Feat
 
 ## Consequences
 - Binary size slightly larger than native-tls (~500KB)
-- No platform keystore certificate integration (rustls uses its own CA bundle via `webpki-roots`)
-- Corporate environments with custom CA certificates need `RUSTLS_NATIVE_CERTS=1` or equivalent configuration
+- **Certificate-root verification uses the platform trust store** (updated for reqwest 0.13): the `rustls` default in reqwest 0.13 delegates root-CA verification to `rustls-platform-verifier`, which reads the OS trust store (macOS Security framework, Windows CryptoAPI/certificate store, Linux system roots). The TLS handshake and crypto remain pure Rust — no OpenSSL, no Schannel for the protocol itself. This replaces the prior reqwest 0.12 behavior of bundling Mozilla roots via `webpki-roots`. As a result, enterprise CAs trusted in the OS store work automatically; `RUSTLS_NATIVE_CERTS=1` is no longer needed for that case. The `rustls-tls-webpki-roots` feature remains available as an opt-in to restore bundled-Mozilla-roots behavior (zero OS-store reliance) at the cost of enterprise-CA and CRL support.
+- Corporate environments with custom CA certificates should install the CA into the OS trust store (the platform verifier picks it up automatically under reqwest 0.13)

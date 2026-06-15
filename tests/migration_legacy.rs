@@ -20,6 +20,12 @@ static ENV_MUTEX: Mutex<()> = Mutex::new(());
 /// — making the assertions about migration shape and idempotency
 /// flaky. The guard scrubs them all on `set()` and restores prior
 /// values on drop.
+// NOTE: JR_CONFIG_DIR is intentionally absent from this list. XdgConfigGuard
+// manages it explicitly (set in `set()`, saved as `previous_jr_config_dir`,
+// restored in `Drop`). Including it here would cause `set()` to remove the
+// just-set override immediately after writing it, leaving `global_config_dir()`
+// without a seam on Windows (where XDG_CONFIG_HOME is not consulted) and
+// causing Config::load to read the real AppData path instead of the temp dir.
 const JR_ENV_VARS_TO_SCRUB: &[&str] = &[
     "JR_PROFILE",
     "JR_DEFAULT_PROFILE",
@@ -35,22 +41,26 @@ const JR_ENV_VARS_TO_SCRUB: &[&str] = &[
     "JR_AUTH_HEADER",
 ];
 
-/// RAII helper: sets `XDG_CONFIG_HOME` to `value` and scrubs `JR_*`
-/// env vars for the duration of the guard's lifetime, then restores
-/// every prior value (or unsets if none) on drop. Drop runs even if
-/// the test panics, so a `Config::load` that unwraps unsuccessfully
-/// never leaks state into the next test in the same binary. Also
-/// avoids unconditionally clobbering a pre-existing `XDG_CONFIG_HOME`
-/// or `JR_*` from the parent environment that the developer relied on
-/// outside the test runner.
+/// RAII helper: sets `XDG_CONFIG_HOME` and `JR_CONFIG_DIR` to isolation
+/// values and scrubs `JR_*` env vars for the duration of the guard's
+/// lifetime, then restores every prior value (or unsets if none) on drop.
+/// Drop runs even if the test panics, so a `Config::load` that unwraps
+/// unsuccessfully never leaks state into the next test in the same binary.
+///
+/// `JR_CONFIG_DIR` is the cross-platform seam (BC-6.2.017) used AS-IS by
+/// `global_config_dir()`. It must point to `value.join("jr")` because the
+/// fixture is written into `<value>/jr/config.toml` and the seam has no
+/// internal "jr" suffix appended. The XDG var is kept for Unix completeness.
 struct XdgConfigGuard {
     previous_xdg: Option<std::ffi::OsString>,
+    previous_jr_config_dir: Option<std::ffi::OsString>,
     previous_jr_vars: Vec<(&'static str, Option<std::ffi::OsString>)>,
 }
 
 impl XdgConfigGuard {
     fn set(value: &std::path::Path) -> Self {
         let previous_xdg = std::env::var_os("XDG_CONFIG_HOME");
+        let previous_jr_config_dir = std::env::var_os("JR_CONFIG_DIR");
         let previous_jr_vars: Vec<(&'static str, Option<std::ffi::OsString>)> =
             JR_ENV_VARS_TO_SCRUB
                 .iter()
@@ -60,12 +70,16 @@ impl XdgConfigGuard {
         // ENV_MUTEX; no concurrent access.
         unsafe {
             std::env::set_var("XDG_CONFIG_HOME", value);
+            // Cross-platform seam (BC-6.2.017): used AS-IS, must be the
+            // fully-resolved config dir (value.join("jr")).
+            std::env::set_var("JR_CONFIG_DIR", value.join("jr"));
             for &name in JR_ENV_VARS_TO_SCRUB {
                 std::env::remove_var(name);
             }
         }
         Self {
             previous_xdg,
+            previous_jr_config_dir,
             previous_jr_vars,
         }
     }
@@ -79,6 +93,10 @@ impl Drop for XdgConfigGuard {
             match self.previous_xdg.take() {
                 Some(prev) => std::env::set_var("XDG_CONFIG_HOME", prev),
                 None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+            match self.previous_jr_config_dir.take() {
+                Some(prev) => std::env::set_var("JR_CONFIG_DIR", prev),
+                None => std::env::remove_var("JR_CONFIG_DIR"),
             }
             for (name, prev) in std::mem::take(&mut self.previous_jr_vars) {
                 match prev {

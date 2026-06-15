@@ -10,9 +10,11 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 /// manipulate the env var must hold this mutex for the entire test duration.
 static ENV_MUTEX: Mutex<()> = Mutex::const_new(());
 
-/// RAII guard that restores XDG_CACHE_HOME to its previous value on drop.
+/// RAII guard that restores XDG_CACHE_HOME and JR_CACHE_DIR to their previous
+/// values on drop. JR_CACHE_DIR is the cross-platform seam (BC-6.2.017).
 struct CacheDirGuard {
     prev: Option<std::ffi::OsString>,
+    prev_jr_cache_dir: Option<std::ffi::OsString>,
     _lock: tokio::sync::MutexGuard<'static, ()>,
 }
 
@@ -24,6 +26,10 @@ impl Drop for CacheDirGuard {
                 Some(prev) => std::env::set_var("XDG_CACHE_HOME", prev),
                 None => std::env::remove_var("XDG_CACHE_HOME"),
             }
+            match &self.prev_jr_cache_dir {
+                Some(prev) => std::env::set_var("JR_CACHE_DIR", prev),
+                None => std::env::remove_var("JR_CACHE_DIR"),
+            }
         }
     }
 }
@@ -32,8 +38,18 @@ async fn set_cache_dir(dir: &std::path::Path) -> CacheDirGuard {
     let guard = ENV_MUTEX.lock().await;
     // SAFETY: ENV_MUTEX guard is held for the entire test duration via CacheDirGuard.
     let prev = std::env::var_os("XDG_CACHE_HOME");
-    unsafe { std::env::set_var("XDG_CACHE_HOME", dir) };
-    CacheDirGuard { prev, _lock: guard }
+    let prev_jr_cache_dir = std::env::var_os("JR_CACHE_DIR");
+    unsafe {
+        std::env::set_var("XDG_CACHE_HOME", dir);
+        // Cross-platform seam (BC-6.2.017): used AS-IS by cache_root(), must
+        // point to dir.join("jr") so it matches the XDG-resolved location.
+        std::env::set_var("JR_CACHE_DIR", dir.join("jr"));
+    }
+    CacheDirGuard {
+        prev,
+        prev_jr_cache_dir,
+        _lock: guard,
+    }
 }
 
 #[tokio::test]
@@ -686,6 +702,7 @@ async fn search_attributes_json_includes_names() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .args([
             "--output",
             "json",
@@ -914,6 +931,7 @@ async fn search_attributes_table_shows_inline_values() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .args(["assets", "search", "--attributes", "objectType = Client"])
         .output()
         .unwrap();
@@ -1542,6 +1560,7 @@ async fn issue_list_asset_substring_rejected() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .current_dir(project_dir.path())
         .args(["--no-input", "issue", "list", "--asset", "Acme"])
         .output()
@@ -1646,6 +1665,7 @@ async fn assets_tickets_status_substring_rejected() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .current_dir(cwd_dir.path())
         .args([
             "--no-input",
@@ -1768,6 +1788,7 @@ async fn assets_schema_type_substring_rejected() {
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .current_dir(cwd_dir.path())
         .args(["--no-input", "assets", "schema", "Serv"])
         .output()

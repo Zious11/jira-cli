@@ -72,6 +72,7 @@ auth_method = "api_token"
 
     let output = jr()
         .env("XDG_CONFIG_HOME", dir.path())
+        .env("JR_CONFIG_DIR", dir.path().join("jr"))
         // Isolate keychain from the developer's real keychain service.
         .env("JR_SERVICE_NAME", "jr-jira-cli-test")
         .args(["--no-input", "auth", "remove", "default"])
@@ -127,6 +128,7 @@ auth_method = "api_token"
     // will detect non-TTY (pipe) and treat it as --no-input automatically.
     let output = jr()
         .env("XDG_CONFIG_HOME", dir.path())
+        .env("JR_CONFIG_DIR", dir.path().join("jr"))
         .env("JR_SERVICE_NAME", "jr-jira-cli-test")
         .args(["auth", "remove", "default"])
         .output()
@@ -176,6 +178,7 @@ auth_method = "oauth"
 
     let output = jr()
         .env("XDG_CONFIG_HOME", dir.path())
+        .env("JR_CONFIG_DIR", dir.path().join("jr"))
         .env("JR_SERVICE_NAME", "jr-jira-cli-test")
         .args(["--no-input", "auth", "remove", "default"])
         .output()

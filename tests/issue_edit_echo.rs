@@ -39,7 +39,9 @@ fn jr_cmd_with_xdg(
     cmd.env("JR_BASE_URL", server_url)
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir)
-        .env("XDG_CONFIG_HOME", config_dir);
+        .env("JR_CACHE_DIR", cache_dir.join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir)
+        .env("JR_CONFIG_DIR", config_dir.join("jr"));
     cmd
 }
 

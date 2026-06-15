@@ -192,47 +192,77 @@ fn test_sd_002_new_for_test_signature_unchanged() {
 ///
 /// Zero tests require immediate migration. This satisfies AC-004 for this story.
 ///
-/// This test uses `std::process::Command` to grep the `tests/` directory for
-/// `env::var("JR_AUTH_HEADER")` — any match indicates an in-process reader
-/// that must be migrated before S-0.05 implementation is merged.
+/// Implementation: in-process `std::fs` directory walk + substring scan, so this
+/// test runs on all platforms without requiring an external `grep` binary (which
+/// is not reliably available on `windows-latest` CI runners). The audit logic is
+/// equivalent to `grep --recursive --include=*.rs 'env::var("JR_AUTH_HEADER")'`
+/// on Unix, but portable.
 #[test]
 fn test_sd_002_ac004_audit_no_in_process_jr_auth_header_readers() {
-    // Use grep to find in-process std::env::var("JR_AUTH_HEADER") calls in tests/.
-    // Subprocess .env("JR_AUTH_HEADER", ...) calls are NOT in-process reads and
-    // do not match this pattern.
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let tests_dir = format!("{manifest_dir}/tests");
+    use std::fs;
 
-    let output = std::process::Command::new("grep")
-        .args([
-            "--recursive",
-            "--include=*.rs",
-            // Exclude this test file itself — it contains the pattern as a
-            // string literal passed to grep, which would otherwise self-match.
-            "--exclude=auth_header_release_gate.rs",
-            // Exclude e2e_live.rs — it reads JR_AUTH_HEADER in-process only to
-            // forward it to a jr subprocess command (the same subprocess pattern
-            // used by all other integration tests). It does NOT call the Jira API
-            // in-process; it has no JiraClient and cannot reach a live site via
-            // the in-process path. The `JR_AUTH_HEADER` read in e2e_live.rs is
-            // architecturally identical to `.env("JR_AUTH_HEADER", ...)` on a
-            // Command builder — it is a subprocess-forwarding call, not an
-            // in-process reader. Added S-E2E-1.
-            "--exclude=e2e_live.rs",
-            "--files-with-matches",
-            "env::var(\"JR_AUTH_HEADER\")",
-            &tests_dir,
-        ])
-        .output()
-        .expect("grep must be available to run AC-004 audit");
+    // The pattern that identifies an IN-PROCESS env-var read (not a subprocess
+    // .env() call and not a scrub/remove). Subprocess calls use the form
+    // `.env("JR_AUTH_HEADER", ...)` on a Command builder; those are safe.
+    let pattern = r#"env::var("JR_AUTH_HEADER")"#;
 
-    let matching_files = String::from_utf8_lossy(&output.stdout);
-    let trimmed = matching_files.trim();
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let tests_dir = manifest_dir.join("tests");
+
+    // Files excluded from the audit (same set as the previous grep invocation):
+    //
+    // - auth_header_release_gate.rs: this file — contains the pattern as a
+    //   string literal inside the test itself, which would produce a spurious
+    //   self-match.
+    // - e2e_live.rs: reads JR_AUTH_HEADER in-process only to forward it to a jr
+    //   subprocess command (S-E2E-1). Architecturally identical to
+    //   `.env("JR_AUTH_HEADER", ...)` on a Command builder; not an in-process
+    //   Jira API caller.
+    const EXCLUDED: &[&str] = &["auth_header_release_gate.rs", "e2e_live.rs"];
+
+    let mut matching_files: Vec<String> = Vec::new();
+
+    let entries = fs::read_dir(&tests_dir).unwrap_or_else(|e| {
+        panic!(
+            "Could not read tests/ directory at {}: {e}",
+            tests_dir.display()
+        )
+    });
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+
+        // Only scan .rs source files.
+        if path.extension().map(|ext| ext != "rs").unwrap_or(true) {
+            continue;
+        }
+
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+
+        if EXCLUDED.contains(&file_name.as_str()) {
+            continue;
+        }
+
+        let content = match fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        if content.contains(pattern) {
+            matching_files.push(format!("tests/{file_name}"));
+        }
+    }
+
+    matching_files.sort();
+    let report = matching_files.join("\n");
 
     assert!(
-        trimmed.is_empty(),
+        matching_files.is_empty(),
         "AC-004 VIOLATION: found in-process JR_AUTH_HEADER env::var() readers \
          in tests/ — these must be migrated to JiraClient::new_for_test before \
-         S-0.05 lands:\n{trimmed}"
+         S-0.05 lands:\n{report}"
     );
 }

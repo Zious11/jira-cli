@@ -42,7 +42,9 @@ fn jr_cmd_with_xdg(
     cmd.env("JR_BASE_URL", server_url)
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
         .env("XDG_CACHE_HOME", cache_dir)
-        .env("XDG_CONFIG_HOME", config_dir);
+        .env("JR_CACHE_DIR", cache_dir.join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir)
+        .env("JR_CONFIG_DIR", config_dir.join("jr"));
     cmd
 }
 
@@ -1290,12 +1292,22 @@ fn test_write_fields_cache_swallows_io_error_and_returns_ok() {
     let fake_cache_home = xdg_root.path().join("fake_cache_home");
     std::fs::write(&fake_cache_home, "I am a file, not a dir").unwrap();
 
-    let result = temp_env::with_var("XDG_CACHE_HOME", Some(&fake_cache_home), || {
-        jr::cache::write_fields_cache(
-            "test-profile-swallow",
-            &[("customfield_10001".to_string(), "Severity".to_string())],
-        )
-    });
+    // Set both the XDG var and the cross-platform seam (BC-6.2.017) to the
+    // fake path so the swallow-on-error test exercises the same codepath on
+    // Windows (where JR_CACHE_DIR is the only active mechanism) as on Unix.
+    let fake_jr_cache_dir = fake_cache_home.join("jr");
+    let result = temp_env::with_vars(
+        [
+            ("XDG_CACHE_HOME", Some(fake_cache_home.as_os_str())),
+            ("JR_CACHE_DIR", Some(fake_jr_cache_dir.as_os_str())),
+        ],
+        || {
+            jr::cache::write_fields_cache(
+                "test-profile-swallow",
+                &[("customfield_10001".to_string(), "Severity".to_string())],
+            )
+        },
+    );
 
     // Best-effort writer MUST return Ok(()) even when the write fails.
     assert!(
@@ -1303,11 +1315,12 @@ fn test_write_fields_cache_swallows_io_error_and_returns_ok() {
         "write_fields_cache must return Ok(()) on I/O error; got: {result:?}"
     );
 
-    // The XDG override is verified by the primary assertion above; no need to
-    // inspect the real cache dir. (The secondary real-path check was removed per
-    // R2-C3: it could flake if ~/.cache/jr/v1/test-profile-swallow/ existed from
-    // a prior run, and cache_root() reads XDG_CACHE_HOME unconditionally first so
-    // there is no codepath where the override could be ignored while set.)
+    // The JR_CACHE_DIR override is verified by the primary assertion above; no
+    // need to inspect the real cache dir. (The secondary real-path check was
+    // removed per R2-C3: it could flake if ~/.cache/jr/v1/test-profile-swallow/
+    // existed from a prior run, and cache_root() reads JR_CACHE_DIR first (then
+    // XDG); both descend through the fake_cache_home file component, so the
+    // create_dir_all I/O failure is exercised either way.)
 }
 
 // ---------------------------------------------------------------------------

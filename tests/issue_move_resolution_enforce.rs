@@ -317,7 +317,9 @@ async fn test_move_refuses_required_done_category_no_input() {
 
     let output = jr_cmd_with_server(&server)
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args(["issue", "move", "EJ-1", "Resolved", "--no-input"])
         .output()
         .unwrap();
@@ -394,7 +396,9 @@ async fn test_move_refuses_required_done_category_with_no_resolution_flag() {
 
     let output = jr_cmd_with_server(&server)
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "move",
@@ -471,7 +475,9 @@ async fn test_move_proceeds_required_with_resolution_flag() {
 
     let output = jr_cmd_with_server(&server)
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "move",
@@ -532,7 +538,9 @@ async fn test_move_refuses_optional_done_category_no_input() {
 
     let output = jr_cmd_with_server(&server)
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args(["issue", "move", "EJ-1", "Resolved", "--no-input"])
         .output()
         .unwrap();
@@ -603,7 +611,9 @@ async fn test_move_proceeds_optional_with_no_resolution_flag() {
 
     let output = jr_cmd_with_server(&server)
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "move",
@@ -681,7 +691,9 @@ async fn test_move_proceeds_optional_with_resolution_flag() {
 
     let output = jr_cmd_with_server(&server)
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "move",
@@ -740,7 +752,9 @@ async fn test_move_isconditional_treated_as_required() {
 
     let output = jr_cmd_with_server(&server)
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args(["issue", "move", "EJ-1", "Resolved", "--no-input"])
         .output()
         .unwrap();
@@ -811,7 +825,9 @@ async fn test_move_skips_gate_when_no_status_category() {
 
     let output = jr_cmd_with_server(&server)
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args(["issue", "move", "EJ-1", "Resolve Issue", "--no-input"])
         .output()
         .unwrap();
@@ -863,7 +879,9 @@ async fn test_move_skips_gate_when_not_done_category() {
 
     let output = jr_cmd_with_server(&server)
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args(["issue", "move", "EJ-1", "Start Progress", "--no-input"])
         .output()
         .unwrap();
@@ -914,7 +932,9 @@ async fn test_move_skips_gate_when_fields_absent() {
 
     let output = jr_cmd_with_server(&server)
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args(["issue", "move", "EJ-1", "Resolve Issue", "--no-input"])
         .output()
         .unwrap();
@@ -977,7 +997,9 @@ async fn test_bulk_move_excludes_proactive_enforcement() {
 
     let output = jr_cmd_with_server(&server)
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "move",
@@ -1047,7 +1069,9 @@ async fn test_move_refuses_resolution_not_in_allowed_values() {
 
     let output = jr_cmd_with_server(&server)
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args([
             "issue",
             "move",
@@ -1152,7 +1176,9 @@ async fn test_move_reactive_backstop_400_resolution_required() {
 
     let output = jr_cmd_with_server(&server)
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args(["issue", "move", "EJ-1", "Resolve Issue", "--no-input"])
         .output()
         .unwrap();
@@ -1494,7 +1520,9 @@ async fn test_move_reactive_backstop_400_resolution_word_only_passthrough() {
 
     let output = jr_cmd_with_server(&server)
         .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
         .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
         .args(["issue", "move", "EJ-1", "Resolve Issue", "--no-input"])
         .output()
         .unwrap();

@@ -24,6 +24,8 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             use_cross: true
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
     steps:
       - name: Harden the runner (Audit all outbound calls)
         uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
@@ -39,13 +41,16 @@ jobs:
 
       - name: Ensure cross-target installed (defensive)
         if: ${{ !matrix.use_cross }}
+        shell: bash
         run: rustup target add ${{ matrix.target }}
 
       - name: Install cross
         if: matrix.use_cross
+        shell: bash
         run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Build
+        shell: bash
         env:
           JR_BUILD_OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID }}
           JR_BUILD_OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
@@ -58,7 +63,9 @@ jobs:
             cargo build --release --target ${{ matrix.target }}
           fi
 
-      - name: Package
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
         run: |
           cd target/${{ matrix.target }}/release
           tar czf ../../../jr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz jr
@@ -69,7 +76,61 @@ jobs:
             shasum -a 256 jr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz > jr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz.sha256
           fi
 
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path "target/${{ matrix.target }}/release/jr.exe" -DestinationPath "jr-${{ github.ref_name }}-${{ matrix.target }}.zip"
+
+      - name: Checksum (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: sha256sum jr-${{ github.ref_name }}-${{ matrix.target }}.zip > jr-${{ github.ref_name }}-${{ matrix.target }}.zip.sha256
+
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'   # Catches Set-Location failure (directory missing)
+          Set-Location "target/${{ matrix.target }}/release"
+          # Use `.\jr.exe` (explicit current-directory prefix) — PowerShell does NOT
+          # search CWD for executables without it, unlike cmd.exe.
+          # NOTE: $ErrorActionPreference does NOT catch non-zero exit from native
+          # executables in PS7; the explicit LASTEXITCODE check below is load-bearing.
+          .\jr.exe --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Embedded OAuth verification (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          # Pass the secret-presence flag in via env so the PowerShell check below
+          # can short-circuit cleanly. Forks (where Actions secrets aren't
+          # available) get OAUTH_CLIENT_ID == '' here, so we skip the smoke.
+          HAS_EMBED_SECRETS: ${{ (secrets.OAUTH_CLIENT_ID != '' && secrets.OAUTH_CLIENT_SECRET != '') && 'yes' || 'no' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:HAS_EMBED_SECRETS -ne 'yes') {
+            Write-Host "Skipping embedded-creds smoke: OAUTH_CLIENT_ID/_SECRET not configured."
+            Write-Host "(Fork build, or upstream secrets are missing — release will ship the unbranded BYO binary.)"
+            exit 0
+          }
+          $f = Get-ChildItem -Path "target/${{ matrix.target }}/release/build" `
+                -Filter 'embedded_oauth.rs' -Recurse | Select-Object -First 1
+          if (-not $f) { Write-Error 'embedded_oauth.rs not found at expected build output path'; exit 1 }
+          $content = Get-Content $f.FullName -Raw
+          if ($content -match 'EMBEDDED_ID\s*:\s*Option.*=\s*None') {
+            Write-Error 'embedded_oauth.rs has EMBEDDED_ID = None — build.rs did not see JR_BUILD_OAUTH_CLIENT_ID'
+            exit 1
+          }
+          if ($content -match 'EMBEDDED_SECRET_XOR\s*:\s*Option.*=\s*None') {
+            Write-Error 'embedded_oauth.rs has EMBEDDED_SECRET_XOR = None — build.rs did not see JR_BUILD_OAUTH_CLIENT_SECRET'
+            exit 1
+          }
+          Write-Host "embedded_oauth.rs at $($f.FullName) has populated constants"
+
       - name: Verify embedded OAuth app present
+        if: runner.os != 'Windows'
+        shell: bash
         env:
           # Pass the secret-presence flag in via env so the bash check below
           # can short-circuit cleanly. Forks (where Actions secrets aren't
@@ -147,6 +208,7 @@ jobs:
           name: jr-${{ matrix.target }}
           path: |
             jr-*.tar.gz
+            jr-*.zip
             jr-*.sha256
 
   release:
@@ -171,4 +233,5 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             jr-*.tar.gz
+            jr-*.zip
             jr-*.sha256

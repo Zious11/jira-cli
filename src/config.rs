@@ -232,6 +232,13 @@ impl Config {
 
         // Read with env-overlay for in-memory use. The rest of the program
         // sees `JR_*` env overrides applied on top of `config.toml`.
+        //
+        // GUARD: GlobalConfig MUST NEVER gain a `config_dir` or `cache_dir`
+        // field. If it did, figment's `Env::prefixed("JR_")` would honor
+        // `JR_CONFIG_DIR` / `JR_CACHE_DIR` in RELEASE builds, bypassing the
+        // `#[cfg(debug_assertions)]` gate in `global_config_dir()` /
+        // `cache_root()` and re-opening the path-injection vector (SEC-PATH-1).
+        // Those env vars are intentionally debug-only seams (BC-6.2.017).
         let mut global: GlobalConfig = Figment::new()
             .merge(Serialized::defaults(GlobalConfig::default()))
             .merge(Toml::file(&global_path))
@@ -463,15 +470,57 @@ impl Config {
     }
 }
 
+/// Pure fallback for a Windows `%APPDATA%`/`%LOCALAPPDATA%`-style env path when the
+/// `dirs` crate returns `None`. Accepts the raw `env::var(NAME).ok()` value so the
+/// logic can be tested on any platform without a `#[cfg(windows)]` gate.
+///
+/// Rules (BC-6.1.014 EC-1, EC-3):
+/// - `Some(s)` where `s` is non-empty → `PathBuf::from(s)`
+/// - `Some(s)` where `s` is empty → `PathBuf::from(".")` (treated as unset)
+/// - `None` → `PathBuf::from(".")`
+///
+/// Called from the `#[cfg(windows)]` production branch in `global_config_dir()`
+/// and directly from cross-platform unit tests.
+pub fn config_appdata_fallback(env_val: Option<String>) -> PathBuf {
+    env_val
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
 pub fn global_config_dir() -> PathBuf {
-    // Use XDG_CONFIG_HOME if set, otherwise ~/.config (matches spec: ~/.config/jr/)
-    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        PathBuf::from(xdg).join("jr")
-    } else {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("~"))
-            .join(".config")
+    // JR_CONFIG_DIR override is debug builds only — release binaries ignore this env
+    // var to prevent path-injection attacks (BC-6.2.017). Seam must be first in body,
+    // before any OS-branch logic, so it fires on all platforms (S-WIN-2 prerequisite).
+    #[cfg(debug_assertions)]
+    if let Some(dir) = std::env::var("JR_CONFIG_DIR")
+        .ok()
+        .filter(|s| !s.is_empty())
+    {
+        return PathBuf::from(dir);
+    }
+
+    #[cfg(windows)]
+    {
+        // Windows: %APPDATA%\jr  (e.g., C:\Users\Alice\AppData\Roaming\jr)
+        // BC-6.1.014: dirs::config_dir() maps to %APPDATA% (Roaming) on Windows.
+        // APPDATA fallback filters empty string: unset and empty both route to ".".
+        dirs::config_dir()
+            .unwrap_or_else(|| config_appdata_fallback(std::env::var("APPDATA").ok()))
             .join("jr")
+    }
+
+    #[cfg(not(windows))]
+    {
+        // Unix: $XDG_CONFIG_HOME/jr or ~/.config/jr (unchanged)
+        if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+            PathBuf::from(xdg).join("jr")
+        } else {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("~"))
+                .join(".config")
+                .join("jr")
+        }
     }
 }
 
@@ -489,6 +538,30 @@ mod tests {
     /// Guards tests that mutate process-global env vars so they don't
     /// interfere with other tests running in parallel.
     static ENV_MUTEX: Mutex<()> = Mutex::new(());
+
+    /// Set `var` to `value`, run `f`, then unconditionally remove `var` — even if
+    /// `f` panics. Mirrors the `with_temp_cache` pattern in `cache.rs`.
+    ///
+    /// # Safety / threading
+    /// Caller must hold `ENV_MUTEX` for the duration of the call (acquired by this
+    /// helper itself). Two env-var names may need to be cleared *before* calling
+    /// `f` (e.g. XDG_CONFIG_HOME); pass a separate `unsafe { remove_var }` call
+    /// before this helper and keep it inside the same mutex guard scope.
+    #[cfg(debug_assertions)]
+    fn with_env_var<F: FnOnce() -> R, R>(var: &str, value: &str, f: F) -> R {
+        // Recover from mutex poison — a prior test that panicked inside set_var..remove_var
+        // will have poisoned the mutex; we recover so subsequent tests can still run.
+        let guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: ENV_MUTEX is held for the duration; no concurrent env access occurs.
+        unsafe { std::env::set_var(var, value) };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        unsafe { std::env::remove_var(var) };
+        drop(guard);
+        match result {
+            Ok(v) => v,
+            Err(e) => std::panic::resume_unwind(e),
+        }
+    }
 
     #[test]
     fn test_default_config() {
@@ -514,7 +587,7 @@ mod tests {
 
     #[test]
     fn test_base_url_api_token() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let mut profiles = std::collections::BTreeMap::new();
         profiles.insert(
             "default".to_string(),
@@ -539,7 +612,7 @@ mod tests {
 
     #[test]
     fn test_base_url_oauth() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let mut profiles = std::collections::BTreeMap::new();
         profiles.insert(
             "default".to_string(),
@@ -568,7 +641,7 @@ mod tests {
 
     #[test]
     fn test_base_url_missing() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let config = Config {
             global: GlobalConfig::default(),
             project: ProjectConfig::default(),
@@ -579,7 +652,7 @@ mod tests {
 
     #[test]
     fn base_url_uses_active_profile() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let mut profiles = std::collections::BTreeMap::new();
         profiles.insert(
             "sandbox".to_string(),
@@ -603,7 +676,7 @@ mod tests {
 
     #[test]
     fn base_url_uses_active_profile_oauth_path() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let mut profiles = std::collections::BTreeMap::new();
         profiles.insert(
             "default".to_string(),
@@ -664,7 +737,7 @@ mod tests {
 
     #[test]
     fn test_base_url_env_override() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         // SAFETY: test holds ENV_MUTEX, so no concurrent env access.
         unsafe { std::env::set_var("JR_BASE_URL", "http://localhost:8080") };
         let config = Config::default();
@@ -674,7 +747,7 @@ mod tests {
 
     #[test]
     fn test_base_url_trailing_slash_trimmed() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let mut profiles = std::collections::BTreeMap::new();
         profiles.insert(
             "default".to_string(),
@@ -1038,7 +1111,7 @@ mod tests {
 
     #[test]
     fn config_load_precedence_flag_overrides_env_overrides_field() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().unwrap();
         let cfg_dir = dir.path().join("jr");
         std::fs::create_dir_all(&cfg_dir).unwrap();
@@ -1058,8 +1131,13 @@ mod tests {
         .unwrap();
 
         // SAFETY: ENV_MUTEX held across env mutations.
+        //
+        // JR_CONFIG_DIR is the cross-platform debug seam (BC-6.2.017): on Windows,
+        // global_config_dir() uses %APPDATA% and ignores XDG_CONFIG_HOME, so we must
+        // also set JR_CONFIG_DIR = dir/jr to keep all platforms reading the same config.
         unsafe {
             std::env::set_var("XDG_CONFIG_HOME", dir.path());
+            std::env::set_var("JR_CONFIG_DIR", dir.path().join("jr"));
             std::env::set_var("JR_PROFILE", "from-env");
         }
         // CLI flag wins over env var.
@@ -1079,12 +1157,13 @@ mod tests {
 
         unsafe {
             std::env::remove_var("XDG_CONFIG_HOME");
+            std::env::remove_var("JR_CONFIG_DIR");
         }
     }
 
     #[test]
     fn config_load_errors_when_jr_profile_targets_unknown_profile() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().unwrap();
         let cfg_dir = dir.path().join("jr");
         std::fs::create_dir_all(&cfg_dir).unwrap();
@@ -1099,14 +1178,19 @@ mod tests {
         .unwrap();
 
         // SAFETY: ENV_MUTEX held.
+        //
+        // JR_CONFIG_DIR is the cross-platform debug seam (BC-6.2.017): on Windows,
+        // global_config_dir() uses %APPDATA% and ignores XDG_CONFIG_HOME.
         unsafe {
             std::env::set_var("XDG_CONFIG_HOME", dir.path());
+            std::env::set_var("JR_CONFIG_DIR", dir.path().join("jr"));
             std::env::set_var("JR_PROFILE", "ghost");
         }
         let result = Config::load();
         unsafe {
             std::env::remove_var("JR_PROFILE");
             std::env::remove_var("XDG_CONFIG_HOME");
+            std::env::remove_var("JR_CONFIG_DIR");
         }
         let err = result.expect_err("ghost profile should fail Config::load");
         let je = err.downcast_ref::<JrError>().expect("should be JrError");
@@ -1122,19 +1206,24 @@ mod tests {
 
     #[test]
     fn config_load_rejects_invalid_profile_name_from_env() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().unwrap();
         let cfg_dir = dir.path().join("jr");
         std::fs::create_dir_all(&cfg_dir).unwrap();
         // SAFETY: ENV_MUTEX held.
+        //
+        // JR_CONFIG_DIR is the cross-platform debug seam (BC-6.2.017): on Windows,
+        // global_config_dir() uses %APPDATA% and ignores XDG_CONFIG_HOME.
         unsafe {
             std::env::set_var("XDG_CONFIG_HOME", dir.path());
+            std::env::set_var("JR_CONFIG_DIR", dir.path().join("jr"));
             std::env::set_var("JR_PROFILE", "evil:profile");
         }
         let result = Config::load();
         unsafe {
             std::env::remove_var("JR_PROFILE");
             std::env::remove_var("XDG_CONFIG_HOME");
+            std::env::remove_var("JR_CONFIG_DIR");
         }
         assert!(
             result.is_err(),
@@ -1144,7 +1233,7 @@ mod tests {
 
     #[test]
     fn config_load_lenient_succeeds_when_active_profile_unknown() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().unwrap();
         let cfg_dir = dir.path().join("jr");
         std::fs::create_dir_all(&cfg_dir).unwrap();
@@ -1159,8 +1248,12 @@ mod tests {
         .unwrap();
 
         // SAFETY: ENV_MUTEX held.
+        //
+        // JR_CONFIG_DIR is the cross-platform debug seam (BC-6.2.017): on Windows,
+        // global_config_dir() uses %APPDATA% and ignores XDG_CONFIG_HOME.
         unsafe {
             std::env::set_var("XDG_CONFIG_HOME", dir.path());
+            std::env::set_var("JR_CONFIG_DIR", dir.path().join("jr"));
             std::env::set_var("JR_PROFILE", "ghost");
         }
         let strict = Config::load();
@@ -1168,6 +1261,7 @@ mod tests {
         unsafe {
             std::env::remove_var("JR_PROFILE");
             std::env::remove_var("XDG_CONFIG_HOME");
+            std::env::remove_var("JR_CONFIG_DIR");
         }
 
         assert!(strict.is_err(), "strict load should reject unknown profile");
@@ -1182,7 +1276,7 @@ mod tests {
 
     #[test]
     fn config_load_rejects_invalid_profile_key_in_config() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().unwrap();
         let cfg_dir = dir.path().join("jr");
         std::fs::create_dir_all(&cfg_dir).unwrap();
@@ -1199,12 +1293,17 @@ mod tests {
         .unwrap();
 
         // SAFETY: ENV_MUTEX held.
+        //
+        // JR_CONFIG_DIR is the cross-platform debug seam (BC-6.2.017): on Windows,
+        // global_config_dir() uses %APPDATA% and ignores XDG_CONFIG_HOME.
         unsafe {
             std::env::set_var("XDG_CONFIG_HOME", dir.path());
+            std::env::set_var("JR_CONFIG_DIR", dir.path().join("jr"));
         }
         let result = Config::load();
         unsafe {
             std::env::remove_var("XDG_CONFIG_HOME");
+            std::env::remove_var("JR_CONFIG_DIR");
         }
 
         let err = result.expect_err("invalid profile key should reject");
@@ -1307,6 +1406,348 @@ mod tests {
             msg.contains("invalid characters") || msg.contains("a-z, 0-9"),
             "AC-007 (BC-6.1.004 invariant): error for a profile name with a space must \
              contain 'invalid characters' or 'a-z, 0-9'. Got: {msg:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // BC-6.2.017 — JR_CONFIG_DIR debug-only path-isolation seam
+    //
+    // These tests pin AC-001 and AC-003 from S-WIN-2.
+    //
+    // Pre-implementation Red Gate: the seam does not exist in global_config_dir()
+    // yet. AC-001 will FAIL because global_config_dir() does not read JR_CONFIG_DIR
+    // at all — it returns the XDG/home-dir path regardless.
+    // AC-003 will FAIL because with no seam, setting JR_CONFIG_DIR="" changes
+    // nothing about the returned path — the assertion that PathBuf::from("") is NOT
+    // returned trivially passes, but the assertion that the seam is absent (i.e. the
+    // function does NOT short-circuit to the env var value) is the load-bearing check
+    // for AC-001. Both tests are structured so they require the seam to exist.
+    // -----------------------------------------------------------------------
+
+    /// BC-6.2.017 postcondition (debug path) — AC-001.
+    ///
+    /// In a debug build, `global_config_dir()` must return `PathBuf::from(value)`
+    /// when `JR_CONFIG_DIR` is set to a non-empty string. The XDG/home-dir logic
+    /// must be bypassed entirely.
+    ///
+    /// Pre-implementation Red Gate: ASSERTION FAILURE — `global_config_dir()` does
+    /// not read `JR_CONFIG_DIR` so it returns the XDG or home-dir path instead of
+    /// the seam value.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn test_bc_6_2_017_config_dir_seam_overrides_path() {
+        // Use a distinctive path that cannot coincidentally match any XDG or home
+        // directory the test environment might have configured.
+        let seam_path = "/tmp/jr-seam-test-config-dir-overrides-path";
+        // Clear XDG_CONFIG_HOME before entering with_env_var so the non-seam branch
+        // cannot accidentally produce the seam path value via a coincidental XDG value.
+        // ENV_MUTEX is acquired inside with_env_var; remove_var here is safe because
+        // this thread is the only one that will touch the env during this test
+        // (with_env_var's mutex acquisition guarantees mutual exclusion).
+        let result = with_env_var("JR_CONFIG_DIR", seam_path, || {
+            // SAFETY: ENV_MUTEX held by with_env_var for the duration of this closure.
+            unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
+            global_config_dir()
+        });
+        assert_eq!(
+            result,
+            std::path::PathBuf::from(seam_path),
+            "AC-001 (BC-6.2.017): global_config_dir() must return the JR_CONFIG_DIR \
+             value as-is (no .join(\"jr\") suffix) when the seam is set in a debug build. \
+             Got: {}",
+            result.display()
+        );
+    }
+
+    /// BC-6.2.017 EC-1 — AC-003.
+    ///
+    /// When `JR_CONFIG_DIR` is set to an empty string in a debug build, the seam
+    /// is treated as unset. `global_config_dir()` must NOT return `PathBuf::from("")`.
+    /// It must proceed to OS-branch logic (XDG / home-dir), returning a non-empty path.
+    ///
+    /// This test is load-bearing: it pins the `.filter(|s| !s.is_empty())` guard in
+    /// `global_config_dir()` (AC-003, BC-6.2.017 EC-1). Without that filter, setting
+    /// `JR_CONFIG_DIR=""` would cause the seam to return `PathBuf::from("")` whose
+    /// `as_os_str().is_empty()` is true — the `assert_ne!` below would then fail.
+    /// Dropping the filter is exactly the mutation this test kills.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn test_bc_6_2_017_empty_config_dir_uses_os_path() {
+        let result = with_env_var("JR_CONFIG_DIR", "", global_config_dir);
+        assert_ne!(
+            result,
+            std::path::PathBuf::from(""),
+            "AC-003 (BC-6.2.017 EC-1): global_config_dir() must NOT return \
+             PathBuf::from(\"\") when JR_CONFIG_DIR is set to the empty string. \
+             The empty-string filter must treat it as unset and proceed to OS logic. \
+             Got: {}",
+            result.display()
+        );
+        // Additionally assert the path is non-empty (OS logic must have fired).
+        assert!(
+            !result.as_os_str().is_empty(),
+            "AC-003 (BC-6.2.017 EC-1): OS-branch result must be a non-empty path. \
+             Got: {}",
+            result.display()
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // BC-6.1.014 — Windows AppData path resolution tests (S-WIN-1)
+    // All tests below are `#[cfg(windows)]`-gated. They compile out on macOS/Linux
+    // (zero impact on Unix CI) and run only on a Windows runner (S-WIN-5).
+    //
+    // RED GATE RATIONALE: `global_config_dir()` currently has NO `#[cfg(windows)]`
+    // branch — on a Windows build it falls through to the XDG/home_dir Unix path,
+    // so `dirs::config_dir()` (= %APPDATA%) is never consulted. Every assertion
+    // below would therefore FAIL on a Windows runner against the current code.
+    // The implementation in S-WIN-1 adds the `#[cfg(windows)]` branch that makes
+    // these tests pass.
+    // -------------------------------------------------------------------------
+
+    /// AC-001 / BC-6.1.014 postcondition — on Windows, `global_config_dir()` returns
+    /// `dirs::config_dir().join("jr")` which resolves to `%APPDATA%\jr` (Roaming).
+    ///
+    /// The test cannot call `dirs::config_dir()` and directly inject its return value
+    /// (it's an OS call). Instead it verifies the structural postcondition: the returned
+    /// path ends with the `jr` component, and its parent equals `dirs::config_dir()`.
+    ///
+    /// Uses PathBuf component comparison (not string literals with `/`) per
+    /// F-WIN-F3-005: on Windows `PathBuf::join` produces `\`-separated paths.
+    ///
+    /// Traces: BC-6.1.014 postcondition, AC-001.
+    #[cfg(windows)]
+    #[test]
+    fn test_bc_6_1_014_windows_config_dir_uses_appdata() {
+        // On Windows, dirs::config_dir() returns Some(%APPDATA% Roaming path).
+        // The function under test must return dirs::config_dir().unwrap().join("jr").
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        // Scrub the debug seam vars so they cannot short-circuit global_config_dir()
+        // and perturb the assertion (RB-102).
+        // SAFETY: ENV_MUTEX is held for the duration; no concurrent env access occurs.
+        unsafe {
+            std::env::remove_var("JR_CONFIG_DIR");
+            std::env::remove_var("JR_CACHE_DIR");
+        }
+        let expected_parent = dirs::config_dir()
+            .expect("dirs::config_dir() must return Some on a Windows system with a user profile");
+        let expected = expected_parent.join("jr");
+        let result = global_config_dir();
+        assert_eq!(
+            result,
+            expected,
+            "AC-001 (BC-6.1.014): on Windows, global_config_dir() must return \
+             dirs::config_dir().join(\"jr\") = %APPDATA%\\jr. \
+             Expected: {}, got: {}",
+            expected.display(),
+            result.display()
+        );
+        // Structural assertion: must end with component "jr"
+        assert!(
+            result.ends_with("jr"),
+            "AC-001 (BC-6.1.014): path must end with 'jr' component, got: {}",
+            result.display()
+        );
+    }
+
+    /// AC-002 / BC-6.1.014 EC-1 — `config_appdata_fallback` pure helper.
+    ///
+    /// Exercises the extracted `config_appdata_fallback` helper directly so that
+    /// mutations to the production fallback (e.g. dropping `.filter(|s| !s.is_empty())`
+    /// or changing `PathBuf::from(".")`) are caught on every platform, not only on a
+    /// Windows CI runner.
+    ///
+    /// The helper is un-gated (no `#[cfg(windows)]`) so this test compiles and runs
+    /// on macOS/Linux in CI, genuinely killing the empty-filter/default mutants.
+    ///
+    /// Traces: BC-6.1.014 EC-1, EC-3, AC-002.
+    #[test]
+    fn test_bc_6_1_014_appdata_env_fallback() {
+        // EC-3: empty string → treated as unset → PathBuf::from(".")
+        assert_eq!(
+            config_appdata_fallback(Some(String::new())),
+            PathBuf::from("."),
+            "EC-3: empty APPDATA must yield PathBuf::from(\".\")"
+        );
+
+        // EC-1: None (unset APPDATA) → PathBuf::from(".")
+        assert_eq!(
+            config_appdata_fallback(None),
+            PathBuf::from("."),
+            "EC-1: None (unset APPDATA) must yield PathBuf::from(\".\")"
+        );
+
+        // Happy-path: non-empty value is passed through unchanged
+        assert_eq!(
+            config_appdata_fallback(Some("C:\\Users\\Alice\\AppData\\Roaming".into())),
+            PathBuf::from("C:\\Users\\Alice\\AppData\\Roaming"),
+            "non-empty APPDATA must be returned as-is"
+        );
+    }
+
+    /// AC-003 / BC-6.1.014 invariant — XDG_CONFIG_HOME must NOT affect `global_config_dir()`
+    /// on Windows. The `#[cfg(windows)]` branch calls `dirs::config_dir()` unconditionally
+    /// and never reads `XDG_CONFIG_HOME`.
+    ///
+    /// This test sets `XDG_CONFIG_HOME` to a sentinel value and asserts that the returned
+    /// path does NOT contain that sentinel — confirming XDG is ignored on the Windows path.
+    ///
+    /// Uses ENV_MUTEX to serialize env-var mutation.
+    ///
+    /// Traces: BC-6.1.014 invariant, EC-5, AC-003.
+    #[cfg(windows)]
+    #[test]
+    fn test_bc_6_1_014_xdg_ignored_on_windows() {
+        let sentinel = "C:\\SENTINEL_XDG_SHOULD_BE_IGNORED_ON_WINDOWS";
+        // with_env_var is #[cfg(debug_assertions)]-gated in config.rs.
+        // On a Windows runner in CI we may be in release mode; use ENV_MUTEX directly.
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: ENV_MUTEX is held for the duration; no concurrent env access occurs.
+        // Scrub the debug seam vars so they cannot short-circuit global_config_dir()
+        // and perturb the assertion (RB-102).
+        unsafe {
+            std::env::remove_var("JR_CONFIG_DIR");
+            std::env::remove_var("JR_CACHE_DIR");
+            std::env::set_var("XDG_CONFIG_HOME", sentinel);
+        }
+        let result = global_config_dir();
+        // SAFETY: ENV_MUTEX still held.
+        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
+        drop(_guard);
+
+        // The result must NOT contain the sentinel — XDG is not consulted on Windows.
+        assert!(
+            !result
+                .to_string_lossy()
+                .contains("SENTINEL_XDG_SHOULD_BE_IGNORED_ON_WINDOWS"),
+            "AC-003 (BC-6.1.014 invariant): XDG_CONFIG_HOME must be ignored on Windows. \
+             global_config_dir() must return the APPDATA-derived path, not the XDG sentinel. \
+             Got: {}",
+            result.display()
+        );
+        // The result must still end with the 'jr' component (correct APPDATA path).
+        assert!(
+            result.ends_with("jr"),
+            "AC-003 (BC-6.1.014 invariant): path must still end with 'jr' component \
+             when XDG_CONFIG_HOME is set. Got: {}",
+            result.display()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // R1-003 — Unix XDG_CONFIG_HOME branch integration coverage
+    //
+    // Characterizes the existing Unix production path: when XDG_CONFIG_HOME is
+    // set and JR_CONFIG_DIR is absent, `global_config_dir()` resolves through
+    // the XDG branch (PathBuf::from(xdg).join("jr")).
+    //
+    // This is a GREEN test (passes against current code) that pins pre-migration
+    // Unix path coverage so a future refactor can't silently drop the XDG branch.
+    // NOT `#[cfg(debug_assertions)]` — the XDG branch is NOT gated on debug_assertions
+    // (unlike JR_CONFIG_DIR which is), so this test runs in both debug and release
+    // builds on Unix.
+    // -----------------------------------------------------------------------
+
+    /// R1-003 — On Unix, `global_config_dir()` resolves through `XDG_CONFIG_HOME`
+    /// when that variable is set and `JR_CONFIG_DIR` is absent.
+    ///
+    /// Sets `XDG_CONFIG_HOME` to a tempdir and explicitly removes `JR_CONFIG_DIR`,
+    /// then asserts the returned path equals `<tempdir>/jr`.
+    ///
+    /// This test PASSES against current code — it characterizes existing behavior
+    /// and prevents regression of the Unix XDG path during Windows-build refactors.
+    ///
+    /// Traces: `global_config_dir()` Unix branch (`#[cfg(not(windows))]`); FIX-F5-001 R1-003.
+    #[cfg(not(windows))]
+    #[test]
+    fn test_global_config_dir_resolves_through_xdg_on_unix() {
+        let dir = TempDir::new().unwrap();
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
+        // SAFETY: ENV_MUTEX is held for the duration; no concurrent env access occurs.
+        // Explicitly remove JR_CONFIG_DIR so the debug seam cannot short-circuit
+        // to a different path (even though JR_CONFIG_DIR is debug-only, removing it
+        // is defense-in-depth for all build configurations).
+        unsafe {
+            std::env::remove_var("JR_CONFIG_DIR");
+            std::env::set_var("XDG_CONFIG_HOME", dir.path());
+        }
+
+        let result = global_config_dir();
+
+        // SAFETY: ENV_MUTEX still held.
+        unsafe {
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+        drop(_guard);
+
+        let expected = dir.path().join("jr");
+        assert_eq!(
+            result,
+            expected,
+            "R1-003: global_config_dir() must resolve through XDG_CONFIG_HOME when \
+             set (and JR_CONFIG_DIR is absent). Expected: {}, got: {}",
+            expected.display(),
+            result.display()
+        );
+        // Structural invariant: path ends with 'jr' component.
+        assert!(
+            result.ends_with("jr"),
+            "R1-003: resolved path must end with 'jr' component. Got: {}",
+            result.display()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // M-6 — Unix XDG fallback branch coverage (XDG_CONFIG_HOME unset)
+    //
+    // Pins the `else` branch of `global_config_dir()` on Unix: when neither
+    // XDG_CONFIG_HOME nor JR_CONFIG_DIR is set, the function falls back to
+    // `dirs::home_dir().join(".config").join("jr")`.  A refactor that changed
+    // the fallback suffix (e.g. to ".cache/jr") would silently break without
+    // this pin test.
+    // -----------------------------------------------------------------------
+
+    /// M-6 — On Unix, `global_config_dir()` falls back to `~/.config/jr` when
+    /// `XDG_CONFIG_HOME` is unset and `JR_CONFIG_DIR` is absent.
+    ///
+    /// Removes both env vars, calls `global_config_dir()`, and asserts the
+    /// returned path ends with `.config/jr`.  The full prefix is `home_dir()`
+    /// which varies by user, so only the suffix is checked.
+    ///
+    /// Traces: `global_config_dir()` Unix else-branch (`#[cfg(not(windows))]`);
+    /// FIX-F5-001 M-6.
+    #[cfg(not(windows))]
+    #[test]
+    fn test_global_config_dir_falls_back_to_home_config_on_unix_when_xdg_unset() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
+        // SAFETY: ENV_MUTEX is held for the duration; no concurrent env access occurs.
+        // Remove both overrides so the production else-branch fires.
+        // Note: cleanup is not panic-safe (consistent with adjacent R1-003 test);
+        // global_config_dir() on a standard system cannot panic.
+        unsafe {
+            std::env::remove_var("JR_CONFIG_DIR");
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+
+        let result = global_config_dir();
+        drop(_guard);
+
+        // The fallback path must end with ".config/jr" (the Unix default).
+        // We cannot assert the full path (home dir varies), so check the suffix.
+        let result_str = result.to_string_lossy();
+        assert!(
+            result_str.ends_with("/.config/jr"),
+            "M-6: global_config_dir() fallback (XDG_CONFIG_HOME unset) must end \
+             with '/.config/jr'. Got: {}",
+            result.display()
+        );
+        // Structural invariant: path ends with 'jr' component.
+        assert!(
+            result.ends_with("jr"),
+            "M-6: resolved path must end with 'jr' component. Got: {}",
+            result.display()
         );
     }
 }
