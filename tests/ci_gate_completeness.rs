@@ -24,10 +24,12 @@
 //!     check (DEC-101).
 //!
 //! Test coverage map (→ S-CIGATE-1 AC):
-//!   test_ci_gate_job_exists_with_correct_shell          → AC-001
-//!   test_ci_gate_needs_exactly_the_required_jobs        → AC-003
-//!   test_ci_gate_excludes_pr_only_jobs                  → AC-003
-//!   test_ci_gate_fails_on_failed_or_cancelled_need      → AC-002
+//!   test_ci_gate_job_exists_with_correct_shell               → AC-001
+//!   test_ci_gate_needs_exactly_the_required_jobs             → AC-003
+//!   test_ci_gate_excludes_pr_only_jobs                       → AC-003
+//!   test_ci_gate_fails_on_failed_or_cancelled_need           → AC-002
+//!   test_ci_gate_needs_jobs_have_no_event_conditional_if     → EC-002 (M1)
+//!   test_ci_gate_pass_fail_semantics_are_structurally_placed → AC-001/AC-002 (M2)
 
 use std::collections::HashSet;
 use std::fs;
