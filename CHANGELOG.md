@@ -8,6 +8,14 @@ All notable changes to jr will be documented here.
 
 ### Added
 
+### Fixed
+
+### Changed
+
+## [0.6.0-dev.2] - 2026-06-14
+
+### Added
+
 - **Windows pre-built binary:** `jr-<version>-x86_64-pc-windows-msvc.zip` (containing
   `jr.exe`) is now published to GitHub Releases alongside the existing Unix `.tar.gz`
   artifacts. Packaged via PowerShell `Compress-Archive`; SHA-256 checksum file included.
@@ -24,10 +32,6 @@ All notable changes to jr will be documented here.
   job matrices in `ci.yml`, providing per-PR regression protection for the
   `#[cfg(windows)]` code paths in `src/config.rs` and `src/cache.rs`. (ADR-0016,
   Decision 3)
-
-### Fixed
-
-### Changed
 
 ## [0.5.0] - 2026-06-11
 
