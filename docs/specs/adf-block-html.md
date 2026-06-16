@@ -16,7 +16,7 @@ Issue #492 tightened the representation: ADF text nodes must never contain a
 raw `\n` character (Jira rejects them). Interior source newlines are now
 represented as `hardBreak` nodes via Algorithm B, documented in BC-7.2.011.
 
-## Algorithm B (the 7-step conversion)
+## Algorithm B (canonical step order)
 
 Implemented in `src/adf.rs::AdfBuilder::end` — `NodeKind::HtmlBlock` arm.
 
