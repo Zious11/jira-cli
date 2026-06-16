@@ -1,6 +1,6 @@
 # `markdown_to_adf` — Block-level HTML → ADF literal text with `hardBreak` interior newlines
 
-**Issues:** [#489](https://github.com/Zious11/jira-cli/issues/489) (preserve vs drop), [#492](https://github.com/Zious11/jira-cli/issues/492) (hardBreak interior newlines — Algorithm B)
+**Issues:** #489 (preserve vs drop), #492 (hardBreak interior newlines — Algorithm B)
 **Module:** `src/adf.rs`
 **Behavioral contract:** BC-7.2.011 (`.factory/specs/prd/bc-7-output-render.md`)
 
