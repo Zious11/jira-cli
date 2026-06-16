@@ -7197,6 +7197,108 @@ mod tests {
         );
     }
 
+    /// BC-7.2.011 EC-4 (F-P1-002) — URL on an interior line of a multi-line block-HTML
+    /// element: the autolink post-pass splits the middle text node into `[pre, link, post]`
+    /// and the surrounding `hardBreak` nodes must survive at the correct positions.
+    ///
+    /// Input: `"<div>\nsee https://example.com\n</div>"`.
+    /// Algorithm B step 4 produces (before autolink):
+    ///   `[text("<div>"), hardBreak, text("see https://example.com"), hardBreak, text("</div>")]`.
+    /// After `autolink_bare_urls` splits the middle text node the expected structure is:
+    ///   `[text("<div>"), hardBreak, text("see "), link("https://example.com"), hardBreak, text("</div>")]`.
+    ///
+    /// Assertions:
+    ///   - No text node in the paragraph contains a raw `\n`.
+    ///   - Exactly one node carries a `link` mark and its text is `"https://example.com"`.
+    ///   - The `hardBreak` at index 1 and the `hardBreak` at index 4 are present (flanking
+    ///     the split triple at indices 2–3 and the post-URL text at index 5 respectively).
+    #[test]
+    fn test_block_html_interior_line_url_split_preserves_hardbreaks() {
+        // BC-7.2.011 EC-4 (F-P1-002).
+        // Use the markdown_to_adf entry point (same as test_block_html_bare_url_gets_link_mark)
+        // so the full Algorithm B + autolink pipeline is exercised.
+        let adf = markdown_to_adf("<div>\nsee https://example.com\n</div>");
+        let para = &adf["content"][0];
+        assert_eq!(
+            para["type"], "paragraph",
+            "multi-line block HTML must produce a paragraph: {adf}"
+        );
+        let nodes = para["content"].as_array().expect("paragraph must have content array");
+
+        // 1. No text node may contain a raw `\n`.
+        for node in nodes {
+            if node["type"] == "text" {
+                let t = node["text"].as_str().unwrap_or("");
+                assert!(
+                    !t.contains('\n'),
+                    "text node must not contain raw '\\n'; got: {t:?}"
+                );
+            }
+        }
+
+        // 2. Exactly one node must carry a `link` mark with href "https://example.com".
+        let link_nodes: Vec<_> = nodes
+            .iter()
+            .filter(|n| {
+                n["type"] == "text"
+                    && n.get("marks")
+                        .and_then(|m| m.as_array())
+                        .is_some_and(|marks| marks.iter().any(|m| m["type"] == "link"))
+            })
+            .collect();
+        assert_eq!(
+            link_nodes.len(),
+            1,
+            "expected exactly one link-marked node; got {}: {nodes:?}",
+            link_nodes.len()
+        );
+        assert_eq!(
+            link_nodes[0]["text"].as_str().unwrap_or(""),
+            "https://example.com",
+            "link-marked node text must be the bare URL"
+        );
+
+        // 3. The hardBreak at index 1 (between "<div>" and "see ") must be present,
+        //    and a hardBreak must be present at index 4 (between the URL node and "</div>").
+        //    Expected full content: [text("<div>"), hb, text("see "), link(url), hb, text("</div>")]
+        assert_eq!(
+            nodes.len(),
+            6,
+            "expected 6 nodes after URL split; got {}: {nodes:?}",
+            nodes.len()
+        );
+        assert_eq!(
+            nodes[0]["type"], "text",
+            "node[0] must be text('<div>'): {nodes:?}"
+        );
+        assert_eq!(nodes[0]["text"], "<div>", "node[0] text must be '<div>'");
+        assert_eq!(
+            nodes[1]["type"], "hardBreak",
+            "node[1] must be hardBreak (before interior line): {nodes:?}"
+        );
+        assert_eq!(
+            nodes[2]["type"], "text",
+            "node[2] must be text('see '): {nodes:?}"
+        );
+        assert_eq!(nodes[2]["text"], "see ", "node[2] text must be 'see '");
+        assert_eq!(
+            nodes[3]["type"], "text",
+            "node[3] must be the link text node: {nodes:?}"
+        );
+        assert_eq!(
+            nodes[4]["type"], "hardBreak",
+            "node[4] must be hardBreak (after URL, before closing tag): {nodes:?}"
+        );
+        assert_eq!(
+            nodes[5]["type"], "text",
+            "node[5] must be text('</div>'): {nodes:?}"
+        );
+        assert_eq!(
+            nodes[5]["text"], "</div>",
+            "node[5] text must be '</div>'"
+        );
+    }
+
     /// BC-7.2.011 EC-1 (AC-005 test 4) — CRLF interior and trailing newlines are
     /// normalized to LF; the resulting content array has three text nodes separated
     /// by two hardBreaks, with zero `\r` characters in any text node.
