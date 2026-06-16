@@ -6880,11 +6880,20 @@ mod tests {
         );
     }
 
-    /// A multi-line block HTML run preserves the interior newlines verbatim (the
-    /// honest literal representation) and trims only the single trailing block
-    /// newline. Issue #489.
+    /// BC-7.2.011 AC-004 — REPLACED from issue #489 body (which asserted the
+    /// buggy raw-`\n`-in-text behavior). The new body asserts Algorithm B's
+    /// hardBreak-segmented `content` array per EC-6.
+    ///
+    /// Input `<div>\n  <span>x</span>\n</div>` has 3 segments after trim+split:
+    /// `["<div>", "  <span>x</span>", "</div>"]`.
+    /// Expected content: `[text("<div>"), hardBreak, text("  <span>x</span>"), hardBreak, text("</div>")]`.
+    /// No raw `\n` may appear in any text-node string (file-wide invariant).
+    ///
+    /// RED GATE: fails against pre-#492 handler (which emits one text node
+    /// with raw `\n` characters in the `"text"` field).
     #[test]
     fn test_convert_multiline_block_html_preserves_interior_newlines() {
+        // BC-7.2.011 EC-6; AC-004.
         let adf = markdown_to_adf("<div>\n  <span>x</span>\n</div>");
         let content = adf["content"].as_array().unwrap();
         assert_eq!(
@@ -6892,14 +6901,60 @@ mod tests {
             1,
             "multi-line block HTML must be one paragraph: {adf}"
         );
+        let para_content = content[0]["content"].as_array().unwrap();
+        // Algorithm B: 3 segments → 2 boundaries → [text, hb, text, hb, text].
         assert_eq!(
-            content[0]["content"][0]["text"], "<div>\n  <span>x</span>\n</div>",
-            "interior newlines preserved, single trailing newline trimmed: {adf}"
+            para_content.len(),
+            5,
+            "3 segments must produce 5 content nodes (text, hardBreak, text, hardBreak, text): {para_content:?}"
         );
+        assert_eq!(
+            para_content[0]["type"], "text",
+            "first node must be text: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[0]["text"], "<div>",
+            "first text node must be '<div>': {para_content:?}"
+        );
+        assert_eq!(
+            para_content[1]["type"], "hardBreak",
+            "second node must be hardBreak: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[2]["type"], "text",
+            "third node must be text: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[2]["text"], "  <span>x</span>",
+            "third text node must be '  <span>x</span>': {para_content:?}"
+        );
+        assert_eq!(
+            para_content[3]["type"], "hardBreak",
+            "fourth node must be hardBreak: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[4]["type"], "text",
+            "fifth node must be text: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[4]["text"], "</div>",
+            "fifth text node must be '</div>': {para_content:?}"
+        );
+        // File-wide invariant: no raw \n in any text node.
+        for node in para_content {
+            if node["type"] == "text" {
+                let text_val = node["text"].as_str().unwrap_or("");
+                assert!(
+                    !text_val.contains('\n'),
+                    "text node must not contain raw \\n (file-wide invariant): {node:?}"
+                );
+            }
+        }
     }
 
     /// Block HTML round-trips through `adf_to_text` without loss or duplication.
     /// Issue #489 acceptance: "round-trip / adf_to_text behavior considered".
+    /// Single-line path — unchanged from #489. Must continue to PASS.
     #[test]
     fn test_block_html_round_trips_through_adf_to_text() {
         let adf = markdown_to_adf("<div>x</div>");
@@ -6907,6 +6962,470 @@ mod tests {
         assert_eq!(
             text, "<div>x</div>",
             "block HTML must survive the ADF→text round trip verbatim: {text:?}"
+        );
+    }
+
+    // --- BC-7.2.011 new tests (issue #492 RED GATE suite) -----------------------
+
+    /// BC-7.2.011 EC-5 extended (AC-005 test 1) — multi-line block HTML whose
+    /// final line is non-whitespace round-trips byte-identically through
+    /// `adf_to_text` (line-structure lossless; LF-only input; no trailing
+    /// whitespace line; no blank-line-terminated HTML block split → byte-identical).
+    ///
+    /// Input: `"<div>\n  <span>a</span>\n</div>"` — LF-only, three lines, no
+    /// interior blank line (avoids pulldown-cmark's blank-line HTML-block
+    /// termination which splits at blank lines per CommonMark §4.6 type 6 rule).
+    /// Expected round-trip output: `"<div>\n  <span>a</span>\n</div>"`.
+    ///
+    /// RED GATE: fails against pre-#492 handler because `adf_to_text` on a
+    /// single `\n`-bearing text node renders the text literally (returning the
+    /// node's raw text content plus paragraph separators), which does NOT equal
+    /// the original input structure (the hardBreak→`\n` rendering that enables
+    /// lossless reconstruction is only present after Algorithm B is implemented).
+    #[test]
+    fn test_multiline_block_html_round_trips_through_adf_to_text() {
+        // BC-7.2.011 EC-5 extended. Input: LF-only, no interior blank line,
+        // ends on "</div>" (non-whitespace) → byte-identical round-trip.
+        // No blank line means pulldown-cmark delivers this as one HtmlBlock.
+        let input = "<div>\n  <span>a</span>\n</div>";
+        let adf = markdown_to_adf(input);
+        let rendered = adf_to_text(&adf);
+        assert_eq!(
+            rendered, input,
+            "multi-line block HTML must round-trip byte-identically (LF-only, non-whitespace final line): rendered={rendered:?}"
+        );
+    }
+
+    /// BC-7.2.011 EC-3 DOCUMENT-AS-IS (AC-005 test 2) — a standalone HTML comment
+    /// block `<!-- x -->` is preserved as visible literal text in a single `text`
+    /// node with no `hardBreak` nodes (single line, no interior newlines).
+    ///
+    /// This is a DOCUMENT-AS-IS pin, not a positive design claim: comment-display
+    /// intent is out of scope for this fix. The test registers current behavior
+    /// and must remain GREEN against both pre-#492 and post-#492 code.
+    ///
+    /// NOT a RED GATE test (single-line behavior unchanged by #492).
+    #[test]
+    fn test_block_html_comment_only_behavior() {
+        // BC-7.2.011 EC-3. Comment is preserved verbatim; trailing newline trimmed.
+        let adf = markdown_to_adf("<!-- x -->");
+        let content = adf["content"].as_array().unwrap();
+        assert_eq!(
+            content.len(),
+            1,
+            "comment block must produce exactly one paragraph: {adf}"
+        );
+        let para_content = content[0]["content"].as_array().unwrap();
+        // Single line → single text node, no hardBreaks.
+        assert_eq!(
+            para_content.len(),
+            1,
+            "comment with no interior newlines must produce exactly one text node: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[0]["type"], "text",
+            "comment node must be text type: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[0]["text"], "<!-- x -->",
+            "comment text must be preserved verbatim: {para_content:?}"
+        );
+        // No hardBreak nodes in the paragraph content.
+        for node in para_content {
+            assert_ne!(
+                node["type"], "hardBreak",
+                "single-line comment block must not contain hardBreak: {node:?}"
+            );
+        }
+    }
+
+    /// BC-7.2.011 EC-4 (AC-005 test 3) — bare URL at a valid autolink boundary
+    /// inside block HTML receives a `link` mark from the `autolink_bare_urls`
+    /// post-pass; a URL flush against `"` (href-attribute form) does NOT receive
+    /// a link mark.
+    ///
+    /// Assertions:
+    /// (a) `<div>see https://example.com</div>` — `https://example.com` is at a
+    ///     valid boundary (preceded by space) and gets a `link` mark on its
+    ///     text node (or the node containing it has a link mark).
+    /// (b) `<a href="https://example.com">` — URL is flush against `"` (a
+    ///     non-boundary character per #473 rules) and stays a plain text node.
+    ///
+    /// RED GATE: Part (a) relies on the autolink pass seeing per-line text nodes
+    /// (produced by Algorithm B). Against pre-#492 code the whole block is one
+    /// text node — the autolink pass can still split it, but the test structure
+    /// asserts the post-split shape which matches the post-#492 paragraph layout.
+    /// Part (b) is a regression guard and passes against both pre- and post-#492.
+    #[test]
+    fn test_block_html_bare_url_gets_link_mark() {
+        // BC-7.2.011 EC-4.
+
+        // (a) Boundary-form: URL preceded by space → gets link mark.
+        let adf_boundary = markdown_to_adf("<div>see https://example.com</div>");
+        let para = &adf_boundary["content"][0];
+        assert_eq!(
+            para["type"], "paragraph",
+            "boundary-form must produce a paragraph: {adf_boundary}"
+        );
+        let para_nodes = para["content"].as_array().unwrap();
+        // After Algorithm B + autolink pass, the URL-bearing line is split.
+        // Find the node(s) carrying the URL and assert at least one has a link mark.
+        let has_link_mark = para_nodes.iter().any(|node| {
+            if node["type"] != "text" {
+                return false;
+            }
+            let text_val = node["text"].as_str().unwrap_or("");
+            if !text_val.contains("https://example.com") {
+                return false;
+            }
+            // The node must carry a link mark.
+            node.get("marks")
+                .and_then(|m| m.as_array())
+                .is_some_and(|marks| marks.iter().any(|m| m["type"] == "link"))
+        });
+        assert!(
+            has_link_mark,
+            "URL at valid autolink boundary must get a link mark: {para_nodes:?}"
+        );
+
+        // (b) href-attribute form: URL flush against `"` → NOT autolinked.
+        let adf_href = markdown_to_adf("<a href=\"https://example.com\">");
+        let para_href = &adf_href["content"][0];
+        assert_eq!(
+            para_href["type"], "paragraph",
+            "href-form must produce a paragraph: {adf_href}"
+        );
+        let href_nodes = para_href["content"].as_array().unwrap();
+        // None of the text nodes containing the URL should carry a link mark.
+        let has_unwanted_link = href_nodes.iter().any(|node| {
+            if node["type"] != "text" {
+                return false;
+            }
+            let text_val = node["text"].as_str().unwrap_or("");
+            if !text_val.contains("https://example.com") {
+                return false;
+            }
+            node.get("marks")
+                .and_then(|m| m.as_array())
+                .is_some_and(|marks| marks.iter().any(|m| m["type"] == "link"))
+        });
+        assert!(
+            !has_unwanted_link,
+            "URL flush against '\"' (href-attribute form) must NOT get a link mark: {href_nodes:?}"
+        );
+    }
+
+    /// BC-7.2.011 EC-1 (AC-005 test 4) — CRLF interior and trailing newlines are
+    /// normalized to LF; the resulting content array has three text nodes separated
+    /// by two hardBreaks, with zero `\r` characters in any text node.
+    ///
+    /// Input: `"<div>\r\n  x\r\n</div>"`.
+    /// Step 2 trims trailing (no trailing `\r\n` after `</div>`).
+    /// Step 3 normalizes `\r\n` → `\n` → `"<div>\n  x\n</div>"`.
+    /// Split on `\n` → `["<div>", "  x", "</div>"]` (3 segments, 2 boundaries).
+    /// Expected: `[text("<div>"), hardBreak, text("  x"), hardBreak, text("</div>")]`.
+    ///
+    /// RED GATE: fails against pre-#492 handler which does not normalize CRLF and
+    /// would preserve `\r` inside the text node.
+    #[test]
+    fn test_block_html_crlf_interior_no_dangling_cr() {
+        // BC-7.2.011 EC-1.
+        // Note: we pass the string directly to markdown_to_adf; pulldown-cmark
+        // normalizes CRLF to LF before tokenization (CommonMark §2.3), so this
+        // test goes through the parser CRLF-normalized path. The handler-level
+        // contract (step-3 normalize) is independently exercised by the
+        // test_block_html_lone_cr_interior_produces_single_hardbreak handler test.
+        // Use a raw block string so CRLF bytes survive the Rust string literal.
+        let input = "<div>\r\n  x\r\n</div>";
+        let adf = markdown_to_adf(input);
+        let content = adf["content"].as_array().unwrap();
+        assert_eq!(
+            content.len(),
+            1,
+            "CRLF block HTML must be one paragraph: {adf}"
+        );
+        let para_content = content[0]["content"].as_array().unwrap();
+        // Must be [text("<div>"), hardBreak, text("  x"), hardBreak, text("</div>")].
+        assert_eq!(
+            para_content.len(),
+            5,
+            "CRLF input (3 segments) must produce 5 content nodes: {para_content:?}"
+        );
+        assert_eq!(para_content[0]["type"], "text", "node[0] must be text: {para_content:?}");
+        assert_eq!(para_content[0]["text"], "<div>", "node[0] text must be '<div>': {para_content:?}");
+        assert_eq!(para_content[1]["type"], "hardBreak", "node[1] must be hardBreak: {para_content:?}");
+        assert_eq!(para_content[2]["type"], "text", "node[2] must be text: {para_content:?}");
+        assert_eq!(para_content[2]["text"], "  x", "node[2] text must be '  x': {para_content:?}");
+        assert_eq!(para_content[3]["type"], "hardBreak", "node[3] must be hardBreak: {para_content:?}");
+        assert_eq!(para_content[4]["type"], "text", "node[4] must be text: {para_content:?}");
+        assert_eq!(para_content[4]["text"], "</div>", "node[4] text must be '</div>': {para_content:?}");
+        // No \r survives into any text node.
+        for node in para_content {
+            if node["type"] == "text" {
+                let t = node["text"].as_str().unwrap_or("");
+                assert!(
+                    !t.contains('\r'),
+                    "no \\r must survive into any text node after CRLF normalization: {node:?}"
+                );
+            }
+        }
+    }
+
+    /// BC-7.2.011 EC-6 (AC-005 test 5) — consecutive blank lines produce double
+    /// hardBreak nodes between surrounding content lines.
+    ///
+    /// Handler-level unit test: constructs the AdfBuilder state directly to
+    /// deliver `"<div>\n\na\n</div>"` as the concatenated Html text.
+    ///
+    /// Note: pulldown-cmark terminates HTML block type 6 at a blank line (CommonMark
+    /// §4.6 rule), so `<div>\n\na\n</div>` in a markdown source is parsed as three
+    /// separate HTML blocks — the blank line cannot be delivered as interior content
+    /// of a single HtmlBlock through the parser. The handler's Algorithm B must
+    /// nonetheless handle this case for spec correctness (defense-in-depth), so this
+    /// test exercises the algorithm directly by constructing the handler input.
+    ///
+    /// Step 2 trims trailing `\n` from `</div>\n` → `<div>\n\na\n</div>`.
+    /// Step 3: split on `\n` → `["<div>", "", "a", "</div>"]` (4 segments, 3 boundaries).
+    /// Algorithm B walk:
+    ///   i=0: text("<div>") + hardBreak
+    ///   i=1: [empty, no text] + hardBreak
+    ///   i=2: text("a") + hardBreak
+    ///   i=3: text("</div>") [last, no trailing hardBreak]
+    /// Result before step 5b: `[text("<div>"), hb, hb, text("a"), hb, text("</div>")]`.
+    /// Step 5b: no leading/trailing hardBreaks — unchanged.
+    ///
+    /// RED GATE: fails against pre-#492 handler which emits a single text node
+    /// containing `"<div>\n\na\n</div>"` (embedded raw newlines, not hardBreaks).
+    #[test]
+    fn test_block_html_consecutive_blank_lines_produce_double_hardbreak() {
+        // BC-7.2.011 EC-6. Handler-level test.
+        // pulldown-cmark splits at blank lines (type 6 HTML block rule), so we
+        // construct the handler input directly to test Algorithm B's handling of
+        // empty interior segments.
+        let mut builder = AdfBuilder::new();
+        builder.push(NodeKind::HtmlBlock);
+        // Simulate the handler receiving the concatenated Html lines including
+        // the interior blank line. The trailing "\n" is present (as pulldown emits).
+        builder.push_text("<div>\n\na\n</div>\n");
+        builder.end(TagEnd::HtmlBlock);
+
+        let root = &builder.root;
+        assert_eq!(
+            root.len(),
+            1,
+            "consecutive-blank-line block HTML must produce one paragraph: {root:?}"
+        );
+        let para_content = root[0]["content"].as_array().unwrap();
+        // Step 2 trims trailing \n: "<div>\n\na\n</div>".
+        // Step 3 split: ["<div>", "", "a", "</div>"] — 4 segments, 3 boundaries.
+        // [text("<div>"), hb, hb, text("a"), hb, text("</div>")] — 6 nodes.
+        assert_eq!(
+            para_content.len(),
+            6,
+            "4 segments (3 boundaries) must produce 6 content nodes: {para_content:?}"
+        );
+        assert_eq!(para_content[0]["type"], "text", "node[0] must be text: {para_content:?}");
+        assert_eq!(para_content[0]["text"], "<div>", "node[0] text: {para_content:?}");
+        assert_eq!(para_content[1]["type"], "hardBreak", "node[1] must be hardBreak: {para_content:?}");
+        assert_eq!(
+            para_content[2]["type"], "hardBreak",
+            "node[2] must also be hardBreak (double-hardBreak from empty segment): {para_content:?}"
+        );
+        assert_eq!(para_content[3]["type"], "text", "node[3] must be text: {para_content:?}");
+        assert_eq!(para_content[3]["text"], "a", "node[3] text must be 'a': {para_content:?}");
+        assert_eq!(para_content[4]["type"], "hardBreak", "node[4] must be hardBreak: {para_content:?}");
+        assert_eq!(para_content[5]["type"], "text", "node[5] must be text: {para_content:?}");
+        assert_eq!(para_content[5]["text"], "</div>", "node[5] text must be '</div>': {para_content:?}");
+    }
+
+    /// BC-7.2.011 EC-8 (AC-005 test 6) — a block whose first line is blank
+    /// produces NO leading `hardBreak` in the final content array.
+    ///
+    /// Algorithm B produces a leading `hardBreak` from the empty leading segment;
+    /// step 5b (`trim_leading_trailing_hardbreaks`) removes it.
+    ///
+    /// Handler-level unit test: constructs the AdfBuilder state directly to
+    /// deliver `"\n<div>x</div>\n"` as the concatenated Html input (one child
+    /// text node with that exact content), bypassing pulldown-cmark (which
+    /// normalizes line endings before tokenization and may not deliver a leading
+    /// blank line in practice — defense-in-depth per BC-7.2.011 EC-8 note).
+    ///
+    /// RED GATE: fails against pre-#492 handler, which does not apply
+    /// `trim_leading_trailing_hardbreaks` and would leave a leading hardBreak
+    /// (or, with the current buggy single-text-node implementation, emits the
+    /// raw `\n<div>x</div>` with a leading `\n` in the text field).
+    #[test]
+    fn test_block_html_leading_blank_line_no_leading_hardbreak() {
+        // BC-7.2.011 EC-8. Handler-level test: simulate pulldown delivering
+        // "\n<div>x</div>\n" as the concatenated Html text for one HtmlBlock.
+        // This is equivalent to a block whose content is: blank line, then
+        // "<div>x</div>", then a trailing newline.
+        let mut builder = AdfBuilder::new();
+        // Simulate Start(HtmlBlock):
+        builder.push(NodeKind::HtmlBlock);
+        // Simulate Event::Html lines: the whole block as one concatenated string
+        // (pulldown emits per-line Html events; each appends to the stack top via
+        // push_text; together they make the children that end() processes).
+        builder.push_text("\n<div>x</div>\n");
+        // Simulate End(HtmlBlock):
+        builder.end(TagEnd::HtmlBlock);
+
+        // The result should be in builder.root.
+        let root = &builder.root;
+        assert_eq!(
+            root.len(),
+            1,
+            "leading-blank-line block HTML must produce one paragraph: {root:?}"
+        );
+        let para_content = root[0]["content"].as_array().unwrap();
+        // After step 5b trim: [text("<div>x</div>")] — the leading hardBreak removed.
+        assert!(
+            !para_content.is_empty(),
+            "content must not be empty: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[0]["type"], "text",
+            "first content node must be text (leading hardBreak must be trimmed by step 5b): {para_content:?}"
+        );
+        assert_ne!(
+            para_content[0]["type"], "hardBreak",
+            "content must NOT begin with hardBreak after step 5b trim: {para_content:?}"
+        );
+        // Confirm no \n in the text node.
+        let first_text = para_content[0]["text"].as_str().unwrap_or("");
+        assert!(
+            !first_text.contains('\n'),
+            "text node must not contain raw \\n: {para_content:?}"
+        );
+    }
+
+    /// BC-7.2.011 EC-9 (AC-005 test 7) — a lone `\r` (old-Mac line ending) is
+    /// treated as a single line-break boundary, producing exactly ONE `hardBreak`
+    /// node, and no `\r` character survives into any text node.
+    ///
+    /// Handler-level unit test: constructs the AdfBuilder state directly to
+    /// deliver `"<div>\rx</div>"` as the concatenated Html input, bypassing
+    /// pulldown-cmark (which normalizes CR to LF before tokenization per
+    /// CommonMark §2.3 — so a lone `\r` in the handler input is a
+    /// defense-in-depth path, not a routine parser-produced scenario).
+    ///
+    /// RED GATE: fails against pre-#492 handler because the handler does not
+    /// normalize lone `\r` — the current handler strips only a trailing `\n`
+    /// and would embed the `\r` inside the text node verbatim.
+    #[test]
+    fn test_block_html_lone_cr_interior_produces_single_hardbreak() {
+        // BC-7.2.011 EC-9. Handler-level test: simulate pulldown delivering
+        // "<div>\rx</div>" (lone CR, old-Mac line ending) as the Html text.
+        let mut builder = AdfBuilder::new();
+        builder.push(NodeKind::HtmlBlock);
+        builder.push_text("<div>\rx</div>");
+        builder.end(TagEnd::HtmlBlock);
+
+        let root = &builder.root;
+        assert_eq!(
+            root.len(),
+            1,
+            "lone-CR block HTML must produce one paragraph: {root:?}"
+        );
+        let para_content = root[0]["content"].as_array().unwrap();
+        // Step 3 normalizes lone `\r` → `\n`, split → ["<div>", "x</div>"].
+        // Expected: [text("<div>"), hardBreak, text("x</div>")] — 3 nodes.
+        assert_eq!(
+            para_content.len(),
+            3,
+            "lone-CR input (2 segments) must produce 3 content nodes: {para_content:?}"
+        );
+        assert_eq!(para_content[0]["type"], "text", "node[0] must be text: {para_content:?}");
+        assert_eq!(para_content[0]["text"], "<div>", "node[0] text must be '<div>': {para_content:?}");
+        assert_eq!(
+            para_content[1]["type"], "hardBreak",
+            "node[1] must be exactly ONE hardBreak (lone \\r = one boundary): {para_content:?}"
+        );
+        assert_eq!(para_content[2]["type"], "text", "node[2] must be text: {para_content:?}");
+        assert_eq!(para_content[2]["text"], "x</div>", "node[2] text must be 'x</div>': {para_content:?}");
+        // No \r must survive in any text node.
+        for node in para_content {
+            if node["type"] == "text" {
+                let t = node["text"].as_str().unwrap_or("");
+                assert!(
+                    !t.contains('\r'),
+                    "no \\r must survive after lone-CR normalization: {node:?}"
+                );
+            }
+        }
+    }
+
+    /// BC-7.2.011 EC-10 (AC-005 test 8) — trailing-whitespace final line (LF-only,
+    /// document-final):
+    ///   - Forward ADF preserves `[text("<div>x</div>"), hardBreak, text("   ")]`
+    ///     (step 2 only trims `\r`/`\n`, NOT spaces/tabs).
+    ///   - Round-trip via `adf_to_text` yields `"<div>x</div>"` (the trailing-
+    ///     whitespace line AND its `hardBreak` separator are stripped by
+    ///     `AdfRenderer::finish()`'s document-global `trim_end()`).
+    ///   - NOT byte-identical.
+    ///
+    /// Handler-level unit test: delivers `"<div>x</div>\n   "` as the Html text
+    /// directly (bypassing pulldown-cmark, which may normalize or strip trailing
+    /// whitespace lines during HTML-block tokenization — defense-in-depth per
+    /// BC-7.2.011 EC-10 note).
+    ///
+    /// RED GATE: fails against pre-#492 handler, which cannot produce the split
+    /// `[text, hardBreak, text("   ")]` shape — it emits one text node and would
+    /// not produce the correct forward ADF assertion.
+    #[test]
+    fn test_block_html_trailing_whitespace_final_line_not_byte_identical() {
+        // BC-7.2.011 EC-10. Handler-level test.
+        // Input: "<div>x</div>\n   " (LF-only; final line is three spaces).
+        // Step 2: trim \r/\n only → "<div>x</div>\n   " (spaces preserved).
+        // Step 3: normalize (no CRLF) → split on \n → ["<div>x</div>", "   "].
+        // Step 4: [text("<div>x</div>"), hardBreak, text("   ")] — 3 nodes.
+        let mut builder = AdfBuilder::new();
+        builder.push(NodeKind::HtmlBlock);
+        builder.push_text("<div>x</div>\n   ");
+        builder.end(TagEnd::HtmlBlock);
+
+        let root = &builder.root;
+        assert_eq!(
+            root.len(),
+            1,
+            "trailing-whitespace block HTML must produce one paragraph: {root:?}"
+        );
+        let para_content = root[0]["content"].as_array().unwrap();
+        // Forward ADF: [text("<div>x</div>"), hardBreak, text("   ")].
+        assert_eq!(
+            para_content.len(),
+            3,
+            "2 segments must produce 3 content nodes (text, hardBreak, text): {para_content:?}"
+        );
+        assert_eq!(para_content[0]["type"], "text", "node[0] must be text: {para_content:?}");
+        assert_eq!(
+            para_content[0]["text"], "<div>x</div>",
+            "node[0] text: {para_content:?}"
+        );
+        assert_eq!(para_content[1]["type"], "hardBreak", "node[1] must be hardBreak: {para_content:?}");
+        assert_eq!(para_content[2]["type"], "text", "node[2] must be text: {para_content:?}");
+        assert_eq!(
+            para_content[2]["text"], "   ",
+            "node[2] must be the trailing-whitespace text '   ' (step 2 must NOT strip non-newline whitespace): {para_content:?}"
+        );
+
+        // Round-trip via adf_to_text: AdfRenderer::finish() trim_end() strips
+        // the trailing-whitespace line and its hardBreak — NOT byte-identical.
+        // Wrap the paragraph into a proper ADF doc for adf_to_text.
+        let doc = json!({
+            "version": 1,
+            "type": "doc",
+            "content": root,
+        });
+        let round_tripped = adf_to_text(&doc);
+        assert_eq!(
+            round_tripped, "<div>x</div>",
+            "round-trip must strip the trailing-whitespace line via finish().trim_end(): round_tripped={round_tripped:?}"
+        );
+        // Confirm NOT byte-identical to original handler input.
+        assert_ne!(
+            round_tripped, "<div>x</div>\n   ",
+            "round-trip must NOT be byte-identical to trailing-whitespace input: {round_tripped:?}"
         );
     }
 
