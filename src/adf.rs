@@ -6931,7 +6931,7 @@ mod tests {
 
     /// BC-7.2.011 AC-004 — REPLACED from issue #489 body (which asserted the
     /// buggy raw-`\n`-in-text behavior). The new body asserts Algorithm B's
-    /// hardBreak-segmented `content` array per EC-6.
+    /// hardBreak-segmented `content` array per Algorithm B's general multiline hardBreak-segmentation (AC-004).
     ///
     /// Input `<div>\n  <span>x</span>\n</div>` has 3 segments after trim+split:
     /// `["<div>", "  <span>x</span>", "</div>"]`.
