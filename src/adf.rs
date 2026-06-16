@@ -6942,7 +6942,7 @@ mod tests {
     /// with raw `\n` characters in the `"text"` field).
     #[test]
     fn test_convert_multiline_block_html_preserves_interior_newlines() {
-        // BC-7.2.011 EC-6; AC-004.
+        // BC-7.2.011 Algorithm B (general multiline hardBreak-segmentation); AC-004.
         let adf = markdown_to_adf("<div>\n  <span>x</span>\n</div>");
         let content = adf["content"].as_array().unwrap();
         assert_eq!(
