@@ -118,7 +118,7 @@ conditions hold (forward-path losses are 1–3; reverse-path losses are 4–5):
 1. **LF-only** — no `\r`; a `\r\n` or lone `\r` is normalized to `\n` by
    step 3 (EC-1, forward).
 2. **No leading newline** — a leading `\n` produces a leading `hardBreak` that
-   step 5 trims, so it is lost (EC-8, forward).
+   step 5b trims, so it is lost (EC-8, forward).
 3. **No trailing newline(s)** — trailing `\r`/`\n` are stripped by step 2 and
    not reconstructed on round-trip (EC-2, forward).
 4. **Final line does not end in non-newline whitespace** — trailing spaces/tabs
@@ -147,7 +147,7 @@ Example of a byte-identical round-trip (all five conditions met):
 | EC-5 | Single-line block (`<div>x</div>`) | One segment after trim+split → one `text` node, no `hardBreak`. | Test: `test_convert_block_html_is_preserved_as_literal_text`, `test_block_html_round_trips_through_adf_to_text` |
 | EC-6 | Consecutive blank lines (`<div>\n\na\n</div>`, handler-level) | 4 segments, 3 boundaries → `[text("<div>"), hb, hb, text("a"), hb, text("</div>")]` — double `hardBreak` for the empty-segment boundary. pulldown-cmark type-6 rule terminates an HTML block at a blank line, so this is a handler-level defense-in-depth case. | Test: `test_block_html_consecutive_blank_lines_produce_double_hardbreak` |
 | EC-7 | All-empty / empty block | After step 2 trim and step 6 guard, no paragraph is emitted (`EndResult::Empty`). | Test: `test_block_html_all_empty_block_emits_no_paragraph` |
-| EC-8 | Leading blank line (`\n<div>x</div>\n`, handler-level) | Step 4 generates a leading `hardBreak` for the empty leading segment; step 5 (`trim_leading_trailing_hardbreaks`) removes it. No `hardBreak` at position 0 in output. | Test: `test_block_html_leading_blank_line_no_leading_hardbreak` |
+| EC-8 | Leading blank line (`\n<div>x</div>\n`, handler-level) | Step 4 generates a leading `hardBreak` for the empty leading segment; step 5b (`trim_leading_trailing_hardbreaks`) removes it. No `hardBreak` at position 0 in output. | Test: `test_block_html_leading_blank_line_no_leading_hardbreak` |
 | EC-9 | Lone `\r` interior (`<div>\rx</div>`, handler-level) | Step 3 normalizes lone `\r`→`\n` before split; exactly ONE `hardBreak` produced (not two). pulldown-cmark normalizes lone `\r` per CommonMark §2.3 before tokenizing, so this is a handler-level defense-in-depth path. | Test: `test_block_html_lone_cr_interior_produces_single_hardbreak` |
 | EC-10 | Trailing non-newline whitespace on final line (`<div>x</div>\n   `, handler-level) | Step 2 preserves the trailing spaces. Forward ADF: `[text("<div>x</div>"), hb, text("   ")]`. Reverse path: `AdfRenderer::finish().trim_end()` strips trailing whitespace — round-trip is NOT byte-identical to the handler input. | Test: `test_block_html_trailing_whitespace_final_line_not_byte_identical` |
 
@@ -187,7 +187,7 @@ content-array construction).
 | `test_block_html_crlf_interior_no_dangling_cr` | CRLF normalized; no `\r` in text nodes (EC-1) |
 | `test_block_html_consecutive_blank_lines_produce_double_hardbreak` | Double hardBreak for empty interior segment (EC-6, handler-level) |
 | `test_block_html_all_empty_block_emits_no_paragraph` | All-whitespace/newlines-only body → step-6 early-return, `builder.root` empty, no paragraph emitted (EC-7, handler-level) |
-| `test_block_html_leading_blank_line_no_leading_hardbreak` | Leading hardBreak trimmed by step 5 (EC-8, handler-level) |
+| `test_block_html_leading_blank_line_no_leading_hardbreak` | Leading hardBreak trimmed by step 5b (EC-8, handler-level) |
 | `test_block_html_lone_cr_interior_produces_single_hardbreak` | Lone `\r` → single hardBreak (EC-9, handler-level) |
 | `test_block_html_trailing_whitespace_final_line_not_byte_identical` | Trailing-whitespace line preserved in forward ADF; stripped by `finish().trim_end()` on reverse (EC-10, handler-level) |
 
