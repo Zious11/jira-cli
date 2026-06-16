@@ -6891,9 +6891,12 @@ mod tests {
     /// 2. Block-level HTML: `<div>x</div>` on its own line triggers
     ///    `Tag::HtmlBlock` (Start + End) wrapping `Event::Html` line events. ADF
     ///    has no raw-HTML node, but silently discarding the source is data loss,
-    ///    so we preserve the verbatim block as literal text inside a paragraph —
-    ///    symmetric with inline HTML (`Event::InlineHtml`, see
-    ///    `test_markdown_inline_html_becomes_literal_text`). Issue #489.
+    ///    so we preserve the verbatim block as literal text inside a paragraph.
+    ///    Issue #489 (preserve vs drop). Issue #492 introduced three load-bearing
+    ///    asymmetries vs inline HTML — own paragraph wrapper, trailing-`\r`/`\n`
+    ///    trim, and no active marks — documented in `docs/specs/adf-block-html.md`
+    ///    §"Differences from inline HTML" and the handler comment at the
+    ///    `NodeKind::HtmlBlock` arm.
     #[test]
     fn test_convert_block_html_is_preserved_as_literal_text() {
         // `<div>x</div>` on its own line: pulldown-cmark emits
@@ -7023,11 +7026,14 @@ mod tests {
     /// termination which splits at blank lines per CommonMark §4.6 type 6 rule).
     /// Expected round-trip output: `"<div>\n  <span>a</span>\n</div>"`.
     ///
-    /// RED GATE: fails against pre-#492 handler because `adf_to_text` on a
-    /// single `\n`-bearing text node renders the text literally (returning the
-    /// node's raw text content plus paragraph separators), which does NOT equal
-    /// the original input structure (the hardBreak→`\n` rendering that enables
-    /// lossless reconstruction is only present after Algorithm B is implemented).
+    /// This test has TWO assertions:
+    ///   (a) Forward ADF structure: 5-node hardBreak-segmented content array
+    ///       (RED GATE — fails against pre-#492 handler which emits one text
+    ///       node with a raw `\n` field, producing exactly 1 content node).
+    ///   (b) Round-trip: rendered string equals original input
+    ///       (regression guard — note: round-trip is also byte-identical
+    ///       against the buggy pre-#492 handler, so this assertion alone is
+    ///       NOT a red gate; assertion (a) is the gating check).
     #[test]
     fn test_multiline_block_html_round_trips_through_adf_to_text() {
         // BC-7.2.011 EC-5 extended. Input: LF-only, no interior blank line,
@@ -7035,6 +7041,36 @@ mod tests {
         // No blank line means pulldown-cmark delivers this as one HtmlBlock.
         let input = "<div>\n  <span>a</span>\n</div>";
         let adf = markdown_to_adf(input);
+
+        // (a) Forward structure: Algorithm B produces [text, hb, text, hb, text].
+        // This is the RED GATE — pre-#492 handler emits a single text node with
+        // raw `\n`, so `para_content.len()` would be 1, not 5.
+        let para_content = adf["content"][0]["content"].as_array().unwrap();
+        assert_eq!(
+            para_content.len(),
+            5,
+            "3 segments must produce 5 content nodes [text, hb, text, hb, text]: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[1]["type"], "hardBreak",
+            "node[1] must be hardBreak (not raw \\n in text): {para_content:?}"
+        );
+        assert_eq!(
+            para_content[3]["type"], "hardBreak",
+            "node[3] must be hardBreak (not raw \\n in text): {para_content:?}"
+        );
+        // File-wide invariant: no raw \n in any text node.
+        for node in para_content {
+            if node["type"] == "text" {
+                let t = node["text"].as_str().unwrap_or("");
+                assert!(
+                    !t.contains('\n'),
+                    "text node must not contain raw \\n: {node:?}"
+                );
+            }
+        }
+
+        // (b) Round-trip regression guard.
         let rendered = adf_to_text(&adf);
         assert_eq!(
             rendered, input,
