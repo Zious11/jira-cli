@@ -143,7 +143,7 @@ Example of a byte-identical round-trip (all five conditions met):
 | EC-4 | Bare URL at valid boundary (`<div>see https://…</div>`) | Gets `link` mark from autolink pass. Href-attribute form (`href="https://…"`) is NOT autolinked (boundary rule). Round-trip for URL content renders as `[url](url)`. | Test: `test_block_html_bare_url_gets_link_mark` |
 | EC-5 | Single-line block (`<div>x</div>`) | One segment after trim+split → one `text` node, no `hardBreak`. | Test: `test_convert_block_html_is_preserved_as_literal_text`, `test_block_html_round_trips_through_adf_to_text` |
 | EC-6 | Consecutive blank lines (`<div>\n\na\n</div>`, handler-level) | 4 segments, 3 boundaries → `[text("<div>"), hb, hb, text("a"), hb, text("</div>")]` — double `hardBreak` for the empty-segment boundary. pulldown-cmark type-6 rule terminates an HTML block at a blank line, so this is a handler-level defense-in-depth case. | Test: `test_block_html_consecutive_blank_lines_produce_double_hardbreak` |
-| EC-7 | All-empty / empty block | After step 2 trim and step 6 guard, no paragraph is emitted (`EndResult::Empty`). |
+| EC-7 | All-empty / empty block | After step 2 trim and step 6 guard, no paragraph is emitted (`EndResult::Empty`). | Test: `test_block_html_all_empty_block_emits_no_paragraph` |
 | EC-8 | Leading blank line (`\n<div>x</div>\n`, handler-level) | Step 4 generates a leading `hardBreak` for the empty leading segment; step 5 (`trim_leading_trailing_hardbreaks`) removes it. No `hardBreak` at position 0 in output. | Test: `test_block_html_leading_blank_line_no_leading_hardbreak` |
 | EC-9 | Lone `\r` interior (`<div>\rx</div>`, handler-level) | Step 3 normalizes lone `\r`→`\n` before split; exactly ONE `hardBreak` produced (not two). pulldown-cmark normalizes lone `\r` per CommonMark §2.3 before tokenizing, so this is a handler-level defense-in-depth path. | Test: `test_block_html_lone_cr_interior_produces_single_hardbreak` |
 | EC-10 | Trailing non-newline whitespace on final line (`<div>x</div>\n   `, handler-level) | Step 2 preserves the trailing spaces. Forward ADF: `[text("<div>x</div>"), hb, text("   ")]`. Reverse path: `AdfRenderer::finish().trim_end()` strips trailing whitespace — round-trip is NOT byte-identical to the handler input. | Test: `test_block_html_trailing_whitespace_final_line_not_byte_identical` |
@@ -170,7 +170,7 @@ The handler does NOT use `push_text` internally to build the output content
 array (which would incorrectly apply `active_marks` and break the direct
 content-array construction).
 
-## Test coverage (10 tests in `src/adf.rs::tests`)
+## Test coverage (12 tests in `src/adf.rs::tests`)
 
 | Test | What it pins |
 |------|--------------|
@@ -182,6 +182,7 @@ content-array construction).
 | `test_block_html_bare_url_gets_link_mark` | URL at valid boundary gets link mark; href-attribute form does not (EC-4) |
 | `test_block_html_crlf_interior_no_dangling_cr` | CRLF normalized; no `\r` in text nodes (EC-1) |
 | `test_block_html_consecutive_blank_lines_produce_double_hardbreak` | Double hardBreak for empty interior segment (EC-6, handler-level) |
+| `test_block_html_all_empty_block_emits_no_paragraph` | All-whitespace/newlines-only body → step-6 early-return, `builder.root` empty, no paragraph emitted (EC-7, handler-level) |
 | `test_block_html_leading_blank_line_no_leading_hardbreak` | Leading hardBreak trimmed by step 5 (EC-8, handler-level) |
 | `test_block_html_lone_cr_interior_produces_single_hardbreak` | Lone `\r` → single hardBreak (EC-9, handler-level) |
 | `test_block_html_trailing_whitespace_final_line_not_byte_identical` | Trailing-whitespace line preserved in forward ADF; stripped by `finish().trim_end()` on reverse (EC-10, handler-level) |

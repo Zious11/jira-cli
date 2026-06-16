@@ -7544,6 +7544,43 @@ mod tests {
         );
     }
 
+    /// BC-7.2.011 EC-7 — an all-whitespace / empty block HTML body produces NO
+    /// paragraph node (`EndResult::Empty`, step-6 early-return).
+    ///
+    /// The step-6 guard is the operative prune path for `paragraph` because
+    /// `paragraph` is excluded from `is_empty_block_container` (empty paragraphs
+    /// are valid ADF for other node types, but here the early-return prevents an
+    /// empty paragraph being emitted at all). Without the guard an empty
+    /// `{"type":"paragraph","content":[]}` would reach the wire and Jira would
+    /// reject it with HTTP 400.
+    ///
+    /// Handler-level unit test: constructs `AdfBuilder` state directly to deliver
+    /// whitespace-only text (newlines only) as the `HtmlBlock` body, then asserts
+    /// that `builder.root` remains empty — no paragraph node is appended.
+    ///
+    /// RED GATE: fails against any handler that does not implement the step-6
+    /// early-return (would instead append an empty `paragraph` to `builder.root`).
+    #[test]
+    fn test_block_html_all_empty_block_emits_no_paragraph() {
+        // BC-7.2.011 EC-7. Handler-level test: whitespace-only Html content.
+        // Step 2: trim_end_matches(['\n', '\r']) on "\n\n\n" → "" (empty).
+        // Step 3: normalize → split → [""] — one segment, all empty.
+        // Step 4: no non-empty segment → content Vec is empty (or only hardBreaks
+        //         from boundaries, which step 5 would trim).
+        // Step 6: early-return EndResult::Empty — nothing pushed to builder.root.
+        let mut builder = AdfBuilder::new();
+        builder.push(NodeKind::HtmlBlock);
+        builder.push_text("\n\n\n");
+        builder.end(TagEnd::HtmlBlock);
+
+        let root = &builder.root;
+        assert!(
+            root.is_empty(),
+            "all-whitespace block HTML must emit no paragraph (step-6 early-return); \
+             builder.root must be empty but got: {root:?}"
+        );
+    }
+
     /// 3. `hardBreak` inside a mark span: `**line one  \nline two**` (two
     ///    trailing spaces before `\n` = markdown hard break, inside bold).
     ///
