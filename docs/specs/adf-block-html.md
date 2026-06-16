@@ -113,7 +113,7 @@ rendering). A `paragraph` in `adf_to_text` appends its content and a trailing
 final buffer, stripping trailing whitespace including any trailing `\n`.
 
 A round-trip is **byte-identical to the handler input** only when ALL five
-conditions hold (forward-path losses are 1–3; reverse-path losses are 4–5):
+conditions hold (forward-path losses are cases 1–3 and 5; the only reverse-path loss is case 4 (EC-10)):
 
 1. **LF-only** — no `\r`; a `\r\n` or lone `\r` is normalized to `\n` by
    step 3 (EC-1, forward).
