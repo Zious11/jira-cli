@@ -7223,7 +7223,9 @@ mod tests {
             para["type"], "paragraph",
             "multi-line block HTML must produce a paragraph: {adf}"
         );
-        let nodes = para["content"].as_array().expect("paragraph must have content array");
+        let nodes = para["content"]
+            .as_array()
+            .expect("paragraph must have content array");
 
         // 1. No text node may contain a raw `\n`.
         for node in nodes {
@@ -7293,10 +7295,7 @@ mod tests {
             nodes[5]["type"], "text",
             "node[5] must be text('</div>'): {nodes:?}"
         );
-        assert_eq!(
-            nodes[5]["text"], "</div>",
-            "node[5] text must be '</div>'"
-        );
+        assert_eq!(nodes[5]["text"], "</div>", "node[5] text must be '</div>'");
     }
 
     /// BC-7.2.011 EC-1 (AC-005 test 4) — CRLF interior and trailing newlines are

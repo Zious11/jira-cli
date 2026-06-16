@@ -50,11 +50,14 @@ For each segment index `i`:
 Empty segments (from consecutive newlines) get no `text` node but still get a
 `hardBreak` for the boundary — preserving line-structure losslessly.
 
-**Step 5 — Wrap and trim.**
-Wrap the content Vec in a `{"type":"paragraph","content":…}`. Then call
-`trim_leading_trailing_hardbreaks` to remove any leading or trailing
-`hardBreak` nodes (these can arise when the input's first or last character
-is a newline).
+**Step 5 — Wrap.** Wrap the content Vec in a `{"type":"paragraph","content":…}`.
+
+**Step 5b — Trim leading/trailing hardBreaks.**
+Call `trim_leading_trailing_hardbreaks` to remove any leading or trailing
+`hardBreak` nodes (these arise when the input's first or last character
+is a newline — e.g., a block whose first byte is `\n` produces a leading
+`hardBreak` in step 4 that step 5b removes). This is the canonical "step 5b"
+referenced in BC-7.2.011, the in-code handler comment, and EC-8.
 
 **Step 6 — Early-return if empty.**
 If the content array is empty after trimming, return `EndResult::Empty`
@@ -140,7 +143,7 @@ Example of a byte-identical round-trip (all five conditions met):
 | EC-1 | CRLF interior (`<div>\r\n  x\r\n</div>`) | Step 3 normalizes `\r\n`→`\n`; no `\r` survives into any text node; same 3-segment output as LF-only. Round-trip is LF-only (CRLF lost). | Test: `test_block_html_crlf_interior_no_dangling_cr` |
 | EC-2 | Trailing newlines | Step 2 trims them; they do not appear in the output and are not reconstructed. | Implicit in all `markdown_to_adf` tests |
 | EC-3 | Comment-only block (`<!-- x -->`) | Single line, no interior newlines — single `text` node, no `hardBreak`. Visible literal text in output (no special treatment). DOCUMENT-AS-IS. | Test: `test_block_html_comment_only_behavior` |
-| EC-4 | Bare URL at valid boundary (`<div>see https://…</div>`) | Gets `link` mark from autolink pass. Href-attribute form (`href="https://…"`) is NOT autolinked (boundary rule). Round-trip for URL content renders as `[url](url)`. | Test: `test_block_html_bare_url_gets_link_mark` |
+| EC-4 | Bare URL at valid boundary (`<div>see https://…</div>`) | Gets `link` mark from autolink pass. Href-attribute form (`href="https://…"`) is NOT autolinked (boundary rule). Round-trip for URL content renders as `[url](url)`. URL on an **interior line** of a multi-line block: autolink splits the middle text node into `[pre, link, post]`; flanking `hardBreak` nodes survive at their original positions (F-P1-002). | Tests: `test_block_html_bare_url_gets_link_mark`, `test_block_html_interior_line_url_split_preserves_hardbreaks` |
 | EC-5 | Single-line block (`<div>x</div>`) | One segment after trim+split → one `text` node, no `hardBreak`. | Test: `test_convert_block_html_is_preserved_as_literal_text`, `test_block_html_round_trips_through_adf_to_text` |
 | EC-6 | Consecutive blank lines (`<div>\n\na\n</div>`, handler-level) | 4 segments, 3 boundaries → `[text("<div>"), hb, hb, text("a"), hb, text("</div>")]` — double `hardBreak` for the empty-segment boundary. pulldown-cmark type-6 rule terminates an HTML block at a blank line, so this is a handler-level defense-in-depth case. | Test: `test_block_html_consecutive_blank_lines_produce_double_hardbreak` |
 | EC-7 | All-empty / empty block | After step 2 trim and step 6 guard, no paragraph is emitted (`EndResult::Empty`). | Test: `test_block_html_all_empty_block_emits_no_paragraph` |
@@ -170,7 +173,7 @@ The handler does NOT use `push_text` internally to build the output content
 array (which would incorrectly apply `active_marks` and break the direct
 content-array construction).
 
-## Test coverage (12 tests in `src/adf.rs::tests`)
+## Test coverage (13 tests in `src/adf.rs::tests`)
 
 | Test | What it pins |
 |------|--------------|
@@ -180,6 +183,7 @@ content-array construction).
 | `test_multiline_block_html_round_trips_through_adf_to_text` | Multi-line round-trip byte-identical (LF-only, non-whitespace final line) |
 | `test_block_html_comment_only_behavior` | Comment-only block → single text node, no hardBreak (EC-3, DOCUMENT-AS-IS) |
 | `test_block_html_bare_url_gets_link_mark` | URL at valid boundary gets link mark; href-attribute form does not (EC-4) |
+| `test_block_html_interior_line_url_split_preserves_hardbreaks` | URL on interior line of multi-line block: autolink splits middle text node into `[pre, link, post]`; flanking `hardBreak` nodes survive at correct positions (EC-4, F-P1-002) |
 | `test_block_html_crlf_interior_no_dangling_cr` | CRLF normalized; no `\r` in text nodes (EC-1) |
 | `test_block_html_consecutive_blank_lines_produce_double_hardbreak` | Double hardBreak for empty interior segment (EC-6, handler-level) |
 | `test_block_html_all_empty_block_emits_no_paragraph` | All-whitespace/newlines-only body → step-6 early-return, `builder.root` empty, no paragraph emitted (EC-7, handler-level) |
