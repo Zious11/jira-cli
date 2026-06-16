@@ -912,28 +912,74 @@ impl AdfBuilder {
                 EndResult::Empty
             }
             NodeKind::HtmlBlock => {
-                // ADF has no raw-HTML node. Concatenate the block's verbatim
-                // `Event::Html` lines (each carries a trailing newline from the
-                // source) into a single literal text node, trimming only the one
-                // trailing block newline so a one-line `<div>x</div>` doesn't
-                // leave a dangling break. Interior newlines are kept as the
-                // honest literal representation (issue #489). Symmetric with the
-                // inline-HTML path, which preserves tags as literal text.
+                // ADF has no raw-HTML node. Preserve block HTML as literal text
+                // in a `paragraph`, using `hardBreak` nodes to represent interior
+                // newlines (issue #492 — Algorithm B). This differs from inline
+                // HTML in three load-bearing ways: (1) block HTML is wrapped in
+                // its own manufactured `paragraph`; inline HTML flows into the
+                // enclosing paragraph directly. (2) Trailing `\r`/`\n` are trimmed
+                // from the block; inline HTML is not trimmed. (3) Block HTML carries
+                // no `active_marks` (the mark stack is always empty when a
+                // `HtmlBlock` end fires); inline HTML inherits the current mark stack.
+
+                // Step 1: Concatenate the per-line `Event::Html` strings accumulated
+                // as child text nodes during the HtmlBlock span.
                 let mut text = String::new();
                 for child in &children {
                     if let Some(s) = child.get("text").and_then(Value::as_str) {
                         text.push_str(s);
                     }
                 }
-                let trimmed = text.strip_suffix('\n').unwrap_or(&text);
-                if trimmed.is_empty() {
+
+                // Step 2: Trim trailing `\r` and `\n` (any count). Trailing
+                // non-newline whitespace (spaces/tabs) is NOT trimmed — preserved
+                // verbatim in the last text node (BC-7.2.011 step 2).
+                let trimmed = text.trim_end_matches(['\n', '\r']);
+
+                // Step 3: Normalize then split. Normalize `\r\n`→`\n` first, then
+                // lone `\r`→`\n`, then split on `\n`. Do NOT use a `['\r','\n']`
+                // char-set split — that double-counts CRLF boundaries, producing
+                // spurious hardBreak nodes (BC-7.2.011 step 3 mandatory constraint).
+                let normalized = trimmed.replace("\r\n", "\n").replace('\r', "\n");
+                let segments: Vec<&str> = normalized.split('\n').collect();
+                let len = segments.len();
+
+                // Step 4: Walk segments by index. For each i: emit a text node if
+                // the segment is non-empty; emit exactly ONE hardBreak if i < len-1
+                // (one per split boundary, regardless of whether adjacent segments
+                // are empty — the LOSSLESS rule from BC-7.2.011 step 4).
+                // Build the content Vec directly — do NOT route through push_text
+                // (which applies active_marks; HtmlBlock has no active marks, but
+                // routing through it would also break the direct-content-array build).
+                let mut content: Vec<Value> = Vec::with_capacity(len * 2);
+                for (i, seg) in segments.iter().enumerate() {
+                    if !seg.is_empty() {
+                        content.push(json!({ "type": "text", "text": seg }));
+                    }
+                    if i < len - 1 {
+                        content.push(json!({ "type": "hardBreak" }));
+                    }
+                }
+
+                // Step 5 + 5b: Wrap in paragraph, then trim any leading/trailing
+                // hardBreak nodes (leading ones can arise from a block whose
+                // trimmed string begins with `\n`; trim_leading_trailing_hardbreaks
+                // is the existing helper reused from the taskItem path).
+                let content = trim_leading_trailing_hardbreaks(content);
+
+                // Step 6: Early-return if the content array is empty after trimming.
+                // (`paragraph` is excluded from `is_empty_block_container`'s
+                // REQUIRES_CONTENT set — the early-return here is the operative prune.)
+                if content.is_empty() {
                     EndResult::Empty
                 } else {
                     EndResult::Single(json!({
                         "type": "paragraph",
-                        "content": [{ "type": "text", "text": trimmed }],
+                        "content": content,
                     }))
                 }
+                // Step 7: autolink_bare_urls runs automatically in the post-finish
+                // pass over the built tree — no change needed here.
             }
             NodeKind::Sink => EndResult::Empty,
         };
@@ -7151,14 +7197,38 @@ mod tests {
             5,
             "CRLF input (3 segments) must produce 5 content nodes: {para_content:?}"
         );
-        assert_eq!(para_content[0]["type"], "text", "node[0] must be text: {para_content:?}");
-        assert_eq!(para_content[0]["text"], "<div>", "node[0] text must be '<div>': {para_content:?}");
-        assert_eq!(para_content[1]["type"], "hardBreak", "node[1] must be hardBreak: {para_content:?}");
-        assert_eq!(para_content[2]["type"], "text", "node[2] must be text: {para_content:?}");
-        assert_eq!(para_content[2]["text"], "  x", "node[2] text must be '  x': {para_content:?}");
-        assert_eq!(para_content[3]["type"], "hardBreak", "node[3] must be hardBreak: {para_content:?}");
-        assert_eq!(para_content[4]["type"], "text", "node[4] must be text: {para_content:?}");
-        assert_eq!(para_content[4]["text"], "</div>", "node[4] text must be '</div>': {para_content:?}");
+        assert_eq!(
+            para_content[0]["type"], "text",
+            "node[0] must be text: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[0]["text"], "<div>",
+            "node[0] text must be '<div>': {para_content:?}"
+        );
+        assert_eq!(
+            para_content[1]["type"], "hardBreak",
+            "node[1] must be hardBreak: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[2]["type"], "text",
+            "node[2] must be text: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[2]["text"], "  x",
+            "node[2] text must be '  x': {para_content:?}"
+        );
+        assert_eq!(
+            para_content[3]["type"], "hardBreak",
+            "node[3] must be hardBreak: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[4]["type"], "text",
+            "node[4] must be text: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[4]["text"], "</div>",
+            "node[4] text must be '</div>': {para_content:?}"
+        );
         // No \r survives into any text node.
         for node in para_content {
             if node["type"] == "text" {
@@ -7224,18 +7294,42 @@ mod tests {
             6,
             "4 segments (3 boundaries) must produce 6 content nodes: {para_content:?}"
         );
-        assert_eq!(para_content[0]["type"], "text", "node[0] must be text: {para_content:?}");
-        assert_eq!(para_content[0]["text"], "<div>", "node[0] text: {para_content:?}");
-        assert_eq!(para_content[1]["type"], "hardBreak", "node[1] must be hardBreak: {para_content:?}");
+        assert_eq!(
+            para_content[0]["type"], "text",
+            "node[0] must be text: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[0]["text"], "<div>",
+            "node[0] text: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[1]["type"], "hardBreak",
+            "node[1] must be hardBreak: {para_content:?}"
+        );
         assert_eq!(
             para_content[2]["type"], "hardBreak",
             "node[2] must also be hardBreak (double-hardBreak from empty segment): {para_content:?}"
         );
-        assert_eq!(para_content[3]["type"], "text", "node[3] must be text: {para_content:?}");
-        assert_eq!(para_content[3]["text"], "a", "node[3] text must be 'a': {para_content:?}");
-        assert_eq!(para_content[4]["type"], "hardBreak", "node[4] must be hardBreak: {para_content:?}");
-        assert_eq!(para_content[5]["type"], "text", "node[5] must be text: {para_content:?}");
-        assert_eq!(para_content[5]["text"], "</div>", "node[5] text must be '</div>': {para_content:?}");
+        assert_eq!(
+            para_content[3]["type"], "text",
+            "node[3] must be text: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[3]["text"], "a",
+            "node[3] text must be 'a': {para_content:?}"
+        );
+        assert_eq!(
+            para_content[4]["type"], "hardBreak",
+            "node[4] must be hardBreak: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[5]["type"], "text",
+            "node[5] must be text: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[5]["text"], "</div>",
+            "node[5] text must be '</div>': {para_content:?}"
+        );
     }
 
     /// BC-7.2.011 EC-8 (AC-005 test 6) — a block whose first line is blank
@@ -7335,14 +7429,26 @@ mod tests {
             3,
             "lone-CR input (2 segments) must produce 3 content nodes: {para_content:?}"
         );
-        assert_eq!(para_content[0]["type"], "text", "node[0] must be text: {para_content:?}");
-        assert_eq!(para_content[0]["text"], "<div>", "node[0] text must be '<div>': {para_content:?}");
+        assert_eq!(
+            para_content[0]["type"], "text",
+            "node[0] must be text: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[0]["text"], "<div>",
+            "node[0] text must be '<div>': {para_content:?}"
+        );
         assert_eq!(
             para_content[1]["type"], "hardBreak",
             "node[1] must be exactly ONE hardBreak (lone \\r = one boundary): {para_content:?}"
         );
-        assert_eq!(para_content[2]["type"], "text", "node[2] must be text: {para_content:?}");
-        assert_eq!(para_content[2]["text"], "x</div>", "node[2] text must be 'x</div>': {para_content:?}");
+        assert_eq!(
+            para_content[2]["type"], "text",
+            "node[2] must be text: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[2]["text"], "x</div>",
+            "node[2] text must be 'x</div>': {para_content:?}"
+        );
         // No \r must survive in any text node.
         for node in para_content {
             if node["type"] == "text" {
@@ -7397,13 +7503,22 @@ mod tests {
             3,
             "2 segments must produce 3 content nodes (text, hardBreak, text): {para_content:?}"
         );
-        assert_eq!(para_content[0]["type"], "text", "node[0] must be text: {para_content:?}");
+        assert_eq!(
+            para_content[0]["type"], "text",
+            "node[0] must be text: {para_content:?}"
+        );
         assert_eq!(
             para_content[0]["text"], "<div>x</div>",
             "node[0] text: {para_content:?}"
         );
-        assert_eq!(para_content[1]["type"], "hardBreak", "node[1] must be hardBreak: {para_content:?}");
-        assert_eq!(para_content[2]["type"], "text", "node[2] must be text: {para_content:?}");
+        assert_eq!(
+            para_content[1]["type"], "hardBreak",
+            "node[1] must be hardBreak: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[2]["type"], "text",
+            "node[2] must be text: {para_content:?}"
+        );
         assert_eq!(
             para_content[2]["text"], "   ",
             "node[2] must be the trailing-whitespace text '   ' (step 2 must NOT strip non-newline whitespace): {para_content:?}"
