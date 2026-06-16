@@ -6891,12 +6891,13 @@ mod tests {
     /// 2. Block-level HTML: `<div>x</div>` on its own line triggers
     ///    `Tag::HtmlBlock` (Start + End) wrapping `Event::Html` line events. ADF
     ///    has no raw-HTML node, but silently discarding the source is data loss,
-    ///    so we preserve the verbatim block as literal text inside a paragraph.
-    ///    Issue #489 (preserve vs drop). Issue #492 introduced three load-bearing
-    ///    asymmetries vs inline HTML — own paragraph wrapper, trailing-`\r`/`\n`
-    ///    trim, and no active marks — documented in `docs/specs/adf-block-html.md`
-    ///    §"Differences from inline HTML" and the handler comment at the
-    ///    `NodeKind::HtmlBlock` arm.
+    ///    so we preserve the verbatim block as literal text inside a paragraph
+    ///    (issue #489 — preserve vs drop). The three asymmetries from inline HTML
+    ///    (own paragraph wrapper, trailing-`\r`/`\n` trim, no active marks) are
+    ///    inherent to the #489 preserve-not-drop handler. Issue #492 added
+    ///    Algorithm B: interior newlines are represented as `hardBreak` nodes
+    ///    instead of raw `\n` in text (Jira rejects raw `\n`). Detail:
+    ///    `docs/specs/adf-block-html.md` §"Differences from inline HTML".
     #[test]
     fn test_convert_block_html_is_preserved_as_literal_text() {
         // `<div>x</div>` on its own line: pulldown-cmark emits
