@@ -9311,12 +9311,20 @@ mod tests {
     fn test_push_text_normalizes_lone_cr_in_heading_and_code_block() {
         // indented codeBlock: lone \r in input → \n in codeBlock text (allowed).
         let cb = markdown_to_adf("\ta\r");
+        let cb_texts = collect_all_text_nodes(&cb);
         assert!(
-            collect_all_text_nodes(&cb)
-                .iter()
-                .all(|t| !t.contains('\r')),
+            cb_texts.iter().all(|t| !t.contains('\r')),
             "push_text must normalize lone \\r in indented codeBlock; \
              text nodes must contain no raw \\r (BC-7.2.011 EC-11)"
+        );
+        // AC-001: the codeBlock text node value must be EXACTLY "a\n" — the lone \r
+        // is replaced by \n (codeBlock context allows \n), and no other characters
+        // are present. Pins the exact postcondition from BC-7.2.011 EC-11.
+        assert!(
+            cb_texts.iter().any(|t| t == "a\n"),
+            "push_text must produce exactly \"a\\n\" as the codeBlock text node \
+             for input \"\\ta\\r\"; got: {:?} (BC-7.2.011 EC-11 AC-001)",
+            cb_texts
         );
         // heading: pulldown emits Text("x\ry"); push_text must convert \r → space,
         // NOT \n (which would violate INV-1 — raw \n forbidden in heading text nodes).
