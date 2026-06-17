@@ -9546,4 +9546,350 @@ mod tests {
              no raw \\r must survive (BC-7.2.011 EC-11)"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // BC-7.2.011 EC-12 — `text_to_adf` plain-text CR/newline normalization
+    // (#522 F4-ext Red Gate)
+    //
+    // These tests assert the postconditions from BC-7.2.011 EC-12 /
+    // INV-1-plain-text.  `text_to_adf` currently emits a single text node
+    // with the raw input string, so all multi-line inputs violate INV-1.
+    //
+    // Red Gate requirement (from story S-522 §Phase 1b):
+    //   - test_text_to_adf_single_line_unchanged  → MAY PASS pre-fix (regression guard)
+    //   - all other EC-12 tests                   → MUST FAIL pre-fix
+    // -----------------------------------------------------------------------
+
+    /// BC-7.2.011 EC-12 (AC-008) — single-line input is byte-identical to the
+    /// pre-fix output.  No `\r`/`\n` in input → output shape is unchanged.
+    ///
+    /// Red Gate: PASSES pre-fix (single-line path is currently correct).
+    /// This test is a no-regression pin: any future change that breaks
+    /// single-line inputs will fail CI immediately.
+    #[test]
+    fn test_text_to_adf_single_line_unchanged() {
+        let adf = text_to_adf("hello");
+        // Exact ADF shape must be the current one-paragraph / one-text-node form.
+        assert_eq!(
+            adf["type"], "doc",
+            "text_to_adf single-line: root must be doc (BC-7.2.011 EC-12 AC-008)"
+        );
+        assert_eq!(
+            adf["version"], 1,
+            "text_to_adf single-line: version must be 1 (BC-7.2.011 EC-12 AC-008)"
+        );
+        let content = adf["content"].as_array().expect("doc.content must be an array");
+        assert_eq!(
+            content.len(),
+            1,
+            "text_to_adf single-line: doc must have exactly one paragraph; \
+             got: {:?} (BC-7.2.011 EC-12 AC-008)",
+            content
+        );
+        assert_eq!(
+            content[0]["type"], "paragraph",
+            "text_to_adf single-line: first child must be paragraph (BC-7.2.011 EC-12 AC-008)"
+        );
+        let para_content = content[0]["content"]
+            .as_array()
+            .expect("paragraph.content must be an array");
+        assert_eq!(
+            para_content.len(),
+            1,
+            "text_to_adf single-line: paragraph must have exactly one text node; \
+             got: {:?} (BC-7.2.011 EC-12 AC-008)",
+            para_content
+        );
+        assert_eq!(
+            para_content[0]["type"], "text",
+            "text_to_adf single-line: content[0] must be a text node (BC-7.2.011 EC-12 AC-008)"
+        );
+        assert_eq!(
+            para_content[0]["text"], "hello",
+            "text_to_adf single-line: text node must contain the exact input string \
+             (BC-7.2.011 EC-12 AC-008)"
+        );
+        // INV-1: no raw \r or \n in any text node (trivially holds for single-line input).
+        assert_no_raw_newline_in_text_nodes(&adf, "hello");
+    }
+
+    /// BC-7.2.011 EC-12 (AC-009) — interior LF becomes a `hardBreak` node;
+    /// no raw `\n` survives into any text node.
+    ///
+    /// Expected ADF after fix:
+    ///   doc > [paragraph > [text("line1"), hardBreak, text("line2")]]
+    ///
+    /// Red Gate: FAILS pre-fix — current `text_to_adf` places the raw `\n`
+    /// verbatim in a single text node, violating INV-1.
+    #[test]
+    fn test_text_to_adf_normalizes_interior_lf_to_hardbreak() {
+        let input = "line1\nline2";
+        let adf = text_to_adf(input);
+
+        // The doc must have exactly one paragraph.
+        let content = adf["content"]
+            .as_array()
+            .expect("doc.content must be an array");
+        assert_eq!(
+            content.len(),
+            1,
+            "text_to_adf(\"line1\\nline2\"): expected 1 paragraph, got {} \
+             (BC-7.2.011 EC-12 AC-009)",
+            content.len()
+        );
+        assert_eq!(
+            content[0]["type"], "paragraph",
+            "text_to_adf interior LF: first child must be paragraph (BC-7.2.011 EC-12 AC-009)"
+        );
+
+        let para = content[0]["content"]
+            .as_array()
+            .expect("paragraph.content must be an array");
+
+        // Expected: [text("line1"), hardBreak, text("line2")]
+        assert_eq!(
+            para.len(),
+            3,
+            "text_to_adf(\"line1\\nline2\"): paragraph must have 3 children \
+             [text, hardBreak, text]; got {:?} (BC-7.2.011 EC-12 AC-009)",
+            para
+        );
+        assert_eq!(
+            para[0]["type"], "text",
+            "text_to_adf interior LF: para[0] must be text (BC-7.2.011 EC-12 AC-009)"
+        );
+        assert_eq!(
+            para[0]["text"], "line1",
+            "text_to_adf interior LF: first text node must be \"line1\" \
+             (BC-7.2.011 EC-12 AC-009)"
+        );
+        assert_eq!(
+            para[1]["type"], "hardBreak",
+            "text_to_adf interior LF: para[1] must be hardBreak \
+             (BC-7.2.011 EC-12 AC-009)"
+        );
+        assert_eq!(
+            para[2]["type"], "text",
+            "text_to_adf interior LF: para[2] must be text (BC-7.2.011 EC-12 AC-009)"
+        );
+        assert_eq!(
+            para[2]["text"], "line2",
+            "text_to_adf interior LF: second text node must be \"line2\" \
+             (BC-7.2.011 EC-12 AC-009)"
+        );
+
+        // INV-1: no raw \n in any text node.
+        assert_no_raw_newline_in_text_nodes(&adf, input);
+    }
+
+    /// BC-7.2.011 EC-12 (AC-010) — interior CRLF (`\r\n`) is normalized to a
+    /// single `hardBreak`, the same shape as the interior-LF case (AC-009).
+    /// Two-pass ordering: `\r\n`→`\n` first, then split on `\n` → one boundary.
+    ///
+    /// Red Gate: FAILS pre-fix — raw `\r\n` embedded in single text node.
+    #[test]
+    fn test_text_to_adf_normalizes_interior_crlf_to_hardbreak() {
+        let input = "line1\r\nline2";
+        let adf = text_to_adf(input);
+
+        let content = adf["content"]
+            .as_array()
+            .expect("doc.content must be an array");
+        assert_eq!(
+            content.len(),
+            1,
+            "text_to_adf(\"line1\\r\\nline2\"): expected 1 paragraph, got {} \
+             (BC-7.2.011 EC-12 AC-010)",
+            content.len()
+        );
+
+        let para = content[0]["content"]
+            .as_array()
+            .expect("paragraph.content must be an array");
+
+        // Same shape as AC-009: [text("line1"), hardBreak, text("line2")]
+        assert_eq!(
+            para.len(),
+            3,
+            "text_to_adf(\"line1\\r\\nline2\"): paragraph must have 3 children; \
+             got {:?} (BC-7.2.011 EC-12 AC-010)",
+            para
+        );
+        assert_eq!(para[0]["text"], "line1",
+            "text_to_adf CRLF: first text node (BC-7.2.011 EC-12 AC-010)");
+        assert_eq!(para[1]["type"], "hardBreak",
+            "text_to_adf CRLF: middle must be hardBreak (BC-7.2.011 EC-12 AC-010)");
+        assert_eq!(para[2]["text"], "line2",
+            "text_to_adf CRLF: second text node (BC-7.2.011 EC-12 AC-010)");
+
+        // INV-1: no raw \r or \n in any text node.
+        assert_no_raw_newline_in_text_nodes(&adf, input);
+    }
+
+    /// BC-7.2.011 EC-12 (AC-011) — interior lone `\r` (old-Mac line ending) is
+    /// normalized to a `hardBreak`, the same shape as the interior-LF case (AC-009).
+    ///
+    /// Red Gate: FAILS pre-fix — raw `\r` embedded in single text node.
+    #[test]
+    fn test_text_to_adf_normalizes_interior_lone_cr_to_hardbreak() {
+        let input = "line1\rline2";
+        let adf = text_to_adf(input);
+
+        let content = adf["content"]
+            .as_array()
+            .expect("doc.content must be an array");
+        assert_eq!(
+            content.len(),
+            1,
+            "text_to_adf(\"line1\\rline2\"): expected 1 paragraph, got {} \
+             (BC-7.2.011 EC-12 AC-011)",
+            content.len()
+        );
+
+        let para = content[0]["content"]
+            .as_array()
+            .expect("paragraph.content must be an array");
+
+        // Same shape as AC-009: [text("line1"), hardBreak, text("line2")]
+        assert_eq!(
+            para.len(),
+            3,
+            "text_to_adf(\"line1\\rline2\"): paragraph must have 3 children; \
+             got {:?} (BC-7.2.011 EC-12 AC-011)",
+            para
+        );
+        assert_eq!(para[0]["text"], "line1",
+            "text_to_adf lone CR: first text node (BC-7.2.011 EC-12 AC-011)");
+        assert_eq!(para[1]["type"], "hardBreak",
+            "text_to_adf lone CR: middle must be hardBreak (BC-7.2.011 EC-12 AC-011)");
+        assert_eq!(para[2]["text"], "line2",
+            "text_to_adf lone CR: second text node (BC-7.2.011 EC-12 AC-011)");
+
+        // INV-1: no raw \r or \n in any text node.
+        assert_no_raw_newline_in_text_nodes(&adf, input);
+    }
+
+    /// BC-7.2.011 EC-12 (AC-012) — trailing newlines are stripped before any
+    /// normalization; output is identical to `text_to_adf("hello")`.
+    ///
+    /// Red Gate: FAILS pre-fix for all three trailing-newline variants — raw
+    /// `\n`, `\r\n`, or `\r` embedded in the text node.
+    #[test]
+    fn test_text_to_adf_strips_trailing_newlines() {
+        let expected = text_to_adf("hello");
+
+        for (input, label) in [
+            ("hello\n",    "LF"),
+            ("hello\r\n",  "CRLF"),
+            ("hello\r",    "lone CR"),
+        ] {
+            let adf = text_to_adf(input);
+            assert_eq!(
+                adf, expected,
+                "text_to_adf trailing {} must produce same output as text_to_adf(\"hello\"); \
+                 got: {} (BC-7.2.011 EC-12 AC-012)",
+                label, adf
+            );
+            assert_no_raw_newline_in_text_nodes(&adf, input);
+        }
+    }
+
+    /// BC-7.2.011 EC-12 (AC-013) — a blank line (`\n\n`) splits the input into
+    /// two separate `paragraph` nodes; consecutive blank lines (`\n\n\n`) collapse
+    /// to one paragraph boundary (same two-paragraph output).
+    ///
+    /// Red Gate: FAILS pre-fix — raw `\n\n` embedded in single text node.
+    #[test]
+    fn test_text_to_adf_blank_line_produces_two_paragraphs() {
+        for (input, label) in [
+            ("line1\n\nline2",   "double LF"),
+            ("line1\n\n\nline2", "triple LF"),
+        ] {
+            let adf = text_to_adf(input);
+            let content = adf["content"]
+                .as_array()
+                .expect("doc.content must be an array");
+
+            assert_eq!(
+                content.len(),
+                2,
+                "text_to_adf({label:?}): expected 2 paragraph nodes (blank line splits), \
+                 got {} — content: {:?} (BC-7.2.011 EC-12 AC-013)",
+                content.len(),
+                content
+            );
+            assert_eq!(
+                content[0]["type"], "paragraph",
+                "text_to_adf({label:?}): content[0] must be paragraph \
+                 (BC-7.2.011 EC-12 AC-013)"
+            );
+            assert_eq!(
+                content[1]["type"], "paragraph",
+                "text_to_adf({label:?}): content[1] must be paragraph \
+                 (BC-7.2.011 EC-12 AC-013)"
+            );
+
+            // Text values in each paragraph.
+            let p0 = &content[0]["content"][0];
+            assert_eq!(p0["text"], "line1",
+                "text_to_adf({label:?}): first paragraph text (BC-7.2.011 EC-12 AC-013)");
+            let p1 = &content[1]["content"][0];
+            assert_eq!(p1["text"], "line2",
+                "text_to_adf({label:?}): second paragraph text (BC-7.2.011 EC-12 AC-013)");
+
+            // INV-1: no raw \n or \r in any text node.
+            assert_no_raw_newline_in_text_nodes(&adf, input);
+        }
+    }
+
+    /// BC-7.2.011 EC-12 (AC-014) — property-style: `assert_no_raw_newline_in_text_nodes`
+    /// passes for a representative sample of multi-line inputs.  Every input in the
+    /// sample has at least one `\r` or `\n`; all MUST FAIL pre-fix.
+    ///
+    /// Red Gate: FAILS pre-fix for ALL multi-line inputs (raw newlines embedded in
+    /// the single text node produced by the pre-fix one-liner).
+    #[test]
+    fn test_text_to_adf_no_raw_newline_in_any_text_node() {
+        // Representative sample from AC-014 (story S-522).
+        let inputs: &[&str] = &[
+            "a\nb",           // interior LF
+            "a\r\nb",         // interior CRLF
+            "a\rb",           // interior lone CR
+            "a\n\nb",         // blank-line boundary
+            "a\r\n\r\nb",     // CRLF blank line
+            "a\nb\n\nc\nd",   // mixed interior LF + blank-line boundary
+            "\n\n\n",         // all newlines → empty/stripped input
+        ];
+
+        for &input in inputs {
+            let adf = text_to_adf(input);
+            // INV-1 via existing helper: no raw \n in non-codeBlock text nodes,
+            // no raw \r in any text node.  (text_to_adf produces no codeBlock,
+            // so the non-codeBlock \n check is unconditional for all its output.)
+            assert_no_raw_newline_in_text_nodes(&adf, input);
+        }
+    }
+
+    /// BC-7.2.011 EC-12 (AC-014 optional) — proptest: INV-1 holds for
+    /// `text_to_adf` over arbitrary string inputs.
+    ///
+    /// Generates 1000+ random strings (including those with `\r`, `\n`, `\r\n`)
+    /// and asserts that no text node in the returned ADF contains a raw `\r` or
+    /// non-codeBlock `\n`.
+    ///
+    /// Red Gate: FAILS pre-fix for any input containing `\r` or `\n`.
+    #[test]
+    fn prop_text_to_adf_holds_inv1() {
+        use proptest::prelude::*;
+        let mut config = proptest::test_runner::Config::default();
+        config.cases = 1000;
+        let mut runner = proptest::test_runner::TestRunner::new(config);
+        runner
+            .run(&proptest::string::string_regex(".*").unwrap(), |input| {
+                let adf = text_to_adf(&input);
+                assert_no_raw_newline_in_text_nodes(&adf, &input);
+                Ok(())
+            })
+            .unwrap();
+    }
 }
