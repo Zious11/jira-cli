@@ -5,17 +5,104 @@ use pulldown_cmark::{
 use serde_json::{Value, json};
 
 pub fn text_to_adf(text: &str) -> Value {
+    // BC-7.2.011 EC-12 (S-522): no raw \r or \n may appear in any text node
+    // (Jira rejects them). Apply the same normalization that Algorithm B uses
+    // for block HTML, but only when the input actually contains control chars.
+    //
+    // Fast path: single-line input with no \r or \n.  Return the original
+    // one-paragraph / one-text-node shape byte-identical (regression guard).
+    if !text.contains('\r') && !text.contains('\n') {
+        return json!({
+            "version": 1,
+            "type": "doc",
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [
+                        { "type": "text", "text": text }
+                    ]
+                }
+            ]
+        });
+    }
+
+    // Multi-line path (BC-7.2.011 EC-12 steps 2–5):
+    //
+    // Step 2: Strip trailing \r/\n (any count). Non-newline trailing
+    // whitespace (spaces/tabs) is preserved verbatim.
+    let stripped = text.trim_end_matches(['\n', '\r']);
+
+    // Step 3: Two-pass normalization — \r\n→\n first, then lone \r→\n.
+    // Do NOT use a ['\r','\n'] char-set split; that double-counts CRLF.
+    let normalized = stripped.replace("\r\n", "\n").replace('\r', "\n");
+
+    // Blank-line split: split on \n\n (consecutive blank lines collapse to
+    // one paragraph boundary — split_terminator on the empty segment that
+    // results from \n\n\n would give an empty middle block, so we collect
+    // and filter empty blocks after splitting).
+    let blocks: Vec<&str> = normalized.split("\n\n").collect();
+
+    // Build paragraph nodes; skip any block that is entirely empty (produced
+    // by consecutive blank lines or an all-newlines input).
+    let paragraphs: Vec<Value> = blocks
+        .into_iter()
+        .filter_map(|block| {
+            // Within a block, split on \n to get inline segments separated
+            // by hardBreak nodes (Algorithm B step 4 logic).
+            let segments: Vec<&str> = block.split('\n').collect();
+            let len = segments.len();
+
+            // Check whether ALL segments are empty (i.e. block is blank).
+            if segments.iter().all(|s| s.is_empty()) {
+                return None;
+            }
+
+            // Build inline content: alternate text + hardBreak nodes.
+            let mut content: Vec<Value> = Vec::with_capacity(len * 2);
+            for (i, seg) in segments.iter().enumerate() {
+                if !seg.is_empty() {
+                    content.push(json!({ "type": "text", "text": seg }));
+                }
+                if i < len - 1 {
+                    content.push(json!({ "type": "hardBreak" }));
+                }
+            }
+
+            // Trim leading/trailing hardBreak nodes (reuse existing helper).
+            let content = trim_leading_trailing_hardbreaks(content);
+
+            if content.is_empty() {
+                None
+            } else {
+                Some(json!({
+                    "type": "paragraph",
+                    "content": content,
+                }))
+            }
+        })
+        .collect();
+
+    // If all content was blank/stripped, produce a single paragraph with an
+    // empty text node (mirrors the fast-path shape for text_to_adf("")).
+    if paragraphs.is_empty() {
+        return json!({
+            "version": 1,
+            "type": "doc",
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [
+                        { "type": "text", "text": "" }
+                    ]
+                }
+            ]
+        });
+    }
+
     json!({
         "version": 1,
         "type": "doc",
-        "content": [
-            {
-                "type": "paragraph",
-                "content": [
-                    { "type": "text", "text": text }
-                ]
-            }
-        ]
+        "content": paragraphs,
     })
 }
 
@@ -9578,7 +9665,9 @@ mod tests {
             adf["version"], 1,
             "text_to_adf single-line: version must be 1 (BC-7.2.011 EC-12 AC-008)"
         );
-        let content = adf["content"].as_array().expect("doc.content must be an array");
+        let content = adf["content"]
+            .as_array()
+            .expect("doc.content must be an array");
         assert_eq!(
             content.len(),
             1,
@@ -9715,12 +9804,18 @@ mod tests {
              got {:?} (BC-7.2.011 EC-12 AC-010)",
             para
         );
-        assert_eq!(para[0]["text"], "line1",
-            "text_to_adf CRLF: first text node (BC-7.2.011 EC-12 AC-010)");
-        assert_eq!(para[1]["type"], "hardBreak",
-            "text_to_adf CRLF: middle must be hardBreak (BC-7.2.011 EC-12 AC-010)");
-        assert_eq!(para[2]["text"], "line2",
-            "text_to_adf CRLF: second text node (BC-7.2.011 EC-12 AC-010)");
+        assert_eq!(
+            para[0]["text"], "line1",
+            "text_to_adf CRLF: first text node (BC-7.2.011 EC-12 AC-010)"
+        );
+        assert_eq!(
+            para[1]["type"], "hardBreak",
+            "text_to_adf CRLF: middle must be hardBreak (BC-7.2.011 EC-12 AC-010)"
+        );
+        assert_eq!(
+            para[2]["text"], "line2",
+            "text_to_adf CRLF: second text node (BC-7.2.011 EC-12 AC-010)"
+        );
 
         // INV-1: no raw \r or \n in any text node.
         assert_no_raw_newline_in_text_nodes(&adf, input);
@@ -9758,12 +9853,18 @@ mod tests {
              got {:?} (BC-7.2.011 EC-12 AC-011)",
             para
         );
-        assert_eq!(para[0]["text"], "line1",
-            "text_to_adf lone CR: first text node (BC-7.2.011 EC-12 AC-011)");
-        assert_eq!(para[1]["type"], "hardBreak",
-            "text_to_adf lone CR: middle must be hardBreak (BC-7.2.011 EC-12 AC-011)");
-        assert_eq!(para[2]["text"], "line2",
-            "text_to_adf lone CR: second text node (BC-7.2.011 EC-12 AC-011)");
+        assert_eq!(
+            para[0]["text"], "line1",
+            "text_to_adf lone CR: first text node (BC-7.2.011 EC-12 AC-011)"
+        );
+        assert_eq!(
+            para[1]["type"], "hardBreak",
+            "text_to_adf lone CR: middle must be hardBreak (BC-7.2.011 EC-12 AC-011)"
+        );
+        assert_eq!(
+            para[2]["text"], "line2",
+            "text_to_adf lone CR: second text node (BC-7.2.011 EC-12 AC-011)"
+        );
 
         // INV-1: no raw \r or \n in any text node.
         assert_no_raw_newline_in_text_nodes(&adf, input);
@@ -9779,9 +9880,9 @@ mod tests {
         let expected = text_to_adf("hello");
 
         for (input, label) in [
-            ("hello\n",    "LF"),
-            ("hello\r\n",  "CRLF"),
-            ("hello\r",    "lone CR"),
+            ("hello\n", "LF"),
+            ("hello\r\n", "CRLF"),
+            ("hello\r", "lone CR"),
         ] {
             let adf = text_to_adf(input);
             assert_eq!(
@@ -9802,7 +9903,7 @@ mod tests {
     #[test]
     fn test_text_to_adf_blank_line_produces_two_paragraphs() {
         for (input, label) in [
-            ("line1\n\nline2",   "double LF"),
+            ("line1\n\nline2", "double LF"),
             ("line1\n\n\nline2", "triple LF"),
         ] {
             let adf = text_to_adf(input);
@@ -9831,11 +9932,15 @@ mod tests {
 
             // Text values in each paragraph.
             let p0 = &content[0]["content"][0];
-            assert_eq!(p0["text"], "line1",
-                "text_to_adf({label:?}): first paragraph text (BC-7.2.011 EC-12 AC-013)");
+            assert_eq!(
+                p0["text"], "line1",
+                "text_to_adf({label:?}): first paragraph text (BC-7.2.011 EC-12 AC-013)"
+            );
             let p1 = &content[1]["content"][0];
-            assert_eq!(p1["text"], "line2",
-                "text_to_adf({label:?}): second paragraph text (BC-7.2.011 EC-12 AC-013)");
+            assert_eq!(
+                p1["text"], "line2",
+                "text_to_adf({label:?}): second paragraph text (BC-7.2.011 EC-12 AC-013)"
+            );
 
             // INV-1: no raw \n or \r in any text node.
             assert_no_raw_newline_in_text_nodes(&adf, input);
@@ -9852,13 +9957,13 @@ mod tests {
     fn test_text_to_adf_no_raw_newline_in_any_text_node() {
         // Representative sample from AC-014 (story S-522).
         let inputs: &[&str] = &[
-            "a\nb",           // interior LF
-            "a\r\nb",         // interior CRLF
-            "a\rb",           // interior lone CR
-            "a\n\nb",         // blank-line boundary
-            "a\r\n\r\nb",     // CRLF blank line
-            "a\nb\n\nc\nd",   // mixed interior LF + blank-line boundary
-            "\n\n\n",         // all newlines → empty/stripped input
+            "a\nb",         // interior LF
+            "a\r\nb",       // interior CRLF
+            "a\rb",         // interior lone CR
+            "a\n\nb",       // blank-line boundary
+            "a\r\n\r\nb",   // CRLF blank line
+            "a\nb\n\nc\nd", // mixed interior LF + blank-line boundary
+            "\n\n\n",       // all newlines → empty/stripped input
         ];
 
         for &input in inputs {
@@ -9880,9 +9985,10 @@ mod tests {
     /// Red Gate: FAILS pre-fix for any input containing `\r` or `\n`.
     #[test]
     fn prop_text_to_adf_holds_inv1() {
-        use proptest::prelude::*;
-        let mut config = proptest::test_runner::Config::default();
-        config.cases = 1000;
+        let config = proptest::test_runner::Config {
+            cases: 1000,
+            ..proptest::test_runner::Config::default()
+        };
         let mut runner = proptest::test_runner::TestRunner::new(config);
         runner
             .run(&proptest::string::string_regex(".*").unwrap(), |input| {
