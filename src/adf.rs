@@ -1077,6 +1077,15 @@ impl AdfBuilder {
                 return;
             }
         }
+        // BC-7.2.011 EC-11: no text node may contain a raw \r. Mirror Algorithm B
+        // step-3 normalization so inline paths share the same invariant as HtmlBlock.
+        let normalized;
+        let text = if text.contains('\r') {
+            normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+            normalized.as_str()
+        } else {
+            text
+        };
         let mut node = json!({ "type": "text", "text": text });
         if !self.active_marks.is_empty() {
             node["marks"] = json!(dedup_marks_by_type(&self.active_marks));
@@ -1093,6 +1102,14 @@ impl AdfBuilder {
                 return;
             }
         }
+        // BC-7.2.011 EC-11: no text node may contain a raw \r (same invariant as push_text).
+        let normalized;
+        let text = if text.contains('\r') {
+            normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+            normalized.as_str()
+        } else {
+            text
+        };
         let mut marks = self.active_marks.clone();
         marks.push(json!({ "type": "code" }));
         self.append_child(json!({
@@ -9263,7 +9280,9 @@ mod tests {
         // codeBlock manifestation.
         let cb = markdown_to_adf("\ta\r");
         assert!(
-            collect_all_text_nodes(&cb).iter().all(|t| !t.contains('\r')),
+            collect_all_text_nodes(&cb)
+                .iter()
+                .all(|t| !t.contains('\r')),
             "push_text must normalize lone \\r in indented codeBlock; \
              text nodes must contain no raw \\r (BC-7.2.011 EC-11)"
         );
@@ -9296,28 +9315,42 @@ mod tests {
         // verbatim into Event::Text, unlike paragraph/heading inputs.
         let adf = markdown_to_adf("```\na\rb\n```");
         assert!(
-            collect_all_text_nodes(&adf).iter().all(|t| !t.contains('\r')),
+            collect_all_text_nodes(&adf)
+                .iter()
+                .all(|t| !t.contains('\r')),
             "push_text must normalize lone \\r in fenced codeBlock content; \
              text nodes must contain no raw \\r (BC-7.2.011 EC-11)"
         );
     }
 
-    /// BC-7.2.011 EC-11 — `push_code` normalizes lone `\r` in inline code span.
+    /// BC-7.2.011 EC-11 — `push_code` normalizes lone `\r` before building the text node.
     ///
-    /// `Event::Code` routes to `push_code`, which must normalize `\r`→`\n`.
-    /// The inline code span `` `a\rb` `` must produce a text node with
-    /// `"text": "a\nb"` — no raw `\r`.
+    /// pulldown-cmark normalizes `\r` to a space inside inline code spans (CommonMark
+    /// §6.3 line-ending handling), so `markdown_to_adf("`a\rb`")` never routes a raw
+    /// `\r` through `Event::Code`. The direct `push_code` path must still guard against
+    /// a raw `\r` arriving via any other caller — tested here by calling `push_code`
+    /// directly on an `AdfBuilder`.
     ///
-    /// Red Gate: FAILS before the fix (`push_code` passes `\r` through;
-    /// text node is `"a\rb"`). Green Gate: passes after push_code normalizes.
+    /// Red Gate: FAILS before the fix (push_code passes `\r` through verbatim).
+    /// Green Gate: passes after push_code gains the CR-normalization guard.
     #[test]
     fn test_push_code_normalizes_lone_cr_in_inline_code() {
-        let adf = markdown_to_adf("`a\rb`");
-        let texts = collect_all_text_nodes(&adf);
-        // The inline code span must produce exactly the normalized text node.
+        // Direct path: call push_code with a raw \r, bypassing pulldown-cmark.
+        // Wrap in a paragraph so append_child has a parent to attach to.
+        let mut builder = AdfBuilder::new();
+        builder.push(NodeKind::Paragraph);
+        builder.push_code("a\rb");
+        builder.end(TagEnd::Paragraph);
+        let doc = json!({
+            "version": 1,
+            "type": "doc",
+            "content": builder.root,
+        });
+        let texts = collect_all_text_nodes(&doc);
+        // push_code must normalize lone \r → \n.
         assert!(
             texts.iter().any(|t| t == "a\nb"),
-            "push_code must normalize lone \\r to \\n in inline code; \
+            "push_code must normalize lone \\r to \\n; \
              expected text node \"a\\nb\" but got: {:?} (BC-7.2.011 EC-11)",
             texts
         );
@@ -9327,6 +9360,15 @@ mod tests {
             "push_code must leave no raw \\r in any text node; \
              got: {:?} (BC-7.2.011 EC-11)",
             texts
+        );
+        // Invariant also holds through the markdown_to_adf path (pulldown normalizes
+        // \r to space in code spans per CommonMark §6.3 — no \r reaches push_code).
+        let via_md = markdown_to_adf("`a\rb`");
+        assert!(
+            collect_all_text_nodes(&via_md)
+                .iter()
+                .all(|t| !t.contains('\r')),
+            "no raw \\r must survive into any text node via markdown_to_adf (BC-7.2.011 EC-11)"
         );
     }
 }
