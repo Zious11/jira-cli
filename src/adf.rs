@@ -3632,6 +3632,33 @@ mod tests {
         assert!(!has_image, "no image/media nodes should be emitted: {adf}");
     }
 
+    /// An image's alt text must NOT leak into the output. `Tag::Image` pushes a
+    /// `NodeKind::Sink`, and the image's alt-text `Event::Text` arrives while the
+    /// Sink is on top of the stack — `push_text`'s Sink guard
+    /// (`Some(top) if matches!(top.kind, NodeKind::Sink) => return`) drops it.
+    ///
+    /// F6 (S-522): kills the `matches!(top.kind, NodeKind::Sink) => return` guard
+    /// → `false` mutant in `push_text`. With the guard disabled, the alt text
+    /// `ALTTEXTMARKER` would be appended as a stray text node. The existing
+    /// `test_markdown_image_is_skipped` only asserts the image *URL* is absent,
+    /// not the alt text — so it does not exercise this guard. A distinctive,
+    /// unambiguous alt-text token pins the drop.
+    #[test]
+    fn test_markdown_image_alt_text_is_dropped_by_sink_guard() {
+        let adf = markdown_to_adf("before ![ALTTEXTMARKER](https://example.com/i.png) after");
+        let serialized = adf.to_string();
+        assert!(
+            !serialized.contains("ALTTEXTMARKER"),
+            "image alt text must be dropped by the push_text Sink guard, \
+             not leaked as a stray text node: {adf}"
+        );
+        // Surrounding text is unaffected (the Sink guard only drops Sink-topped text).
+        assert!(
+            serialized.contains("before") && serialized.contains("after"),
+            "surrounding text must survive: {adf}"
+        );
+    }
+
     // --- GFM task lists → ADF taskList/taskItem (issue #471) ----------------
     //
     // BEHAVIOR CHANGE from pre-#471: previously `ENABLE_TASKLISTS` was NOT set,
@@ -9832,6 +9859,63 @@ mod tests {
         );
 
         // INV-1: no raw \r or \n in any text node.
+        assert_no_raw_newline_in_text_nodes(&adf, input);
+    }
+
+    /// BC-7.2.011 EC-12 (AC-009) — three lines separated by single `\n` produce
+    /// exactly two interior `hardBreak` nodes, one between each adjacent pair of
+    /// text segments.  The existing two-line tests (AC-009/010/011) only exercise
+    /// `len == 2`, where the hardBreak-insertion guard `i < len - 1` is
+    /// indistinguishable from off-by-one variants that the trailing-hardBreak
+    /// trim then masks.  A three-segment block is the smallest input that pins the
+    /// per-pair break count: `[text(a), hardBreak, text(b), hardBreak, text(c)]`.
+    ///
+    /// F6 (S-522): kills the `i < len - 1` → `i < len / 2` mutant in `text_to_adf`,
+    /// which for `len == 3` would emit only one break and fuse `b`/`c` into
+    /// adjacent text nodes with no separator.
+    #[test]
+    fn test_text_to_adf_three_lines_produce_two_interior_hardbreaks() {
+        let input = "a\nb\nc";
+        let adf = text_to_adf(input);
+
+        let content = adf["content"]
+            .as_array()
+            .expect("doc.content must be an array");
+        assert_eq!(
+            content.len(),
+            1,
+            "text_to_adf(\"a\\nb\\nc\"): expected 1 paragraph, got {} \
+             (BC-7.2.011 EC-12 AC-009)",
+            content.len()
+        );
+
+        let para = content[0]["content"]
+            .as_array()
+            .expect("paragraph.content must be an array");
+
+        // Expected: [text(a), hardBreak, text(b), hardBreak, text(c)] — exactly
+        // two interior hardBreaks (one per adjacent pair of non-empty segments).
+        assert_eq!(
+            para.len(),
+            5,
+            "text_to_adf(\"a\\nb\\nc\"): paragraph must have 5 children \
+             [text, hardBreak, text, hardBreak, text]; got {para:?} \
+             (BC-7.2.011 EC-12 AC-009)"
+        );
+        assert_eq!(para[0]["text"], "a", "para[0] text (AC-009)");
+        assert_eq!(para[1]["type"], "hardBreak", "para[1] hardBreak (AC-009)");
+        assert_eq!(para[2]["text"], "b", "para[2] text (AC-009)");
+        assert_eq!(para[3]["type"], "hardBreak", "para[3] hardBreak (AC-009)");
+        assert_eq!(para[4]["text"], "c", "para[4] text (AC-009)");
+
+        let hardbreak_count = para.iter().filter(|n| n["type"] == "hardBreak").count();
+        assert_eq!(
+            hardbreak_count, 2,
+            "text_to_adf(\"a\\nb\\nc\"): expected exactly 2 interior hardBreaks, \
+             got {hardbreak_count} (BC-7.2.011 EC-12 AC-009)"
+        );
+
+        // INV-1: no raw \n in any text node.
         assert_no_raw_newline_in_text_nodes(&adf, input);
     }
 
