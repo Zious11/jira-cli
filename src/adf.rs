@@ -10051,6 +10051,47 @@ mod tests {
         );
     }
 
+    /// BC-7.2.011 EC-12 — pin the exact JSON shape that
+    /// `text_to_adf("a\n \nb")` produces (OBS-2 coverage).
+    ///
+    /// The middle line is a single space (NOT empty), so the input contains
+    /// no `"\n\n"` blank-line separator — the whole input is ONE block.
+    /// Within that block, `split('\n')` yields three segments: `"a"`, `" "`,
+    /// `"b"`.  The space segment is non-empty, so it becomes a `text(" ")`
+    /// node rather than being dropped.  Expected shape:
+    ///
+    ///   doc > [paragraph > [text("a"), hardBreak, text(" "), hardBreak, text("b")]]
+    ///
+    /// INV-1 holds: no text node contains a raw `\n` or `\r`.
+    #[test]
+    fn test_text_to_adf_whitespace_only_blank_line_preserved() {
+        let adf = text_to_adf("a\n \nb");
+        let expected = serde_json::json!({
+            "version": 1,
+            "type": "doc",
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [
+                        { "type": "text", "text": "a" },
+                        { "type": "hardBreak" },
+                        { "type": "text", "text": " " },
+                        { "type": "hardBreak" },
+                        { "type": "text", "text": "b" }
+                    ]
+                }
+            ]
+        });
+        assert_eq!(
+            adf, expected,
+            "text_to_adf(\"a\\n \\nb\") must produce a single paragraph with \
+             [text(\"a\"), hardBreak, text(\" \"), hardBreak, text(\"b\")] — \
+             whitespace-only middle segment must be preserved as text, \
+             not treated as a blank-line paragraph separator \
+             (BC-7.2.011 EC-12 OBS-2)"
+        );
+    }
+
     /// BC-7.2.011 EC-12 (AC-014 optional) — proptest: INV-1 holds for
     /// `text_to_adf` over arbitrary string inputs.
     ///
