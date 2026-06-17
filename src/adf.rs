@@ -10122,4 +10122,313 @@ mod tests {
             )
             .unwrap();
     }
+
+    // -----------------------------------------------------------------------
+    // BC-7.2.011 EC-11 (CR-01 red gate, #522 F5-INV-1 gap)
+    //
+    // `push_text` and `push_code` only normalize control chars when
+    // `text.contains('\r')`.  A bare `\n` (no `\r`) in Other context
+    // (paragraph, heading, inline-mark stack top — anything that is NOT
+    // a codeBlock or HtmlBlock) passes through unchanged, embedding a raw
+    // `\n` in the emitted text node.  This violates BC-7.2.011 INV-1 and
+    // causes Jira HTTP 400.
+    //
+    // The fix will extend the Other-context branch to also map bare `\n`→space
+    // (mirroring SoftBreak→" ").  CodeBlock MUST keep `\n` byte-identical.
+    //
+    // Red Gate requirement:
+    //   test 1 (push_text Other bare \n)      → MUST FAIL pre-fix
+    //   test 2 (push_code bare \n)            → MUST FAIL pre-fix
+    //   test 3 (push_text CodeBlock \n)       → MUST PASS pre-fix AND post-fix
+    //   test 4 (markdown inline-HTML \n)      → EMPIRICALLY determined below
+    //   test 5 (proptest markdown HTML chars) → likely FAILS pre-fix if test 4 RED
+    //   test 6 (text_to_adf worklog multiline)→ MUST PASS pre-fix AND post-fix
+    // -----------------------------------------------------------------------
+
+    /// BC-7.2.011 EC-11 (CR-01, #522 test 1) — `push_text` in Other context
+    /// (paragraph) must normalize a bare `\n` to a space, not pass it through.
+    ///
+    /// Contract: bare `\n` in non-codeBlock, non-HtmlBlock context (i.e.
+    /// the `Other` branch) must become a space, mirroring SoftBreak→" ".
+    /// The emitted text node must contain `"a b"`, not `"a\nb"`.
+    ///
+    /// Red Gate: FAILS before the fix because `push_text` only runs the
+    /// normalization block when `text.contains('\r')`, leaving a bare `\n`
+    /// untouched → raw `\n` in the text node → INV-1 violation.
+    #[test]
+    fn test_push_text_normalizes_bare_lf_in_other_context_to_space() {
+        // Construct AdfBuilder with a paragraph (Other context) directly.
+        // Do NOT use markdown_to_adf — we need to call push_text with a raw \n
+        // to bypass pulldown-cmark's own normalization.
+        let mut builder = AdfBuilder::new();
+        builder.push(NodeKind::Paragraph);
+        builder.push_text("a\nb");
+        builder.end(TagEnd::Paragraph);
+
+        let doc = json!({
+            "version": 1,
+            "type": "doc",
+            "content": builder.root,
+        });
+        let texts = collect_all_text_nodes(&doc);
+
+        // Post-fix expectation: bare \n → single space → "a b".
+        assert!(
+            texts.iter().any(|t| t == "a b"),
+            "push_text must normalize bare \\n to space in Other (paragraph) context \
+             (BC-7.2.011 EC-11 CR-01 #522 test 1); expected text node \"a b\" but got: {:?}",
+            texts
+        );
+
+        // Enforce INV-1 directly: no raw \n must survive.
+        assert!(
+            texts.iter().all(|t| !t.contains('\n')),
+            "push_text must not leave raw \\n in any text node in Other context \
+             (BC-7.2.011 EC-11 INV-1 #522 test 1); got: {:?}",
+            texts
+        );
+
+        // Belt-and-suspenders: the full INV-1 helper (also checks \r).
+        assert_no_raw_newline_in_text_nodes(&doc, "a\nb");
+    }
+
+    /// BC-7.2.011 EC-11 (CR-01, #522 test 2) — `push_code` must normalize
+    /// a bare `\n` to a space before building the inline code text node.
+    ///
+    /// `push_code` always emits an inline code mark — the `code` mark text
+    /// node is never inside a block-level codeBlock, so the Other-context
+    /// rule applies: `\n`→space, same as `\r`→space.
+    ///
+    /// Red Gate: FAILS before the fix because `push_code` only runs the
+    /// normalization when `text.contains('\r')`.
+    #[test]
+    fn test_push_code_normalizes_bare_lf_to_space() {
+        // Wrap in a paragraph so append_child has a parent.
+        let mut builder = AdfBuilder::new();
+        builder.push(NodeKind::Paragraph);
+        builder.push_code("a\nb");
+        builder.end(TagEnd::Paragraph);
+
+        let doc = json!({
+            "version": 1,
+            "type": "doc",
+            "content": builder.root,
+        });
+        let texts = collect_all_text_nodes(&doc);
+
+        // Post-fix expectation: bare \n in inline code → space → "a b".
+        assert!(
+            texts.iter().any(|t| t == "a b"),
+            "push_code must normalize bare \\n to space in inline context \
+             (BC-7.2.011 EC-11 CR-01 #522 test 2); expected text node \"a b\" but got: {:?}",
+            texts
+        );
+
+        // INV-1: no raw \n in any text node.
+        assert!(
+            texts.iter().all(|t| !t.contains('\n')),
+            "push_code must not leave raw \\n in any text node \
+             (BC-7.2.011 EC-11 INV-1 #522 test 2); got: {:?}",
+            texts
+        );
+    }
+
+    /// BC-7.2.011 EC-11 (CR-01, #522 test 3) — regression guard: `push_text`
+    /// inside a CodeBlock context must preserve bare `\n` byte-identical.
+    ///
+    /// codeBlock content is preformatted — multi-line code is legally stored
+    /// as a single text node with literal `\n` newlines, which Jira accepts.
+    /// The fix must NOT touch the CodeBlock branch.
+    ///
+    /// This test MUST PASS both before and after the fix.
+    #[test]
+    fn test_push_text_codeblock_preserves_bare_lf() {
+        let mut builder = AdfBuilder::new();
+        builder.push(NodeKind::CodeBlock { language: None });
+        builder.push_text("a\nb");
+        builder.end(TagEnd::CodeBlock);
+
+        let doc = json!({
+            "version": 1,
+            "type": "doc",
+            "content": builder.root,
+        });
+        let texts = collect_all_text_nodes(&doc);
+
+        // codeBlock \n must be preserved as-is — NOT converted to a space.
+        assert!(
+            texts.iter().any(|t| t == "a\nb"),
+            "push_text must preserve bare \\n inside a codeBlock (Jira accepts \
+             multi-line preformatted text); expected text node \"a\\nb\" but got: {:?} \
+             (BC-7.2.011 EC-11 #522 test 3 regression guard)",
+            texts
+        );
+
+        // Confirm codeBlock text contains the literal \n (not stripped or replaced).
+        assert!(
+            texts.iter().any(|t| t.contains('\n')),
+            "codeBlock text node must still contain the raw \\n character after the fix \
+             (BC-7.2.011 EC-11 #522 test 3 regression guard); got: {:?}",
+            texts
+        );
+    }
+
+    /// BC-7.2.011 EC-11 (CR-01, #522 test 4) — reachability probe: does
+    /// multi-line INLINE HTML inside a paragraph reach `push_text` with an
+    /// embedded `\n`, violating INV-1?
+    ///
+    /// Background: inline HTML (`Event::InlineHtml`) is handled via the shared
+    /// `push_text` arm in the pulldown event loop.  pulldown-cmark follows
+    /// CommonMark §6.6: inline HTML spans are arbitrary tag-like fragments
+    /// within a paragraph (not block HTML).  Unlike block HTML (`Tag::HtmlBlock`
+    /// whose Algorithm B explicitly normalises newlines), inline HTML text passes
+    /// through `push_text` directly.  If pulldown emits an `Event::InlineHtml`
+    /// carrying an embedded `\n`, it reaches the `Other` branch of `push_text`
+    /// and — absent the fix — lands in the text node verbatim.
+    ///
+    /// This test feeds `markdown_to_adf` inputs with HTML-tag-like fragments
+    /// that contain a `\n` inside the tag attribute position and asserts
+    /// `assert_no_raw_newline_in_text_nodes` on the result.
+    ///
+    /// EMPIRICAL DETERMINATION (pre-fix):
+    /// If this test FAILS before the fix → CR-01 is reachable end-to-end via
+    ///   the markdown_to_adf → pulldown → Event::InlineHtml → push_text path
+    ///   (HIGH severity — exploitable through any CLI --description flag).
+    /// If this test PASSES before the fix → CR-01 is a latent / defense-in-depth
+    ///   gap (pulldown normalises newlines inside inline HTML before emitting
+    ///   Event::InlineHtml) — the direct push_text/push_code tests (tests 1 & 2)
+    ///   still justify the fix as a defense-in-depth invariant enforcement.
+    ///
+    /// The test is kept regardless of reachability verdict as a regression guard.
+    #[test]
+    fn test_markdown_multiline_inline_html_holds_inv1() {
+        // Several shapes of inline HTML containing a \n, to probe whether
+        // pulldown emits the \n or normalises it before Event::InlineHtml.
+        let inputs: &[&str] = &[
+            // \n inside a tag attribute
+            "foo <span\ndata-x=\"1\">bar",
+            // \n between tag name and >
+            "a <b\n>c",
+            // \n in a self-closing tag
+            "x <br\n/>y",
+            // multiple inline HTML fragments with \n
+            "text <em\nclass=\"a\">more</em>",
+        ];
+
+        for &input in inputs {
+            let adf = markdown_to_adf(input);
+            // If this assertion fires on ANY input before the fix, CR-01 is
+            // reachable end-to-end through markdown_to_adf (HIGH verdict).
+            assert_no_raw_newline_in_text_nodes(
+                &adf,
+                input,
+                // The assert_no_raw_newline_in_text_nodes signature takes (adf, input).
+            );
+        }
+    }
+
+    /// BC-7.2.011 EC-11 (CR-01, #522 test 5) — proptest: INV-1 holds for
+    /// `markdown_to_adf` over inputs that include HTML-like chars (`<`, `>`,
+    /// `/`, `"`, `=`) interleaved with `\r`/`\n`.
+    ///
+    /// The existing `prop_492_arbitrary_string_holds_core_invariants` proptest
+    /// uses charset `[\r\n\t a-zA-Z0-9]{0,64}` which deliberately excludes `<`
+    /// and `>`.  This test adds a new strategy that includes HTML-structural
+    /// chars so the inline-HTML→push_text path is fuzzed.
+    ///
+    /// If CR-01 is reachable through pulldown (test 4 RED), this proptest will
+    /// also be RED (and will find minimal failing inputs automatically).
+    /// If CR-01 is latent (test 4 GREEN), this proptest may still be RED if
+    /// there are other paths through the markdown parser that deliver raw `\n`
+    /// to push_text Other context.
+    ///
+    /// Uses 1024 cases (fast CI while still dense sampling).
+    #[test]
+    fn prop_markdown_to_adf_html_chars_holds_inv1() {
+        let config = proptest::test_runner::Config {
+            cases: 1024,
+            ..proptest::test_runner::Config::default()
+        };
+        let mut runner = proptest::test_runner::TestRunner::new(config);
+        runner
+            .run(
+                // Extend the charset with HTML-structural chars so inline-HTML
+                // fragments (e.g. "<br\n/>") can be generated.
+                &proptest::string::string_regex(
+                    "[\\r\\n\\t a-zA-Z0-9<>/\"=]{0,64}",
+                )
+                .unwrap(),
+                |input| {
+                    let adf = markdown_to_adf(&input);
+                    // INV-1: no raw \n in non-codeBlock text nodes, no raw \r anywhere.
+                    assert_no_raw_newline_in_text_nodes(&adf, &input);
+                    Ok(())
+                },
+            )
+            .unwrap();
+    }
+
+    /// BC-7.2.011 EC-11 (CR-01, #522 test 6) — regression guard: `text_to_adf`
+    /// (the worklog path, called at `src/cli/worklog.rs` via
+    /// `message.map(adf::text_to_adf)`) correctly handles a multi-line message,
+    /// producing hardBreak interior nodes with no raw `\n` in any text node.
+    ///
+    /// `text_to_adf` independently implements Algorithm B step logic and has its
+    /// own multi-line path — it does NOT route through `push_text`.  This test
+    /// confirms that the worklog path is already correct (INV-1 holds) and will
+    /// continue to hold after the push_text fix (no regression).
+    ///
+    /// This test MUST PASS both before and after the push_text/push_code fix.
+    #[test]
+    fn test_text_to_adf_worklog_multiline_message_is_cr_lf_free() {
+        // Simulate a worklog message with a bare \n (e.g. "Fixed the bug\nSee ticket").
+        let adf = text_to_adf("a\nb");
+
+        // INV-1: text_to_adf must never embed raw \n in a text node.
+        assert_no_raw_newline_in_text_nodes(&adf, "a\nb");
+
+        // Confirm the correct structural shape: one paragraph with
+        // [text("a"), hardBreak, text("b")].
+        let content = adf["content"]
+            .as_array()
+            .expect("text_to_adf must produce a doc with content array");
+        assert_eq!(
+            content.len(),
+            1,
+            "text_to_adf(\"a\\nb\") must produce one paragraph \
+             (BC-7.2.011 EC-12, worklog path regression guard #522 test 6)"
+        );
+        let para_content = content[0]["content"]
+            .as_array()
+            .expect("paragraph must have a content array");
+        // Expected: [text("a"), hardBreak, text("b")]
+        assert_eq!(
+            para_content.len(),
+            3,
+            "text_to_adf(\"a\\nb\") paragraph must have 3 inline nodes \
+             [text, hardBreak, text] (BC-7.2.011 EC-12 #522 test 6); got: {:?}",
+            para_content
+        );
+        assert_eq!(
+            para_content[0]["type"], "text",
+            "para_content[0] must be a text node (#522 test 6)"
+        );
+        assert_eq!(
+            para_content[0]["text"], "a",
+            "para_content[0].text must be \"a\" (#522 test 6)"
+        );
+        assert_eq!(
+            para_content[1]["type"], "hardBreak",
+            "para_content[1] must be hardBreak (interior \\n → hardBreak, not raw \\n) \
+             (#522 test 6)"
+        );
+        assert_eq!(
+            para_content[2]["type"], "text",
+            "para_content[2] must be a text node (#522 test 6)"
+        );
+        assert_eq!(
+            para_content[2]["text"], "b",
+            "para_content[2].text must be \"b\" (#522 test 6)"
+        );
+    }
 }
