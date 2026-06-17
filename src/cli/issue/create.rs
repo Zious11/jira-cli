@@ -2718,7 +2718,10 @@ async fn handle_jsm_create(
     let issue_key = &created.issue_key;
     match output_format {
         OutputFormat::Json => {
-            println!("{}", serde_json::json!({"key": issue_key}));
+            println!(
+                "{}",
+                output::render_json(&serde_json::json!({"key": issue_key}))?
+            );
         }
         OutputFormat::Table => {
             output::print_success(&format!("Created request {issue_key}"));
