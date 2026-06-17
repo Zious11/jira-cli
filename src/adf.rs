@@ -1175,7 +1175,7 @@ impl AdfBuilder {
         // a raw \n. Mirror Algorithm B step-3 normalization so inline paths share the
         // same invariant as HtmlBlock.
         //
-        // Context determines the replacement for CR:
+        // Context determines the replacement for CR/LF:
         // - CodeBlock: \r\n → \n, lone \r → \n  (codeBlock text nodes allow \n for
         //   multi-line preformatted content; Jira accepts embedded \n here).
         // - HtmlBlock: CR is left UNCHANGED. The HtmlBlock End arm (Algorithm B)
@@ -1183,20 +1183,24 @@ impl AdfBuilder {
         //   \r\n→\n / lone \r→\n normalization before splitting into hardBreak
         //   nodes. Pre-normalizing here would turn a lone \r into a space, which
         //   Algorithm B would then NOT treat as a line boundary — breaking the
-        //   hardBreak contract. HtmlBlock owns its own CR lifecycle.
-        // - Other (paragraph, heading, inline text): \r\n → space, lone \r → space
-        //   (mirrors SoftBreak → " "; raw \n forbidden in non-codeBlock text nodes
-        //   per INV-1, so \r→\n would trade one violation for another).
+        //   hardBreak contract. HtmlBlock owns its own CR/LF lifecycle.
+        // - Other (paragraph, heading, inline text): \r\n → space, lone \r → space,
+        //   lone \n → space (mirrors SoftBreak → " "; raw \n is forbidden in
+        //   non-codeBlock text nodes per INV-1 — this is the defense-in-depth
+        //   chokepoint that catches bare \n from inline HTML and other inline paths).
         let normalized;
-        let text = if text.contains('\r') {
+        let needs_norm =
+            text.contains('\r') || (matches!(ctx, TextCtx::Other) && text.contains('\n'));
+        let text = if needs_norm {
             match ctx {
                 TextCtx::CodeBlock => {
                     normalized = text.replace("\r\n", "\n").replace('\r', "\n");
                     normalized.as_str()
                 }
-                TextCtx::HtmlBlock => text, // Algorithm B owns CR normalization
+                TextCtx::HtmlBlock => text, // Algorithm B owns CR/LF normalization
                 TextCtx::Other => {
-                    normalized = text.replace("\r\n", " ").replace('\r', " ");
+                    // Replace CRLF pairs first (→ single space), then lone \r/\n.
+                    normalized = text.replace("\r\n", " ").replace(['\r', '\n'], " ");
                     normalized.as_str()
                 }
             }
@@ -1219,13 +1223,16 @@ impl AdfBuilder {
                 return;
             }
         }
-        // BC-7.2.011 EC-11: no text node may contain a raw \r (same invariant as push_text).
-        // push_code always emits an inline code mark — the `code` mark text node is
-        // never inside a block-level codeBlock, so the non-codeBlock branch applies:
-        // \r\n → space, lone \r → space (no raw \n in inline text nodes).
+        // BC-7.2.011 EC-11: no text node may contain a raw \r or \n (same invariant as
+        // push_text Other context). Structural precondition: push_code is only ever
+        // called for inline Event::Code, which CommonMark guarantees never nests inside
+        // a codeBlock or HtmlBlock — hence no context branch is needed here.
+        // \r\n → space, lone \r → space, lone \n → space (defense-in-depth chokepoint
+        // for INV-1; catches bare \n arriving from any inline path).
         let normalized;
-        let text = if text.contains('\r') {
-            normalized = text.replace("\r\n", " ").replace('\r', " ");
+        let text = if text.contains('\r') || text.contains('\n') {
+            // Replace CRLF pairs first (→ single space), then lone \r/\n.
+            normalized = text.replace("\r\n", " ").replace(['\r', '\n'], " ");
             normalized.as_str()
         } else {
             text
@@ -10354,10 +10361,7 @@ mod tests {
             .run(
                 // Extend the charset with HTML-structural chars so inline-HTML
                 // fragments (e.g. "<br\n/>") can be generated.
-                &proptest::string::string_regex(
-                    "[\\r\\n\\t a-zA-Z0-9<>/\"=]{0,64}",
-                )
-                .unwrap(),
+                &proptest::string::string_regex("[\\r\\n\\t a-zA-Z0-9<>/\"=]{0,64}").unwrap(),
                 |input| {
                     let adf = markdown_to_adf(&input);
                     // INV-1: no raw \n in non-codeBlock text nodes, no raw \r anywhere.
