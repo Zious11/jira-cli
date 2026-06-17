@@ -87,6 +87,14 @@ Three load-bearing asymmetries between block and inline HTML handling:
    active marks and would be incorrect here even if the stack happened to be
    empty).
 
+4. **Interior newline treatment.** Block HTML interior `\n`/`\r` → `hardBreak`
+   nodes via Algorithm B step 4 (the defining behavior of issue #492). Inline
+   HTML (`Event::InlineHtml`) flows into `push_text` with context `Other`, which
+   maps any `\n`/`\r` character to a single space — mirroring the `SoftBreak →
+   " "` convention — because a `hardBreak` mid-span would be visually surprising
+   inside a paragraph and INV-1 (BC-7.2.011 EC-11) forbids a raw `\n`/`\r` in
+   any `text` node regardless of context.
+
 ## autolink interaction (issue #473)
 
 The post-`finish()` `autolink_bare_urls` pass walks the entire built tree,

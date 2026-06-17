@@ -10320,6 +10320,10 @@ mod tests {
             "x <br\n/>y",
             // multiple inline HTML fragments with \n
             "text <em\nclass=\"a\">more</em>",
+            // 3+-line inline HTML: INV-1 must hold across all three interior \n (F-522-02)
+            "a <b\nc\nd>e",
+            // CRLF inline HTML: \r\n must not produce a raw \r or \n in any text node (F-522-02)
+            "a <b\r\nc>d",
         ];
 
         for &input in inputs {
