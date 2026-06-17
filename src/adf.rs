@@ -1072,17 +1072,47 @@ impl AdfBuilder {
         if text.is_empty() {
             return;
         }
-        if let Some(top) = self.stack.last() {
-            if matches!(top.kind, NodeKind::Sink) {
-                return;
-            }
+        // Check stack top once for both the Sink guard and the context classification.
+        enum TextCtx {
+            CodeBlock,
+            HtmlBlock,
+            Other,
         }
-        // BC-7.2.011 EC-11: no text node may contain a raw \r. Mirror Algorithm B
-        // step-3 normalization so inline paths share the same invariant as HtmlBlock.
+        let ctx = match self.stack.last() {
+            Some(top) if matches!(top.kind, NodeKind::Sink) => return,
+            Some(top) if matches!(top.kind, NodeKind::CodeBlock { .. }) => TextCtx::CodeBlock,
+            Some(top) if matches!(top.kind, NodeKind::HtmlBlock) => TextCtx::HtmlBlock,
+            _ => TextCtx::Other,
+        };
+        // BC-7.2.011 EC-11: no text node may contain a raw \r or (outside codeBlock)
+        // a raw \n. Mirror Algorithm B step-3 normalization so inline paths share the
+        // same invariant as HtmlBlock.
+        //
+        // Context determines the replacement for CR:
+        // - CodeBlock: \r\n → \n, lone \r → \n  (codeBlock text nodes allow \n for
+        //   multi-line preformatted content; Jira accepts embedded \n here).
+        // - HtmlBlock: CR is left UNCHANGED. The HtmlBlock End arm (Algorithm B)
+        //   accumulates the raw text strings from children and does its own
+        //   \r\n→\n / lone \r→\n normalization before splitting into hardBreak
+        //   nodes. Pre-normalizing here would turn a lone \r into a space, which
+        //   Algorithm B would then NOT treat as a line boundary — breaking the
+        //   hardBreak contract. HtmlBlock owns its own CR lifecycle.
+        // - Other (paragraph, heading, inline text): \r\n → space, lone \r → space
+        //   (mirrors SoftBreak → " "; raw \n forbidden in non-codeBlock text nodes
+        //   per INV-1, so \r→\n would trade one violation for another).
         let normalized;
         let text = if text.contains('\r') {
-            normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-            normalized.as_str()
+            match ctx {
+                TextCtx::CodeBlock => {
+                    normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+                    normalized.as_str()
+                }
+                TextCtx::HtmlBlock => text, // Algorithm B owns CR normalization
+                TextCtx::Other => {
+                    normalized = text.replace("\r\n", " ").replace('\r', " ");
+                    normalized.as_str()
+                }
+            }
         } else {
             text
         };
@@ -1103,9 +1133,12 @@ impl AdfBuilder {
             }
         }
         // BC-7.2.011 EC-11: no text node may contain a raw \r (same invariant as push_text).
+        // push_code always emits an inline code mark — the `code` mark text node is
+        // never inside a block-level codeBlock, so the non-codeBlock branch applies:
+        // \r\n → space, lone \r → space (no raw \n in inline text nodes).
         let normalized;
         let text = if text.contains('\r') {
-            normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+            normalized = text.replace("\r\n", " ").replace('\r', " ");
             normalized.as_str()
         } else {
             text
@@ -8911,26 +8944,23 @@ mod tests {
         for_each_adf_node_ctx(node, false, &mut |n, _| f(n));
     }
 
-    /// INV-1: the #492 bug class. No `text` node OUTSIDE a `codeBlock` may carry a
-    /// raw `\n` (Jira rejects raw newlines in paragraph/inline text with HTTP
-    /// 400). This is the exact surface the #492 Algorithm B block-HTML handler
-    /// governs, and the core invariant it must uphold.
+    /// INV-1: No `text` node OUTSIDE a `codeBlock` may carry a raw `\n` (Jira
+    /// rejects raw newlines in paragraph/inline text — HTTP 400). This is the
+    /// core invariant the #492 Algorithm B block-HTML handler governs, and the
+    /// #522 context-aware `push_text`/`push_code` normalization upholds.
     ///
-    /// `strict_cr` controls the *carriage-return* clause:
-    /// - `strict_cr = true` (block-HTML inputs): the text node must ALSO be free
-    ///   of raw `\r`. The #492 Algorithm B handler explicitly normalizes
-    ///   `\r\n`→`\n` and lone `\r`→`\n` (step 3), so its manufactured paragraphs
-    ///   are provably CR-free — this asserts that guarantee.
-    /// - `strict_cr = false`: the `\r` clause is NOT asserted. Reserved for
-    ///   callers that have verified CR-normalization separately. As of #522,
-    ///   `push_text`/`push_code` normalize lone `\r` on the generic parser path
-    ///   (BC-7.2.011 EC-11), so all callers in this file now pass `true`; `false`
-    ///   is kept for API completeness and future callers with different invariants.
+    /// Additionally, no `text` node anywhere in the tree may carry a raw `\r`:
+    /// the #492 Algorithm B handler (block-HTML) and the #522 `push_text`/
+    /// `push_code` normalization (generic parser path) both guarantee CR-free
+    /// output. The `\r` check is unconditional — as of #522 all code paths
+    /// normalize CR before constructing any text node (BC-7.2.011 EC-11,
+    /// F5 Pass-1).
     ///
-    /// SCOPE NOTE (codeBlock exemption): `codeBlock` content is preformatted —
+    /// SCOPE NOTE (codeBlock `\n` exemption): `codeBlock` content is preformatted —
     /// multi-line code is legally stored as a single `text` node with literal
     /// `\n` newlines, which Jira accepts — so the `\n` clause exempts codeBlock.
-    fn assert_no_raw_newline_in_text_nodes(adf: &serde_json::Value, input: &str, strict_cr: bool) {
+    /// The `\r` clause applies everywhere (no exemption).
+    fn assert_no_raw_newline_in_text_nodes(adf: &serde_json::Value, input: &str) {
         for_each_adf_node_ctx(adf, false, &mut |node, in_code_block| {
             if node.get("type").and_then(|t| t.as_str()) == Some("text") {
                 if let Some(text) = node.get("text").and_then(|t| t.as_str()) {
@@ -8943,17 +8973,14 @@ mod tests {
                              input={input:?}\ntext node={text:?}\nfull adf={adf}"
                         );
                     }
-                    // `\r` clause: only asserted for the #492-governed block-HTML
-                    // surface (strict_cr). See doc-comment for the pre-existing
-                    // out-of-scope parser CR gap.
-                    if strict_cr {
-                        assert!(
-                            !text.contains('\r'),
-                            "INV-1 VIOLATED: block-HTML text node contains raw \\r \
-                             (Algorithm B step-3 CR normalization failed).\n\
-                             input={input:?}\ntext node={text:?}\nfull adf={adf}"
-                        );
-                    }
+                    // `\r` clause: unconditional — all code paths normalize CR before
+                    // constructing any text node (#492 Algorithm B + #522 push_text).
+                    assert!(
+                        !text.contains('\r'),
+                        "INV-1 VIOLATED: text node contains raw \\r \
+                         (CR normalization failed).\n\
+                         input={input:?}\ntext node={text:?}\nfull adf={adf}"
+                    );
                 }
             }
         });
@@ -9195,11 +9222,10 @@ mod tests {
             // INV-4: markdown_to_adf must not panic (proptest surfaces a panic
             // here and minimizes the input automatically).
             let adf = markdown_to_adf(&input);
-            // INV-1: no raw `\n` or `\r` in any non-codeBlock text node.
-            // fixed in #522: push_text/push_code normalize lone \r on the generic
-            // parser path. strict_cr=true: lone \r must not survive into any
-            // text node (BC-7.2.011 EC-11 / INV-push-text-cr).
-            assert_no_raw_newline_in_text_nodes(&adf, &input, true);
+            // INV-1: no raw `\n` or `\r` in any non-codeBlock text node, and no
+            // raw `\r` anywhere. Fixed in #522: push_text/push_code normalize lone
+            // \r on the generic parser path (BC-7.2.011 EC-11 / INV-push-text-cr).
+            assert_no_raw_newline_in_text_nodes(&adf, &input);
             // INV-2 (file-wide): every paragraph carries a `content` array key
             // (empty `[]` is valid ADF; a keyless paragraph is the real hazard).
             assert_paragraph_has_content_key(&adf, &input);
@@ -9216,9 +9242,10 @@ mod tests {
         #[test]
         fn prop_492_block_html_holds_core_invariants(input in gen_block_html()) {
             let adf = markdown_to_adf(&input);     // INV-4
-            // INV-1 strict: block-HTML text nodes must be free of BOTH \n and \r
-            // (Algorithm B step-3 normalizes \r). strict_cr=true.
-            assert_no_raw_newline_in_text_nodes(&adf, &input, true);  // INV-1
+            // INV-1: block-HTML text nodes must be free of both \n (non-codeBlock)
+            // and \r (all nodes). Algorithm B step-3 normalizes \r; push_text
+            // context-aware normalization (#522) covers the generic path.
+            assert_no_raw_newline_in_text_nodes(&adf, &input);  // INV-1
             assert_paragraph_has_content_key(&adf, &input);     // INV-2 (file-wide)
             assert_no_empty_paragraph_strict(&adf, &input);     // INV-2 (delta-strict)
             assert_no_paragraph_edge_hardbreak(&adf, &input);   // INV-3
@@ -9265,19 +9292,24 @@ mod tests {
         out
     }
 
-    /// BC-7.2.011 EC-11 (INV-push-text-cr) — fixed in #522.
+    /// BC-7.2.011 EC-11 (INV-push-text-cr) — fixed in #522 (F5 Pass-1 hardening).
     ///
-    /// `AdfBuilder::push_text` and `AdfBuilder::push_code` must normalize
-    /// `\r\n`→`\n` then lone `\r`→`\n` before constructing any ADF text node on
-    /// the generic parser path. This test asserts the fixed (post-#522) behavior:
-    /// no raw `\r` survives into any `text` node from a heading or indented
-    /// codeBlock. Mirrors Algorithm B step 3 in the `NodeKind::HtmlBlock` arm.
+    /// `AdfBuilder::push_text` must normalize CR before constructing any ADF text
+    /// node. The correct substitution is context-dependent (empirically confirmed):
     ///
-    /// Red Gate: this test FAILS before the fix (push_text does not normalize `\r`).
-    /// Green Gate: passes after push_text/push_code gain the CR-normalization guard.
+    /// - **Inside `codeBlock`:** lone `\r`→`\n` (codeBlock text nodes allow `\n`
+    ///   for multi-line preformatted content).
+    /// - **Outside `codeBlock` (heading, paragraph, inline text):** lone `\r`→ space
+    ///   (mirrors `SoftBreak → push_text(" ")`; raw `\n` is forbidden in non-codeBlock
+    ///   text nodes — INV-1 — so converting `\r`→`\n` would trade one violation for
+    ///   another). pulldown-cmark emits `Text("x\ry")` for `# x\ry` (heading with lone
+    ///   CR), so the space substitution is the minimal correct fix.
+    ///
+    /// Red Gate: FAILS before the fix (push_text does not normalize `\r`).
+    /// Green Gate: passes after push_text gains context-aware CR-normalization.
     #[test]
     fn test_push_text_normalizes_lone_cr_in_heading_and_code_block() {
-        // codeBlock manifestation.
+        // indented codeBlock: lone \r in input → \n in codeBlock text (allowed).
         let cb = markdown_to_adf("\ta\r");
         assert!(
             collect_all_text_nodes(&cb)
@@ -9286,50 +9318,182 @@ mod tests {
             "push_text must normalize lone \\r in indented codeBlock; \
              text nodes must contain no raw \\r (BC-7.2.011 EC-11)"
         );
-        // heading manifestation (same root cause, different block type).
+        // heading: pulldown emits Text("x\ry"); push_text must convert \r → space,
+        // NOT \n (which would violate INV-1 — raw \n forbidden in heading text nodes).
         let h = markdown_to_adf("# x\ry");
+        let h_texts = collect_all_text_nodes(&h);
         assert!(
-            collect_all_text_nodes(&h).iter().all(|t| !t.contains('\r')),
+            h_texts.iter().all(|t| !t.contains('\r')),
             "push_text must normalize lone \\r in heading; \
              text nodes must contain no raw \\r (BC-7.2.011 EC-11)"
         );
-    }
-
-    /// BC-7.2.011 EC-11 — lone `\r` in a fenced codeBlock reaches push_text
-    /// and must be normalized; no raw `\r` survives into any text node.
-    ///
-    /// pulldown-cmark normalizes `\r\n` (CRLF) and lone `\r` in paragraph and
-    /// heading contexts at the parse-input level before emitting `Event::Text`.
-    /// However, in fenced codeBlock content, pulldown passes the raw text through
-    /// verbatim including lone `\r` characters — so `push_text` MUST strip them.
-    ///
-    /// This test uses a fenced codeBlock with a lone `\r` embedded in the body
-    /// to exercise the `push_text` path without going through the indented-codeBlock
-    /// path already covered by `test_push_text_normalizes_lone_cr_in_heading_and_code_block`.
-    ///
-    /// Red Gate: FAILS before the fix (push_text passes `\r` through in fenced codeBlock).
-    /// Green Gate: passes after push_text gains the CR-normalization guard.
-    #[test]
-    fn test_push_text_normalizes_crlf_in_paragraph() {
-        // Fenced codeBlock with a lone \r in the body. pulldown passes this through
-        // verbatim into Event::Text, unlike paragraph/heading inputs.
-        let adf = markdown_to_adf("```\na\rb\n```");
         assert!(
-            collect_all_text_nodes(&adf)
-                .iter()
-                .all(|t| !t.contains('\r')),
-            "push_text must normalize lone \\r in fenced codeBlock content; \
-             text nodes must contain no raw \\r (BC-7.2.011 EC-11)"
+            h_texts.iter().all(|t| !t.contains('\n')),
+            "push_text must NOT introduce raw \\n in heading text nodes (INV-1); \
+             \\r must become space, not \\n. got: {:?} (BC-7.2.011 EC-11)",
+            h_texts
+        );
+        // The heading text must contain the space-substituted form "x y".
+        assert!(
+            h_texts.iter().any(|t| t == "x y"),
+            "push_text must convert lone \\r to space in heading; \
+             expected text node \"x y\" but got: {:?} (BC-7.2.011 EC-11)",
+            h_texts
         );
     }
 
-    /// BC-7.2.011 EC-11 — `push_code` normalizes lone `\r` before building the text node.
+    /// BC-7.2.011 EC-11 — lone `\r` in a fenced codeBlock content reaches `push_text`
+    /// via `Event::Text` and must be normalized to `\n` (codeBlock context allows `\n`).
+    ///
+    /// pulldown-cmark passes fenced codeBlock body text verbatim, including lone `\r`,
+    /// unlike paragraph/heading where it normalizes at parse-input level.
+    ///
+    /// **F5 Pass-1 correction (F-001):** the original test was misnamed
+    /// `test_push_text_normalizes_crlf_in_paragraph` but actually tested a fenced
+    /// codeBlock. Renamed to accurately describe the covered path.
+    ///
+    /// Red Gate: FAILS before the fix (push_text passes `\r` through in fenced codeBlock).
+    /// Green Gate: passes after push_text gains context-aware CR-normalization.
+    #[test]
+    fn test_push_text_normalizes_lone_cr_in_fenced_code_block() {
+        // Fenced codeBlock with a lone \r in the body. pulldown passes this through
+        // verbatim into Event::Text; inside CodeBlock context \r must become \n.
+        let adf = markdown_to_adf("```\na\rb\n```");
+        let texts = collect_all_text_nodes(&adf);
+        assert!(
+            texts.iter().all(|t| !t.contains('\r')),
+            "push_text must normalize lone \\r in fenced codeBlock content; \
+             text nodes must contain no raw \\r (BC-7.2.011 EC-11)"
+        );
+        // Inside codeBlock the normalized form must be \n (not space), so multi-line
+        // code retains its line structure.
+        assert!(
+            texts.iter().any(|t| t.contains("a\nb")),
+            "push_text must normalize lone \\r to \\n inside codeBlock; \
+             expected a text node containing \"a\\nb\" but got: {:?} (BC-7.2.011 EC-11)",
+            texts
+        );
+    }
+
+    /// BC-7.2.011 EC-11 — CRLF two-pass ordering pinned by direct `push_text`/`push_code`
+    /// calls, bypassing pulldown.
+    ///
+    /// The normalization is `\r\n`→replacement THEN lone `\r`→replacement (two-pass).
+    /// Incorrect ordering (lone `\r` first, then `\r\n`) would double-convert CRLF:
+    ///   `\r\n` → `\n\n` (lone `\r` becomes `\n`, then the original `\n` stays) — wrong.
+    ///
+    /// Context rules (empirically confirmed, F5 Pass-1):
+    /// - Inside codeBlock:    `\r\n`→`\n`,     lone `\r`→`\n`
+    /// - Outside codeBlock:   `\r\n`→ space,   lone `\r`→ space   (INV-1: no raw `\n`)
+    ///
+    /// **F5 Pass-1 (F-001):** this is a new deterministic test that pins the two-pass
+    /// ordering and the non-codeBlock space-substitution path that was missing before.
+    #[test]
+    fn test_push_text_crlf_two_pass_ordering_deterministic() {
+        // --- Non-codeBlock path (paragraph) ---
+        // "hello\r\nworld": CRLF → space (not \n, not doubled)
+        {
+            let mut b = AdfBuilder::new();
+            b.push(NodeKind::Paragraph);
+            b.push_text("hello\r\nworld");
+            b.end(TagEnd::Paragraph);
+            let doc = json!({"version":1,"type":"doc","content":b.root});
+            let texts = collect_all_text_nodes(&doc);
+            assert!(
+                texts.iter().any(|t| t == "hello world"),
+                "CRLF in non-codeBlock must become space (two-pass: \\r\\n→space first); \
+                 got: {:?}",
+                texts
+            );
+        }
+        // "a\r\rb": two lone CRs → two spaces (not doubled \n)
+        {
+            let mut b = AdfBuilder::new();
+            b.push(NodeKind::Paragraph);
+            b.push_text("a\r\rb");
+            b.end(TagEnd::Paragraph);
+            let doc = json!({"version":1,"type":"doc","content":b.root});
+            let texts = collect_all_text_nodes(&doc);
+            assert!(
+                texts.iter().any(|t| t == "a  b"),
+                "two lone CRs in non-codeBlock must become two spaces; got: {:?}",
+                texts
+            );
+        }
+        // "\r\n\r": CRLF + lone CR → two spaces
+        {
+            let mut b = AdfBuilder::new();
+            b.push(NodeKind::Paragraph);
+            b.push_text("\r\n\r");
+            b.end(TagEnd::Paragraph);
+            let doc = json!({"version":1,"type":"doc","content":b.root});
+            let texts = collect_all_text_nodes(&doc);
+            assert!(
+                texts.iter().any(|t| t == "  "),
+                "CRLF + lone CR in non-codeBlock must become two spaces; got: {:?}",
+                texts
+            );
+        }
+        // --- codeBlock path ---
+        // "hello\r\nworld": CRLF → \n (not doubled)
+        {
+            let mut b = AdfBuilder::new();
+            b.push(NodeKind::CodeBlock { language: None });
+            b.push_text("hello\r\nworld");
+            b.end(TagEnd::CodeBlock);
+            let doc = json!({"version":1,"type":"doc","content":b.root});
+            let texts = collect_all_text_nodes(&doc);
+            assert!(
+                texts.iter().any(|t| t == "hello\nworld"),
+                "CRLF in codeBlock must become \\n (not doubled); got: {:?}",
+                texts
+            );
+        }
+        // "a\r\rb": two lone CRs → two \n chars
+        {
+            let mut b = AdfBuilder::new();
+            b.push(NodeKind::CodeBlock { language: None });
+            b.push_text("a\r\rb");
+            b.end(TagEnd::CodeBlock);
+            let doc = json!({"version":1,"type":"doc","content":b.root});
+            let texts = collect_all_text_nodes(&doc);
+            assert!(
+                texts.iter().any(|t| t == "a\n\nb"),
+                "two lone CRs in codeBlock must become two \\n chars; got: {:?}",
+                texts
+            );
+        }
+        // "\r\n\r": CRLF + lone CR → two \n chars
+        {
+            let mut b = AdfBuilder::new();
+            b.push(NodeKind::CodeBlock { language: None });
+            b.push_text("\r\n\r");
+            b.end(TagEnd::CodeBlock);
+            let doc = json!({"version":1,"type":"doc","content":b.root});
+            let texts = collect_all_text_nodes(&doc);
+            assert!(
+                texts.iter().any(|t| t == "\n\n"),
+                "CRLF + lone CR in codeBlock must become two \\n chars; got: {:?}",
+                texts
+            );
+        }
+    }
+
+    /// BC-7.2.011 EC-11 — `push_code` normalizes lone `\r` before building the
+    /// inline code text node; CR becomes space (inline text, not codeBlock context).
     ///
     /// pulldown-cmark normalizes `\r` to a space inside inline code spans (CommonMark
-    /// §6.3 line-ending handling), so `markdown_to_adf("`a\rb`")` never routes a raw
-    /// `\r` through `Event::Code`. The direct `push_code` path must still guard against
-    /// a raw `\r` arriving via any other caller — tested here by calling `push_code`
-    /// directly on an `AdfBuilder`.
+    /// §6.3), so `markdown_to_adf("`a\rb`")` never routes a raw `\r` through
+    /// `Event::Code`. The direct `push_code` path guards against any other caller
+    /// supplying a raw `\r`.
+    ///
+    /// **F5 Pass-1 correction (F-002):** the original assertion
+    /// `texts.iter().any(|t| t == "a\nb")` was wrong — inline code is NOT in a
+    /// codeBlock context, so `\r` must become a space, producing `"a b"`, not `"a\nb"`.
+    /// The `markdown_to_adf("`a\rb`")` assertion documented pulldown §6.3 behavior
+    /// (which already produces `"a b"`) and was vacuous as a regression guard — it
+    /// passes even without the fix. That assertion is retained with an explanatory
+    /// comment distinguishing the pulldown path from the direct-call guard.
     ///
     /// Red Gate: FAILS before the fix (push_code passes `\r` through verbatim).
     /// Green Gate: passes after push_code gains the CR-normalization guard.
@@ -9347,11 +9511,11 @@ mod tests {
             "content": builder.root,
         });
         let texts = collect_all_text_nodes(&doc);
-        // push_code must normalize lone \r → \n.
+        // push_code is inline (not inside a codeBlock), so lone \r must become space.
         assert!(
-            texts.iter().any(|t| t == "a\nb"),
-            "push_code must normalize lone \\r to \\n; \
-             expected text node \"a\\nb\" but got: {:?} (BC-7.2.011 EC-11)",
+            texts.iter().any(|t| t == "a b"),
+            "push_code must normalize lone \\r to space in inline context; \
+             expected text node \"a b\" but got: {:?} (BC-7.2.011 EC-11)",
             texts
         );
         // No text node anywhere in the ADF may contain a raw \r.
@@ -9361,14 +9525,17 @@ mod tests {
              got: {:?} (BC-7.2.011 EC-11)",
             texts
         );
-        // Invariant also holds through the markdown_to_adf path (pulldown normalizes
-        // \r to space in code spans per CommonMark §6.3 — no \r reaches push_code).
+        // Documents pulldown CommonMark §6.3 behavior: pulldown converts inline-code
+        // \r to a space BEFORE emitting Event::Code, so no \r reaches push_code on
+        // this path. This assertion is NOT a regression guard for the push_code fix
+        // (it passes even without the fix); it documents the pulldown §6.3 invariant.
         let via_md = markdown_to_adf("`a\rb`");
         assert!(
             collect_all_text_nodes(&via_md)
                 .iter()
                 .all(|t| !t.contains('\r')),
-            "no raw \\r must survive into any text node via markdown_to_adf (BC-7.2.011 EC-11)"
+            "pulldown §6.3 already normalizes \\r to space in inline code; \
+             no raw \\r must survive (BC-7.2.011 EC-11)"
         );
     }
 }
