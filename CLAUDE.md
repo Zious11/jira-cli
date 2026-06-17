@@ -12,55 +12,83 @@ src/
 ├── cli/                 # Clap derive definitions + command handlers
 │   ├── mod.rs           # CLI enums, global flags (--output, --project, --profile, --no-input, --no-color)
 │   ├── issue/           # issue commands (split by operation theme)
-│   │   ├── mod.rs       # dispatch + re-exports
-│   │   ├── format.rs    # row formatting, headers, points display
-│   │   ├── list.rs      # list + view + comments (read operations, unified JQL composition)
-│   │   ├── view.rs      # cli/issue/view.rs — issue view handler, detailed single-issue rendering (~287 LOC)
-│   │   ├── comments.rs  # cli/issue/comments.rs — comment list formatting and display (~61 LOC)
-│   │   ├── create.rs    # create + edit (field-building)
-│   │   ├── workflow.rs  # move + transitions + assign + comment + open
-│   │   ├── links.rs     # link + unlink + link-types
-│   │   ├── helpers.rs   # team/points resolution, user resolution, prompts
-│   │   └── assets.rs    # linked assets (issue→asset lookup)
-│   ├── assets.rs        # assets search/view/tickets/schemas/types/schema (search enrichment, schema discovery)
+│   │   ├── mod.rs           # dispatch + re-exports
+│   │   ├── format.rs        # row formatting, headers, points display
+│   │   ├── list.rs          # list only (JQL composition, filter application)
+│   │   ├── view.rs          # issue view handler, detailed single-issue rendering (~287 LOC)
+│   │   ├── comments.rs      # comment list formatting and display (~61 LOC)
+│   │   ├── create.rs        # create + edit (field-building)
+│   │   ├── workflow.rs      # move + transitions + assign + comment + open
+│   │   ├── links.rs         # link + unlink + link-types
+│   │   ├── helpers.rs       # team/points resolution, user resolution, prompts
+│   │   ├── assets.rs        # linked assets (issue→asset lookup)
+│   │   ├── changelog.rs     # issue changelog handler (`jr issue changelog`)
+│   │   ├── field_resolve.rs # field resolution helpers for `issue edit --field`
+│   │   └── json_output.rs   # JSON output helpers for issue commands
+│   ├── assets/          # assets commands (module directory)
+│   │   ├── mod.rs           # dispatch + re-exports
+│   │   ├── search.rs        # assets search (AQL, enrichment)
+│   │   ├── view.rs          # asset detail view
+│   │   ├── tickets.rs       # connected tickets (`filter_tickets` lives here)
+│   │   └── schemas.rs       # schema/type/attribute discovery
+│   ├── auth/            # auth commands (module directory)
+│   │   ├── mod.rs           # dispatch + re-exports
+│   │   ├── keychain.rs      # keychain helpers
+│   │   ├── list.rs          # auth list
+│   │   ├── login.rs         # auth login
+│   │   ├── logout.rs        # auth logout
+│   │   ├── refresh.rs       # auth refresh
+│   │   ├── remove.rs        # auth remove
+│   │   ├── status.rs        # auth status (human text only; no JSON path)
+│   │   └── switch.rs        # auth switch
+│   ├── api.rs           # API passthrough command (`jr api`)
 │   ├── board.rs         # board list/view
 │   ├── sprint.rs        # sprint list/current/add/remove (scrum-only, errors on kanban)
 │   ├── worklog.rs       # worklog add/list
 │   ├── team.rs          # team list (with cache + lazy org discovery)
 │   ├── user.rs          # user search/list/view (thin wrapper over api/jira/users.rs)
-│   ├── auth.rs          # auth login/switch/list/status/refresh/logout/remove. Multi-profile aware via --profile.
 │   ├── init.rs          # Interactive setup (prefetches org metadata + team cache + story points field)
 │   ├── project.rs       # project fields (types, priorities, statuses, CMDB fields)
 │   ├── queue.rs         # queue list/view (JSM service desks)
 │   └── requesttype.rs   # requesttype list/fields (JSM request-type discovery + 7d cache)
 ├── api/
-│   ├── client.rs        # JiraClient — HTTP methods, auth headers, rate limit retry, 429/401 handling
-│   ├── auth.rs          # OAuth 2.0 flow + per-profile keychain layout (shared email/api-token/oauth_client_*; namespaced <profile>:oauth-access-token / <profile>:oauth-refresh-token); lazy migration of legacy flat OAuth keys for the "default" profile
-│   ├── pagination.rs    # Offset-based (most endpoints) + cursor-based (JQL search)
-│   ├── rate_limit.rs    # Retry-After parsing
+│   ├── client.rs              # JiraClient — HTTP methods, auth headers, rate limit retry, 429/401 handling
+│   ├── auth.rs                # OAuth 2.0 flow + per-profile keychain layout (shared email/api-token/oauth_client_*; namespaced <profile>:oauth-access-token / <profile>:oauth-refresh-token); lazy migration of legacy flat OAuth keys for the "default" profile
+│   ├── auth_embedded.rs       # thin sibling to auth.rs; XOR-obfuscated embedded OAuth app credentials
+│   ├── pagination.rs          # Offset-based (most endpoints) + cursor-based (JQL search)
+│   ├── rate_limit.rs          # Retry-After parsing
+│   ├── refresh_coordinator.rs # per-profile single-flight OAuth refresh coordinator (prevents concurrent invalid_grant races)
 │   ├── assets/          # Assets/CMDB API call implementations
 │   │   ├── workspace.rs     # workspace ID discovery + cache
 │   │   ├── linked.rs        # CMDB field discovery, asset extraction/enrichment (per-field + JSON)
 │   │   ├── objects.rs       # AQL search, get object, resolve key
-│   │   ├── schemas.rs       # api/assets/schemas.rs — schema discovery + object-type attributes (~44 LOC)
+│   │   ├── schemas.rs       # schema discovery + object-type attributes (~44 LOC)
 │   │   └── tickets.rs       # connected tickets
-│   └── jira/            # Jira-specific API call implementations (one file per resource)
-│       ├── issues.rs    # search (full + keys-only), get, create, edit, list comments
-│       ├── boards.rs    # list boards, get board config
-│       ├── sprints.rs   # list sprints, get sprint issues
-│       ├── fields.rs    # list fields, story points + CMDB field discovery
-│       ├── statuses.rs  # get all statuses (global, not project-scoped)
-│       ├── links.rs     # create/delete issue links, list link types
-│       ├── teams.rs     # org metadata (GraphQL), list teams
-│       ├── worklogs.rs  # add/list worklogs
-│       ├── projects.rs  # project details
-│       └── users.rs     # current user, user search, assignable users, single-user lookup
-│   ├── jsm/             # JSM-specific API call implementations
-│   │   ├── servicedesks.rs  # list service desks, project meta orchestration
-│   │   └── queues.rs        # list queues, get queue issues
+│   ├── jira/            # Jira-specific API call implementations (one file per resource)
+│   │   ├── issues.rs    # search (full + keys-only), get, create, edit, list comments
+│   │   ├── bulk.rs      # bulk issue operations (transition, field edit, label edit)
+│   │   ├── boards.rs    # list boards, get board config
+│   │   ├── sprints.rs   # list sprints, get sprint issues
+│   │   ├── fields.rs    # list fields, story points + CMDB field discovery
+│   │   ├── statuses.rs  # get all statuses (global, not project-scoped)
+│   │   ├── links.rs     # create/delete issue links, list link types
+│   │   ├── resolutions.rs # resolution list endpoint
+│   │   ├── teams.rs     # org metadata (GraphQL), list teams
+│   │   ├── worklogs.rs  # add/list worklogs
+│   │   ├── projects.rs  # project details
+│   │   └── users.rs     # current user, user search, assignable users, single-user lookup
+│   └── jsm/             # JSM-specific API call implementations
+│       ├── servicedesks.rs  # list service desks, project meta orchestration
+│       ├── queues.rs        # list queues, get queue issues
+│       ├── request_types.rs # JSM request-type discovery
+│       └── requests.rs      # JSM request creation (`handle_jsm_create` path)
 ├── types/assets/        # Serde structs for Assets API responses (AssetObject, ConnectedTicket, LinkedAsset, etc.)
-├── types/jira/          # Serde structs for API responses (Issue, Board, Sprint, User, Team, etc.)
-├── types/jsm/           # Serde structs for JSM API responses (ServiceDesk, Queue, etc.)
+├── types/jira/          # Serde structs for Jira API responses
+│   ├── issue.rs, board.rs, sprint.rs, user.rs, team.rs, project.rs, worklog.rs  # core types
+│   ├── bulk.rs          # serde structs for bulk operations
+│   ├── changelog.rs     # serde structs for changelog API
+│   └── editmeta.rs      # serde structs for editmeta
+├── types/jsm/           # Serde structs for JSM API responses (ServiceDesk, Queue, RequestType, etc.)
 ├── cache.rs             # Per-profile XDG cache (~/.cache/jr/v1/<profile>/) — team list, project meta, workspace ID, CMDB fields, object-type attrs, resolutions (all 7-day TTL). Versioned root (`v1/`) lets a future schema bump orphan stale files cleanly.
 ├── config.rs            # Global (~/.config/jr/config.toml) [profiles.<name>] + default_profile + per-project (.jr.toml), figment layering. Auto-migrates legacy [instance]/[fields] shape on first load. Active profile resolved at load via Config::load_with(cli_profile) (cli flag threaded through as a parameter, NOT an env-var seam) > JR_PROFILE env > default_profile field > "default".
 ├── output.rs            # Table (comfy-table) and JSON formatting
@@ -77,7 +105,7 @@ Product-namespaced `api/jira/` and `types/jira/` so future Confluence/JSM/Assets
 
 ## Known Size Deviations
 
-- `cli/issue/list.rs`: 1,083 LOC post-split (target was ≤750 per `docs/specs/list-rs-split.md`; spec target not achieved but split was partial — `view.rs` and `comments.rs` already extracted). NFR-O-G: DOCUMENT-AS-IS-COMPLETE (S-3.08).
+- `cli/issue/list.rs`: 1,256 LOC post-split (target was ≤750 per `docs/specs/list-rs-split.md`; spec target not achieved but split was partial — `view.rs` and `comments.rs` already extracted). NFR-O-G: DOCUMENT-AS-IS-COMPLETE (S-3.08).
 
 ## Build & Test
 
@@ -111,7 +139,7 @@ DIFF_FILE=$(mktemp -t pr.diff.XXXXXX) && trap 'rm -f "$DIFF_FILE"' EXIT && git d
 - `--dry-run` is implemented on `issue edit` (multi-key positional + `--jql`-resolved sets) with `--output json` support. Pre-PR2 NFR-O-C originally documented this as DOCUMENT-AS-IS-OUT-OF-SCOPE; superseded by issue #110 part 2.
 - `jr version --output json` is not implemented (NFR-O-X: deferred to v2; consider for `release-notes` automation).
 - `sprint list` table omits start/end dates (NFR-O-U: deferred UX pass v2; available in API response).
-- `auth status --output json` covers single-profile JSON; multi-profile listing has no JSON path (NFR-O-N: deferred; planned alongside future `auth list --output json` extension).
+- `auth status` has no `--output json` support (NFR-O-N: deferred; neither single-profile nor multi-profile JSON is implemented — `src/cli/auth/status.rs::status()` writes human text only via `println!`). JSON path planned alongside future `auth list --output json` extension.
 - JSON output has no `_meta: {version: N}` envelope (NFR-O-P: deliberate for v0.5; consider for v2 to enable downstream-parser schema-drift detection).
 
 ### Output channels
@@ -167,11 +195,11 @@ When adding a new feature:
 - **Embedded OAuth app uses fixed callback port 53682.** Callback URL is `http://127.0.0.1:53682/callback` — literal `127.0.0.1` (not `localhost`) to force IPv4 and dodge the macOS/Chrome `localhost`→`::1` pitfall; must match the Atlassian Developer Console registration, so changing the port is a breaking release. Release builds inject `JR_BUILD_OAUTH_CLIENT_ID`/`_SECRET` via `build.rs` → XOR-obfuscated `embedded_oauth.rs`. BYO sources (flag/env/keychain) keep dynamic-port behavior. Detail: ADR-0006, `docs/superpowers/specs/2026-04-30-embedded-oauth-app-design.md`.
 - **`src/api/auth_embedded.rs` is a thin sibling module** to `auth.rs`. Keep
   obfuscation plumbing there; keep keychain/OAuth flow plumbing in `auth.rs`.
-- **`--verbose` is header-only (SD-003 breaking change):** As of v0.6, `--verbose` shows method + URL + status only. It does NOT print request/response bodies. To inspect bodies (e.g., for debugging API calls), use `--verbose-bodies`. This flag emits a 3-line PII warning to stderr because bodies contain accountIds, email addresses, and ADF content. Do not use `--verbose-bodies` in shared terminals, debug log files piped to shared storage, or AI-agent context windows. Migration: `jr ... --verbose` → `jr ... --verbose --verbose-bodies` if body inspection was relied upon.
+- **`--verbose` is header-only (SD-003 breaking change):** As of v0.6, `--verbose` shows method + URL only. It does NOT print request/response bodies. To inspect bodies (e.g., for debugging API calls), use `--verbose-bodies`. This flag emits a 3-line PII warning to stderr because bodies contain accountIds, email addresses, and ADF content. Do not use `--verbose-bodies` in shared terminals, debug log files piped to shared storage, or AI-agent context windows. Migration: `jr ... --verbose` → `jr ... --verbose --verbose-bodies` if body inspection was relied upon.
 - **`refresh_oauth_token` resolves credentials internally** (keychain →
   embedded) — callers pass only `profile`. Do not re-introduce
   `client_id`/`client_secret` parameters; they short-circuit the resolver.
-- **`--open` filter uses two mechanisms:** Jira issues → `statusCategory != Done` injected into JQL (server-side). Connected CMDB tickets (`cli/assets.rs::filter_tickets`) → client-side `status.colorName != "green"`, because CMDB tickets don't support JQL `statusCategory` filtering.
+- **`--open` filter uses two mechanisms:** Jira issues → `statusCategory != Done` injected into JQL (server-side). Connected CMDB tickets (`cli/assets/tickets.rs::filter_tickets`) → client-side `status.colorName != "green"`, because CMDB tickets don't support JQL `statusCategory` filtering.
 - **User pagination advances by `USER_PAGE_SIZE`, not returned count:** In
   `src/api/jira/users.rs`, both `search_users_all` and `search_assignable_users_by_project_all`
   increment `start_at` by `USER_PAGE_SIZE` (100) after each page, NOT by the number of

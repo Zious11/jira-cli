@@ -217,6 +217,7 @@ jr issue comment JSM-42 "customer is on the paid plan — prioritizing" --intern
 | `jr issue link-types` | List available link types |
 | `jr issue remote-link KEY --url URL` | Attach a Confluence page or web URL (`--title` optional, defaults to URL) |
 | `jr issue assets KEY`          | Show assets linked to an issue                |
+| `jr issue changelog KEY` | Show the audit history (change log) for an issue |
 | `jr board list` | List boards (`--project`, `--type scrum\|kanban`) |
 | `jr board view --board 42` | Show current board issues (`--board` or config, `--limit`/`--all`) |
 | `jr sprint list --board 42` | List sprints (`--board` or config or auto-discover, scrum only) |
@@ -233,12 +234,15 @@ jr issue comment JSM-42 "customer is on the paid plan — prioritizing" --intern
 | `jr assets schemas`             | List object schemas in the workspace           |
 | `jr assets types [--schema]`    | List object types (all or filtered by schema)  |
 | `jr assets schema <TYPE>`       | Show attributes for an object type (partial match) |
+| `jr api <PATH>` | API passthrough — make an authenticated request to any Jira REST endpoint (`--method`, `--body`, `--output json`) |
 | `jr team list` | List available teams (`--refresh` to force update) |
 | `jr user search <query>` | Search users by display name or email (`--limit`/`--all`) |
 | `jr user list --project FOO` | List users assignable to a project (`--limit`/`--all`) |
 | `jr user view <accountId>` | Look up a single user by accountId |
 | `jr project list` | List accessible projects (`--type`, `--limit`/`--all`) |
 | `jr project fields --project FOO` | Show valid issue types, priorities, statuses, and asset custom fields |
+| `jr requesttype list` | List JSM request types for the project's service desk (7d cache) |
+| `jr requesttype fields <NAME\|ID>` | Show fields for a request type (partial name match or numeric ID) |
 | `jr completion bash\|zsh\|fish` | Generate shell completions |
 
 ## Global Flags
@@ -250,7 +254,8 @@ jr issue comment JSM-42 "customer is on the paid plan — prioritizing" --intern
 | `--profile NAME` | Override the active profile for this invocation (precedence: this flag > `JR_PROFILE` env > `default_profile` in config > `"default"`) |
 | `--no-color` | Disable colored output (also respects `NO_COLOR` env) |
 | `--no-input` | Disable interactive prompts (auto-enabled in pipes/scripts) |
-| `--verbose` | Show HTTP request/response details |
+| `--verbose` | Show HTTP method + URL per request (header-only since v0.6 / SD-003; does NOT print bodies) |
+| `--verbose-bodies` | Also print request/response bodies to stderr (add `--verbose` to also log method+URL per request; emits a PII warning — bodies contain accountIds, emails, and ADF content) |
 
 ## Configuration
 
@@ -357,6 +362,7 @@ jr completion fish | source
 | 2 | Authentication error |
 | 64 | Usage error (bad arguments) |
 | 78 | Configuration error |
+| 124 | Timeout / deadline exceeded |
 | 130 | Interrupted (Ctrl+C) |
 
 ## License

@@ -8480,6 +8480,11 @@ mod tests {
     // --- Comprehensive structural-validity corpus (stop the whack-a-mole) ----
 
     #[test]
+    // This test function legitimately exceeds clippy's line limit: it is a single
+    // parametric corpus covering the Cartesian product of list kind × tightness ×
+    // outer body × nested child × depth × interleaving × container wrapping.
+    // Splitting it into smaller tests would lose the combinatorial coverage
+    // guarantee and make failures harder to trace across dimensions.
     #[allow(clippy::too_many_lines)]
     fn test_adf_structural_validity_comprehensive_corpus() {
         // Comprehensive corpus covering the cartesian product of:

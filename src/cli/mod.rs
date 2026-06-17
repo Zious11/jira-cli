@@ -36,7 +36,7 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub no_input: bool,
 
-    /// verbose mode (headers + status + URL only; use --verbose-bodies for full body inspection)
+    /// verbose mode (method + URL only; use --verbose-bodies for full body inspection)
     #[arg(long, global = true)]
     pub verbose: bool,
 
