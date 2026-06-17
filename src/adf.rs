@@ -9304,8 +9304,15 @@ mod tests {
 
         /// INV-1/2/3/4 over FULLY ARBITRARY markdown. The file-wide invariants
         /// must hold for every possible string, not just block HTML.
+        ///
+        /// Strategy: explicit charset `[\r\n\t a-zA-Z0-9]{0,64}` so that `\r`
+        /// and `\n` (the INV-1 control chars) are sampled on every run.  The
+        /// former `".*"` strategy silently excluded `\n` because Rust regex `.`
+        /// does not match newlines by default (F5 finding F-1).
         #[test]
-        fn prop_492_arbitrary_string_holds_core_invariants(input in ".*") {
+        fn prop_492_arbitrary_string_holds_core_invariants(
+            input in "[\\r\\n\\t a-zA-Z0-9]{0,64}",
+        ) {
             // INV-4: markdown_to_adf must not panic (proptest surfaces a panic
             // here and minimizes the input automatically).
             let adf = markdown_to_adf(&input);
@@ -9975,12 +9982,85 @@ mod tests {
         }
     }
 
+    /// BC-7.2.011 EC-12 — pin the exact JSON shape that `text_to_adf("")`
+    /// produces (F5 finding F-3).
+    ///
+    /// `text_to_adf("")` takes the fast path (no `\r`/`\n`) and returns a
+    /// single paragraph containing a single empty-string text node:
+    ///
+    ///   doc > [paragraph > [text("")]]
+    ///
+    /// `assert_no_raw_newline_in_text_nodes` passes trivially on this output
+    /// because the text node value is `""` (no control chars) — so the
+    /// INV-1 helper provides no shape guarantee here.  This test pins the
+    /// exact structure with `assert_eq!` so a regression that changes the
+    /// shape (e.g. emitting no text node, or a `null` content) is caught.
+    #[test]
+    fn test_text_to_adf_empty_string_shape() {
+        let adf = text_to_adf("");
+        let expected = serde_json::json!({
+            "version": 1,
+            "type": "doc",
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [
+                        { "type": "text", "text": "" }
+                    ]
+                }
+            ]
+        });
+        assert_eq!(
+            adf, expected,
+            "text_to_adf(\"\") must produce doc > [paragraph > [text(\"\")]] \
+             (BC-7.2.011 EC-12 F5-F3)"
+        );
+    }
+
+    /// BC-7.2.011 EC-12 — pin the exact JSON shape that `text_to_adf("\n\n\n")`
+    /// produces (F5 finding F-3).
+    ///
+    /// All-newlines input: Step 2 strips all trailing `\r`/`\n`, leaving `""`;
+    /// the block split produces `[""]`; every segment is empty → filter returns
+    /// `None`; `paragraphs.is_empty()` → fallback produces the same shape as
+    /// `text_to_adf("")`:
+    ///
+    ///   doc > [paragraph > [text("")]]
+    ///
+    /// `assert_no_raw_newline_in_text_nodes` passes trivially because the text
+    /// node value is `""` — this explicit shape test is the operative pin.
+    #[test]
+    fn test_text_to_adf_all_newlines_shape() {
+        let adf = text_to_adf("\n\n\n");
+        let expected = serde_json::json!({
+            "version": 1,
+            "type": "doc",
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [
+                        { "type": "text", "text": "" }
+                    ]
+                }
+            ]
+        });
+        assert_eq!(
+            adf, expected,
+            "text_to_adf(\"\\n\\n\\n\") must produce doc > [paragraph > [text(\"\")]] \
+             (BC-7.2.011 EC-12 F5-F3)"
+        );
+    }
+
     /// BC-7.2.011 EC-12 (AC-014 optional) — proptest: INV-1 holds for
     /// `text_to_adf` over arbitrary string inputs.
     ///
-    /// Generates 1000+ random strings (including those with `\r`, `\n`, `\r\n`)
-    /// and asserts that no text node in the returned ADF contains a raw `\r` or
-    /// non-codeBlock `\n`.
+    /// Strategy: explicit charset `[\r\n\t a-zA-Z0-9]{0,64}` ensures that
+    /// `\r` and `\n` (the INV-1 control chars) are always in the sample
+    /// space.  The former `".*"` strategy silently excluded `\n` because
+    /// Rust regex `.` does not match newlines by default (F5 finding F-1).
+    ///
+    /// Generates 1000+ random strings and asserts that no text node in the
+    /// returned ADF contains a raw `\r` or non-codeBlock `\n`.
     ///
     /// Red Gate: FAILS pre-fix for any input containing `\r` or `\n`.
     #[test]
@@ -9991,11 +10071,14 @@ mod tests {
         };
         let mut runner = proptest::test_runner::TestRunner::new(config);
         runner
-            .run(&proptest::string::string_regex(".*").unwrap(), |input| {
-                let adf = text_to_adf(&input);
-                assert_no_raw_newline_in_text_nodes(&adf, &input);
-                Ok(())
-            })
+            .run(
+                &proptest::string::string_regex("[\\r\\n\\t a-zA-Z0-9]{0,64}").unwrap(),
+                |input| {
+                    let adf = text_to_adf(&input);
+                    assert_no_raw_newline_in_text_nodes(&adf, &input);
+                    Ok(())
+                },
+            )
             .unwrap();
     }
 }
