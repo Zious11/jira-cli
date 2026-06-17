@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc b07a8f2612b4851bfe8cef3391c45e0bde94450ac2e34cabea0e388a3d816740 # shrinks to md = "> [!NOTE]\n> - [ ] x\n>   - x\n>     - [ ] x\n>   - [ ] x\n"
+cc ddc05b29408afebd325a847f58bf2c32ea538172c1ebb8b2d44ba0d76960d454 # shrinks to input = "\t¡\r¡"

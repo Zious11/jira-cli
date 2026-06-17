@@ -8904,14 +8904,11 @@ mod tests {
     ///   of raw `\r`. The #492 Algorithm B handler explicitly normalizes
     ///   `\r\n`→`\n` and lone `\r`→`\n` (step 3), so its manufactured paragraphs
     ///   are provably CR-free — this asserts that guarantee.
-    /// - `strict_cr = false` (arbitrary-markdown inputs): the `\r` clause is NOT
-    ///   asserted. A lone `\r` surviving into a NON-block-HTML text node (heading,
-    ///   paragraph, codeBlock, …) is a SEPARATE, PRE-EXISTING defect in the
-    ///   generic `Event::Text → push_text` parser path (a pulldown-cmark
-    ///   CR-normalization gap, CommonMark §2.3), NOT in the #492 delta. It is
-    ///   pinned by the `#[ignore]`d regression `test_lone_cr_survives_*` below for
-    ///   a follow-up fix; this F6 pass stays scoped to its delta (the generic
-    ///   parser path on `origin/develop` is unchanged by #492).
+    /// - `strict_cr = false`: the `\r` clause is NOT asserted. Reserved for
+    ///   callers that have verified CR-normalization separately. As of #522,
+    ///   `push_text`/`push_code` normalize lone `\r` on the generic parser path
+    ///   (BC-7.2.011 EC-11), so all callers in this file now pass `true`; `false`
+    ///   is kept for API completeness and future callers with different invariants.
     ///
     /// SCOPE NOTE (codeBlock exemption): `codeBlock` content is preformatted —
     /// multi-line code is legally stored as a single `text` node with literal
@@ -9181,11 +9178,11 @@ mod tests {
             // INV-4: markdown_to_adf must not panic (proptest surfaces a panic
             // here and minimizes the input automatically).
             let adf = markdown_to_adf(&input);
-            // INV-1: no raw `\n` in any non-codeBlock text node (the #492 bug
-            // class). `\r` is NOT asserted here — a lone `\r` surviving the
-            // generic parser path is a pre-existing out-of-#492-scope defect
-            // (strict_cr=false). See assert_no_raw_newline_in_text_nodes rustdoc.
-            assert_no_raw_newline_in_text_nodes(&adf, &input, false);
+            // INV-1: no raw `\n` or `\r` in any non-codeBlock text node.
+            // fixed in #522: push_text/push_code normalize lone \r on the generic
+            // parser path. strict_cr=true: lone \r must not survive into any
+            // text node (BC-7.2.011 EC-11 / INV-push-text-cr).
+            assert_no_raw_newline_in_text_nodes(&adf, &input, true);
             // INV-2 (file-wide): every paragraph carries a `content` array key
             // (empty `[]` is valid ADF; a keyless paragraph is the real hazard).
             assert_paragraph_has_content_key(&adf, &input);
@@ -9251,46 +9248,85 @@ mod tests {
         out
     }
 
-    /// PRE-EXISTING FINDING (out of #492 scope) — pinned, not yet fixed.
+    /// BC-7.2.011 EC-11 (INV-push-text-cr) — fixed in #522.
     ///
-    /// The F6 `prop_492_arbitrary_string_holds_core_invariants` property
-    /// mechanically surfaced a latent defect *unrelated to the #492 Algorithm B
-    /// delta*: a lone `\r` embedded mid-content survives verbatim into a NON-block-
-    /// HTML `text` node. It is NOT confined to code blocks — proptest found it in
-    /// both an indented `codeBlock` (`"\ta\r"` → text `"a\r"`) and a `heading`
-    /// (`"# x\ry"` → heading text containing `\r`). Both are the SAME root cause.
+    /// `AdfBuilder::push_text` and `AdfBuilder::push_code` must normalize
+    /// `\r\n`→`\n` then lone `\r`→`\n` before constructing any ADF text node on
+    /// the generic parser path. This test asserts the fixed (post-#522) behavior:
+    /// no raw `\r` survives into any `text` node from a heading or indented
+    /// codeBlock. Mirrors Algorithm B step 3 in the `NodeKind::HtmlBlock` arm.
     ///
-    /// Root cause: the generic `Event::Text → push_text` parser path does not
-    /// normalize line endings; pulldown-cmark 0.13 fails to normalize a lone `\r`
-    /// in these cases (CommonMark §2.3 says it should). This path is on
-    /// `origin/develop` UNCHANGED by #492 — #492 only touched the
-    /// `NodeKind::HtmlBlock` end arm, which DOES normalize `\r` (Algorithm B
-    /// step 3). Perplexity-verified (2026-06): a raw `\r` in an ADF text node is
-    /// undocumented/unsupported and a JSON-level hazard (unescaped U+000D is
-    /// invalid JSON); the robust fix is to normalize `\r\n`→`\n` then `\r`→`\n`
-    /// at the `push_text` chokepoint before building the ADF text node.
-    ///
-    /// This test asserts the CURRENT (buggy) behavior so the defect is pinned and
-    /// visible; it is `#[ignore]`d because it documents a known-bad state, not a
-    /// passing contract. When the parser CR-normalization fix lands (separate VSDD
-    /// cycle / follow-up issue), invert these assertions to `!contains('\r')` and
-    /// flip the arbitrary-string property's `strict_cr` argument to `true`.
+    /// Red Gate: this test FAILS before the fix (push_text does not normalize `\r`).
+    /// Green Gate: passes after push_text/push_code gain the CR-normalization guard.
     #[test]
-    #[ignore = "pre-existing generic-parser \\r defect, out of #492 scope — pinned for follow-up"]
-    fn test_lone_cr_survives_pre_existing_492_oos() {
+    fn test_push_text_normalizes_lone_cr_in_heading_and_code_block() {
         // codeBlock manifestation.
         let cb = markdown_to_adf("\ta\r");
         assert!(
-            collect_all_text_nodes(&cb).iter().any(|t| t.contains('\r')),
-            "pinning pre-existing codeBlock \\r behavior; if no \\r survives, the \
-             parser fix may have landed — flip strict_cr=true and re-tighten INV-1"
+            collect_all_text_nodes(&cb).iter().all(|t| !t.contains('\r')),
+            "push_text must normalize lone \\r in indented codeBlock; \
+             text nodes must contain no raw \\r (BC-7.2.011 EC-11)"
         );
         // heading manifestation (same root cause, different block type).
         let h = markdown_to_adf("# x\ry");
         assert!(
-            collect_all_text_nodes(&h).iter().any(|t| t.contains('\r')),
-            "pinning pre-existing heading \\r behavior; if no \\r survives, the \
-             parser fix may have landed — flip strict_cr=true and re-tighten INV-1"
+            collect_all_text_nodes(&h).iter().all(|t| !t.contains('\r')),
+            "push_text must normalize lone \\r in heading; \
+             text nodes must contain no raw \\r (BC-7.2.011 EC-11)"
+        );
+    }
+
+    /// BC-7.2.011 EC-11 — lone `\r` in a fenced codeBlock reaches push_text
+    /// and must be normalized; no raw `\r` survives into any text node.
+    ///
+    /// pulldown-cmark normalizes `\r\n` (CRLF) and lone `\r` in paragraph and
+    /// heading contexts at the parse-input level before emitting `Event::Text`.
+    /// However, in fenced codeBlock content, pulldown passes the raw text through
+    /// verbatim including lone `\r` characters — so `push_text` MUST strip them.
+    ///
+    /// This test uses a fenced codeBlock with a lone `\r` embedded in the body
+    /// to exercise the `push_text` path without going through the indented-codeBlock
+    /// path already covered by `test_push_text_normalizes_lone_cr_in_heading_and_code_block`.
+    ///
+    /// Red Gate: FAILS before the fix (push_text passes `\r` through in fenced codeBlock).
+    /// Green Gate: passes after push_text gains the CR-normalization guard.
+    #[test]
+    fn test_push_text_normalizes_crlf_in_paragraph() {
+        // Fenced codeBlock with a lone \r in the body. pulldown passes this through
+        // verbatim into Event::Text, unlike paragraph/heading inputs.
+        let adf = markdown_to_adf("```\na\rb\n```");
+        assert!(
+            collect_all_text_nodes(&adf).iter().all(|t| !t.contains('\r')),
+            "push_text must normalize lone \\r in fenced codeBlock content; \
+             text nodes must contain no raw \\r (BC-7.2.011 EC-11)"
+        );
+    }
+
+    /// BC-7.2.011 EC-11 — `push_code` normalizes lone `\r` in inline code span.
+    ///
+    /// `Event::Code` routes to `push_code`, which must normalize `\r`→`\n`.
+    /// The inline code span `` `a\rb` `` must produce a text node with
+    /// `"text": "a\nb"` — no raw `\r`.
+    ///
+    /// Red Gate: FAILS before the fix (`push_code` passes `\r` through;
+    /// text node is `"a\rb"`). Green Gate: passes after push_code normalizes.
+    #[test]
+    fn test_push_code_normalizes_lone_cr_in_inline_code() {
+        let adf = markdown_to_adf("`a\rb`");
+        let texts = collect_all_text_nodes(&adf);
+        // The inline code span must produce exactly the normalized text node.
+        assert!(
+            texts.iter().any(|t| t == "a\nb"),
+            "push_code must normalize lone \\r to \\n in inline code; \
+             expected text node \"a\\nb\" but got: {:?} (BC-7.2.011 EC-11)",
+            texts
+        );
+        // No text node anywhere in the ADF may contain a raw \r.
+        assert!(
+            texts.iter().all(|t| !t.contains('\r')),
+            "push_code must leave no raw \\r in any text node; \
+             got: {:?} (BC-7.2.011 EC-11)",
+            texts
         );
     }
 }
