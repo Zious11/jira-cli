@@ -8,6 +8,7 @@
 # Scope mutation testing to the bulk + create modules where F6 hardening review
 # identified weak-assertion risk.
 examine_globs = [
+    "src/adf.rs",
     "src/api/jira/bulk.rs",
     "src/types/jira/bulk.rs",
     "src/cli/issue/create.rs",
