@@ -291,7 +291,7 @@ async fn finish_transition(
         OutputFormat::Json => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&json_output::move_response(key, new_status, true))?
+                output::render_json(&json_output::move_response(key, new_status, true))?
             );
         }
         OutputFormat::Table => {
@@ -416,11 +416,7 @@ pub(super) async fn handle_move(
             OutputFormat::Json => {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&json_output::move_response(
-                        key,
-                        &current_status,
-                        false,
-                    ))?
+                    output::render_json(&json_output::move_response(key, &current_status, false,))?
                 );
             }
             OutputFormat::Table => {
@@ -928,7 +924,7 @@ async fn handle_move_bulk(
                 "taskId": task_id,
                 "results": results,
             });
-            println!("{}", serde_json::to_string_pretty(&payload)?);
+            println!("{}", output::render_json(&payload)?);
         }
         OutputFormat::Table => {
             for entry in &results {
@@ -1034,7 +1030,7 @@ pub(super) async fn handle_assign(
                 OutputFormat::Json => {
                     println!(
                         "{}",
-                        serde_json::to_string_pretty(&json_output::unassign_response(&key, false))?
+                        output::render_json(&json_output::unassign_response(&key, false))?
                     );
                 }
                 OutputFormat::Table => {
@@ -1049,7 +1045,7 @@ pub(super) async fn handle_assign(
             OutputFormat::Json => {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&json_output::unassign_response(&key, true))?
+                    output::render_json(&json_output::unassign_response(&key, true))?
                 );
             }
             OutputFormat::Table => {
@@ -1079,11 +1075,11 @@ pub(super) async fn handle_assign(
                 OutputFormat::Json => {
                     println!(
                         "{}",
-                        serde_json::to_string_pretty(&json_output::assign_unchanged_response(
+                        output::render_json(&json_output::assign_unchanged_response(
                             &key,
                             &display_name,
                             &account_id,
-                        ),)?
+                        ))?
                     );
                 }
                 OutputFormat::Table => {
@@ -1103,7 +1099,7 @@ pub(super) async fn handle_assign(
         OutputFormat::Json => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&json_output::assign_changed_response(
+                output::render_json(&json_output::assign_changed_response(
                     &key,
                     &display_name,
                     &account_id,
@@ -1169,7 +1165,7 @@ pub(super) async fn handle_comment(
 
     match output_format {
         OutputFormat::Json => {
-            println!("{}", serde_json::to_string_pretty(&comment)?);
+            println!("{}", output::render_json(&comment)?);
         }
         OutputFormat::Table => {
             output::print_success(&format!(

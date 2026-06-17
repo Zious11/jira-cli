@@ -41,8 +41,7 @@ pub async fn handle_switch(
     if matches!(output, OutputFormat::Json) {
         println!(
             "{}",
-            serde_json::to_string_pretty(&auth_json_response(target, "switch"))
-                .expect("auth JSON response serialization cannot fail")
+            output::render_json(&auth_json_response(target, "switch"))?
         );
     } else {
         output::print_success(&format!("Active profile set to {target:?}"));

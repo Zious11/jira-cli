@@ -1,5 +1,6 @@
 use crate::cli::OutputFormat;
 use crate::error::JrError;
+use crate::output;
 
 use super::auth_json_response;
 
@@ -40,11 +41,10 @@ pub async fn handle_logout(profile_arg: Option<&str>, output: &OutputFormat) -> 
     if matches!(output, OutputFormat::Json) {
         println!(
             "{}",
-            serde_json::to_string_pretty(&auth_json_response(&target, "logout"))
-                .expect("auth JSON response serialization cannot fail")
+            output::render_json(&auth_json_response(&target, "logout"))?
         );
     } else {
-        crate::output::print_success(&format!("Logged out of profile {target:?}"));
+        output::print_success(&format!("Logged out of profile {target:?}"));
     }
     Ok(())
 }

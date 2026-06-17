@@ -1,6 +1,7 @@
 use crate::cli::OutputFormat;
 use crate::config::Config;
 use crate::error::JrError;
+use crate::output;
 
 use super::auth_json_response;
 
@@ -89,7 +90,7 @@ pub async fn handle_remove(
             .default(false)
             .interact()?;
         if !confirm {
-            crate::output::print_warning("Aborted.");
+            output::print_warning("Aborted.");
             return Ok(());
         }
     }
@@ -103,14 +104,14 @@ pub async fn handle_remove(
     // user does need to know they have leftover state to clean up
     // manually. Surface as warnings; report overall success.
     if let Err(e) = crate::api::auth::clear_profile_creds(target) {
-        crate::output::print_warning(&format!(
+        output::print_warning(&format!(
             "removed config entry but failed to clear OAuth tokens for {target:?}: {e}. \
              Remove the entries manually via your OS keychain UI."
         ));
     }
     if let Err(e) = crate::cache::clear_profile_cache(target) {
         let cache_path = crate::cache::cache_dir(target);
-        crate::output::print_warning(&format!(
+        output::print_warning(&format!(
             "removed config entry but failed to clear cache for {target:?}: {e}. \
              Remove {} manually if disk space matters.",
             cache_path.display()
@@ -119,11 +120,10 @@ pub async fn handle_remove(
     if matches!(output, OutputFormat::Json) {
         println!(
             "{}",
-            serde_json::to_string_pretty(&auth_json_response(target, "remove"))
-                .expect("auth JSON response serialization cannot fail")
+            output::render_json(&auth_json_response(target, "remove"))?
         );
     } else {
-        crate::output::print_success(&format!("Removed profile {target:?}"));
+        output::print_success(&format!("Removed profile {target:?}"));
     }
     Ok(())
 }

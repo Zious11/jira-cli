@@ -331,8 +331,7 @@ pub async fn handle_login(args: LoginArgs) -> Result<()> {
     if matches!(args.output, OutputFormat::Json) {
         println!(
             "{}",
-            serde_json::to_string_pretty(&auth_json_response(&target, "login"))
-                .expect("auth JSON response serialization cannot fail")
+            output::render_json(&auth_json_response(&target, "login"))?
         );
     }
     Ok(())

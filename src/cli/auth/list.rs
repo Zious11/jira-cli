@@ -1,5 +1,7 @@
 use anyhow::Result;
 
+use crate::output;
+
 /// Render the table-form output of `jr auth list`. The active profile is
 /// marked with a leading `*`; others get a leading space so column widths
 /// stay stable across rows. Status today is a coarse "do we have a URL on
@@ -48,7 +50,7 @@ pub(crate) fn render_list_json(
             })
         })
         .collect();
-    Ok(serde_json::to_string_pretty(&arr)?)
+    output::render_json(&arr)
 }
 
 /// `jr auth list` — print every configured profile, marking the active one.

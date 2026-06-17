@@ -260,7 +260,7 @@ pub(super) async fn handle_create(
                     if let Some(obj) = issue_json.as_object_mut() {
                         obj.insert("url".into(), serde_json::Value::String(browse_url.clone()));
                     }
-                    println!("{}", serde_json::to_string_pretty(&issue_json)?);
+                    println!("{}", output::render_json(&issue_json)?);
                 }
                 Err(err) => {
                     // Fallback JSON carries a top-level `fetch_error` string so
@@ -276,7 +276,7 @@ pub(super) async fn handle_create(
                     let mut json_response = serde_json::to_value(&response)?;
                     json_response["url"] = json!(browse_url);
                     json_response["fetch_error"] = json!(err_msg);
-                    println!("{}", serde_json::to_string_pretty(&json_response)?);
+                    println!("{}", output::render_json(&json_response)?);
                 }
             }
         }
@@ -755,7 +755,7 @@ pub(super) async fn handle_edit(
                     "issues": &effective_keys,
                     "plannedChanges": planned,
                 });
-                println!("{}", serde_json::to_string_pretty(&payload)?);
+                println!("{}", output::render_json(&payload)?);
             }
             OutputFormat::Table => {
                 // Human-readable prose on stdout (profile-1 for dry-run: data on stdout is fine).
@@ -1097,7 +1097,7 @@ pub(super) async fn handle_edit(
         OutputFormat::Json => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&json_output::edit_response(key, &changed_fields))?
+                output::render_json(&json_output::edit_response(key, &changed_fields))?
             );
         }
         OutputFormat::Table => {
@@ -1259,10 +1259,7 @@ async fn handle_edit_bulk_labels(
             OutputFormat::Json => {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&json_output::edit_response(
-                        key,
-                        &changed_fields
-                    ))?
+                    output::render_json(&json_output::edit_response(key, &changed_fields))?
                 );
             }
             OutputFormat::Table => {
@@ -1483,7 +1480,7 @@ fn render_bulk_edit_results(
             if keys.len() == 1 {
                 payload["key"] = json!(&keys[0]);
             }
-            println!("{}", serde_json::to_string_pretty(&payload)?);
+            println!("{}", output::render_json(&payload)?);
         }
         OutputFormat::Table => {
             for entry in &results {

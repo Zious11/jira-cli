@@ -3,6 +3,7 @@ use anyhow::{Context, Result};
 use crate::api::auth;
 use crate::config::Config;
 use crate::error::JrError;
+use crate::output;
 
 use super::{AuthFlow, chosen_flow_for_profile, login_oauth, login_token};
 
@@ -138,8 +139,7 @@ pub async fn refresh_credentials(args: RefreshArgs<'_>) -> Result<()> {
 
     match args.output {
         crate::cli::OutputFormat::Json => {
-            let payload = serde_json::to_string_pretty(&refresh_success_payload(flow))
-                .context("failed to serialize refresh success payload as JSON")?;
+            let payload = output::render_json(&refresh_success_payload(flow))?;
             println!("{payload}");
         }
         crate::cli::OutputFormat::Table => {

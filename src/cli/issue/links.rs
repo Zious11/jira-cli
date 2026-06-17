@@ -96,11 +96,7 @@ pub(super) async fn handle_link(
         OutputFormat::Json => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&json_output::link_response(
-                    &key1,
-                    &key2,
-                    &resolved_name,
-                ))?
+                output::render_json(&json_output::link_response(&key1, &key2, &resolved_name,))?
             );
         }
         OutputFormat::Table => {
@@ -194,7 +190,7 @@ pub(super) async fn handle_unlink(
             OutputFormat::Json => {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&json_output::unlink_response(false, 0))?
+                    output::render_json(&json_output::unlink_response(false, 0))?
                 );
             }
             OutputFormat::Table => {
@@ -213,7 +209,7 @@ pub(super) async fn handle_unlink(
         OutputFormat::Json => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&json_output::unlink_response(true, count))?
+                output::render_json(&json_output::unlink_response(true, count))?
             );
         }
         OutputFormat::Table => {
@@ -275,7 +271,7 @@ pub(super) async fn handle_remote_link(
         OutputFormat::Json => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&json_output::remote_link_response(
+                output::render_json(&json_output::remote_link_response(
                     &key,
                     response.id,
                     url,
