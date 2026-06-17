@@ -82,7 +82,7 @@ async fn handle_fields(
         OutputFormat::Json => {
             println!(
                 "{}",
-                serde_json::json!({
+                output::render_json(&serde_json::json!({
                     "project": project_key,
                     "issue_types": issue_types,
                     "priorities": priorities,
@@ -90,7 +90,7 @@ async fn handle_fields(
                     "asset_fields": cmdb_fields.iter().map(|(id, name)| {
                         serde_json::json!({"id": id, "name": name})
                     }).collect::<Vec<_>>(),
-                })
+                }))?
             );
         }
         OutputFormat::Table => {
