@@ -71,7 +71,7 @@ No change is needed in the handler; the URL-splitting pass operates on the
 
 ## Differences from inline HTML
 
-Three load-bearing asymmetries between block and inline HTML handling:
+Four load-bearing asymmetries between block and inline HTML handling:
 
 1. **Own paragraph wrapper.** Block HTML gets its own manufactured `paragraph`
    wrapping the text/hardBreak sequence. Inline HTML (`Event::InlineHtml`)
