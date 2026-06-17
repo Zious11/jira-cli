@@ -129,6 +129,7 @@ DIFF_FILE=$(mktemp -t pr.diff.XXXXXX) && trap 'rm -f "$DIFF_FILE"' EXIT && git d
 - **CI Gate:** `ci-gate` (job name "CI Gate") is THE single required branch-protection status check on `develop`/`main`. New CI jobs that must be required must be added to `ci-gate.needs`, never wired directly into branch protection — this prevents the matrix-rename fragility class (DEC-096/DEC-097).
 - **Errors:** Always suggest what to do next. Map to exit codes via `JrError::exit_code()`
 - **Output:** `--output json` returns structured JSON for both success and errors. Human text is default.
+- **JSON render invariant (#526):** Every `--output json` path in `src/cli/` MUST route through `output::render_json` or `output::print_output` (which delegates to `render_json`). Direct `serde_json::to_string_pretty` calls and compact `serde_json::json!` Display printing are both forbidden. Output is pretty-printed. As of v0.6+ (#526), `jr issue create --request-type` and `jr project fields` changed from compact to pretty-printed JSON; `jq` and programmatic parsers are unaffected.
 - **Non-interactive:** `--no-input` disables prompts (auto-enabled when stdin is not a TTY). Commands must have fully non-interactive flag equivalents.
 - **Idempotent:** State-changing commands (move, assign) exit 0 if already in target state.
 - **Tests:** TDD. Unit tests inline, integration tests in `tests/`. Property tests with proptest. Snapshot tests with insta.
