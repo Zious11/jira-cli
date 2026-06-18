@@ -199,8 +199,17 @@ url = "https://from-flag.example"
 /// because each handler reloaded config internally and only saw the
 /// subcommand-level `--profile`. main.rs now composes an effective profile
 /// (`subcmd.profile.or(cli.profile)`) so the global flag propagates.
+///
+/// Gated behind `JR_RUN_KEYRING_TESTS=1` because `auth status` reaches
+/// `load_api_token()` → `keyring::Entry::get_password()`, which can block
+/// under Keychain contention on macOS or hang on Linux CI without a
+/// secret-service daemon (#526-F6-KEYRING-GATE).
 #[test]
+#[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
 fn global_profile_flag_targets_auth_status() {
+    if std::env::var("JR_RUN_KEYRING_TESTS").is_err() {
+        return;
+    }
     let (dir, path) = fresh_config_dir();
     std::fs::write(
         &path,
