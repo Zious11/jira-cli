@@ -521,3 +521,69 @@ async fn test_list_comments_paginates_correctly_when_offset_advances() {
     assert_eq!(comments[0].id.as_deref(), Some("20001"));
     assert_eq!(comments[1].id.as_deref(), Some("20002"));
 }
+
+/// AC-002 / BC-2.4.043 (mutation kill, deterministic): bounds the stall-guard call
+/// with an explicit wall-clock timeout so the guard-boundary mutant
+/// (`next <= start_at` → `next > start_at`, src/api/jira/issues.rs) is caught as a
+/// FAST FAILURE rather than relying on cargo-mutants' multi-minute global timeout.
+///
+/// Same malformed response as the stall-guard test above: every page returns
+/// startAt=0/maxResults=0 with total=5, so the offset NEVER advances. With the
+/// correct `<=` guard, `list_comments` returns Err on the first iteration (well
+/// under the 5s bound). With the mutated `>` guard, the loop never terminates —
+/// the timeout elapses and this test fails immediately, killing the mutant.
+#[tokio::test]
+async fn test_list_comments_stall_guard_terminates_within_bounded_time() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-2/comment"))
+        .and(query_param("startAt", "0"))
+        .and(query_param("maxResults", "100"))
+        .and(query_param("expand", "properties"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "comments": [
+                {
+                    "id": "30001",
+                    "author": {
+                        "accountId": "abc", "displayName": "Alice",
+                        "emailAddress": "a@test.com", "active": true
+                    },
+                    "body": null,
+                    "created": "2026-03-20T10:00:00.000+0000"
+                }
+            ],
+            "startAt": 0,
+            "maxResults": 0,
+            "total": 5
+        })))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+
+    let bounded = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        client.list_comments("TEST-2", None),
+    )
+    .await;
+
+    // The outer Result is the timeout boundary: Err(Elapsed) means the loop never
+    // terminated (mutant alive). Ok means list_comments returned in time.
+    let result = bounded.expect(
+        "list_comments did not terminate within 5s — anti-stall guard is broken \
+         (non-advancing startAt must return Err, not loop forever)",
+    );
+    assert!(
+        result.is_err(),
+        "expected Err from stall guard within bounded time, got Ok"
+    );
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("aborting to prevent infinite loop"),
+        "expected 'aborting to prevent infinite loop' in the bounded-time error"
+    );
+}
