@@ -304,10 +304,28 @@ jobs:
 
           echo "OK: cargo-mutants gate passed (kill rate ${kill_rate}% ≥ 90%)."
 
+  check-signing-workflow-injection:
+    name: Signing Workflow Injection Guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+
+      - name: Run injection guard (YAML-aware)
+        run: bash scripts/check-signing-workflow-injection.sh
+
+      - name: Run injection guard negative fixture self-test
+        run: bash scripts/check-signing-workflow-injection.sh --self-test
+
   ci-gate:
     name: CI Gate
     runs-on: ubuntu-latest
-    needs: [fmt, clippy, test, msrv, deny, spec-guard]
+    needs: [fmt, clippy, test, msrv, deny, spec-guard, check-signing-workflow-injection]
     if: ${{ always() }}
     steps:
       - name: Fail if any required job failed or was cancelled
