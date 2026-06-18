@@ -153,12 +153,15 @@ def find_inline_expressions(run_body):
 def yaml_contains_secrets(obj, depth=0):
     """
     Recursively searches a YAML subtree for any secrets.* reference.
-    Returns True if any string value matches the pattern ${{ secrets.* }}.
+    Returns True if any string value matches the pattern ${{ secrets.* }}
+    (dot notation) or ${{ secrets['NAME'] }} / ${{ secrets["NAME"] }}
+    (index notation — L-PASS2-02).
     """
     if depth > 20:  # guard against pathological nesting
         return False
     if isinstance(obj, str):
-        return bool(re.search(r'\$\{\{[^}]*secrets\.', obj))
+        # Match both secrets.NAME (dot) and secrets['NAME'] / secrets["NAME"] (index)
+        return bool(re.search(r'\$\{\{[^}]*secrets[\.\[]', obj))
     if isinstance(obj, dict):
         for v in obj.values():
             if yaml_contains_secrets(v, depth + 1):
@@ -189,12 +192,22 @@ def job_is_in_scope(job_id, job_def, workflow_perms):
     if yaml_contains_secrets(job_def):
         return True, 'uses secrets.*'
 
-    # Criterion (b): explicit contents: write at job or workflow level
+    # Criterion (b): explicit contents: write at job or workflow level.
+    # Also catches permissions: write-all (string form) which grants write
+    # to all scopes including contents (L-PASS2-01).
     job_perms = job_def.get('permissions', {}) or {}
-    if isinstance(job_perms, dict):
+    if isinstance(job_perms, str):
+        # String form: 'write-all' grants all permissions including contents:write
+        if job_perms in ('write-all', 'write'):
+            return True, f'job-level permissions: {job_perms}'
+    elif isinstance(job_perms, dict):
         if job_perms.get('contents') == 'write':
             return True, 'job-level permissions.contents: write'
-    if isinstance(workflow_perms, dict):
+    if isinstance(workflow_perms, str):
+        # String form at workflow level: 'write-all' propagates to all jobs
+        if workflow_perms in ('write-all', 'write'):
+            return True, f'workflow-level permissions: {workflow_perms}'
+    elif isinstance(workflow_perms, dict):
         if workflow_perms.get('contents') == 'write':
             return True, 'workflow-level permissions.contents: write'
 
@@ -213,7 +226,9 @@ def scan_workflow_doc(doc, filename):
     flagged_list: list of (job_id, step_name, expr) tuples.
     """
     if not doc or 'jobs' not in doc:
-        return 0, 0, 0, []
+        # Return a 5-tuple to match the normal return — callers always unpack 5
+        # (M-PASS2-01: 4-tuple here caused ValueError at unpack sites).
+        return 0, 0, 0, [], []
 
     workflow_perms = doc.get('permissions', {}) or {}
     run_block_count = 0
@@ -260,6 +275,8 @@ def run_self_test():
     5. (NEW C-2) Flags a secrets-using job that would have been OMITTED by the
        old hardcoded job-name list — proving scope is structural.
     6. (NEW H-1) Flags a needs.*.outputs.* laundered value inline in a run: body.
+    7. (M-PASS2-01) Empty/no-jobs document returns 5-tuple (no ValueError) and
+       zero in-scope jobs — verifying the fail-closed path is clean.
     """
     fixture_yaml = """
 permissions:
@@ -373,9 +390,42 @@ jobs:
     if not all_ok:
         sys.exit(1)
 
+    # Assertion D: empty / no-jobs document — fail-closed path (M-PASS2-01).
+    # scan_workflow_doc must return a valid 5-tuple (no ValueError) with zero
+    # in-scope jobs when given an empty doc or a doc lacking top-level `jobs:`.
+    print()
+    print("=== ASSERTION D: empty/no-jobs fail-closed path (M-PASS2-01) ===")
+    empty_doc_cases = [
+        ('null YAML (empty file)', None),
+        ('doc with no jobs key', {'on': 'push', 'name': 'test'}),
+        ('doc with empty jobs mapping', {'jobs': {}}),
+    ]
+    d_ok = True
+    for case_label, test_doc in empty_doc_cases:
+        try:
+            result = scan_workflow_doc(test_doc, '<empty-test>')
+            if len(result) != 5:
+                print(f"  [FAIL] {case_label}: returned {len(result)}-tuple, expected 5 (M-PASS2-01)")
+                d_ok = False
+                continue
+            in_scope_c, _, _, _, in_scope_j = result
+            if in_scope_c != 0 or in_scope_j != []:
+                print(f"  [FAIL] {case_label}: expected 0 in-scope jobs, got {in_scope_c}")
+                d_ok = False
+            else:
+                print(f"  [PASS] {case_label}: 5-tuple returned, 0 in-scope jobs, no crash")
+        except Exception as exc:
+            print(f"  [FAIL] {case_label}: raised {type(exc).__name__}: {exc}")
+            d_ok = False
+
+    if not d_ok:
+        print("FAIL: empty/no-jobs fail-closed path is broken (M-PASS2-01)")
+        sys.exit(1)
+
     print()
     print(f"PASS: detector correctly flagged {len(flagged)} violation(s), "
           f"did NOT flag allowlisted/env-bound/matrix/runner values.")
+    print("PASS: empty/no-jobs fail-closed path returns clean 5-tuple (M-PASS2-01).")
     sys.exit(0)
 
 
