@@ -185,8 +185,9 @@ pub async fn enrich_search_attributes(
                                 position: d.position,
                             })
                             .collect();
-                        // Best-effort cache write
-                        let _ = cache::write_object_type_attr_cache(profile, type_id, &cached);
+                        // Best-effort cache write — writer is model-b (always Ok); .ok() discards the
+                        // infallible Result without triggering "unused Result" warnings.
+                        cache::write_object_type_attr_cache(profile, type_id, &cached).ok();
                         cached
                     }
                     Err(_) => {

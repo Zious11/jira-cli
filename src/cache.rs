@@ -291,15 +291,27 @@ pub fn read_cmdb_fields_cache(profile: &str) -> Result<Option<CmdbFieldsCache>> 
     read_cache(profile, "cmdb_fields.json")
 }
 
+/// Best-effort writer: swallows disk-write errors with `eprintln!` and returns
+/// `Ok(())`. A missed write costs at most one extra HTTP call on the next
+/// invocation. Cache write failures MUST NOT break a successful API call.
+///
+/// Chosen model: (b) swallow + warn — this cache is a read-acceleration
+/// shortcut, not a correctness-critical store. The call site in
+/// `src/api/assets/linked.rs` does NOT use `let _ =`; errors are absorbed
+/// inside this writer. Do not re-introduce `let _ =` or `?` at the call site.
 pub fn write_cmdb_fields_cache(profile: &str, fields: &[(String, String)]) -> Result<()> {
-    write_cache(
+    let result = write_cache(
         profile,
         "cmdb_fields.json",
         &CmdbFieldsCache {
             fields: fields.to_vec(),
             fetched_at: Utc::now(),
         },
-    )
+    );
+    if let Err(e) = result {
+        eprintln!("warning: failed to write cmdb_fields cache: {e}");
+    }
+    Ok(())
 }
 
 /// Per-profile cache of `GET /rest/api/3/field` results (all Jira fields).
@@ -403,41 +415,56 @@ pub fn read_object_type_attr_cache(
 /// Write cached attributes for a specific object type.
 ///
 /// Merges into the existing map file, preserving entries for other object types.
+///
+/// Best-effort writer: swallows disk-write errors with `eprintln!` and returns
+/// `Ok(())`. A missed write costs at most one extra HTTP call on the next
+/// invocation. Cache write failures MUST NOT break a successful API call.
+///
+/// Chosen model: (b) swallow + warn — this cache is a read-acceleration
+/// shortcut, not a correctness-critical store. The call site in
+/// `src/api/assets/objects.rs` does NOT use `let _ =`; errors are absorbed
+/// inside this writer. Do not re-introduce `let _ =` or `?` at the call site.
 pub fn write_object_type_attr_cache(
     profile: &str,
     object_type_id: &str,
     attrs: &[CachedObjectTypeAttr],
 ) -> Result<()> {
-    let dir = cache_dir(profile);
-    std::fs::create_dir_all(&dir)?;
+    let result = (|| -> Result<()> {
+        let dir = cache_dir(profile);
+        std::fs::create_dir_all(&dir)?;
 
-    let path = dir.join("object_type_attrs.json");
+        let path = dir.join("object_type_attrs.json");
 
-    let mut cache: ObjectTypeAttrCache = if path.exists() {
-        let content = std::fs::read_to_string(&path)?;
-        serde_json::from_str(&content).unwrap_or_else(|e| {
-            eprintln!(
-                "warning: object_type_attrs.json unreadable ({e}); starting fresh — other cached object types will be lost"
-            );
+        let mut cache: ObjectTypeAttrCache = if path.exists() {
+            let content = std::fs::read_to_string(&path)?;
+            serde_json::from_str(&content).unwrap_or_else(|e| {
+                eprintln!(
+                    "warning: object_type_attrs.json unreadable ({e}); starting fresh — other cached object types will be lost"
+                );
+                ObjectTypeAttrCache {
+                    fetched_at: Utc::now(),
+                    types: HashMap::new(),
+                }
+            })
+        } else {
             ObjectTypeAttrCache {
                 fetched_at: Utc::now(),
                 types: HashMap::new(),
             }
-        })
-    } else {
-        ObjectTypeAttrCache {
-            fetched_at: Utc::now(),
-            types: HashMap::new(),
-        }
-    };
+        };
 
-    cache
-        .types
-        .insert(object_type_id.to_string(), attrs.to_vec());
-    cache.fetched_at = Utc::now();
+        cache
+            .types
+            .insert(object_type_id.to_string(), attrs.to_vec());
+        cache.fetched_at = Utc::now();
 
-    let content = serde_json::to_string_pretty(&cache)?;
-    std::fs::write(&path, content)?;
+        let content = serde_json::to_string_pretty(&cache)?;
+        std::fs::write(&path, content)?;
+        Ok(())
+    })();
+    if let Err(e) = result {
+        eprintln!("warning: failed to write object_type_attrs cache: {e}");
+    }
     Ok(())
 }
 
@@ -997,6 +1024,70 @@ mod tests {
         assert!(
             result.is_ok(),
             "write_fields_cache must return Ok(()) on I/O error (best-effort writer); got: {result:?}"
+        );
+    }
+
+    // AC-003 / CR-007: `write_cmdb_fields_cache` swallow behavior — mirrors
+    // `test_write_fields_cache_swallow_io_error_returns_ok` above.
+    // Forces an I/O error by pointing JR_CACHE_DIR at a file (not a dir), so
+    // create_dir_all inside write_cache fails with ENOTDIR.  The model-b writer
+    // must return Ok(()) and NOT panic.
+    #[test]
+    fn test_write_cmdb_fields_cache_swallow_io_error_returns_ok() {
+        let outer_dir = tempfile::TempDir::new().unwrap();
+        let fake_cache_home = outer_dir.path().join("i_am_a_file");
+        std::fs::write(&fake_cache_home, "file, not a dir").unwrap();
+
+        let guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::set_var("XDG_CACHE_HOME", &fake_cache_home);
+            std::env::set_var("JR_CACHE_DIR", &fake_cache_home);
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            write_cmdb_fields_cache(
+                "test-cmdb-swallow",
+                &[("customfield_10191".to_string(), "Client".to_string())],
+            )
+        }));
+        unsafe {
+            std::env::remove_var("XDG_CACHE_HOME");
+            std::env::remove_var("JR_CACHE_DIR");
+        }
+        drop(guard);
+
+        let result = result.expect("write_cmdb_fields_cache must not panic on I/O error");
+        assert!(
+            result.is_ok(),
+            "write_cmdb_fields_cache must return Ok(()) on I/O error (best-effort writer); got: {result:?}"
+        );
+    }
+
+    // AC-003 / CR-007: `write_object_type_attr_cache` swallow behavior — same
+    // ENOTDIR pattern as above.
+    #[test]
+    fn test_write_object_type_attr_cache_swallow_io_error_returns_ok() {
+        let outer_dir = tempfile::TempDir::new().unwrap();
+        let fake_cache_home = outer_dir.path().join("i_am_a_file");
+        std::fs::write(&fake_cache_home, "file, not a dir").unwrap();
+
+        let guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::set_var("XDG_CACHE_HOME", &fake_cache_home);
+            std::env::set_var("JR_CACHE_DIR", &fake_cache_home);
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            write_object_type_attr_cache("test-objattr-swallow", "99", &[])
+        }));
+        unsafe {
+            std::env::remove_var("XDG_CACHE_HOME");
+            std::env::remove_var("JR_CACHE_DIR");
+        }
+        drop(guard);
+
+        let result = result.expect("write_object_type_attr_cache must not panic on I/O error");
+        assert!(
+            result.is_ok(),
+            "write_object_type_attr_cache must return Ok(()) on I/O error (best-effort writer); got: {result:?}"
         );
     }
 

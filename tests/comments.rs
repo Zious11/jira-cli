@@ -400,3 +400,124 @@ async fn comments_parse_failure_silent_without_verbose() {
         "expected no verbose parse-failure output without --verbose, got:\n{stderr}"
     );
 }
+
+// ─── BC-2.4.043 — anti-stall guard ──────────────────────────────────────────
+
+/// AC-002 / BC-2.4.043: non-advancing startAt must return Err (not hang).
+///
+/// Simulates a malformed Jira response where `total > len(comments)` (has_more=true)
+/// but startAt stays at 0 on the first page, which would cause an infinite loop
+/// without the guard. The guard fires after page 1 and returns Err.
+#[tokio::test]
+async fn test_list_comments_stall_guard_returns_error_when_start_at_does_not_advance() {
+    let server = MockServer::start().await;
+
+    // Page 1: startAt=0, maxResults=0 in response, total=5.
+    // next_start = startAt + maxResults = 0 + 0 = 0.
+    // has_more = 0 + 0 < 5 = true.
+    // Guard fires: next (0) <= start_at (0) → Err.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1/comment"))
+        .and(query_param("startAt", "0"))
+        .and(query_param("maxResults", "100"))
+        .and(query_param("expand", "properties"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "comments": [
+                {
+                    "id": "10001",
+                    "author": {
+                        "accountId": "abc", "displayName": "Alice",
+                        "emailAddress": "a@test.com", "active": true
+                    },
+                    "body": null,
+                    "created": "2026-03-20T10:00:00.000+0000"
+                }
+            ],
+            "startAt": 0,
+            "maxResults": 0,
+            "total": 5
+        })))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let result = client.list_comments("TEST-1", None).await;
+
+    assert!(result.is_err(), "expected Err from stall guard, got Ok");
+    let err = result.unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("aborting to prevent infinite loop"),
+        "expected 'aborting to prevent infinite loop' in error, got: {err}"
+    );
+}
+
+/// AC-002 / BC-2.4.043 (normal path): multi-page pagination with advancing startAt
+/// must return Ok with all comments collected.
+///
+/// The existing `list_comments_paginated` test covers this code path — this test
+/// is an explicit named regression pin that exercices the guard skip (guard does
+/// NOT fire when next > start_at) to confirm normal pagination works correctly.
+#[tokio::test]
+async fn test_list_comments_paginates_correctly_when_offset_advances() {
+    let server = MockServer::start().await;
+
+    // Page 1: startAt=0, total=2, one comment — next_start = 0+1 = 1 > 0 (guard skipped).
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/ADV-1/comment"))
+        .and(query_param("startAt", "0"))
+        .and(query_param("maxResults", "100"))
+        .and(query_param("expand", "properties"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "comments": [
+                {
+                    "id": "20001",
+                    "author": {
+                        "accountId": "u1", "displayName": "Alice",
+                        "emailAddress": "a@test.com", "active": true
+                    },
+                    "body": null,
+                    "created": "2026-03-20T10:00:00.000+0000"
+                }
+            ],
+            "startAt": 0,
+            "maxResults": 1,
+            "total": 2
+        })))
+        .mount(&server)
+        .await;
+
+    // Page 2: startAt=1, total=2, one comment — isLast (next_start == 1+1 == 2 >= total 2).
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/ADV-1/comment"))
+        .and(query_param("startAt", "1"))
+        .and(query_param("maxResults", "100"))
+        .and(query_param("expand", "properties"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "comments": [
+                {
+                    "id": "20002",
+                    "author": {
+                        "accountId": "u2", "displayName": "Bob",
+                        "emailAddress": "b@test.com", "active": true
+                    },
+                    "body": null,
+                    "created": "2026-03-21T11:00:00.000+0000"
+                }
+            ],
+            "startAt": 1,
+            "maxResults": 1,
+            "total": 2
+        })))
+        .mount(&server)
+        .await;
+
+    let client =
+        jr::api::client::JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let comments = client.list_comments("ADV-1", None).await.unwrap();
+
+    assert_eq!(comments.len(), 2, "expected 2 comments from two pages");
+    assert_eq!(comments[0].id.as_deref(), Some("20001"));
+    assert_eq!(comments[1].id.as_deref(), Some("20002"));
+}

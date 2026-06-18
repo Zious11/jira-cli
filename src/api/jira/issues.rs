@@ -668,6 +668,17 @@ impl JiraClient {
             if !has_more {
                 break;
             }
+            // Guard against an API response that advertises more pages but
+            // returns a page that wouldn't advance `startAt` — otherwise we'd
+            // infinite-loop on a malformed/empty page. Surface as an explicit
+            // error instead.
+            if next <= start_at {
+                return Err(anyhow::anyhow!(
+                    "Jira comment pagination did not advance (startAt {} → {}) — aborting to prevent infinite loop",
+                    start_at,
+                    next
+                ));
+            }
             start_at = next;
         }
         Ok(all)

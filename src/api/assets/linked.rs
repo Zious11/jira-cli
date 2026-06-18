@@ -31,7 +31,9 @@ pub async fn get_or_fetch_cmdb_fields(client: &JiraClient) -> Result<Vec<(String
     }
 
     let fields = client.find_cmdb_fields().await?;
-    let _ = cache::write_cmdb_fields_cache(profile, &fields);
+    // Best-effort cache write — writer is model-b (always Ok); .ok() discards the
+    // infallible Result without triggering "unused Result" warnings.
+    cache::write_cmdb_fields_cache(profile, &fields).ok();
     Ok(fields)
 }
 
