@@ -12,6 +12,47 @@ All notable changes to jr will be documented here.
 
 ### Changed
 
+## [0.6.0-dev.4] - 2026-06-18
+
+### Fixed
+
+- **Fork-ops signing workflows hardened against CWE-77 env injection, TOCTOU alpha-tag
+  race, and missing `set -eo pipefail` (AC-001/002/003/005, #535):**
+  `sign-and-publish.yml` and `backfill-release.yml` now env-bind all workflow-context
+  expansions (`github.event.workflow_run.head_branch`, `inputs.tag`) before they reach
+  `run:` script bodies, eliminating command-injection vectors. Alpha-tag reservation is
+  replaced with an atomic 5-step `gh api POST git/refs` retry loop (bounded to 10
+  attempts) that removes the TOCTOU-unsafe delete→count→construct pattern. Signature-
+  verify steps use `mktemp + trap cleanup` instead of predictable `/tmp` paths (CWE-377)
+  and switch from `set -e` to `set -eo pipefail` (CWE-390). A new
+  `check-signing-workflow-injection` CI job (YAML-structure-aware Python3+PyYAML scanner)
+  is wired into `ci-gate.needs` (AC-005/S-CIGATE-1) to prevent regressions. (#535)
+- **`rustup target add` defensive step ported to `sign-and-publish.yml` and
+  `backfill-release.yml`:** Native macOS builds in both workflows were vulnerable to
+  `error[E0463]: can't find crate for 'core'` because `rust-toolchain.toml`'s stable
+  pin re-routes the build through a toolchain that lacks the matrix target.
+  `release.yml` already carried the defensive `rustup target add ${{ matrix.target }}`
+  step; this ports the same step to the two workflows that were missing it. Inert in
+  the canonical repo (signing workflows gated on `SIGNING_ENABLED`); prevents build
+  failures in downstream forks that opt in.
+
+### Changed
+
+- **Gatekeeper acceptance and hardened-runtime verification added after notarization
+  (closes #210 literal gap):** After every `Notarize` step in `sign-and-publish.yml`
+  (alpha-sign, stable-sign) and `backfill-release.yml` (sign), the workflow now asserts
+  load-bearing post-signing properties. Stapled containers (`.pkg`, `.dmg`) are checked
+  via `spctl --assess --type install|open`; bare Mach-O binaries are checked via
+  `codesign -dvv` for Authority, TeamIdentifier, and `runtime` CodeDirectory flag
+  (hardened runtime — the property #210 identifies as the root cause of unstable
+  Keychain partition entries). Inert in canonical repo; active for forks that set
+  `SIGNING_ENABLED=true`. (#210)
+- **Shared-docs guidance added for CLAUDE.md/README/ADR sync hygiene across fork repos
+  (`docs/specs/fork-friendly-release-ops.md`):** Documents the expectation that fork
+  maintainers keep their local copies of `CLAUDE.md`, `README.md`, and relevant ADRs
+  in sync with upstream when merging release-ops workflow changes, to prevent drift
+  between CI behavior and documentation. No runtime behavior changed.
+
 ## [0.6.0-dev.3] - 2026-06-18
 
 ### Fixed
