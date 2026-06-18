@@ -96,15 +96,30 @@ workflow can't auto-resolve it, so the merge stops for a human. To avoid it:
 
 ## Security constraints (sign-and-publish.yml / backfill-release.yml)
 
-These requirements apply to any job in `sign-and-publish.yml` or
-`backfill-release.yml` that has secrets (Apple Developer ID credentials) or
-`contents: write` in scope.
+These requirements apply to **every job** in `sign-and-publish.yml` or
+`backfill-release.yml` that meets any of the following criteria, computed
+per-job by inspection — NOT by a hardcoded job-name list:
+
+- (a) the job uses any `secrets.*` value (Apple Developer ID credentials,
+  tap token, etc.), OR
+- (b) the job or the workflow declares `permissions: contents: write`, OR
+- (c) the job references a named `environment:` that carries secrets.
+
+An implementing guard MUST compute scope by inspecting each job for criteria
+(a)–(c) above. Hardcoding a fixed job-name list (e.g. only "sign" and
+"release") is prohibited: it silently misses newly-added jobs that meet the
+criterion. The job names `stable-sign`, `alpha-sign`, `sign`, and `release`
+are illustrative examples of current jobs that happen to meet the criterion —
+they are NOT a normative enumeration. Any job added to either file that meets
+(a), (b), or (c) is automatically in scope.
 
 ### No inline context data in shell run-blocks (CWE-77)
 
-Any context value that is not on the short allowlist of structurally-safe
-values below MUST be bound via a step-level `env:` mapping and referenced as a
-double-quoted shell variable inside the `run:` block.
+**DEFAULT-DENY rule for `run:` script bodies:** the ONLY context expressions
+permitted inline in a `run:` body of any in-scope job are the format-safe
+allowlist below. EVERY other context expression MUST be bound via a step-level
+`env:` mapping and referenced as a double-quoted shell variable inside the
+`run:` block — regardless of whether the value appears server-generated.
 
 **Allowlist** (safe to expand inline — these are FORMAT-CONSTRAINED values:
 `github.sha` is a hex string `[0-9a-f]{40}`, `github.run_id` and
@@ -119,11 +134,11 @@ regardless of provenance):
 - `github.repository`
 - `github.repository_owner`
 
-The allowlist is the ONLY exception set. Any context value not explicitly
-listed here is high-risk by default and MUST be bound via `env:`.
+The allowlist is the ONLY exception set. Any context expression not explicitly
+listed here MUST be bound via `env:`.
 
-**High-risk sources (non-exhaustive — illustrative examples) that MUST always
-be bound via `env:`:**
+**Explicitly prohibited inline** (illustrative, non-exhaustive — the default-deny
+rule covers everything not on the allowlist, including but not limited to):
 - `github.event.*` (all fields — in particular
   `github.event.workflow_run.head_branch`)
 - `github.head_ref`
@@ -133,7 +148,21 @@ be bound via `env:`:**
 - `github.actor`
 - `github.triggering_actor`
 - `inputs.*` (all workflow_dispatch inputs)
-- `steps.*.outputs.*` derived from any of the above
+- `steps.*.outputs.*` and `needs.*.outputs.*` — REGARDLESS of whether the
+  output appears server-generated; a step or job output can launder an
+  attacker-controlled value through multiple hops (e.g.
+  `stable-sign.outputs.tag` derived from
+  `github.event.workflow_run.head_branch`), and a guard cannot reliably trace
+  cross-job derivation chains. The safe, enforceable rule is to bind ALL
+  non-allowlisted expressions, not to maintain a derivation-provenance list.
+
+**`matrix.*` and `runner.*` are NOT subject to this rule.** `matrix.*` values
+are workflow-author-defined static literals set in the matrix include list —
+they are author-controlled, not attacker-controlled, and their format depends
+entirely on what the author wrote. `runner.*` values are runner-provided
+metadata (OS, architecture, temp path) and equally author/platform-controlled.
+Neither source accepts attacker input. They may appear inline in `run:` bodies
+without env-binding.
 
 ```yaml
 # REQUIRED
@@ -178,19 +207,18 @@ passes the value as a literal environment variable — metacharacters are inert
 at the variable-reference site, but remain active at any downstream code sink.
 
 During an F5 adversarial pass, scan ALL `${{ }}` inline expansions in every
-job that has secrets OR `contents: write` in scope across BOTH workflow files —
-`stable-sign` and `alpha-sign` in `sign-and-publish.yml`; the `sign` job and
-the `release` job in `backfill-release.yml` (the `release` job declares
-`permissions: contents: write` and inlines `${{ github.repository }}` in
-run-blocks) — not just the identified `head_branch` field — to confirm no
-context values outside the allowlist are inline-expanded in `run:` blocks.
-`backfill-release.yml` inlines `${{ inputs.tag }}` across multiple
-signing-path `run:` blocks; these are in scope for the same CWE-77
-env-binding remediation. `${{ github.repository }}` is on the allowlist
-(format-constrained) so the existing inline usage in the `release` and
-homebrew jobs requires no remediation. The F5 scope statement and this
-normative rule cover the same surface: every job with secrets or
-`contents: write` across both files.
+job that has secrets OR `contents: write` in scope (per criteria (a)–(c) above)
+across BOTH workflow files — not just the identified `head_branch` field — to
+confirm no context expressions outside the allowlist are inline-expanded in
+`run:` blocks. The scope is computed by inspecting each job, not from a fixed
+list: current in-scope examples include `stable-sign` and `alpha-sign` in
+`sign-and-publish.yml`, and the `sign` and `release` jobs in
+`backfill-release.yml`. `backfill-release.yml` inlines `${{ inputs.tag }}`
+across multiple signing-path `run:` blocks; these are in scope for the same
+CWE-77 env-binding remediation. `${{ github.repository }}` is on the allowlist
+(format-constrained) so the existing inline usage in the `release` and homebrew
+jobs requires no remediation. The F5 scan scope and this normative rule cover
+the same surface: every job meeting criteria (a)–(c) across both files.
 
 ### Atomic alpha-tag creation (no TOCTOU)
 
@@ -298,27 +326,40 @@ A one-shot F5 scan provides no protection against re-introduction of inline
 context expansions in these secret-bearing workflows. A CI guard is REQUIRED
 (not optional) that:
 
-1. Scans all `run:` blocks reachable from every job that has secrets OR
-   `contents: write` in scope across BOTH workflow files — including the `sign`,
-   `stable-sign`, `alpha-sign`, and `release` jobs, and any local composite
-   actions they invoke (not only two hard-coded workflow filenames) — for inline
-   `${{ }}` expansions of high-risk context sources (the sources listed in the
-   high-risk section above). The extraction MUST be YAML-structure-aware —
-   either by parsing the document and iterating `jobs.*.steps[].run`, or by
-   mandating a workflow-security linter that models `run:` block boundaries such
-   as zizmor or actionlint. A naive line-oriented grep is INSUFFICIENT: it
-   cannot reliably delimit `run:` scope and misses `${{` split across lines in
-   folded or block scalars.
-2. Fails CI if any inline high-risk expansions are found inside `run:` blocks.
-   Context expansions in `env:`, `with:`, or `if:` keys MUST NOT be flagged.
+1. Scans all `run:` blocks reachable from every job meeting criteria (a)–(c)
+   above across BOTH workflow files — including any local composite actions they
+   invoke (not only two hard-coded workflow filenames) — for inline `${{ }}`
+   expansions of context expressions not on the allowlist. The extraction MUST
+   be YAML-structure-aware — either by parsing the document and iterating
+   `jobs.*.steps[].run`, or by mandating a workflow-security linter that models
+   `run:` block boundaries such as zizmor or actionlint. A naive line-oriented
+   grep is INSUFFICIENT: it cannot reliably delimit `run:` scope and misses
+   `${{` split across lines in folded or block scalars.
+2. Fails CI if any inline non-allowlisted expansions are found inside `run:`
+   blocks. Context expansions in `env:`, `with:`, or `if:` keys MUST NOT be
+   flagged. `matrix.*` and `runner.*` inline expressions MUST NOT be flagged
+   (see above).
 3. Emits a runtime-computed positive-coverage assertion on success that reports
-   total `${{ }}` occurrences scanned vs. classified — for example: "scanned N
-   run-blocks across M workflows, K total ${{}} expressions scanned, 0 inline
-   high-risk expansions" — so a broken script or unexpectedly low scanned count
-   is immediately visible and cannot produce a silent false-green.
+   the COUNT OF JOBS classified in-scope AND total `${{ }}` occurrences scanned
+   vs. classified — for example: "N jobs in-scope, scanned M run-blocks across P
+   workflows, K total ${{}} expressions scanned, 0 inline non-allowlisted
+   expansions" — so a broken script or unexpectedly low scanned count is
+   immediately visible and cannot produce a silent false-green.
 4. Is wired into CI by adding its job to `ci-gate.needs` per the project's
    CI-gate convention (CLAUDE.md). Do NOT wire it directly into branch
    protection.
+5. **Fails closed (non-zero exit) on any of the following error conditions:**
+   - A YAML parse error in any scanned workflow file.
+   - The YAML parsing library is unavailable or fails to load.
+   - A workflow file that is in scope cannot be read (missing, permission
+     denied, etc.).
+   - Structural scope detection finds ZERO in-scope jobs in a file that is
+     expected to contain signing or secrets jobs. Zero in-scope jobs is a
+     sentinel for a broken scope-detection heuristic or a silently-renamed
+     job — it MUST be treated as a guard failure, not a clean pass. The
+     positive-coverage assertion on job count (requirement 3) is the
+     mechanism: if the count is zero, the guard exits non-zero with a
+     diagnostic explaining that no in-scope jobs were found.
 
 The guard MUST be implemented as a script in `scripts/` or via an action-lint
 tool (zizmor preferred; actionlint as an alternative). F6 is responsible for
