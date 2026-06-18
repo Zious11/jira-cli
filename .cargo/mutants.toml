@@ -15,6 +15,12 @@ examine_globs = [
     "src/api/jsm/requests.rs",
     "src/api/jsm/request_types.rs",
     "src/cli/requesttype.rs",
+    # HIGH-value: JRACLOUD-95368 anti-loop guard, seen_keys dedup, has_more sentinel,
+    # cursor-vs-offset pagination branch (F1 sibling analysis, MAINT-MUTANTS-GLOBS-01).
+    "src/api/jira/issues.rs",
+    # HIGH-value: TTL logic, per-profile path construction, model-a vs model-b
+    # error-handling split (F1 sibling analysis, MAINT-MUTANTS-GLOBS-01).
+    "src/cache.rs",
 ]
 
 # Async bulk paths use tokio::time::sleep and wiremock; mutations of `.await`
