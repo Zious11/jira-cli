@@ -267,7 +267,10 @@ jobs:
 
       - name: Verify signatures (Gatekeeper + codesign)
         run: |
-          set -e
+          set -eo pipefail
+          CS_OUT=$(mktemp)
+          SPCTL_OUT=$(mktemp)
+          trap 'rm -f "$CS_OUT" "$SPCTL_OUT"' EXIT
           # Bare Mach-O binaries: stapler can't attach to a bare binary
           # (Apple TN3147), so `spctl --assess --type execute` would
           # report "Unnotarized Developer ID". Verify the load-bearing
@@ -275,12 +278,12 @@ jobs:
           # identity, stable Team Identifier, and hardened runtime flag.
           for BIN in jr-darwin-arm64 jr-darwin-amd64; do
             echo "::group::Verify $BIN"
-            codesign -dvv "$BIN" 2>&1 | tee /tmp/cs.out
-            grep -q "^Authority=Developer ID Application:" /tmp/cs.out \
+            codesign -dvv "$BIN" 2>&1 | tee "$CS_OUT"
+            grep -q "^Authority=Developer ID Application:" "$CS_OUT" \
               || { echo "::error::$BIN missing Developer ID Application authority"; exit 1; }
-            grep -q "^TeamIdentifier=" /tmp/cs.out \
+            grep -q "^TeamIdentifier=" "$CS_OUT" \
               || { echo "::error::$BIN missing TeamIdentifier"; exit 1; }
-            grep -qE "^CodeDirectory.*flags=0x[0-9a-f]+\(.*runtime.*\)" /tmp/cs.out \
+            grep -qE "^CodeDirectory.*flags=0x[0-9a-f]+\(.*runtime.*\)" "$CS_OUT" \
               || { echo "::error::$BIN missing hardened runtime (--options runtime) flag"; exit 1; }
             echo "::endgroup::"
           done
@@ -289,15 +292,15 @@ jobs:
           # stapled. .pkg → --type install; .dmg → --type open.
           for PKG in jr-arm64.pkg jr-amd64.pkg; do
             echo "::group::Verify $PKG"
-            spctl --assess --type install --verbose=4 "$PKG" 2>&1 | tee /tmp/spctl.out
-            grep -q "source=Notarized Developer ID" /tmp/spctl.out \
+            spctl --assess --type install --verbose=4 "$PKG" 2>&1 | tee "$SPCTL_OUT"
+            grep -q "source=Notarized Developer ID" "$SPCTL_OUT" \
               || { echo "::error::$PKG not notarized (spctl source unexpected)"; exit 1; }
             echo "::endgroup::"
           done
           for DMG in jr-arm64.dmg jr-amd64.dmg; do
             echo "::group::Verify $DMG"
-            spctl --assess --type open --verbose=4 "$DMG" 2>&1 | tee /tmp/spctl.out
-            grep -q "source=Notarized Developer ID" /tmp/spctl.out \
+            spctl --assess --type open --verbose=4 "$DMG" 2>&1 | tee "$SPCTL_OUT"
+            grep -q "source=Notarized Developer ID" "$SPCTL_OUT" \
               || { echo "::error::$DMG not notarized (spctl source unexpected)"; exit 1; }
             echo "::endgroup::"
           done
