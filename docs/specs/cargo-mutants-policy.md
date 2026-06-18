@@ -2,17 +2,20 @@
 
 ## Purpose
 
-Mutation testing as a meta-verification layer on the bulk + create modules.
+Mutation testing as a meta-verification layer on the bulk, create, ADF, and supporting modules.
 Reference: F6 hardening review of PR #110-pr2 (2026-05-10); closes audit-followup #346.
 
 Mutation testing catches a class of defect that line-coverage metrics miss: tests that
 pass even when the implementation is silently broken by small code mutations (negated
-conditions, removed returns, swapped operators). The three modules designated below had
+conditions, removed returns, swapped operators). The scoped modules designated below had
 high line coverage but untested assertion strength at the time of the F6 review.
 
 ## Scope
 
 `cargo-mutants` runs against:
+- `src/adf.rs` — ADF conversion core (`markdown_to_adf`, `adf_to_text`, `text_to_adf`); largest
+  behavior-dense module with high weak-assertion surface across node normalization, pruning,
+  mark deduplication, and the Algorithm B HTML block path (added F6 hardening)
 - `src/cli/issue/create.rs` — `handle_edit_bulk_labels`, `handle_edit_bulk_fields`, `handle_jsm_create`, `parse_field_kv`
 - `src/api/jira/bulk.rs` — `await_bulk_task`, polling loop, deadline propagation
 - `src/types/jira/bulk.rs` — serde structs for bulk API responses
