@@ -225,9 +225,9 @@ fn test_ci_gate_job_exists_with_correct_shell() {
 // AC-003 — `ci-gate.needs` is exactly the required six-job set
 // ---------------------------------------------------------------------------
 
-/// AC-003 (exact-set check): `ci-gate.needs` must contain exactly the six
-/// jobs `{fmt, clippy, test, msrv, deny, spec-guard}` — order-insensitive,
-/// no extras, none missing.
+/// AC-003 (exact-set check): `ci-gate.needs` must contain exactly the seven
+/// jobs `{fmt, clippy, test, msrv, deny, spec-guard, check-signing-workflow-injection}`
+/// — order-insensitive, no extras, none missing.
 ///
 /// Rationale for exact-set (not subset):
 ///   - Adding a job to `needs` without updating this test intentionally fails
@@ -259,10 +259,18 @@ fn test_ci_gate_needs_exactly_the_required_jobs() {
         )
     });
 
-    let expected: HashSet<String> = ["fmt", "clippy", "test", "msrv", "deny", "spec-guard"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+    let expected: HashSet<String> = [
+        "fmt",
+        "clippy",
+        "test",
+        "msrv",
+        "deny",
+        "spec-guard",
+        "check-signing-workflow-injection",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
 
     let missing: Vec<&String> = expected.difference(&actual).collect();
     let extra: Vec<&String> = actual.difference(&expected).collect();
@@ -294,7 +302,7 @@ fn test_ci_gate_needs_exactly_the_required_jobs() {
     assert!(
         failures.is_empty(),
         "FAIL: `ci-gate.needs` does not match the required exact set \
-         {{fmt, clippy, test, msrv, deny, spec-guard}}.\n\
+         {{fmt, clippy, test, msrv, deny, spec-guard, check-signing-workflow-injection}}.\n\
          Actual needs: {:?}\n\
          {}",
         {
@@ -470,8 +478,16 @@ fn test_ci_gate_fails_on_failed_or_cancelled_need() {
 fn test_ci_gate_needs_jobs_have_no_event_conditional_if() {
     let ci = read_ci_yml();
 
-    // The six jobs that must run unconditionally on every push and PR.
-    let required_jobs = ["fmt", "clippy", "test", "msrv", "deny", "spec-guard"];
+    // The seven jobs that must run unconditionally on every push and PR.
+    let required_jobs = [
+        "fmt",
+        "clippy",
+        "test",
+        "msrv",
+        "deny",
+        "spec-guard",
+        "check-signing-workflow-injection",
+    ];
 
     for job_name in &required_jobs {
         let job_block = extract_job_block(&ci, job_name).unwrap_or_else(|| {
