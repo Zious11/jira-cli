@@ -256,8 +256,9 @@ jobs:
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_INSTALLER_IDENTITY: ${{ secrets.APPLE_INSTALLER_IDENTITY }}
+          RELEASE_VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          VERSION="${{ steps.meta.outputs.version }}"
+          VERSION="$RELEASE_VERSION"
           chmod +x scripts/create-app.sh scripts/create-dmg.sh scripts/create-pkg.sh
 
           for arch in arm64 amd64; do
@@ -334,8 +335,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           HOMEBREW_TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
         run: |
-          TAG="${{ steps.meta.outputs.tag }}"
+          TAG="$RELEASE_TAG"
 
           BINARY_LINE="download below"
           if [ -n "$HOMEBREW_TAP_REPO" ]; then
@@ -385,8 +387,9 @@ jobs:
       - name: Download signed binaries from release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.alpha-sign.outputs.tag }}
         run: |
-          TAG="${{ needs.alpha-sign.outputs.tag }}"
+          TAG="$RELEASE_TAG"
           gh release download "$TAG" --pattern "jr-a-darwin-arm64" --dir .
           gh release download "$TAG" --pattern "jr-a-darwin-amd64" --dir .
 
@@ -394,9 +397,11 @@ jobs:
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           HOMEBREW_TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO }}
+          RELEASE_VERSION: ${{ needs.alpha-sign.outputs.version }}
+          RELEASE_TAG: ${{ needs.alpha-sign.outputs.tag }}
         run: |
-          VERSION="${{ needs.alpha-sign.outputs.version }}"
-          TAG="${{ needs.alpha-sign.outputs.tag }}"
+          VERSION="$RELEASE_VERSION"
+          TAG="$RELEASE_TAG"
 
           TAP_SHORT="${HOMEBREW_TAP_REPO#*/}"
           TAP_NAME="${HOMEBREW_TAP_REPO%%/*}/${TAP_SHORT#homebrew-}"
@@ -478,8 +483,9 @@ jobs:
       - name: Download release binaries
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
         run: |
-          TAG="${{ steps.meta.outputs.tag }}"
+          TAG="$RELEASE_TAG"
           for target in x86_64-apple-darwin aarch64-apple-darwin; do
             ASSET="jr-${TAG}-${target}.tar.gz"
             echo "Downloading $ASSET..."
@@ -527,8 +533,9 @@ jobs:
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_INSTALLER_IDENTITY: ${{ secrets.APPLE_INSTALLER_IDENTITY }}
+          RELEASE_VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          VERSION="${{ steps.meta.outputs.version }}"
+          VERSION="$RELEASE_VERSION"
           chmod +x scripts/create-app.sh scripts/create-dmg.sh scripts/create-pkg.sh
 
           for arch in arm64 amd64; do
@@ -604,8 +611,9 @@ jobs:
       - name: Upload signed artifacts to release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
         run: |
-          TAG="${{ steps.meta.outputs.tag }}"
+          TAG="$RELEASE_TAG"
           gh release upload "$TAG" \
             jr-darwin-arm64 \
             jr-darwin-amd64 \
@@ -620,9 +628,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           HOMEBREW_TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+          RELEASE_CHANNEL: ${{ steps.meta.outputs.channel }}
         run: |
-          TAG="${{ steps.meta.outputs.tag }}"
-          CHANNEL="${{ steps.meta.outputs.channel }}"
+          TAG="$RELEASE_TAG"
+          CHANNEL="$RELEASE_CHANNEL"
 
           # Map channel to formula name
           case "$CHANNEL" in
@@ -682,8 +692,9 @@ jobs:
       - name: Download signed binaries from release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.stable-sign.outputs.tag }}
         run: |
-          TAG="${{ needs.stable-sign.outputs.tag }}"
+          TAG="$RELEASE_TAG"
           gh release download "$TAG" --pattern "jr-darwin-arm64" --dir .
           gh release download "$TAG" --pattern "jr-darwin-amd64" --dir .
 
@@ -691,11 +702,14 @@ jobs:
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           HOMEBREW_TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO }}
+          RELEASE_VERSION: ${{ needs.stable-sign.outputs.version }}
+          RELEASE_TAG: ${{ needs.stable-sign.outputs.tag }}
+          RELEASE_CHANNEL: ${{ needs.stable-sign.outputs.channel }}
         run: |
           set -euo pipefail
-          VERSION="${{ needs.stable-sign.outputs.version }}"
-          TAG="${{ needs.stable-sign.outputs.tag }}"
-          CHANNEL="${{ needs.stable-sign.outputs.channel }}"
+          VERSION="$RELEASE_VERSION"
+          TAG="$RELEASE_TAG"
+          CHANNEL="$RELEASE_CHANNEL"
 
           # Map channel to formula name
           case "$CHANNEL" in
