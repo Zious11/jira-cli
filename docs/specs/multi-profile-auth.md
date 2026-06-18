@@ -440,6 +440,20 @@ fn store_and_load_per_profile_oauth_tokens() {
 
 CI runs them on macOS/Windows by default; Linux CI either provides D-Bus or skips. Local devs run them automatically.
 
+The gating rule applies to ANY test that calls into a live keychain path — not only tests that write
+credentials. A test that runs `jr auth status` against a profile whose `auth_method` is `api_token`
+reaches `src/cli/auth/status.rs::status()` → `auth::load_api_token()` → `keyring::Entry::get_password()`,
+which can block or prompt on a CI host without a keychain daemon. Such tests MUST also carry
+`#[ignore]` + `JR_RUN_KEYRING_TESTS` guard (MAINT-MUTANTS-GLOBS-01 / #526-F6-KEYRING-GATE).
+
+Current gated tests (non-exhaustive; search `#[ignore]` + `JR_RUN_KEYRING_TESTS` for the full list):
+- `tests/auth_profiles.rs::auth_login_creates_new_profile_with_url` — writes API token to keychain
+- `tests/auth_profiles.rs::auth_login_with_jr_profile_pointing_to_unrelated_profile_still_creates_target` — writes API token
+- `tests/auth_profiles.rs::global_profile_flag_targets_auth_status` — reads keychain via `load_api_token()` on an `api_token` profile (added #526-F6-KEYRING-GATE)
+- `tests/multi_cloudid_disambiguation.rs` — multiple `auth login --oauth` tests that write OAuth tokens
+- `tests/oauth_refresh_integration.rs` — AC-002 / AC-009..AC-011 OAuth refresh coordinator tests
+- `tests/auth_output_json.rs::test_auth_login_emits_json_when_output_json_set` — writes API token
+
 ## Concurrency & Cross-Platform Notes
 
 **Concurrent `jr` invocations writing `config.toml`**: two simultaneous mutating commands (e.g., `jr auth switch` and `jr auth login` in different terminals) can race; the last writer wins, the other's changes are lost. This is a *pre-existing* limitation of `Config::save_global` (which uses non-atomic `std::fs::write`), not a regression introduced by multi-profile. Mitigated by the same atomic-save follow-up listed below.
