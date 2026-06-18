@@ -249,6 +249,59 @@ auth_method = "api_token"
     );
 }
 
+/// Ungated substitute coverage for the global-`--profile`→subcommand fallback
+/// fork in `src/main.rs` (the `effective_profile = subcmd.profile.or_else(||
+/// cli.profile.clone())` branch in `AuthCommand::Status`).
+///
+/// # Why this test exists
+///
+/// `global_profile_flag_targets_auth_status` (below) was keyring-gated in
+/// `#526-F6-KEYRING-GATE` because `auth status` against an existing profile
+/// reaches `load_api_token()` → `keyring::Entry::get_password()`, which can
+/// block on CI without a secret-service daemon. That left the global-flag
+/// propagation path with ZERO default-CI coverage.
+///
+/// This test recovers that coverage without touching the keychain by
+/// exploiting the unknown-profile guard in `src/cli/auth/status.rs::status()`:
+/// that guard (line `if !config.global.profiles.contains_key(&target)`) fires
+/// BEFORE the credential probe (`auth::load_api_token()`) and returns exit 64.
+/// If the global `--profile ghost` flag were dropped (not propagated from
+/// `cli.profile` into `effective_profile`), the active profile would fall back
+/// to `"default"` (which exists in the test config), the guard would NOT fire,
+/// and the test would proceed to the keyring probe — eventually succeeding or
+/// erroring with a different exit code, but NOT exit 64. Therefore exit 64
+/// proves that the global flag was propagated.
+#[test]
+fn global_profile_flag_propagates_to_auth_status_unknown_profile_exits_64() {
+    let (dir, path) = fresh_config_dir();
+    std::fs::write(
+        &path,
+        r#"
+default_profile = "default"
+[profiles.default]
+url = "https://default.example"
+auth_method = "api_token"
+[profiles.sandbox]
+url = "https://sandbox.example"
+auth_method = "api_token"
+"#,
+    )
+    .unwrap();
+
+    // Global `--profile ghost` positioned BEFORE the subcommand — this is the
+    // fork that main.rs::run() handles with `effective_profile =
+    // profile.or_else(|| cli.profile.clone())` for AuthCommand::Status.
+    // "ghost" is NOT in [profiles], so the unknown-profile guard in status.rs
+    // fires before any keyring probe and exits 64.
+    jr().env("XDG_CONFIG_HOME", dir.path())
+        .env("JR_CONFIG_DIR", dir.path().join("jr"))
+        .args(["--profile", "ghost", "auth", "status"])
+        .assert()
+        .failure()
+        .code(64)
+        .stderr(predicates::str::contains("unknown profile"));
+}
+
 /// Regression: round-4's unified active-profile existence check at
 /// `Config::load` time broke `jr auth login --profile newprof --url ...`
 /// because the profile didn't exist yet. `handle_login` now uses
