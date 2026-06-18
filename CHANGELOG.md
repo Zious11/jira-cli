@@ -12,6 +12,60 @@ All notable changes to jr will be documented here.
 
 ### Changed
 
+## [0.6.0-dev.3] - 2026-06-18
+
+### Fixed
+
+- **`jr issue comments` no longer stalls on repeated `nextPageToken` (S-525, BC-2.4.043):**
+  `list_comments` in `src/api/jira/issues.rs` now carries the same non-advancing-offset
+  guard that `get_changelog` uses — if `next <= start_at` after a page with `has_more=true`,
+  the paginator aborts with an error instead of looping forever. Mirrors the JRACLOUD-95368
+  pattern already present on the JQL search path. (#531)
+- **Multi-line inline HTML in `--description`/comments no longer causes HTTP 400 (BC-7.2.011,
+  #522):** `push_text`, `push_code`, and `text_to_adf` now enforce the ADF text-node invariant
+  (no raw `\r` or `\n`) at the chokepoint level. In non-codeBlock context `\r\n`, lone `\r`,
+  and bare `\n` are all mapped to a single space — matching `SoftBreak` semantics. In codeBlock
+  context `\r\n`→`\n` and lone `\r`→`\n` (newlines preserved). This closes a reachable HIGH
+  bug where multi-line inline HTML (e.g. `foo <span\nx>bar` in a `--description` or `issue
+  comment`) emitted a raw `\n` into an ADF text node, which Jira rejected with HTTP 400. (#523)
+- **Block-level HTML interior newlines rendered as `hardBreak` nodes instead of raw `\n`
+  (BC-7.2.011, #492):** `markdown_to_adf` now applies Algorithm B to `Tag::HtmlBlock` content:
+  the block is split on line boundaries and emitted as alternating `text`/`hardBreak` nodes
+  (leading/trailing `hardBreak`s trimmed, empty result suppressed). Previously, multi-line
+  block HTML emitted raw `\n` characters inside text nodes — an ADF schema violation that Jira
+  rejected with HTTP 400. (#492)
+
+### Changed
+
+- **`jr issue create --request-type` and `jr project fields` now emit pretty-printed JSON
+  (#526):** All `--output json` paths in `src/cli/` are now routed through
+  `output::render_json`. The two commands that previously used compact `serde_json::json!`
+  Display output — `handle_jsm_create` and `handle_fields` — now emit pretty-printed JSON
+  consistent with every other `jr` command. `jq` and programmatic parsers that accept
+  whitespace-insensitive JSON are unaffected; scripts that did byte-exact comparison against
+  compact output will need updating. (#527, S-526)
+- **`write_cmdb_fields_cache` and `write_object_type_attr_cache` now use model-b
+  error handling (S-525/CR-007):** Both cache writers in `src/cache.rs` swallow disk-write
+  errors with an `eprintln!("warning: …")` and return `Ok(())` rather than propagating via
+  `?`. A failed cache write no longer prevents a successful API call from completing. Call
+  sites updated to use `.ok()` (idiomatic for discarding an always-`Ok` result). (#531)
+- **CI Gate aggregator job added as the single required branch-protection status check
+  (S-CIGATE-1):** `ci.yml` now contains a `ci-gate` job (`needs: [fmt, clippy, test, msrv,
+  deny, spec-guard]`, `if: always()`) that is the only job wired into branch protection on
+  `develop`/`main`. New required CI jobs must be added to `ci-gate.needs`, never directly to
+  branch protection, to prevent the matrix-rename fragility class. (#533 note: `cargo-mutants`
+  examine_globs extended to cover `src/api/jira/issues.rs` and `src/cache.rs`; a keyring-
+  touching test gated behind `JR_RUN_KEYRING_TESTS`.)
+- **Opt-in release operations workflows added (inert by default):** Four new GitHub Actions
+  workflows — Apple binary signing (`sign-and-publish.yml`), release backfill
+  (`backfill-release.yml`), gap-fill (`release-gap-fill.yml`), and fork sync
+  (`sync-upstream.yml`) — are activated only when the corresponding repository variables
+  (`SIGNING_ENABLED`, `HOMEBREW_TAP_REPO`, `RELEASE_GAP_FILL_ENABLED`, `SYNC_UPSTREAM_REPO`)
+  are set. The canonical repo has none of these set; existing CI is unaffected.
+  (`docs/specs/fork-friendly-release-ops.md`, #503)
+- **Documentation accuracy sweep (DRIFT-D1..D12, CR-003/CR-004):** internal doc-only
+  corrections to `CLAUDE.md` and architecture notes; no runtime behavior changed. (#524)
+
 ## [0.6.0-dev.2] - 2026-06-14
 
 ### Added
