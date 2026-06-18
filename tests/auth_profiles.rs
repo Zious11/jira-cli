@@ -255,24 +255,30 @@ auth_method = "api_token"
 ///
 /// # Why this test exists
 ///
-/// `global_profile_flag_targets_auth_status` (below) was keyring-gated in
+/// `global_profile_flag_targets_auth_status` (above) was keyring-gated in
 /// `#526-F6-KEYRING-GATE` because `auth status` against an existing profile
 /// reaches `load_api_token()` → `keyring::Entry::get_password()`, which can
 /// block on CI without a secret-service daemon. That left the global-flag
 /// propagation path with ZERO default-CI coverage.
 ///
-/// This test recovers that coverage without touching the keychain by
-/// exploiting the unknown-profile guard in `src/cli/auth/status.rs::status()`:
-/// that guard (line `if !config.global.profiles.contains_key(&target)`) fires
-/// BEFORE the credential probe (`auth::load_api_token()`) and returns exit 64.
+/// This test recovers that coverage without touching the keychain by exploiting
+/// the strict active-profile-existence guard in `Config::load_with` (called as
+/// the first statement in `src/cli/auth/status.rs::status()`). When
+/// `Config::load_with(Some("ghost"))` is invoked, `load_inner(strict=true)`
+/// checks whether the resolved active profile exists in `[profiles]`; because
+/// `"ghost"` is absent, it returns `JrError::UserError("unknown profile: …")`
+/// before any credential probe occurs. The `contains_key` guard inside
+/// `status.rs` is a redundant second backstop for the explicit `--profile` path
+/// but is never reached here — the config-load boundary fires first.
+///
 /// If the global `--profile ghost` flag were dropped (not propagated from
 /// `cli.profile` into `effective_profile`), the active profile would fall back
-/// to `"default"` (which exists in the test config), the guard would NOT fire,
-/// and the test would proceed to the keyring probe — eventually succeeding or
-/// erroring with a different exit code, but NOT exit 64. Therefore exit 64
-/// proves that the global flag was propagated.
+/// to `"default"` (which exists in the test config), `Config::load_with` would
+/// succeed, the status handler would proceed to the keyring probe, and the
+/// process would exit with a different code — NOT 64. Therefore exit 64 proves
+/// the global flag was propagated all the way into `Config::load_with`.
 #[test]
-fn global_profile_flag_propagates_to_auth_status_unknown_profile_exits_64() {
+fn test_global_profile_flag_propagates_to_auth_status_unknown_profile_exits_64() {
     let (dir, path) = fresh_config_dir();
     std::fs::write(
         &path,
