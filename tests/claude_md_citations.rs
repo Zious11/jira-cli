@@ -48,6 +48,7 @@
 //!   test_in_scope_docs_path_extracted                   → AC-001, VP-CITE-001
 //!   test_in_scope_scripts_path_extracted                → AC-001, VP-CITE-001
 //!   test_in_scope_github_workflow_path_extracted        → AC-001, VP-CITE-001
+//!   test_in_scope_yaml_path_extracted                   → AC-001, VP-CITE-001 (EC-CITE-035)
 //!   test_glob_star_pattern_skipped                      → AC-001, VP-CITE-001
 //!   test_glob_brace_pattern_skipped                     → AC-001, VP-CITE-001
 //!   test_symbol_form_stripped_to_file                   → AC-001, VP-CITE-001
@@ -802,6 +803,27 @@ fn test_in_scope_github_workflow_path_extracted() {
     assert!(
         result.iter().any(|(p, _)| p == ".github/workflows/ci.yml"),
         "Expected .github/workflows/ci.yml to be extracted, got: {:?}",
+        result
+    );
+}
+
+/// `.yaml` extension is in `RECOGNIZED_EXTS` — IS extracted (EC-CITE-035).
+///
+/// A mutant that drops `".yaml"` from `RECOGNIZED_EXTS` would make this test fail
+/// because the token passes step (c) (`.github/` dir prefix) but then fails step (d)
+/// without the `.yaml` entry, producing empty output.
+///
+/// Traces to AC-001, VP-CITE-001.
+#[test]
+fn test_in_scope_yaml_path_extracted() {
+    let doc = "See `.github/workflows/foo.yaml` for the workflow definition.";
+    let result = extract_path_citations(doc);
+    assert!(
+        result
+            .iter()
+            .any(|(p, _)| p == ".github/workflows/foo.yaml"),
+        "Expected .github/workflows/foo.yaml to be extracted (.yaml is a recognized extension), \
+         got: {:?}",
         result
     );
 }
