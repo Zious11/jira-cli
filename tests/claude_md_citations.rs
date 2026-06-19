@@ -73,6 +73,10 @@
 //!   test_root_file_changelog_md_extracted               → AC-006, VP-CITE-001
 //!   test_root_file_rust_toolchain_toml_extracted        → AC-006, VP-CITE-001
 //!   test_render_dead_citation_message_matches_ci_cite_001 → AC-002, BC-X.13.001 postcondition 2
+//!   test_render_dead_citation_message_single_element     → AC-002, BC-X.13.001 postcondition 2 (L-2)
+//!   test_fenced_code_block_path_excluded                 → EC-CITE-016, BC-X.13.002 fence-skip
+//!   test_balanced_paren_in_path_not_stripped_by_step_b5 → BC-X.13.002 step (b) sub-step (5) (L-1)
+//!   test_citation_on_line_3_returns_exact_line_number   → BC-X.13.001 postcondition 2, BC-X.13.002 (M-1 extra pin)
 //!   test_shorthand_ci_yml_excluded                      → AC-006, VP-CITE-001 (EC-CITE-030)
 //!   test_shorthand_adf_rs_excluded                      → AC-006, VP-CITE-001 (EC-CITE-031)
 //!   test_shorthand_fields_json_excluded                 → AC-006, VP-CITE-001
@@ -472,6 +476,26 @@ fn test_two_dead_citations_both_listed() {
         "Second citation should be DOES_NOT_EXIST_TWO.rs, got: {:?}",
         citations
     );
+
+    // M-1: assert EXACT 1-based absolute line numbers.
+    // The fixture string is a single doc with no leading newline:
+    //   line 1: "See `src/DOES_NOT_EXIST_ONE.rs` for details."
+    //   line 2: "And also `src/DOES_NOT_EXIST_TWO.rs`."
+    // `extract_path_citations` counts newlines before the opening backtick,
+    // so the citation on line 1 has 0 preceding newlines → line number 1;
+    // the citation on line 2 has 1 preceding newline → line number 2.
+    // Killing the +1→+0 or +1→+2 mutant requires these exact assertions.
+    assert_eq!(
+        line0, 1,
+        "First citation must be on line 1 (exact 1-based), got: {}",
+        line0
+    );
+    assert_eq!(
+        line1, 2,
+        "Second citation must be on line 2 (exact 1-based), got: {}",
+        line1
+    );
+
     assert!(
         line0 < line1,
         "First citation line ({}) must come before second citation line ({})",
@@ -535,6 +559,115 @@ fn test_render_dead_citation_message_matches_ci_cite_001() {
     assert_eq!(
         got, expected,
         "render_dead_citation_message must produce the exact CI-CITE-001 canonical block"
+    );
+}
+
+/// BC-X.13.001 postcondition 2: `render_dead_citation_message` with a SINGLE
+/// dead entry produces the exact CI-CITE-001 block — confirms the 2-space indent
+/// and leading `\n  ` hold for a one-element list (L-2 mutation gap).
+///
+/// A mutant that changes the join separator (e.g. `\n` instead of `\n  `) or
+/// drops the indent for single-element lists will fail here.
+///
+/// Traces to AC-002, BC-X.13.001 postcondition 2.
+#[test]
+fn test_render_dead_citation_message_single_element() {
+    let dead = vec![("src/foo.rs".to_string(), 142usize)];
+    let got = render_dead_citation_message(&dead);
+    let expected = "CLAUDE.md cites file paths that do not exist on disk:\n  src/foo.rs (line 142)\nFix the citation or restore the file.\nNote: .factory/, glob, and symbol-form tokens are auto-excluded. Root-level files (Cargo.toml, CLAUDE.md, etc.) are checked.";
+    assert_eq!(
+        got, expected,
+        "render_dead_citation_message must produce CI-CITE-001 block for a single entry"
+    );
+}
+
+/// EC-CITE-016: fenced triple-backtick code blocks are excluded entirely.
+///
+/// A fenced block whose body contains an in-scope, recognized-extension path that
+/// does NOT exist on disk (e.g. `src/DOES_NOT_EXIST_FENCED.rs`) must produce
+/// EMPTY output. Disabling the fence-skip branch would make this test fail,
+/// which kills the "remove fence exclusion" mutation.
+///
+/// Traces to EC-CITE-016, BC-X.13.002 step (fence-skip precondition).
+#[test]
+fn test_fenced_code_block_path_excluded() {
+    // The fenced block body contains a syntactically valid, in-scope,
+    // recognized-extension path that does NOT exist on disk.
+    // The path starts with `src/` (passes step c) and ends with `.rs` (passes step d).
+    // If the fence-skip is disabled, `extract_path_citations` would return this path.
+    let doc = "```\nsrc/DOES_NOT_EXIST_FENCED.rs\n```\n";
+    let result = extract_path_citations(doc);
+    assert!(
+        result.is_empty(),
+        "EC-CITE-016: path inside triple-backtick fenced block must be excluded, \
+         but extract_path_citations returned: {:?}",
+        result
+    );
+}
+
+/// L-1: sub-step (5) uses `open < close`, NOT `open <= close`.
+///
+/// A token `src/foo(bar).rs` has one open paren and one close paren at the END
+/// of the meaningful segment; after step (4) trim nothing (no trailing punct),
+/// the trailing `)` count-check gives open=1, close=1. Under the correct `<`
+/// rule: 1 < 1 is false → `)` is NOT stripped → path stays `src/foo(bar).rs`.
+/// Under a buggy `<=` rule: 1 <= 1 is true → `)` WOULD be stripped → path
+/// becomes `src/foo(bar.rs` (a different string). This test asserts the CORRECT
+/// path `src/foo(bar).rs` is returned, killing the `<`→`<=` mutant.
+///
+/// Note: `src/foo(bar).rs` does not exist on disk — this is a grammar-only
+/// unit test. Existence checking lives in the integration test body only.
+///
+/// Traces to BC-X.13.002 step (b) sub-step (5).
+#[test]
+fn test_balanced_paren_in_path_not_stripped_by_step_b5() {
+    // Token has balanced parens embedded in the path name.
+    // The trailing `)` is balanced (open == close), so it must NOT be stripped.
+    let doc = "See `src/foo(bar).rs` for details.";
+    let result = extract_path_citations(doc);
+    assert!(
+        result.iter().any(|(p, _)| p == "src/foo(bar).rs"),
+        "Balanced trailing ) must not be stripped (open < close rule, not <=): \
+         expected src/foo(bar).rs in output, got: {:?}",
+        result
+    );
+    // Additionally confirm that the wrongly-stripped form is NOT present.
+    assert!(
+        !result.iter().any(|(p, _)| p == "src/foo(bar.rs"),
+        "Balanced ) must not produce src/foo(bar.rs (would indicate <= bug), got: {:?}",
+        result
+    );
+}
+
+/// M-1 (additional pin): citation on a later line (line 3+) in a multi-line
+/// fixture returns the correct absolute line number.
+///
+/// Fixture has 4 lines; the citation appears on line 3. Asserting `line == 3`
+/// kills both the +0 and +2 off-by-one mutants relative to the `+1` in the
+/// newline-count expression.
+///
+/// Traces to BC-X.13.001 postcondition 2, BC-X.13.002 line-number rule.
+#[test]
+fn test_citation_on_line_3_returns_exact_line_number() {
+    // 4-line doc; citation appears on line 3 (0-indexed line 2 = two preceding newlines + 1).
+    let doc = "Line one.\nLine two.\nSee `src/DOES_NOT_EXIST_LINE3.rs` here.\nLine four.\n";
+    let result = extract_path_citations(doc);
+    assert_eq!(
+        result.len(),
+        1,
+        "Expected exactly 1 citation, got: {:?}",
+        result
+    );
+    let (path, line) = &result[0];
+    assert_eq!(
+        path, "src/DOES_NOT_EXIST_LINE3.rs",
+        "Expected path src/DOES_NOT_EXIST_LINE3.rs, got: {:?}",
+        path
+    );
+    assert_eq!(
+        *line, 3,
+        "Citation on line 3 must return exact line number 3, got: {}",
+        line
     );
 }
 
