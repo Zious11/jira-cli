@@ -89,20 +89,12 @@
 use std::path::Path;
 
 // ---------------------------------------------------------------------------
-// The pure extraction function — STUB (Red Gate phase)
+// Pure extraction function.
 // Implements BC-X.13.002: 5-step pipeline (a)–(e), returning
 // (normalized_path, 1-based-line-number) pairs.
 // No Path::exists() calls inside — pure, no I/O.
 // ---------------------------------------------------------------------------
 
-/// Extract all in-scope backtick-quoted file-path citations from `doc`.
-///
-/// Returns `Vec<(normalized_path, 1-based-line-number)>` pairs.
-///
-/// Steps (a)–(d) are applied inside this function (pure). Step (e)
-/// — `Path::exists()` — is effectful and lives only in the integration test.
-///
-/// See BC-X.13.002 for the full pipeline specification.
 /// Extract all in-scope backtick-quoted file-path citations from `doc`.
 ///
 /// Returns `Vec<(normalized_path, 1-based-line-number)>` pairs, sorted and
@@ -177,20 +169,12 @@ fn extract_path_citations(doc: &str) -> Vec<(String, usize)> {
 
     while i < len {
         // Check for triple-backtick fence (skip the fenced block)
-        if bytes[i] == b'`'
-            && i + 2 < len
-            && bytes[i + 1] == b'`'
-            && bytes[i + 2] == b'`'
-        {
+        if bytes[i] == b'`' && i + 2 < len && bytes[i + 1] == b'`' && bytes[i + 2] == b'`' {
             // Skip past the opening ```
             i += 3;
             // Skip optional language identifier and content until closing ```
             while i < len {
-                if bytes[i] == b'`'
-                    && i + 2 < len
-                    && bytes[i + 1] == b'`'
-                    && bytes[i + 2] == b'`'
-                {
+                if bytes[i] == b'`' && i + 2 < len && bytes[i + 1] == b'`' && bytes[i + 2] == b'`' {
                     i += 3;
                     break;
                 }
@@ -239,9 +223,7 @@ fn extract_path_citations(doc: &str) -> Vec<(String, usize)> {
                     }
 
                     // --- Step (c): Dir-prefix filter + ROOT_FILES ---
-                    let in_scope = DIR_PREFIXES
-                        .iter()
-                        .any(|p| normalized_token.starts_with(p))
+                    let in_scope = DIR_PREFIXES.iter().any(|p| normalized_token.starts_with(p))
                         || ROOT_FILES.contains(&normalized_token.as_str());
                     if !in_scope {
                         continue;
