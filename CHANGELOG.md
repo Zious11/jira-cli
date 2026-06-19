@@ -12,6 +12,34 @@ All notable changes to jr will be documented here.
 
 ### Changed
 
+## [0.6.0-dev.5] - 2026-06-19
+
+### Fixed
+
+- **`backfill-release.yml` safe release upsert — check-then-upsert replaces destructive
+  delete+recreate (#539, S-FORK-OPS-BACKFILL-1):** `backfill-release.yml` now checks
+  whether a GitHub Release for the tag already exists before touching it. If a release
+  exists, it upserts assets individually (skipping already-present files); if it does not
+  exist, it creates a new release. This eliminates the previous destructive
+  `gh release delete` + `gh release create` pattern, which permanently discarded any
+  curated release notes that had been written for an existing release.
+- **`backfill-release.yml` Windows target parity (#539, S-FORK-OPS-BACKFILL-1):**
+  Backfilled releases now include the `x86_64-pc-windows-msvc` `.zip` asset alongside
+  the macOS and Linux tarballs, matching the asset matrix produced by `release.yml`.
+
+### Changed
+
+- **`GITLEAKS_DISABLED` fork-ops opt-out documented (#538):** Added `GITLEAKS_DISABLED`
+  to the repository-variable reference in `docs/specs/fork-friendly-release-ops.md`.
+  Fork maintainers who hit false-positive gitleaks alerts on the signing workflows can
+  set this variable to skip the gitleaks scan step. No runtime behavior changed in the
+  canonical repo.
+- **Backfill matrix-parity test guard anchored to distinct upsert branches (#540,
+  FIX-F5-001):** The CI test that verifies zip assets are produced and upserted by
+  `backfill-release.yml` now creates isolated branches per test scenario so each upsert
+  operation targets a distinct branch, eliminating false-pass conditions that could arise
+  from shared branch state across test cases.
+
 ## [0.6.0-dev.4] - 2026-06-18
 
 ### Fixed
