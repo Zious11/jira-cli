@@ -21,6 +21,8 @@
 //!       (4) greedily trim trailing `.`, `,`, `;`, `:`
 //!       (5) trim one trailing `)` iff count('(') < count(')')
 //!       (6) trim one trailing `]` iff count('[') < count(']')
+//!   (b′) Parent-dir traversal reject: normalized token containing `..` path
+//!       segment → EXCLUDED (defense-in-depth against path-probe outside repo).
 //!   (c) Dir-prefix filter + ROOT_FILES curated exact-match:
 //!       keep if starts with `src/`, `tests/`, `docs/`, `.github/`, `scripts/`
 //!       OR exactly equals a ROOT_FILES member.
@@ -49,6 +51,7 @@
 //!   test_in_scope_scripts_path_extracted                → AC-001, VP-CITE-001
 //!   test_in_scope_github_workflow_path_extracted        → AC-001, VP-CITE-001
 //!   test_in_scope_yaml_path_extracted                   → AC-001, VP-CITE-001 (EC-CITE-035)
+//!   test_in_scope_shell_script_extracted                → AC-001, VP-CITE-001 (.sh extension pin)
 //!   test_glob_star_pattern_skipped                      → AC-001, VP-CITE-001
 //!   test_glob_brace_pattern_skipped                     → AC-001, VP-CITE-001
 //!   test_symbol_form_stripped_to_file                   → AC-001, VP-CITE-001
@@ -92,10 +95,38 @@
 //!   test_extension_filter_excludes_lock_extension       → AC-011, VP-CITE-001 (EC-CITE-034)
 //!   test_comma_delimited_both_tokens_extracted          → AC-012, VP-CITE-001 (EC-CITE-002)
 //!   test_crlf_line_endings_no_false_positive            → AC-012, VP-CITE-001 (EC-CITE-003)
+//!   test_parent_dir_traversal_excluded                  → SEC-001, CWE-22 defense-in-depth
+//!   test_leading_double_colon_token_excluded            → VP-CITE-001 (leading `::` corner)
 //!   proptests::test_non_prefix_tokens_are_never_extracted → AC-008, VP-CITE-001
 //!   proptests::test_extract_never_panics                → AC-008, VP-CITE-001
 
 use std::path::Path;
+
+// ---------------------------------------------------------------------------
+// Module-level canonical constants (BC-X.13.002 step (c) and step (d)).
+//
+// These are the single source of truth shared by BOTH `extract_path_citations`
+// and the proptest module.  Any change here automatically propagates to both.
+// Values are immutable per spec: 7 ROOT_FILES, 6 extensions, 5 dir-prefixes.
+// ---------------------------------------------------------------------------
+
+/// ROOT_FILES curated set — immutable per BC-X.13.002 step (c).
+/// Any addition requires a BC update in the same commit.
+const ROOT_FILES: &[&str] = &[
+    "build.rs",
+    "Cargo.toml",
+    "CHANGELOG.md",
+    "CLAUDE.md",
+    "deny.toml",
+    "README.md",
+    "rust-toolchain.toml",
+];
+
+/// Recognized extensions per BC-X.13.002 step (d).
+const RECOGNIZED_EXTS: &[&str] = &[".md", ".rs", ".sh", ".toml", ".yml", ".yaml"];
+
+/// Develop-tracked directory prefixes per BC-X.13.002 step (c).
+const DIR_PREFIXES: &[&str] = &["src/", "tests/", "docs/", ".github/", "scripts/"];
 
 // ---------------------------------------------------------------------------
 // Canonical CI-CITE-001 failure message renderer.
@@ -145,22 +176,8 @@ fn render_dead_citation_message(dead: &[(String, usize)]) -> String {
 ///
 /// No `Path::exists()` calls inside — pure, no I/O.
 fn extract_path_citations(doc: &str) -> Vec<(String, usize)> {
-    // ROOT_FILES curated set — immutable per BC-X.13.002 step (c).
-    const ROOT_FILES: &[&str] = &[
-        "build.rs",
-        "Cargo.toml",
-        "CHANGELOG.md",
-        "CLAUDE.md",
-        "deny.toml",
-        "README.md",
-        "rust-toolchain.toml",
-    ];
-
-    // Recognized extensions per BC-X.13.002 step (d).
-    const RECOGNIZED_EXTS: &[&str] = &[".md", ".rs", ".sh", ".toml", ".yml", ".yaml"];
-
-    // Develop-tracked directory prefixes per BC-X.13.002 step (c).
-    const DIR_PREFIXES: &[&str] = &["src/", "tests/", "docs/", ".github/", "scripts/"];
+    // Use module-level ROOT_FILES, RECOGNIZED_EXTS, DIR_PREFIXES constants —
+    // single source of truth shared with the proptest module.
 
     // Normalize CRLF: replace \r\n with \n and lone \r with \n (EC-CITE-003).
     // We work on a CRLF-normalized copy so line counting is consistent.
@@ -253,6 +270,20 @@ fn extract_path_citations(doc: &str) -> Vec<(String, usize)> {
                         continue;
                     }
 
+                    // --- Step (b′): Parent-dir traversal reject (SEC-001, CWE-22 defense) ---
+                    // A token whose normalized form contains a `..` path segment is never a
+                    // valid in-repo citation.  Excluding it closes the `.exists()` probe-outside-
+                    // repo path cleanly even though CLAUDE.md is repo-controlled.
+                    // We check for `..` as a standalone path component: preceded and followed
+                    // by `/` or at token boundaries.
+                    let has_dotdot = normalized_token == ".."
+                        || normalized_token.starts_with("../")
+                        || normalized_token.ends_with("/..")
+                        || normalized_token.contains("/../");
+                    if has_dotdot {
+                        continue;
+                    }
+
                     // --- Step (c): Dir-prefix filter + ROOT_FILES ---
                     let in_scope = DIR_PREFIXES.iter().any(|p| normalized_token.starts_with(p))
                         || ROOT_FILES.contains(&normalized_token.as_str());
@@ -321,8 +352,7 @@ fn apply_fixpoint(token: &str) -> String {
 
         // Sub-step (4): greedily trim trailing `.`, `,`, `;`, `:`.
         while current.ends_with(['.', ',', ';', ':']) {
-            let new_len = current.len() - 1;
-            current.truncate(new_len);
+            current.pop(); // safety-by-construction: all four chars are ASCII (1 byte)
         }
 
         // Sub-step (5): trim one trailing `)` iff count('(') < count(')').
@@ -330,8 +360,7 @@ fn apply_fixpoint(token: &str) -> String {
             let open = current.chars().filter(|&c| c == '(').count();
             let close = current.chars().filter(|&c| c == ')').count();
             if open < close {
-                let new_len = current.len() - 1;
-                current.truncate(new_len);
+                current.pop(); // `)` is ASCII (1 byte) — pop() cannot panic
             }
         }
 
@@ -340,8 +369,7 @@ fn apply_fixpoint(token: &str) -> String {
             let open = current.chars().filter(|&c| c == '[').count();
             let close = current.chars().filter(|&c| c == ']').count();
             if open < close {
-                let new_len = current.len() - 1;
-                current.truncate(new_len);
+                current.pop(); // `]` is ASCII (1 byte) — pop() cannot panic
             }
         }
 
@@ -1448,12 +1476,76 @@ fn test_crlf_line_endings_no_false_positive() {
 }
 
 // ---------------------------------------------------------------------------
+// New hardening tests (F6)
+// ---------------------------------------------------------------------------
+
+/// SEC-001 (CWE-22 defense-in-depth): token with `..` parent-directory segment
+/// must be EXCLUDED after step (b) normalization.
+///
+/// Even though CLAUDE.md is repo-controlled (low direct risk), the `..` guard
+/// closes the `Path::exists()` probe-outside-repo path cleanly and kills any
+/// mutant that drops the traversal check.
+///
+/// Traces to SEC-001, CWE-22.
+#[test]
+fn test_parent_dir_traversal_excluded() {
+    // The token `src/../../../etc/shadow.rs` has `src/` prefix (would pass step c)
+    // and `.rs` extension (would pass step d) — only the `..` guard stops it.
+    let doc = "See `src/../../../etc/shadow.rs` for details.";
+    let result = extract_path_citations(doc);
+    assert!(
+        result.is_empty(),
+        "SEC-001: token with `..` path segment must be excluded, got: {:?}",
+        result
+    );
+}
+
+/// `.sh` extension positive-extraction test — kills the `.sh`-drop mutant.
+///
+/// A `scripts/` path with `.sh` extension passes steps (c) and (d); removing
+/// `".sh"` from `RECOGNIZED_EXTS` would make this fail.
+///
+/// Traces to AC-001, VP-CITE-001 (.sh extension mutation coverage).
+#[test]
+fn test_in_scope_shell_script_extracted() {
+    let doc = "Run `scripts/check-spec-counts.sh` to validate counts.";
+    let result = extract_path_citations(doc);
+    assert!(
+        result
+            .iter()
+            .any(|(p, _)| p == "scripts/check-spec-counts.sh"),
+        ".sh path in scripts/ must be extracted (.sh is a recognized extension), got: {:?}",
+        result
+    );
+}
+
+/// Leading `::` token corner: `` `::src/x.rs` `` — the leading `::` means after
+/// sub-step (1) strips from the FIRST `::`, the result is empty → EXCLUDED.
+///
+/// This pins the leading-`::` corner case that `apply_fixpoint` must handle
+/// without panicking (sub-step 1 truncates to pos 0 → empty string → skipped).
+///
+/// Traces to VP-CITE-001 (leading `::` corner).
+#[test]
+fn test_leading_double_colon_token_excluded() {
+    // `::src/x.rs` → sub-step (1) finds "::" at position 0 → truncate(0) → ""
+    // → empty result check fires → not extracted.
+    let doc = "See `::src/x.rs` for details.";
+    let result = extract_path_citations(doc);
+    assert!(
+        result.is_empty(),
+        "Leading `::` token must produce empty output (::src/x.rs), got: {:?}",
+        result
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Proptest block — VP-CITE-001 (no false positives, no panics — AC-008)
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod proptests {
-    use super::extract_path_citations;
+    use super::{DIR_PREFIXES, ROOT_FILES, extract_path_citations};
     use proptest::prelude::*;
 
     // VP-CITE-001 proptest: for any string `s` from the documented alphabet
@@ -1465,6 +1557,9 @@ mod proptests {
     // The alphabet exercises all 6 sub-steps of the merged fixpoint and the
     // glob-skip branch by random input.
     //
+    // DIR_PREFIXES and ROOT_FILES are imported from the module level — single
+    // source of truth, no hand-sync required.
+    //
     // Traces to AC-008, VP-CITE-001.
     proptest! {
         #[test]
@@ -1475,22 +1570,8 @@ mod proptests {
             let result = extract_path_citations(&non_prefix);
             // result is Vec<(String, usize)>; inspect the path component of each entry
             for (path, _line) in &result {
-                let is_dir_prefix = path.starts_with("src/")
-                    || path.starts_with("tests/")
-                    || path.starts_with("docs/")
-                    || path.starts_with(".github/")
-                    || path.starts_with("scripts/");
-                // MUST match ROOT_FILES const inside extract_path_citations (BC-X.13.002 step c) — update both together.
-                let root_files = [
-                    "build.rs",
-                    "Cargo.toml",
-                    "CHANGELOG.md",
-                    "CLAUDE.md",
-                    "deny.toml",
-                    "README.md",
-                    "rust-toolchain.toml",
-                ];
-                let is_root_file = root_files.contains(&path.as_str());
+                let is_dir_prefix = DIR_PREFIXES.iter().any(|p| path.starts_with(p));
+                let is_root_file = ROOT_FILES.contains(&path.as_str());
                 prop_assert!(
                     is_dir_prefix || is_root_file,
                     "Unexpected token in output (neither dir-prefix nor ROOT_FILES member): {}",
