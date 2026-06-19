@@ -82,6 +82,7 @@ jobs:
         run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Build
+        shell: bash
         env:
           JR_BUILD_OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID }}
           JR_BUILD_OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
@@ -95,6 +96,7 @@ jobs:
 
       - name: Package
         if: runner.os != 'Windows'
+        shell: bash
         env:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |

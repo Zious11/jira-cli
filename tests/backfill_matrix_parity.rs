@@ -35,6 +35,8 @@
 //! | `test_backfill_release_job_has_upsert_upload_branch`     | AC-002 | DESTRUCTIVE |
 //! | `test_backfill_release_job_zip_in_both_upsert_branches`  | AC-002 | DESTRUCTIVE |
 //! | `test_backfill_release_job_has_draft_detection`          | AC-002 (EC-001) | DESTRUCTIVE |
+//! | `test_backfill_build_step_declares_shell_bash`           | CR-001 | WIN-TARGET |
+//! | `test_backfill_unix_package_step_declares_shell_bash`    | CR-002 | WIN-TARGET |
 
 use std::fs;
 use std::path::Path;
@@ -448,9 +450,9 @@ fn test_backfill_release_job_has_no_or_true_silencer() {
         )
     });
 
-    // The `|| true` silencer must not appear on any `gh` command line.
-    // We check for its presence on any line that also has `gh release` to avoid
-    // a false positive from `|| true` appearing in an unrelated context.
+    // The `|| true` silencer must not appear on any `gh release` command line.
+    // We scope the check to lines that also contain `gh release` (not any `gh`
+    // command) to avoid false positives from `|| true` in unrelated contexts.
     let has_silenced_gh_command = release_block
         .lines()
         .any(|line| line.contains("gh release") && line.contains("|| true"));
@@ -658,5 +660,140 @@ fn test_backfill_release_job_has_draft_detection() {
          release remains unpublished after the run (EC-001 / Invariant 6).\n\
          \n\
          (S-FORK-OPS-BACKFILL-1 AC-002 / spec-delta DESTRUCTIVE Invariant 6 / EC-001)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// CR-001 / CR-002 (shell: bash) — Build and Unix Package steps must declare
+// shell: bash so they work correctly on the new Windows runner
+// ---------------------------------------------------------------------------
+
+/// CR-001 (CRITICAL): The `Build` step in `backfill-release.yml` must declare
+/// `shell: bash`.
+///
+/// Without `shell: bash`, GitHub Actions defaults to `pwsh` on `windows-latest`
+/// runners. The Build step body contains a POSIX `if [ ... ]; then ... fi`
+/// construct that is invalid PowerShell — the Windows build job would fail
+/// immediately on the new `x86_64-pc-windows-msvc` matrix row.
+///
+/// `release.yml`'s Build step carries `shell: bash` for exactly this reason.
+///
+/// Anchoring: the assertion is scoped to the `build` job block to prevent
+/// a `shell: bash` in the `sign` job or a comment from satisfying the check.
+///
+/// RED GATE (CR-001): `shell: bash` is currently absent from the Build step.
+/// This test FAILS against the workflow as-committed in ac5cdf4.
+///
+/// Traces to: CR-001; release.yml `jobs.build.steps[name=Build].shell`.
+#[test]
+fn test_backfill_build_step_declares_shell_bash() {
+    let yml = read_backfill_yml();
+
+    let build_block = extract_job_block(&yml, "build").unwrap_or_else(|| {
+        panic!(
+            "FAIL: `.github/workflows/backfill-release.yml` does not contain a \
+             `build:` job (two-space indent)."
+        )
+    });
+
+    // Locate the `Build` step by finding `      - name: Build\n` within the
+    // build block, then search the following lines for `shell: bash` before
+    // the next step boundary (`      - name:`).
+    let build_step_needle = "      - name: Build\n";
+    let step_start = build_block.find(build_step_needle).unwrap_or_else(|| {
+        panic!(
+            "FAIL: Could not find the `Build` step (      - name: Build) inside the \
+                 `build` job of `.github/workflows/backfill-release.yml`."
+        )
+    });
+
+    // Slice from the start of the Build step to the next step boundary.
+    let after_step = &build_block[step_start + build_step_needle.len()..];
+    let next_step_offset = after_step.find("      - name:").unwrap_or(after_step.len());
+    let build_step_body = &after_step[..next_step_offset];
+
+    assert!(
+        build_step_body.contains("shell: bash"),
+        "FAIL (CR-001): The `Build` step in `.github/workflows/backfill-release.yml` \
+         does not declare `shell: bash`.\n\
+         \n\
+         Without `shell: bash`, GitHub Actions defaults to `pwsh` on `windows-latest`. \
+         The Build step body contains POSIX shell syntax (`if [ ... ]; then ... fi`) \
+         that is invalid PowerShell — the Windows build job (x86_64-pc-windows-msvc) \
+         will fail immediately.\n\
+         \n\
+         Required fix: add `shell: bash` to the Build step, matching `release.yml`:\n\
+           - name: Build\n\
+             shell: bash\n\
+             env:\n\
+               ...\n\
+         \n\
+         (CR-001 / release.yml `jobs.build.steps[name=Build].shell`)"
+    );
+}
+
+/// CR-002 (HIGH): The Unix `Package` step in `backfill-release.yml` must declare
+/// `shell: bash`.
+///
+/// The step is gated `if: runner.os != 'Windows'`, so it never runs on Windows.
+/// However, adding `shell: bash` makes the shell contract explicit — consistent
+/// with `release.yml`'s Package (Unix) step which also carries `shell: bash` —
+/// and ensures the step behaves correctly if the `if:` condition ever changes.
+///
+/// Anchoring: the assertion is scoped to the `build` job block and targets the
+/// `Package` step (the Unix one, without `(Windows)` in the name).
+///
+/// RED GATE (CR-002): `shell: bash` is currently absent from the Unix Package step.
+/// This test FAILS against the workflow as-committed in ac5cdf4.
+///
+/// Traces to: CR-002; release.yml `jobs.build.steps[name="Package (Unix)"].shell`.
+#[test]
+fn test_backfill_unix_package_step_declares_shell_bash() {
+    let yml = read_backfill_yml();
+
+    let build_block = extract_job_block(&yml, "build").unwrap_or_else(|| {
+        panic!(
+            "FAIL: `.github/workflows/backfill-release.yml` does not contain a \
+             `build:` job (two-space indent)."
+        )
+    });
+
+    // Locate the Unix `Package` step: `      - name: Package\n` (NOT
+    // `Package (Windows)`) within the build block, then search the following
+    // lines for `shell: bash` before the next step boundary.
+    // We find the step by looking for the exact name `Package\n` to avoid
+    // matching `Package (Windows)`.
+    let package_step_needle = "      - name: Package\n";
+    let step_start = build_block.find(package_step_needle).unwrap_or_else(|| {
+        panic!(
+            "FAIL: Could not find the Unix `Package` step (      - name: Package) \
+                 inside the `build` job of `.github/workflows/backfill-release.yml`.\n\
+                 The step must be named exactly `Package` (not `Package (Windows)`) \
+                 and gated with `if: runner.os != 'Windows'`."
+        )
+    });
+
+    // Slice from the start of the Package step to the next step boundary.
+    let after_step = &build_block[step_start + package_step_needle.len()..];
+    let next_step_offset = after_step.find("      - name:").unwrap_or(after_step.len());
+    let package_step_body = &after_step[..next_step_offset];
+
+    assert!(
+        package_step_body.contains("shell: bash"),
+        "FAIL (CR-002): The Unix `Package` step in `.github/workflows/backfill-release.yml` \
+         does not declare `shell: bash`.\n\
+         \n\
+         The step is gated `if: runner.os != 'Windows'` so it does not run on Windows, \
+         but explicitly declaring `shell: bash` matches `release.yml`'s Package (Unix) \
+         step convention and makes the shell contract explicit.\n\
+         \n\
+         Required fix: add `shell: bash` to the Unix Package step:\n\
+           - name: Package\n\
+             if: runner.os != 'Windows'\n\
+             shell: bash\n\
+             env:\n\
+               ...\n\
+         \n\
+         (CR-002 / release.yml `jobs.build.steps[name=\"Package (Unix)\"].shell`)"
     );
 }
