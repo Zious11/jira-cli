@@ -560,19 +560,28 @@ fn test_backfill_release_job_has_upsert_upload_branch() {
     );
 }
 
-/// AC-002 (asset completeness — zip in both branches): `jr-*.zip` must appear
-/// in BOTH the upload (exists) branch AND the create (new release) branch of the
-/// check-then-upsert block in the `release` job.
+/// AC-002 (asset completeness — zip in DISTINCT upsert branches): `jr-*.zip`
+/// must appear in the upload (exists) branch AND in the create (new release)
+/// branch of the check-then-upsert `if/else/fi` block in the `release` job —
+/// each occurrence anchored to its own distinct branch slice.
 ///
 /// Adding `jr-*.zip` to only one branch creates an asset-completeness bug on the
 /// other path — backfilled releases created for the first time would be missing
 /// the Windows binary, or re-run releases would be missing it on upsert.
 ///
-/// The assertion counts occurrences of `jr-*.zip` in the release job block and
-/// requires at least two — one per branch. (The Upload artifact step in the build
-/// job also uses `jr-*.zip`, but that is in the `build` job block, not `release`.)
+/// Anchoring strategy (stronger than a raw occurrence count):
+///   1. Extract the `release` job block.
+///   2. Locate the `else` line inside that block — this is the boundary between
+///      the upload (exists) branch and the create (new release) branch.
+///   3. Split the block into `pre_else` (upload branch) and `post_else` (create
+///      branch).
+///   4. Assert `jr-*.zip` is present in EACH slice independently.
 ///
-/// Anchoring: assertion is scoped to the `release` job block.
+/// This prevents the over-permissive "≥2 anywhere" form from passing when both
+/// occurrences fall in the same branch (the exact data-loss class being guarded).
+///
+/// Anchoring: assertion is scoped to the `release` job block; branch slices are
+/// anchored to the `else` token.
 ///
 /// RED GATE: `jr-*.zip` is NOT present in the current `release` job (the old
 /// delete+create pattern does not include it). This test FAILS on the current
@@ -591,25 +600,74 @@ fn test_backfill_release_job_zip_in_both_upsert_branches() {
         )
     });
 
-    let zip_count = release_block.matches("jr-*.zip").count();
+    // Locate the `else` line that separates the upload branch (release exists)
+    // from the create branch (release does not exist yet).  We search for a
+    // line whose trimmed content is exactly `else` — robust to any indentation.
+    let else_byte_offset = release_block
+        .lines()
+        .scan(0usize, |pos, line| {
+            let start = *pos;
+            *pos += line.len() + 1; // +1 for the '\n' stripped by .lines()
+            Some((start, line))
+        })
+        .find(|(_start, line)| line.trim() == "else")
+        .map(|(start, _line)| start)
+        .unwrap_or_else(|| {
+            panic!(
+                "FAIL: The `release` job in `.github/workflows/backfill-release.yml` \
+                 does not contain a bare `else` line.\n\
+                 \n\
+                 The check-then-upsert block must have an `if/else/fi` structure:\n\
+                   if gh release view \"$TAG\" ...; then\n\
+                     <upload branch>\n\
+                   else\n\
+                     <create branch>\n\
+                   fi\n\
+                 \n\
+                 Without an `else`, the test cannot anchor `jr-*.zip` to distinct \
+                 branches.\n\
+                 \n\
+                 (S-FORK-OPS-BACKFILL-1 AC-002 / spec-delta DESTRUCTIVE §Replacement)"
+            )
+        });
+
+    let upload_branch = &release_block[..else_byte_offset];
+    let create_branch = &release_block[else_byte_offset..];
 
     assert!(
-        zip_count >= 2,
-        "FAIL (RED GATE): `jr-*.zip` appears fewer than 2 times in the `release` \
-         job block of `.github/workflows/backfill-release.yml` \
-         (found {} occurrence{}).\n\
+        upload_branch.contains("jr-*.zip"),
+        "FAIL (RED GATE): `jr-*.zip` is absent from the UPLOAD (exists) branch of \
+         the check-then-upsert block in the `release` job of \
+         `.github/workflows/backfill-release.yml`.\n\
          \n\
-         `jr-*.zip` MUST appear in BOTH branches of the check-then-upsert block:\n\
-           1. The upload branch (`gh release upload ... jr-*.tar.gz jr-*.zip jr-*.sha256`)\n\
-           2. The create branch (`gh release create ... jr-*.tar.gz jr-*.zip jr-*.sha256`)\n\
+         The upload branch runs when the release already exists and uploads/replaces \
+         assets via `gh release upload --clobber`. It must include `jr-*.zip` so \
+         that a re-run release ships the Windows binary.\n\
          \n\
-         Adding it to only one branch creates an asset-completeness bug: \
-         a first-run release would be missing the Windows binary, or a re-run \
-         release would be missing it on upsert (Invariant 3).\n\
+         Required form (exists-branch):\n\
+           gh release upload \"$TAG\" --repo \"...\" --clobber \\\n\
+             jr-*.tar.gz jr-*.zip jr-*.sha256\n\
          \n\
-         (S-FORK-OPS-BACKFILL-1 AC-002 / spec-delta DESTRUCTIVE Invariant 3)",
-        zip_count,
-        if zip_count == 1 { "" } else { "s" }
+         (S-FORK-OPS-BACKFILL-1 AC-002 / spec-delta DESTRUCTIVE Invariant 3 — \
+         upload branch anchor)"
+    );
+
+    assert!(
+        create_branch.contains("jr-*.zip"),
+        "FAIL (RED GATE): `jr-*.zip` is absent from the CREATE (new release) branch \
+         of the check-then-upsert block in the `release` job of \
+         `.github/workflows/backfill-release.yml`.\n\
+         \n\
+         The create branch runs when no release exists yet and creates one via \
+         `gh release create`. It must include `jr-*.zip` so that a first-run \
+         backfilled release ships the Windows binary.\n\
+         \n\
+         Required form (create-branch):\n\
+           gh release create \"$TAG\" --repo \"...\" --generate-notes \\\n\
+             jr-*.tar.gz jr-*.zip jr-*.sha256\n\
+         \n\
+         (S-FORK-OPS-BACKFILL-1 AC-002 / spec-delta DESTRUCTIVE Invariant 3 — \
+         create branch anchor)"
     );
 }
 
