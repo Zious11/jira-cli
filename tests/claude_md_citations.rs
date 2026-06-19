@@ -69,6 +69,10 @@
 //!   test_root_file_claude_md_extracted                  → AC-006, VP-CITE-001
 //!   test_root_file_build_rs_extracted                   → AC-006, VP-CITE-001
 //!   test_root_file_deny_toml_extracted                  → AC-006, VP-CITE-001
+//!   test_root_file_readme_md_extracted                  → AC-006, VP-CITE-001
+//!   test_root_file_changelog_md_extracted               → AC-006, VP-CITE-001
+//!   test_root_file_rust_toolchain_toml_extracted        → AC-006, VP-CITE-001
+//!   test_render_dead_citation_message_matches_ci_cite_001 → AC-002, BC-X.13.001 postcondition 2
 //!   test_shorthand_ci_yml_excluded                      → AC-006, VP-CITE-001 (EC-CITE-030)
 //!   test_shorthand_adf_rs_excluded                      → AC-006, VP-CITE-001 (EC-CITE-031)
 //!   test_shorthand_fields_json_excluded                 → AC-006, VP-CITE-001
@@ -87,6 +91,27 @@
 //!   proptests::test_extract_never_panics                → AC-008, VP-CITE-001
 
 use std::path::Path;
+
+// ---------------------------------------------------------------------------
+// Canonical CI-CITE-001 failure message renderer.
+// ---------------------------------------------------------------------------
+
+/// Render the canonical CI-CITE-001 failure block for a list of dead citations.
+///
+/// This is the EXACT wording required by BC-X.13.001 postcondition 2.
+/// It is used in BOTH the integration test's panic message AND the dedicated
+/// assertion test below — any drift between the two will fail CI.
+fn render_dead_citation_message(dead: &[(String, usize)]) -> String {
+    let paths = dead
+        .iter()
+        .map(|(p, n)| format!("{} (line {})", p, n))
+        .collect::<Vec<_>>()
+        .join("\n  ");
+    format!(
+        "CLAUDE.md cites file paths that do not exist on disk:\n  {}\nFix the citation or restore the file.\nNote: .factory/, glob, and symbol-form tokens are auto-excluded. Root-level files (Cargo.toml, CLAUDE.md, etc.) are checked.",
+        paths
+    )
+}
 
 // ---------------------------------------------------------------------------
 // Pure extraction function.
@@ -186,6 +211,7 @@ fn extract_path_citations(doc: &str) -> Vec<(String, usize)> {
         // Single backtick — find the span content
         if bytes[i] == b'`' {
             // Compute 1-based line number of the opening backtick
+            // O(i) newline scan per backtick span — fine at CLAUDE.md scale; switch to a running counter if it grows 10x.
             let line_number = normalized[..i].chars().filter(|&c| c == '\n').count() + 1;
 
             let span_start = i + 1;
@@ -325,6 +351,9 @@ fn apply_fixpoint(token: &str) -> String {
 
 /// Find the start position of a trailing `:~[0-9]+` or `:[0-9]+` suffix.
 /// Returns `Some(colon_pos)` if found, `None` otherwise.
+///
+/// The rule is: the trailing colon-run is entirely digits (with optional leading `~`),
+/// not a free regex — only the LAST `:` in the string is inspected.
 fn find_line_ref_suffix(s: &str) -> Option<usize> {
     // Look for the last `:` in the string.
     let colon_pos = s.rfind(':')?;
@@ -365,12 +394,11 @@ fn test_claude_md_citations_resolve_to_real_files() {
         .collect();
     assert!(
         dead.is_empty(),
-        // CANONICAL failure message — CI-CITE-001 (error-taxonomy §8) — VERBATIM:
-        "CLAUDE.md cites file paths that do not exist on disk:\n  {}\nFix the citation or restore the file.\nNote: .factory/, glob, and symbol-form tokens are auto-excluded. Root-level files (Cargo.toml, CLAUDE.md, etc.) are checked.",
-        dead.iter()
-            .map(|(p, n)| format!("{} (line {})", p, n))
-            .collect::<Vec<_>>()
-            .join("\n  ")
+        // CANONICAL failure message — CI-CITE-001 (error-taxonomy §8).
+        // render_dead_citation_message produces the exact wording; change wording
+        // there, not here, so the dedicated assertion test catches drift.
+        "{}",
+        render_dead_citation_message(&dead)
     );
 }
 
@@ -486,6 +514,27 @@ fn test_two_dead_citations_both_listed() {
         rendered.contains(&format!("(line {})", line1)),
         "Rendered message must contain real line number for second citation, got: {:?}",
         rendered
+    );
+}
+
+/// BC-X.13.001 postcondition 2: `render_dead_citation_message` produces the
+/// exact canonical CI-CITE-001 block byte-for-byte.
+///
+/// Feeds a 2-entry fixture and asserts the output equals the hardcoded expected
+/// string. This pins the load-bearing wording so any drift fails CI.
+///
+/// Traces to AC-002, BC-X.13.001 postcondition 2.
+#[test]
+fn test_render_dead_citation_message_matches_ci_cite_001() {
+    let dead = vec![
+        ("src/foo.rs".to_string(), 142usize),
+        ("tests/bar.rs".to_string(), 287usize),
+    ];
+    let got = render_dead_citation_message(&dead);
+    let expected = "CLAUDE.md cites file paths that do not exist on disk:\n  src/foo.rs (line 142)\n  tests/bar.rs (line 287)\nFix the citation or restore the file.\nNote: .factory/, glob, and symbol-form tokens are auto-excluded. Root-level files (Cargo.toml, CLAUDE.md, etc.) are checked.";
+    assert_eq!(
+        got, expected,
+        "render_dead_citation_message must produce the exact CI-CITE-001 canonical block"
     );
 }
 
@@ -957,6 +1006,48 @@ fn test_root_file_deny_toml_extracted() {
     );
 }
 
+/// ROOT_FILES inclusion: `README.md` exactly matches ROOT_FILES member;
+/// `.md` passes step (d) — IS extracted.
+/// Traces to AC-006, VP-CITE-001.
+#[test]
+fn test_root_file_readme_md_extracted() {
+    let doc = "See `README.md` for project overview.";
+    let result = extract_path_citations(doc);
+    assert!(
+        result.iter().any(|(p, _)| p == "README.md"),
+        "README.md must be extracted as ROOT_FILES member, got: {:?}",
+        result
+    );
+}
+
+/// ROOT_FILES inclusion: `CHANGELOG.md` exactly matches ROOT_FILES member;
+/// `.md` passes step (d) — IS extracted.
+/// Traces to AC-006, VP-CITE-001.
+#[test]
+fn test_root_file_changelog_md_extracted() {
+    let doc = "See `CHANGELOG.md` for release history.";
+    let result = extract_path_citations(doc);
+    assert!(
+        result.iter().any(|(p, _)| p == "CHANGELOG.md"),
+        "CHANGELOG.md must be extracted as ROOT_FILES member, got: {:?}",
+        result
+    );
+}
+
+/// ROOT_FILES inclusion: `rust-toolchain.toml` exactly matches ROOT_FILES member;
+/// `.toml` passes step (d) — IS extracted.
+/// Traces to AC-006, VP-CITE-001.
+#[test]
+fn test_root_file_rust_toolchain_toml_extracted() {
+    let doc = "See `rust-toolchain.toml` for the pinned toolchain.";
+    let result = extract_path_citations(doc);
+    assert!(
+        result.iter().any(|(p, _)| p == "rust-toolchain.toml"),
+        "rust-toolchain.toml must be extracted as ROOT_FILES member, got: {:?}",
+        result
+    );
+}
+
 /// ROOT_FILES exclusion: `ci.yml` is NOT in ROOT_FILES (shorthand for
 /// `.github/workflows/ci.yml`) → NOT extracted (EC-CITE-030).
 /// Traces to AC-006, VP-CITE-001.
@@ -1234,6 +1325,7 @@ mod proptests {
                     || path.starts_with("docs/")
                     || path.starts_with(".github/")
                     || path.starts_with("scripts/");
+                // MUST match ROOT_FILES const inside extract_path_citations (BC-X.13.002 step c) — update both together.
                 let root_files = [
                     "build.rs",
                     "Cargo.toml",
