@@ -274,6 +274,15 @@ When adding a new feature:
 - `JR_BULK_UNKNOWN_GRACE_SECS` overrides the unknown-bulk-task grace period (default 30s). Debug-only, single-site gate in `bulk.rs::resolve_unknown_status_grace` (not security-critical). Pinned by `tests/bulk_unknown_grace_release_gate.rs`. (#336)
 - `JR_BULK_AWAIT_TIMEOUT_SECS` overrides the bulk-poll wall-clock timeout (default 300s). Debug-only, single-site gate in `bulk.rs::resolve_bulk_await_timeout`. Pinned by `tests/bulk_await_timeout_release_gate.rs`. (#333)
 - `JR_E2E_ENABLED` — GitHub Actions **repository variable** (`vars.JR_E2E_ENABLED`). Gates the `e2e:` job at scheduling time. NOT a Rust env var; never read by `src/` code. Forks with this variable unset skip cleanly (empty string `!= 'true'`). The canonical repo sets `JR_E2E_ENABLED=true` as a repository variable in GitHub repo settings (not environment-scoped — environment-level variables are not available in `jobs.<id>.if:`). See `docs/specs/e2e-fork-safe-ci-enablement.md §2.3`.
+- **`GITLEAKS_DISABLED`** — GitHub Actions **repository variable**
+  (`vars.GITLEAKS_DISABLED`). Skips the gitleaks secret-scan job on
+  pull-request events when set to `'true'` (`ci.yml` `jobs.security.if:
+  github.event_name == 'pull_request' && vars.GITLEAKS_DISABLED != 'true'`).
+  Provided for forks that cannot obtain a gitleaks org/commercial license or
+  prefer an alternative secret scanner. NOT a Rust env var; never read by `src/`
+  code. Follows the `vars.JR_E2E_ENABLED` repo-variable-gate doc pattern
+  (`docs/specs/e2e-fork-safe-ci-enablement.md`). See
+  `docs/specs/fork-friendly-release-ops.md`.
 - `JR_CONFIG_DIR` env var overrides the config directory in debug builds (cross-platform test isolation seam; see BC-6.2.017). Debug builds only — release binaries ignore this env var. The override is read before the `#[cfg(windows)]` / `#[cfg(not(windows))]` OS split in `src/config.rs::global_config_dir()`, so it works identically on all platforms. Pinned by `tests/config_dir_release_gate.rs`.
 - `JR_CACHE_DIR` env var overrides the cache root directory in debug builds (cross-platform test isolation seam; see BC-6.2.017). Debug builds only — release binaries ignore this env var. Identical gate pattern to `JR_CONFIG_DIR`, applied in `src/cache.rs::cache_root()`. Pinned by `tests/config_dir_release_gate.rs`.
 - **Release-ops repo-variable gates** — `SIGNING_ENABLED`, `HOMEBREW_TAP_REPO`, `RELEASE_GAP_FILL_ENABLED`, `SYNC_UPSTREAM_REPO` (all GitHub Actions repository variables, never read by `src/` code) gate the opt-in signing/backfill/gap-fill/fork-sync workflows. All unset in the canonical repo → those workflows are no-ops; downstream forks opt in. Same fail-safe pattern as `JR_E2E_ENABLED`. See `docs/specs/fork-friendly-release-ops.md`.
