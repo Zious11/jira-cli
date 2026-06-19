@@ -40,7 +40,8 @@ src/
 │   │   ├── refresh.rs       # auth refresh
 │   │   ├── remove.rs        # auth remove
 │   │   ├── status.rs        # auth status (human text only; no JSON path)
-│   │   └── switch.rs        # auth switch
+│   │   ├── switch.rs        # auth switch
+│   │   └── tests/           # inline integration tests + insta snapshots
 │   ├── api.rs           # API passthrough command (`jr api`)
 │   ├── board.rs         # board list/view
 │   ├── sprint.rs        # sprint list/current/add/remove (scrum-only, errors on kanban)
@@ -82,13 +83,22 @@ src/
 │       ├── queues.rs        # list queues, get queue issues
 │       ├── request_types.rs # JSM request-type discovery
 │       └── requests.rs      # JSM request creation (`handle_jsm_create` path)
-├── types/assets/        # Serde structs for Assets API responses (AssetObject, ConnectedTicket, LinkedAsset, etc.)
+├── types/assets/        # Serde structs for Assets API responses
+│   ├── mod.rs           # re-exports
+│   ├── linked.rs        # LinkedAsset + CMDB field types
+│   ├── object.rs        # AssetObject, attribute value structs
+│   ├── schema.rs        # schema/object-type discovery types
+│   └── ticket.rs        # ConnectedTicket
 ├── types/jira/          # Serde structs for Jira API responses
 │   ├── issue.rs, board.rs, sprint.rs, user.rs, team.rs, project.rs, worklog.rs  # core types
 │   ├── bulk.rs          # serde structs for bulk operations
 │   ├── changelog.rs     # serde structs for changelog API
 │   └── editmeta.rs      # serde structs for editmeta
-├── types/jsm/           # Serde structs for JSM API responses (ServiceDesk, Queue, RequestType, etc.)
+├── types/jsm/           # Serde structs for JSM API responses
+│   ├── mod.rs           # re-exports
+│   ├── servicedesk.rs   # ServiceDesk, project meta types
+│   ├── queue.rs         # Queue, queue issue list types
+│   └── request_type.rs  # RequestType, request type fields types
 ├── cache.rs             # Per-profile XDG cache (~/.cache/jr/v1/<profile>/) — team list, project meta, workspace ID, CMDB fields, object-type attrs, resolutions (all 7-day TTL). Versioned root (`v1/`) lets a future schema bump orphan stale files cleanly.
 ├── config.rs            # Global (~/.config/jr/config.toml) [profiles.<name>] + default_profile + per-project (.jr.toml), figment layering. Auto-migrates legacy [instance]/[fields] shape on first load. Active profile resolved at load via Config::load_with(cli_profile) (cli flag threaded through as a parameter, NOT an env-var seam) > JR_PROFILE env > default_profile field > "default".
 ├── output.rs            # Table (comfy-table) and JSON formatting
@@ -164,6 +174,7 @@ See `docs/adr/` for detailed rationale:
 - ADR-0004: Per-feature specs, not a growing master spec
 - ADR-0005: GraphQL hostNames for org discovery (team support)
 - ADR-0006: Embedded `jr` OAuth app with compile-time XOR obfuscation (re-supersedes ADR-0002)
+- ADR-0014: JSM request-type dispatch fork in `jr issue create` (`--request-type` routes to `/rest/servicedeskapi/request`)
 - ADR-0015: Proactive resolution enforcement on done-category transitions (`jr issue move` requires `--resolution` or `--no-resolution`)
 - ADR-0016: Windows build target (x86_64-pc-windows-msvc, AppData config/cache paths, Windows Credential Manager keyring, .zip packaging, CI)
 
@@ -228,7 +239,7 @@ When adding a new feature:
 - **`refresh_coordinator.rs` mutex layering:** outer `std::sync::Mutex<HashMap>` held only briefly for lookup/insert, released BEFORE any `.await`. Inner `tokio::sync::Mutex<RefreshState>` held across the refresh `.await` — MUST be `tokio::sync::Mutex` (no poison-on-panic; a panicked refresh must not permanently break the coordinator). Detail: S-3.03 v2 spec.
 - **Bulk transitions are not idempotent.** Single-key `move` exits 0 if already in target status; multi-key `move` (positional or `--to`) transitions every key unconditionally → expect per-key 400s on workflows that reject same-status moves. Pre-filter with `jr issue list --jql "… AND status != \"<target>\""`. Note: `--jql` selection is on `edit` only, not `move`.
   - **Bulk transition wire schema is NESTED, not flat (FIX-BULK-TRANSITION-001):** `POST /rest/api/3/bulk/issues/transition` requires `{"bulkTransitionInputs":[{"selectedIssueIdsOrKeys":[…],"transitionId":"…"}],"sendBulkNotification":false}`. The flat top-level shape (`selectedIssueIdsOrKeys` + `transitionId` at root) documented in the Atlassian OpenAPI JSON is wrong — live Jira rejects it with 400 "bulkTransitionInputs must not be empty". Same asymmetry class as `labelsFields`/`"labels"` and `issueType`/`"issuetype"`. Confirmed: Atlassian community 2026-02-19 + live run 27156639337.
-- **`/rest/api/3/search/jql` repeated-`nextPageToken` = JRACLOUD-95368** (live-data drift between page fetches), NOT -94632/-92049/-85546 — those three are misattributed (verified, issue #361/PR #364). `search_issues` / `search_issue_keys` in `src/api/jira/issues.rs` carry an anti-loop guard (sets `has_more=true` on abort) plus an incremental `seen_keys: HashSet` that dedupes all exit paths in first-occurrence order. Two load-bearing string rules: (1) the stderr ORDER BY hint must read "append `, key ASC` to an existing sort, or use `ORDER BY key ASC` if none" — never a bare "add `ORDER BY key ASC`" (JQL allows one ORDER BY → HTTP 400 if user already sorts); (2) the literal `"JRACLOUD-95368"` is pinned by `tests/rate_limit_cap_tests.rs` and `tests/search_issue_keys.rs::test_..._emits_jracloud_95368_literal` — update together. Detail: `.factory/research/issue-361-jra95368-scope.md`, `-jql-orderby.md`.
+- **`/rest/api/3/search/jql` repeated-`nextPageToken` = JRACLOUD-95368** (live-data drift between page fetches), NOT -94632/-92049/-85546 — those three are misattributed (verified, issue #361/PR #364). `search_issues` / `search_issue_keys` in `src/api/jira/issues.rs` carry an anti-loop guard (sets `has_more=true` on abort) plus an incremental `seen_keys: HashSet` that dedupes all exit paths in first-occurrence order. Two load-bearing string rules: (1) the stderr ORDER BY hint must read "append `, key ASC` to an existing sort, or use `ORDER BY key ASC` if none" — never a bare "add `ORDER BY key ASC`" (JQL allows one ORDER BY → HTTP 400 if user already sorts); (2) the literal `"JRACLOUD-95368"` is pinned by `tests/rate_limit_cap_tests.rs` and `tests/search_issue_keys.rs::test_..._emits_jracloud_95368_literal` — update together.
 - **`issue edit` description echo asymmetry (issue #398):** Table/human output echoes
   `description → (updated)` — a marker, never the content. JSON `changed_fields.description`
   carries the **raw user-supplied input string** from `--description` / `--description-stdin`,
@@ -287,7 +298,7 @@ When adding a new feature:
 - `JR_CACHE_DIR` env var overrides the cache root directory in debug builds (cross-platform test isolation seam; see BC-6.2.017). Debug builds only — release binaries ignore this env var. Identical gate pattern to `JR_CONFIG_DIR`, applied in `src/cache.rs::cache_root()`. Pinned by `tests/config_dir_release_gate.rs`.
 - **Release-ops repo-variable gates** — `SIGNING_ENABLED`, `HOMEBREW_TAP_REPO`, `RELEASE_GAP_FILL_ENABLED`, `SYNC_UPSTREAM_REPO` (all GitHub Actions repository variables, never read by `src/` code) gate the opt-in signing/backfill/gap-fill/fork-sync workflows. All unset in the canonical repo → those workflows are no-ops; downstream forks opt in. Same fail-safe pattern as `JR_E2E_ENABLED`. See `docs/specs/fork-friendly-release-ops.md`.
 - **When adding a new `JR_*` test-seam env var:** grep `CLAUDE.md` for existing `JR_*` entries and add a parallel line in the SAME commit as the code change. This is the codified doc-fallout pattern from #335/#357; first applied retroactively when `JR_BULK_UNKNOWN_GRACE_SECS` and `JR_BULK_AWAIT_TIMEOUT_SECS` shipped without documentation.
-- **Citation discipline for external-tracker IDs in user-facing strings:** before citing a JRACLOUD-*/GitHub/community ID in anything a user sees (stderr, errors, JSON, hints) or in literal rustdoc, Perplexity-validate the source actually documents the symptom — issue #361 had three misattributed JRACLOUD tickets survive multiple PRs. Also ensure the string is valid in the user's env (e.g. JQL allows one ORDER BY) and keep paraphrasing rustdoc in lockstep. Detail: `.factory/research/issue-361-validation.md`, `-followup.md`.
+- **Citation discipline for external-tracker IDs in user-facing strings:** before citing a JRACLOUD-*/GitHub/community ID in anything a user sees (stderr, errors, JSON, hints) or in literal rustdoc, Perplexity-validate the source actually documents the symptom — issue #361 had three misattributed JRACLOUD tickets survive multiple PRs. Also ensure the string is valid in the user's env (e.g. JQL allows one ORDER BY) and keep paraphrasing rustdoc in lockstep.
 - **Citation form in spec/CLAUDE.md:** prefer symbol-form (`<file>::<fn>` or `… § "<comment>"`) over line numbers, which drift on refactor. Fall back to `<file>:~NN` (`~` = approximate); never a bare `<file>:NN-MM` for new citations. (#408)
 - `JR_PROFILE` env var overrides the active profile per-call (combine with direnv to scope a repo to a sandbox site)
 - `--profile NAME` flag overrides `JR_PROFILE` for one invocation; precedence is flag > env > config > "default"
