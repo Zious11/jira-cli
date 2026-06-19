@@ -50,8 +50,7 @@ use std::path::Path;
 /// platform-independent — identical to the precedent in
 /// `tests/ci_yml_windows_matrix.rs` and `tests/release_yml_windows_matrix.rs`.
 fn read_backfill_yml() -> String {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join(".github/workflows/backfill-release.yml");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows/backfill-release.yml");
     let raw = fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("Could not read {}: {e}", path.display()));
     raw.replace("\r\n", "\n")
@@ -61,8 +60,7 @@ fn read_backfill_yml() -> String {
 ///
 /// Same CRLF normalization as `read_backfill_yml`.
 fn read_release_yml() -> String {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join(".github/workflows/release.yml");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows/release.yml");
     let raw = fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("Could not read {}: {e}", path.display()));
     raw.replace("\r\n", "\n")
@@ -237,8 +235,7 @@ fn test_backfill_matrix_parity_matches_release_yml() {
 
     // Assert release.yml has exactly the five expected targets (regression guard).
     assert_eq!(
-        release_targets,
-        expected_targets,
+        release_targets, expected_targets,
         "FAIL: `.github/workflows/release.yml` does not have exactly the five \
          expected targets.\n\
          Expected (sorted): {expected_targets:?}\n\
@@ -454,9 +451,9 @@ fn test_backfill_release_job_has_no_or_true_silencer() {
     // The `|| true` silencer must not appear on any `gh` command line.
     // We check for its presence on any line that also has `gh release` to avoid
     // a false positive from `|| true` appearing in an unrelated context.
-    let has_silenced_gh_command = release_block.lines().any(|line| {
-        line.contains("gh release") && line.contains("|| true")
-    });
+    let has_silenced_gh_command = release_block
+        .lines()
+        .any(|line| line.contains("gh release") && line.contains("|| true"));
 
     assert!(
         !has_silenced_gh_command,
