@@ -222,7 +222,10 @@ pub async fn enrich_assets(client: &JiraClient, assets: &mut [LinkedAsset]) {
                 .clone()
                 .or_else(|| fallback_workspace_id.clone())
                 .expect("workspace_id must be available (checked above)");
-            let oid = assets[idx].id.clone().unwrap();
+            let oid = assets[idx]
+                .id
+                .clone()
+                .expect("id present — needs_enrichment filter guarantees id.is_some()");
             async move {
                 let result = client.get_asset(&wid, &oid, false).await;
                 (idx, result)
