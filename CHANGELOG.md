@@ -17,6 +17,7 @@ All notable changes to jr will be documented here.
 - Dependency bumps:
   - `codecov/codecov-action` 6.0.1 → 7.0.0 (#519)
   - `insta` 1.47.2 → 1.48.0 (#541)
+  - `quinn-proto` 0.11.14 → 0.11.15 (RUSTSEC-2026-0185, non-reachable from jr — http3 feature off)
 
 ## [0.6.0-dev.6] - 2026-06-19
 
