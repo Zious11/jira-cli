@@ -119,9 +119,16 @@ pub fn validate_profile_name(name: &str) -> Result<(), JrError> {
     ];
 
     // BC-6.1.004 (AC-006): length check first so the error is unambiguous when
-    // both conditions fail. Empty names are treated as a length violation.
-    if name.is_empty() || name.len() > 64 {
-        return Err(JrError::ConfigError(
+    // both conditions fail. UserError (exit 64) because the name comes from
+    // user-supplied input (--profile flag, JR_PROFILE env, default_profile
+    // field) — not from a malformed config file.
+    if name.is_empty() {
+        return Err(JrError::UserError(
+            "Profile name must not be empty".to_string(),
+        ));
+    }
+    if name.len() > 64 {
+        return Err(JrError::UserError(
             "Profile name too long (max 64 characters)".to_string(),
         ));
     }
@@ -130,7 +137,7 @@ pub fn validate_profile_name(name: &str) -> Result<(), JrError> {
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
     {
-        return Err(JrError::ConfigError(
+        return Err(JrError::UserError(
             "Profile name contains invalid characters (use a-z, 0-9, -, _)".to_string(),
         ));
     }

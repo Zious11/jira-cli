@@ -10,6 +10,8 @@ All notable changes to jr will be documented here.
 
 ### Fixed
 
+- **Invalid profile name via `--profile` or `JR_PROFILE` now exits 64 instead of 78 (H-019):** Supplying an invalid profile name (bad charset, empty, or too long) via the `--profile` flag or `JR_PROFILE` environment variable now exits 64 (EX_USAGE — user input error) instead of 78 (EX_CONFIG — config file error). This matches the exit code produced by the unknown-profile check on the same code path. The config-file boundary (`[profiles."foo:bar"]` in `config.toml`) already exited 64 and is unchanged.
+
 - **`verify-signatures` CI step now exercises correctly in signing-configured forks:** The step was a no-op on forks that set `SIGNING_ENABLED=true` because it did not propagate the expected environment. Fixed so signature verification runs as intended when the opt-in workflow is active. No behavior change in the canonical repo (signing disabled).
 
 ### Changed
