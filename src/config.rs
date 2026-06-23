@@ -296,6 +296,7 @@ impl Config {
         // is also covered) and before resolving `active_profile_name` (so a
         // fresh first-run with empty profiles isn't gated).
         for name in global.profiles.keys() {
+            // map_err supplies a file-locating message; keep even though validate_profile_name now returns UserError.
             validate_profile_name(name).map_err(|_| {
                 JrError::UserError(format!(
                     "invalid profile name {name:?} in config.toml; allowed: \
@@ -1235,7 +1236,7 @@ mod tests {
         let err = result.expect_err("JR_PROFILE with invalid char should reject");
         let je = err.downcast_ref::<JrError>().expect("should be JrError");
         // H-019: JR_PROFILE is user-supplied input → must be UserError (exit 64),
-        // not ConfigError (exit 78). RED GATE: currently returns ConfigError/78.
+        // not ConfigError (exit 78). Previously exited 78 (ConfigError); fixed by H-019.
         assert!(
             matches!(je, JrError::UserError(_)),
             "H-019: JR_PROFILE invalid charset must produce UserError, got {je:?}"
@@ -1265,9 +1266,9 @@ mod tests {
     /// charset character; the input comes from the `--profile` flag, not a
     /// config file.
     ///
-    /// RED GATE: currently exits 78 (ConfigError) because `validate_profile_name`
-    /// returns `JrError::ConfigError` for charset violations and `load_inner`
-    /// propagates it raw via `?`.
+    /// Previously exited 78 (ConfigError) because `validate_profile_name`
+    /// returned `JrError::ConfigError` for charset violations and `load_inner`
+    /// propagated it raw via `?`. Fixed by H-019.
     #[test]
     fn test_load_with_invalid_charset_profile_flag_returns_user_error() {
         let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
@@ -1306,8 +1307,8 @@ mod tests {
     /// `Err` with `JrError::UserError` (exit 64). An empty profile name
     /// supplied via `--profile ""` is a user error.
     ///
-    /// RED GATE: currently exits 78 (ConfigError) because `validate_profile_name`
-    /// returns `JrError::ConfigError` for the empty-name branch.
+    /// Previously exited 78 (ConfigError) because `validate_profile_name`
+    /// returned `JrError::ConfigError` for the empty-name branch. Fixed by H-019.
     #[test]
     fn test_load_with_empty_profile_flag_returns_user_error() {
         let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
@@ -1343,8 +1344,8 @@ mod tests {
     /// return `Err` with `JrError::UserError` (exit 64). A 65-char profile
     /// name supplied via `--profile` is a user error (too long).
     ///
-    /// RED GATE: currently exits 78 (ConfigError) because `validate_profile_name`
-    /// returns `JrError::ConfigError` for the too-long branch.
+    /// Previously exited 78 (ConfigError) because `validate_profile_name`
+    /// returned `JrError::ConfigError` for the too-long branch. Fixed by H-019.
     #[test]
     fn test_load_with_overlength_profile_flag_returns_user_error() {
         let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
@@ -1381,9 +1382,9 @@ mod tests {
     /// `Err` with `JrError::UserError` (exit 64). An empty profile name
     /// from the env var is a user error.
     ///
-    /// RED GATE: currently exits 78 (ConfigError) because `validate_profile_name`
-    /// returns `JrError::ConfigError` for the empty-name branch, propagated
-    /// raw by `load_inner`.
+    /// Previously exited 78 (ConfigError) because `validate_profile_name`
+    /// returned `JrError::ConfigError` for the empty-name branch, propagated
+    /// raw by `load_inner`. Fixed by H-019.
     #[test]
     fn test_load_jr_profile_env_empty_returns_user_error() {
         let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
@@ -1417,6 +1418,48 @@ mod tests {
             64,
             "H-019: exit code must be 64 (EX_USAGE), got {}",
             je.exit_code()
+        );
+    }
+
+    /// H-019 (BC-6.1.004): `Config::load_with(Some("valid-name"))` returns `Ok` when the
+    /// config has a `[profiles.valid-name]` entry. Guards the `load_with(cli_flag)` wiring
+    /// and kills the "charset check → unconditional reject" mutant.
+    #[test]
+    fn test_load_with_valid_profile_flag_returns_ok() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = TempDir::new().unwrap();
+        let cfg_dir = dir.path().join("jr");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::write(
+            cfg_dir.join("config.toml"),
+            r#"
+                default_profile = "valid-name"
+                [profiles.valid-name]
+                url = "https://example.atlassian.net"
+                auth_method = "api_token"
+            "#,
+        )
+        .unwrap();
+
+        // SAFETY: ENV_MUTEX held.
+        //
+        // JR_CONFIG_DIR is the cross-platform debug seam (BC-6.2.017).
+        // Clear JR_PROFILE so only the cli_flag path is exercised.
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", dir.path());
+            std::env::set_var("JR_CONFIG_DIR", dir.path().join("jr"));
+            std::env::remove_var("JR_PROFILE");
+        }
+        let result = Config::load_with(Some("valid-name"));
+        unsafe {
+            std::env::remove_var("XDG_CONFIG_HOME");
+            std::env::remove_var("JR_CONFIG_DIR");
+        }
+
+        let cfg = result.expect("load_with(valid-name) must return Ok for a known, valid profile");
+        assert_eq!(
+            cfg.active_profile_name, "valid-name",
+            "active_profile_name must match the cli_flag value"
         );
     }
 
