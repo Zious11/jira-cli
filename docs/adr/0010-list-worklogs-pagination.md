@@ -21,36 +21,39 @@ pub async fn list_worklogs(&self, issue_key: &str) -> Result<Vec<Worklog>> {
 }
 ```
 
-**Correct pattern already in the codebase (`list_comments`):**
+**Correct pattern (offset-pagination loop):**
 
 ```rust
-pub async fn list_comments(&self, issue_key: &str) -> Result<Vec<Comment>> {
-    paginate_offset(|start| async move {
-        self.get(&format!("issue/{}/comment?startAt={}", issue_key, start)).await
-    }).await
+pub async fn list_worklogs(&self, key: &str) -> Result<Vec<Worklog>> {
+    let base_path = format!("/rest/api/3/issue/{}/worklog", key);
+    let mut all_items: Vec<Worklog> = Vec::new();
+    let mut start_at: u32 = 0;
+    loop {
+        let path = format!("{}?startAt={}", base_path, start_at);
+        let page: OffsetPage<Worklog> = self.get(&path).await?;
+        let has_more = page.has_more();
+        let next = page.next_start();
+        all_items.extend_from_slice(page.items());
+        if !has_more {
+            break;
+        }
+        start_at = next;
+    }
+    Ok(all_items)
 }
 ```
-
-Both worklogs and comments are on the same issue and use `OffsetPage<T>`. The comment
-endpoint was correctly paginated; the worklog endpoint was not.
 
 ## Decision
 
-Refactor `list_worklogs` to use the `paginate_offset` helper, identical in structure to
-`list_comments`:
-
-```rust
-pub async fn list_worklogs(&self, issue_key: &str) -> Result<Vec<Worklog>> {
-    paginate_offset(|start| async move {
-        self.get(&format!("issue/{}/worklog?startAt={}", issue_key, start)).await
-    }).await
-}
-```
+Refactor `list_worklogs` to use an inline `loop { … has_more() … next_start() … }` over
+`OffsetPage<Worklog>`, collecting all pages before returning. This is the established
+offset-pagination pattern in `src/api/jira/` — the same approach used by other
+paginated endpoints in the codebase.
 
 ## Rationale
 
-- `paginate_offset` is the established pattern in `src/api/jira/` for offset-paginated
-  endpoints. Using it here is consistent with the rest of the codebase.
+- The offset-pagination loop is the codebase's established pattern for
+  `OffsetPage<T>`-returning endpoints. Using it here is consistent.
 - There is no valid reason to want only the first page of worklogs. The previous behavior
   was a bug, not a deliberate design choice.
 - Silent data truncation is a HIGH-severity reliability issue — users building reports
@@ -58,7 +61,7 @@ pub async fn list_worklogs(&self, issue_key: &str) -> Result<Vec<Worklog>> {
 
 ## Consequences
 
-- **Fix scope:** ~10 LOC in `src/api/jira/worklogs.rs::list_worklogs`.
+- **Fix scope:** ~15 LOC in `src/api/jira/worklogs.rs::list_worklogs`.
 - **Regression risk:** LOW. The behavior change is: users now see all worklogs, not just
   the first page. Tests that assert a specific worklog count must account for pagination.
 - **Test requirement:** Add a 2-page worklog integration test. Set up a mock that returns
@@ -71,5 +74,4 @@ pub async fn list_worklogs(&self, issue_key: &str) -> Result<Vec<Worklog>> {
 ## See Also
 
 - `src/api/jira/worklogs.rs::list_worklogs` — the paginated implementation
-- `src/api/jira/issues.rs::list_comments` — the correct pagination pattern to mirror
-- `src/api/pagination.rs::paginate_offset` — the shared offset-pagination helper
+- `src/api/pagination.rs` — `OffsetPage<T>` type providing `has_more()` / `next_start()`

@@ -27,10 +27,12 @@ views.
 
 **Two options were considered:**
 
-**Option A (chosen):** Add a `Config::field_id(FieldKind, profile)` accessor that reads
-from `active_profile()` exclusively — NO fallback to `global.fields` (fallback rejected;
-see Rationale). Route all 14 hot-path read sites through it; raise `ConfigError` if the
-profile lacks the field IDs.
+**Option A (chosen):** Route all 14 hot-path read sites through
+`config.active_profile()` field reads — NO fallback to `global.fields` (fallback
+rejected; see Rationale). `Config::active_profile()` returns the `ProfileConfig` for
+the currently active profile; call sites read `.story_points_field_id` /
+`.team_field_id` from it directly. Surface a `ConfigError` (exit 78) if the profile
+lacks the field IDs.
 
 **Option B (rejected):** Keep the current behavior, document it as a known limitation,
 and defer until v2. A profile-aware workaround would require users to run `jr init` once
@@ -38,18 +40,19 @@ per profile switch.
 
 ## Decision
 
-Use **Option A**: add a single `Config::field_id(FieldKind, profile)` accessor and
-update all 14 call sites to use `config.field_id(FieldKind::StoryPoints, &config.active_profile_name)`
-and `config.field_id(FieldKind::Team, &config.active_profile_name)` instead of
-`config.global.fields.*`.
+Use **Option A**: update all 14 call sites to read field IDs via
+`config.active_profile().story_points_field_id` / `config.active_profile().team_field_id`
+instead of `config.global.fields.*`. No new dedicated accessor is added —
+`Config::active_profile()` (the existing per-profile getter in `src/config.rs`) is the
+read path.
 
 ## Rationale
 
 - The per-profile `ProfileConfig` fields already exist and are correctly populated by
   `jr init`. The bug is exclusively on the read side — 14 sites that bypass the
   per-profile path.
-- A single accessor centralizes the read logic with no fallback in one place. Future
-  additions are automatically correct.
+- Routing through `active_profile()` centralizes the read logic with no fallback in one
+  place. Future additions are automatically correct.
 - The fallback to `global.fields.*` was explicitly rejected: `Config::save_global()`
   drops the `[fields]` block from disk via `#[serde(default, skip_serializing)]`. The
   fallback target does not exist post-save, making fallback a silent no-op at best and
@@ -61,20 +64,21 @@ and `config.field_id(FieldKind::Team, &config.active_profile_name)` instead of
 ## Consequences
 
 - **Fix scope:** ~30–40 lines changed across 6+ files. All changes are read-site
-  replacements of `config.global.fields.*` with `config.field_id(FieldKind::*, ...)`.
+  replacements of `config.global.fields.*` with
+  `config.active_profile().story_points_field_id` /
+  `config.active_profile().team_field_id`.
 - **Regression risk:** LOW. The existing behavior is incorrect for multi-profile users.
   The integration test added to `tests/auth_profiles.rs` must verify per-profile field
   isolation explicitly.
-- **Migration compatibility:** `Config::field_id()` reads
-  `active_profile().story_points_field_id` / `active_profile().team_field_id` directly.
-  There is NO fallback to `global.fields.*`. If `[profiles.<name>]` lacks the field IDs
-  AND `[fields]` is also absent (post-save state), `Config::field_id()` returns `None`
-  and the caller surfaces: `"Custom field IDs not configured for profile '<name>'. Run
-  'jr init' to configure."` (exit 78, `ConfigError`).
+- **Migration compatibility:** `Config::active_profile()` reads the active
+  `ProfileConfig` directly. There is NO fallback to `global.fields.*`. If
+  `[profiles.<name>]` lacks the field IDs AND `[fields]` is also absent (post-save
+  state), the caller surfaces: `"Custom field IDs not configured for profile '<name>'.
+  Run 'jr init' to configure."` (exit 78, `ConfigError`).
 - **BC anchor:** BC-6.3.001.
 
 ## See Also
 
 - ADR-0006 — Embedded OAuth app (multi-profile context; profiles introduced alongside)
-- `src/config.rs::Config::field_id` — canonical accessor added by this decision
+- `src/config.rs::Config::active_profile` — the per-profile getter used at all read sites
 - `tests/auth_profiles.rs` — per-profile field isolation integration tests
