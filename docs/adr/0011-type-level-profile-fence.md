@@ -67,6 +67,7 @@ This decision should be revisited in v0.6.0 or later if any of the following occ
   3. Update `Config.active_profile_name: String` → `Profile`
   4. Update `JiraClient.profile_name: String` → `Profile`
   5. Fix all call sites (estimated ~50–70 changes)
+- The open scalability NFR (soft-fence per-profile cache isolation) remains tracked in the factory NFR catalog.
 
 ## See Also
 
