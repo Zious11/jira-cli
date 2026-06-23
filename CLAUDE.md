@@ -181,6 +181,13 @@ See `docs/adr/` for detailed rationale:
 - ADR-0004: Per-feature specs, not a growing master spec
 - ADR-0005: GraphQL hostNames for org discovery (team support)
 - ADR-0006: Embedded `jr` OAuth app with compile-time XOR obfuscation (re-supersedes ADR-0002)
+- ADR-0007: Multi-profile fields bug — per-profile field IDs must be read from ProfileConfig, not global config
+- ADR-0008: Asset enrichment key correctness — HashMap key must be (workspace_id, object_id), not object_id alone
+- ADR-0009: handle_open uses instance_url(), not base_url() — base_url() is API-only; browser URLs must use instance_url()
+- ADR-0010: list_worklogs pagination loop — single-page fetch silently truncates; must use offset pagination
+- ADR-0011: Type-level Profile fence deferred — convention-based soft fence is sufficient for current team size (v0.5.x)
+- ADR-0012: Module shard rule — src/cli/ files at ≥1,000 LOC are shard candidates; exceptions: adf.rs, api/auth.rs
+- ADR-0013: PKCE deferral — Atlassian 3LO does not support public-client PKCE as of 2026-05; reactivation trigger defined
 - ADR-0014: JSM request-type dispatch fork in `jr issue create` (`--request-type` routes to `/rest/servicedeskapi/request`)
 - ADR-0015: Proactive resolution enforcement on done-category transitions (`jr issue move` requires `--resolution` or `--no-resolution`)
 - ADR-0016: Windows build target (x86_64-pc-windows-msvc, AppData config/cache paths, Windows Credential Manager keyring, .zip packaging, CI)
