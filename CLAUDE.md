@@ -53,6 +53,7 @@ src/
 │   ├── queue.rs         # queue list/view (JSM service desks)
 │   └── requesttype.rs   # requesttype list/fields (JSM request-type discovery + 7d cache)
 ├── api/
+│   ├── mod.rs                 # module re-exports for api/
 │   ├── client.rs              # JiraClient — HTTP methods, auth headers, rate limit retry, 429/401 handling
 │   ├── auth.rs                # OAuth 2.0 flow + per-profile keychain layout (shared email/api-token/oauth_client_*; namespaced <profile>:oauth-access-token / <profile>:oauth-refresh-token); lazy migration of legacy flat OAuth keys for the "default" profile
 │   ├── auth_embedded.rs       # thin sibling to auth.rs; XOR-obfuscated embedded OAuth app credentials
@@ -60,12 +61,14 @@ src/
 │   ├── rate_limit.rs          # Retry-After parsing
 │   ├── refresh_coordinator.rs # per-profile single-flight OAuth refresh coordinator (prevents concurrent invalid_grant races)
 │   ├── assets/          # Assets/CMDB API call implementations
+│   │   ├── mod.rs           # module re-exports for api/assets/
 │   │   ├── workspace.rs     # workspace ID discovery + cache
 │   │   ├── linked.rs        # CMDB field discovery, asset extraction/enrichment (per-field + JSON)
 │   │   ├── objects.rs       # AQL search, get object, resolve key
 │   │   ├── schemas.rs       # schema discovery + object-type attributes (~44 LOC)
 │   │   └── tickets.rs       # connected tickets
 │   ├── jira/            # Jira-specific API call implementations (one file per resource)
+│   │   ├── mod.rs       # module re-exports for api/jira/
 │   │   ├── issues.rs    # search (full + keys-only), get, create, edit, list comments
 │   │   ├── bulk.rs      # bulk issue operations (transition, field edit, label edit)
 │   │   ├── boards.rs    # list boards, get board config
@@ -79,10 +82,13 @@ src/
 │   │   ├── projects.rs  # project details
 │   │   └── users.rs     # current user, user search, assignable users, single-user lookup
 │   └── jsm/             # JSM-specific API call implementations
+│       ├── mod.rs           # module re-exports for api/jsm/
 │       ├── servicedesks.rs  # list service desks, project meta orchestration
 │       ├── queues.rs        # list queues, get queue issues
 │       ├── request_types.rs # JSM request-type discovery
 │       └── requests.rs      # JSM request creation (`handle_jsm_create` path)
+├── types/
+│   └── mod.rs           # module re-exports (assets, jira, jsm sub-modules)
 ├── types/assets/        # Serde structs for Assets API responses
 │   ├── mod.rs           # re-exports
 │   ├── linked.rs        # LinkedAsset + CMDB field types
@@ -90,6 +96,7 @@ src/
 │   ├── schema.rs        # schema/object-type discovery types
 │   └── ticket.rs        # ConnectedTicket
 ├── types/jira/          # Serde structs for Jira API responses
+│   ├── mod.rs           # re-exports
 │   ├── issue.rs, board.rs, sprint.rs, user.rs, team.rs, project.rs, worklog.rs  # core types
 │   ├── bulk.rs          # serde structs for bulk operations
 │   ├── changelog.rs     # serde structs for changelog API

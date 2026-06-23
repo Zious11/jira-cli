@@ -32,7 +32,7 @@ curl -fsSL https://raw.githubusercontent.com/Zious11/jira-cli/main/install.sh | 
 To install a specific version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Zious11/jira-cli/main/install.sh | sh -s -- v0.3.0
+curl -fsSL https://raw.githubusercontent.com/Zious11/jira-cli/main/install.sh | sh -s -- v0.5.0
 ```
 
 ### From source
