@@ -55,58 +55,8 @@ fn read_ci_yml() -> String {
     raw.replace("\r\n", "\n")
 }
 
-/// Extract the content of a named job block from ci.yml.
-///
-/// A job block starts at `  <name>:` (two-space indent) and ends at the next
-/// top-level job header or end-of-file. Returns `None` when the job name is
-/// not found. The returned slice begins at the job-key line and ends just
-/// before the next job-key line (or EOF).
-///
-/// Anchoring rationale: assertions made against the returned slice are
-/// guaranteed to target the correct job, even if the same substring appears
-/// in a different job, a comment, or a multi-line shell step.
-fn extract_job_block<'a>(ci_yml: &'a str, job_name: &str) -> Option<&'a str> {
-    // Job headers in GitHub Actions YAML are at two-space indent: "  <id>:\n"
-    let needle = format!("  {job_name}:\n");
-    let start = ci_yml.find(&needle)?;
-
-    // The end of this job block is the next line at the same indent level
-    // (i.e., the next "  <something>:\n" after our start).
-    let rest = &ci_yml[start + needle.len()..];
-    let end_offset = rest
-        .find("\n  ")
-        // Scan forward to find the line that starts the next job (a line
-        // beginning with exactly two spaces followed by a non-space char and
-        // ending in `:` is a YAML mapping key at the job level).
-        .and_then(|pos| {
-            // `pos` points to the `\n` before the `  ` prefix. Walk forward
-            // to collect candidate lines.
-            let mut search_start = pos + 1; // skip the `\n`
-            loop {
-                let candidate = &rest[search_start..];
-                // A new job key: two spaces, non-space char, eventually `:`
-                if candidate.starts_with("  ")
-                    && candidate.chars().nth(2).map(|c| c != ' ').unwrap_or(false)
-                    && candidate
-                        .lines()
-                        .next()
-                        .map(|l| l.trim_end().ends_with(':'))
-                        .unwrap_or(false)
-                {
-                    return Some(search_start);
-                }
-                // Advance past this `\n  ` candidate
-                if let Some(next) = rest[search_start..].find("\n  ") {
-                    search_start = search_start + next + 1;
-                } else {
-                    return None;
-                }
-            }
-        })
-        .unwrap_or(rest.len());
-
-    Some(&ci_yml[start..start + needle.len() + end_offset])
-}
+mod common;
+use common::yaml::extract_job_block;
 
 // ---------------------------------------------------------------------------
 // AC-001 — `test` job matrix includes `windows-latest`

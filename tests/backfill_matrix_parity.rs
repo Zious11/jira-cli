@@ -146,48 +146,8 @@ fn extract_build_matrix_targets(yaml_content: &str) -> Vec<String> {
     targets
 }
 
-/// Extract the content of the `jobs.release` block from a workflow YAML string.
-///
-/// A job block starts at `  <name>:` (two-space indent) and ends at the next
-/// two-space-indented job key or end-of-file. Returns `None` when the job name
-/// is not found.
-///
-/// Anchoring rationale: assertions made against the returned slice are
-/// guaranteed to target the correct job, even if the same substring appears
-/// in a different job, a comment, or a multi-line shell step.
-fn extract_job_block<'a>(yaml: &'a str, job_name: &str) -> Option<&'a str> {
-    let needle = format!("  {job_name}:\n");
-    let start = yaml.find(&needle)?;
-
-    let rest = &yaml[start + needle.len()..];
-    let end_offset = rest
-        .find("\n  ")
-        .and_then(|pos| {
-            let mut search_start = pos + 1; // skip the `\n`
-            loop {
-                let candidate = &rest[search_start..];
-                // A new job key at two-space indent: two spaces, non-space char, `:`
-                if candidate.starts_with("  ")
-                    && candidate.chars().nth(2).map(|c| c != ' ').unwrap_or(false)
-                    && candidate
-                        .lines()
-                        .next()
-                        .map(|l| l.trim_end().ends_with(':'))
-                        .unwrap_or(false)
-                {
-                    return Some(search_start);
-                }
-                if let Some(next) = rest[search_start..].find("\n  ") {
-                    search_start = search_start + next + 1;
-                } else {
-                    return None;
-                }
-            }
-        })
-        .unwrap_or(rest.len());
-
-    Some(&yaml[start..start + needle.len() + end_offset])
-}
+mod common;
+use common::yaml::extract_job_block;
 
 // ---------------------------------------------------------------------------
 // AC-004 — Matrix parity: backfill-release.yml must have the same five targets
