@@ -55,6 +55,7 @@ fn read_ci_yml() -> String {
     raw.replace("\r\n", "\n")
 }
 
+#[allow(dead_code)]
 mod common;
 use common::yaml::extract_job_block;
 

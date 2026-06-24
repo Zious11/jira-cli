@@ -146,6 +146,7 @@ fn extract_build_matrix_targets(yaml_content: &str) -> Vec<String> {
     targets
 }
 
+#[allow(dead_code)]
 mod common;
 use common::yaml::extract_job_block;
 

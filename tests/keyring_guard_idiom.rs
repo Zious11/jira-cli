@@ -34,12 +34,10 @@ fn collect_rs_files(dir: &Path) -> Vec<std::path::PathBuf> {
 
 /// Returns true if the line contains both `JR_RUN_KEYRING_TESTS` and `.is_err()`.
 ///
-/// The detection string is split to prevent this file itself from matching.
+/// Self-match is prevented by the `files.retain` call in the test, which
+/// excludes this file by name before scanning begins.
 fn line_uses_loose_guard(line: &str) -> bool {
-    // Split the needle so this source file doesn't trigger on its own content.
-    let needle_a = "JR_RUN_KEYRING_TESTS";
-    let needle_b = [".is_", "err()"].concat();
-    line.contains(needle_a) && line.contains(needle_b.as_str())
+    line.contains("JR_RUN_KEYRING_TESTS") && line.contains(".is_err()")
 }
 
 #[test]
