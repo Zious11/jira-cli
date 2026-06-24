@@ -8,12 +8,18 @@ use tracing::{debug, info};
 /// touching a developer's real keychain.
 const DEFAULT_SERVICE_NAME: &str = "jr-jira-cli";
 
-/// Resolve the keychain service name, honoring `JR_SERVICE_NAME` whenever
-/// it is set. All keychain operations go through this, so changing it also
-/// changes where credentials are stored and loaded (for example, tests can
-/// scope their own namespace with `"jr-jira-cli-test"`).
+/// Resolve the keychain service name. In debug builds, `JR_SERVICE_NAME` can
+/// override the default to isolate keyring integration tests from a developer's
+/// real keychain. Release builds always return [`DEFAULT_SERVICE_NAME`] — the
+/// env var is excluded at compile time via `#[cfg(debug_assertions)]` to prevent
+/// an attacker who can set env vars from redirecting keychain lookups to a
+/// different service namespace (SEC-JR-SERVICE-NAME-GATE).
 fn service_name() -> String {
-    std::env::var("JR_SERVICE_NAME").unwrap_or_else(|_| DEFAULT_SERVICE_NAME.to_string())
+    #[cfg(debug_assertions)]
+    if let Ok(name) = std::env::var("JR_SERVICE_NAME") {
+        return name;
+    }
+    DEFAULT_SERVICE_NAME.to_string()
 }
 
 /// Key names stored in the system keychain.
