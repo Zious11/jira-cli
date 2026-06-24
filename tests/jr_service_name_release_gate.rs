@@ -37,9 +37,10 @@
 /// Pre-fix: no cfg gate (FAILS). Post-fix: the `#[cfg(debug_assertions)]`
 /// annotation wraps the env-var block (PASSES).
 ///
-/// Strategy: look for `#[cfg(debug_assertions)]` within 5 source lines BEFORE
-/// the `JR_SERVICE_NAME` string literal in the `service_name` fn. Whitespace-tolerant.
-/// Mirrors the strategy of `tests/base_url_release_gate.rs`.
+/// Strategy: look for `#[cfg(debug_assertions)]` in the 5 source lines BEFORE
+/// the `JR_SERVICE_NAME` env-var read, inclusive of the env-read line itself
+/// (a 6-line window: `lines[env_read_line - 5 ..= env_read_line]`). This is
+/// whitespace-tolerant and mirrors the strategy of `tests/base_url_release_gate.rs`.
 #[test]
 fn test_sec_jr_service_name_cfg_gate_present_in_auth_source() {
     let source = include_str!("../src/api/auth.rs");

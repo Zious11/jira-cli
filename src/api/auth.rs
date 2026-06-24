@@ -1846,6 +1846,51 @@ mod tests {
         );
     }
 
+    /// SEC-JR-SERVICE-NAME-GATE behavioral regression: proves that debug builds
+    /// actually honor `JR_SERVICE_NAME` at runtime, not just that the
+    /// `#[cfg(debug_assertions)]` attribute is textually present in source.
+    ///
+    /// This is the behavioral complement to the source-scan test in
+    /// `tests/jr_service_name_release_gate.rs`. The source-scan can only assert
+    /// the gate *text* exists; this test asserts the gated path *executes*
+    /// in debug builds (where `cfg!(debug_assertions)` is true).
+    ///
+    /// Pattern mirrors the keyring-gated tests above: KEYRING_TEST_ENV_MUTEX
+    /// serializes env mutation; `JR_RUN_KEYRING_TESTS=1` gates execution so
+    /// it never runs in normal CI (no keyring backend required — `service_name()`
+    /// does NOT touch the keychain, but we share the mutex to stay consistent
+    /// with the env-isolation convention used throughout this module).
+    #[test]
+    #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
+    fn test_service_name_debug_build_honors_jr_service_name_override() {
+        if std::env::var("JR_RUN_KEYRING_TESTS").is_err() {
+            return;
+        }
+        let sentinel = "jr-test-sec-service-name-gate-sentinel";
+        let _guard = KEYRING_TEST_ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let prev = std::env::var("JR_SERVICE_NAME").ok();
+        // SAFETY: KEYRING_TEST_ENV_MUTEX is held for the duration of this scope.
+        unsafe { std::env::set_var("JR_SERVICE_NAME", sentinel) };
+        let result = service_name();
+        // SAFETY: still holding KEYRING_TEST_ENV_MUTEX.
+        unsafe {
+            match prev {
+                Some(p) => std::env::set_var("JR_SERVICE_NAME", p),
+                None => std::env::remove_var("JR_SERVICE_NAME"),
+            }
+        }
+        assert_eq!(
+            result, sentinel,
+            "SEC-JR-SERVICE-NAME-GATE BEHAVIORAL FAILURE: \
+             service_name() returned {:?} but expected sentinel {:?}. \
+             The #[cfg(debug_assertions)] gate must be active in this debug build \
+             and JR_SERVICE_NAME must be honored at runtime.",
+            result, sentinel
+        );
+    }
+
     /// AC-003 (BC-1.4.028): `load_oauth_tokens` error message for partial state
     /// must contain `"partial"` so users can identify the recovery path.
     /// This test verifies the error arm is present and produces an actionable
