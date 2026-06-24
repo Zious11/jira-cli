@@ -207,7 +207,8 @@ url = "https://from-flag.example"
 #[test]
 #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
 fn global_profile_flag_targets_auth_status() {
-    if std::env::var("JR_RUN_KEYRING_TESTS").is_err() {
+    if std::env::var("JR_RUN_KEYRING_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set JR_RUN_KEYRING_TESTS=1 to run keychain tests");
         return;
     }
     let (dir, path) = fresh_config_dir();
@@ -319,7 +320,8 @@ auth_method = "api_token"
 #[test]
 #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
 fn auth_login_creates_new_profile_with_url() {
-    if std::env::var("JR_RUN_KEYRING_TESTS").is_err() {
+    if std::env::var("JR_RUN_KEYRING_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set JR_RUN_KEYRING_TESTS=1 to run keychain tests");
         return;
     }
     let (dir, path) = fresh_config_dir();
@@ -369,7 +371,8 @@ auth_method = "api_token"
 #[test]
 #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
 fn auth_login_with_jr_profile_pointing_to_unrelated_profile_still_creates_target() {
-    if std::env::var("JR_RUN_KEYRING_TESTS").is_err() {
+    if std::env::var("JR_RUN_KEYRING_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set JR_RUN_KEYRING_TESTS=1 to run keychain tests");
         return;
     }
     let (dir, path) = fresh_config_dir();

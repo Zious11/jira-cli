@@ -1352,7 +1352,7 @@ mod tests {
 
     /// Wrap a test in a unique JR_SERVICE_NAME scope so concurrent tests don't collide.
     fn with_test_keyring<F: FnOnce()>(f: F) {
-        if std::env::var("JR_RUN_KEYRING_TESTS").is_err() {
+        if std::env::var("JR_RUN_KEYRING_TESTS").as_deref() != Ok("1") {
             return;
         }
         // Hold the mutex across env mutation + body + cleanup so no other
@@ -1863,7 +1863,7 @@ mod tests {
     #[test]
     #[ignore = "requires keyring backend; set JR_RUN_KEYRING_TESTS=1 to run"]
     fn test_service_name_debug_build_honors_jr_service_name_override() {
-        if std::env::var("JR_RUN_KEYRING_TESTS").is_err() {
+        if std::env::var("JR_RUN_KEYRING_TESTS").as_deref() != Ok("1") {
             return;
         }
         let sentinel = "jr-test-sec-service-name-gate-sentinel";
