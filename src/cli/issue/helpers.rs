@@ -503,7 +503,11 @@ pub(super) async fn resolve_asset(
     }
 
     if results.len() == 1 {
-        return Ok(results.into_iter().next().unwrap().object_key);
+        return Ok(results
+            .into_iter()
+            .next()
+            .expect("results.len() == 1 checked above")
+            .object_key);
     }
 
     // Multiple results — disambiguate via partial_match on labels

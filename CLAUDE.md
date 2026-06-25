@@ -123,6 +123,8 @@ Product-namespaced `api/jira/` and `types/jira/` so future Confluence/JSM/Assets
 ## Known Size Deviations
 
 - `cli/issue/list.rs`: 1,256 LOC post-split (target was ≤750 per `docs/specs/list-rs-split.md`; spec target not achieved but split was partial — `view.rs` and `comments.rs` already extracted). NFR-O-G: DOCUMENT-AS-IS-COMPLETE (S-3.08).
+- `cli/issue/create.rs`: 2,880 LOC — largest `src/cli/` file (~3× the ADR-0012 1,000-LOC threshold); handles `issue create` + `issue edit` + JSM create + bulk-edit + dry-run + field resolution. DOCUMENT-AS-IS; candidate split = extract `handle_edit` bulk path into a future `edit.rs` shard. ADR-0012. (PF-016)
+- `cli/issue/workflow.rs`: 1,341 LOC — covers move/transitions/assign/comment/open/remote-link; 34% over the threshold. DOCUMENT-AS-IS; candidate split = extract `handle_remote_link` + `handle_comment` into an `interactions.rs` shard. ADR-0012. (PF-017)
 
 ## Build & Test
 

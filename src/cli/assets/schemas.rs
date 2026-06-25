@@ -20,7 +20,10 @@ pub(super) fn resolve_schema<'a>(
     // Partial match on name
     let names: Vec<String> = schemas.iter().map(|s| s.name.clone()).collect();
     match partial_match::partial_match(input, &names) {
-        MatchResult::Exact(name) => Ok(schemas.iter().find(|s| s.name == name).unwrap()),
+        MatchResult::Exact(name) => Ok(schemas
+            .iter()
+            .find(|s| s.name == name)
+            .expect("name originates from schemas — find always matches")),
         MatchResult::ExactMultiple(_) => {
             let input_lower = input.to_lowercase();
             let duplicates: Vec<String> = schemas
@@ -263,7 +266,9 @@ pub async fn handle_schema(
         .into());
     }
 
-    let (matched_type, schema_name) = same_name.first().unwrap();
+    let (matched_type, schema_name) = same_name
+        .first()
+        .expect("same_name non-empty — empty case returned Err above");
 
     // Fetch attributes
     let attrs = client

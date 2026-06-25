@@ -407,7 +407,7 @@ pub(super) async fn handle_list(
             for (j, asset) in assets.iter().enumerate() {
                 if asset.id.is_some() && asset.key.is_none() && asset.name.is_none() {
                     let wid = asset.workspace_id.clone().unwrap_or_default();
-                    let oid = asset.id.clone().unwrap();
+                    let oid = asset.id.clone().expect("asset.id.is_some() checked above");
                     let key = (wid, oid);
                     to_enrich.entry(key.clone()).or_insert(());
                     enrich_indices.push((i, j));

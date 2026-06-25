@@ -166,7 +166,11 @@ pub(crate) fn resolve_oauth_app_credentials_for_test(
         .unwrap_or(false);
     match (flag_id_present, flag_secret_present) {
         (true, true) => {
-            return Ok((flag_id.unwrap(), flag_secret.unwrap(), OAuthAppSource::Flag));
+            return Ok((
+                flag_id.expect("flag_id_present checked above"),
+                flag_secret.expect("flag_secret_present checked above"),
+                OAuthAppSource::Flag,
+            ));
         }
         (true, false) => {
             return Err(JrError::UserError(
@@ -195,7 +199,11 @@ pub(crate) fn resolve_oauth_app_credentials_for_test(
         .unwrap_or(false);
     match (env_id_present, env_secret_present) {
         (true, true) => {
-            return Ok((env_id.unwrap(), env_secret.unwrap(), OAuthAppSource::Env));
+            return Ok((
+                env_id.expect("env_id_present checked above"),
+                env_secret.expect("env_secret_present checked above"),
+                OAuthAppSource::Env,
+            ));
         }
         (true, false) => {
             return Err(JrError::UserError(
