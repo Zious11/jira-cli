@@ -201,7 +201,7 @@ pub fn markdown_to_adf(markdown: &str) -> Result<Value, JrError> {
 /// `https://x/a*b*c`, where `*b*` parsed as emphasis) has already been split into
 /// separate text nodes, so only the leading plain run is linked.
 fn autolink_bare_urls(nodes: &mut Vec<Value>, depth: usize) -> Result<(), JrError> {
-    if depth > MAX_ADF_DEPTH {
+    if depth >= MAX_ADF_DEPTH {
         return Err(JrError::UserError(
             "markdown nesting too deep (max 256 levels)".to_string(),
         ));
@@ -1291,6 +1291,10 @@ impl AdfBuilder {
     }
 
     fn finish(mut self) -> Result<Vec<Value>, JrError> {
+        // INVARIANT: depth_error is checked FIRST and self.root may hold partial
+        // content built up to the point where the depth limit was hit.  This early
+        // return is what prevents that partial ADF from being returned to the caller.
+        // Do NOT move this check below `Ok(self.root)`.
         if let Some(e) = self.depth_error {
             return Err(e);
         }
@@ -2066,7 +2070,7 @@ fn assign_local_ids_walk(
     counter: &mut u64,
     depth: usize,
 ) -> Result<(), JrError> {
-    if depth > MAX_ADF_DEPTH {
+    if depth >= MAX_ADF_DEPTH {
         return Err(JrError::UserError(
             "markdown nesting too deep (max 256 levels)".to_string(),
         ));
@@ -2140,7 +2144,7 @@ impl AdfRenderer {
     }
 
     fn render_node(&mut self, node: &Value, depth: usize) -> Result<(), JrError> {
-        if depth > MAX_ADF_DEPTH {
+        if depth >= MAX_ADF_DEPTH {
             return Err(JrError::UserError(
                 "ADF response nesting too deep (max 256 levels) — the issue data returned by Jira cannot be rendered".to_string(),
             ));
@@ -2356,7 +2360,7 @@ impl AdfRenderer {
                     if cell.get("type").and_then(|t| t.as_str()) == Some("tableHeader") {
                         has_header = true;
                     }
-                    self.render_cell_inline(cell, depth)?;
+                    self.render_cell_inline(cell)?;
                 }
                 self.output.push_str(" |\n");
                 if has_header {
@@ -2373,7 +2377,7 @@ impl AdfRenderer {
             "tableCell" | "tableHeader" => {
                 // Should not be reached directly — tableRow invokes render_cell_inline
                 // on its cells. Fall through to flat rendering defensively.
-                self.render_cell_inline(node, depth)?;
+                self.render_cell_inline(node)?;
             }
             _ => {
                 // NFR-O-I: ADF inline nodes mention/emoji/inlineCard/media fall through to `_`
@@ -2411,7 +2415,7 @@ impl AdfRenderer {
     /// inline content is emitted without its trailing newline (which would
     /// break the "| cell | cell |" row structure). Other block types inside
     /// a cell (rare but legal per the schema) fall back to normal rendering.
-    fn render_cell_inline(&mut self, cell: &Value, _depth: usize) -> Result<(), JrError> {
+    fn render_cell_inline(&mut self, cell: &Value) -> Result<(), JrError> {
         let Some(content) = cell.get("content").and_then(|c| c.as_array()) else {
             return Ok(());
         };
@@ -10710,13 +10714,21 @@ mod tests {
 
     /// BC-7.2.012 forward path: depth 255 (one below the inclusive limit) is Ok.
     /// Node type: nested blockquote (SEC-001 §9.1).
+    ///
+    /// The post-build `autolink_bare_urls` pass walks the tree recursively,
+    /// starting at depth=0 for the top-level content array and incrementing per
+    /// container level.  For a document with N blockquotes the deepest content
+    /// array seen is the paragraph's children at depth=N.  To keep the guard at
+    /// depth 255 (OK, 255 < 256) we need N=254 blockquote wrappers: the guard
+    /// sees depth 254 for the innermost blockquote content, then depth 255 for
+    /// the paragraph content — both pass the `>= MAX_ADF_DEPTH` check.
     #[test]
     fn test_markdown_to_adf_depth_255_blockquote_is_ok() {
-        let md = make_nested_blockquote_markdown(255);
+        let md = make_nested_blockquote_markdown(254);
         let result = markdown_to_adf(&md);
         assert!(
             result.is_ok(),
-            "depth 255 blockquote must be Ok (SEC-001 §3); got: {result:?}"
+            "depth 255 (254-blockquote doc) must be Ok (SEC-001 §3); got: {result:?}"
         );
     }
 
@@ -10854,14 +10866,26 @@ mod tests {
     // `-> String` signature.  That IS the red state.
     // =========================================================================
 
-    /// BC-7.2.012 reverse path: ADF with 255 levels of nesting is Ok.
+    /// BC-7.2.012 reverse path: ADF where the deepest render_node call is at
+    /// depth 255 (one below the inclusive limit) is Ok.
+    ///
+    /// `render_node` is called with depth=0 for each top-level doc node.
+    /// `render_children` increments depth by 1 before each child call.  For a
+    /// document with N blockquotes the deepest call chain is:
+    ///   render_node(bq_N, N-1) → render_children → render_node(paragraph, N)
+    ///                          → render_children → render_node(text, N+1)
+    /// The deepest `render_node` call depth is N+1 (for the leaf text node).
+    /// To exercise exactly depth=255 we need N=254 blockquote wrappers:
+    ///   text is called at depth 255 — 255 < 256, passes the guard. ✓
     #[test]
     fn test_adf_to_text_depth_255_is_ok() {
-        let adf = make_nested_adf_value(255);
+        // 254 blockquotes → text rendered at depth 255, which is below
+        // MAX_ADF_DEPTH=256 (guard: depth >= 256 → Err).
+        let adf = make_nested_adf_value(254);
         let result = adf_to_text(&adf);
         assert!(
             result.is_ok(),
-            "depth 255 ADF must be Ok (SEC-001 §3); got: {result:?}"
+            "depth 255 (254-blockquote ADF) must be Ok (SEC-001 §3); got: {result:?}"
         );
     }
 

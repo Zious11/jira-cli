@@ -25,37 +25,34 @@ pub(super) async fn handle_comments(
         OutputFormat::Table => {
             let verbose = client.verbose();
             let (headers, rows) = if has_visibility {
-                let rows: Vec<Vec<String>> = comments
-                    .iter()
-                    .map(|c| {
-                        let author = c.author.as_ref().map(|a| a.display_name.as_str());
-                        let created = c.created.as_deref();
-                        let body_text: Option<String> = c
-                            .body
-                            .as_ref()
-                            .map(|v| adf::adf_to_text(v).unwrap_or_default());
-                        let visibility = comment_visibility(c).unwrap_or("External");
-                        let mut row =
-                            format_comment_row(author, created, body_text.as_deref(), verbose);
-                        // Insert Visibility before Body (index 2)
-                        row.insert(2, visibility.to_string());
-                        row
-                    })
-                    .collect();
+                let mut rows: Vec<Vec<String>> = Vec::with_capacity(comments.len());
+                for c in &comments {
+                    let author = c.author.as_ref().map(|a| a.display_name.as_str());
+                    let created = c.created.as_deref();
+                    let body_text: Option<String> =
+                        c.body.as_ref().map(adf::adf_to_text).transpose()?;
+                    let visibility = comment_visibility(c).unwrap_or("External");
+                    let mut row =
+                        format_comment_row(author, created, body_text.as_deref(), verbose);
+                    // Insert Visibility before Body (index 2)
+                    row.insert(2, visibility.to_string());
+                    rows.push(row);
+                }
                 (vec!["Author", "Date", "Visibility", "Body"], rows)
             } else {
-                let rows: Vec<Vec<String>> = comments
-                    .iter()
-                    .map(|c| {
-                        let author = c.author.as_ref().map(|a| a.display_name.as_str());
-                        let created = c.created.as_deref();
-                        let body_text: Option<String> = c
-                            .body
-                            .as_ref()
-                            .map(|v| adf::adf_to_text(v).unwrap_or_default());
-                        format_comment_row(author, created, body_text.as_deref(), verbose)
-                    })
-                    .collect();
+                let mut rows: Vec<Vec<String>> = Vec::with_capacity(comments.len());
+                for c in &comments {
+                    let author = c.author.as_ref().map(|a| a.display_name.as_str());
+                    let created = c.created.as_deref();
+                    let body_text: Option<String> =
+                        c.body.as_ref().map(adf::adf_to_text).transpose()?;
+                    rows.push(format_comment_row(
+                        author,
+                        created,
+                        body_text.as_deref(),
+                        verbose,
+                    ));
+                }
                 (vec!["Author", "Date", "Body"], rows)
             };
 
