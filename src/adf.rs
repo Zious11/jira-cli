@@ -10732,6 +10732,46 @@ mod tests {
         );
     }
 
+    /// BC-7.2.012 forward path: deepest recursive node lands at EXACTLY depth 256
+    /// → must be Err.  This pins the INCLUSIVE boundary and kills the `>=`→`>`
+    /// mutant (CR-005, SEC-001).
+    ///
+    /// Depth accounting for `autolink_bare_urls` (same formula for
+    /// `assign_local_ids_walk`, which runs first):
+    ///   The function is called on the top-level content array at depth=0.
+    ///   Each container node causes a recursive call on its `content` at depth+1.
+    ///   For N blockquotes: blockquote_N.content is visited at depth=N, then
+    ///   paragraph.content is visited at depth=N+1 (the deepest call).
+    ///   Guard: `depth >= 256`.
+    ///   N=255 → paragraph.content visited at depth 256 → fires `>=256` → Err.
+    ///   N=254 → paragraph.content visited at depth 255 → passes → Ok (see above).
+    ///
+    /// Mutant kill proof: under `> 256` (wrong operator), N=255 gives deepest 256,
+    /// which satisfies `256 > 256 == false` → the guard would NOT fire → Ok.
+    /// This test asserts Err, so it FAILS under the mutant → mutant is killed.
+    #[test]
+    fn test_markdown_to_adf_deepest_node_at_256_is_err_boundary_exact() {
+        // 255 blockquotes: deepest recursive call lands at depth 256.
+        // Under `>= 256` (correct): Err.  Under `> 256` (mutant): Ok.  Test asserts Err.
+        let md = make_nested_blockquote_markdown(255);
+        let result = markdown_to_adf(&md);
+        assert!(
+            result.is_err(),
+            "255-blockquote doc (deepest at depth 256) must be Err — pins inclusive boundary (CR-005)"
+        );
+        let err = result.unwrap_err();
+        assert_eq!(
+            err.exit_code(),
+            64,
+            "boundary-exact forward guard must produce exit_code 64; got {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("nesting too deep"),
+            "error must contain 'nesting too deep'; got: {msg:?}"
+        );
+    }
+
     /// BC-7.2.012 forward path: depth 256 (the inclusive boundary) is Err.
     /// Node type: nested blockquote (SEC-001 §9.1).
     #[test]
@@ -10886,6 +10926,46 @@ mod tests {
         assert!(
             result.is_ok(),
             "depth 255 (254-blockquote ADF) must be Ok (SEC-001 §3); got: {result:?}"
+        );
+    }
+
+    /// BC-7.2.012 reverse path: deepest `render_node` call lands at EXACTLY depth
+    /// 256 → must be Err.  Pins the inclusive boundary, kills the `>=`→`>` mutant
+    /// (CR-005, SEC-001).
+    ///
+    /// Depth accounting for `render_node`:
+    ///   `adf_to_text` calls `render_node(child, 0)` for each top-level doc node.
+    ///   `render_children(depth)` calls `render_node(child, depth + 1)` for each child.
+    ///   For N blockquotes: chain is render_node(bq_1, 0) → render_node(bq_2, 1) →
+    ///   … → render_node(bq_N, N-1) → render_node(paragraph, N) →
+    ///   render_node(text, N+1).  Deepest call is at depth N+1.
+    ///   Guard: `depth >= 256`.
+    ///   N=255 → text rendered at depth 256 → fires `>=256` → Err.
+    ///   N=254 → text rendered at depth 255 → passes → Ok (test above).
+    ///
+    /// Mutant kill proof: under `> 256` (wrong operator), N=255 gives deepest 256,
+    /// which satisfies `256 > 256 == false` → guard does NOT fire → Ok.
+    /// This test asserts Err → FAILS under the mutant → mutant is killed.
+    #[test]
+    fn test_adf_to_text_deepest_node_at_256_is_err_boundary_exact() {
+        // 255 blockquotes: text node rendered at depth 256.
+        // Under `>= 256` (correct): Err.  Under `> 256` (mutant): Ok.  Test asserts Err.
+        let adf = make_nested_adf_value(255);
+        let result = adf_to_text(&adf);
+        assert!(
+            result.is_err(),
+            "255-blockquote ADF (text at depth 256) must be Err — pins inclusive boundary (CR-005)"
+        );
+        let err = result.unwrap_err();
+        assert_eq!(
+            err.exit_code(),
+            64,
+            "boundary-exact reverse guard must produce exit_code 64; got {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("nesting too deep"),
+            "error must contain 'nesting too deep'; got: {msg:?}"
         );
     }
 
