@@ -14,6 +14,11 @@ All notable changes to jr will be documented here.
   exits 64 with "nesting too deep" instead of stack-overflowing. Guard applies to
   `markdown_to_adf` (forward path) and `adf_to_text` (reverse path).
 
+- **`JR_SERVICE_NAME` is now debug-gated (SEC-JR-SERVICE-NAME-GATE, #551):** the
+  keychain-service-name override env var is honored only in debug builds; release
+  binaries ignore it and always use the compiled-in `jr-jira-cli` service name. Closes
+  a test-seam env var that release binaries should not respect.
+
 ### Fixed
 
 - **Invalid profile name via `--profile` or `JR_PROFILE` now exits 64 instead of 78 (H-019):** Supplying an invalid profile name (bad charset, empty, or too long) via the `--profile` flag or `JR_PROFILE` environment variable now exits 64 (EX_USAGE — user input error) instead of 78 (EX_CONFIG — config file error). This matches the exit code produced by the unknown-profile check on the same code path. The config-file boundary (`[profiles."foo:bar"]` in `config.toml`) already exited 64 and is unchanged.
@@ -26,6 +31,7 @@ All notable changes to jr will be documented here.
   - `codecov/codecov-action` 6.0.1 → 7.0.0 (#519)
   - `insta` 1.47.2 → 1.48.0 (#541)
   - `quinn-proto` 0.11.14 → 0.11.15 (RUSTSEC-2026-0185, non-reachable from jr — http3 feature off)
+  - `actions/checkout` 6.0.3 → 7.0.0 (#550)
 
 ## [0.6.0-dev.6] - 2026-06-19
 
