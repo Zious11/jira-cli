@@ -10528,4 +10528,331 @@ mod tests {
             "para_content[2].text must be \"b\" (#522 test 6)"
         );
     }
+
+    // =========================================================================
+    // SEC-001 — ADF recursion-depth guard (BC-7.2.012)
+    //
+    // RED GATE: These tests target the NEW fallible signatures:
+    //   markdown_to_adf(&str) -> Result<Value, JrError>   (currently -> Value)
+    //   adf_to_text(&Value)   -> Result<String, JrError>  (currently -> String)
+    //
+    // They will NOT COMPILE against the current infallible signatures.
+    // That compile failure IS the red state — it will be resolved when the
+    // implementer changes the production signatures.
+    //
+    // Depth boundary encoded:
+    //   depth 255 → Ok  (one below the inclusive limit)
+    //   depth 256 → Err (the boundary itself is rejected — inclusive 256)
+    //   depth 257 → Err (guard fires at 256, never reaches 257)
+    //
+    // Safety note: Inputs use depth 255/256/257 only.  The current unguarded
+    // implementation handles these depths without stack-overflowing (they are
+    // far from the crash threshold).  No pathologically deep inputs are used.
+    // =========================================================================
+
+    // -------------------------------------------------------------------------
+    // §9.4 Const-gate test (regression pin, SEC-001)
+    // Pins MAX_ADF_DEPTH == 256 so a silent change must update this test.
+    // This test compiles and runs today; it will FAIL until the implementer
+    // adds `pub(crate) const MAX_ADF_DEPTH: usize = 256;` to src/adf.rs.
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_max_adf_depth_constant_is_256() {
+        // BC-7.2.012: The compile-time depth limit must be exactly 256.
+        // If an implementer silently changes MAX_ADF_DEPTH this test catches it.
+        assert_eq!(MAX_ADF_DEPTH, 256, "MAX_ADF_DEPTH must be 256 (SEC-001)");
+    }
+
+    // -------------------------------------------------------------------------
+    // Helper: build a deeply-nested blockquote markdown string.
+    //
+    // Each level adds one `> ` prefix, producing markdown like:
+    //   "> > > text"  (for depth 3)
+    //
+    // The leaf content is a plain paragraph.  This is the simplest nestable
+    // construct that pulldown-cmark maps to a real ADF container node
+    // (blockquote), ensuring the depth guard exercises a real structural nesting.
+    // -------------------------------------------------------------------------
+
+    fn make_nested_blockquote_markdown(depth: usize) -> String {
+        // Build ">>> … text" with `depth` levels of blockquote nesting.
+        // pulldown-cmark allows "> " (space optional) so we use "> " per level
+        // which is unambiguous: depth=1 → "> text", depth=2 → "> > text", etc.
+        let prefix = "> ".repeat(depth);
+        format!("{}leaf content", prefix)
+    }
+
+    // -------------------------------------------------------------------------
+    // Helper: build a deeply-nested ADF serde_json::Value.
+    //
+    // Produces a doc whose content is `depth` levels of nested blockquote nodes,
+    // each containing one child, with a paragraph leaf at the bottom.
+    //
+    // This bypasses the forward path and tests the reverse (adf_to_text) guard
+    // directly with a programmatically-constructed deep value.
+    // -------------------------------------------------------------------------
+
+    fn make_nested_adf_value(depth: usize) -> Value {
+        // Build the leaf paragraph.
+        let leaf = json!({
+            "type": "paragraph",
+            "content": [{"type": "text", "text": "deep"}]
+        });
+        // Wrap the leaf in `depth` blockquote containers.
+        let mut node = leaf;
+        for _ in 0..depth {
+            node = json!({
+                "type": "blockquote",
+                "content": [node]
+            });
+        }
+        json!({
+            "version": 1,
+            "type": "doc",
+            "content": [node]
+        })
+    }
+
+    // =========================================================================
+    // §9.1 Forward direction — markdown_to_adf depth boundary tests
+    //
+    // NOTE: These tests call `markdown_to_adf(…)?` (Result<Value, JrError>)
+    // which is the NEW fallible signature.  They WILL NOT COMPILE against
+    // the current `-> Value` signature.  That IS the red state.
+    // =========================================================================
+
+    /// BC-7.2.012 forward path: depth 255 (one below the inclusive limit) is Ok.
+    /// Node type: nested blockquote (SEC-001 §9.1).
+    #[test]
+    fn test_markdown_to_adf_depth_255_blockquote_is_ok() {
+        let md = make_nested_blockquote_markdown(255);
+        // NEW SIGNATURE: markdown_to_adf returns Result<Value, JrError>.
+        // This test will NOT COMPILE until the signature change is implemented.
+        let result = markdown_to_adf(&md);
+        assert!(
+            result.is_ok(),
+            "depth 255 blockquote must be Ok (SEC-001 §3); got: {result:?}"
+        );
+    }
+
+    /// BC-7.2.012 forward path: depth 256 (the inclusive boundary) is Err.
+    /// Node type: nested blockquote (SEC-001 §9.1).
+    #[test]
+    fn test_markdown_to_adf_depth_256_blockquote_is_err() {
+        let md = make_nested_blockquote_markdown(256);
+        // NEW SIGNATURE: markdown_to_adf returns Result<Value, JrError>.
+        // This test will NOT COMPILE until the signature change is implemented.
+        let result = markdown_to_adf(&md);
+        assert!(
+            result.is_err(),
+            "depth 256 blockquote must be Err (SEC-001 §3 inclusive boundary); got Ok"
+        );
+        let err = result.unwrap_err();
+        assert_eq!(
+            err.exit_code(),
+            64,
+            "depth guard must produce JrError with exit_code 64 (UserError); got {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("nesting too deep"),
+            "error message must contain 'nesting too deep'; got: {msg:?}"
+        );
+        assert!(
+            msg.contains("256"),
+            "error message must contain '256' (the limit); got: {msg:?}"
+        );
+    }
+
+    /// BC-7.2.012 forward path: depth 257 is Err (guard fires at 256, same error).
+    /// Node type: nested blockquote (SEC-001 §9.1).
+    #[test]
+    fn test_markdown_to_adf_depth_257_blockquote_is_err() {
+        let md = make_nested_blockquote_markdown(257);
+        // NEW SIGNATURE: markdown_to_adf returns Result<Value, JrError>.
+        // This test will NOT COMPILE until the signature change is implemented.
+        let result = markdown_to_adf(&md);
+        assert!(
+            result.is_err(),
+            "depth 257 blockquote must be Err (guard fires at 256); got Ok"
+        );
+        let err = result.unwrap_err();
+        assert_eq!(err.exit_code(), 64, "exit_code must be 64; got {err:?}");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("nesting too deep"),
+            "error message must contain 'nesting too deep'; got: {msg:?}"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Helper: build deeply-nested list markdown.
+    //
+    // Nested lists in GFM require 2-space indentation per level.
+    // depth=1 → "- leaf", depth=2 → "- x\n  - leaf", etc.
+    //
+    // This exercises a second node type (bulletList/listItem) to confirm the
+    // depth guard is not node-type-specific.
+    // -------------------------------------------------------------------------
+
+    fn make_nested_list_markdown(depth: usize) -> String {
+        if depth == 0 {
+            return String::new();
+        }
+        // Build from innermost outward.
+        // Innermost: "- leaf"
+        // Each wrapping level adds "- item\n<2-spaces-per-level><inner>"
+        let mut inner = "- leaf".to_string();
+        for level in 1..depth {
+            let indent = "  ".repeat(level);
+            inner = format!("- item\n{}{}", indent, inner);
+        }
+        inner
+    }
+
+    /// BC-7.2.012 forward path: depth 256 nested lists → Err.
+    /// Confirms the depth guard is not node-type-specific (SEC-001 §9.1).
+    #[test]
+    fn test_markdown_to_adf_depth_256_nested_list_is_err() {
+        let md = make_nested_list_markdown(256);
+        // NEW SIGNATURE: markdown_to_adf returns Result<Value, JrError>.
+        // This test will NOT COMPILE until the signature change is implemented.
+        let result = markdown_to_adf(&md);
+        assert!(
+            result.is_err(),
+            "depth 256 nested list must be Err (SEC-001 §3); got Ok"
+        );
+        let err = result.unwrap_err();
+        assert_eq!(err.exit_code(), 64);
+        let msg = err.to_string();
+        assert!(
+            msg.contains("nesting too deep"),
+            "error message must contain 'nesting too deep'; got: {msg:?}"
+        );
+        assert!(
+            msg.contains("256"),
+            "error message must mention '256'; got: {msg:?}"
+        );
+    }
+
+    /// BC-7.2.012 forward path: depth 257 nested lists → Err (different node type).
+    #[test]
+    fn test_markdown_to_adf_depth_257_nested_list_is_err() {
+        let md = make_nested_list_markdown(257);
+        // NEW SIGNATURE: will NOT COMPILE until signature change.
+        let result = markdown_to_adf(&md);
+        assert!(
+            result.is_err(),
+            "depth 257 nested list must be Err; got Ok"
+        );
+        let err = result.unwrap_err();
+        assert_eq!(err.exit_code(), 64);
+    }
+
+    /// BC-7.2.012 forward path: normal depth (real-world markdown) returns Ok
+    /// and produces the expected structural output.  Regression guard: the guard
+    /// must not alter happy-path behavior.
+    #[test]
+    fn test_markdown_to_adf_normal_depth_is_ok() {
+        let md = "# Title\n\n- bullet one\n- bullet two\n\nSome **bold** text.\n";
+        // NEW SIGNATURE: will NOT COMPILE until signature change.
+        let result = markdown_to_adf(md);
+        assert!(result.is_ok(), "normal-depth markdown must be Ok; got: {result:?}");
+        let adf = result.unwrap();
+        assert_eq!(adf["type"], "doc");
+        assert_eq!(adf["content"][0]["type"], "heading");
+    }
+
+    // =========================================================================
+    // §9.2 Reverse direction — adf_to_text depth boundary tests
+    //
+    // NOTE: These tests call `adf_to_text(…)` returning Result<String, JrError>
+    // (NEW fallible signature).  They WILL NOT COMPILE against the current
+    // `-> String` signature.  That IS the red state.
+    // =========================================================================
+
+    /// BC-7.2.012 reverse path: ADF with 255 levels of nesting is Ok.
+    #[test]
+    fn test_adf_to_text_depth_255_is_ok() {
+        let adf = make_nested_adf_value(255);
+        // NEW SIGNATURE: adf_to_text returns Result<String, JrError>.
+        // This test will NOT COMPILE until the signature change is implemented.
+        let result = adf_to_text(&adf);
+        assert!(
+            result.is_ok(),
+            "depth 255 ADF must be Ok (SEC-001 §3); got: {result:?}"
+        );
+    }
+
+    /// BC-7.2.012 reverse path: ADF with 256 levels of nesting is Err
+    /// (inclusive boundary, Option A — error).
+    #[test]
+    fn test_adf_to_text_depth_256_is_err() {
+        let adf = make_nested_adf_value(256);
+        // NEW SIGNATURE: adf_to_text returns Result<String, JrError>.
+        // This test will NOT COMPILE until the signature change is implemented.
+        let result = adf_to_text(&adf);
+        assert!(
+            result.is_err(),
+            "depth 256 ADF must be Err (SEC-001 §3 inclusive boundary); got Ok"
+        );
+        let err = result.unwrap_err();
+        assert_eq!(
+            err.exit_code(),
+            64,
+            "reverse depth guard must produce JrError with exit_code 64; got {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("nesting too deep"),
+            "reverse error message must contain 'nesting too deep'; got: {msg:?}"
+        );
+        assert!(
+            msg.contains("256"),
+            "reverse error message must contain '256'; got: {msg:?}"
+        );
+    }
+
+    /// BC-7.2.012 reverse path: ADF with 257 levels → Err (guard fires at 256).
+    #[test]
+    fn test_adf_to_text_depth_257_is_err() {
+        let adf = make_nested_adf_value(257);
+        // NEW SIGNATURE: will NOT COMPILE until signature change.
+        let result = adf_to_text(&adf);
+        assert!(
+            result.is_err(),
+            "depth 257 ADF must be Err (guard fires at 256); got Ok"
+        );
+        let err = result.unwrap_err();
+        assert_eq!(err.exit_code(), 64);
+    }
+
+    /// BC-7.2.012 reverse path: normal real-world ADF returns Ok.
+    /// Regression guard: the guard must not alter happy-path rendering.
+    #[test]
+    fn test_adf_to_text_normal_depth_is_ok() {
+        // Use a well-formed doc (one heading + one paragraph).
+        // NEW SIGNATURE: will NOT COMPILE until signature change.
+        let adf = json!({
+            "version": 1,
+            "type": "doc",
+            "content": [
+                {
+                    "type": "heading",
+                    "attrs": {"level": 2},
+                    "content": [{"type": "text", "text": "Hello"}]
+                },
+                {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": "world"}]
+                }
+            ]
+        });
+        let result = adf_to_text(&adf);
+        assert!(result.is_ok(), "normal ADF must be Ok; got: {result:?}");
+        let text = result.unwrap();
+        assert!(text.contains("Hello"), "rendered text must contain 'Hello'; got: {text:?}");
+        assert!(text.contains("world"), "rendered text must contain 'world'; got: {text:?}");
+    }
 }
