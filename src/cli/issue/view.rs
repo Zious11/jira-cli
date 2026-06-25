@@ -85,7 +85,8 @@ pub(super) async fn handle_view(
                 .description
                 .as_ref()
                 .map(adf::adf_to_text)
-                .unwrap_or_else(|| "(no description)".into());
+                .transpose()?
+                .unwrap_or_else(|| "(no description)".to_string());
 
             let mut rows = vec![
                 vec!["Key".into(), issue.key.clone()],

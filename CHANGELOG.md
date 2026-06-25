@@ -8,6 +8,12 @@ All notable changes to jr will be documented here.
 
 ### Added
 
+### Security
+
+- **SEC-001 (CWE-674):** Pathologically nested markdown/ADF input (≥256 levels) now
+  exits 64 with "nesting too deep" instead of stack-overflowing. Guard applies to
+  `markdown_to_adf` (forward path) and `adf_to_text` (reverse path).
+
 ### Fixed
 
 - **Invalid profile name via `--profile` or `JR_PROFILE` now exits 64 instead of 78 (H-019):** Supplying an invalid profile name (bad charset, empty, or too long) via the `--profile` flag or `JR_PROFILE` environment variable now exits 64 (EX_USAGE — user input error) instead of 78 (EX_CONFIG — config file error). This matches the exit code produced by the unknown-profile check on the same code path. The config-file boundary (`[profiles."foo:bar"]` in `config.toml`) already exited 64 and is unchanged.

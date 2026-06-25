@@ -30,7 +30,10 @@ pub(super) async fn handle_comments(
                     .map(|c| {
                         let author = c.author.as_ref().map(|a| a.display_name.as_str());
                         let created = c.created.as_deref();
-                        let body_text = c.body.as_ref().map(adf::adf_to_text);
+                        let body_text: Option<String> = c
+                            .body
+                            .as_ref()
+                            .map(|v| adf::adf_to_text(v).unwrap_or_default());
                         let visibility = comment_visibility(c).unwrap_or("External");
                         let mut row =
                             format_comment_row(author, created, body_text.as_deref(), verbose);
@@ -46,7 +49,10 @@ pub(super) async fn handle_comments(
                     .map(|c| {
                         let author = c.author.as_ref().map(|a| a.display_name.as_str());
                         let created = c.created.as_deref();
-                        let body_text = c.body.as_ref().map(adf::adf_to_text);
+                        let body_text: Option<String> = c
+                            .body
+                            .as_ref()
+                            .map(|v| adf::adf_to_text(v).unwrap_or_default());
                         format_comment_row(author, created, body_text.as_deref(), verbose)
                     })
                     .collect();

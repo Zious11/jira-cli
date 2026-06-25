@@ -679,7 +679,7 @@ async fn test_edit_issue_with_markdown_description() {
         .edit_issue(
             "FOO-11",
             serde_json::json!({
-                "description": jr::adf::markdown_to_adf("**bold text**")
+                "description": jr::adf::markdown_to_adf("**bold text**").unwrap()
             }),
         )
         .await

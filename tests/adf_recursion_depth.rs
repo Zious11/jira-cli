@@ -149,8 +149,7 @@ async fn test_issue_create_deep_markdown_description_exits_64() {
     // PRIMARY assertion: the guard must cause exit 64.
     // RED state: fails because exit_code is 0.
     assert_eq!(
-        exit_code,
-        64,
+        exit_code, 64,
         "SEC-001 (BC-7.2.012): jr issue create with 256-deep markdown must exit 64 \
          (nesting too deep guard); got exit {exit_code}. \
          stderr: {stderr:?} stdout: {stdout:?}"
@@ -166,37 +165,10 @@ async fn test_issue_create_deep_markdown_description_exits_64() {
 }
 
 // ---------------------------------------------------------------------------
-// §9.4 Constant regression pin — via library
+// §9.4 Constant regression pin
 //
-// RED GATE (compile failure): `jr::adf::MAX_ADF_DEPTH` does not exist.
-//
-// The constant is `pub(crate)` per the spec (§5.2), which means it is NOT
-// accessible from integration tests via `jr::adf::MAX_ADF_DEPTH`.  The
-// implementer has two options:
-//
-//   A) Change the constant to `pub` (or add a `pub` re-export in lib.rs).
-//      Then this test compiles and runs as written.
-//
-//   B) Keep `pub(crate)` and delete this integration-level pin.
-//      The unit-test pin inside `src/adf.rs` (`test_max_adf_depth_constant_is_256`)
-//      is sufficient — it lives in the same crate and sees `pub(crate)`.
-//
-// In the RED state the compile error signals the absence of the constant.
+// `MAX_ADF_DEPTH` is `pub(crate)` per the spec (§5.2), so it is NOT
+// accessible from integration tests.  The unit-test pin inside `src/adf.rs`
+// (`test_max_adf_depth_constant_is_256`) covers this requirement from within
+// the same crate.
 // ---------------------------------------------------------------------------
-
-/// BC-7.2.012: `MAX_ADF_DEPTH` must equal 256.
-///
-/// RED GATE: compile error — `jr::adf::MAX_ADF_DEPTH` not yet defined.
-///
-/// If the implementer chooses `pub(crate)` visibility, they should delete
-/// this test and rely on the unit-level pin in `src/adf.rs` instead.
-#[test]
-fn test_max_adf_depth_constant_equals_256() {
-    // Requires the implementer to add:
-    //   pub(crate) const MAX_ADF_DEPTH: usize = 256;  (unit-test pin suffices)
-    //   — OR —
-    //   pub const MAX_ADF_DEPTH: usize = 256;  (needed for this integration pin)
-    //
-    // This line does NOT COMPILE until the constant exists and is pub.
-    assert_eq!(jr::adf::MAX_ADF_DEPTH, 256, "MAX_ADF_DEPTH must be 256 (SEC-001)");
-}

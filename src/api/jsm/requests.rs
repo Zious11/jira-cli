@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 
 use crate::api::client::JiraClient;
+use crate::error::JrError;
 use crate::types::jsm::JsmRequestCreated;
 
 impl JiraClient {
@@ -79,7 +80,7 @@ impl<'a> JsmRequestBuilder<'a> {
     ///
     /// All business logic lives here — no free-standing function with > 7 args
     /// (satisfies `clippy::too_many_arguments` per CLAUDE.md policy).
-    pub fn build(self) -> serde_json::Value {
+    pub fn build(self) -> Result<serde_json::Value, JrError> {
         use crate::adf;
         use serde_json::json;
 
@@ -93,7 +94,7 @@ impl<'a> JsmRequestBuilder<'a> {
         // Optional description → ADF (BC-3.8.006).
         let is_adf_request = if let Some(desc_text) = self.description {
             let adf_body = if self.markdown {
-                adf::markdown_to_adf(desc_text)
+                adf::markdown_to_adf(desc_text)?
             } else {
                 adf::text_to_adf(desc_text)
             };
@@ -147,7 +148,7 @@ impl<'a> JsmRequestBuilder<'a> {
             );
         }
 
-        serde_json::Value::Object(body)
+        Ok(serde_json::Value::Object(body))
     }
 }
 
@@ -180,7 +181,8 @@ mod proptests {
                 on_behalf_of: None,
                 extra_fields: &extra,
             }
-            .build();
+            .build()
+            .unwrap();
             let rfv_summary = body
                 .get("requestFieldValues")
                 .and_then(|rfv| rfv.get("summary"))
@@ -216,7 +218,8 @@ mod proptests {
                 on_behalf_of: None,
                 extra_fields: &extra,
             }
-            .build();
+            .build()
+            .unwrap();
             if has_desc {
                 prop_assert_eq!(
                     body.get("isAdfRequest").and_then(serde_json::Value::as_bool),
@@ -266,7 +269,8 @@ mod proptests {
                 on_behalf_of: None,
                 extra_fields: &extra,
             }
-            .build();
+            .build()
+            .unwrap();
 
             // Top-level pin
             prop_assert_eq!(body.get("serviceDeskId").and_then(serde_json::Value::as_str), Some(sid.as_str()));
@@ -309,7 +313,8 @@ mod proptests {
                 on_behalf_of,
                 extra_fields: &extra,
             }
-            .build();
+            .build()
+            .unwrap();
             if has_obo {
                 prop_assert_eq!(
                     body.get("raiseOnBehalfOf").and_then(serde_json::Value::as_str),

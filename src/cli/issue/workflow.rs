@@ -1156,7 +1156,7 @@ pub(super) async fn handle_comment(
     }
 
     let adf_body = if markdown {
-        adf::markdown_to_adf(&text)
+        adf::markdown_to_adf(&text)?
     } else {
         adf::text_to_adf(&text)
     };

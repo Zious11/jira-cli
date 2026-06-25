@@ -176,7 +176,7 @@ pub(super) async fn handle_create(
 
     if let Some(ref text) = desc_text {
         let adf_body = if markdown {
-            adf::markdown_to_adf(text)
+            adf::markdown_to_adf(text)?
         } else {
             adf::text_to_adf(text)
         };
@@ -922,7 +922,7 @@ pub(super) async fn handle_edit(
 
     if let Some(ref text) = desc_text {
         let adf_body = if markdown {
-            adf::markdown_to_adf(text)
+            adf::markdown_to_adf(text)?
         } else {
             adf::text_to_adf(text)
         };
@@ -2645,7 +2645,7 @@ async fn handle_jsm_create(
         on_behalf_of: on_behalf_of.as_deref(),
         extra_fields: &extra_fields,
     }
-    .build();
+    .build()?;
 
     // POST to /rest/servicedeskapi/request (BC-3.8.001).
     //

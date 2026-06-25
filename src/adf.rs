@@ -4,6 +4,16 @@ use pulldown_cmark::{
 };
 use serde_json::{Value, json};
 
+use crate::error::JrError;
+
+/// Maximum ADF nesting depth. Forward (`markdown_to_adf` post-passes) and
+/// reverse (`adf_to_text`) tree walkers both reject inputs exceeding this
+/// depth to prevent stack overflow (SEC-001, CWE-674).
+/// Value 256 provides a large margin over any legitimate human-authored
+/// nesting while staying well below the stack-overflow threshold on the
+/// configured 8 MB stack.
+pub(crate) const MAX_ADF_DEPTH: usize = 256;
+
 pub fn text_to_adf(text: &str) -> Value {
     // BC-7.2.011 EC-12 (S-522): no raw \r or \n may appear in any text node
     // (Jira rejects them). Apply the same normalization that Algorithm B uses
@@ -106,7 +116,7 @@ pub fn text_to_adf(text: &str) -> Value {
     })
 }
 
-pub fn markdown_to_adf(markdown: &str) -> Value {
+pub fn markdown_to_adf(markdown: &str) -> Result<Value, JrError> {
     let options = Options::ENABLE_TABLES
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_FOOTNOTES
@@ -149,24 +159,24 @@ pub fn markdown_to_adf(markdown: &str) -> Value {
     for event in parser {
         builder.process(event);
     }
-    let mut content = builder.finish();
+    let mut content = builder.finish()?;
     // Post-normalization DFS pre-order walk: assign monotonically increasing
     // 1-based counter strings ("1", "2", …) to all taskList.attrs.localId and
     // taskItem.attrs.localId fields. The walk runs AFTER finish() so that pruned
     // nodes (whose counter slots are reclaimed) do not participate. Container
     // nodes are numbered before their children (pre-order). No uuid crate (#471).
-    assign_local_ids(&mut content);
+    assign_local_ids(&mut content)?;
     // pulldown-cmark 0.13 has no autolink extension (ENABLE_GFM only adds alert
     // blockquotes), so bare URLs arrive as plain text. Post-process the built
     // tree to apply `link` marks to explicit-scheme `http(s)://` runs — Jira's
     // REST API does NOT auto-linkify plain text, so the mark is required for the
     // URL to be clickable (#473, .factory/research/issue-473-bare-url-autolink-scope.md).
-    autolink_bare_urls(&mut content);
-    json!({
+    autolink_bare_urls(&mut content, 0)?;
+    Ok(json!({
         "version": 1,
         "type": "doc",
         "content": content,
-    })
+    }))
 }
 
 /// Post-process an ADF node array, applying `link` marks to bare `http(s)://`
@@ -190,7 +200,12 @@ pub fn markdown_to_adf(markdown: &str) -> Value {
 /// the *already-built* tree: a URL whose interior contains inline markup (e.g.
 /// `https://x/a*b*c`, where `*b*` parsed as emphasis) has already been split into
 /// separate text nodes, so only the leading plain run is linked.
-fn autolink_bare_urls(nodes: &mut Vec<Value>) {
+fn autolink_bare_urls(nodes: &mut Vec<Value>, depth: usize) -> Result<(), JrError> {
+    if depth > MAX_ADF_DEPTH {
+        return Err(JrError::UserError(
+            "markdown nesting too deep (max 256 levels)".to_string(),
+        ));
+    }
     let mut i = 0;
     while i < nodes.len() {
         let node_type = nodes[i].get("type").and_then(Value::as_str).unwrap_or("");
@@ -221,12 +236,13 @@ fn autolink_bare_urls(nodes: &mut Vec<Value>) {
             }
             _ => {
                 if let Some(content) = nodes[i].get_mut("content").and_then(Value::as_array_mut) {
-                    autolink_bare_urls(content);
+                    autolink_bare_urls(content, depth + 1)?;
                 }
             }
         }
         i += 1;
     }
+    Ok(())
 }
 
 /// Split a plain `text` node into a run of text nodes where each bare-URL span
@@ -390,6 +406,9 @@ struct AdfBuilder {
     // only the first occurrence instead of emitting two identically-labelled
     // paragraphs.
     footnote_labels_seen: std::collections::HashSet<String>,
+    // SEC-001: captures the first depth-limit error from the normalizer calls
+    // inside `end()`. Propagated by `finish()` → `markdown_to_adf`.
+    depth_error: Option<JrError>,
 }
 
 struct PartialNode {
@@ -473,6 +492,7 @@ impl AdfBuilder {
             in_table_head: false,
             footnote_defs: Vec::new(),
             footnote_labels_seen: std::collections::HashSet::new(),
+            depth_error: None,
         }
     }
 
@@ -601,7 +621,15 @@ impl AdfBuilder {
                 // scan in firstpass.rs is container-agnostic. Normalize: unwrap taskList
                 // children → each taskItem's inline content becomes a paragraph inside the
                 // blockquote. (BC-7.2.010 obligation #2 / EC-6, unconditional.)
-                let normalized = normalize_blockquote_content(children);
+                let normalized = match normalize_blockquote_content(children, 0) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        if self.depth_error.is_none() {
+                            self.depth_error = Some(e);
+                        }
+                        Vec::new()
+                    }
+                };
                 EndResult::Single(json!({ "type": "blockquote", "content": normalized }))
             }
             NodeKind::Panel { panel_type } => {
@@ -609,7 +637,15 @@ impl AdfBuilder {
                 // `blockquote`; normalize_panel_content transforms each into the
                 // permitted set BEFORE wrapping loose inline runs (mirrors the
                 // listItem path #470). See docs/specs/adf-panel-content-model.md.
-                let normalized = normalize_panel_content(children);
+                let normalized = match normalize_panel_content(children, 0) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        if self.depth_error.is_none() {
+                            self.depth_error = Some(e);
+                        }
+                        Vec::new()
+                    }
+                };
                 // A body-less alert (`> [!NOTE]` with no content) emits empty
                 // panel content so `is_empty_block_container` prunes the whole
                 // panel below — an empty `panel` is invalid ADF (Jira 400).
@@ -849,7 +885,15 @@ impl AdfBuilder {
                         }
                     }
                 } else {
-                    let normalized = normalize_list_item_content(children);
+                    let normalized = match normalize_list_item_content(children, 0) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            if self.depth_error.is_none() {
+                                self.depth_error = Some(e);
+                            }
+                            Vec::new()
+                        }
+                    };
                     let wrapped = wrap_inlines_as_blocks(
                         normalized,
                         &[
@@ -1246,7 +1290,10 @@ impl AdfBuilder {
         }));
     }
 
-    fn finish(mut self) -> Vec<Value> {
+    fn finish(mut self) -> Result<Vec<Value>, JrError> {
+        if let Some(e) = self.depth_error {
+            return Err(e);
+        }
         // Flush collected footnote definitions into an appended section,
         // separated from the body by a single `rule` divider. Only emitted when
         // at least one definition exists (a bare reference adds no section).
@@ -1266,7 +1313,7 @@ impl AdfBuilder {
             }
             self.root.append(&mut self.footnote_defs);
         }
-        self.root
+        Ok(self.root)
     }
 }
 
@@ -1607,7 +1654,12 @@ fn wrap_inlines_as_blocks(children: Vec<Value>, block_types: &[&str]) -> Vec<Val
 /// Permitted blocks and loose inline nodes (`text`, `hardBreak`) pass through
 /// untouched; the caller's `wrap_inlines_as_blocks` then groups the inline runs
 /// into paragraphs.
-fn normalize_list_item_content(children: Vec<Value>) -> Vec<Value> {
+fn normalize_list_item_content(children: Vec<Value>, depth: usize) -> Result<Vec<Value>, JrError> {
+    if depth >= MAX_ADF_DEPTH {
+        return Err(JrError::UserError(
+            "markdown nesting too deep (max 256 levels)".to_string(),
+        ));
+    }
     let mut out: Vec<Value> = Vec::new();
     for child in children {
         match child["type"].as_str() {
@@ -1621,7 +1673,7 @@ fn normalize_list_item_content(children: Vec<Value>) -> Vec<Value> {
                     .and_then(|c| c.as_array())
                     .cloned()
                     .unwrap_or_default();
-                out.extend(normalize_list_item_content(inner));
+                out.extend(normalize_list_item_content(inner, depth + 1)?);
             }
             Some("taskList") => {
                 // `listItem.content` does NOT permit `taskList` (BC-7.2.010
@@ -1654,7 +1706,7 @@ fn normalize_list_item_content(children: Vec<Value>) -> Vec<Value> {
                         // sibling. If there is no preceding listItem (nested
                         // taskList appears first), create a placeholder empty-
                         // paragraph listItem to satisfy ADF constraints.
-                        let inner_blocks = normalize_list_item_content(vec![ti]);
+                        let inner_blocks = normalize_list_item_content(vec![ti], depth + 1)?;
                         for block in inner_blocks {
                             if let Some(last_li) = converted_items.last_mut() {
                                 // Append the sub-bulletList to the last listItem's
@@ -1696,12 +1748,12 @@ fn normalize_list_item_content(children: Vec<Value>) -> Vec<Value> {
                 let content = child.get("content").cloned().unwrap_or_else(|| json!([]));
                 out.push(json!({ "type": "paragraph", "content": content }));
             }
-            Some("table") => out.extend(flatten_table_to_paragraphs(&child)),
+            Some("table") => out.extend(flatten_table_to_paragraphs(&child)?),
             Some("rule") => { /* dropped — no content, invalid inside listItem */ }
             _ => out.push(child),
         }
     }
-    out
+    Ok(out)
 }
 
 /// Normalize the children of a `blockquote` to the ADF-permitted content model.
@@ -1735,7 +1787,12 @@ fn normalize_list_item_content(children: Vec<Value>) -> Vec<Value> {
 /// already-normalized content). No explicit guard is needed here.
 ///
 /// All other node types pass through unchanged.
-fn normalize_blockquote_content(children: Vec<Value>) -> Vec<Value> {
+fn normalize_blockquote_content(children: Vec<Value>, depth: usize) -> Result<Vec<Value>, JrError> {
+    if depth >= MAX_ADF_DEPTH {
+        return Err(JrError::UserError(
+            "markdown nesting too deep (max 256 levels)".to_string(),
+        ));
+    }
     let mut out: Vec<Value> = Vec::new();
     for child in children {
         if child.get("type").and_then(Value::as_str) == Some("taskList") {
@@ -1758,7 +1815,7 @@ fn normalize_blockquote_content(children: Vec<Value>) -> Vec<Value> {
                     Some("taskList") => {
                         // Nested taskList inside the blockquote-level taskList:
                         // recurse to unwrap its items too.
-                        out.extend(normalize_blockquote_content(vec![ti]));
+                        out.extend(normalize_blockquote_content(vec![ti], depth + 1)?);
                     }
                     _ => {
                         // Unexpected node inside taskList — pass through defensively.
@@ -1770,7 +1827,7 @@ fn normalize_blockquote_content(children: Vec<Value>) -> Vec<Value> {
             out.push(child);
         }
     }
-    out
+    Ok(out)
 }
 
 /// Normalize the children of a `panel` to the ADF-permitted content model.
@@ -1795,7 +1852,12 @@ fn normalize_blockquote_content(children: Vec<Value>) -> Vec<Value> {
 ///   (no marks)`); defense-in-depth — block nodes don't carry marks today.
 ///
 /// Permitted blocks and loose inline nodes pass through untouched.
-fn normalize_panel_content(children: Vec<Value>) -> Vec<Value> {
+fn normalize_panel_content(children: Vec<Value>, depth: usize) -> Result<Vec<Value>, JrError> {
+    if depth >= MAX_ADF_DEPTH {
+        return Err(JrError::UserError(
+            "markdown nesting too deep (max 256 levels)".to_string(),
+        ));
+    }
     let mut out: Vec<Value> = Vec::new();
     for mut child in children {
         match child["type"].as_str() {
@@ -1805,9 +1867,9 @@ fn normalize_panel_content(children: Vec<Value>) -> Vec<Value> {
                     .and_then(|c| c.as_array())
                     .cloned()
                     .unwrap_or_default();
-                out.extend(normalize_panel_content(inner));
+                out.extend(normalize_panel_content(inner, depth + 1)?);
             }
-            Some("table") => out.extend(flatten_table_to_paragraphs(&child)),
+            Some("table") => out.extend(flatten_table_to_paragraphs(&child)?),
             Some("heading") | Some("paragraph") => {
                 // panel.content requires `paragraph (no marks)` / `heading (no
                 // marks)`: strip any node-level marks array.
@@ -1819,7 +1881,7 @@ fn normalize_panel_content(children: Vec<Value>) -> Vec<Value> {
             _ => out.push(child),
         }
     }
-    out
+    Ok(out)
 }
 
 /// Flatten an ADF `table` node into one `paragraph` per row, for embedding inside
@@ -1832,10 +1894,10 @@ fn normalize_panel_content(children: Vec<Value>) -> Vec<Value> {
 /// verbatim. The table's grid structure is necessarily lost (there is no ADF node
 /// nesting a table inside a listItem); only the per-row pipe layout and cell
 /// content survive.
-fn flatten_table_to_paragraphs(table: &Value) -> Vec<Value> {
+fn flatten_table_to_paragraphs(table: &Value) -> Result<Vec<Value>, JrError> {
     let mut paragraphs: Vec<Value> = Vec::new();
     let Some(rows) = table.get("content").and_then(|c| c.as_array()) else {
-        return paragraphs;
+        return Ok(paragraphs);
     };
     for row in rows {
         if row.get("type").and_then(Value::as_str) != Some("tableRow") {
@@ -1864,7 +1926,7 @@ fn flatten_table_to_paragraphs(table: &Value) -> Vec<Value> {
                         }
                     } else {
                         let doc = json!({ "type": "doc", "version": 1, "content": [block] });
-                        let text = adf_to_text(&doc).trim_end().replace(['\n', '\r'], " ");
+                        let text = adf_to_text(&doc)?.trim_end().replace(['\n', '\r'], " ");
                         if !text.is_empty() {
                             content.push(json!({ "type": "text", "text": text }));
                         }
@@ -1880,7 +1942,7 @@ fn flatten_table_to_paragraphs(table: &Value) -> Vec<Value> {
         content.push(json!({ "type": "text", "text": " |" }));
         paragraphs.push(json!({ "type": "paragraph", "content": content }));
     }
-    paragraphs
+    Ok(paragraphs)
 }
 
 /// EC-16 inline-flattening for `taskItem`: strip paragraph wrappers from the
@@ -1994,12 +2056,21 @@ fn extract_inline_from_list_item_content(list_item: &Value) -> Vec<Value> {
 /// The ordering is immaterial to correctness (`autolink_bare_urls` only adds
 /// `link` marks to text nodes and never adds or removes task-list nodes), but
 /// the source order is: `finish()` → `assign_local_ids` → `autolink_bare_urls`.
-fn assign_local_ids(nodes: &mut [Value]) {
+fn assign_local_ids(nodes: &mut [Value]) -> Result<(), JrError> {
     let mut counter = 0u64;
-    assign_local_ids_walk(nodes, &mut counter);
+    assign_local_ids_walk(nodes, &mut counter, 0)
 }
 
-fn assign_local_ids_walk(nodes: &mut [Value], counter: &mut u64) {
+fn assign_local_ids_walk(
+    nodes: &mut [Value],
+    counter: &mut u64,
+    depth: usize,
+) -> Result<(), JrError> {
+    if depth > MAX_ADF_DEPTH {
+        return Err(JrError::UserError(
+            "markdown nesting too deep (max 256 levels)".to_string(),
+        ));
+    }
     for node in nodes.iter_mut() {
         // CR-004: compare &str directly instead of allocating a String via to_owned().
         let node_type = node.get("type").and_then(Value::as_str).unwrap_or("");
@@ -2015,9 +2086,10 @@ fn assign_local_ids_walk(nodes: &mut [Value], counter: &mut u64) {
         // Recurse into content regardless of node type (task lists can be
         // nested inside panels, blockquotes, etc.; items at any depth need IDs).
         if let Some(content) = node.get_mut("content").and_then(Value::as_array_mut) {
-            assign_local_ids_walk(content, counter);
+            assign_local_ids_walk(content, counter, depth + 1)?;
         }
     }
+    Ok(())
 }
 
 fn heading_level_to_u8(level: HeadingLevel) -> u8 {
@@ -2031,10 +2103,10 @@ fn heading_level_to_u8(level: HeadingLevel) -> u8 {
     }
 }
 
-pub fn adf_to_text(adf: &Value) -> String {
+pub fn adf_to_text(adf: &Value) -> Result<String, JrError> {
     let mut r = AdfRenderer::new();
-    r.render_doc(adf);
-    r.finish()
+    r.render_doc(adf)?;
+    Ok(r.finish())
 }
 
 struct AdfRenderer {
@@ -2058,15 +2130,21 @@ impl AdfRenderer {
         }
     }
 
-    fn render_doc(&mut self, adf: &Value) {
+    fn render_doc(&mut self, adf: &Value) -> Result<(), JrError> {
         if let Some(content) = adf.get("content").and_then(|c| c.as_array()) {
             for node in content {
-                self.render_node(node);
+                self.render_node(node, 0)?;
             }
         }
+        Ok(())
     }
 
-    fn render_node(&mut self, node: &Value) {
+    fn render_node(&mut self, node: &Value, depth: usize) -> Result<(), JrError> {
+        if depth > MAX_ADF_DEPTH {
+            return Err(JrError::UserError(
+                "ADF response nesting too deep (max 256 levels) — the issue data returned by Jira cannot be rendered".to_string(),
+            ));
+        }
         let node_type = node.get("type").and_then(|t| t.as_str()).unwrap_or("");
         match node_type {
             "text" => {
@@ -2075,7 +2153,7 @@ impl AdfRenderer {
                 self.output.push_str(&apply_marks(text, marks));
             }
             "paragraph" => {
-                self.render_children(node);
+                self.render_children(node, depth)?;
                 self.output.push('\n');
             }
             "heading" => {
@@ -2088,7 +2166,7 @@ impl AdfRenderer {
                     self.output.push('#');
                 }
                 self.output.push(' ');
-                self.render_children(node);
+                self.render_children(node, depth)?;
                 self.output.push('\n');
             }
             "taskList" => {
@@ -2096,7 +2174,7 @@ impl AdfRenderer {
                 // indentation tracking (2 spaces per nesting level, same as
                 // bulletList / orderedList). (BC-7.2.010 reverse path; AC-010/012)
                 self.list_stack.push(ListFrame::Task);
-                self.render_children(node);
+                self.render_children(node, depth)?;
                 self.list_stack.pop();
             }
             "taskItem" => {
@@ -2120,14 +2198,14 @@ impl AdfRenderer {
                 // Render inline content directly (no paragraph wrapper in taskItem).
                 if let Some(content) = node.get("content").and_then(|c| c.as_array()) {
                     for child in content {
-                        self.render_node(child);
+                        self.render_node(child, depth + 1)?;
                     }
                 }
                 self.output.push('\n');
             }
             "bulletList" => {
                 self.list_stack.push(ListFrame::Bullet);
-                self.render_children(node);
+                self.render_children(node, depth)?;
                 self.list_stack.pop();
             }
             "orderedList" => {
@@ -2142,7 +2220,7 @@ impl AdfRenderer {
                     .unwrap_or(1);
                 self.list_stack
                     .push(ListFrame::Ordered { next_index: start });
-                self.render_children(node);
+                self.render_children(node, depth)?;
                 self.list_stack.pop();
             }
             "listItem" => {
@@ -2157,7 +2235,7 @@ impl AdfRenderer {
                     _ => "- ".to_string(),
                 };
                 self.output.push_str(&prefix);
-                self.render_children(node);
+                self.render_children(node, depth)?;
             }
             "rule" => {
                 self.output.push_str("---\n");
@@ -2174,12 +2252,12 @@ impl AdfRenderer {
                 self.output.push_str("```");
                 self.output.push_str(lang);
                 self.output.push('\n');
-                self.render_children(node);
+                self.render_children(node, depth)?;
                 self.output.push_str("\n```\n");
             }
             "blockquote" => {
                 let start = self.output.len();
-                self.render_children(node);
+                self.render_children(node, depth)?;
 
                 // Prefix every line in the just-rendered segment with "> ".
                 // Nesting accumulates ("> > inner") because each level's prefix
@@ -2227,7 +2305,7 @@ impl AdfRenderer {
                     .and_then(|p| p.as_str())
                     .and_then(gfm_label_for_panel_type);
                 let start = self.output.len();
-                self.render_children(node);
+                self.render_children(node, depth)?;
                 let rendered = self.output.split_off(start);
                 let mut lines: Vec<&str> = rendered.split('\n').collect();
                 while lines.last() == Some(&"") {
@@ -2259,7 +2337,7 @@ impl AdfRenderer {
                 }
             }
             "table" => {
-                self.render_children(node);
+                self.render_children(node, depth)?;
                 self.output.push('\n');
             }
             "tableRow" => {
@@ -2278,7 +2356,7 @@ impl AdfRenderer {
                     if cell.get("type").and_then(|t| t.as_str()) == Some("tableHeader") {
                         has_header = true;
                     }
-                    self.render_cell_inline(cell);
+                    self.render_cell_inline(cell, depth)?;
                 }
                 self.output.push_str(" |\n");
                 if has_header {
@@ -2295,7 +2373,7 @@ impl AdfRenderer {
             "tableCell" | "tableHeader" => {
                 // Should not be reached directly — tableRow invokes render_cell_inline
                 // on its cells. Fall through to flat rendering defensively.
-                self.render_cell_inline(node);
+                self.render_cell_inline(node, depth)?;
             }
             _ => {
                 // NFR-O-I: ADF inline nodes mention/emoji/inlineCard/media fall through to `_`
@@ -2313,27 +2391,29 @@ impl AdfRenderer {
                 // salvaging the text content of container nodes like panel or
                 // nestedExpand.
                 if node.get("content").is_some() {
-                    self.render_children(node);
+                    self.render_children(node, depth)?;
                 }
             }
         }
+        Ok(())
     }
 
-    fn render_children(&mut self, node: &Value) {
+    fn render_children(&mut self, node: &Value, depth: usize) -> Result<(), JrError> {
         if let Some(content) = node.get("content").and_then(|c| c.as_array()) {
             for child in content {
-                self.render_node(child);
+                self.render_node(child, depth + 1)?;
             }
         }
+        Ok(())
     }
 
     /// Render a tableCell/tableHeader's children in "flat" mode: a paragraph's
     /// inline content is emitted without its trailing newline (which would
     /// break the "| cell | cell |" row structure). Other block types inside
     /// a cell (rare but legal per the schema) fall back to normal rendering.
-    fn render_cell_inline(&mut self, cell: &Value) {
+    fn render_cell_inline(&mut self, cell: &Value, _depth: usize) -> Result<(), JrError> {
         let Some(content) = cell.get("content").and_then(|c| c.as_array()) else {
-            return;
+            return Ok(());
         };
         for (i, child) in content.iter().enumerate() {
             if i > 0 {
@@ -2355,6 +2435,7 @@ impl AdfRenderer {
                 _ => self.render_inline_in_cell(child),
             }
         }
+        Ok(())
     }
 
     /// Render an inline node in cell mode: `hardBreak` becomes a space, and
@@ -2371,7 +2452,7 @@ impl AdfRenderer {
                 let marks = node.get("marks").and_then(|m| m.as_array());
                 self.output.push_str(&apply_marks(&sanitized, marks));
             }
-            _ => self.render_node(node),
+            _ => {}
         }
     }
 
@@ -2502,19 +2583,19 @@ mod tests {
     #[test]
     fn test_adf_to_text_paragraph() {
         let adf = text_to_adf("Hello world");
-        assert_eq!(adf_to_text(&adf), "Hello world");
+        assert_eq!(adf_to_text(&adf).unwrap(), "Hello world");
     }
 
     #[test]
     fn test_markdown_heading() {
-        let adf = markdown_to_adf("## Root cause");
+        let adf = markdown_to_adf("## Root cause").unwrap();
         assert_eq!(adf["content"][0]["type"], "heading");
         assert_eq!(adf["content"][0]["attrs"]["level"], 2);
     }
 
     #[test]
     fn test_markdown_list() {
-        let adf = markdown_to_adf("- item one\n- item two");
+        let adf = markdown_to_adf("- item one\n- item two").unwrap();
         assert_eq!(adf["content"][0]["type"], "bulletList");
         let items = adf["content"][0]["content"].as_array().unwrap();
         assert_eq!(items.len(), 2);
@@ -2522,14 +2603,14 @@ mod tests {
 
     #[test]
     fn test_markdown_code_block() {
-        let adf = markdown_to_adf("```\nlet x = 1;\n```");
+        let adf = markdown_to_adf("```\nlet x = 1;\n```").unwrap();
         assert_eq!(adf["content"][0]["type"], "codeBlock");
     }
 
     #[test]
     fn test_adf_roundtrip_heading() {
-        let adf = markdown_to_adf("## Title\nSome text");
-        let text = adf_to_text(&adf);
+        let adf = markdown_to_adf("## Title\nSome text").unwrap();
+        let text = adf_to_text(&adf).unwrap();
         assert!(text.contains("## Title"));
         assert!(text.contains("Some text"));
     }
@@ -2540,7 +2621,7 @@ mod tests {
             "type": "doc",
             "content": [{ "type": "mediaGroup" }]
         });
-        assert_eq!(adf_to_text(&adf), "");
+        assert_eq!(adf_to_text(&adf).unwrap(), "");
     }
 
     #[test]
@@ -2555,7 +2636,7 @@ mod tests {
                 ]
             }]
         });
-        let text = adf_to_text(&adf);
+        let text = adf_to_text(&adf).unwrap();
         assert!(text.contains("inside panel"), "got: {text:?}");
         assert!(!text.contains("[unsupported"), "no debug string: {text:?}");
     }
@@ -2590,13 +2671,13 @@ mod tests {
             "fn validate() -> bool { true }\n",
             "```\n",
         );
-        let adf = markdown_to_adf(input);
+        let adf = markdown_to_adf(input).unwrap();
         insta::assert_json_snapshot!("markdown_complex_to_adf", adf);
     }
 
     #[test]
     fn test_markdown_ordered_list_sets_order_when_start_is_not_one() {
-        let adf = markdown_to_adf("5. first\n6. second");
+        let adf = markdown_to_adf("5. first\n6. second").unwrap();
         assert_eq!(adf["content"][0]["type"], "orderedList");
         assert_eq!(adf["content"][0]["attrs"]["order"], 5);
         assert_eq!(adf["content"][0]["content"][0]["type"], "listItem");
@@ -2604,7 +2685,7 @@ mod tests {
 
     #[test]
     fn test_markdown_ordered_list_omits_order_when_start_is_one() {
-        let adf = markdown_to_adf("1. alpha\n2. beta");
+        let adf = markdown_to_adf("1. alpha\n2. beta").unwrap();
         assert_eq!(adf["content"][0]["type"], "orderedList");
         assert!(adf["content"][0]["attrs"].is_null());
     }
@@ -2615,7 +2696,7 @@ mod tests {
     fn test_markdown_ordered_task_list_produces_task_list_not_ordered_list() {
         // `1. [ ] a\n2. [x] b` must reclassify to taskList, NOT orderedList.
         // orderedList.content only permits listItem; taskItem would be Jira 400.
-        let adf = markdown_to_adf("1. [ ] a\n2. [x] b\n");
+        let adf = markdown_to_adf("1. [ ] a\n2. [x] b\n").unwrap();
         let top = &adf["content"][0];
         assert_eq!(
             top["type"], "taskList",
@@ -2644,7 +2725,7 @@ mod tests {
     #[test]
     fn test_markdown_ordered_task_list_mixed_promotes_plain_to_todo() {
         // `1. [ ] a\n2. plain` — plain item must be promoted to taskItem TODO.
-        let adf = markdown_to_adf("1. [ ] a\n2. plain\n");
+        let adf = markdown_to_adf("1. [ ] a\n2. plain\n").unwrap();
         let top = &adf["content"][0];
         assert_eq!(
             top["type"], "taskList",
@@ -2662,7 +2743,7 @@ mod tests {
     #[test]
     fn test_markdown_ordered_task_list_nested_produces_nested_task_list() {
         // `1. [ ] a\n   1. [ ] b` — nested ordered task list per EC-13.
-        let adf = markdown_to_adf("1. [ ] a\n   1. [ ] b\n");
+        let adf = markdown_to_adf("1. [ ] a\n   1. [ ] b\n").unwrap();
         // The outer container must be a taskList.
         let outer = &adf["content"][0];
         assert_eq!(outer["type"], "taskList", "outer must be taskList: {adf}");
@@ -2673,7 +2754,7 @@ mod tests {
     #[test]
     fn test_markdown_plain_ordered_list_unchanged_without_task_markers() {
         // Plain `1. first\n2. second` (no task markers) must remain orderedList.
-        let adf = markdown_to_adf("1. first\n2. second\n");
+        let adf = markdown_to_adf("1. first\n2. second\n").unwrap();
         let top = &adf["content"][0];
         assert_eq!(
             top["type"], "orderedList",
@@ -2694,7 +2775,7 @@ mod tests {
 
     #[test]
     fn test_markdown_hard_break() {
-        let adf = markdown_to_adf("line one  \nline two");
+        let adf = markdown_to_adf("line one  \nline two").unwrap();
         let para = &adf["content"][0];
         assert_eq!(para["type"], "paragraph");
         let contents = para["content"].as_array().unwrap();
@@ -2703,7 +2784,7 @@ mod tests {
 
     #[test]
     fn test_markdown_horizontal_rule() {
-        let adf = markdown_to_adf("above\n\n---\n\nbelow");
+        let adf = markdown_to_adf("above\n\n---\n\nbelow").unwrap();
         let has_rule = adf["content"]
             .as_array()
             .unwrap()
@@ -2714,7 +2795,7 @@ mod tests {
 
     #[test]
     fn test_markdown_soft_break_becomes_space() {
-        let adf = markdown_to_adf("first line\nsecond line");
+        let adf = markdown_to_adf("first line\nsecond line").unwrap();
         let para = &adf["content"][0];
         let text = para["content"]
             .as_array()
@@ -2727,7 +2808,7 @@ mod tests {
 
     #[test]
     fn test_markdown_nested_bullet_list() {
-        let adf = markdown_to_adf("- outer\n  - inner");
+        let adf = markdown_to_adf("- outer\n  - inner").unwrap();
         let outer_list = &adf["content"][0];
         assert_eq!(outer_list["type"], "bulletList");
         let outer_item = &outer_list["content"][0];
@@ -2742,7 +2823,7 @@ mod tests {
 
     #[test]
     fn test_markdown_blockquote_wraps_children() {
-        let adf = markdown_to_adf("> quoted text");
+        let adf = markdown_to_adf("> quoted text").unwrap();
         let bq = &adf["content"][0];
         assert_eq!(bq["type"], "blockquote");
         let para = &bq["content"][0];
@@ -2752,7 +2833,7 @@ mod tests {
 
     #[test]
     fn test_markdown_code_block_with_language() {
-        let adf = markdown_to_adf("```rust\nfn x() {}\n```");
+        let adf = markdown_to_adf("```rust\nfn x() {}\n```").unwrap();
         let block = &adf["content"][0];
         assert_eq!(block["type"], "codeBlock");
         assert_eq!(block["attrs"]["language"], "rust");
@@ -2761,7 +2842,7 @@ mod tests {
 
     #[test]
     fn test_markdown_empty_input() {
-        let adf = markdown_to_adf("");
+        let adf = markdown_to_adf("").unwrap();
         assert_eq!(adf["type"], "doc");
         assert_eq!(adf["content"], json!([]));
     }
@@ -2769,7 +2850,7 @@ mod tests {
     #[test]
     fn test_markdown_inline_code_mark_and_composition() {
         // Plain inline code: emits text with a `code` mark.
-        let adf = markdown_to_adf("see `foo` here");
+        let adf = markdown_to_adf("see `foo` here").unwrap();
         let code_node = adf["content"][0]["content"]
             .as_array()
             .unwrap()
@@ -2779,7 +2860,7 @@ mod tests {
         assert_eq!(code_node["marks"][0]["type"], "code");
 
         // Inline code inside bold: composes both marks on the same text node.
-        let adf = markdown_to_adf("**bold `code` bold**");
+        let adf = markdown_to_adf("**bold `code` bold**").unwrap();
         let code_node = adf["content"][0]["content"]
             .as_array()
             .unwrap()
@@ -2805,7 +2886,7 @@ mod tests {
         // bulletList, orderedList, codeBlock, mediaSingle — see
         // docs/specs/adf-listitem-content-model.md, issue #470). We unwrap the
         // blockquote and splice its child paragraph(s) directly into the listItem.
-        let adf = markdown_to_adf("- > quoted text");
+        let adf = markdown_to_adf("- > quoted text").unwrap();
         let item = &adf["content"][0]["content"][0];
         assert_eq!(item["type"], "listItem");
         let first_child = &item["content"][0];
@@ -2822,7 +2903,7 @@ mod tests {
     fn test_markdown_heading_inside_list_item_becomes_paragraph() {
         // ADF `listItem` does not permit `heading`. Convert to a paragraph,
         // preserving inline content (issue #470).
-        let adf = markdown_to_adf("- # Heading text");
+        let adf = markdown_to_adf("- # Heading text").unwrap();
         let item = &adf["content"][0]["content"][0];
         assert_eq!(item["type"], "listItem");
         let first_child = &item["content"][0];
@@ -2842,7 +2923,7 @@ mod tests {
     fn test_markdown_heading_inside_list_item_preserves_inline_marks() {
         // `- ### deep **bold** head` → paragraph preserving the strong mark on
         // "bold" (inline content kept verbatim, only the heading wrapper dropped).
-        let adf = markdown_to_adf("- ### deep **bold** head");
+        let adf = markdown_to_adf("- ### deep **bold** head").unwrap();
         let para = &adf["content"][0]["content"][0]["content"][0];
         assert_eq!(para["type"], "paragraph");
         let content = para["content"].as_array().unwrap();
@@ -2857,7 +2938,7 @@ mod tests {
     fn test_markdown_blockquote_with_heading_inside_list_item_normalizes_recursively() {
         // `- > # quoted heading` → unwrap blockquote, then the inner heading is
         // itself downconverted to a paragraph (recursive normalization).
-        let adf = markdown_to_adf("- > # quoted heading");
+        let adf = markdown_to_adf("- > # quoted heading").unwrap();
         let item = &adf["content"][0]["content"][0];
         assert_eq!(item["type"], "listItem");
         let first_child = &item["content"][0];
@@ -2873,7 +2954,7 @@ mod tests {
     fn test_markdown_rule_inside_list_item_is_dropped() {
         // ADF `listItem` does not permit `rule`. A horizontal rule inside a list
         // item carries no content and is dropped; the paragraph is kept.
-        let adf = markdown_to_adf("- item\n\n  ---");
+        let adf = markdown_to_adf("- item\n\n  ---").unwrap();
         let item = &adf["content"][0]["content"][0];
         assert_eq!(item["type"], "listItem");
         assert_eq!(item["content"][0]["type"], "paragraph");
@@ -2890,7 +2971,7 @@ mod tests {
         // paragraph per row (`| a | b |` form); no `table`/`tableRow` node
         // survives. The header cell is bold to verify inline marks are preserved
         // as real ADF marks (NOT serialized to literal `**` markdown).
-        let adf = markdown_to_adf("- intro\n\n  | **a** | b |\n  | - | - |\n  | 1 | 2 |");
+        let adf = markdown_to_adf("- intro\n\n  | **a** | b |\n  | - | - |\n  | 1 | 2 |").unwrap();
         let item = &adf["content"][0]["content"][0];
         assert_eq!(item["type"], "listItem");
         let children = item["content"].as_array().unwrap();
@@ -2976,7 +3057,7 @@ mod tests {
                 }]
             }]
         });
-        let paras = flatten_table_to_paragraphs(&table);
+        let paras = flatten_table_to_paragraphs(&table).unwrap();
         assert_eq!(paras.len(), 1, "one row → one paragraph: {paras:?}");
         let content = paras[0]["content"].as_array().unwrap();
         // No block node smuggled into the paragraph; every child is a text node.
@@ -3000,7 +3081,7 @@ mod tests {
         // the item empty, so `wrap_inlines_as_blocks` supplies a single empty
         // paragraph to satisfy ADF's "at least one block" rule (BC-7.2.006 edge
         // case). No `rule` node survives.
-        let adf = markdown_to_adf("-   \n\n    ---");
+        let adf = markdown_to_adf("-   \n\n    ---").unwrap();
         let item = &adf["content"][0]["content"][0];
         assert_eq!(item["type"], "listItem");
         let children = item["content"].as_array().unwrap();
@@ -3021,7 +3102,7 @@ mod tests {
     fn test_markdown_codeblock_inside_list_item_passes_through() {
         // `codeBlock` is a permitted listItem child and must pass through the
         // normalization untouched (BC-7.2.006).
-        let adf = markdown_to_adf("- ```\n  let x = 1;\n  ```");
+        let adf = markdown_to_adf("- ```\n  let x = 1;\n  ```").unwrap();
         let item = &adf["content"][0]["content"][0];
         assert_eq!(item["type"], "listItem");
         let code = &item["content"][0];
@@ -3038,7 +3119,7 @@ mod tests {
     fn test_markdown_ordered_list_inside_list_item_passes_through() {
         // A nested `orderedList` is a permitted listItem child and passes through;
         // its own items are normalized at their own listItem boundary.
-        let adf = markdown_to_adf("- outer\n  1. a\n  2. b");
+        let adf = markdown_to_adf("- outer\n  1. a\n  2. b").unwrap();
         let item = &adf["content"][0]["content"][0];
         assert_eq!(item["type"], "listItem");
         let nested = item["content"]
@@ -3061,7 +3142,7 @@ mod tests {
     fn test_markdown_inline_html_becomes_literal_text() {
         // ENABLE_HTML is not set in Options; pulldown-cmark still emits Html/InlineHtml
         // events which we forward to push_text so the literal source is preserved.
-        let adf = markdown_to_adf("before <span>x</span> after");
+        let adf = markdown_to_adf("before <span>x</span> after").unwrap();
         let para_text: String = adf["content"][0]["content"]
             .as_array()
             .unwrap()
@@ -3094,7 +3175,7 @@ mod tests {
 
     #[test]
     fn test_bare_https_url_becomes_link_mark() {
-        let adf = markdown_to_adf("see https://example.com now");
+        let adf = markdown_to_adf("see https://example.com now").unwrap();
         let para = &adf["content"][0];
         assert_eq!(para["type"], "paragraph");
         // Surrounding text stays plain; the URL span carries a link mark.
@@ -3115,7 +3196,7 @@ mod tests {
 
     #[test]
     fn test_bare_http_url_becomes_link_mark() {
-        let adf = markdown_to_adf("http://a.co/x?q=1");
+        let adf = markdown_to_adf("http://a.co/x?q=1").unwrap();
         let para = &adf["content"][0];
         assert_eq!(
             link_href_for_text(para, "http://a.co/x?q=1"),
@@ -3126,7 +3207,7 @@ mod tests {
 
     #[test]
     fn test_bare_url_trailing_period_is_trimmed() {
-        let adf = markdown_to_adf("visit https://example.com.");
+        let adf = markdown_to_adf("visit https://example.com.").unwrap();
         let para = &adf["content"][0];
         // Trailing sentence period is NOT part of the link.
         assert_eq!(
@@ -3145,7 +3226,7 @@ mod tests {
 
     #[test]
     fn test_bare_url_wrapping_paren_not_captured() {
-        let adf = markdown_to_adf("(https://example.com)");
+        let adf = markdown_to_adf("(https://example.com)").unwrap();
         let para = &adf["content"][0];
         assert_eq!(
             link_href_for_text(para, "https://example.com"),
@@ -3156,7 +3237,7 @@ mod tests {
 
     #[test]
     fn test_bare_url_balanced_inner_parens_kept() {
-        let adf = markdown_to_adf("https://en.wikipedia.org/wiki/Foo_(bar)");
+        let adf = markdown_to_adf("https://en.wikipedia.org/wiki/Foo_(bar)").unwrap();
         let para = &adf["content"][0];
         assert_eq!(
             link_href_for_text(para, "https://en.wikipedia.org/wiki/Foo_(bar)"),
@@ -3167,7 +3248,7 @@ mod tests {
 
     #[test]
     fn test_url_in_inline_code_not_linkified() {
-        let adf = markdown_to_adf("`https://example.com`");
+        let adf = markdown_to_adf("`https://example.com`").unwrap();
         let node = &adf["content"][0]["content"][0];
         let marks: Vec<&str> = node["marks"]
             .as_array()
@@ -3182,7 +3263,7 @@ mod tests {
 
     #[test]
     fn test_url_in_code_block_not_linkified() {
-        let adf = markdown_to_adf("```\nhttps://example.com\n```");
+        let adf = markdown_to_adf("```\nhttps://example.com\n```").unwrap();
         assert_eq!(adf["content"][0]["type"], "codeBlock", "{adf}");
         let node = &adf["content"][0]["content"][0];
         assert!(
@@ -3193,7 +3274,7 @@ mod tests {
 
     #[test]
     fn test_existing_markdown_link_not_double_linkified() {
-        let adf = markdown_to_adf("[x](https://example.com)");
+        let adf = markdown_to_adf("[x](https://example.com)").unwrap();
         let content = adf["content"][0]["content"].as_array().unwrap();
         assert_eq!(content.len(), 1, "exactly one text node: {adf}");
         assert_eq!(
@@ -3211,7 +3292,7 @@ mod tests {
 
     #[test]
     fn test_www_url_stays_plain_text() {
-        let adf = markdown_to_adf("see www.example.com here");
+        let adf = markdown_to_adf("see www.example.com here").unwrap();
         let para = &adf["content"][0];
         // www. is deliberately out of scope (no scheme to infer); stays plain.
         assert!(
@@ -3229,7 +3310,7 @@ mod tests {
 
     #[test]
     fn test_bare_email_stays_plain_text() {
-        let adf = markdown_to_adf("ping user@example.com please");
+        let adf = markdown_to_adf("ping user@example.com please").unwrap();
         assert!(
             !contains_node_type(&adf, "link"),
             "bare email must NOT be linkified (out of scope): {adf}"
@@ -3250,7 +3331,7 @@ mod tests {
     fn test_uppercase_https_scheme_is_linkified() {
         // RFC 3986 / GFM treat schemes case-insensitively. The href preserves the
         // user's original case (we do not normalize the scheme or path).
-        let adf = markdown_to_adf("see HTTPS://example.com now");
+        let adf = markdown_to_adf("see HTTPS://example.com now").unwrap();
         let para = &adf["content"][0];
         assert_eq!(
             link_href_for_text(para, "HTTPS://example.com"),
@@ -3261,7 +3342,7 @@ mod tests {
 
     #[test]
     fn test_mixed_case_scheme_is_linkified_and_path_case_preserved() {
-        let adf = markdown_to_adf("Http://Example.com/Path");
+        let adf = markdown_to_adf("Http://Example.com/Path").unwrap();
         let para = &adf["content"][0];
         assert_eq!(
             link_href_for_text(para, "Http://Example.com/Path"),
@@ -3273,7 +3354,7 @@ mod tests {
     #[test]
     fn test_trailing_uppercase_in_scheme_is_linkified() {
         // `httpS://` matches `http` then the case-insensitive `https://` check.
-        let adf = markdown_to_adf("httpS://example.com");
+        let adf = markdown_to_adf("httpS://example.com").unwrap();
         let para = &adf["content"][0];
         assert_eq!(
             link_href_for_text(para, "httpS://example.com"),
@@ -3288,7 +3369,7 @@ mod tests {
         // avoid linking the inner URL of an unresolved reference shortcut. pulldown
         // emits `[https://example.com]` as literal text; the `[` before `http`
         // fails our boundary check, so no link is produced.
-        let adf = markdown_to_adf("[https://example.com]");
+        let adf = markdown_to_adf("[https://example.com]").unwrap();
         assert!(
             !contains_node_type(&adf, "link"),
             "URL after `[` (reference-shortcut form) must stay plain text: {adf}"
@@ -3299,7 +3380,7 @@ mod tests {
     fn test_url_tight_against_preceding_word_not_matched() {
         // GFM boundary: an autolink must start at line-start, after whitespace, or
         // after one of *_~( . A scheme tight against a word char is not an autolink.
-        let adf = markdown_to_adf("foohttps://example.com");
+        let adf = markdown_to_adf("foohttps://example.com").unwrap();
         assert!(
             !contains_node_type(&adf, "link"),
             "URL tight against a preceding word char must NOT match: {adf}"
@@ -3310,8 +3391,8 @@ mod tests {
     fn test_bare_url_round_trips_to_markdown_link_text() {
         // A bare URL becomes a real link, so adf_to_text renders it in `[t](href)`
         // form — semantically correct (it IS a link now), not the bare string.
-        let adf = markdown_to_adf("https://example.com");
-        let text = adf_to_text(&adf);
+        let adf = markdown_to_adf("https://example.com").unwrap();
+        let text = adf_to_text(&adf).unwrap();
         assert_eq!(
             text, "[https://example.com](https://example.com)",
             "bare URL round-trips as a markdown link: {text:?}"
@@ -3328,7 +3409,7 @@ mod tests {
         // emphasized tail is NOT part of the href. Documented in the spec's
         // "Deviations from GFM" section. This test pins the limitation so it is a
         // declared behavior, not an accident.
-        let adf = markdown_to_adf("see https://example.com/a*b*c done");
+        let adf = markdown_to_adf("see https://example.com/a*b*c done").unwrap();
         let para = &adf["content"][0];
         assert_eq!(
             link_href_for_text(para, "https://example.com/a"),
@@ -3352,7 +3433,7 @@ mod tests {
     fn test_bare_url_inside_emphasis_keeps_em_and_link() {
         // A URL wholly inside an emphasis span arrives carrying an `em` mark; the
         // split must preserve it AND add `link` (two distinct mark types, valid).
-        let adf = markdown_to_adf("*https://example.com*");
+        let adf = markdown_to_adf("*https://example.com*").unwrap();
         let node = &adf["content"][0]["content"][0];
         let mark_types: Vec<&str> = node["marks"]
             .as_array()
@@ -3374,7 +3455,7 @@ mod tests {
     fn test_two_bare_urls_in_one_text_node_both_link() {
         // find_bare_url_spans returns multiple spans; split_text_node_on_urls
         // loops over them. Pins the cursor bookkeeping for >1 URL in one node.
-        let adf = markdown_to_adf("https://a.example.com and https://b.example.com");
+        let adf = markdown_to_adf("https://a.example.com and https://b.example.com").unwrap();
         let para = &adf["content"][0];
         assert_eq!(
             link_href_for_text(para, "https://a.example.com"),
@@ -3403,7 +3484,7 @@ mod tests {
     fn test_bare_url_with_port_is_preserved() {
         // The `:` trailing-trim rule must NOT strip a port (`:8080` is followed by
         // digits, so `:` is interior, not trailing). Load-bearing: pins port survival.
-        let adf = markdown_to_adf("https://example.com:8080/path");
+        let adf = markdown_to_adf("https://example.com:8080/path").unwrap();
         let para = &adf["content"][0];
         assert_eq!(
             link_href_for_text(para, "https://example.com:8080/path"),
@@ -3415,7 +3496,7 @@ mod tests {
     #[test]
     fn test_bare_url_trailing_colon_is_trimmed() {
         // A genuinely trailing `:` (end of the run) IS trimmed, per GFM.
-        let adf = markdown_to_adf("see https://example.com: next");
+        let adf = markdown_to_adf("see https://example.com: next").unwrap();
         let para = &adf["content"][0];
         assert_eq!(
             link_href_for_text(para, "https://example.com"),
@@ -3429,7 +3510,7 @@ mod tests {
         // The walker recurses into a `panel` AFTER normalize_panel_content ran.
         // A `link` is an inline text-node mark (not a node-level mark), so it does
         // not violate the panel "no node marks" rule. Pins the post-normalization path.
-        let adf = markdown_to_adf("> [!NOTE]\n> see https://example.com here");
+        let adf = markdown_to_adf("> [!NOTE]\n> see https://example.com here").unwrap();
         assert_eq!(adf["content"][0]["type"], "panel", "is a panel: {adf}");
         assert!(
             contains_node_type(&adf, "link"),
@@ -3439,7 +3520,7 @@ mod tests {
 
     #[test]
     fn test_bare_url_in_table_cell_is_linkified() {
-        let adf = markdown_to_adf("| a |\n|---|\n| https://example.com |");
+        let adf = markdown_to_adf("| a |\n|---|\n| https://example.com |").unwrap();
         assert!(contains_node_type(&adf, "table"), "is a table: {adf}");
         assert!(
             contains_node_type(&adf, "link"),
@@ -3449,7 +3530,7 @@ mod tests {
 
     #[test]
     fn test_markdown_italic_to_em_mark() {
-        let adf = markdown_to_adf("*italic words*");
+        let adf = markdown_to_adf("*italic words*").unwrap();
         let text_node = &adf["content"][0]["content"][0];
         assert_eq!(text_node["type"], "text");
         assert_eq!(text_node["text"], "italic words");
@@ -3458,7 +3539,7 @@ mod tests {
 
     #[test]
     fn test_markdown_bold_to_strong_mark() {
-        let adf = markdown_to_adf("**bold words**");
+        let adf = markdown_to_adf("**bold words**").unwrap();
         let text_node = &adf["content"][0]["content"][0];
         assert_eq!(text_node["text"], "bold words");
         assert_eq!(text_node["marks"][0]["type"], "strong");
@@ -3466,7 +3547,7 @@ mod tests {
 
     #[test]
     fn test_markdown_strikethrough_to_strike_mark() {
-        let adf = markdown_to_adf("~~gone~~");
+        let adf = markdown_to_adf("~~gone~~").unwrap();
         let text_node = &adf["content"][0]["content"][0];
         assert_eq!(text_node["text"], "gone");
         assert_eq!(text_node["marks"][0]["type"], "strike");
@@ -3474,7 +3555,7 @@ mod tests {
 
     #[test]
     fn test_markdown_link_preserves_href_and_no_title() {
-        let adf = markdown_to_adf("[jr](https://example.com/jr)");
+        let adf = markdown_to_adf("[jr](https://example.com/jr)").unwrap();
         let text_node = &adf["content"][0]["content"][0];
         assert_eq!(text_node["text"], "jr");
         let mark = &text_node["marks"][0];
@@ -3486,7 +3567,7 @@ mod tests {
 
     #[test]
     fn test_markdown_link_preserves_href_and_title() {
-        let adf = markdown_to_adf(r#"[jr](https://example.com/jr "JR docs")"#);
+        let adf = markdown_to_adf(r#"[jr](https://example.com/jr "JR docs")"#).unwrap();
         let mark = &adf["content"][0]["content"][0]["marks"][0];
         assert_eq!(mark["type"], "link");
         assert_eq!(mark["attrs"]["href"], "https://example.com/jr");
@@ -3495,7 +3576,7 @@ mod tests {
 
     #[test]
     fn test_markdown_mixed_marks() {
-        let adf = markdown_to_adf("**bold _italic_ bold**");
+        let adf = markdown_to_adf("**bold _italic_ bold**").unwrap();
         let content = adf["content"][0]["content"].as_array().unwrap();
         // Every text node in this paragraph should carry `strong` (outer).
         assert!(
@@ -3523,7 +3604,7 @@ mod tests {
 
     #[test]
     fn test_markdown_escape_literal_asterisk() {
-        let adf = markdown_to_adf(r"\*not italic\*");
+        let adf = markdown_to_adf(r"\*not italic\*").unwrap();
         let text_node = &adf["content"][0]["content"][0];
         assert_eq!(text_node["text"], "*not italic*");
         // No em mark because backslash escapes the asterisks.
@@ -3533,7 +3614,7 @@ mod tests {
     #[test]
     fn test_markdown_table_cells_and_headers() {
         let input = "| foo | bar |\n| --- | --- |\n| baz | qux |";
-        let adf = markdown_to_adf(input);
+        let adf = markdown_to_adf(input).unwrap();
         let table = &adf["content"][0];
         assert_eq!(table["type"], "table");
 
@@ -3607,13 +3688,13 @@ mod tests {
                 ]}
             ]
         });
-        let text = adf_to_text(&adf);
+        let text = adf_to_text(&adf).unwrap();
         insta::assert_snapshot!("adf_to_text_complex", text);
     }
 
     #[test]
     fn test_markdown_image_is_skipped() {
-        let adf = markdown_to_adf("before ![alt](https://example.com/img.png) after");
+        let adf = markdown_to_adf("before ![alt](https://example.com/img.png) after").unwrap();
         let para_text: String = adf["content"][0]["content"]
             .as_array()
             .unwrap()
@@ -3645,7 +3726,8 @@ mod tests {
     /// unambiguous alt-text token pins the drop.
     #[test]
     fn test_markdown_image_alt_text_is_dropped_by_sink_guard() {
-        let adf = markdown_to_adf("before ![ALTTEXTMARKER](https://example.com/i.png) after");
+        let adf =
+            markdown_to_adf("before ![ALTTEXTMARKER](https://example.com/i.png) after").unwrap();
         let serialized = adf.to_string();
         assert!(
             !serialized.contains("ALTTEXTMARKER"),
@@ -3680,7 +3762,7 @@ mod tests {
         // `taskItem` with state "TODO". No `bulletList` node in the output.
         // Replaces the pre-#471 test `test_markdown_task_list_syntax_preserved_as_text`
         // which pinned literal-text behavior when ENABLE_TASKLISTS was off.
-        let adf = markdown_to_adf("- [ ] unchecked item");
+        let adf = markdown_to_adf("- [ ] unchecked item").unwrap();
         let list = first_block(&adf);
         assert_eq!(list["type"], "taskList", "expected taskList, got: {list}");
         // localId must be a non-empty string
@@ -3710,7 +3792,7 @@ mod tests {
     #[test]
     fn test_markdown_task_checked_item_emits_done_state() {
         // BC-7.2.010 EC-1: `- [x] done item` → taskItem with attrs.state == "DONE" (uppercase).
-        let adf = markdown_to_adf("- [x] done item");
+        let adf = markdown_to_adf("- [x] done item").unwrap();
         let list = first_block(&adf);
         assert_eq!(list["type"], "taskList", "got: {list}");
         let item = &list["content"][0];
@@ -3729,7 +3811,7 @@ mod tests {
         // Forward: state must be "DONE" (not "done" or "Done").
         // Reverse (AC-003b): adf_to_text always emits `- [x]` (lowercase) for DONE state.
         // Casing normalization is documented lossiness (EC-10(f)).
-        let adf = markdown_to_adf("- [X] uppercase");
+        let adf = markdown_to_adf("- [X] uppercase").unwrap();
         let list = first_block(&adf);
         assert_eq!(list["type"], "taskList", "got: {list}");
         let item = &list["content"][0];
@@ -3738,7 +3820,7 @@ mod tests {
             "uppercase [X] must produce state DONE: {item}"
         );
         // Reverse path: must render as `- [x]` (lowercase), never `- [X]`
-        let rendered = adf_to_text(&adf);
+        let rendered = adf_to_text(&adf).unwrap();
         assert!(
             rendered.contains("- [x] "),
             "DONE state must render as `- [x]` (lowercase), got: {rendered:?}"
@@ -3756,7 +3838,7 @@ mod tests {
         // BC-7.2.010 EC-3: a list containing both task and plain items must have
         // the whole container promoted to `taskList`. Plain items get state "TODO".
         // ADF does not permit mixing `listItem` and `taskItem` in one container.
-        let adf = markdown_to_adf("- [ ] checkbox\n- plain item");
+        let adf = markdown_to_adf("- [ ] checkbox\n- plain item").unwrap();
         let list = first_block(&adf);
         assert_eq!(
             list["type"], "taskList",
@@ -3793,7 +3875,7 @@ mod tests {
         //
         // Input: `- [ ] task\n- plain\n  - sub`
         // Expected: `sub` appears in the output (hoisted to the correct level).
-        let adf = markdown_to_adf("- [ ] task\n- plain\n  - sub");
+        let adf = markdown_to_adf("- [ ] task\n- plain\n  - sub").unwrap();
         let adf_str = adf.to_string();
         assert!(
             adf_str.contains("sub"),
@@ -3811,7 +3893,7 @@ mod tests {
         // Input: "- [x] a\n- " — pulldown-cmark emits a Start(Item)→End(Item) for
         // the bare `- ` (no text inside), producing an empty listItem that the
         // promotion arm turns into an empty taskItem. EC-8 requires it be dropped.
-        let adf = markdown_to_adf("- [x] a\n- ");
+        let adf = markdown_to_adf("- [x] a\n- ").unwrap();
         let adf_str = adf.to_string();
         // The result must contain exactly one taskItem (the `[x] a` item).
         // The empty promoted plain item must be pruned.
@@ -3839,7 +3921,7 @@ mod tests {
         // EC-3 / O-2 regression guard: non-empty plain items promoted to taskItem
         // in a mixed list must NOT be pruned by the emptiness check.
         // Input: "- [ ] task\n- plain" — `plain` is non-empty → must survive.
-        let adf = markdown_to_adf("- [ ] task\n- plain");
+        let adf = markdown_to_adf("- [ ] task\n- plain").unwrap();
         let task_list = first_block(&adf);
         assert_eq!(task_list["type"], "taskList", "must be taskList: {adf}");
         let items = task_list["content"]
@@ -3870,7 +3952,7 @@ mod tests {
         //   [text("bold",[strong]), text(" and "), text("em",[em])]
         // with NO hardBreak nodes between runs. The prior weak version only checked
         // `contains("strong")` and `contains("em")` and missed spurious hardBreaks.
-        let adf = markdown_to_adf("- [x] **bold** and _em_");
+        let adf = markdown_to_adf("- [x] **bold** and _em_").unwrap();
         let list = first_block(&adf);
         assert_eq!(list["type"], "taskList", "got: {list}");
         let item = &list["content"][0];
@@ -3940,7 +4022,7 @@ mod tests {
         // F-P2-C1 regression: `- [x] a \`code\` b` → tight task item with inline code.
         // The three text runs (plain "a ", code "code", plain " b") must appear
         // as consecutive text/code nodes with NO hardBreak injected between them.
-        let adf = markdown_to_adf("- [x] a `code` b");
+        let adf = markdown_to_adf("- [x] a `code` b").unwrap();
         let list = first_block(&adf);
         assert_eq!(list["type"], "taskList", "got: {list}");
         let item = &list["content"][0];
@@ -3970,7 +4052,7 @@ mod tests {
         // task item. pulldown-cmark emits Event::SoftBreak which is mapped to a space.
         // The two text runs must be joined (possibly as one merged text node or two
         // adjacent text nodes) with NO hardBreak injected between them.
-        let adf = markdown_to_adf("- [x] line one\n  continued");
+        let adf = markdown_to_adf("- [x] line one\n  continued").unwrap();
         let list = first_block(&adf);
         assert_eq!(list["type"], "taskList", "got: {list}");
         let item = &list["content"][0];
@@ -4008,13 +4090,13 @@ mod tests {
         // Anchor assertion: top-level task list (no outer bullet) DOES produce taskList.
         // This fails without ENABLE_TASKLISTS and distinguishes the normalization test
         // from "no taskList because the feature is off" vacuousness.
-        let adf_anchor = markdown_to_adf("- [ ] top level");
+        let adf_anchor = markdown_to_adf("- [ ] top level").unwrap();
         assert_eq!(
             first_block(&adf_anchor)["type"],
             "taskList",
             "top-level task list must produce taskList (ENABLE_TASKLISTS required): {adf_anchor}"
         );
-        let adf = markdown_to_adf("- outer\n  - [ ] inner task");
+        let adf = markdown_to_adf("- outer\n  - [ ] inner task").unwrap();
         let outer_list = first_block(&adf);
         // Outer list stays as bulletList (not taskList — the outer item has no checkbox)
         assert_eq!(
@@ -4073,13 +4155,13 @@ mod tests {
         // Anchor assertion: top-level task list DOES produce taskList node.
         // This fails without ENABLE_TASKLISTS and guards against vacuous pass
         // ("no taskList in blockquote because the feature is off").
-        let adf_anchor = markdown_to_adf("- [ ] top level");
+        let adf_anchor = markdown_to_adf("- [ ] top level").unwrap();
         assert_eq!(
             first_block(&adf_anchor)["type"],
             "taskList",
             "top-level task list must produce taskList (ENABLE_TASKLISTS required): {adf_anchor}"
         );
-        let adf = markdown_to_adf("> - [ ] item");
+        let adf = markdown_to_adf("> - [ ] item").unwrap();
         let block = first_block(&adf);
         assert_eq!(
             block["type"], "blockquote",
@@ -4118,7 +4200,7 @@ mod tests {
         // "taskList". Without it, a surviving taskList is misclassified as inline and
         // wrapped into panel > paragraph > taskList — INVALID ADF (Jira 400).
         // Source: .factory/research/issue-471-panel-tasklist-shape.md §D.
-        let adf = markdown_to_adf("> [!NOTE]\n> - [ ] item");
+        let adf = markdown_to_adf("> [!NOTE]\n> - [ ] item").unwrap();
         // Must be a panel (from the GFM alert, per #483)
         let panel = first_block(&adf);
         assert_eq!(panel["type"], "panel", "got: {panel}");
@@ -4159,14 +4241,14 @@ mod tests {
         // The test requires ENABLE_TASKLISTS to be set: first verify that a non-empty
         // task item DOES produce a taskList node (this assertion fails without the feature),
         // then verify the empty item is pruned.
-        let adf_nonempty = markdown_to_adf("- [ ] has text");
+        let adf_nonempty = markdown_to_adf("- [ ] has text").unwrap();
         assert_eq!(
             first_block(&adf_nonempty)["type"],
             "taskList",
             "non-empty task item must produce taskList (requires ENABLE_TASKLISTS): {adf_nonempty}"
         );
         // Now the actual pruning assertion:
-        let adf = markdown_to_adf("- [ ]");
+        let adf = markdown_to_adf("- [ ]").unwrap();
         let adf_str = adf.to_string();
         assert!(
             !adf_str.contains("\"taskItem\""),
@@ -4179,14 +4261,14 @@ mod tests {
         // BC-7.2.010 EC-9: all taskItems pruned → empty taskList → also pruned.
         // Two empty items — both pruned → the enclosing taskList must also be absent.
         // Anchor: a non-empty task list DOES produce a taskList node.
-        let adf_nonempty = markdown_to_adf("- [ ] has text");
+        let adf_nonempty = markdown_to_adf("- [ ] has text").unwrap();
         assert_eq!(
             first_block(&adf_nonempty)["type"],
             "taskList",
             "non-empty task item must produce taskList (requires ENABLE_TASKLISTS): {adf_nonempty}"
         );
         // Empty items: both pruned → taskList also pruned
-        let adf = markdown_to_adf("- [ ]\n- [ ]");
+        let adf = markdown_to_adf("- [ ]\n- [ ]").unwrap();
         let adf_str = adf.to_string();
         assert!(
             !adf_str.contains("\"taskList\""),
@@ -4212,13 +4294,13 @@ mod tests {
         // treat as empty when ALL nodes are hardBreak or whitespace-only text.
         //
         // Anchor: a non-empty task item DOES produce a taskList node (requires ENABLE_TASKLISTS).
-        let adf_anchor = markdown_to_adf("- [ ] has text");
+        let adf_anchor = markdown_to_adf("- [ ] has text").unwrap();
         assert_eq!(
             first_block(&adf_anchor)["type"],
             "taskList",
             "non-empty task item must produce taskList (requires ENABLE_TASKLISTS): {adf_anchor}"
         );
-        let adf = markdown_to_adf("- [ ] \\\n");
+        let adf = markdown_to_adf("- [ ] \\\n").unwrap();
         let adf_str = adf.to_string();
         assert!(
             !adf_str.contains("\"taskItem\""),
@@ -4280,15 +4362,15 @@ mod tests {
         // CR-004: strengthened from presence-only `contains` to assert_eq on
         // the trimmed full output, so extraneous-content regressions are caught.
         let input = "- [ ] pending\n- [x] done";
-        let adf = markdown_to_adf(input);
-        let rendered = adf_to_text(&adf);
+        let adf = markdown_to_adf(input).unwrap();
+        let rendered = adf_to_text(&adf).unwrap();
         assert_eq!(
             rendered.trim(),
             "- [ ] pending\n- [x] done",
             "adf_to_text must render exact task list output, got: {rendered:?}"
         );
         // Re-parse must produce taskList (not bulletList)
-        let adf2 = markdown_to_adf(&rendered);
+        let adf2 = markdown_to_adf(&rendered).unwrap();
         let list2 = first_block(&adf2);
         assert_eq!(
             list2["type"], "taskList",
@@ -4331,7 +4413,7 @@ mod tests {
                 }]
             }]
         });
-        let rendered = adf_to_text(&adf);
+        let rendered = adf_to_text(&adf).unwrap();
         assert!(
             rendered.contains("- [x]"),
             "lowercase state 'done' must render as `- [x]`, got: {rendered:?}"
@@ -4346,7 +4428,7 @@ mod tests {
         // Forward: nested taskList placed as sibling AFTER parent taskItem in parent
         // taskList.content. NOT inside taskItem.content (inline-only).
         // Reverse: adf_to_text renders with exactly 2-space indentation per nesting level.
-        let adf = markdown_to_adf("- [ ] outer\n  - [x] nested");
+        let adf = markdown_to_adf("- [ ] outer\n  - [x] nested").unwrap();
         let outer_list = first_block(&adf);
         assert_eq!(outer_list["type"], "taskList", "got: {outer_list}");
         let outer_content = outer_list["content"].as_array().expect("taskList.content");
@@ -4377,7 +4459,7 @@ mod tests {
             );
         }
         // Reverse path: 2-space indentation pinned
-        let rendered = adf_to_text(&adf);
+        let rendered = adf_to_text(&adf).unwrap();
         assert!(
             rendered.contains("\n  - [x] nested") || rendered.contains("  - [x] nested"),
             "nested task item must render with exactly 2-space indent, got: {rendered:?}"
@@ -4402,7 +4484,7 @@ mod tests {
             ("- [X] checked uppercase", "DONE"),
         ];
         for (md, expected_state) in valid_forms {
-            let adf = markdown_to_adf(md);
+            let adf = markdown_to_adf(md).unwrap();
             let list = first_block(&adf);
             assert_eq!(
                 list["type"], "taskList",
@@ -4424,7 +4506,7 @@ mod tests {
             "- [X ] trailing space",
         ];
         for md in malformed {
-            let adf = markdown_to_adf(md);
+            let adf = markdown_to_adf(md).unwrap();
             let list = first_block(&adf);
             assert_ne!(
                 list["type"], "taskList",
@@ -4450,7 +4532,7 @@ mod tests {
         // taskList.content (only taskItem/taskList permitted). The builder hoists the
         // nested list to the grandparent block level (doc root in this case).
         // Output at grandparent level: [taskList > [taskItem("outer")], bulletList(...)]
-        let adf = markdown_to_adf("- [ ] outer\n  - plain inner");
+        let adf = markdown_to_adf("- [ ] outer\n  - plain inner").unwrap();
         // Must have at least 2 top-level blocks: taskList + hoisted bulletList
         let doc_content = adf["content"].as_array().expect("doc must have content");
         assert!(
@@ -4492,7 +4574,7 @@ mod tests {
         //
         // Sub-assertion 1: normal two-paragraph case
         // `- [ ] line1\n\n  line2` → taskItem.content: [text("line1"), hardBreak, text("line2")]
-        let adf1 = markdown_to_adf("- [ ] line1\n\n  line2");
+        let adf1 = markdown_to_adf("- [ ] line1\n\n  line2").unwrap();
         let list1 = first_block(&adf1);
         assert_eq!(list1["type"], "taskList", "got: {list1}");
         let item1 = &list1["content"][0];
@@ -4526,7 +4608,7 @@ mod tests {
 
         // Sub-assertion 2: trailing-empty-paragraph trim
         // `- [ ] x\n\n  ` → taskItem.content: [text("x")] — NO trailing hardBreak
-        let adf2 = markdown_to_adf("- [ ] x\n\n  ");
+        let adf2 = markdown_to_adf("- [ ] x\n\n  ").unwrap();
         let list2 = first_block(&adf2);
         assert_eq!(list2["type"], "taskList", "got: {list2}");
         let item2 = &list2["content"][0];
@@ -4552,7 +4634,7 @@ mod tests {
         // producing empty content [], then prune gate fires.
         // If prune runs BEFORE flatten (bug), the unflattened [paragraph(""), paragraph("")]
         // has non-empty content → NOT pruned → stray taskItem PRESENT → this assertion fails.
-        let adf3 = markdown_to_adf("- [ ]\n\n  ");
+        let adf3 = markdown_to_adf("- [ ]\n\n  ").unwrap();
         let adf3_str = adf3.to_string();
         assert!(
             !adf3_str.contains("\"taskItem\""),
@@ -4595,7 +4677,7 @@ mod tests {
             }]
         });
         // Reverse path: renders taskItem with `- [ ] ` prefix (requires taskItem arm in renderer)
-        let rendered = adf_to_text(&adf);
+        let rendered = adf_to_text(&adf).unwrap();
         assert!(
             rendered.contains("- [ ] "),
             "TODO taskItem must render with `- [ ] ` prefix (requires taskList/taskItem arm in adf_to_text): {rendered:?}"
@@ -4610,7 +4692,7 @@ mod tests {
         );
         // Round-trip is lossy: re-parsing the rendered text does NOT produce a hardBreak
         // (bare newline inside `- [ ] item` re-parses as item terminator, not hardBreak)
-        let adf2 = markdown_to_adf(&rendered);
+        let adf2 = markdown_to_adf(&rendered).unwrap();
         let adf2_str = adf2.to_string();
         // The re-parsed ADF is expected to NOT contain a hardBreak inside the task item
         // (this is the documented lossiness — do NOT treat absence as a bug)
@@ -4628,7 +4710,7 @@ mod tests {
         // Sub-assertion 1: concrete values for a 2-item list
         // Input: `- [ ] first\n- [x] second`
         // Expected: taskList.localId="1", taskItem[0].localId="2", taskItem[1].localId="3"
-        let adf = markdown_to_adf("- [ ] first\n- [x] second");
+        let adf = markdown_to_adf("- [ ] first\n- [x] second").unwrap();
         let task_list = first_block(&adf);
         assert_eq!(task_list["type"], "taskList", "got: {task_list}");
         assert_eq!(
@@ -4651,7 +4733,7 @@ mod tests {
         // Sub-assertion 2: dense assignment after pruning (pruned nodes skip counter)
         // Input: `- [ ] keep\n- [ ]\n- [ ] also`
         // Middle item has no text → pruned. Remaining IDs must be dense: "1","2","3"
-        let adf2 = markdown_to_adf("- [ ] keep\n- [ ]\n- [ ] also");
+        let adf2 = markdown_to_adf("- [ ] keep\n- [ ]\n- [ ] also").unwrap();
         let task_list2 = first_block(&adf2);
         assert_eq!(task_list2["type"], "taskList", "got: {task_list2}");
         assert_eq!(
@@ -4718,7 +4800,7 @@ mod tests {
         //   Start(BlockQuote(None)) → … → End(BlockQuote) → End(Item)
         // So blockquote IS a child of the tight TaskItem node.
         let md = "- [ ] x\n  > quote\n";
-        let adf = markdown_to_adf(md);
+        let adf = markdown_to_adf(md).unwrap();
         let serialized = serde_json::to_string(&adf).unwrap();
 
         // The blockquote must not appear inside any taskItem.content
@@ -4740,7 +4822,7 @@ mod tests {
         // path handles the hoist. The invariant is the same: no blockquote
         // inside taskItem.content.
         let md = "- [ ] x\n\n  > quote\n";
-        let adf = markdown_to_adf(md);
+        let adf = markdown_to_adf(md).unwrap();
 
         assert_no_block_in_task_item_content(&adf, "blockquote");
         assert!(contains_node_type(&adf, "taskList"), "must have taskList");
@@ -4750,7 +4832,7 @@ mod tests {
     fn test_block_in_loose_task_item_code_block_hoisted() {
         // F-471-H1: `- [ ] x\n\n  ```\n  code\n  ```\n` — codeBlock in loose task.
         let md = "- [ ] x\n\n  ```\n  code\n  ```\n";
-        let adf = markdown_to_adf(md);
+        let adf = markdown_to_adf(md).unwrap();
 
         assert_no_block_in_task_item_content(&adf, "codeBlock");
         assert!(contains_node_type(&adf, "taskList"), "must have taskList");
@@ -4773,7 +4855,7 @@ mod tests {
         //   — the empty outer task wrapper is dropped; the nested taskList is
         //     lifted to doc level as a direct child (valid ADF).
         let md = "- [ ]\n  - [x] nested\n";
-        let adf = markdown_to_adf(md);
+        let adf = markdown_to_adf(md).unwrap();
         let serialized = serde_json::to_string_pretty(&adf).unwrap();
 
         // Structural validity: no invalid parent→child relationships.
@@ -4819,7 +4901,7 @@ mod tests {
         //   — the empty outer task wrapper + outer list dissolve; the nested bulletList
         //     is lifted to doc level as a direct child (valid ADF).
         let md = "- [ ]\n  - plain inner\n";
-        let adf = markdown_to_adf(md);
+        let adf = markdown_to_adf(md).unwrap();
         let serialized = serde_json::to_string_pretty(&adf).unwrap();
 
         // Structural validity: no invalid parent→child relationships.
@@ -5189,7 +5271,7 @@ mod tests {
             ),
         ];
         for (label, md) in inputs {
-            let adf = markdown_to_adf(md);
+            let adf = markdown_to_adf(md).unwrap();
             // No underscore keys (F-471-M2)
             assert_no_underscore_keys(&adf, "root");
             // Structural validity (F-PASS3-I1)
@@ -5221,7 +5303,7 @@ mod tests {
             "- p\n    - [ ] deep\n- [ ] sib\n",
         ];
         for md in inputs {
-            let adf = markdown_to_adf(md);
+            let adf = markdown_to_adf(md).unwrap();
             assert_every_tasklist_leads_with_taskitem(&adf, md);
             // Defense in depth: the full structural validator must also pass.
             assert_valid_adf_structure(&adf);
@@ -5294,7 +5376,7 @@ mod tests {
             "- [ ] task\n- plain\n",
         ];
         for md in &inputs {
-            let adf = markdown_to_adf(md);
+            let adf = markdown_to_adf(md).unwrap();
             assert_no_underscore_keys(&adf, "root");
         }
     }
@@ -5321,7 +5403,7 @@ mod tests {
 
     #[test]
     fn test_markdown_footnote_reference_renders_marker_not_literal_caret() {
-        let adf = markdown_to_adf("See note.[^1]\n\n[^1]: The note body.");
+        let adf = markdown_to_adf("See note.[^1]\n\n[^1]: The note body.").unwrap();
         let s = adf.to_string();
         assert!(
             !s.contains("[^1]"),
@@ -5339,7 +5421,7 @@ mod tests {
 
     #[test]
     fn test_markdown_footnote_definition_appended_after_rule_with_label() {
-        let adf = markdown_to_adf("Body.[^1]\n\n[^1]: Definition text.");
+        let adf = markdown_to_adf("Body.[^1]\n\n[^1]: Definition text.").unwrap();
         let content = adf["content"].as_array().unwrap();
         let rule_idx = content
             .iter()
@@ -5360,7 +5442,7 @@ mod tests {
 
     #[test]
     fn test_markdown_footnote_definition_not_stray_broken_paragraph() {
-        let adf = markdown_to_adf("Body.[^1]\n\n[^1]: Definition text.");
+        let adf = markdown_to_adf("Body.[^1]\n\n[^1]: Definition text.").unwrap();
         let s = adf.to_string();
         assert!(
             !s.contains("[^1]:"),
@@ -5370,7 +5452,7 @@ mod tests {
 
     #[test]
     fn test_markdown_multiple_footnotes_share_single_divider() {
-        let adf = markdown_to_adf("First.[^a] Second.[^b]\n\n[^a]: Alpha.\n[^b]: Beta.");
+        let adf = markdown_to_adf("First.[^a] Second.[^b]\n\n[^a]: Alpha.\n[^b]: Beta.").unwrap();
         let s = adf.to_string();
         assert!(!s.contains("[^"), "no literal carets: {s}");
         let content = adf["content"].as_array().unwrap();
@@ -5397,7 +5479,7 @@ mod tests {
         // and produces no footnotes section. This is documented pulldown
         // behavior, not the #472 malformed-output bug (which required a
         // definition to manifest). Pinning it guards against a silent change.
-        let adf = markdown_to_adf("Dangling.[^x]");
+        let adf = markdown_to_adf("Dangling.[^x]").unwrap();
         let content = adf["content"].as_array().unwrap();
         assert!(
             content.iter().all(|n| n["type"] != "rule"),
@@ -5445,7 +5527,7 @@ mod tests {
     #[test]
     fn test_markdown_footnote_definition_in_blockquote_no_empty_container() {
         // `> [^1]: x` hoists the definition out, leaving an empty blockquote.
-        let adf = markdown_to_adf("Body.[^1]\n\n> [^1]: quoted note");
+        let adf = markdown_to_adf("Body.[^1]\n\n> [^1]: quoted note").unwrap();
         assert_no_invalid_empty_container(&adf);
         assert!(
             adf.to_string().contains("quoted note"),
@@ -5460,7 +5542,7 @@ mod tests {
         // it is NOT pruned), which keeps the listItem/bulletList non-empty and
         // valid. The point of this test: the hoist must never yield an
         // empty-`content` listItem/bulletList (a 400), and the body survives.
-        let adf = markdown_to_adf("Body.[^1]\n\n- [^1]: listed note");
+        let adf = markdown_to_adf("Body.[^1]\n\n- [^1]: listed note").unwrap();
         assert_no_invalid_empty_container(&adf);
         assert!(
             adf.to_string().contains("listed note"),
@@ -5472,7 +5554,7 @@ mod tests {
     fn test_markdown_footnote_reference_marker_does_not_inherit_marks() {
         // A reference inside `**bold**` must render a PLAIN `[1]` marker — the
         // marker is structural, not styled content.
-        let adf = markdown_to_adf("**bold[^1]**\n\n[^1]: note");
+        let adf = markdown_to_adf("**bold[^1]**\n\n[^1]: note").unwrap();
         let first_para = &adf["content"][0];
         let marker = first_para["content"]
             .as_array()
@@ -5499,7 +5581,7 @@ mod tests {
 
     #[test]
     fn test_markdown_footnote_duplicate_definition_kept_once() {
-        let adf = markdown_to_adf("Body.[^1]\n\n[^1]: first\n[^1]: second");
+        let adf = markdown_to_adf("Body.[^1]\n\n[^1]: first\n[^1]: second").unwrap();
         let content = adf["content"].as_array().unwrap();
         let def_paras = content
             .iter()
@@ -5519,7 +5601,7 @@ mod tests {
 
     #[test]
     fn test_markdown_footnote_no_double_rule_when_body_ends_with_rule() {
-        let adf = markdown_to_adf("Body.[^1]\n\n---\n\n[^1]: note");
+        let adf = markdown_to_adf("Body.[^1]\n\n---\n\n[^1]: note").unwrap();
         let rules = adf["content"]
             .as_array()
             .unwrap()
@@ -5533,7 +5615,7 @@ mod tests {
     fn test_markdown_footnote_only_document_has_no_leading_rule() {
         // A definition with no body content and no reference still preserves the
         // text but must not produce a leading rule divider.
-        let adf = markdown_to_adf("[^1]: orphan definition");
+        let adf = markdown_to_adf("[^1]: orphan definition").unwrap();
         let content = adf["content"].as_array().unwrap();
         assert_ne!(content[0]["type"], "rule", "no leading rule: {adf}");
         assert!(
@@ -5546,7 +5628,7 @@ mod tests {
     fn test_markdown_footnote_definition_body_list_preserved() {
         // A definition whose body is a list exercises the non-paragraph branch:
         // a standalone `[1]` label paragraph is prepended, then the list blocks.
-        let adf = markdown_to_adf("Body.[^1]\n\n[^1]:\n    - alpha\n    - beta");
+        let adf = markdown_to_adf("Body.[^1]\n\n[^1]:\n    - alpha\n    - beta").unwrap();
         assert_no_invalid_empty_container(&adf);
         let content = adf["content"].as_array().unwrap();
         let has_label = content
@@ -5631,7 +5713,7 @@ mod tests {
     fn test_markdown_bare_heading_pruned_no_empty_container() {
         // A contentless `#` line yields an empty heading; it must be pruned, not
         // emitted as an invalid empty-content node.
-        let adf = markdown_to_adf("#\n\nbody text");
+        let adf = markdown_to_adf("#\n\nbody text").unwrap();
         assert_no_invalid_empty_container(&adf);
         let content = adf["content"].as_array().unwrap();
         assert!(
@@ -5656,7 +5738,7 @@ mod tests {
 
     #[test]
     fn test_markdown_superscript_to_subsup_sup() {
-        let adf = markdown_to_adf("a ^sup^ b");
+        let adf = markdown_to_adf("a ^sup^ b").unwrap();
         let nodes = adf["content"][0]["content"].as_array().unwrap();
         let sup = nodes
             .iter()
@@ -5668,7 +5750,7 @@ mod tests {
 
     #[test]
     fn test_markdown_subscript_to_subsup_sub() {
-        let adf = markdown_to_adf("a ~sub~ b");
+        let adf = markdown_to_adf("a ~sub~ b").unwrap();
         let nodes = adf["content"][0]["content"].as_array().unwrap();
         let sub = nodes
             .iter()
@@ -5684,7 +5766,7 @@ mod tests {
         // a preceding word char, so the common `mc^2^` exponent form is NOT
         // converted — it stays literal. Documented limitation (#474); use a
         // boundary like `mc ^2^` to get a subsup mark.
-        let adf = markdown_to_adf("mc^2^");
+        let adf = markdown_to_adf("mc^2^").unwrap();
         let t = adf["content"][0]["content"][0].clone();
         assert_eq!(t["text"], "mc^2^", "intraword caret stays literal: {t}");
         assert!(t["marks"].is_null(), "no subsup mark applied: {t}");
@@ -5693,7 +5775,7 @@ mod tests {
     #[test]
     fn test_markdown_double_tilde_still_strikethrough_not_subscript() {
         // Enabling ENABLE_SUBSCRIPT must not steal `~~x~~` from strikethrough.
-        let adf = markdown_to_adf("~~struck~~");
+        let adf = markdown_to_adf("~~struck~~").unwrap();
         let t = first_para_first_text(&adf);
         assert_eq!(t["text"], "struck");
         assert_eq!(t["marks"][0]["type"], "strike", "got: {t}");
@@ -5710,19 +5792,19 @@ mod tests {
                 { "type": "text", "text": "x", "marks": [{ "type": "subsup", "attrs": { "type": "sup" } }] }
             ]}]
         });
-        assert_eq!(adf_to_text(&sup).trim(), "^x^");
+        assert_eq!(adf_to_text(&sup).unwrap().trim(), "^x^");
         let sub = json!({
             "type": "doc",
             "content": [{ "type": "paragraph", "content": [
                 { "type": "text", "text": "y", "marks": [{ "type": "subsup", "attrs": { "type": "sub" } }] }
             ]}]
         });
-        assert_eq!(adf_to_text(&sub).trim(), "~y~");
+        assert_eq!(adf_to_text(&sub).unwrap().trim(), "~y~");
     }
 
     #[test]
     fn test_subsup_markdown_to_text_roundtrip() {
-        let text = adf_to_text(&markdown_to_adf("a ^sup^ and ~sub~ b"));
+        let text = adf_to_text(&markdown_to_adf("a ^sup^ and ~sub~ b").unwrap()).unwrap();
         assert!(text.contains("^sup^"), "sup round-trip: {text:?}");
         assert!(text.contains("~sub~"), "sub round-trip: {text:?}");
     }
@@ -5742,7 +5824,7 @@ mod tests {
                 })
                 .unwrap_or_default()
         };
-        let adf = markdown_to_adf("**^x^**");
+        let adf = markdown_to_adf("**^x^**").unwrap();
         let marks = marks_of(&adf);
         assert!(
             marks.contains(&"strong".to_string()),
@@ -5753,7 +5835,7 @@ mod tests {
             "subsup present: {adf}"
         );
         // Reverse + re-parse: both marks survive the text representation.
-        let reparsed = markdown_to_adf(&adf_to_text(&adf));
+        let reparsed = markdown_to_adf(&adf_to_text(&adf).unwrap()).unwrap();
         let rt = marks_of(&reparsed);
         assert!(
             rt.contains(&"strong".to_string()) && rt.contains(&"subsup".to_string()),
@@ -5763,7 +5845,7 @@ mod tests {
 
     #[test]
     fn test_markdown_strike_sub_sup_coexist() {
-        let adf = markdown_to_adf("~~s~~ ~b~ ^p^");
+        let adf = markdown_to_adf("~~s~~ ~b~ ^p^").unwrap();
         let nodes = adf["content"][0]["content"].as_array().unwrap();
         let mark_of = |text: &str| -> String {
             nodes
@@ -5782,7 +5864,7 @@ mod tests {
         // `^ ~x~ ^` nests a subscript inside a superscript; the inner text would
         // otherwise carry two `subsup` marks, which ADF rejects (duplicate mark
         // type). dedup_marks_by_type keeps the first (outer sup).
-        let adf = markdown_to_adf("a ^b ~c~ d^ e");
+        let adf = markdown_to_adf("a ^b ~c~ d^ e").unwrap();
         let nodes = adf["content"][0]["content"].as_array().unwrap();
         let inner = nodes
             .iter()
@@ -5804,7 +5886,7 @@ mod tests {
         // Node `b` is inside only the outer `^…^` and never receives a duplicate,
         // so it is not the interesting target here. This test fails if dedup is
         // changed to last-wins.
-        let adf = markdown_to_adf("a ^b ~c~ d^ e");
+        let adf = markdown_to_adf("a ^b ~c~ d^ e").unwrap();
         let nodes = adf["content"][0]["content"].as_array().unwrap();
         let inner = nodes
             .iter()
@@ -5841,7 +5923,7 @@ mod tests {
         // identical for both (same push_mark / NodeKind::InlineMark mechanism).
 
         // --- Superscript: "a ^sup^ b" ---
-        let adf_sup = markdown_to_adf("a ^sup^ b");
+        let adf_sup = markdown_to_adf("a ^sup^ b").unwrap();
         let nodes_sup = adf_sup["content"][0]["content"]
             .as_array()
             .expect("paragraph must have content nodes");
@@ -5879,7 +5961,7 @@ mod tests {
         );
 
         // --- Subscript: "a ~sub~ b" ---
-        let adf_sub = markdown_to_adf("a ~sub~ b");
+        let adf_sub = markdown_to_adf("a ~sub~ b").unwrap();
         let nodes_sub = adf_sub["content"][0]["content"]
             .as_array()
             .expect("paragraph must have content nodes");
@@ -5922,7 +6004,7 @@ mod tests {
         // end-of-heading as a potential attribute container and silently drops
         // unrecognised tokens inside it, so `{bar}` is stripped alongside valid
         // forms like `{#id}` and `{.cls}`.
-        let adf = markdown_to_adf("## Foo {bar}");
+        let adf = markdown_to_adf("## Foo {bar}").unwrap();
         let heading = &adf["content"][0];
         assert_eq!(heading["type"], "heading", "must be a heading: {adf}");
         assert_eq!(heading["attrs"]["level"], 2, "must be level 2: {adf}");
@@ -5953,7 +6035,7 @@ mod tests {
             "## Title {#id .cls}",
             "## Title {key=val}",
         ] {
-            let adf = markdown_to_adf(src);
+            let adf = markdown_to_adf(src).unwrap();
             let heading = &adf["content"][0];
             assert_eq!(heading["type"], "heading", "{src}: {adf}");
             assert_eq!(heading["attrs"]["level"], 2, "{src}: {adf}");
@@ -5987,7 +6069,7 @@ mod tests {
                 ]
             }]
         });
-        let text = adf_to_text(&adf);
+        let text = adf_to_text(&adf).unwrap();
         assert!(text.contains("| h1 | h2 |"), "header row missing: {text:?}");
         assert!(
             text.contains("| --- | --- |"),
@@ -6010,7 +6092,7 @@ mod tests {
                 ]
             }]
         });
-        let text = adf_to_text(&adf);
+        let text = adf_to_text(&adf).unwrap();
         assert!(text.contains("| h | c |"), "row missing: {text:?}");
         assert!(
             text.contains("| --- | --- |"),
@@ -6032,7 +6114,7 @@ mod tests {
                 }]
             }]
         });
-        let text = adf_to_text(&adf);
+        let text = adf_to_text(&adf).unwrap();
         assert!(text.contains("| just text |"), "cell not flat: {text:?}");
     }
 
@@ -6040,7 +6122,8 @@ mod tests {
     fn test_markdown_table_cell_with_inline_formatting() {
         // Verify marks (Task 2) compose correctly with table cells (Task 3).
         // Structure: doc > table > tableRow > tableHeader > paragraph > text.
-        let adf = markdown_to_adf("| **bold** | [link](https://x) |\n| - | - |\n| a | b |");
+        let adf =
+            markdown_to_adf("| **bold** | [link](https://x) |\n| - | - |\n| a | b |").unwrap();
         let header_row = &adf["content"][0]["content"][0];
         assert_eq!(header_row["type"], "tableRow");
 
@@ -6075,7 +6158,7 @@ mod tests {
                 ]
             }]
         });
-        let text = adf_to_text(&adf);
+        let text = adf_to_text(&adf).unwrap();
         for line in text.lines() {
             assert!(line.starts_with("> "), "line should be prefixed: {line:?}");
         }
@@ -6097,7 +6180,7 @@ mod tests {
                 }]
             }]
         });
-        let text = adf_to_text(&adf);
+        let text = adf_to_text(&adf).unwrap();
         assert!(text.contains("> > inner"), "got: {text:?}");
     }
 
@@ -6109,7 +6192,7 @@ mod tests {
                 {"type": "text", "text": "bold", "marks": [{"type": "strong"}]}
             ]}]
         });
-        assert_eq!(adf_to_text(&adf), "**bold**");
+        assert_eq!(adf_to_text(&adf).unwrap(), "**bold**");
     }
 
     #[test]
@@ -6120,7 +6203,7 @@ mod tests {
                 {"type": "text", "text": "em", "marks": [{"type": "em"}]}
             ]}]
         });
-        assert_eq!(adf_to_text(&adf), "*em*");
+        assert_eq!(adf_to_text(&adf).unwrap(), "*em*");
     }
 
     #[test]
@@ -6131,7 +6214,7 @@ mod tests {
                 {"type": "text", "text": "gone", "marks": [{"type": "strike"}]}
             ]}]
         });
-        assert_eq!(adf_to_text(&adf), "~~gone~~");
+        assert_eq!(adf_to_text(&adf).unwrap(), "~~gone~~");
     }
 
     #[test]
@@ -6142,7 +6225,7 @@ mod tests {
                 {"type": "text", "text": "x", "marks": [{"type": "code"}]}
             ]}]
         });
-        assert_eq!(adf_to_text(&adf), "`x`");
+        assert_eq!(adf_to_text(&adf).unwrap(), "`x`");
     }
 
     #[test]
@@ -6155,7 +6238,7 @@ mod tests {
                 ]}
             ]}]
         });
-        assert_eq!(adf_to_text(&adf), "[jr](https://example.com/jr)");
+        assert_eq!(adf_to_text(&adf).unwrap(), "[jr](https://example.com/jr)");
     }
 
     #[test]
@@ -6166,7 +6249,7 @@ mod tests {
                 {"type": "text", "text": "jr", "marks": [{"type": "link"}]}
             ]}]
         });
-        assert_eq!(adf_to_text(&adf), "[jr]()");
+        assert_eq!(adf_to_text(&adf).unwrap(), "[jr]()");
     }
 
     #[test]
@@ -6177,7 +6260,7 @@ mod tests {
                 {"type": "text", "text": "foo", "marks": [{"type": "strong"}, {"type": "em"}]}
             ]}]
         });
-        assert_eq!(adf_to_text(&adf), "***foo***");
+        assert_eq!(adf_to_text(&adf).unwrap(), "***foo***");
     }
 
     #[test]
@@ -6188,7 +6271,7 @@ mod tests {
                 {"type": "text", "text": "plain", "marks": [{"type": "underline"}]}
             ]}]
         });
-        assert_eq!(adf_to_text(&adf), "plain");
+        assert_eq!(adf_to_text(&adf).unwrap(), "plain");
     }
 
     #[test]
@@ -6204,7 +6287,7 @@ mod tests {
                 ]
             }]
         });
-        let text = adf_to_text(&adf);
+        let text = adf_to_text(&adf).unwrap();
         assert!(text.contains("1. alpha"), "got: {text:?}");
         assert!(text.contains("2. beta"), "got: {text:?}");
         assert!(text.contains("3. gamma"), "got: {text:?}");
@@ -6223,7 +6306,7 @@ mod tests {
                 ]
             }]
         });
-        let text = adf_to_text(&adf);
+        let text = adf_to_text(&adf).unwrap();
         assert!(text.contains("5. five"), "got: {text:?}");
         assert!(text.contains("6. six"), "got: {text:?}");
     }
@@ -6240,7 +6323,7 @@ mod tests {
                 ]
             }]
         });
-        let text = adf_to_text(&adf);
+        let text = adf_to_text(&adf).unwrap();
         assert!(text.contains("1. only"), "got: {text:?}");
     }
 
@@ -6262,7 +6345,7 @@ mod tests {
                 }]
             }]
         });
-        let text = adf_to_text(&adf);
+        let text = adf_to_text(&adf).unwrap();
         assert!(text.contains("1. outer"), "got: {text:?}");
         assert!(text.contains("  - inner"), "got: {text:?}");
     }
@@ -6277,7 +6360,7 @@ mod tests {
                 {"type": "paragraph", "content": [{"type": "text", "text": "below"}]}
             ]
         });
-        let text = adf_to_text(&adf);
+        let text = adf_to_text(&adf).unwrap();
         assert!(text.contains("---"), "expected rule line, got: {text:?}");
         assert!(text.contains("above"));
         assert!(text.contains("below"));
@@ -6293,7 +6376,7 @@ mod tests {
                 {"type": "text", "text": "line two"}
             ]}]
         });
-        let text = adf_to_text(&adf);
+        let text = adf_to_text(&adf).unwrap();
         assert!(text.contains("line one\nline two"), "got: {text:?}");
     }
 
@@ -6307,7 +6390,7 @@ mod tests {
                 "content": [{"type": "text", "text": "fn x() {}"}]
             }]
         });
-        let text = adf_to_text(&adf);
+        let text = adf_to_text(&adf).unwrap();
         assert!(
             text.contains("```rust"),
             "expected rust fence, got: {text:?}"
@@ -6324,7 +6407,7 @@ mod tests {
                 "content": [{"type": "text", "text": "plain"}]
             }]
         });
-        let text = adf_to_text(&adf);
+        let text = adf_to_text(&adf).unwrap();
         assert!(
             text.contains("```\nplain"),
             "expected empty fence, got: {text:?}"
@@ -6346,9 +6429,9 @@ mod tests {
             "\n",
             "> quote\n",
         );
-        let adf_original = markdown_to_adf(input);
-        let text = adf_to_text(&adf_original);
-        let adf_reparsed = markdown_to_adf(&text);
+        let adf_original = markdown_to_adf(input).unwrap();
+        let text = adf_to_text(&adf_original).unwrap();
+        let adf_reparsed = markdown_to_adf(&text).unwrap();
 
         let types_original = collect_node_types(&adf_original);
         let types_reparsed = collect_node_types(&adf_reparsed);
@@ -6385,7 +6468,7 @@ mod tests {
                 {"type": "text", "text": "foo`bar", "marks": [{"type": "code"}]}
             ]}]
         });
-        let text = adf_to_text(&adf);
+        let text = adf_to_text(&adf).unwrap();
         assert_eq!(text, "``foo`bar``");
     }
 
@@ -6397,7 +6480,7 @@ mod tests {
                 {"type": "text", "text": "`x`", "marks": [{"type": "code"}]}
             ]}]
         });
-        let text = adf_to_text(&adf);
+        let text = adf_to_text(&adf).unwrap();
         assert_eq!(text, "`` `x` ``");
     }
 
@@ -6416,7 +6499,7 @@ mod tests {
                 }]
             }]
         });
-        let text = adf_to_text(&adf);
+        let text = adf_to_text(&adf).unwrap();
         for line in text.lines() {
             assert!(
                 line.starts_with('>'),
@@ -6432,7 +6515,7 @@ mod tests {
         // Pinned here so a future refactor that starts emitting a placeholder
         // for empty documents trips a test instead of silently changing output.
         let adf = json!({"type": "doc", "content": []});
-        assert_eq!(adf_to_text(&adf), "");
+        assert_eq!(adf_to_text(&adf).unwrap(), "");
     }
 
     #[test]
@@ -6451,7 +6534,7 @@ mod tests {
                 "content": [{"type": "paragraph", "content": []}]
             }]
         });
-        assert_eq!(adf_to_text(&adf), "");
+        assert_eq!(adf_to_text(&adf).unwrap(), "");
     }
 
     #[test]
@@ -6470,7 +6553,7 @@ mod tests {
                 ]
             }]
         });
-        assert_eq!(adf_to_text(&adf), "a\n\nb");
+        assert_eq!(adf_to_text(&adf).unwrap(), "a\n\nb");
     }
 
     #[test]
@@ -6488,7 +6571,7 @@ mod tests {
                 ]}
             ]}]
         });
-        assert_eq!(adf_to_text(&adf), "**`x`**");
+        assert_eq!(adf_to_text(&adf).unwrap(), "**`x`**");
     }
 
     #[test]
@@ -6503,7 +6586,7 @@ mod tests {
                 ]}
             ]}]
         });
-        assert_eq!(adf_to_text(&adf), "*~~x~~*");
+        assert_eq!(adf_to_text(&adf).unwrap(), "*~~x~~*");
     }
 
     #[test]
@@ -6521,7 +6604,10 @@ mod tests {
                 ]}
             ]}]
         });
-        assert_eq!(adf_to_text(&adf), "**[x](https://example.com/jr)**");
+        assert_eq!(
+            adf_to_text(&adf).unwrap(),
+            "**[x](https://example.com/jr)**"
+        );
     }
 
     #[test]
@@ -6542,7 +6628,7 @@ mod tests {
                 ]
             }]
         });
-        assert_eq!(adf_to_text(&adf), "a");
+        assert_eq!(adf_to_text(&adf).unwrap(), "a");
     }
 
     #[test]
@@ -6567,7 +6653,7 @@ mod tests {
                 }]
             }]
         });
-        let text = adf_to_text(&adf);
+        let text = adf_to_text(&adf).unwrap();
         // The cell content must stay on a single pipe row — no embedded newline.
         assert!(text.contains("| line one line two |"), "got: {text:?}");
     }
@@ -6582,7 +6668,7 @@ mod tests {
                 {"type": "text", "text": "x", "marks": [{"type": "strong"}, {"type": "code"}]}
             ]}]
         });
-        let text = adf_to_text(&adf);
+        let text = adf_to_text(&adf).unwrap();
         assert_eq!(text, "**`x`**");
     }
 
@@ -6603,7 +6689,7 @@ mod tests {
                 }]
             }]
         });
-        let text = adf_to_text(&adf);
+        let text = adf_to_text(&adf).unwrap();
         // Pipe inside the cell must be escaped so it doesn't introduce a
         // false column break.
         assert!(text.contains(r"| a\|b |"), "got: {text:?}");
@@ -6626,7 +6712,7 @@ mod tests {
                 }]
             }]
         });
-        let text = adf_to_text(&adf);
+        let text = adf_to_text(&adf).unwrap();
         assert!(text.contains("| line wrap |"), "got: {text:?}");
     }
 
@@ -6681,7 +6767,7 @@ mod tests {
 
     #[test]
     fn test_markdown_alert_note_maps_to_panel_info() {
-        let adf = markdown_to_adf("> [!NOTE]\n> useful info");
+        let adf = markdown_to_adf("> [!NOTE]\n> useful info").unwrap();
         let content = assert_panel(&adf, "info");
         assert_eq!(content[0]["type"], "paragraph", "got: {content:?}");
         assert!(
@@ -6697,25 +6783,25 @@ mod tests {
 
     #[test]
     fn test_markdown_alert_tip_maps_to_panel_success() {
-        let adf = markdown_to_adf("> [!TIP]\n> a tip");
+        let adf = markdown_to_adf("> [!TIP]\n> a tip").unwrap();
         assert_panel(&adf, "success");
     }
 
     #[test]
     fn test_markdown_alert_important_maps_to_panel_note() {
-        let adf = markdown_to_adf("> [!IMPORTANT]\n> key point");
+        let adf = markdown_to_adf("> [!IMPORTANT]\n> key point").unwrap();
         assert_panel(&adf, "note");
     }
 
     #[test]
     fn test_markdown_alert_warning_maps_to_panel_warning() {
-        let adf = markdown_to_adf("> [!WARNING]\n> careful");
+        let adf = markdown_to_adf("> [!WARNING]\n> careful").unwrap();
         assert_panel(&adf, "warning");
     }
 
     #[test]
     fn test_markdown_alert_caution_maps_to_panel_error() {
-        let adf = markdown_to_adf("> [!CAUTION]\n> danger");
+        let adf = markdown_to_adf("> [!CAUTION]\n> danger").unwrap();
         assert_panel(&adf, "error");
     }
 
@@ -6726,7 +6812,7 @@ mod tests {
         // disqualifies it -> stays a plain blockquote with the marker as literal
         // text. (Note: pulldown is otherwise lenient — a missing space `>[!NOTE]`
         // and any-case `[!note]`/`[!Note]` ARE still recognized as alerts.)
-        let adf = markdown_to_adf("> [!NOTE] extra\n> text");
+        let adf = markdown_to_adf("> [!NOTE] extra\n> text").unwrap();
         let block = first_block(&adf);
         assert_eq!(block["type"], "blockquote", "got: {block}");
         assert!(
@@ -6737,7 +6823,7 @@ mod tests {
 
     #[test]
     fn test_markdown_unknown_alert_kind_stays_literal_blockquote() {
-        let adf = markdown_to_adf("> [!FOO]\n> text");
+        let adf = markdown_to_adf("> [!FOO]\n> text").unwrap();
         let block = first_block(&adf);
         assert_eq!(block["type"], "blockquote", "got: {block}");
         assert!(
@@ -6748,7 +6834,7 @@ mod tests {
 
     #[test]
     fn test_markdown_plain_blockquote_unchanged() {
-        let adf = markdown_to_adf("> just a quote");
+        let adf = markdown_to_adf("> just a quote").unwrap();
         let block = first_block(&adf);
         assert_eq!(block["type"], "blockquote", "got: {block}");
     }
@@ -6757,7 +6843,7 @@ mod tests {
     fn test_markdown_nested_alert_unwraps_inner_panel() {
         // `panel > panel` is invalid ADF; the inner alert is unwrapped, its blocks
         // spliced into the outer panel. No panel may contain a nested panel.
-        let adf = markdown_to_adf("> [!NOTE]\n> outer\n> > [!TIP]\n> > inner");
+        let adf = markdown_to_adf("> [!NOTE]\n> outer\n> > [!TIP]\n> > inner").unwrap();
         let content = assert_panel(&adf, "info");
         let types: Vec<&str> = content.iter().filter_map(|n| n["type"].as_str()).collect();
         assert!(
@@ -6777,7 +6863,7 @@ mod tests {
     #[test]
     fn test_markdown_alert_with_table_flattens_to_paragraphs() {
         let md = "> [!NOTE]\n> | a | b |\n> | --- | --- |\n> | 1 | 2 |";
-        let adf = markdown_to_adf(md);
+        let adf = markdown_to_adf(md).unwrap();
         assert_panel(&adf, "info");
         let descendants = panel_descendant_types(&adf);
         assert!(
@@ -6800,7 +6886,7 @@ mod tests {
     fn test_markdown_alert_in_listitem_unwraps_panel() {
         // `listItem > panel` is invalid ADF; the panel is unwrapped inside the item.
         let md = "- item\n\n  > [!NOTE]\n  > nested";
-        let adf = markdown_to_adf(md);
+        let adf = markdown_to_adf(md).unwrap();
         let descendants_have_panel = {
             fn has_panel_in_listitem(node: &Value) -> bool {
                 let is_li = node.get("type").and_then(Value::as_str) == Some("listItem");
@@ -6830,7 +6916,7 @@ mod tests {
     fn test_markdown_alert_heading_child_has_no_marks() {
         // panel.content requires `heading (no marks)`. A heading inside an alert
         // must not carry a node-level `marks` array.
-        let adf = markdown_to_adf("> [!NOTE]\n> # Title");
+        let adf = markdown_to_adf("> [!NOTE]\n> # Title").unwrap();
         let content = assert_panel(&adf, "info");
         let heading = content
             .iter()
@@ -6849,7 +6935,7 @@ mod tests {
         // kept as a panel holding a placeholder paragraph. Positively assert the
         // panel node is absent from the whole document (not vacuously true on a
         // non-empty-content panel).
-        let adf = markdown_to_adf("> [!NOTE]");
+        let adf = markdown_to_adf("> [!NOTE]").unwrap();
         assert_no_invalid_empty_container(&adf);
         fn has_panel(n: &Value) -> bool {
             n["type"] == "panel"
@@ -6867,7 +6953,7 @@ mod tests {
     fn test_panel_content_only_permitted_node_types() {
         // Invariant: no panel anywhere contains a disallowed child node type.
         let md = "> [!NOTE]\n> outer\n> > [!TIP]\n> > | a | b |\n> > | - | - |\n> > | 1 | 2 |";
-        let adf = markdown_to_adf(md);
+        let adf = markdown_to_adf(md).unwrap();
         const FORBIDDEN: [&str; 3] = ["panel", "table", "blockquote"];
         for t in panel_descendant_types(&adf) {
             assert!(
@@ -6889,7 +6975,7 @@ mod tests {
                 ]
             }]
         });
-        let text = adf_to_text(&adf);
+        let text = adf_to_text(&adf).unwrap();
         // The marker line itself must be quoted (`> [!NOTE]`), not a bare
         // `[!NOTE]` (which would be a malformed alert), and the body line quoted.
         assert!(
@@ -6914,7 +7000,7 @@ mod tests {
                 ]
             }]
         });
-        let text = adf_to_text(&adf);
+        let text = adf_to_text(&adf).unwrap();
         assert!(text.contains("> [!WARNING]"), "marker quoted: {text:?}");
         assert!(text.contains("> line one"), "first line quoted: {text:?}");
         assert!(text.contains("> line two"), "second line quoted: {text:?}");
@@ -6935,7 +7021,7 @@ mod tests {
                 ]
             }]
         });
-        let text = adf_to_text(&adf);
+        let text = adf_to_text(&adf).unwrap();
         assert!(!text.contains("[!"), "no alert marker for `tip`: {text:?}");
         assert!(text.contains("> y"), "still quoted: {text:?}");
     }
@@ -6952,7 +7038,7 @@ mod tests {
                 ]
             }]
         });
-        let text = adf_to_text(&adf);
+        let text = adf_to_text(&adf).unwrap();
         assert!(
             !text.contains("[!"),
             "no alert marker for unknown type: {text:?}"
@@ -6970,8 +7056,8 @@ mod tests {
             ("CAUTION", "c"),
         ] {
             let md = format!("> [!{marker}]\n> {body}");
-            let adf = markdown_to_adf(&md);
-            let text = adf_to_text(&adf);
+            let adf = markdown_to_adf(&md).unwrap();
+            let text = adf_to_text(&adf).unwrap();
             assert!(
                 text.contains(&format!("[!{marker}]")),
                 "round-trip lost marker for {marker}: {text:?}"
@@ -6989,7 +7075,7 @@ mod tests {
         // is still recognized as an alert. This pins an upstream-dependency
         // behavior the mapping relies on — a future bump narrowing recognition
         // would otherwise silently leak `[!NOTE]` as a plain blockquote.
-        let adf = markdown_to_adf(">[!NOTE]\n>body");
+        let adf = markdown_to_adf(">[!NOTE]\n>body").unwrap();
         assert_panel(&adf, "info");
     }
 
@@ -6998,7 +7084,7 @@ mod tests {
         // pulldown-cmark recognizes the marker case-insensitively (`[!note]`,
         // `[!Note]`). Pin it so a dependency bump can't silently regress it.
         for md in ["> [!note]\n> b", "> [!Note]\n> b", "> [!WaRnInG]\n> b"] {
-            let adf = markdown_to_adf(md);
+            let adf = markdown_to_adf(md).unwrap();
             let block = first_block(&adf);
             assert_eq!(
                 block["type"], "panel",
@@ -7018,7 +7104,7 @@ mod tests {
         // "1. a\n   1. b" — three-space indent is what pulldown-cmark requires
         // for a sub-list inside an ordered item (mirrors "- outer\n  - inner"
         // for bullets but with 3-space indent because the "1. " prefix is 3 chars).
-        let adf = markdown_to_adf("1. a\n   1. b");
+        let adf = markdown_to_adf("1. a\n   1. b").unwrap();
 
         // Outer list is an orderedList at doc root.
         let outer_list = &adf["content"][0];
@@ -7075,7 +7161,7 @@ mod tests {
         //   Start(HtmlBlock) → Html("<div>x</div>\n") → End(HtmlBlock).
         // The HtmlBlock end handler concatenates the inner Html lines, trims the
         // single trailing block newline, and emits a paragraph of literal text.
-        let adf = markdown_to_adf("<div>x</div>");
+        let adf = markdown_to_adf("<div>x</div>").unwrap();
         let content = adf["content"].as_array().unwrap();
         assert_eq!(
             content.len(),
@@ -7115,7 +7201,7 @@ mod tests {
     #[test]
     fn test_convert_multiline_block_html_preserves_interior_newlines() {
         // BC-7.2.011 Algorithm B (general multiline hardBreak-segmentation); AC-004.
-        let adf = markdown_to_adf("<div>\n  <span>x</span>\n</div>");
+        let adf = markdown_to_adf("<div>\n  <span>x</span>\n</div>").unwrap();
         let content = adf["content"].as_array().unwrap();
         assert_eq!(
             content.len(),
@@ -7178,8 +7264,8 @@ mod tests {
     /// Single-line path — unchanged from #489. Must continue to PASS.
     #[test]
     fn test_block_html_round_trips_through_adf_to_text() {
-        let adf = markdown_to_adf("<div>x</div>");
-        let text = adf_to_text(&adf);
+        let adf = markdown_to_adf("<div>x</div>").unwrap();
+        let text = adf_to_text(&adf).unwrap();
         assert_eq!(
             text, "<div>x</div>",
             "block HTML must survive the ADF→text round trip verbatim: {text:?}"
@@ -7212,7 +7298,7 @@ mod tests {
         // ends on "</div>" (non-whitespace) → byte-identical round-trip.
         // No blank line means pulldown-cmark delivers this as one HtmlBlock.
         let input = "<div>\n  <span>a</span>\n</div>";
-        let adf = markdown_to_adf(input);
+        let adf = markdown_to_adf(input).unwrap();
 
         // (a) Forward structure: Algorithm B produces [text, hb, text, hb, text].
         // This is the RED GATE — pre-#492 handler emits a single text node with
@@ -7243,7 +7329,7 @@ mod tests {
         }
 
         // (b) Round-trip regression guard.
-        let rendered = adf_to_text(&adf);
+        let rendered = adf_to_text(&adf).unwrap();
         assert_eq!(
             rendered, input,
             "multi-line block HTML must round-trip byte-identically (LF-only, non-whitespace final line): rendered={rendered:?}"
@@ -7262,7 +7348,7 @@ mod tests {
     #[test]
     fn test_block_html_comment_only_behavior() {
         // BC-7.2.011 EC-3. Comment is preserved verbatim; trailing newline trimmed.
-        let adf = markdown_to_adf("<!-- x -->");
+        let adf = markdown_to_adf("<!-- x -->").unwrap();
         let content = adf["content"].as_array().unwrap();
         assert_eq!(
             content.len(),
@@ -7315,7 +7401,7 @@ mod tests {
         // BC-7.2.011 EC-4.
 
         // (a) Boundary-form: URL preceded by space → gets link mark.
-        let adf_boundary = markdown_to_adf("<div>see https://example.com</div>");
+        let adf_boundary = markdown_to_adf("<div>see https://example.com</div>").unwrap();
         let para = &adf_boundary["content"][0];
         assert_eq!(
             para["type"], "paragraph",
@@ -7343,7 +7429,7 @@ mod tests {
         );
 
         // (b) href-attribute form: URL flush against `"` → NOT autolinked.
-        let adf_href = markdown_to_adf("<a href=\"https://example.com\">");
+        let adf_href = markdown_to_adf("<a href=\"https://example.com\">").unwrap();
         let para_href = &adf_href["content"][0];
         assert_eq!(
             para_href["type"], "paragraph",
@@ -7389,7 +7475,7 @@ mod tests {
         // BC-7.2.011 EC-4 (F-P1-002).
         // Use the markdown_to_adf entry point (same as test_block_html_bare_url_gets_link_mark)
         // so the full Algorithm B + autolink pipeline is exercised.
-        let adf = markdown_to_adf("<div>\nsee https://example.com\n</div>");
+        let adf = markdown_to_adf("<div>\nsee https://example.com\n</div>").unwrap();
         let para = &adf["content"][0];
         assert_eq!(
             para["type"], "paragraph",
@@ -7492,7 +7578,7 @@ mod tests {
         // test_block_html_lone_cr_interior_produces_single_hardbreak handler test.
         // Use a raw block string so CRLF bytes survive the Rust string literal.
         let input = "<div>\r\n  x\r\n</div>";
-        let adf = markdown_to_adf(input);
+        let adf = markdown_to_adf(input).unwrap();
         let content = adf["content"].as_array().unwrap();
         assert_eq!(
             content.len(),
@@ -7841,7 +7927,7 @@ mod tests {
             "type": "doc",
             "content": root,
         });
-        let round_tripped = adf_to_text(&doc);
+        let round_tripped = adf_to_text(&doc).unwrap();
         assert_eq!(
             round_tripped, "<div>x</div>",
             "round-trip must strip the trailing-whitespace line via finish().trim_end(): round_tripped={round_tripped:?}"
@@ -7902,7 +7988,7 @@ mod tests {
         // bold span. The InlineMark end handler (NodeKind::InlineMark branch in
         // `end()`) splices already-marked children — including the hardBreak node
         // pushed by `Event::HardBreak` — back into the parent paragraph.
-        let adf = markdown_to_adf("**line one  \nline two**");
+        let adf = markdown_to_adf("**line one  \nline two**").unwrap();
 
         let para = &adf["content"][0];
         assert_eq!(
@@ -7964,7 +8050,7 @@ mod tests {
         // Expected output doc-level: [bulletList(plain inner), taskList([after])]
         // (NOT [taskList([after]), bulletList(plain inner)] — that is inverted.)
         let md = "- [ ]\n  - plain inner\n- [x] after\n";
-        let adf = markdown_to_adf(md);
+        let adf = markdown_to_adf(md).unwrap();
         let serialized = serde_json::to_string_pretty(&adf).unwrap();
 
         assert_valid_adf_structure(&adf);
@@ -8026,7 +8112,7 @@ mod tests {
         // blocks are interleaved, one taskList node is emitted per contiguous run
         // of task items, each run separated by the interposed hoisted block(s).
         let md = "- [x] before\n- [ ]\n  - plain\n- [x] after\n";
-        let adf = markdown_to_adf(md);
+        let adf = markdown_to_adf(md).unwrap();
         let serialized = serde_json::to_string_pretty(&adf).unwrap();
 
         assert_valid_adf_structure(&adf);
@@ -8087,7 +8173,7 @@ mod tests {
         // Empty parent task, TWO nested task items. Both must survive in order.
         // Expected: doc > taskList{taskItem(a), taskItem(b)}
         let md = "- [ ]\n  - [x] a\n  - [ ] b\n";
-        let adf = markdown_to_adf(md);
+        let adf = markdown_to_adf(md).unwrap();
         let serialized = serde_json::to_string_pretty(&adf).unwrap();
 
         assert_valid_adf_structure(&adf);
@@ -8140,7 +8226,7 @@ mod tests {
         // The key invariant: 'real' must appear at or before 'nested' in the
         // output — NOT after.
         let md = "- [x] real\n- [ ]\n  - [ ] nested\n";
-        let adf = markdown_to_adf(md);
+        let adf = markdown_to_adf(md).unwrap();
         let serialized = serde_json::to_string_pretty(&adf).unwrap();
 
         assert_valid_adf_structure(&adf);
@@ -8306,7 +8392,7 @@ mod tests {
         // Expected doc-level order: [taskList(outer), bulletList(inner)]
         // NOT [bulletList(inner), taskList(outer)].
         let md = "- [ ] outer\n\n  - inner\n";
-        let adf = markdown_to_adf(md);
+        let adf = markdown_to_adf(md).unwrap();
 
         assert_valid_adf_structure(&adf);
 
@@ -8356,7 +8442,7 @@ mod tests {
         // (sibling semantics), OR outer taskList comes before inner taskList.
         // Most importantly: the outer task item must NOT appear AFTER the inner list.
         let md = "- [ ] outer\n\n  - [x] inner\n";
-        let adf = markdown_to_adf(md);
+        let adf = markdown_to_adf(md).unwrap();
 
         assert_valid_adf_structure(&adf);
 
@@ -8392,7 +8478,7 @@ mod tests {
             "marks": [{ "type": "strong" }],
             "content": [{ "type": "text", "text": "x" }]
         })];
-        let out = normalize_panel_content(children);
+        let out = normalize_panel_content(children, 0).unwrap();
         assert_eq!(out.len(), 1, "paragraph kept: {out:?}");
         assert!(
             out[0].get("marks").is_none(),
@@ -8415,7 +8501,7 @@ mod tests {
         // it must NOT wrap `[taskList]` directly in `orderedList` (invalid ADF).
         // It must dissolve (hoist stray blocks to grandparent) instead.
         let md = "1. [ ]\n   1. [x] x\n";
-        let adf = markdown_to_adf(md);
+        let adf = markdown_to_adf(md).unwrap();
         assert_valid_adf_structure(&adf);
         // The nested task item "x" must appear somewhere in the output.
         let s = serde_json::to_string(&adf).unwrap();
@@ -8429,7 +8515,7 @@ mod tests {
     fn test_empty_outer_ordered_task_with_nested_plain_list_is_valid() {
         // F-P11-001 variant: `1. [ ]\n   - plain inner`
         let md = "1. [ ]\n   - plain inner\n";
-        let adf = markdown_to_adf(md);
+        let adf = markdown_to_adf(md).unwrap();
         assert_valid_adf_structure(&adf);
         let s = serde_json::to_string(&adf).unwrap();
         assert!(
@@ -8442,7 +8528,7 @@ mod tests {
     fn test_empty_outer_ordered_task_with_nested_task_list_is_valid() {
         // F-P11-001 variant: `1. [ ]\n   - [x] nested`
         let md = "1. [ ]\n   - [x] nested\n";
-        let adf = markdown_to_adf(md);
+        let adf = markdown_to_adf(md).unwrap();
         assert_valid_adf_structure(&adf);
         let s = serde_json::to_string(&adf).unwrap();
         assert!(s.contains("nested"), "content must not be dropped: {adf}");
@@ -8460,7 +8546,7 @@ mod tests {
         // The converted taskList([b]) → bulletList([listItem(b)]) must be nested
         // INSIDE the listItem(a), not appended as a sibling of listItem(a).
         let md = "- outer\n  - [ ] a\n    - [ ] b\n";
-        let adf = markdown_to_adf(md);
+        let adf = markdown_to_adf(md).unwrap();
         assert_valid_adf_structure(&adf);
         let s = serde_json::to_string(&adf).unwrap();
         assert!(
@@ -8473,7 +8559,7 @@ mod tests {
     fn test_plain_outer_item_with_multi_level_nested_ordered_task_list_is_valid() {
         // F-PASS13-C1 ordered variant: `- outer\n  1. [ ] a\n     1. [ ] b`
         let md = "- outer\n  1. [ ] a\n     1. [ ] b\n";
-        let adf = markdown_to_adf(md);
+        let adf = markdown_to_adf(md).unwrap();
         assert_valid_adf_structure(&adf);
     }
 
@@ -8725,7 +8811,7 @@ mod tests {
 
         for (label, md) in inputs {
             // No-panic guarantee: markdown_to_adf must complete normally.
-            let adf = markdown_to_adf(md);
+            let adf = markdown_to_adf(md).unwrap();
 
             // Structural validity: assert_valid_adf_structure panics on violation.
             assert_valid_adf_structure(&adf);
@@ -8991,7 +9077,7 @@ mod tests {
         fn prop_task_list_markdown_always_valid_adf(md in gen_markdown()) {
             // (a) markdown_to_adf is total (never panics). If it panicked,
             // proptest would catch it here and minimize.
-            let adf = markdown_to_adf(&md);
+            let adf = markdown_to_adf(&md).unwrap();
 
             // (b) structural validity: parent→child content-model legality for
             // every node touched by the task-list feature (bulletList/orderedList
@@ -9006,7 +9092,7 @@ mod tests {
             assert_no_underscore_keys(&adf, "root");
 
             // (d) the reverse render is total too.
-            let _ = adf_to_text(&adf);
+            let _ = adf_to_text(&adf).unwrap();
         }
     }
 
@@ -9354,7 +9440,7 @@ mod tests {
         ) {
             // INV-4: markdown_to_adf must not panic (proptest surfaces a panic
             // here and minimizes the input automatically).
-            let adf = markdown_to_adf(&input);
+            let adf = markdown_to_adf(&input).unwrap();
             // INV-1: no raw `\n` or `\r` in any non-codeBlock text node, and no
             // raw `\r` anywhere. Fixed in #522: push_text/push_code normalize lone
             // \r on the generic parser path (BC-7.2.011 EC-11 / INV-push-text-cr).
@@ -9366,7 +9452,7 @@ mod tests {
             // legitimately edge with a hardBreak (backslash hard-break at a line
             // boundary). INV-3 is a block-HTML-delta contract — see that property.
             // INV-4 (reverse): adf_to_text must also be total.
-            let _ = adf_to_text(&adf);
+            let _ = adf_to_text(&adf).unwrap();
         }
 
         /// INV-1/2/3/4 over BLOCK-HTML-SHAPED inputs (the Algorithm B surface):
@@ -9374,7 +9460,7 @@ mod tests {
         /// blank lines, leading/trailing whitespace, and multibyte UTF-8.
         #[test]
         fn prop_492_block_html_holds_core_invariants(input in gen_block_html()) {
-            let adf = markdown_to_adf(&input);     // INV-4
+            let adf = markdown_to_adf(&input).unwrap();     // INV-4
             // INV-1: block-HTML text nodes must be free of both \n (non-codeBlock)
             // and \r (all nodes). Algorithm B step-3 normalizes \r; push_text
             // context-aware normalization (#522) covers the generic path.
@@ -9382,7 +9468,7 @@ mod tests {
             assert_paragraph_has_content_key(&adf, &input);     // INV-2 (file-wide)
             assert_no_empty_paragraph_strict(&adf, &input);     // INV-2 (delta-strict)
             assert_no_paragraph_edge_hardbreak(&adf, &input);   // INV-3
-            let _ = adf_to_text(&adf);             // INV-4 reverse
+            let _ = adf_to_text(&adf).unwrap();             // INV-4 reverse
         }
 
         /// INV-5: for a SINGLE uninterrupted block-HTML run (no interior blank
@@ -9398,8 +9484,8 @@ mod tests {
             // The generator guarantees no interior blank line by construction;
             // this assertion documents/enforces that contract (never rejects).
             prop_assert!(!has_interior_blank_line(&input));
-            let adf = markdown_to_adf(&input);
-            let rendered = adf_to_text(&adf);
+            let adf = markdown_to_adf(&input).unwrap();
+            let rendered = adf_to_text(&adf).unwrap();
             prop_assert_eq!(
                 lf_canonical(&rendered),
                 lf_canonical(&input),
@@ -9443,7 +9529,7 @@ mod tests {
     #[test]
     fn test_push_text_normalizes_lone_cr_in_heading_and_code_block() {
         // indented codeBlock: lone \r in input → \n in codeBlock text (allowed).
-        let cb = markdown_to_adf("\ta\r");
+        let cb = markdown_to_adf("\ta\r").unwrap();
         let cb_texts = collect_all_text_nodes(&cb);
         assert!(
             cb_texts.iter().all(|t| !t.contains('\r')),
@@ -9461,7 +9547,7 @@ mod tests {
         );
         // heading: pulldown emits Text("x\ry"); push_text must convert \r → space,
         // NOT \n (which would violate INV-1 — raw \n forbidden in heading text nodes).
-        let h = markdown_to_adf("# x\ry");
+        let h = markdown_to_adf("# x\ry").unwrap();
         let h_texts = collect_all_text_nodes(&h);
         assert!(
             h_texts.iter().all(|t| !t.contains('\r')),
@@ -9499,7 +9585,7 @@ mod tests {
     fn test_push_text_normalizes_lone_cr_in_fenced_code_block() {
         // Fenced codeBlock with a lone \r in the body. pulldown passes this through
         // verbatim into Event::Text; inside CodeBlock context \r must become \n.
-        let adf = markdown_to_adf("```\na\rb\n```");
+        let adf = markdown_to_adf("```\na\rb\n```").unwrap();
         let texts = collect_all_text_nodes(&adf);
         assert!(
             texts.iter().all(|t| !t.contains('\r')),
@@ -9670,7 +9756,7 @@ mod tests {
         // \r to a space BEFORE emitting Event::Code, so no \r reaches push_code on
         // this path. This assertion is NOT a regression guard for the push_code fix
         // (it passes even without the fix); it documents the pulldown §6.3 invariant.
-        let via_md = markdown_to_adf("`a\rb`");
+        let via_md = markdown_to_adf("`a\rb`").unwrap();
         assert!(
             collect_all_text_nodes(&via_md)
                 .iter()
@@ -10416,7 +10502,7 @@ mod tests {
         ];
 
         for &input in inputs {
-            let adf = markdown_to_adf(input);
+            let adf = markdown_to_adf(input).unwrap();
             // If this assertion fires on ANY input before the fix, CR-01 is
             // reachable end-to-end through markdown_to_adf (HIGH verdict).
             assert_no_raw_newline_in_text_nodes(
@@ -10456,7 +10542,7 @@ mod tests {
                 // fragments (e.g. "<br\n/>") can be generated.
                 &proptest::string::string_regex("[\\r\\n\\t a-zA-Z0-9<>/\"=]{0,64}").unwrap(),
                 |input| {
-                    let adf = markdown_to_adf(&input);
+                    let adf = markdown_to_adf(&input).unwrap();
                     // INV-1: no raw \n in non-codeBlock text nodes, no raw \r anywhere.
                     assert_no_raw_newline_in_text_nodes(&adf, &input);
                     Ok(())
@@ -10627,8 +10713,6 @@ mod tests {
     #[test]
     fn test_markdown_to_adf_depth_255_blockquote_is_ok() {
         let md = make_nested_blockquote_markdown(255);
-        // NEW SIGNATURE: markdown_to_adf returns Result<Value, JrError>.
-        // This test will NOT COMPILE until the signature change is implemented.
         let result = markdown_to_adf(&md);
         assert!(
             result.is_ok(),
@@ -10641,8 +10725,6 @@ mod tests {
     #[test]
     fn test_markdown_to_adf_depth_256_blockquote_is_err() {
         let md = make_nested_blockquote_markdown(256);
-        // NEW SIGNATURE: markdown_to_adf returns Result<Value, JrError>.
-        // This test will NOT COMPILE until the signature change is implemented.
         let result = markdown_to_adf(&md);
         assert!(
             result.is_err(),
@@ -10670,8 +10752,6 @@ mod tests {
     #[test]
     fn test_markdown_to_adf_depth_257_blockquote_is_err() {
         let md = make_nested_blockquote_markdown(257);
-        // NEW SIGNATURE: markdown_to_adf returns Result<Value, JrError>.
-        // This test will NOT COMPILE until the signature change is implemented.
         let result = markdown_to_adf(&md);
         assert!(
             result.is_err(),
@@ -10700,15 +10780,21 @@ mod tests {
         if depth == 0 {
             return String::new();
         }
-        // Build from innermost outward.
-        // Innermost: "- leaf"
-        // Each wrapping level adds "- item\n<2-spaces-per-level><inner>"
-        let mut inner = "- leaf".to_string();
-        for level in 1..depth {
+        // Build from outermost to innermost with correct GFM 2-space-per-level indentation.
+        // For depth=3:
+        //   - item
+        //     - item
+        //       - leaf
+        let mut lines = Vec::with_capacity(depth);
+        for level in 0..depth {
             let indent = "  ".repeat(level);
-            inner = format!("- item\n{}{}", indent, inner);
+            if level < depth - 1 {
+                lines.push(format!("{}- item", indent));
+            } else {
+                lines.push(format!("{}- leaf", indent));
+            }
         }
-        inner
+        lines.join("\n")
     }
 
     /// BC-7.2.012 forward path: depth 256 nested lists → Err.
@@ -10716,8 +10802,6 @@ mod tests {
     #[test]
     fn test_markdown_to_adf_depth_256_nested_list_is_err() {
         let md = make_nested_list_markdown(256);
-        // NEW SIGNATURE: markdown_to_adf returns Result<Value, JrError>.
-        // This test will NOT COMPILE until the signature change is implemented.
         let result = markdown_to_adf(&md);
         assert!(
             result.is_err(),
@@ -10740,12 +10824,8 @@ mod tests {
     #[test]
     fn test_markdown_to_adf_depth_257_nested_list_is_err() {
         let md = make_nested_list_markdown(257);
-        // NEW SIGNATURE: will NOT COMPILE until signature change.
         let result = markdown_to_adf(&md);
-        assert!(
-            result.is_err(),
-            "depth 257 nested list must be Err; got Ok"
-        );
+        assert!(result.is_err(), "depth 257 nested list must be Err; got Ok");
         let err = result.unwrap_err();
         assert_eq!(err.exit_code(), 64);
     }
@@ -10756,9 +10836,11 @@ mod tests {
     #[test]
     fn test_markdown_to_adf_normal_depth_is_ok() {
         let md = "# Title\n\n- bullet one\n- bullet two\n\nSome **bold** text.\n";
-        // NEW SIGNATURE: will NOT COMPILE until signature change.
         let result = markdown_to_adf(md);
-        assert!(result.is_ok(), "normal-depth markdown must be Ok; got: {result:?}");
+        assert!(
+            result.is_ok(),
+            "normal-depth markdown must be Ok; got: {result:?}"
+        );
         let adf = result.unwrap();
         assert_eq!(adf["type"], "doc");
         assert_eq!(adf["content"][0]["type"], "heading");
@@ -10776,8 +10858,6 @@ mod tests {
     #[test]
     fn test_adf_to_text_depth_255_is_ok() {
         let adf = make_nested_adf_value(255);
-        // NEW SIGNATURE: adf_to_text returns Result<String, JrError>.
-        // This test will NOT COMPILE until the signature change is implemented.
         let result = adf_to_text(&adf);
         assert!(
             result.is_ok(),
@@ -10790,8 +10870,6 @@ mod tests {
     #[test]
     fn test_adf_to_text_depth_256_is_err() {
         let adf = make_nested_adf_value(256);
-        // NEW SIGNATURE: adf_to_text returns Result<String, JrError>.
-        // This test will NOT COMPILE until the signature change is implemented.
         let result = adf_to_text(&adf);
         assert!(
             result.is_err(),
@@ -10818,7 +10896,6 @@ mod tests {
     #[test]
     fn test_adf_to_text_depth_257_is_err() {
         let adf = make_nested_adf_value(257);
-        // NEW SIGNATURE: will NOT COMPILE until signature change.
         let result = adf_to_text(&adf);
         assert!(
             result.is_err(),
@@ -10852,7 +10929,13 @@ mod tests {
         let result = adf_to_text(&adf);
         assert!(result.is_ok(), "normal ADF must be Ok; got: {result:?}");
         let text = result.unwrap();
-        assert!(text.contains("Hello"), "rendered text must contain 'Hello'; got: {text:?}");
-        assert!(text.contains("world"), "rendered text must contain 'world'; got: {text:?}");
+        assert!(
+            text.contains("Hello"),
+            "rendered text must contain 'Hello'; got: {text:?}"
+        );
+        assert!(
+            text.contains("world"),
+            "rendered text must contain 'world'; got: {text:?}"
+        );
     }
 }
