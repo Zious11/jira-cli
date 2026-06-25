@@ -11042,4 +11042,174 @@ mod tests {
             "rendered text must contain 'world'; got: {text:?}"
         );
     }
+
+    // =========================================================================
+    // §9.5 Depth-increment mutant-kill tests (SEC-001)
+    //
+    // Each test calls a normalizer directly with a fixture constructed so the
+    // FIRST recursive call lands at exactly depth == MAX_ADF_DEPTH (256).
+    // Under correct code (`depth + 1`) the guard fires → Err.
+    // Under the surviving mutant (`depth * 1`) the depth never increments,
+    // the guard never fires, and the function returns Ok — so the test would
+    // FAIL.  Asserting Err here kills the mutant.
+    // =========================================================================
+
+    /// Kills the `depth + 1` → `depth * 1` mutant at the
+    /// `normalize_list_item_content(inner, depth + 1)?` call (blockquote-in-listItem
+    /// arm, ~line 1680).
+    ///
+    /// A `blockquote` node inside the children list triggers that arm; calling with
+    /// `depth = MAX_ADF_DEPTH - 1` means the recursive call gets depth 256 → Err.
+    #[test]
+    fn test_normalize_list_item_content_depth_increment_kills_mutant() {
+        // A blockquote node with one paragraph inside.  The listItem normalizer
+        // unwraps the blockquote and calls itself recursively on its children.
+        let blockquote_node = json!({
+            "type": "blockquote",
+            "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": "x"}]}
+            ]
+        });
+        let result = normalize_list_item_content(vec![blockquote_node], MAX_ADF_DEPTH - 1);
+        assert!(
+            result.is_err(),
+            "normalize_list_item_content must Err when recursive call hits depth 256; got Ok"
+        );
+        assert_eq!(
+            result.unwrap_err().exit_code(),
+            64,
+            "depth guard must produce exit_code 64"
+        );
+    }
+
+    /// Kills the `depth + 1` → `depth * 1` mutant at the
+    /// `normalize_list_item_content(vec![ti], depth + 1)?` call (nested taskList
+    /// inside listItem.content, ~line 1713).
+    ///
+    /// A `taskList` child whose own content contains another `taskList` node
+    /// triggers the `ti["type"] == "taskList"` branch, which recurses.  With
+    /// `depth = MAX_ADF_DEPTH - 1` the recursive call gets depth 256 → Err.
+    #[test]
+    fn test_normalize_list_item_content_tasklist_depth_increment_kills_mutant() {
+        // A taskList node whose content contains another taskList (triggers the
+        // `if ti["type"] == "taskList"` recursion branch inside the outer taskList arm).
+        let nested_task_list = json!({
+            "type": "taskList",
+            "content": [
+                {
+                    "type": "taskList",
+                    "content": [
+                        {
+                            "type": "taskItem",
+                            "attrs": {"localId": "1", "state": "TODO"},
+                            "content": [{"type": "text", "text": "inner"}]
+                        }
+                    ]
+                }
+            ]
+        });
+        let result = normalize_list_item_content(vec![nested_task_list], MAX_ADF_DEPTH - 1);
+        assert!(
+            result.is_err(),
+            "normalize_list_item_content must Err when nested taskList recurse hits depth 256; got Ok"
+        );
+        assert_eq!(
+            result.unwrap_err().exit_code(),
+            64,
+            "depth guard must produce exit_code 64"
+        );
+    }
+
+    /// Kills the `depth + 1` → `depth * 1` mutant at the
+    /// `normalize_blockquote_content(vec![ti], depth + 1)?` call (nested taskList
+    /// inside a blockquote-level taskList, ~line 1822).
+    ///
+    /// A `taskList` node whose content contains another `taskList` triggers the
+    /// `Some("taskList")` inner arm, which recurses.  With `depth = MAX_ADF_DEPTH - 1`
+    /// the recursive call gets depth 256 → Err.
+    #[test]
+    fn test_normalize_blockquote_content_depth_increment_kills_mutant() {
+        // A taskList node whose items include another taskList, triggering the
+        // recursive `normalize_blockquote_content(vec![ti], depth + 1)?` call.
+        let nested_task_list = json!({
+            "type": "taskList",
+            "content": [
+                {
+                    "type": "taskList",
+                    "content": [
+                        {
+                            "type": "taskItem",
+                            "attrs": {"localId": "1", "state": "TODO"},
+                            "content": [{"type": "text", "text": "inner"}]
+                        }
+                    ]
+                }
+            ]
+        });
+        let result = normalize_blockquote_content(vec![nested_task_list], MAX_ADF_DEPTH - 1);
+        assert!(
+            result.is_err(),
+            "normalize_blockquote_content must Err when nested taskList recurse hits depth 256; got Ok"
+        );
+        assert_eq!(
+            result.unwrap_err().exit_code(),
+            64,
+            "depth guard must produce exit_code 64"
+        );
+    }
+
+    /// Kills the `depth + 1` → `depth * 1` mutant at the
+    /// `normalize_panel_content(inner, depth + 1)?` call (nested panel/blockquote
+    /// inside panel content, ~line 1874).
+    ///
+    /// A `blockquote` node inside panel content triggers the
+    /// `Some("panel") | Some("blockquote")` arm, which recurses.  With
+    /// `depth = MAX_ADF_DEPTH - 1` the recursive call gets depth 256 → Err.
+    #[test]
+    fn test_normalize_panel_content_depth_increment_kills_mutant() {
+        // A blockquote node inside panel content triggers the recursive arm.
+        let blockquote_node = json!({
+            "type": "blockquote",
+            "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": "x"}]}
+            ]
+        });
+        let result = normalize_panel_content(vec![blockquote_node], MAX_ADF_DEPTH - 1);
+        assert!(
+            result.is_err(),
+            "normalize_panel_content must Err when blockquote-in-panel recurse hits depth 256; got Ok"
+        );
+        assert_eq!(
+            result.unwrap_err().exit_code(),
+            64,
+            "depth guard must produce exit_code 64"
+        );
+    }
+
+    /// Kills the `depth + 1` → `depth * 1` mutant at the
+    /// `autolink_bare_urls(content, depth + 1)?` call (container node `_` arm,
+    /// ~line 239).
+    ///
+    /// A container node that is neither `"text"` nor `"codeBlock"` and carries a
+    /// `"content"` array triggers the recursive call.  A `paragraph` node with a
+    /// text child satisfies this.  Calling with `depth = MAX_ADF_DEPTH - 1` means
+    /// the recursive call gets depth 256 → Err.
+    #[test]
+    fn test_autolink_bare_urls_depth_increment_kills_mutant() {
+        // A paragraph node with content triggers the `_ => { recurse }` arm.
+        let mut nodes = vec![json!({
+            "type": "paragraph",
+            "content": [{"type": "text", "text": "hello"}]
+        })];
+        let result = autolink_bare_urls(&mut nodes, MAX_ADF_DEPTH - 1);
+        assert!(
+            result.is_err(),
+            "autolink_bare_urls must Err when container-node recurse hits depth 256; got Ok"
+        );
+        assert_eq!(
+            result.unwrap_err().exit_code(),
+            64,
+            "depth guard must produce exit_code 64"
+        );
+    }
 }
