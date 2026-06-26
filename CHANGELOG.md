@@ -10,6 +10,14 @@ All notable changes to jr will be documented here.
 
 ### Security
 
+### Fixed
+
+### Changed
+
+## [0.6.0-dev.7] - 2026-06-26
+
+### Security
+
 - **SEC-001 (CWE-674):** Pathologically nested markdown/ADF input (≥256 levels) now
   exits 64 with "nesting too deep" instead of stack-overflowing. Guard applies to
   `markdown_to_adf` (forward path) and `adf_to_text` (reverse path).
@@ -32,6 +40,10 @@ All notable changes to jr will be documented here.
   - `insta` 1.47.2 → 1.48.0 (#541)
   - `quinn-proto` 0.11.14 → 0.11.15 (RUSTSEC-2026-0185, non-reachable from jr — http3 feature off)
   - `actions/checkout` 6.0.3 → 7.0.0 (#550)
+
+- Internal (no behavior change): split the oversized `src/cli/issue/create.rs` (2,880 LOC)
+  into three cohesive modules — `create.rs` (394), `edit.rs` (2,067), `jsm_create.rs` (444) —
+  to satisfy the ADR-0012 shard rule (#556, #558). Test parity preserved (1957/93).
 
 ## [0.6.0-dev.6] - 2026-06-19
 
