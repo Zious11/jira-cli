@@ -2,6 +2,7 @@ mod assets;
 mod changelog;
 mod comments;
 mod create;
+mod edit;
 mod field_resolve;
 mod format;
 mod helpers;
@@ -56,7 +57,7 @@ pub async fn handle(
             .await
         }
         IssueCommand::Edit { .. } => {
-            create::handle_edit(command, output_format, config, client, no_input).await
+            edit::handle_edit(command, output_format, config, client, no_input).await
         }
         IssueCommand::Move { .. } => {
             workflow::handle_move(command, output_format, client, no_input).await

@@ -17,7 +17,8 @@ src/
 │   │   ├── list.rs          # list only (JQL composition, filter application)
 │   │   ├── view.rs          # issue view handler, detailed single-issue rendering (~287 LOC)
 │   │   ├── comments.rs      # comment list formatting and display (~61 LOC)
-│   │   ├── create.rs        # create + edit (field-building)
+│   │   ├── create.rs        # issue create (platform path + JSM dispatch fork); parse_field_kv helper
+│   │   ├── edit.rs          # issue edit: single + bulk field/label/type paths, dry-run, type-error enrichment; extracted from create.rs (Seam B, ADR-0012)
 │   │   ├── jsm_create.rs    # JSM `handle_jsm_create` path + RT-id resolution (extracted from create.rs, ADR-0012/ADR-0014)
 │   │   ├── workflow.rs      # move + transitions + assign + comment + open
 │   │   ├── links.rs         # link + unlink + link-types
@@ -124,7 +125,8 @@ Product-namespaced `api/jira/` and `types/jira/` so future Confluence/JSM/Assets
 ## Known Size Deviations
 
 - `cli/issue/list.rs`: 1,256 LOC post-split (target was ≤750 per `docs/specs/list-rs-split.md`; spec target not achieved but split was partial — `view.rs` and `comments.rs` already extracted). NFR-O-G: DOCUMENT-AS-IS-COMPLETE (S-3.08).
-- `cli/issue/create.rs`: 2,447 LOC (~2.4× the ADR-0012 1,000-LOC threshold); handles `issue create` + `issue edit` + bulk-edit + dry-run + field resolution. JSM path extracted to `jsm_create.rs` (Seam A, ADR-0012/ADR-0014). Candidate split = extract `handle_edit` bulk path into a future `edit.rs` shard. ADR-0012. (PF-016)
+- `cli/issue/create.rs`: 394 LOC post-Seam-B split (was 2,447; edit cluster extracted to `edit.rs`). Handles `issue create` platform path + JSM dispatch fork + `parse_field_kv`. ADR-0012. (PF-016)
+- `cli/issue/edit.rs`: 2,067 LOC (Seam B extraction of `handle_edit` cluster from `create.rs`; ~2× the ADR-0012 1,000-LOC threshold). Handles `issue edit`: single-key + bulk field/label/type paths, dry-run, type-error enrichment. ADR-0012. (PF-016)
 - `cli/issue/workflow.rs`: 1,341 LOC — covers move/transitions/assign/comment/open; 34% over the threshold. DOCUMENT-AS-IS; candidate split = extract `handle_comment` + `handle_open` into an `interactions.rs` shard. ADR-0012. (PF-017)
 
 ## Build & Test
@@ -271,7 +273,7 @@ When adding a new feature:
   (3) JSM Urgency/Impact and other RT select fields CAN be set via `--field NAME=VALUE` **only if** an admin has added the field to the issue's agent Edit screen (portal-only by default).
   (4) `--field` adds one `GET …/editmeta` round-trip (skipped when absent) to validate field + resolve `allowedValues`.
   (5) `write_fields_cache` (in `resolve_edit_fields`) is unconditional on miss/stale (mirrors `write_cmdb_fields_cache`); cache-touching tests use `jr_cmd_with_xdg` + per-test `TempDir` to avoid the real `fields.json`.
-  (6) `--field` + `--label` on one key → exit 64 (mutual-exclusion block in `create.rs::handle_edit`); without the guard the label→bulk routing fork would silently drop the `--field` write. Combined label+custom-field bulk tracked at #331. [FIX-F5-001]
+  (6) `--field` + `--label` on one key → exit 64 (mutual-exclusion block in `edit.rs::handle_edit`); without the guard the label→bulk routing fork would silently drop the `--field` write. Combined label+custom-field bulk tracked at #331. [FIX-F5-001]
 - **`issue edit --label` endpoint fork (BUG-LABEL-400):** `handle_edit_bulk_labels` routes on key count. ONE key (incl. a `--jql` set matching one) → `PUT /issue/{key}` with **bare-string** labels via `update_issue_labels` (sync 204). TWO+ keys → `POST /bulk/issues/fields` with `{"name":…}` **objects** via `build_labels_edited_fields` (async poll). The two payload shapes are **asymmetric — do not unify**; both were proven against real Jira (single-key path + #446 bulk-schema fix after live 400s). Broader schema-verification effort: #331.
 - **`issue edit --type` multi-key bulk path (S-331, BC-3.4.018/019):**
   1. **camelCase/lowercase asymmetry (load-bearing, do NOT fix):** `selectedActions` uses lowercase `"issuetype"` (canonical field ID); `editedFieldsInput` uses camelCase `"issueType"` (bean name) — verbatim per Atlassian Bulk Ops FAQ, same as `labelsFields`/`"labels"`. Detail: `.factory/research/issue-331-issuetype-bulk-schema.md`.
