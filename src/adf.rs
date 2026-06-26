@@ -11212,4 +11212,224 @@ mod tests {
             "depth guard must produce exit_code 64"
         );
     }
+
+    /// O-1: Pin that plain-text interior lines inside a `<div>` HTML block are
+    /// preserved as part of the same HtmlBlock (one paragraph) with alternating
+    /// text/hardBreak nodes per Algorithm B (BC-7.2.011, issues #489/#492).
+    ///
+    /// Non-tautology: this test would fail if pulldown-cmark stopped treating
+    /// plain-text continuation lines as part of the type-6 HTML block and instead
+    /// split them into a separate paragraph node (giving a different top-level node
+    /// count), OR if Algorithm B merged adjacent plain-text segments (yielding a
+    /// single large text node instead of discrete per-line text nodes separated by
+    /// hardBreaks). The existing `test_convert_multiline_block_html_preserves_interior_newlines`
+    /// uses HTML-tag-bearing interior lines (`  <span>x</span>`); this test pins
+    /// the same guarantee for PLAIN-TEXT interior lines ("line one", "line two"),
+    /// closing the coverage gap that the D4 holdout scenario O-1 relies on.
+    #[test]
+    fn test_block_html_plain_text_interior_lines_preserved_in_one_paragraph() {
+        // BC-7.2.011 Algorithm B (O-1 regression pin).
+        // Input: a type-6 HTML block whose interior lines are plain prose, not HTML.
+        // CommonMark §4.6: the block continues until a blank line, so all four lines
+        // belong to a single HtmlBlock event.  Algorithm B then segments them.
+        let adf = markdown_to_adf("<div>\nline one\nline two\n</div>").unwrap();
+
+        // Exactly one top-level node: a paragraph (not split into separate blocks).
+        let content = adf["content"].as_array().unwrap();
+        assert_eq!(
+            content.len(),
+            1,
+            "all four lines must be one paragraph, not separate blocks: {adf}"
+        );
+        assert_eq!(
+            content[0]["type"], "paragraph",
+            "the single block must be a paragraph: {adf}"
+        );
+
+        // Algorithm B: 4 segments → 3 boundaries → 7 nodes
+        // [text("<div>"), hardBreak, text("line one"), hardBreak,
+        //  text("line two"), hardBreak, text("</div>")]
+        let para_content = content[0]["content"].as_array().unwrap();
+        assert_eq!(
+            para_content.len(),
+            7,
+            "4 plain-text segments must produce 7 content nodes \
+             (text, hb, text, hb, text, hb, text): {para_content:?}"
+        );
+        // Node sequence assertions (exact, positional).
+        assert_eq!(
+            para_content[0]["type"], "text",
+            "node[0] must be text: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[0]["text"], "<div>",
+            "node[0] text must be '<div>': {para_content:?}"
+        );
+        assert_eq!(
+            para_content[1]["type"], "hardBreak",
+            "node[1] must be hardBreak: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[2]["type"], "text",
+            "node[2] must be text: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[2]["text"], "line one",
+            "node[2] text must be 'line one': {para_content:?}"
+        );
+        assert_eq!(
+            para_content[3]["type"], "hardBreak",
+            "node[3] must be hardBreak: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[4]["type"], "text",
+            "node[4] must be text: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[4]["text"], "line two",
+            "node[4] text must be 'line two': {para_content:?}"
+        );
+        assert_eq!(
+            para_content[5]["type"], "hardBreak",
+            "node[5] must be hardBreak: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[6]["type"], "text",
+            "node[6] must be text: {para_content:?}"
+        );
+        assert_eq!(
+            para_content[6]["text"], "</div>",
+            "node[6] text must be '</div>': {para_content:?}"
+        );
+
+        // BC-7.2.011 INV-1: no text node may contain a raw \n character.
+        for node in para_content {
+            if node["type"] == "text" {
+                let text_val = node["text"].as_str().unwrap_or("");
+                assert!(
+                    !text_val.contains('\n'),
+                    "text node must not contain raw \\n (BC-7.2.011 INV-1): {node:?}"
+                );
+                assert!(
+                    !text_val.contains('\r'),
+                    "text node must not contain raw \\r (BC-7.2.011 INV-1): {node:?}"
+                );
+            }
+        }
+    }
+
+    /// O-3: Pin that a footnote reference and its definition produce DISCRETE,
+    /// UNMARKED text nodes — not merged text and not mark-inheriting nodes.
+    ///
+    /// Non-tautology: this test would fail if a future refactor merged adjacent
+    /// same-paragraph text nodes (a valid ADF-equivalence optimization, e.g. to
+    /// reduce node count), because `ref_nodes.len() == 2` and the exact-equality
+    /// assertion `ref_nodes[1]["text"] == "[1]"` require `"[1]"` to be its own
+    /// separate node with no surrounding text merged in.  Mark-inheritance in a
+    /// bold context is pinned separately by
+    /// `test_markdown_footnote_reference_marker_does_not_inherit_marks`; the
+    /// fixture here (`"See note.[^1]"`) has no surrounding marks, so that
+    /// regression is not detectable here.
+    /// The existing concatenated-text assertions in `test_markdown_footnote_reference_renders_marker_not_literal_caret`
+    /// and `test_markdown_footnote_definition_appended_after_rule_with_label` verify
+    /// that the strings appear somewhere, but do NOT verify node-level discreteness or
+    /// mark absence at the node level; this test closes that gap.
+    #[test]
+    fn test_footnote_reference_and_definition_are_discrete_unmarked_text_nodes() {
+        // BC-7.2.011 / issue #472 (O-3 regression pin).
+        let adf = markdown_to_adf("See note.[^1]\n\n[^1]: The note body.").unwrap();
+        let content = adf["content"].as_array().unwrap();
+
+        // --- Reference paragraph (content[0]) ---
+        let ref_para = &content[0];
+        assert_eq!(
+            ref_para["type"], "paragraph",
+            "content[0] must be a paragraph: {adf}"
+        );
+        let ref_nodes = ref_para["content"].as_array().unwrap();
+
+        // Exactly two text nodes in the reference paragraph: "See note." and "[1]".
+        assert_eq!(
+            ref_nodes.len(),
+            2,
+            "reference paragraph must contain exactly 2 text nodes: {ref_nodes:?}"
+        );
+
+        // First node: the prose text — no marks.
+        assert_eq!(
+            ref_nodes[0]["type"], "text",
+            "ref_para node[0] must be text: {ref_nodes:?}"
+        );
+        assert_eq!(
+            ref_nodes[0]["text"], "See note.",
+            "ref_para node[0] text: {ref_nodes:?}"
+        );
+        assert!(
+            ref_nodes[0].get("marks").is_none(),
+            "ref_para node[0] must carry no marks: {ref_nodes:?}"
+        );
+
+        // Second node: the reference marker — a SEPARATE text node carrying NO marks.
+        assert_eq!(
+            ref_nodes[1]["type"], "text",
+            "ref_para node[1] must be text: {ref_nodes:?}"
+        );
+        assert_eq!(
+            ref_nodes[1]["text"], "[1]",
+            "reference marker must be exactly '[1]': {ref_nodes:?}"
+        );
+        assert!(
+            ref_nodes[1].get("marks").is_none(),
+            "footnote reference marker must carry NO marks (must not inherit active marks): {ref_nodes:?}"
+        );
+
+        // --- Rule divider (content[1]) ---
+        assert_eq!(
+            content[1]["type"], "rule",
+            "content[1] must be the footnotes-section rule divider: {adf}"
+        );
+
+        // --- Definition paragraph (content[2]) ---
+        let def_para = &content[2];
+        assert_eq!(
+            def_para["type"], "paragraph",
+            "content[2] must be the definition paragraph: {adf}"
+        );
+        let def_nodes = def_para["content"].as_array().unwrap();
+
+        // Exactly two text nodes: "[1] " prefix and "The note body.".
+        assert_eq!(
+            def_nodes.len(),
+            2,
+            "definition paragraph must contain exactly 2 text nodes: {def_nodes:?}"
+        );
+
+        // First node: the label prefix — a DISCRETE "[1] " node, NO marks.
+        assert_eq!(
+            def_nodes[0]["type"], "text",
+            "def_para node[0] must be text: {def_nodes:?}"
+        );
+        assert_eq!(
+            def_nodes[0]["text"], "[1] ",
+            "definition label prefix must be exactly '[1] ' (with trailing space): {def_nodes:?}"
+        );
+        assert!(
+            def_nodes[0].get("marks").is_none(),
+            "definition label prefix must carry no marks: {def_nodes:?}"
+        );
+
+        // Second node: the definition body — separate node, NO marks.
+        assert_eq!(
+            def_nodes[1]["type"], "text",
+            "def_para node[1] must be text: {def_nodes:?}"
+        );
+        assert_eq!(
+            def_nodes[1]["text"], "The note body.",
+            "definition body text: {def_nodes:?}"
+        );
+        assert!(
+            def_nodes[1].get("marks").is_none(),
+            "definition body must carry no marks: {def_nodes:?}"
+        );
+    }
 }
