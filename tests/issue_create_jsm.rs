@@ -1572,7 +1572,7 @@ async fn test_jsm_create_output_json_shape_matches_platform() {
 /// uses Basic auth which hits the `NotAuthenticated` branch; this test uses
 /// Bearer auth + body "scope does not match" which hits the `InsufficientScope`
 /// branch (the `"scope does not match"` body check in `send_inner`). Regression guard for the C-01 fix in
-/// `src/cli/issue/create.rs handle_jsm_create map_err`.
+/// `src/cli/issue/jsm_create.rs::handle_jsm_create map_err`.
 ///
 /// // H-NEW-JSM-RT-003 + BC-3.8.015 anchor
 /// This test IS H-NEW-JSM-RT-003 (re-bound per F2 adversary-pass-9 C-01).
@@ -1943,7 +1943,7 @@ async fn test_jsm_create_account_id_flag_emits_warning_with_request_type() {
 /// H-02 (adversary pass-01) + BC-3.8.002 (O-08-02 harmonized string): missing project
 /// on JSM path exits 64 with the harmonized verbatim string carrying --project /
 /// .jr.toml / jr project list affordances. Regression guard for the impl change in
-/// `src/cli/issue/create.rs handle_jsm_create`.
+/// `src/cli/issue/jsm_create.rs::handle_jsm_create`.
 ///
 /// UPDATED by S-385 (O-08-02): assertion updated from the terse pre-#385 string
 /// ("project is required for JSM request creation") to the harmonized form

@@ -5,6 +5,7 @@ mod create;
 mod field_resolve;
 mod format;
 mod helpers;
+mod jsm_create;
 mod json_output;
 mod links;
 mod list;

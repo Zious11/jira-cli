@@ -18,6 +18,7 @@ src/
 │   │   ├── view.rs          # issue view handler, detailed single-issue rendering (~287 LOC)
 │   │   ├── comments.rs      # comment list formatting and display (~61 LOC)
 │   │   ├── create.rs        # create + edit (field-building)
+│   │   ├── jsm_create.rs    # JSM `handle_jsm_create` path + RT-id resolution (extracted from create.rs, ADR-0012/ADR-0014)
 │   │   ├── workflow.rs      # move + transitions + assign + comment + open
 │   │   ├── links.rs         # link + unlink + link-types
 │   │   ├── helpers.rs       # team/points resolution, user resolution, prompts
@@ -123,7 +124,7 @@ Product-namespaced `api/jira/` and `types/jira/` so future Confluence/JSM/Assets
 ## Known Size Deviations
 
 - `cli/issue/list.rs`: 1,256 LOC post-split (target was ≤750 per `docs/specs/list-rs-split.md`; spec target not achieved but split was partial — `view.rs` and `comments.rs` already extracted). NFR-O-G: DOCUMENT-AS-IS-COMPLETE (S-3.08).
-- `cli/issue/create.rs`: 2,880 LOC — largest `src/cli/` file (~3× the ADR-0012 1,000-LOC threshold); handles `issue create` + `issue edit` + JSM create + bulk-edit + dry-run + field resolution. DOCUMENT-AS-IS; candidate split = extract `handle_edit` bulk path into a future `edit.rs` shard. ADR-0012. (PF-016)
+- `cli/issue/create.rs`: 2,447 LOC (~2.4× the ADR-0012 1,000-LOC threshold); handles `issue create` + `issue edit` + bulk-edit + dry-run + field resolution. JSM path extracted to `jsm_create.rs` (Seam A, ADR-0012/ADR-0014). Candidate split = extract `handle_edit` bulk path into a future `edit.rs` shard. ADR-0012. (PF-016)
 - `cli/issue/workflow.rs`: 1,341 LOC — covers move/transitions/assign/comment/open; 34% over the threshold. DOCUMENT-AS-IS; candidate split = extract `handle_comment` + `handle_open` into an `interactions.rs` shard. ADR-0012. (PF-017)
 
 ## Build & Test
