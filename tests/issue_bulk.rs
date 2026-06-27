@@ -925,6 +925,147 @@ async fn test_move_multikey_bulk_transition_uses_bulktransitioninputs_wrapper() 
 }
 
 // ---------------------------------------------------------------------------
+// G-MOVE-BULK-NONIDEMPOTENT (FIX-BULK-TRANSITION-001 / BC-3.2.009):
+//
+// Behavior: bulk `jr issue move` (multi-key positional) is NOT idempotent —
+// it transitions every key unconditionally and expects per-key 400s on
+// workflows that reject same-status moves. The wire schema MUST be the NESTED
+// `{"bulkTransitionInputs":[{"selectedIssueIdsOrKeys":[…],"transitionId":"…"}],"sendBulkNotification":false}`
+// shape. A same-status-rejection appears as per-key 400 in
+// failedAccessibleIssues, which causes exit 1 with a per-key breakdown.
+//
+// This test pins THREE things simultaneously:
+//   1. The nested bulkTransitionInputs schema (FIX-BULK-TRANSITION-001).
+//   2. The sendBulkNotification: false field (required by confirmed schema).
+//   3. Per-key 400 handling: COMPLETE + non-empty failedAccessibleIssues
+//      → exit 1 with per-key error printed (not a silent success).
+//
+// Non-tautology: would fail if:
+//   - The request reverted to the flat top-level schema (mock unmatched → wiremock
+//     panic on .expect(1) drop).
+//   - sendBulkNotification was omitted (body_partial_json would not match).
+//   - Per-key 400 handling changed (exit-code assertion trips).
+//
+// BC anchors: BC-3.2.009 (reactive backstop), FIX-BULK-TRANSITION-001
+// (schema confirmation), CLAUDE.md "Bulk transitions are not idempotent".
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_move_multikey_bulk_nonidempotent_per_key_400_exits_1_with_nested_schema() {
+    let server = MockServer::start().await;
+
+    // Transition lookup: resolve "In Progress" → id "21" from first key.
+    // Using a non-done-category status so proactive resolution enforcement
+    // (BC-3.2.013 / ADR-0015) does NOT fire (that path is single-key only and
+    // only triggers on done-category transitions). The test keys are already
+    // In Progress; the workflow rejects the same-status move with a per-key 400.
+    Mock::given(method("GET"))
+        .and(path_regex(r"^/rest/api/3/issue/[A-Z]+-\d+/transitions$"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "transitions": [
+                {"id": "11", "name": "To Do",        "to": {"name": "To Do",       "statusCategory": {"key": "new",           "name": "To Do"}}},
+                {"id": "21", "name": "In Progress",  "to": {"name": "In Progress", "statusCategory": {"key": "indeterminate", "name": "In Progress"}}},
+                {"id": "31", "name": "Done",         "to": {"name": "Done",        "statusCategory": {"key": "done",          "name": "Done"}}}
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    // The bulk transition POST: MUST use nested `bulkTransitionInputs` with
+    // `sendBulkNotification: false` (FIX-BULK-TRANSITION-001 full schema pin).
+    // body_string_contains("bulkTransitionInputs") acts as a closed-failure guard:
+    // a flat body does NOT contain this key, so the mock goes unmatched and
+    // .expect(1) panics on drop, proving a regression to the flat schema.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/bulk/issues/transition"))
+        .and(body_string_contains("bulkTransitionInputs"))
+        .and(body_partial_json(serde_json::json!({
+            "bulkTransitionInputs": [
+                {
+                    "selectedIssueIdsOrKeys": ["PROJ-1", "PROJ-2"],
+                    "transitionId": "21"
+                }
+            ],
+            "sendBulkNotification": false
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(bulk_task_enqueued_response("task-nonidempotent-001")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Poll: COMPLETE but both keys failed with a per-key 400 (same-status rejection).
+    // This is the documented non-idempotency outcome: bulk move transitions every
+    // key unconditionally; a workflow that rejects same-status moves produces a
+    // per-key error in failedAccessibleIssues.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/bulk/queue/task-nonidempotent-001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            bulk_task_complete_with_failures_response(
+                "task-nonidempotent-001",
+                vec![], // no successfully processed issues
+                serde_json::json!({
+                    "PROJ-1": {
+                        "errorMessages": ["Issue is already in status 'In Progress'. Transition is not valid."],
+                        "errors": {}
+                    },
+                    "PROJ-2": {
+                        "errorMessages": ["Issue is already in status 'In Progress'. Transition is not valid."],
+                        "errors": {}
+                    }
+                }),
+            ),
+        ))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri())
+        .args([
+            "--no-input",
+            "issue",
+            "move",
+            "PROJ-1",
+            "PROJ-2",
+            "--to",
+            "In Progress",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{stdout}{stderr}");
+
+    // Per-key 400 handling: COMPLETE with all-failed → exit 1 (not exit 0).
+    // This is distinct from the schema-regression assertion above; it pins
+    // the non-idempotency CONTRACT (caller must pre-filter to avoid same-status
+    // transitions — see CLAUDE.md "Bulk transitions are not idempotent").
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "Expected exit 1 when ALL keys fail with per-key 400 (same-status rejection); \
+         single-key move would have been idempotent (exit 0) but multi-key is NOT; \
+         stderr={stderr} stdout={stdout}"
+    );
+
+    // Per-key error breakdown: both keys must appear in the output.
+    assert!(
+        combined.contains("PROJ-1"),
+        "Expected PROJ-1 in per-key error breakdown; combined={combined}"
+    );
+    assert!(
+        combined.contains("PROJ-2"),
+        "Expected PROJ-2 in per-key error breakdown; combined={combined}"
+    );
+
+    // wiremock .expect(1) on the bulk transition POST fires on drop — verifies:
+    //   (a) the POST was made exactly once with the nested bulkTransitionInputs schema.
+    //   (b) sendBulkNotification: false was present in the body.
+}
+
+// ---------------------------------------------------------------------------
 // Regression: numeric processedAccessibleIssues in poll response (live E2E 26735034015)
 //
 // Real Jira Cloud returns processedAccessibleIssues as an array of numeric

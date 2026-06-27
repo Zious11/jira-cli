@@ -229,6 +229,132 @@ async fn resolve_queue_duplicate_names_error_message() {
     );
 }
 
+/// G-H2: BC-X.10.001 EC-1 call-count pin — ambiguous partial_match short-circuits
+/// with exit 64 and fires the queue-list endpoint EXACTLY ONCE (no follow-on HTTP).
+///
+/// The `.expect(1)` on the list mock verifies that (a) the list fetch ran (the
+/// subprocess did not bail before hitting the network), and (b) no follow-on
+/// request (e.g. a spurious queue-view GET or a second list fetch) was made —
+/// because no other endpoint is mounted, any extra call would hit an unregistered
+/// route and wiremock would return 404 (surfaced as a non-zero exit), but more
+/// importantly `.expect(1)` on the list mock would panic on server drop if any
+/// extra call matched it.
+///
+/// Non-tautology: would fail if partial_match stopped short-circuiting on
+/// Ambiguous (a follow-on GET would hit an unmounted endpoint / exceed expect(1)).
+///
+/// BC anchor: BC-X.10.001 EC-1 (call-count pin recommended in BC text).
+#[tokio::test]
+async fn test_resolve_queue_ambiguous_fires_list_exactly_once_no_followon_http() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    // Serve a project-meta response so require_service_desk passes (queue handler
+    // needs this before it reaches list_queues; must be service_desk type).
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/HELPDESK"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "10000",
+            "key": "HELPDESK",
+            "projectTypeKey": "service_desk",
+            "simplified": false
+        })))
+        .mount(&server)
+        .await;
+
+    // Service-desk meta (require_service_desk fetches /rest/servicedeskapi/servicedesk
+    // to obtain the numeric service_desk_id for the project).
+    // ServiceDesk struct requires: id, projectId, projectName (serde rename).
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 1,
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "values": [
+                { "id": "15", "projectId": "10000", "projectName": "HELPDESK Service Desk" }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    // The queue list: mount with .expect(1) so wiremock panics on server drop if
+    // the endpoint is called 0 times (command bailed early) or >1 times (retry/loop).
+    // "esc" matches "Escalations" as a single-substring → Ambiguous → exit 64.
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk/15/queue"))
+        .and(query_param("includeCount", "true"))
+        .and(query_param("start", "0"))
+        .and(query_param("limit", "50"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 2,
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "values": [
+                { "id": "10", "name": "Escalations", "issueCount": 5 },
+                { "id": "20", "name": "General Requests", "issueCount": 3 }
+            ]
+        })))
+        .expect(1) // BC-X.10.001 EC-1: the list fetch fires exactly once
+        .mount(&server)
+        .await;
+
+    // No queue-view endpoint is mounted — any follow-on HTTP (e.g. GET queue issues)
+    // would hit an unregistered route, which in wiremock returns 404 and causes the
+    // command to exit non-zero; the exit-64 assertion below would then fail and the
+    // disambiguation-message assertion would also fail, surfacing the defect.
+
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+        .args([
+            "queue",
+            "view",
+            "--project",
+            "HELPDESK",
+            "--no-input",
+            "esc",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Must exit 64 (UserError / disambiguation)
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 for ambiguous queue name; stderr={stderr}"
+    );
+
+    // Must emit the disambiguation phrase (Ambiguous path in partial_match).
+    // The real message at queue.rs::resolve_queue_by_name is:
+    //   "\"{}\" matches multiple queues: …"
+    // The lowercase "ambiguous" alternative never appears in subprocess stderr —
+    // it only surfaces in the inline unit-test assertions in queue.rs itself.
+    assert!(
+        stderr.contains("matches multiple queues"),
+        "Expected disambiguation phrase in stderr; stderr={stderr}"
+    );
+
+    // Must name the matching queue in the message
+    assert!(
+        stderr.contains("Escalations"),
+        "Expected matched queue 'Escalations' in stderr; stderr={stderr}"
+    );
+    // wiremock verifies .expect(1) on server drop — fires if list was called 0 or 2+ times
+}
+
 /// Single-substring hit on a queue name must route through Ambiguous and
 /// error with the disambiguation message + UserError (exit 64 in the
 /// binary). Complements the ExactMultiple coverage above and locks the
