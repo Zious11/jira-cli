@@ -1586,6 +1586,451 @@ mod resolution_cache_tests {
     }
 }
 
+/// P1 — Cross-profile isolation unit tests for the six families that were
+/// previously untested for this dimension (BC-6.2.009).
+///
+/// POLICY multi-profile-cache (CRITICAL): cross-profile cache leakage is a
+/// stated correctness bug — sandbox vs prod custom-field IDs differ.  Families
+/// 1 (team), 8 (request_types) and 9 (request_type_fields) already have
+/// explicit cross-profile tests.  This module adds equivalent coverage for the
+/// remaining six: workspace, resolutions, cmdb_fields, fields, object_type_attrs,
+/// and project_meta.
+///
+/// Pattern for each test (mirrors `cross_profile_isolation_team_cache`):
+///   1. Write a value under profile "prod".
+///   2. Write a *different* value under profile "sandbox".
+///   3. Assert `read_*("prod")` returns the prod value.
+///   4. Assert `read_*("sandbox")` returns the sandbox value.
+///   5. Assert the two on-disk paths are distinct.
+///
+/// BC anchor: BC-6.2.009 (cross-profile isolation — the team-cache example BC).
+/// Note: the audit doc cited BC-6.3.001 as "the closest existing BC", but
+/// BC-6.3.001 covers per-profile *config* field IDs surviving Config::save_global(),
+/// not on-disk cache-file isolation.  BC-6.2.009 is the correct anchor.
+#[cfg(test)]
+mod cache_profile_isolation_tests {
+    use super::tests::with_temp_cache;
+    use super::*;
+
+    /// BC-6.2.009 — workspace cache is isolated per profile.
+    ///
+    /// Regression guard: if `write_workspace_cache` or `cache_dir` ever dropped
+    /// the profile path segment, both profiles would share a single file and
+    /// this test would catch the leak (prod would read sandbox's workspace ID).
+    #[test]
+    fn test_workspace_cache_cross_profile_isolation() {
+        with_temp_cache(|| {
+            write_workspace_cache("prod", "workspace-prod-abc").unwrap();
+            write_workspace_cache("sandbox", "workspace-sandbox-xyz").unwrap();
+
+            let prod = read_workspace_cache("prod")
+                .unwrap()
+                .expect("prod workspace cache must exist");
+            assert_eq!(
+                prod.workspace_id, "workspace-prod-abc",
+                "prod profile must return 'workspace-prod-abc', not sandbox data"
+            );
+
+            let sandbox = read_workspace_cache("sandbox")
+                .unwrap()
+                .expect("sandbox workspace cache must exist");
+            assert_eq!(
+                sandbox.workspace_id, "workspace-sandbox-xyz",
+                "sandbox profile must return 'workspace-sandbox-xyz', not prod data"
+            );
+
+            // Verify on-disk paths are distinct — path leak would make these identical.
+            let prod_path = cache_dir("prod").join("workspace.json");
+            let sandbox_path = cache_dir("sandbox").join("workspace.json");
+            assert!(
+                prod_path.exists(),
+                "prod workspace.json must exist at {prod_path:?}"
+            );
+            assert!(
+                sandbox_path.exists(),
+                "sandbox workspace.json must exist at {sandbox_path:?}"
+            );
+            assert_ne!(
+                prod_path, sandbox_path,
+                "prod and sandbox workspace cache paths must be distinct"
+            );
+        });
+    }
+
+    /// BC-6.2.009 — resolutions cache is isolated per profile.
+    ///
+    /// Regression guard: if the profile scoping were removed, a prod resolution
+    /// list (e.g. containing "Fixed") would be returned for the sandbox profile
+    /// (which might have "Resolved" instead), silently sending the wrong
+    /// resolution name to the Jira API on `jr issue move`.
+    #[test]
+    fn test_resolutions_cache_cross_profile_isolation() {
+        with_temp_cache(|| {
+            let prod_res = vec![CachedResolution {
+                id: "10000".into(),
+                name: "Fixed".into(),
+                description: None,
+            }];
+            let sandbox_res = vec![CachedResolution {
+                id: "20000".into(),
+                name: "Resolved".into(),
+                description: None,
+            }];
+
+            write_resolutions_cache("prod", &prod_res).unwrap();
+            write_resolutions_cache("sandbox", &sandbox_res).unwrap();
+
+            let prod = read_resolutions_cache("prod")
+                .unwrap()
+                .expect("prod resolutions cache must exist");
+            assert_eq!(
+                prod.resolutions[0].name, "Fixed",
+                "prod profile must return 'Fixed', not sandbox data"
+            );
+
+            let sandbox = read_resolutions_cache("sandbox")
+                .unwrap()
+                .expect("sandbox resolutions cache must exist");
+            assert_eq!(
+                sandbox.resolutions[0].name, "Resolved",
+                "sandbox profile must return 'Resolved', not prod data"
+            );
+
+            let prod_path = cache_dir("prod").join("resolutions.json");
+            let sandbox_path = cache_dir("sandbox").join("resolutions.json");
+            assert!(prod_path.exists());
+            assert!(sandbox_path.exists());
+            assert_ne!(
+                prod_path, sandbox_path,
+                "prod and sandbox resolutions cache paths must be distinct"
+            );
+        });
+    }
+
+    /// BC-6.2.009 — cmdb_fields cache is isolated per profile.
+    ///
+    /// Regression guard: highest sub-risk family — cmdb_fields stores
+    /// custom-field IDs (e.g. customfield_10191) that differ between sandbox
+    /// and prod Jira instances.  A leak would silently write the wrong field ID
+    /// into an asset-enriched issue payload.
+    #[test]
+    fn test_cmdb_fields_cache_cross_profile_isolation() {
+        with_temp_cache(|| {
+            let prod_fields = vec![("customfield_10191".to_string(), "Client".to_string())];
+            let sandbox_fields = vec![("customfield_20001".to_string(), "Client".to_string())];
+
+            // write_cmdb_fields_cache is a model-b (always-Ok) writer: it swallows
+            // disk errors internally and always returns Ok(()).  The .unwrap() here
+            // is therefore trivially infallible.  To catch a silent write no-op we
+            // assert the cache files exist immediately after each call.
+            write_cmdb_fields_cache("prod", &prod_fields).unwrap();
+            assert!(
+                cache_dir("prod").join("cmdb_fields.json").exists(),
+                "write_cmdb_fields_cache did not create the cache file for 'prod'"
+            );
+            write_cmdb_fields_cache("sandbox", &sandbox_fields).unwrap();
+            assert!(
+                cache_dir("sandbox").join("cmdb_fields.json").exists(),
+                "write_cmdb_fields_cache did not create the cache file for 'sandbox'"
+            );
+
+            let prod = read_cmdb_fields_cache("prod")
+                .unwrap()
+                .expect("prod cmdb_fields cache must exist");
+            assert_eq!(
+                prod.fields[0].0, "customfield_10191",
+                "prod profile must return customfield_10191, not sandbox's customfield_20001"
+            );
+
+            let sandbox = read_cmdb_fields_cache("sandbox")
+                .unwrap()
+                .expect("sandbox cmdb_fields cache must exist");
+            assert_eq!(
+                sandbox.fields[0].0, "customfield_20001",
+                "sandbox profile must return customfield_20001, not prod's customfield_10191"
+            );
+
+            let prod_path = cache_dir("prod").join("cmdb_fields.json");
+            let sandbox_path = cache_dir("sandbox").join("cmdb_fields.json");
+            assert!(prod_path.exists());
+            assert!(sandbox_path.exists());
+            assert_ne!(
+                prod_path, sandbox_path,
+                "prod and sandbox cmdb_fields cache paths must be distinct"
+            );
+        });
+    }
+
+    /// BC-6.2.009 — fields cache is isolated per profile.
+    ///
+    /// Regression guard: `fields.json` caches Jira field IDs for `issue edit
+    /// --field`.  The Story Points field ID typically differs between a sandbox
+    /// and prod instance; a leak would silently target the wrong field on write.
+    #[test]
+    fn test_fields_cache_cross_profile_isolation() {
+        with_temp_cache(|| {
+            let prod_fields = vec![("customfield_10016".to_string(), "Story Points".to_string())];
+            let sandbox_fields =
+                vec![("customfield_10028".to_string(), "Story Points".to_string())];
+
+            // write_fields_cache is a model-b (always-Ok) writer: it swallows
+            // disk errors internally and always returns Ok(()).  The .unwrap() here
+            // is therefore trivially infallible.  To catch a silent write no-op we
+            // assert the cache files exist immediately after each call.
+            write_fields_cache("prod", &prod_fields).unwrap();
+            assert!(
+                cache_dir("prod").join("fields.json").exists(),
+                "write_fields_cache did not create the cache file for 'prod'"
+            );
+            write_fields_cache("sandbox", &sandbox_fields).unwrap();
+            assert!(
+                cache_dir("sandbox").join("fields.json").exists(),
+                "write_fields_cache did not create the cache file for 'sandbox'"
+            );
+
+            let prod = read_fields_cache("prod")
+                .unwrap()
+                .expect("prod fields cache must exist");
+            assert_eq!(
+                prod.fields[0].0, "customfield_10016",
+                "prod profile must return customfield_10016, not sandbox's customfield_10028"
+            );
+
+            let sandbox = read_fields_cache("sandbox")
+                .unwrap()
+                .expect("sandbox fields cache must exist");
+            assert_eq!(
+                sandbox.fields[0].0, "customfield_10028",
+                "sandbox profile must return customfield_10028, not prod's customfield_10016"
+            );
+
+            let prod_path = cache_dir("prod").join("fields.json");
+            let sandbox_path = cache_dir("sandbox").join("fields.json");
+            assert!(prod_path.exists());
+            assert!(sandbox_path.exists());
+            assert_ne!(
+                prod_path, sandbox_path,
+                "prod and sandbox fields cache paths must be distinct"
+            );
+        });
+    }
+
+    /// BC-6.2.009 — object_type_attrs cache is isolated per profile.
+    ///
+    /// Regression guard: object-type attribute IDs (e.g. "134") can differ
+    /// across CMDB workspaces tied to different Jira instances.  A profile
+    /// leak would cause AQL queries built with wrong attribute IDs.
+    #[test]
+    fn test_object_type_attr_cache_cross_profile_isolation() {
+        with_temp_cache(|| {
+            let prod_attrs = vec![CachedObjectTypeAttr {
+                id: "134".into(),
+                name: "Key".into(),
+                system: true,
+                hidden: false,
+                label: false,
+                position: 0,
+            }];
+            let sandbox_attrs = vec![CachedObjectTypeAttr {
+                id: "999".into(),
+                name: "Key".into(),
+                system: true,
+                hidden: false,
+                label: false,
+                position: 0,
+            }];
+
+            write_object_type_attr_cache("prod", "23", &prod_attrs).unwrap();
+            write_object_type_attr_cache("sandbox", "23", &sandbox_attrs).unwrap();
+
+            let prod = read_object_type_attr_cache("prod", "23")
+                .unwrap()
+                .expect("prod object_type_attrs cache must exist");
+            assert_eq!(
+                prod[0].id, "134",
+                "prod profile must return attr id '134', not sandbox's '999'"
+            );
+
+            let sandbox = read_object_type_attr_cache("sandbox", "23")
+                .unwrap()
+                .expect("sandbox object_type_attrs cache must exist");
+            assert_eq!(
+                sandbox[0].id, "999",
+                "sandbox profile must return attr id '999', not prod's '134'"
+            );
+
+            let prod_path = cache_dir("prod").join("object_type_attrs.json");
+            let sandbox_path = cache_dir("sandbox").join("object_type_attrs.json");
+            assert!(prod_path.exists());
+            assert!(sandbox_path.exists());
+            // The path-distinctness check below is trivially true (paths always
+            // differ by the profile directory segment).  The primary isolation
+            // guard is the per-profile value round-trips above; this assert_ne!
+            // only confirms that the two profiles use separate on-disk directories.
+            assert_ne!(
+                prod_path, sandbox_path,
+                "prod and sandbox object_type_attrs cache paths must be distinct"
+            );
+        });
+    }
+
+    /// BC-6.2.009 — project_meta cache is isolated per profile.
+    ///
+    /// Regression guard: the existing `project_meta_multiple_projects` test
+    /// only exercises multiple project keys within ONE profile.  This test
+    /// pins that two profiles with the same project key ("HELPDESK") each
+    /// see their own service_desk_id and never the other profile's value.
+    #[test]
+    fn test_project_meta_cross_profile_isolation() {
+        with_temp_cache(|| {
+            let prod_meta = ProjectMeta {
+                project_type: "service_desk".into(),
+                simplified: false,
+                project_id: "10042".into(),
+                service_desk_id: Some("15".into()),
+                fetched_at: Utc::now(),
+            };
+            let sandbox_meta = ProjectMeta {
+                project_type: "service_desk".into(),
+                simplified: false,
+                project_id: "99999".into(),
+                service_desk_id: Some("77".into()),
+                fetched_at: Utc::now(),
+            };
+
+            write_project_meta("prod", "HELPDESK", &prod_meta).unwrap();
+            write_project_meta("sandbox", "HELPDESK", &sandbox_meta).unwrap();
+
+            let prod = read_project_meta("prod", "HELPDESK")
+                .unwrap()
+                .expect("prod project_meta must exist");
+            assert_eq!(
+                prod.service_desk_id.as_deref(),
+                Some("15"),
+                "prod profile must return service_desk_id '15', not sandbox's '77'"
+            );
+            assert_eq!(prod.project_id, "10042");
+
+            let sandbox = read_project_meta("sandbox", "HELPDESK")
+                .unwrap()
+                .expect("sandbox project_meta must exist");
+            assert_eq!(
+                sandbox.service_desk_id.as_deref(),
+                Some("77"),
+                "sandbox profile must return service_desk_id '77', not prod's '15'"
+            );
+            assert_eq!(sandbox.project_id, "99999");
+
+            let prod_path = cache_dir("prod").join("project_meta.json");
+            let sandbox_path = cache_dir("sandbox").join("project_meta.json");
+            assert!(prod_path.exists());
+            assert!(sandbox_path.exists());
+            assert_ne!(
+                prod_path, sandbox_path,
+                "prod and sandbox project_meta cache paths must be distinct"
+            );
+        });
+    }
+}
+
+/// P2 — Format-drift self-heal for `fields.json` (BC-6.2.011).
+///
+/// `FieldsCache` has the exact same `Vec<(String,String)>` tuple layout as
+/// `CmdbFieldsCache`.  CLAUDE.md documents the cmdb_fields `(id,name)` tuple
+/// migration as a real historical format change.  `cmdb_fields` has a
+/// self-heal test (in the holdout suite via `worklog_duration_holdouts.rs`);
+/// the structurally-identical `fields.json` had none.
+///
+/// BC anchor: BC-6.2.011 (corrupt/old-shape cache files → `Ok(None)`, no
+/// panic, no crash).  The sibling BC-6.2.013 is about the write/merge pattern
+/// for `object_type_attrs` and does NOT enumerate fields.json; BC-6.2.011 is
+/// the operative self-heal contract here.
+///
+/// Note: the audit doc cited BC-6.2.013 as the anchor for P2, but BC-6.2.013
+/// governs write-merge semantics, not self-heal-on-read.  BC-6.2.011 is the
+/// correct anchor (explicit "corrupt/old-shape → Ok(None)" postcondition).
+#[cfg(test)]
+mod fields_cache_format_drift_tests {
+    use super::tests::with_temp_cache;
+    use super::*;
+
+    /// BC-6.2.011 — legacy ID-only array in fields.json self-heals as Ok(None).
+    ///
+    /// Before the `(id, name)` tuple format was introduced, an ID-only JSON
+    /// array `["customfield_10001"]` would have been a plausible old shape.
+    /// Reading such a file must NOT panic or return Err; it must return Ok(None)
+    /// so the caller refetches from the API.
+    ///
+    /// Regression guard: if `read_cache` stopped swallowing serde errors and
+    /// propagated them instead, callers of `read_fields_cache` in
+    /// `resolve_edit_fields` would crash on `issue edit --field` for any user
+    /// whose `fields.json` predates the tuple format.
+    #[test]
+    fn test_fields_cache_legacy_id_only_format_self_heals() {
+        with_temp_cache(|| {
+            let dir = cache_dir("default");
+            std::fs::create_dir_all(&dir).unwrap();
+
+            // Old/legacy shape: bare string array instead of FieldsCache struct.
+            // This is the "ID-only" format that would exist if an older version
+            // of jr wrote the file before the (id,name) tuple layout.
+            std::fs::write(
+                dir.join("fields.json"),
+                r#"["customfield_10001", "customfield_10016"]"#,
+            )
+            .unwrap();
+
+            let result = read_fields_cache("default").unwrap();
+            assert!(
+                result.is_none(),
+                "legacy ID-only fields.json must self-heal as Ok(None), not return Err or Some; \
+                 got: {result:?}"
+            );
+        });
+    }
+
+    /// BC-6.2.011 — garbage / completely invalid JSON in fields.json self-heals as Ok(None).
+    ///
+    /// Mirrors the `corrupt_team_cache_returns_none` test pattern.  Any
+    /// unreadable file (truncated write, filesystem corruption, manual edit)
+    /// must not propagate an error that breaks `issue edit --field`.
+    ///
+    /// Regression guard: if `read_cache` changed to propagate serde errors
+    /// (e.g. a refactor removes the match-arm that returns Ok(None)), this
+    /// test would fail immediately, surfacing the regression before it reaches CI.
+    #[test]
+    fn test_corrupt_fields_cache_returns_none() {
+        with_temp_cache(|| {
+            let dir = cache_dir("default");
+            std::fs::create_dir_all(&dir).unwrap();
+
+            // --- Case 1: garbage bytes — not JSON at all ---
+            // Verifies that a completely unparseable file returns Ok(None)
+            // rather than propagating a serde error.
+            std::fs::write(dir.join("fields.json"), b"not json {{{{ garbage").unwrap();
+            let result = read_fields_cache("default").unwrap();
+            assert!(
+                result.is_none(),
+                "garbage fields.json must return Ok(None), not Err or Some"
+            );
+
+            // --- Case 2: valid JSON, wrong shape ---
+            // Verifies that a file that parses as JSON but does not match the
+            // FieldsCache schema (missing `fields` array) also returns Ok(None).
+            std::fs::write(
+                dir.join("fields.json"),
+                b"{\"unexpected_key\": true, \"no_fields_array\": null}",
+            )
+            .unwrap();
+            let result = read_fields_cache("default").unwrap();
+            assert!(
+                result.is_none(),
+                "wrong-shape fields.json must return Ok(None), not Err or Some"
+            );
+        });
+    }
+}
+
 /// M-5 (adv-01): Cross-profile isolation unit tests for the new request-type
 /// and request-type-fields caches.
 ///
