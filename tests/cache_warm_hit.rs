@@ -1,7 +1,10 @@
-//! D2 warm-hit / no-HTTP integration tests for five cache families.
+//! D2 warm-hit / no-HTTP integration tests for five of the nine cache families.
 //!
 //! BC anchor: BC-6.2.018 (warm cache hit returns cached value and issues ZERO HTTP
 //! calls to the backing API endpoint — invariant holds for all nine cache families).
+//! This file covers five families (1, 2, 4, 5, 7); the remaining four families
+//! (3 workspace, 6 request_types, 8 request_type_fields, 9 fields) are tested
+//! elsewhere or are candidates for future warm-hit coverage.
 //!
 //! Technique: wiremock `expect(1)` call-count pin — mount the backing endpoint with
 //! `.expect(1)`, run the command twice sharing the same JR_CACHE_DIR temp dir, then
@@ -382,6 +385,13 @@ async fn test_cmdb_fields_warm_cache_skips_http() {
     let server = MockServer::start().await;
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
+    // INTENTIONAL: the config omits `story_points_field_id` and `team_field_id`.
+    // Both of those config keys would trigger an additional `list_fields()` call
+    // (story-points and team-field discovery each call GET /rest/api/3/field).
+    // Keeping them absent guarantees that the single expect(1) on /rest/api/3/field
+    // below is reached ONLY by `get_or_fetch_cmdb_fields` — not by an unrelated
+    // discovery path — making the call-count pin unambiguous. If you ever add those
+    // keys here, you must raise the expect() to match the extra call(s).
     write_minimal_config_with_org(config_dir.path(), &server.uri(), None);
 
     // CRITICAL: expect(1) — field-discovery endpoint must fire EXACTLY ONCE across
