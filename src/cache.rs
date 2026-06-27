@@ -1546,6 +1546,121 @@ mod tests {
             profile_dir.display()
         );
     }
+
+    // ── P3: request-type writer swallow-on-IO-error (BC-X.12.008 D5) ─────────
+    //
+    // `write_request_type_cache` and `write_request_type_fields_cache` are model-b
+    // best-effort writers: disk-write failures are logged to stderr and the function
+    // returns `Ok(())`. This ensures a cache-write error never breaks a successful
+    // API call or pollutes a pipeline (`jr requesttype list --output json | jq`).
+    //
+    // Exact warning text emitted on IO error:
+    //   write_request_type_cache:        "warning: failed to write request type cache: {e}"
+    //   write_request_type_fields_cache: "warning: failed to write request type fields cache: {e}"
+    //
+    // Pattern mirrors `test_write_cmdb_fields_cache_swallow_io_error_returns_ok`
+    // and `test_write_object_type_attr_cache_swallow_io_error_returns_ok` above.
+    // BC anchor: BC-X.12.008 (request-type caching BCs — 7-day TTL + best-effort write model).
+
+    /// BC-X.12.008 (D5) — `write_request_type_cache` swallows disk-write errors.
+    ///
+    /// Forces an I/O error by pointing JR_CACHE_DIR at a *file* (not a directory),
+    /// so `create_dir_all` inside `write_cache` fails with ENOTDIR. The model-b
+    /// writer must return `Ok(())` and NOT panic or propagate the error.
+    ///
+    /// Non-tautology: would fail if the writer were changed to propagate via ?
+    #[test]
+    fn test_write_request_type_cache_swallows_disk_error() {
+        let outer_dir = tempfile::TempDir::new().unwrap();
+        let fake_cache_home = outer_dir.path().join("i_am_a_file");
+        std::fs::write(&fake_cache_home, "file, not a dir").unwrap();
+
+        // Acquire ENV_MUTEX to serialise env access with all other cache tests.
+        let guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: ENV_MUTEX serialises all tests that touch XDG_CACHE_HOME / JR_CACHE_DIR.
+        // JR_CACHE_DIR is the cross-platform seam (BC-6.2.017): set to the file path
+        // so cache_root() returns a file path on both platforms, causing ENOTDIR in
+        // create_dir_all inside write_cache.
+        unsafe {
+            std::env::set_var("XDG_CACHE_HOME", &fake_cache_home);
+            std::env::set_var("JR_CACHE_DIR", &fake_cache_home);
+        }
+        let types = vec![crate::types::jsm::RequestType {
+            id: "11001".to_string(),
+            name: "Get IT Help".to_string(),
+            description: None,
+            help_text: None,
+            issue_type_id: None,
+            group_ids: vec![],
+        }];
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            write_request_type_cache("p3-swallow-test", "10", &types)
+        }));
+        unsafe {
+            std::env::remove_var("XDG_CACHE_HOME");
+            std::env::remove_var("JR_CACHE_DIR");
+        }
+        drop(guard);
+
+        let result = result.expect("write_request_type_cache must not panic on I/O error");
+        assert!(
+            result.is_ok(),
+            "write_request_type_cache must return Ok(()) on I/O error \
+             (model-b best-effort writer, BC-X.12.008); got: {result:?}"
+        );
+    }
+
+    /// BC-X.12.008 (D5) — `write_request_type_fields_cache` swallows disk-write errors.
+    ///
+    /// Forces an I/O error by pointing JR_CACHE_DIR at a *file* (not a directory),
+    /// so `create_dir_all` inside `write_cache` fails with ENOTDIR. The model-b
+    /// writer must return `Ok(())` and NOT panic or propagate the error.
+    ///
+    /// Non-tautology: would fail if the writer were changed to propagate via ?
+    #[test]
+    fn test_write_request_type_fields_cache_swallows_disk_error() {
+        let outer_dir = tempfile::TempDir::new().unwrap();
+        let fake_cache_home = outer_dir.path().join("i_am_a_file");
+        std::fs::write(&fake_cache_home, "file, not a dir").unwrap();
+
+        // Acquire ENV_MUTEX to serialise env access with all other cache tests.
+        let guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: ENV_MUTEX serialises all tests that touch XDG_CACHE_HOME / JR_CACHE_DIR.
+        // Same ENOTDIR-forcing pattern as test_write_request_type_cache_swallows_disk_error.
+        unsafe {
+            std::env::set_var("XDG_CACHE_HOME", &fake_cache_home);
+            std::env::set_var("JR_CACHE_DIR", &fake_cache_home);
+        }
+        let response = crate::types::jsm::RequestTypeFieldsResponse {
+            can_raise_on_behalf_of: true,
+            can_add_request_participants: false,
+            request_type_fields: vec![crate::types::jsm::RequestTypeField {
+                field_id: "summary".to_string(),
+                name: "What do you need?".to_string(),
+                description: None,
+                required: true,
+                visible: true,
+                default_values: None,
+                valid_values: None,
+                jira_schema: serde_json::json!({"type": "string", "system": "summary"}),
+            }],
+        };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            write_request_type_fields_cache("p3-swallow-test", "10", "200", &response)
+        }));
+        unsafe {
+            std::env::remove_var("XDG_CACHE_HOME");
+            std::env::remove_var("JR_CACHE_DIR");
+        }
+        drop(guard);
+
+        let result = result.expect("write_request_type_fields_cache must not panic on I/O error");
+        assert!(
+            result.is_ok(),
+            "write_request_type_fields_cache must return Ok(()) on I/O error \
+             (model-b best-effort writer, BC-X.12.008); got: {result:?}"
+        );
+    }
 }
 
 #[cfg(test)]
