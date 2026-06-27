@@ -3322,3 +3322,127 @@ async fn test_label_plus_markdown_rejected_with_exit_64_no_http() {
          stderr={stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// G-EDIT-FIELD-LABEL-GUARD (FIX-F5-001, BC-3.4.017 clause 6)
+// `jr issue edit <KEY> --field NAME=VALUE --label foo` → exit 64, offline.
+//
+// The mutual-exclusion block in `edit.rs::handle_edit`
+// § "--label cannot be combined with" fires BEFORE any HTTP call when --label
+// is combined with --field.  Without the block the --field write would silently
+// be dropped because the label→bulk routing fork does not honour --field.
+//
+// Non-tautology: removing the `if !field_pairs.is_empty()` arm from the
+// conflicting-flags block would let this invocation reach `handle_edit_bulk_labels`
+// which ignores field_pairs entirely → data loss with exit 0.
+// ---------------------------------------------------------------------------
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_edit_field_and_label_combined_exits_64_with_guard_message() {
+    let server = MockServer::start().await;
+    // No mocks mounted — the mutual-exclusion guard fires before any HTTP call.
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "--field",
+            "Severity=Critical",
+            "--label",
+            "add:foo",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // The FIX-F5-001 mutual-exclusion guard must fire.
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 for --field + --label combination (FIX-F5-001); \
+         stderr={stderr} stdout={stdout}"
+    );
+
+    // The guard message must name the conflict.
+    assert!(
+        stderr.contains("--label cannot be combined with"),
+        "Stderr must contain '--label cannot be combined with' (guard message); stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--field"),
+        "Stderr must name '--field' as the conflicting flag; stderr={stderr}"
+    );
+
+    // stdout must be empty — no partial data.
+    assert!(
+        stdout.trim().is_empty(),
+        "stdout must be empty when guard fires pre-HTTP; stdout={stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// G-EDIT-FIELD-C1-BULK (C-1 guard, BC-3.4.017 — single-key only for --field)
+// `jr issue edit FOO-1 FOO-2 --field NAME=VALUE` (multi-key / bulk) → exit 64.
+//
+// The C-1 guard in `edit.rs::handle_edit`
+// § "Multi-key bulk edit doesn't yet support" fires after the working-key-set
+// is resolved but before any API call to editmeta or PUT.  Without the guard,
+// --field would reach handle_edit_bulk_fields which ignores field_pairs
+// entirely → silent data loss.
+//
+// Non-tautology: removing the `if !field_pairs.is_empty()` arm from the
+// unsupported-flags block would allow the bulk path to run and silently discard
+// the --field write with exit 0.
+// ---------------------------------------------------------------------------
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_edit_field_multi_key_bulk_exits_64_with_c1_message() {
+    let server = MockServer::start().await;
+    // No mocks — C-1 guard fires before any HTTP call.
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "FOO-1",
+            "FOO-2",
+            "--field",
+            "Severity=Critical",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // The C-1 guard must fire.
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 for multi-key + --field (C-1 guard); \
+         stderr={stderr} stdout={stdout}"
+    );
+
+    // C-1 message must identify --field and the single-key constraint.
+    assert!(
+        stderr.contains("--field"),
+        "Stderr must name '--field' in the C-1 rejection message; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("Multi-key bulk edit doesn't yet support"),
+        "Stderr must contain the C-1 bulk-rejection phrase; stderr={stderr}"
+    );
+
+    // stdout must be empty.
+    assert!(
+        stdout.trim().is_empty(),
+        "stdout must be empty when C-1 guard fires pre-HTTP; stdout={stdout}"
+    );
+}
