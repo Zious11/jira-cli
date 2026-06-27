@@ -9,19 +9,11 @@
 //! re-fetched, the endpoint would be hit twice and wiremock would panic on drop.
 //!
 //! Coverage:
-//!   test_team_list_warm_cache_skips_http         — Family 1 (team list)
-//!   test_resolutions_warm_cache_skips_http       — Family 4 (resolutions)
-//!   test_project_meta_warm_cache_skips_http      — Family 2 (project_meta; bespoke inline reader)
-//!
-//! Families NOT pinned here (flagged as needing complex multi-endpoint setup):
-//!   cmdb_fields (#5)        — requires assets-enriched `issue list` with CMDB schema detection;
-//!                             needs workspace + CMDB field + AQL search mocks all active.
-//!                             Pre-populate approach: feasible but fragile without knowing
-//!                             which issue responses trigger cmdb-field reading.
-//!   object_type_attrs (#7)  — requires full `assets search` subprocess flow (workspace ID +
-//!                             AQL search + object-type-attrs); in-process vs subprocess env
-//!                             var conflict makes it fragile.  Flagged for a future dedicated
-//!                             assets-search warm-hit integration test.
+//!   test_team_list_warm_cache_skips_http             — Family 1 (team list)
+//!   test_resolutions_warm_cache_skips_http           — Family 4 (resolutions)
+//!   test_project_meta_warm_cache_skips_http          — Family 2 (project_meta; bespoke inline reader)
+//!   test_cmdb_fields_warm_cache_skips_http           — Family 5 (cmdb_fields; GET /rest/api/3/field)
+//!   test_object_type_attrs_warm_cache_skips_http     — Family 7 (object_type_attrs; GET objecttype/.../attributes)
 
 #[allow(dead_code)]
 mod common;
@@ -368,4 +360,308 @@ async fn test_project_meta_warm_cache_skips_http() {
     );
 
     // MockServer drop automatically enforces expect(1) on project endpoint.
+}
+
+// ── Family 5 (cmdb_fields) ────────────────────────────────────────────────────
+
+/// BC-6.2.018 (D2) — Family 5: warm cmdb_fields cache skips HTTP.
+///
+/// `jr issue list --project PROJ --assets` calls `get_or_fetch_cmdb_fields` which
+/// hits `GET /rest/api/3/field` on the first call (cold miss) and writes
+/// `cmdb_fields.json`. On the second call (warm hit, same JR_CACHE_DIR), the
+/// cache is fresh so the field-discovery endpoint MUST NOT be hit again.
+///
+/// Non-tautology: would fail if warm path re-fetched — the /field endpoint would
+/// be hit twice → expect(1) panics on drop.
+///
+/// The mock issue response carries pre-resolved `label`/`objectKey` (no bare
+/// `objectId`-only), so the asset-enrichment path is skipped and no workspace
+/// discovery call is needed on either invocation.
+#[tokio::test]
+async fn test_cmdb_fields_warm_cache_skips_http() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config_with_org(config_dir.path(), &server.uri(), None);
+
+    // CRITICAL: expect(1) — field-discovery endpoint must fire EXACTLY ONCE across
+    // BOTH invocations. Returns one CMDB-typed custom field so cmdb_fields.json is
+    // written on the cold-miss invocation and the warm-hit invocation reads from it.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {
+                "id": "summary",
+                "name": "Summary",
+                "custom": false,
+                "schema": { "type": "string" }
+            },
+            {
+                "id": "customfield_10191",
+                "name": "Client Asset",
+                "custom": true,
+                "schema": {
+                    "type": "any",
+                    "custom": "com.atlassian.jira.plugins.cmdb:cmdb-object-cftype",
+                    "customId": 10191
+                }
+            }
+        ])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Project existence check — fires on both invocations (not cached). Mount
+    // without expect() so it does not constrain the test.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/PROJ"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "key": "PROJ",
+            "name": "Test Project"
+        })))
+        .mount(&server)
+        .await;
+
+    // JQL search — fires on both invocations (not cached). Returns one issue
+    // with a pre-resolved CMDB asset (label + objectKey already set) so the
+    // asset-enrichment HTTP path is skipped entirely on both invocations.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "issues": [
+                {
+                    "key": "PROJ-1",
+                    "fields": {
+                        "summary": "Test Issue",
+                        "status": { "name": "To Do" },
+                        "issuetype": { "name": "Task" },
+                        "priority": { "name": "Medium" },
+                        "assignee": null,
+                        "project": { "key": "PROJ" },
+                        "customfield_10191": [
+                            {
+                                "label": "Acme Corp",
+                                "objectKey": "ASSET-1"
+                            }
+                        ]
+                    }
+                }
+            ],
+            "nextPageToken": null
+        })))
+        .mount(&server)
+        .await;
+
+    // Invocation 1: cold miss — fetches GET /rest/api/3/field, writes cmdb_fields.json.
+    let out1 = jr_cmd_isolated(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "issue",
+            "list",
+            "--project",
+            "PROJ",
+            "--assets",
+            "--no-input",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr1 = String::from_utf8_lossy(&out1.stderr);
+    assert!(
+        out1.status.success(),
+        "Invocation 1 expected exit 0; stderr: {stderr1}"
+    );
+
+    // Non-empty content check: an empty [] from inv-1 would let parsed1==parsed2
+    // pass vacuously and hide a broken cold-miss path.
+    let parsed1: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out1.stdout))
+        .unwrap_or_else(|e| {
+            panic!(
+                "Invocation 1 expected valid JSON; error: {e}; stdout: {}",
+                String::from_utf8_lossy(&out1.stdout)
+            )
+        });
+    let arr1 = parsed1.as_array().expect("expected JSON array from inv 1");
+    assert!(
+        !arr1.is_empty(),
+        "Invocation 1 must return at least one issue; got empty array; stdout: {}",
+        String::from_utf8_lossy(&out1.stdout)
+    );
+
+    // Invocation 2: warm hit — must NOT call GET /rest/api/3/field again.
+    let out2 = jr_cmd_isolated(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "issue",
+            "list",
+            "--project",
+            "PROJ",
+            "--assets",
+            "--no-input",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr2 = String::from_utf8_lossy(&out2.stderr);
+    assert!(
+        out2.status.success(),
+        "Invocation 2 expected exit 0; stderr: {stderr2}"
+    );
+
+    let parsed2: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out2.stdout))
+        .unwrap_or_else(|e| panic!("Invocation 2 expected valid JSON; error: {e}"));
+    let arr2 = parsed2.as_array().expect("expected JSON array from inv 2");
+    assert_eq!(
+        arr1.len(),
+        arr2.len(),
+        "Both invocations must return same number of issues"
+    );
+
+    // MockServer drop automatically enforces expect(1) on the field endpoint.
+}
+
+// ── Family 7 (object_type_attrs) ──────────────────────────────────────────────
+
+/// BC-6.2.018 (D2) — Family 7: warm object_type_attrs cache skips HTTP.
+///
+/// `jr assets search ... --attributes` calls `enrich_search_attributes` which hits
+/// `GET /jsm/assets/workspace/<wid>/v1/objecttype/<type_id>/attributes` on the
+/// first call (cold miss) and writes `object_type_attrs.json`. On the second call
+/// (warm hit, same JR_CACHE_DIR), the cache is fresh so the objecttype-attributes
+/// endpoint MUST NOT be hit again.
+///
+/// Non-tautology: would fail if warm path re-fetched — the attributes endpoint
+/// would be hit twice → expect(1) panics on drop.
+///
+/// The workspace cache is pre-seeded in the TempDir before any invocation so
+/// workspace discovery (`GET /rest/servicedeskapi/assets/workspace`) is never
+/// needed. The AQL search fires on both invocations (not cached); it is mounted
+/// without expect().
+#[tokio::test]
+async fn test_object_type_attrs_warm_cache_skips_http() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config_with_org(config_dir.path(), &server.uri(), None);
+
+    // Pre-seed the workspace cache so workspace discovery is never needed.
+    // Cache path: JR_CACHE_DIR/v1/default/workspace.json
+    let workspace_id = "test-workspace-abc123";
+    let cache_profile_dir = cache_dir.path().join("jr").join("v1").join("default");
+    std::fs::create_dir_all(&cache_profile_dir).unwrap();
+    let workspace_cache = serde_json::json!({
+        "workspace_id": workspace_id,
+        "fetched_at": "2099-01-01T00:00:00Z"
+    });
+    std::fs::write(
+        cache_profile_dir.join("workspace.json"),
+        serde_json::to_string_pretty(&workspace_cache).unwrap(),
+    )
+    .unwrap();
+
+    // AQL search — fires on both invocations (not cached). Returns one object
+    // with objectType.id "42" so enrich_search_attributes is called on cold miss.
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "/jsm/assets/workspace/{workspace_id}/v1/object/aql"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "startAt": 0,
+            "maxResults": 25,
+            "total": 1,
+            "isLast": true,
+            "values": [
+                {
+                    "id": "88",
+                    "label": "Web Server 01",
+                    "objectKey": "SRV-1",
+                    "objectType": { "id": "42", "name": "Server" },
+                    "attributes": [
+                        {
+                            "id": "501",
+                            "objectTypeAttributeId": "201",
+                            "objectAttributeValues": [
+                                { "value": "prod", "displayValue": "prod" }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    // CRITICAL: expect(1) — objecttype attributes endpoint must fire EXACTLY ONCE
+    // across BOTH invocations. Returns one non-system, non-hidden attribute so the
+    // result is meaningful and the cache write actually stores something.
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/jsm/assets/workspace/{workspace_id}/v1/objecttype/42/attributes"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {
+                "id": "201",
+                "name": "Environment",
+                "system": false,
+                "hidden": false,
+                "label": false,
+                "position": 1
+            }
+        ])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Invocation 1: cold miss on object_type_attrs — fetches objecttype/42/attributes,
+    // writes object_type_attrs.json.
+    let out1 = jr_cmd_isolated(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "assets",
+            "search",
+            "objectType = Server",
+            "--attributes",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr1 = String::from_utf8_lossy(&out1.stderr);
+    assert!(
+        out1.status.success(),
+        "Invocation 1 expected exit 0; stderr: {stderr1}"
+    );
+
+    let stdout1 = String::from_utf8_lossy(&out1.stdout);
+    assert!(
+        stdout1.contains("Web Server 01") || stdout1.contains("SRV-1"),
+        "Invocation 1 must list the asset; stdout: {stdout1}"
+    );
+
+    // Invocation 2: warm hit — must NOT call objecttype/42/attributes again.
+    let out2 = jr_cmd_isolated(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "assets",
+            "search",
+            "objectType = Server",
+            "--attributes",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr2 = String::from_utf8_lossy(&out2.stderr);
+    assert!(
+        out2.status.success(),
+        "Invocation 2 expected exit 0; stderr: {stderr2}"
+    );
+
+    let stdout2 = String::from_utf8_lossy(&out2.stdout);
+    assert!(
+        stdout2.contains("Web Server 01") || stdout2.contains("SRV-1"),
+        "Invocation 2 must return same asset data from cache; stdout: {stdout2}"
+    );
+
+    // MockServer drop automatically enforces expect(1) on the objecttype attributes endpoint.
 }
