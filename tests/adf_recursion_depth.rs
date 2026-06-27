@@ -3,36 +3,21 @@
 //! These tests exercise the depth guard at the CLI boundary — they run the `jr`
 //! binary as a subprocess and assert on exit code and stderr.
 //!
-//! # Compile status
+//! # Guard status
 //!
-//! The CLI test (`test_issue_create_deep_markdown_description_exits_64`)
-//! COMPILES today.  It FAILS at runtime in the RED state because the guard is
-//! not yet implemented: the binary exits 0 (success) and makes a POST to Jira
-//! instead of exiting 64 before the HTTP call.
+//! The recursion-depth guard is implemented and these tests pass against the
+//! current codebase (shipped in PR #553, SEC-001, CWE-674 mitigation).
 //!
-//! The constant integration test (`test_max_adf_depth_constant_equals_256`)
-//! does NOT compile today because `jr::adf::MAX_ADF_DEPTH` does not exist yet.
-//! See its inline comment.
+//! `src/adf.rs` defines `pub(crate) const MAX_ADF_DEPTH: usize = 256`.  All
+//! recursive-descent sites on both the forward path (`markdown_to_adf` and its
+//! post-passes) and the reverse path (`adf_to_text` / `render_node`) reject
+//! inputs at or beyond that depth with a `JrError` that exits 64.
 //!
 //! # Depth choice
 //!
-//! Inputs use 256 levels of nesting (the inclusive boundary per spec §3).
-//! The current unguarded implementation handles 256 levels without
-//! stack-overflowing — it returns Ok and proceeds to POST.  The test asserting
-//! exit 64 therefore fails cleanly (gets exit 0) rather than crashing the
-//! test harness.
-//!
-//! # Red gate notes
-//!
-//! - `test_issue_create_deep_markdown_description_exits_64`:
-//!   FAILS with: expected exit code 64, got 0 (guard not yet implemented).
-//!   The binary proceeds to POST the issue to Jira.
-//!
-//! - `test_max_adf_depth_constant_equals_256`:
-//!   FAILS TO COMPILE: `error[E0425]: cannot find value MAX_ADF_DEPTH in
-//!   module jr::adf`.  This compile failure IS the red state for this test.
-//!   The implementer must add the constant (and expose it appropriately) to
-//!   make this compile and pass.
+//! Inputs use 256 levels of nesting (the inclusive boundary per BC-7.2.012 §3).
+//! Depth-256 input is rejected by the guard (`depth >= MAX_ADF_DEPTH`) before
+//! any HTTP call is made.
 
 use assert_cmd::Command;
 use wiremock::matchers::{method, path};
@@ -66,14 +51,11 @@ fn write_minimal_config(config_dir: &std::path::Path) {
     std::fs::write(conf.join("config.toml"), "").unwrap();
 }
 
-/// Build a 256-level nested blockquote markdown string.
+/// Build a depth-level nested blockquote markdown string.
 ///
 /// Each level is `"> "`, so depth=256 produces 256 `"> "` prefixes before the
-/// leaf text.  The current unguarded implementation converts this to a 256-deep
-/// ADF tree; once the guard exists it is rejected before the HTTP call.
-///
-/// Safety: depth=256 does NOT crash the current unguarded code.  The stack
-/// depth is far below the crash threshold — the binary simply exits 0.
+/// leaf text.  The depth guard in `markdown_to_adf` rejects this before any
+/// HTTP call, causing `jr` to exit 64.
 fn deep_blockquote_markdown(depth: usize) -> String {
     let prefix = "> ".repeat(depth);
     format!("{}leaf content", prefix)
@@ -81,26 +63,22 @@ fn deep_blockquote_markdown(depth: usize) -> String {
 
 // ---------------------------------------------------------------------------
 // §9.3 Call-site integration test (BC-7.2.012 postcondition, SEC-001)
-//
-// RED GATE (runtime failure): the binary exits 0 and POSTs to Jira.
-// After the guard is implemented, it must exit 64 with no POST.
 // ---------------------------------------------------------------------------
 
 /// BC-7.2.012 postcondition: `jr issue create --description <256-deep-markdown>
 /// --markdown` must exit 64 with "nesting too deep" on stderr, and must NOT
 /// make a POST to Jira.
 ///
-/// This exercises the cheapest forward call-site: `issue create --markdown`
-/// runs `markdown_to_adf` before any HTTP call.
-///
-/// RED GATE failure mode: exit code is 0 (not 64) and the POST IS called.
+/// This exercises the forward call-site: `issue create --markdown` runs
+/// `markdown_to_adf` before any HTTP call; the depth guard intercepts at 256
+/// levels and exits 64.
 #[tokio::test]
 async fn test_issue_create_deep_markdown_description_exits_64() {
     let server = MockServer::start().await;
 
-    // Mount POST /rest/api/3/issue — the guard must prevent this from being
-    // reached.  We mount it (without .expect()) so the binary does not fail on
-    // an unmocked endpoint when running in the RED state (guard absent).
+    // Mount POST /rest/api/3/issue without `.expect()` — the guard prevents
+    // this endpoint from being reached.  Mounted anyway so that any unexpected
+    // POST fails with a meaningful wiremock 501, not a connection-refused error.
     Mock::given(method("POST"))
         .and(path("/rest/api/3/issue"))
         .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
@@ -146,8 +124,7 @@ async fn test_issue_create_deep_markdown_description_exits_64() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // PRIMARY assertion: the guard must cause exit 64.
-    // RED state: fails because exit_code is 0.
+    // PRIMARY assertion: the guard causes exit 64.
     assert_eq!(
         exit_code, 64,
         "SEC-001 (BC-7.2.012): jr issue create with 256-deep markdown must exit 64 \
@@ -155,9 +132,7 @@ async fn test_issue_create_deep_markdown_description_exits_64() {
          stderr: {stderr:?} stdout: {stdout:?}"
     );
 
-    // SECONDARY assertion: stderr must name the condition.
-    // RED state: fails because stderr contains the Created confirmation, not
-    // the depth guard message.
+    // SECONDARY assertion: stderr names the condition.
     assert!(
         stderr.contains("nesting too deep"),
         "SEC-001: stderr must contain 'nesting too deep'; got: {stderr:?}"
