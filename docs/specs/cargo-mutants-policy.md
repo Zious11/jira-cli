@@ -195,7 +195,7 @@ capped at 240s.
 | SEC-001 scale (adf.rs recursion guards) | ~36 | ~21 min |
 | Typical adf.rs PR | ~80 | ~47 min |
 | Large adf.rs + bulk.rs PR | ~120 | ~70 min |
-| Very large / multiple scoped files | ~200 | ~90 min+ (budget signal: split the PR) |
+| Very large / multiple scoped files | ~200 | ~117 min — exceeds the 90-min ceiling; job cancelled → split the PR |
 
 Formula: `mutants / 4 jobs × ~140s avg` — the 140s average is the measured median
 baseline (133–145s range from 5 green develop runs, 2026-06-28); hanging mutants add up
@@ -234,9 +234,9 @@ is silently ignored and the test timeout falls back to **300s** per mutant (book
 timeout default of 300 seconds will be used."*).
 
 **This Path-A design (retained baseline run) MUST NOT use `--baseline=skip`.** The
-baseline run is required for `--timeout` to override the multiplier correctly (though
-with `--timeout 240` in the invocation, this distinction is moot — `--timeout` applies
-regardless of whether the baseline is skipped or not).
+baseline run is retained so the suite is proven green before any mutant is scored;
+`--timeout 240` applies as the per-mutant ceiling unconditionally — it supersedes the
+`timeout_multiplier` and is independent of whether `--baseline=skip` is used.
 
 A future sharding effort (Path B) MUST pass `--timeout 240` (or a tuned value) explicitly
 on every shard command, since `timeout_multiplier` is not available under `--baseline=skip`.

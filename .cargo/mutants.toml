@@ -5,8 +5,8 @@
 # .cargo/mutants.toml. Both are equivalent when passed via --config; the .cargo/ location
 # is the zero-flags default.
 
-# Scope mutation testing to the bulk + create modules where F6 hardening review
-# identified weak-assertion risk.
+# Scope mutation testing to adf, bulk/create, issues, cache, and jsm modules.
+# Canonical scope definition: docs/specs/cargo-mutants-policy.md §Scope.
 examine_globs = [
     "src/adf.rs",
     "src/api/jira/bulk.rs",

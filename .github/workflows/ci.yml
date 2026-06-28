@@ -178,11 +178,15 @@ jobs:
       - uses: taiki-e/install-action@aae1387a167f5eee4267fe2946da57ae49a68770  # install-action v2.x
         with:
           # Pin to cargo-mutants major v27 to protect the required gate's schema/exit-code
-          # assumptions: v27 outcomes.json keys (caught/missed/timeout/unviable), exit-code
-          # mapping (0=all-caught-or-no-mutants, non-zero=survivors/harness-error), and
+          # assumptions: v27 outcomes.json top-level summary keys
+          # (caught/missed/timeout/unviable/total_mutants), exit-code mapping
+          # (0=all-caught-or-no-mutants, non-zero=survivors/harness-error), and
           # --timeout semantics. A silent major-version bump could change these and produce
           # a false-green or false-red without any code change in this repo.
-          # Cross-ref: .factory/research/cargo-mutants-timeout-keys-verification-2026-06-28.md
+          # Evidence basis: v27 schema verified top-level in S-346 Pass 5 F1 refutation
+          # (.factory/cycles/cycle-001/S-346/implementation/red-gate-log.md §"Pass 5 F1
+          # empirical refutation") + timeout/exit-code semantics confirmed in
+          # .factory/research/cargo-mutants-timeout-keys-verification-2026-06-28.md
           tool: cargo-mutants@27
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
       - name: Run mutation tests on PR diff
@@ -304,7 +308,41 @@ jobs:
             # green. This warning does NOT hard-fail (avoids coupling the required gate to
             # an unverified future schema), but makes the discrepancy visible in job logs.
             total_mutants=$(jq '.total_mutants // 0' mutants.out/outcomes.json)
+
+            # H-2: integer validation — guard each jq-extracted field against a
+            # non-integer value (future schema change emitting string/float/object would
+            # survive `// 0` then break `$(( ))` under set -e → false-RED). Coerce to 0
+            # on any non-integer; normal integer case is unchanged.
+            [[ "${caught}"       =~ ^[0-9]+$ ]] || caught=0
+            [[ "${missed}"       =~ ^[0-9]+$ ]] || missed=0
+            [[ "${timeout}"      =~ ^[0-9]+$ ]] || timeout=0
+            [[ "${unviable}"     =~ ^[0-9]+$ ]] || unviable=0
+            [[ "${total_mutants}" =~ ^[0-9]+$ ]] || total_mutants=0
+
+            # H-1: runtime schema-drift guard — detect when outcomes.json is valid JSON
+            # with a non-empty .outcomes array BUT all top-level summary keys parsed as 0.
+            # This is the fingerprint of a schema change that moved summary keys (e.g. into
+            # a nested "summary" object): the `// 0` fallbacks all fire silently, giving
+            # caught=missed=timeout=unviable=0 → total_outcomes=0 → PASS (false-green).
+            # A genuine 0-mutant run produces NO outcomes.json, so it never reaches this
+            # branch. A genuine all-unviable run has non-zero unviable. A genuine empty
+            # .outcomes array means no mutants were scored → not drift.
+            # Evidence basis: v27 top-level schema confirmed in S-346 Pass 5 F1 refutation
+            # (red-gate-log.md §"Pass 5 F1 empirical refutation"); drift guard activates
+            # only when the confirmed schema no longer matches.
+            _outcomes_len=$(jq '(.outcomes // []) | length' mutants.out/outcomes.json 2>/dev/null || echo 0)
+            [[ "${_outcomes_len}" =~ ^[0-9]+$ ]] || _outcomes_len=0
             _sum_check=$((caught + missed + timeout + unviable))
+            if [ "${_outcomes_len}" -gt 0 ] && [ "${_sum_check}" -eq 0 ] && [ "${total_mutants}" -eq 0 ]; then
+              echo "FAIL: outcomes.json schema drift detected."
+              echo "      outcomes.json has ${_outcomes_len} outcome(s) in .outcomes array but all"
+              echo "      top-level summary keys (caught/missed/timeout/unviable/total_mutants) are 0."
+              echo "      The cargo-mutants output format may have changed (e.g. summary keys"
+              echo "      moved to a nested object). Pin update or schema investigation required."
+              echo "      Pin: .github/workflows/ci.yml cargo-mutants@27"
+              exit 1
+            fi
+
             if [ "${total_mutants}" -ne 0 ] && [ "${_sum_check}" -ne "${total_mutants}" ]; then
               echo "::warning::Schema mismatch: total_mutants=${total_mutants} but caught+missed+timeout+unviable=${_sum_check}. An unrecognized outcome category may exist in this version of cargo-mutants. Kill-rate denominator may be understated."
               echo "WARNING: total_mutants=${total_mutants} != sum of known categories ${_sum_check}. Check cargo-mutants release notes for new outcome types."
