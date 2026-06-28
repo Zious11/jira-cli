@@ -175,7 +175,15 @@ jobs:
           # Need full history so `git diff origin/<base_ref>...HEAD` can resolve the
           # base ref (used by --in-diff to scope mutation testing to changed lines).
           fetch-depth: 0
-      - uses: taiki-e/install-action@aae1387a167f5eee4267fe2946da57ae49a68770  # cargo-mutants
+      - uses: taiki-e/install-action@aae1387a167f5eee4267fe2946da57ae49a68770  # install-action v2.x
+        with:
+          # Pin to cargo-mutants major v27 to protect the required gate's schema/exit-code
+          # assumptions: v27 outcomes.json keys (caught/missed/timeout/unviable), exit-code
+          # mapping (0=all-caught-or-no-mutants, non-zero=survivors/harness-error), and
+          # --timeout semantics. A silent major-version bump could change these and produce
+          # a false-green or false-red without any code change in this repo.
+          # Cross-ref: .factory/research/cargo-mutants-timeout-keys-verification-2026-06-28.md
+          tool: cargo-mutants@27
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
       - name: Run mutation tests on PR diff
         id: run-mutants
@@ -192,7 +200,17 @@ jobs:
         continue-on-error: true
         run: |
           DIFF_FILE="${{ runner.temp }}/pr-${{ github.run_id }}.diff"
-          git diff origin/${{ github.base_ref }}...HEAD > "${DIFF_FILE}"
+          # F-4: append || true so a base-ref resolution failure (git diff exits non-zero)
+          # does not abort this step before OVERALL_DIFF_LINES is exported to GITHUB_ENV.
+          # Without || true, set -eo pipefail aborts here → run_outcome=failure +
+          # outcomes.json absent → "harness crash" message in Check kill rate (mislabeled).
+          # With || true: DIFF_FILE is created empty (shell opens it before git runs),
+          # OVERALL_DIFF_LINES=0, cargo-mutants runs with an empty diff (0 mutants, exits 0),
+          # run_outcome=success + outcomes.json absent + OVERALL_DIFF_LINES=0 → precise
+          # "base-ref drift / empty diff" FAIL in Check kill rate. No false-GREEN: an empty
+          # diff still FAILs via the drift branch. The harness-crash branch is preserved for
+          # true cargo-mutants failures (run_outcome=failure + outcomes.json absent).
+          git diff origin/${{ github.base_ref }}...HEAD > "${DIFF_FILE}" || true
 
           # F-3 (corrected, F5 fix): base-ref drift guard uses the OVERALL diff size,
           # not per-file scoped line count. Real base-ref drift produces an EMPTY diff
@@ -280,6 +298,17 @@ jobs:
             missed=$(jq '.missed // 0' mutants.out/outcomes.json)
             timeout=$(jq '.timeout // 0' mutants.out/outcomes.json)
             unviable=$(jq '.unviable // 0' mutants.out/outcomes.json)
+            # M-2 reconciliation: compare sum of known categories against total_mutants
+            # field (v27+). If a future cargo-mutants version adds a new outcome category,
+            # those mutants would fall outside our denominator — producing a silent false-
+            # green. This warning does NOT hard-fail (avoids coupling the required gate to
+            # an unverified future schema), but makes the discrepancy visible in job logs.
+            total_mutants=$(jq '.total_mutants // 0' mutants.out/outcomes.json)
+            _sum_check=$((caught + missed + timeout + unviable))
+            if [ "${total_mutants}" -ne 0 ] && [ "${_sum_check}" -ne "${total_mutants}" ]; then
+              echo "::warning::Schema mismatch: total_mutants=${total_mutants} but caught+missed+timeout+unviable=${_sum_check}. An unrecognized outcome category may exist in this version of cargo-mutants. Kill-rate denominator may be understated."
+              echo "WARNING: total_mutants=${total_mutants} != sum of known categories ${_sum_check}. Check cargo-mutants release notes for new outcome types."
+            fi
           else
             # F5 fix: wc -l prints "0" cleanly on empty file with exit 0; grep -c '' exits 1
             # on empty match, triggering `|| echo 0` and producing newline-embedded "0\n0"

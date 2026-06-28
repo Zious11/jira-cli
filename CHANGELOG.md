@@ -14,6 +14,15 @@ All notable changes to jr will be documented here.
 
 ### Changed
 
+- **CI: `mutants` job is now a hard-required merge gate (MUTATION-CI-TIMEOUT):** The
+  `cargo-mutants` mutation-testing job is wired into `ci-gate.needs`, so PRs touching
+  scoped files block merge when the kill rate falls below 90%. The absolute per-mutant
+  ceiling is `--timeout 240` (seconds); job `timeout-minutes` was raised 60→90. A PR
+  that generates 200+ mutants and causes the 90-minute job to be cancelled is also
+  blocked — the correct response is to split the PR. The `cargo-mutants` tool version
+  is pinned to major v27 to protect schema/exit-code assumptions. See
+  `docs/specs/cargo-mutants-policy.md`.
+
 ## [0.6.0-dev.7] - 2026-06-26
 
 ### Security
