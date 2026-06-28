@@ -184,11 +184,35 @@ jobs:
         # Use runner.temp + run_id to avoid /tmp race conditions on concurrent jobs.
         # continue-on-error: true so the Check-kill-rate step (the sole pass/fail
         # arbiter) always runs even when cargo-mutants exits non-zero on missed mutants.
+        # --timeout 180: absolute per-mutant test ceiling (180 s). This is the ONLY
+        # knob that sets a hard ceiling; minimum_test_timeout is a floor (not used),
+        # timeout_multiplier is superseded once --timeout is present.
+        # See docs/specs/cargo-mutants-policy.md §Timeout Parameters.
         continue-on-error: true
         run: |
           DIFF_FILE="${{ runner.temp }}/pr-${{ github.run_id }}.diff"
           git diff origin/${{ github.base_ref }}...HEAD > "${DIFF_FILE}"
-          cargo mutants --in-diff "${DIFF_FILE}" --jobs 4
+
+          # F-3 positive-coverage assertion: count diff lines touching examine_globs
+          # files. If scoped files changed but cargo-mutants generates 0 mutants, the
+          # Check-kill-rate step will detect base-ref drift and fail rather than
+          # silently passing as a "clean PR".
+          SCOPED_DIFF_LINES=$(git diff origin/${{ github.base_ref }}...HEAD -- \
+              src/adf.rs \
+              src/api/jira/bulk.rs \
+              src/types/jira/bulk.rs \
+              "src/cli/issue/create.rs" \
+              src/api/jsm/requests.rs \
+              src/api/jsm/request_types.rs \
+              src/cli/requesttype.rs \
+              src/api/jira/issues.rs \
+              src/cache.rs \
+            | wc -l)
+          SCOPED_DIFF_LINES=$(echo "${SCOPED_DIFF_LINES}" | tr -d ' ')
+          echo "Scoped-file diff lines: ${SCOPED_DIFF_LINES}"
+          echo "SCOPED_DIFF_LINES=${SCOPED_DIFF_LINES}" >> "${GITHUB_ENV}"
+
+          cargo mutants --in-diff "${DIFF_FILE}" --jobs 4 --timeout 180
       - name: Check kill rate
         # if: always() ensures this step runs regardless of whether Run-mutation-tests
         # exited non-zero. This step is the sole pass/fail arbiter for the mutants job.
@@ -220,7 +244,17 @@ jobs:
 
           if [ ! -f mutants.out/outcomes.json ]; then
             if [ "$run_outcome" = "success" ]; then
-              echo "OK: cargo-mutants exited 0 with no outcomes.json — 0 mutants generated from PR diff (clean/docs-only/out-of-scope)."
+              # F-3 base-ref drift guard: if scoped files changed but cargo-mutants
+              # produced 0 mutants, the --in-diff resolved against an empty diff
+              # (base-ref drift). That is a false-green on a required gate.
+              if [ "${SCOPED_DIFF_LINES:-0}" -gt 0 ]; then
+                echo "FAIL: cargo-mutants exited 0 with no outcomes.json BUT diff touches scoped files."
+                echo "      Scoped-file diff lines: ${SCOPED_DIFF_LINES}"
+                echo "      Possible base-ref drift (--in-diff resolved empty despite scoped-file changes)."
+                echo "      Re-run the job, or check that the diff was generated against the correct base."
+                exit 1
+              fi
+              echo "OK: 0 mutants — diff does not touch any examine_globs files (clean/docs-only PR)."
               exit 0
             else
               echo "FAIL: cargo-mutants exited non-zero AND outcomes.json missing — harness crash."

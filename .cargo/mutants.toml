@@ -23,20 +23,10 @@ examine_globs = [
     "src/cache.rs",
 ]
 
-# Absolute per-mutant test ceiling (seconds). Overrides timeout_multiplier when
-# the multiplier result exceeds this value. The slowest legitimate test in scope
-# (tests/bulk_deadline_propagation.rs real wall-clock sleep) runs in ~30–40s;
-# 120s is 3× that — generous for runner variance, tight enough to kill hung
-# async mutations quickly. Root cause: MUTATION-CI-TIMEOUT / docs/specs/cargo-mutants-policy.md §Timeout Parameters.
-minimum_test_timeout = 120
-
-# Multiplier on the measured baseline test duration to derive per-mutant timeout.
-# Reduced from 3.0 to 2.0: with the 120s absolute ceiling, the multiplier only
-# matters when the baseline is small (< 60s). At ~90s baseline, 2.0× = 180s —
-# overridden by the 120s ceiling. Retaining the multiplier preserves the
-# baseline-proportional floor for fast-baseline scenarios.
-# Root cause: MUTATION-CI-TIMEOUT / docs/specs/cargo-mutants-policy.md §Multiplier Reduction.
-timeout_multiplier = 2.0
+# The absolute per-mutant test ceiling is set via `--timeout 180` on the CLI
+# invocation (CI and local). There is no .cargo/mutants.toml key for it in
+# cargo-mutants 27.x — `--timeout` is a CLI-only flag.
+# See docs/specs/cargo-mutants-policy.md §Timeout Parameters for derivation.
 
 # Match the CI test invocation so mutation runs use the same feature set as
 # the verifying suite.
