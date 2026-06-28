@@ -115,9 +115,11 @@ Key facts:
 - The test's wall-clock budget is approximately 30–40 seconds per run.
 - The per-mutant cost is **a full baseline test suite run**, not just the slowest single
   test. cargo-mutants runs the entire test suite per mutant (with `--all-features`).
-- With a ~90s baseline and old `timeout_multiplier = 3.0`, the auto-derived per-mutant
-  ceiling was ~270s. With no `--timeout`, the multiplier result was unbounded above as the
-  baseline grows.
+- With a ~90s baseline and old `timeout_multiplier = 3.0` (the S-346 original config; note
+  this was transiently set to 2.0 in the initial MUTATION-CI-TIMEOUT pass-1 before being
+  removed entirely in pass-2 in favor of the `--timeout` CLI flag), the auto-derived
+  per-mutant ceiling was ~270s. With no `--timeout`, the multiplier result was unbounded
+  above as the baseline grows.
 
 Detail: `.factory/phase-f1-delta-analysis/MUTATION-CI-TIMEOUT-delta-analysis.md` §2.1.
 
@@ -157,7 +159,7 @@ the `Check kill rate` step — if any appear on otherwise-healthy mutants, bump 
 further. If the job consistently finishes under 30 minutes for typical PRs, a tighter
 value (e.g., 200) could reduce average job time.
 
-### Multiplier Decision: REMOVE `timeout_multiplier` (Was 2.0)
+### Multiplier Decision: REMOVE `timeout_multiplier` (Was 3.0 in S-346 original; transiently 2.0 in MUTATION-CI-TIMEOUT pass-1; removed in pass-2)
 
 `timeout_multiplier` is removed from `.cargo/mutants.toml` because:
 - It is dead config once `--timeout 240` is in the CLI invocation (book: superseded).
@@ -457,7 +459,7 @@ cargo mutants --in-diff "${DIFF_FILE}" --jobs 4 --timeout 240
 
 The job also includes a base-ref drift guard (`OVERALL_DIFF_LINES` check) that
 guards against base-ref drift producing a false-green zero-mutant result: the gate
-FAIL-only when the computed `DIFF_FILE` is empty (overall diff is zero lines); a
+FAILs only when the computed `DIFF_FILE` is empty (overall diff is zero lines); a
 non-empty diff that yields 0 mutants passes. See
 **F-3: Positive-Coverage Assertion** above for the exact gate logic.
 
@@ -469,7 +471,151 @@ mutants; the kill-rate check exits 0 provided the positive-coverage assertion al
 The job `timeout-minutes` is set to **90** (increased from 60 in MUTATION-CI-TIMEOUT,
 2026-06-28). See **CI Budget Model** above.
 
-See `.factory/cicd-setup.md` §1.1a for the canonical CI job specification.
+The live workflow `.github/workflows/ci.yml` is the source of truth for the current job
+specification. The reference to `.factory/cicd-setup.md §1.1a` is historical — that
+artifact-branch file records the pre-MUTATION-CI-TIMEOUT spec (60-min/no-`--timeout`/
+advisory) and is pending refresh on the factory-artifacts branch. Do NOT use it as
+authoritative for the current gate configuration.
+
+## Schema-Drift and False-Green Guards
+
+Beyond the base-ref drift guard (F-3) and kill-rate threshold, the `Check kill rate` CI
+step implements several additional guards. These are documented here because they are
+load-bearing correctness invariants of the required gate, and the policy doc must match
+the implemented behavior.
+
+### cargo-mutants Version Pin (`cargo-mutants@27`)
+
+**Trigger:** `taiki-e/install-action` install step in `.github/workflows/ci.yml`.
+
+**Mechanism:** The install step pins to `cargo-mutants@27` (major version).
+
+**Rationale:** The `Check kill rate` step makes specific assumptions about cargo-mutants
+v27 behavior that could change silently across major versions:
+- **outcomes.json top-level summary keys:** `caught`, `missed`, `timeout`, `unviable`,
+  `total_mutants` — all present as top-level integer fields in v27. If a future major
+  version moves these into a nested object (e.g. `summary.caught`), the `// 0` fallbacks
+  in the `jq` extraction would all fire silently, giving a 0-mutant false-green.
+- **Exit-code semantics:** `0` means all mutants caught or none generated; non-zero means
+  missed mutants, timeouts, or harness errors. The `(outcome, outcomes.json)` matrix logic
+  in `Check kill rate` depends on this invariant.
+- **`--timeout` semantics:** `--timeout` is a CLI-only flag (no `.cargo/mutants.toml`
+  equivalent) that supersedes `timeout_multiplier` entirely when present.
+
+**Evidence basis:** v27 top-level schema empirically confirmed in S-346 Pass 5 F1
+refutation (`.factory/cycles/cycle-001/S-346/implementation/red-gate-log.md`, Pass 5 F1
+empirical refutation section, showing `caught`/`missed`/`timeout`/`unviable`/
+`total_mutants` as top-level integer keys). Exit-code and `--timeout` semantics confirmed
+via source-code analysis in `.factory/research/cargo-mutants-timeout-keys-verification-2026-06-28.md`.
+
+**Impact:** Pinning to `@27` means a silent upstream release of cargo-mutants v28+ with
+incompatible schema or exit-code changes cannot break the required gate without an
+explicit pin-bump that surfaces the change for review.
+
+### Malformed-JSON Guard
+
+**Trigger:** `outcomes.json` exists but fails `jq empty` parseability check.
+
+**Mechanism:** Before extracting any fields, the step runs:
+```bash
+if ! jq empty mutants.out/outcomes.json 2>/dev/null; then
+  echo "FAIL: mutants.out/outcomes.json exists but is malformed JSON."
+  exit 1
+fi
+```
+
+**Rationale:** cargo-mutants writes `outcomes.json` incrementally. An OOM-kill or
+runner crash mid-write can produce a truncated, syntactically invalid file. Without this
+guard, the subsequent `jq '.caught // 0'` extractions would all return `0` via the `// 0`
+fallback — yielding a false-green zero-mutant result even though mutants were scored.
+The `jq empty` check FAILs the gate rather than silently passing.
+
+### Integer Validation
+
+**Trigger:** Any `jq`-extracted summary field contains a non-integer value.
+
+**Mechanism:** After extracting `caught`, `missed`, `timeout`, `unviable`, and
+`total_mutants` via `jq`, each variable is validated with a regex guard:
+```bash
+[[ "${caught}"        =~ ^[0-9]+$ ]] || caught=0
+[[ "${missed}"        =~ ^[0-9]+$ ]] || missed=0
+[[ "${timeout}"       =~ ^[0-9]+$ ]] || timeout=0
+[[ "${unviable}"      =~ ^[0-9]+$ ]] || unviable=0
+[[ "${total_mutants}" =~ ^[0-9]+$ ]] || total_mutants=0
+```
+
+**Rationale:** A future schema change that emits a string, float, or object in any of
+these fields would survive `jq`'s `// 0` fallback (the fallback only fires on `null`, not
+on a wrong type) and would then cause the `$(( ))` arithmetic to fail under `set -e`,
+producing a false-RED (job failure on an otherwise healthy PR). Coercing to `0` on any
+non-integer makes the gate predictably non-crashing — the schema-drift guard or the
+kill-rate calculation will then surface the anomaly in a controlled way.
+
+### Runtime Schema-Drift Guard (H-1)
+
+**Trigger:** `outcomes.json` is valid JSON with a non-empty `.outcomes` array, but all
+five top-level summary keys (`caught`, `missed`, `timeout`, `unviable`, `total_mutants`)
+parsed as `0`.
+
+**Mechanism:**
+```bash
+_outcomes_len=$(jq '(.outcomes // []) | length' mutants.out/outcomes.json 2>/dev/null || echo 0)
+_sum_check=$((caught + missed + timeout + unviable))
+if [ "${_outcomes_len}" -gt 0 ] && [ "${_sum_check}" -eq 0 ] && [ "${total_mutants}" -eq 0 ]; then
+  echo "FAIL: outcomes.json schema drift detected."
+  exit 1
+fi
+```
+
+**Rationale:** This is the fingerprint of a schema migration in which summary keys move
+from the top level into a nested object (e.g. `summary.caught`). When that happens, the
+`jq '.caught // 0'` extractions all return `0` silently (the key does not exist at the
+top level), giving `total_outcomes = 0` → the gate exits 0 as if no mutants ran (false-
+green). The guard detects this by cross-checking: if `outcomes` entries are present but
+all summary totals are zero, the schema has changed. The guard then FAILs the step with an
+actionable message referencing the `@27` pin.
+
+**Why it cannot produce false-REDs on legitimate runs:**
+- A genuine zero-mutant run produces **no** `outcomes.json` at all — this branch is never
+  reached.
+- A genuine all-unviable run has `unviable > 0`, so `_sum_check > 0` — the condition
+  does not fire.
+- A genuine empty `.outcomes` array (no mutants scored) has `_outcomes_len == 0` — the
+  condition does not fire.
+
+### `total_mutants` Reconciliation Warning (M-2)
+
+**Trigger:** `caught + missed + timeout + unviable != total_mutants` (and
+`total_mutants != 0`).
+
+**Mechanism:**
+```bash
+if [ "${total_mutants}" -ne 0 ] && [ "${_sum_check}" -ne "${total_mutants}" ]; then
+  echo "::warning::Schema mismatch: total_mutants=${total_mutants} but ..."
+fi
+```
+
+**This emits a `::warning::` annotation — it does NOT hard-fail the gate.**
+
+**Rationale for warning-only:** The `total_mutants` field accounts for ALL outcomes,
+including any new outcome categories added in future cargo-mutants versions that this
+script does not yet enumerate. A mismatch means the denominator in the kill-rate
+calculation may be understated (some mutants fell into an unrecognized category and are
+not counted in `missed`). However, promoting this to a hard-fail was considered and
+rejected for the following reasons:
+
+1. **False-RED risk:** If cargo-mutants adds a new outcome category (e.g. `skipped`),
+   the sum would legitimately diverge from `total_mutants` — hard-failing would block
+   every PR until the script is updated, even if the kill rate is healthy.
+2. **Accepted residual:** The `@27` version pin protects against undiscovered schema
+   changes in the current CI. If the pin is deliberately bumped to accommodate a new
+   major version that adds an outcome category, the reconciliation mismatch will surface
+   in CI logs at that time — making it an observable, actionable signal rather than a
+   silent drift. The warning-in-logs posture is sufficient because defeating it requires
+   bypassing the `@27` pin AND the change being visible in job logs.
+3. **Defense-in-depth:** The H-1 schema-drift guard (above) already FAILs the gate when
+   all summary keys are zero despite non-empty outcomes — the most dangerous false-green
+   class. The reconciliation warning catches the residual case of a partial-key move.
 
 ## Spec Anchor
 
@@ -511,6 +657,7 @@ Path B is deferred until Path A's 90-minute budget proves insufficient in practi
 
 | Date | Cycle | Change |
 |------|-------|--------|
+| 2026-06-28 | MUTATION-CI-TIMEOUT (F5 doc-completeness, pass 3) | Added "Schema-Drift and False-Green Guards" section documenting @27 pin rationale + evidence basis, malformed-JSON guard, integer-validation guard, H-1 runtime schema-drift guard, and M-2 total_mutants reconciliation warning-only design decision. Disambiguated timeout_multiplier history (3.0 in S-346 original; 2.0 in pass-1; removed in pass-2). Softened .factory/cicd-setup.md reference from "canonical" to "historical/pending refresh." F5 final blocker F1 (HIGH) + O1 + O3. |
 | 2026-06-28 | MUTATION-CI-TIMEOUT (F5 adversarial correction, pass 2) | HIGH false-RED fix: replaced SCOPED_DIFF_LINES-based drift guard with OVERALL_DIFF_LINES check. Old guard incorrectly failed comment-only/whitespace/reformat edits to scoped files. New guard: FAIL only when overall diff is EMPTY (genuine base-ref drift); PASS for any non-empty diff that yields 0 mutants. Grounded --timeout in measured baseline (133–145s on ubuntu-latest, 5 green develop runs 2026-06-28). Bumped --timeout 180 → 240 (old 180s gave only 3–6% headroom over worst-case 174s; 240s gives 38% headroom). Updated all --timeout references in policy doc, CLAUDE.md, and CI YAML. |
 | 2026-06-28 | MUTATION-CI-TIMEOUT (F5 adversarial correction, pass 1) | CRITICAL: corrected inverted timeout-mechanism documentation. `minimum_test_timeout` is a FLOOR not a ceiling; it and `timeout_multiplier` are REMOVED from `.cargo/mutants.toml` (dead config once `--timeout` is set). Moved the absolute per-mutant ceiling to `--timeout 180` on the CLI invocation. Derived 180s value with explicit reasoning (baseline ~90s assumed + runner variance headroom). Documented F-2 (cancelled = blocking, intentional). Added F-3 positive-coverage assertion (in-scope: gate is now required; base-ref drift false-green is a correctness hole). Corrected budget model to use `--timeout 180` / `~90s avg`. Corrected Path B sharding guidance to remove `minimum_test_timeout` references. Updated Local Invocation commands to add `--timeout 180`. |
 | 2026-06-28 | MUTATION-CI-TIMEOUT | Promoted `mutants` job to hard-required via `ci-gate.needs`. Raised job `timeout-minutes: 60 → 90`. Added (incorrectly) `minimum_test_timeout = 120` and `timeout_multiplier = 2.0` in `.cargo/mutants.toml` — both superseded by F5 correction above. |
