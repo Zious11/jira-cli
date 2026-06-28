@@ -140,7 +140,7 @@ cargo test --test '*'                # Integration tests only
 cargo clippy -- -D warnings          # Lint (zero warnings policy)
 cargo fmt --all -- --check           # Format check
 cargo deny check                     # License + vulnerability audit
-DIFF_FILE=$(mktemp -t pr.diff.XXXXXX) && trap 'rm -f "$DIFF_FILE"' EXIT && git diff origin/develop...HEAD > "$DIFF_FILE" && cargo mutants --in-diff "$DIFF_FILE" --jobs 4 --timeout 180  # Mutation testing on PR diff scope (see docs/specs/cargo-mutants-policy.md)
+DIFF_FILE=$(mktemp -t pr.diff.XXXXXX) && trap 'rm -f "$DIFF_FILE"' EXIT && git diff origin/develop...HEAD > "$DIFF_FILE" && cargo mutants --in-diff "$DIFF_FILE" --jobs 4 --timeout 240  # Mutation testing on PR diff scope (see docs/specs/cargo-mutants-policy.md)
 ```
 
 ## Conventions

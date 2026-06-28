@@ -184,47 +184,41 @@ jobs:
         # Use runner.temp + run_id to avoid /tmp race conditions on concurrent jobs.
         # continue-on-error: true so the Check-kill-rate step (the sole pass/fail
         # arbiter) always runs even when cargo-mutants exits non-zero on missed mutants.
-        # --timeout 180: absolute per-mutant test ceiling (180 s). This is the ONLY
-        # knob that sets a hard ceiling; minimum_test_timeout is a floor (not used),
-        # timeout_multiplier is superseded once --timeout is present.
+        # --timeout 240: absolute per-mutant test ceiling. Value derived from measured
+        # ubuntu-latest baseline of 133-145s (5 green develop runs, 2026-06-28); with
+        # ~20% runner variance worst-case ~174s, 240s gives ~38% headroom. Old assumed
+        # ~90s baseline was materially wrong.
         # See docs/specs/cargo-mutants-policy.md §Timeout Parameters.
         continue-on-error: true
         run: |
           DIFF_FILE="${{ runner.temp }}/pr-${{ github.run_id }}.diff"
           git diff origin/${{ github.base_ref }}...HEAD > "${DIFF_FILE}"
 
-          # F-3 positive-coverage assertion: count diff lines touching examine_globs
-          # files. If scoped files changed but cargo-mutants generates 0 mutants, the
-          # Check-kill-rate step will detect base-ref drift and fail rather than
-          # silently passing as a "clean PR".
-          SCOPED_DIFF_LINES=$(git diff origin/${{ github.base_ref }}...HEAD -- \
-              src/adf.rs \
-              src/api/jira/bulk.rs \
-              src/types/jira/bulk.rs \
-              "src/cli/issue/create.rs" \
-              src/api/jsm/requests.rs \
-              src/api/jsm/request_types.rs \
-              src/cli/requesttype.rs \
-              src/api/jira/issues.rs \
-              src/cache.rs \
-            | wc -l)
-          SCOPED_DIFF_LINES=$(echo "${SCOPED_DIFF_LINES}" | tr -d ' ')
-          echo "Scoped-file diff lines: ${SCOPED_DIFF_LINES}"
-          echo "SCOPED_DIFF_LINES=${SCOPED_DIFF_LINES}" >> "${GITHUB_ENV}"
+          # F-3 (corrected, F5 fix): base-ref drift guard uses the OVERALL diff size,
+          # not per-file scoped line count. Real base-ref drift produces an EMPTY diff
+          # while a legitimate comment-only or non-scoped-file edit produces a non-empty
+          # diff that yields 0 mutants — both cases must be handled correctly.
+          # OVERALL_DIFF_LINES is computed here for the "Check kill rate" step.
+          OVERALL_DIFF_LINES=$(wc -l < "${DIFF_FILE}" | tr -d ' ')
+          echo "Overall diff lines: ${OVERALL_DIFF_LINES}"
+          echo "OVERALL_DIFF_LINES=${OVERALL_DIFF_LINES}" >> "${GITHUB_ENV}"
 
-          cargo mutants --in-diff "${DIFF_FILE}" --jobs 4 --timeout 180
+          cargo mutants --in-diff "${DIFF_FILE}" --jobs 4 --timeout 240
       - name: Check kill rate
         # if: always() ensures this step runs regardless of whether Run-mutation-tests
         # exited non-zero. This step is the sole pass/fail arbiter for the mutants job.
         # The 90% kill-rate threshold lives here (not in .cargo/mutants.toml) for
         # CI-artifact visibility.
-        # Pass 4 gate logic: distinguish harness crash from zero-mutant clean PR using
-        # steps.run-mutants.outcome + mutants.out/outcomes.json presence. Then enforce
-        # 90% kill-rate target on (caught + missed + timeout) — timeouts count as
-        # survived per cargo-mutants v27 convention.
+        # Pass 4 gate logic (F5 corrected): distinguish harness crash from zero-mutant
+        # clean PR using steps.run-mutants.outcome + mutants.out/outcomes.json presence.
+        # Then enforce 90% kill-rate target on (caught + missed + timeout) — timeouts
+        # count as survived per cargo-mutants v27 convention.
+        # F5 fix: absent-outcomes.json + success → FAIL only when overall diff is EMPTY
+        # (genuine base-ref drift). A non-empty diff that yields 0 mutants is a
+        # legitimate comment-only, docs-only, or non-scoped-file PR — MUST PASS.
         if: always()
         run: |
-          # Pass 4 F1 fix — distinguish harness crash from zero-mutants clean PR.
+          # Pass 4 F1 fix + F5 correction — distinguish harness crash from zero-mutant run.
           #
           # cargo-mutants exit codes (v27):
           #   0 → all mutants caught OR no mutants generated
@@ -235,7 +229,9 @@ jobs:
           # matrix lets us distinguish:
           #
           #   outcome=success + outcomes.json present  → 100% caught (gate passes)
-          #   outcome=success + outcomes.json absent   → 0 mutants generated (clean PR — pass)
+          #   outcome=success + outcomes.json absent   → 0 mutants generated:
+          #     OVERALL_DIFF_LINES == 0 → FAIL (base-ref drift — empty diff)
+          #     OVERALL_DIFF_LINES  > 0 → PASS (comment-only/docs-only/non-scoped PR)
           #   outcome=failure + outcomes.json present  → missed/timeout (enforce 90% gate)
           #   outcome=failure + outcomes.json absent   → harness crash (FAIL)
 
@@ -244,17 +240,20 @@ jobs:
 
           if [ ! -f mutants.out/outcomes.json ]; then
             if [ "$run_outcome" = "success" ]; then
-              # F-3 base-ref drift guard: if scoped files changed but cargo-mutants
-              # produced 0 mutants, the --in-diff resolved against an empty diff
-              # (base-ref drift). That is a false-green on a required gate.
-              if [ "${SCOPED_DIFF_LINES:-0}" -gt 0 ]; then
-                echo "FAIL: cargo-mutants exited 0 with no outcomes.json BUT diff touches scoped files."
-                echo "      Scoped-file diff lines: ${SCOPED_DIFF_LINES}"
-                echo "      Possible base-ref drift (--in-diff resolved empty despite scoped-file changes)."
-                echo "      Re-run the job, or check that the diff was generated against the correct base."
+              # F-3 corrected (F5 fix): base-ref drift is detected by an EMPTY overall
+              # diff, not by scoped-file line count. A non-empty diff that produces 0
+              # mutants is a LEGITIMATE outcome — the PR may touch only comments,
+              # whitespace, docs, or non-scoped files. Only an empty DIFF_FILE while the
+              # PR claims to have changes is a drift signal (base-ref resolved wrong).
+              if [ "${OVERALL_DIFF_LINES:-0}" -eq 0 ]; then
+                echo "FAIL: cargo-mutants exited 0 with no outcomes.json AND overall diff is EMPTY."
+                echo "      Possible base-ref drift (git diff origin/<base_ref>...HEAD produced an"
+                echo "      empty file, suggesting --in-diff resolved against the wrong base)."
+                echo "      Re-run the job, or check that the branch is up-to-date with its base."
                 exit 1
               fi
-              echo "OK: 0 mutants — diff does not touch any examine_globs files (clean/docs-only PR)."
+              echo "OK: 0 mutants — non-empty diff produced no mutable lines in examine_globs files"
+              echo "    (comment-only, whitespace, docs-only, or non-scoped-file PR)."
               exit 0
             else
               echo "FAIL: cargo-mutants exited non-zero AND outcomes.json missing — harness crash."

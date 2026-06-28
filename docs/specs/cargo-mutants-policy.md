@@ -87,16 +87,16 @@ Both become dead config once `--timeout` is added to the invocation. Removing th
 misleading future readers into thinking either key controls a ceiling.
 
 **CI invocation (`.github/workflows/ci.yml`, `Run mutation tests on PR diff` step)** —
-ADD `--timeout 180` to the `cargo mutants` command line:
+ADD `--timeout 240` to the `cargo mutants` command line:
 
 ```
-cargo mutants --in-diff "${DIFF_FILE}" --jobs 4 --timeout 180
+cargo mutants --in-diff "${DIFF_FILE}" --jobs 4 --timeout 240
 ```
 
-**Local invocation (`CLAUDE.md` Build & Test section)** — add `--timeout 180` to match:
+**Local invocation (`CLAUDE.md` Build & Test section)** — add `--timeout 240` to match:
 
 ```
-cargo mutants --in-diff "$DIFF_FILE" --jobs 4 --timeout 180
+cargo mutants --in-diff "$DIFF_FILE" --jobs 4 --timeout 240
 ```
 
 ### Root Cause: Real Wall-Clock Sleeps in `bulk.rs` Scope
@@ -121,40 +121,46 @@ Key facts:
 
 Detail: `.factory/phase-f1-delta-analysis/MUTATION-CI-TIMEOUT-delta-analysis.md` §2.1.
 
-### Absolute Timeout Ceiling: `--timeout 180`
+### Absolute Timeout Ceiling: `--timeout 240`
 
-`--timeout 180` is passed on the `cargo mutants` command line as the absolute per-mutant
+`--timeout 240` is passed on the `cargo mutants` command line as the absolute per-mutant
 test ceiling.
 
-**Value derivation:**
-- The per-mutant cost approximates the FULL baseline test suite duration (~90s assumed).
+**Value derivation (measured, not assumed — F5 fix, 2026-06-28):**
+- Measured `cargo test --all-features` on ubuntu-latest from 5 recent green develop runs:
+  - Run 28324668568: 133s
+  - Run 28302021132: 145s
+  - Run 28300391929: 135s
+  - Run 28298946264: 145s
+  - Run 28297473119: 135s
+  - **Measured range: 133–145s. The prior ~90s assumed baseline was materially wrong.**
 - GitHub Actions ubuntu-latest runner performance variability adds ~10–20%: worst-case
-  legitimate run ≈ 90s × 1.2 = ~108s.
-- `--timeout 180` gives approximately 1.6–2× headroom over the worst-case legitimate run,
+  legitimate run ≈ 145s × 1.2 = ~174s.
+- `--timeout 240` gives ~38% headroom over the worst-case legitimate run (~174s),
   which is adequate to avoid false-timeout flakiness on a now-REQUIRED gate.
-- 180s still kills genuine async hangs far below the previous uncapped scenarios (~270s+).
-- **Calibration caveat:** the 90s baseline assumption has not been confirmed on the GitHub
-  Actions ubuntu-latest runner under `--all-features`. The first CI run on this branch
-  will reveal the true baseline. If the "Check kill rate" step shows many `timeout`
-  outcomes on otherwise-healthy mutants, increase `--timeout` incrementally (e.g., to 240).
-  If the job consistently finishes in under 20 minutes, a tighter value (e.g., 120) could
-  reduce average job time on large PRs — but prefer false-safety until the live baseline
-  is confirmed.
+- 240s still kills genuine async hangs well below the previous uncapped scenarios (~270s+).
+
+**Why not 180?**
+The previously used 180s value was derived from an assumed 90s baseline. With the real
+measured baseline of 133–145s and worst-case runner variance of ~174s, 180s gives only
+~3–6% headroom — dangerously close to producing false timeouts on any slow runner day.
 
 **Why not a larger value (e.g., 300)?**
 300s is the `--baseline=skip` fallback, which was the uncapped state we are trying to
-escape. 180s provides a meaningful cap while remaining conservative enough not to false-
+escape. 240s provides a meaningful cap while remaining conservative enough not to false-
 timeout on the bulk deadline propagation test.
 
-**Why not a smaller value (e.g., 120)?**
-120s was the previous (incorrect) belief about what `minimum_test_timeout` did. The
-actual full-suite baseline is ~90s; with CI variance a 120s hard cap leaves only ~30s
-headroom — tight enough to produce false timeouts on a slow runner.
+**Calibration note:** This PR itself touches NO examine_globs files, so its own mutants
+run will hit the "0 mutants" path and will NOT exercise the timeout ceiling. The first PR
+that touches a scoped file provides the real calibration. Watch for `timeout` outcomes in
+the `Check kill rate` step — if any appear on otherwise-healthy mutants, bump `--timeout`
+further. If the job consistently finishes under 30 minutes for typical PRs, a tighter
+value (e.g., 200) could reduce average job time.
 
 ### Multiplier Decision: REMOVE `timeout_multiplier` (Was 2.0)
 
 `timeout_multiplier` is removed from `.cargo/mutants.toml` because:
-- It is dead config once `--timeout 180` is in the CLI invocation (book: superseded).
+- It is dead config once `--timeout 240` is in the CLI invocation (book: superseded).
 - Retaining it creates a documentation debt: readers see a multiplier and assume it has
   effect, but it does not. Future maintainers may then reason incorrectly about the
   timeout model (the exact failure mode that caused the original CRITICAL).
@@ -178,22 +184,23 @@ role and its interaction with `--timeout`.
 
 ### CI Budget Model
 
-With `--timeout 180`, `--jobs 4`, and the `--in-diff` PR diff scope:
+With `--timeout 240`, `--jobs 4`, and the `--in-diff` PR diff scope:
 
-Per-mutant cost is approximately `min(actual_suite_duration, 180)` seconds. For normal
-non-hanging mutants the suite finishes in ~90s; hanging mutants are capped at 180s.
+Per-mutant cost is approximately `min(actual_suite_duration, 240)` seconds. For normal
+non-hanging mutants the suite finishes in ~140s (measured median); hanging mutants are
+capped at 240s.
 
 | PR scenario | Estimated mutants | Estimated wall-clock |
 |-------------|-------------------|----------------------|
-| SEC-001 scale (adf.rs recursion guards) | ~36 | ~14 min |
-| Typical adf.rs PR | ~80 | ~30 min |
-| Large adf.rs + bulk.rs PR | ~120 | ~45 min |
-| Very large / multiple scoped files | ~200 | ~75 min (budget signal) |
+| SEC-001 scale (adf.rs recursion guards) | ~36 | ~21 min |
+| Typical adf.rs PR | ~80 | ~47 min |
+| Large adf.rs + bulk.rs PR | ~120 | ~70 min |
+| Very large / multiple scoped files | ~200 | ~90 min+ (budget signal: split the PR) |
 
-Formula: `mutants / 4 jobs × ~90s avg` — the 90s average assumes a full-suite baseline;
-hanging mutants add up to 180s each (capped), so a PR with many async hangs will skew
-toward the upper bound. The 80-minute row above uses 90s avg (not 180s cap) because
-most mutants in the adf.rs + cache.rs scope do not produce async hangs.
+Formula: `mutants / 4 jobs × ~140s avg` — the 140s average is the measured median
+baseline (133–145s range from 5 green develop runs, 2026-06-28); hanging mutants add up
+to 240s each (capped), so a PR with many async hangs will skew toward the upper bound.
+Most mutants in the adf.rs + cache.rs scope do not produce async hangs.
 
 The CI job `timeout-minutes` is set to **90 minutes**. A PR generating 200+ mutants that
 approaches or exceeds this budget is a signal to split the PR. See **Oversized-Diff
@@ -228,10 +235,10 @@ timeout default of 300 seconds will be used."*).
 
 **This Path-A design (retained baseline run) MUST NOT use `--baseline=skip`.** The
 baseline run is required for `--timeout` to override the multiplier correctly (though
-with `--timeout 180` in the invocation, this distinction is moot — `--timeout` applies
+with `--timeout 240` in the invocation, this distinction is moot — `--timeout` applies
 regardless of whether the baseline is skipped or not).
 
-A future sharding effort (Path B) MUST pass `--timeout 180` (or a tuned value) explicitly
+A future sharding effort (Path B) MUST pass `--timeout 240` (or a tuned value) explicitly
 on every shard command, since `timeout_multiplier` is not available under `--baseline=skip`.
 See research: `.factory/research/mutation-ci-perf-2026-06-28.md` §4.
 
@@ -273,55 +280,47 @@ reachable mutants are caught. This is the correct and intended behavior — it p
 incentive to resolve async hang mutations (via `#[mutants::skip]` with justification, or
 by refactoring the code to be mutation-testable) rather than silently ignoring them.
 
-### F-3: Positive-Coverage Assertion (IN-SCOPE, MUTATION-CI-TIMEOUT)
+### F-3: Positive-Coverage Assertion (IMPLEMENTED, corrected by F5 adversarial pass)
 
 **Problem (F-3 MEDIUM [process-gap]):** When the PR diff resolves empty via base-ref
 drift (e.g., the feature branch was rebased but `git diff origin/...HEAD` produces an
 empty diff against the resolved merge base), `--in-diff` generates 0 mutants, `cargo
 mutants` exits 0 with no `outcomes.json`, and the current gate logic returns "OK: 0
-mutants — clean PR". This is a **false-green** on a now-REQUIRED gate: it passes without
-verifying any mutation coverage, even if the PR actually modifies `examine_globs` files.
+mutants — clean PR". This is a **false-green** on a now-REQUIRED gate.
 
-**Decision: IN-SCOPE for this cycle.** The gate is now REQUIRED. A false-green from
-base-ref drift on a scoped-file-touching PR is a correctness hole in a safety guarantee,
-not a cosmetic issue. The harden is mechanical.
+**F5 adversarial correction (HIGH false-RED):** The initial F-3 implementation used
+`SCOPED_DIFF_LINES` (per-file scoped line count) to detect drift. This introduced a
+HIGH false-RED: a comment-only, whitespace-only, or reformat edit to a scoped file
+(e.g. a rustdoc line in `src/cache.rs`) yields `SCOPED_DIFF_LINES > 0` but legitimately
+0 mutants and no `outcomes.json` — the old guard would FALSELY FAIL a correct PR on a
+now-required gate.
 
-**Gate-logic addition to `ci.yml` (devops to implement):**
+**Corrected implementation:** The guard tests the OVERALL diff size, not the scoped line
+count. Real base-ref drift signature is an EMPTY `DIFF_FILE`. A non-empty diff that
+produces 0 mutants is always legitimate (comment-only, docs-only, whitespace, or changes
+to non-scoped files within scoped files).
 
-In the `Run mutation tests on PR diff` step, BEFORE calling `cargo mutants`, add a
-positive-coverage check:
+**Implemented gate logic (ci.yml `Run mutation tests on PR diff` step):**
 
 ```bash
-# Count how many lines in the diff touch examine_globs files.
-# If the diff is non-empty but zero lines touch scoped files, this is a
-# clean-scope PR (e.g. pure docs). If the diff IS non-empty AND touches
-# scoped files, require outcomes.json to appear after cargo-mutants runs.
-SCOPED_DIFF_LINES=$(git diff origin/${{ github.base_ref }}...HEAD -- \
-    src/adf.rs \
-    src/api/jira/bulk.rs \
-    src/types/jira/bulk.rs \
-    "src/cli/issue/create.rs" \
-    src/api/jsm/requests.rs \
-    src/api/jsm/request_types.rs \
-    src/cli/requesttype.rs \
-    src/api/jira/issues.rs \
-    src/cache.rs \
-  | wc -l)
-echo "Scoped-file diff lines: ${SCOPED_DIFF_LINES}"
+# Compute overall diff size for the base-ref drift guard in Check kill rate.
+OVERALL_DIFF_LINES=$(wc -l < "${DIFF_FILE}" | tr -d ' ')
+echo "Overall diff lines: ${OVERALL_DIFF_LINES}"
+echo "OVERALL_DIFF_LINES=${OVERALL_DIFF_LINES}" >> "${GITHUB_ENV}"
 ```
 
-Then in the `Check kill rate` step, modify the zero-`outcomes.json` branch:
+**In the `Check kill rate` step, zero-`outcomes.json` branch:**
 
 ```bash
 if [ ! -f mutants.out/outcomes.json ]; then
   if [ "$run_outcome" = "success" ]; then
-    if [ "${SCOPED_DIFF_LINES:-0}" -gt 0 ]; then
-      echo "FAIL: cargo-mutants exited 0 with no outcomes.json BUT diff touches scoped files."
-      echo "      Possible base-ref drift (--in-diff resolved empty despite scoped-file changes)."
-      echo "      Re-run the job, or check that the diff file was generated against the correct base."
+    if [ "${OVERALL_DIFF_LINES:-0}" -eq 0 ]; then
+      echo "FAIL: cargo-mutants exited 0 with no outcomes.json AND overall diff is EMPTY."
+      echo "      Possible base-ref drift (git diff produced an empty file)."
       exit 1
     fi
-    echo "OK: 0 mutants — diff does not touch any examine_globs files (clean/docs-only PR)."
+    echo "OK: 0 mutants — non-empty diff produced no mutable lines in examine_globs files"
+    echo "    (comment-only, whitespace, docs-only, or non-scoped-file PR)."
     exit 0
   else
     echo "FAIL: cargo-mutants exited non-zero AND outcomes.json missing — harness crash."
@@ -330,24 +329,21 @@ if [ ! -f mutants.out/outcomes.json ]; then
 fi
 ```
 
-`SCOPED_DIFF_LINES` must be exported from the first step and made available to the second
-(use `$GITHUB_ENV` or inline the count check within the same step block).
-
 This check adds zero network calls and negligible time. It fires only on the degenerate
-case of base-ref drift coinciding with scoped-file changes. False positives (legitimate
-zero-mutant runs) are impossible when the file-list matches `examine_globs` exactly.
+case of genuine base-ref drift (empty diff file). All legitimate zero-mutant PRs pass.
 
-**Maintenance:** if `examine_globs` in `.cargo/mutants.toml` is updated, the file list
-in the `SCOPED_DIFF_LINES` git diff command above MUST be updated in the same commit.
+**Maintenance:** No file-list maintenance required — the guard tests the overall diff
+size, not a per-file enumeration. If the examine_globs scope changes, no update to this
+guard is needed.
 
 ### Flakiness Risk Assessment
 
 The flakiness risk of a required `mutants` job is moderate:
 
 1. **GitHub Actions runner performance variability:** ubuntu-latest runners vary in CPU
-   speed by ~10–20%. The `--timeout 180` absolute cap provides adequate headroom for the
-   estimated ~90s baseline on the slowest plausible runner (~90s × 1.2 = ~108s, well under
-   180s). If the live baseline proves higher than 90s, tune `--timeout` upward.
+   speed by ~10–20%. The `--timeout 240` absolute cap provides adequate headroom for the
+   measured 133–145s baseline on the slowest plausible runner (145s × 1.2 = ~174s, well
+   under 240s). See **Absolute Timeout Ceiling** above for the full derivation.
 2. **crates.io download reliability:** `taiki-e/install-action` downloads cargo-mutants;
    `Swatenim/rust-cache` caches the binary after first install, limiting exposure.
 3. **Parallel wiremock port contention:** parallel mutant runs start their own test
@@ -415,7 +411,7 @@ cargo install cargo-mutants --locked
 Full baseline on scoped files (uses `.cargo/mutants.toml` automatically):
 
 ```bash
-cargo mutants --jobs 4 --timeout 180
+cargo mutants --jobs 4 --timeout 240
 ```
 
 PR-diff-equivalent run (matches CI scope):
@@ -424,20 +420,20 @@ PR-diff-equivalent run (matches CI scope):
 DIFF_FILE=$(mktemp -t pr.diff.XXXXXX)
 trap 'rm -f "$DIFF_FILE"' EXIT
 git diff origin/develop...HEAD > "$DIFF_FILE"
-cargo mutants --in-diff "$DIFF_FILE" --jobs 4 --timeout 180
+cargo mutants --in-diff "$DIFF_FILE" --jobs 4 --timeout 240
 ```
 
 Note: the `--file` flags are omitted above because `.cargo/mutants.toml` already
 scopes via `examine_globs`. The `--in-diff` flag further narrows to lines changed in
 the diff. Using both is redundant (CI uses `--in-diff` only).
 
-The `--timeout 180` flag sets the absolute per-mutant test ceiling to 180 seconds.
+The `--timeout 240` flag sets the absolute per-mutant test ceiling to 240 seconds.
 This is the same value used in CI. See **Timeout Parameters** above for the derivation.
 
 Single-file inspection:
 
 ```bash
-cargo mutants --file src/api/jira/bulk.rs --jobs 4 --timeout 180
+cargo mutants --file src/api/jira/bulk.rs --jobs 4 --timeout 240
 ```
 
 Results land in `mutants.out/` (excluded from git via `.gitignore`).
@@ -451,12 +447,12 @@ mutation testing cost bounded to the PR review phase.
 The canonical `cargo mutants` invocation is:
 
 ```
-cargo mutants --in-diff "${DIFF_FILE}" --jobs 4 --timeout 180
+cargo mutants --in-diff "${DIFF_FILE}" --jobs 4 --timeout 240
 ```
 
 - `--in-diff` scopes mutations to lines changed in the PR diff.
 - `--jobs 4` runs four mutants in parallel.
-- `--timeout 180` sets the absolute per-mutant test ceiling to 180 seconds (CLI-only; no
+- `--timeout 240` sets the absolute per-mutant test ceiling to 240 seconds (CLI-only; no
   equivalent `.cargo/mutants.toml` key exists for this parameter in cargo-mutants 27.x).
 
 The job also includes a positive-coverage assertion (`SCOPED_DIFF_LINES` pre-check) that
@@ -496,7 +492,7 @@ Path B, informed by research (`.factory/research/mutation-ci-perf-2026-06-28.md`
 1. Run a dedicated `mutants-baseline` job first (`cargo test --locked`) to prove the
    suite is green; shards then run with `--baseline=skip`.
 2. Under `--baseline=skip`, `timeout_multiplier` is ignored and the test timeout falls
-   back to 300s per mutant (book verbatim). Pass `--timeout 180` (or the current tuned
+   back to 300s per mutant (book verbatim). Pass `--timeout 240` (or the current tuned
    value) explicitly on every shard command — do NOT rely on the multiplier or the
    `minimum_test_timeout` floor under `--baseline=skip`.
 3. Wire a single **shard-aggregator job** (`needs: [all shards]`) into `ci-gate.needs`
@@ -512,6 +508,7 @@ Path B is deferred until Path A's 90-minute budget proves insufficient in practi
 
 | Date | Cycle | Change |
 |------|-------|--------|
-| 2026-06-28 | MUTATION-CI-TIMEOUT (F5 adversarial correction) | CRITICAL: corrected inverted timeout-mechanism documentation. `minimum_test_timeout` is a FLOOR not a ceiling; it and `timeout_multiplier` are REMOVED from `.cargo/mutants.toml` (dead config once `--timeout` is set). Moved the absolute per-mutant ceiling to `--timeout 180` on the CLI invocation. Derived 180s value with explicit reasoning (baseline ~90s + runner variance headroom). Documented F-2 (cancelled = blocking, intentional). Added F-3 positive-coverage assertion (in-scope: gate is now required; base-ref drift false-green is a correctness hole). Corrected budget model to use `--timeout 180` / `~90s avg`. Corrected Path B sharding guidance to remove `minimum_test_timeout` references. Updated Local Invocation commands to add `--timeout 180`. |
+| 2026-06-28 | MUTATION-CI-TIMEOUT (F5 adversarial correction, pass 2) | HIGH false-RED fix: replaced SCOPED_DIFF_LINES-based drift guard with OVERALL_DIFF_LINES check. Old guard incorrectly failed comment-only/whitespace/reformat edits to scoped files. New guard: FAIL only when overall diff is EMPTY (genuine base-ref drift); PASS for any non-empty diff that yields 0 mutants. Grounded --timeout in measured baseline (133–145s on ubuntu-latest, 5 green develop runs 2026-06-28). Bumped --timeout 180 → 240 (old 180s gave only 3–6% headroom over worst-case 174s; 240s gives 38% headroom). Updated all --timeout references in policy doc, CLAUDE.md, and CI YAML. |
+| 2026-06-28 | MUTATION-CI-TIMEOUT (F5 adversarial correction, pass 1) | CRITICAL: corrected inverted timeout-mechanism documentation. `minimum_test_timeout` is a FLOOR not a ceiling; it and `timeout_multiplier` are REMOVED from `.cargo/mutants.toml` (dead config once `--timeout` is set). Moved the absolute per-mutant ceiling to `--timeout 180` on the CLI invocation. Derived 180s value with explicit reasoning (baseline ~90s assumed + runner variance headroom). Documented F-2 (cancelled = blocking, intentional). Added F-3 positive-coverage assertion (in-scope: gate is now required; base-ref drift false-green is a correctness hole). Corrected budget model to use `--timeout 180` / `~90s avg`. Corrected Path B sharding guidance to remove `minimum_test_timeout` references. Updated Local Invocation commands to add `--timeout 180`. |
 | 2026-06-28 | MUTATION-CI-TIMEOUT | Promoted `mutants` job to hard-required via `ci-gate.needs`. Raised job `timeout-minutes: 60 → 90`. Added (incorrectly) `minimum_test_timeout = 120` and `timeout_multiplier = 2.0` in `.cargo/mutants.toml` — both superseded by F5 correction above. |
 | 2026-05-10 | F6 / S-346 | Initial policy established. Scope: bulk + create modules. Kill-rate target: 90%. `timeout_multiplier = 3.0`. Non-required (advisory) CI job. |
