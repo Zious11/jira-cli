@@ -23,7 +23,7 @@ examine_globs = [
     "src/cache.rs",
 ]
 
-# The absolute per-mutant test ceiling is set via `--timeout 180` on the CLI
+# The absolute per-mutant test ceiling is set via `--timeout 240` on the CLI
 # invocation (CI and local). There is no .cargo/mutants.toml key for it in
 # cargo-mutants 27.x — `--timeout` is a CLI-only flag.
 # See docs/specs/cargo-mutants-policy.md §Timeout Parameters for derivation.

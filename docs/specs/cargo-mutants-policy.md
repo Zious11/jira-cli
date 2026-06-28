@@ -455,8 +455,10 @@ cargo mutants --in-diff "${DIFF_FILE}" --jobs 4 --timeout 240
 - `--timeout 240` sets the absolute per-mutant test ceiling to 240 seconds (CLI-only; no
   equivalent `.cargo/mutants.toml` key exists for this parameter in cargo-mutants 27.x).
 
-The job also includes a positive-coverage assertion (`SCOPED_DIFF_LINES` pre-check) that
-guards against base-ref drift producing a false-green zero-mutant result. See
+The job also includes a base-ref drift guard (`OVERALL_DIFF_LINES` check) that
+guards against base-ref drift producing a false-green zero-mutant result: the gate
+FAIL-only when the computed `DIFF_FILE` is empty (overall diff is zero lines); a
+non-empty diff that yields 0 mutants passes. See
 **F-3: Positive-Coverage Assertion** above for the exact gate logic.
 
 Only mutants in code **changed by the PR** AND **in the scoped files** are tested
@@ -498,9 +500,10 @@ Path B, informed by research (`.factory/research/mutation-ci-perf-2026-06-28.md`
 3. Wire a single **shard-aggregator job** (`needs: [all shards]`) into `ci-gate.needs`
    per DEC-096/097 — not the individual shard matrix jobs.
 4. Pass the **same diff file** to every shard for correct `--in-diff` behavior.
-5. The positive-coverage assertion (F-3, `SCOPED_DIFF_LINES`) must run in the
+5. The base-ref drift guard (F-3, `OVERALL_DIFF_LINES` check) must run in the
    aggregator job, not per-shard — only the aggregate outcomes.json reflects the full
-   run.
+   run. The guard FAILs only when the overall diff is empty; a non-empty diff with
+   0 mutants passes (comment-only, docs-only, or non-scoped-file PRs).
 
 Path B is deferred until Path A's 90-minute budget proves insufficient in practice.
 
