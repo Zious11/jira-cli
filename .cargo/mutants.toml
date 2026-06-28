@@ -23,11 +23,20 @@ examine_globs = [
     "src/cache.rs",
 ]
 
-# Async bulk paths use tokio::time::sleep and wiremock; mutations of `.await`
-# chains can produce hangs rather than test failures, which cargo-mutants would
-# otherwise count as "unviable". A 3x multiplier on the baseline timeout absorbs
-# this without inflating false-positives in the kill-rate denominator.
-timeout_multiplier = 3.0
+# Absolute per-mutant test ceiling (seconds). Overrides timeout_multiplier when
+# the multiplier result exceeds this value. The slowest legitimate test in scope
+# (tests/bulk_deadline_propagation.rs real wall-clock sleep) runs in ~30–40s;
+# 120s is 3× that — generous for runner variance, tight enough to kill hung
+# async mutations quickly. Root cause: MUTATION-CI-TIMEOUT / docs/specs/cargo-mutants-policy.md §Timeout Parameters.
+minimum_test_timeout = 120
+
+# Multiplier on the measured baseline test duration to derive per-mutant timeout.
+# Reduced from 3.0 to 2.0: with the 120s absolute ceiling, the multiplier only
+# matters when the baseline is small (< 60s). At ~90s baseline, 2.0× = 180s —
+# overridden by the 120s ceiling. Retaining the multiplier preserves the
+# baseline-proportional floor for fast-baseline scenarios.
+# Root cause: MUTATION-CI-TIMEOUT / docs/specs/cargo-mutants-policy.md §Multiplier Reduction.
+timeout_multiplier = 2.0
 
 # Match the CI test invocation so mutation runs use the same feature set as
 # the verifying suite.

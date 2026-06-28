@@ -17,16 +17,22 @@
 //!     protection evaluates as SUCCESS — the worst failure mode (broken
 //!     upstream silently permits merge).  Detail: F1 delta analysis §4,
 //!     Architecture Compliance Rules in S-CIGATE-1 story spec.
-//!   - PR-only jobs (`security`, `mutants`) must NOT be in `needs` because
-//!     they emit `skipped` on push events, which would poison push-triggered
-//!     `ci-gate` runs.  Same for `coverage` (advisory by design).
+//!   - `security` and `coverage` must NOT be in `needs`: `security` is PR-only
+//!     (emits `skipped` on push and is gated by GITLEAKS_DISABLED); `coverage`
+//!     is advisory by design (`fail_ci_if_error: false`).
+//!   - `mutants` IS in `needs` (MUTATION-CI-TIMEOUT, 2026-06-28).  It carries
+//!     `if: github.event_name == 'pull_request'` and emits `skipped` on push
+//!     events.  The ci-gate pass condition checks for `failure` or `cancelled`
+//!     only — `skipped` is neither, so ci-gate passes on push events.  This is
+//!     the correct behavior per DEC-096/097 and delta-analysis §5.
 //!   - `spec-guard` has no `if:` guard and must be promoted to a blocking
 //!     check (DEC-101).
 //!
 //! Test coverage map (→ S-CIGATE-1 AC):
 //!   test_ci_gate_job_exists_with_correct_shell               → AC-001
 //!   test_ci_gate_needs_exactly_the_required_jobs             → AC-003
-//!   test_ci_gate_excludes_pr_only_jobs                       → AC-003
+//!   test_ci_gate_excludes_advisory_and_secret_scan_jobs      → AC-003
+//!   test_mutants_is_in_ci_gate_needs                         → MUTATION-CI-TIMEOUT / AC-003
 //!   test_ci_gate_fails_on_failed_or_cancelled_need           → AC-002
 //!   test_ci_gate_needs_jobs_have_no_event_conditional_if     → EC-002 (M1)
 //!   test_ci_gate_pass_fail_semantics_are_structurally_placed → AC-001/AC-002 (M2)
@@ -181,14 +187,19 @@ fn test_ci_gate_job_exists_with_correct_shell() {
 // AC-003 — `ci-gate.needs` is exactly the required six-job set
 // ---------------------------------------------------------------------------
 
-/// AC-003 (exact-set check): `ci-gate.needs` must contain exactly the seven
-/// jobs `{fmt, clippy, test, msrv, deny, spec-guard, check-signing-workflow-injection}`
+/// AC-003 (exact-set check): `ci-gate.needs` must contain exactly the eight
+/// jobs `{fmt, clippy, test, msrv, deny, spec-guard, check-signing-workflow-injection, mutants}`
 /// — order-insensitive, no extras, none missing.
+///
+/// `mutants` was promoted to hard-required in MUTATION-CI-TIMEOUT (2026-06-28).
+/// It carries `if: github.event_name == 'pull_request'` and emits `skipped` on
+/// push events.  The ci-gate condition checks for `failure` or `cancelled` only
+/// — `skipped` is neither, so ci-gate passes on push events (correct behavior).
 ///
 /// Rationale for exact-set (not subset):
 ///   - Adding a job to `needs` without updating this test intentionally fails
-///     the test, prompting the author to (a) confirm the new job has no
-///     PR-only `if:` guard and (b) update the expected set.
+///     the test, prompting the author to confirm push-event safety and update
+///     the expected set.
 ///   - Dropping a required job from `needs` (CI drift) also fails this test.
 ///
 /// Anchoring: assertion is made only within the `ci-gate` job block.
@@ -223,6 +234,11 @@ fn test_ci_gate_needs_exactly_the_required_jobs() {
         "deny",
         "spec-guard",
         "check-signing-workflow-injection",
+        // MUTATION-CI-TIMEOUT (2026-06-28): promoted to hard-required.
+        // Carries `if: github.event_name == 'pull_request'`; emits `skipped`
+        // on push events — safe because ci-gate checks `failure`/`cancelled`
+        // only.  See delta-analysis §5 and cargo-mutants-policy.md §CI Gate.
+        "mutants",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -258,7 +274,7 @@ fn test_ci_gate_needs_exactly_the_required_jobs() {
     assert!(
         failures.is_empty(),
         "FAIL: `ci-gate.needs` does not match the required exact set \
-         {{fmt, clippy, test, msrv, deny, spec-guard, check-signing-workflow-injection}}.\n\
+         {{fmt, clippy, test, msrv, deny, spec-guard, check-signing-workflow-injection, mutants}}.\n\
          Actual needs: {:?}\n\
          {}",
         {
@@ -271,25 +287,30 @@ fn test_ci_gate_needs_exactly_the_required_jobs() {
 }
 
 // ---------------------------------------------------------------------------
-// AC-003 — PR-only jobs must NOT be in `ci-gate.needs`
+// AC-003 — advisory/secret-scan jobs must NOT be in `ci-gate.needs`
 // ---------------------------------------------------------------------------
 
-/// AC-003 (exclusion check): `security` and `mutants` must NOT appear in
+/// AC-003 (exclusion check): `security` and `coverage` must NOT appear in
 /// `ci-gate.needs`.
 ///
-/// Both jobs carry `if: github.event_name == 'pull_request'` — they emit
-/// `skipped` on push events.  Including them in `ci-gate.needs` would make
-/// every push-triggered `ci-gate` run fail because GitHub treats `skipped`
-/// as a non-success result for aggregator purposes.
+/// `security` carries `if: github.event_name == 'pull_request'` AND is
+/// further gated by `vars.GITLEAKS_DISABLED`.  Including it would poison
+/// push-triggered `ci-gate` runs (the job emits `skipped` on push).
 ///
-/// `coverage` is also excluded: it uses `fail_ci_if_error: false` on the
-/// codecov upload and is advisory by design.
+/// `coverage` uses `fail_ci_if_error: false` on the codecov upload and is
+/// advisory by design.  Including it would let a flaky coverage upload block
+/// legitimate merges.
+///
+/// NOTE: `mutants` IS in `ci-gate.needs` since MUTATION-CI-TIMEOUT
+/// (2026-06-28).  It carries `if: github.event_name == 'pull_request'` but
+/// the ci-gate pass condition checks `failure` or `cancelled` only — `skipped`
+/// is neither, so ci-gate passes on push events.  See delta-analysis §5.
 ///
 /// Anchoring: assertion is made only within the `ci-gate` job block.
 ///
 /// RED GATE: `ci-gate` does not exist in ci.yml.  This test FAILS on develop.
 #[test]
-fn test_ci_gate_excludes_pr_only_jobs() {
+fn test_ci_gate_excludes_advisory_and_secret_scan_jobs() {
     let ci = read_ci_yml();
     let gate_block = extract_job_block(&ci, "ci-gate").unwrap_or_else(|| {
         panic!(
@@ -302,25 +323,12 @@ fn test_ci_gate_excludes_pr_only_jobs() {
 
     let needs = parse_needs_set(gate_block).unwrap_or_default();
 
-    // PR-only jobs: skipped on push → must not be in needs.
+    // `security` is gated by `github.event_name == 'pull_request'` AND by
+    // `vars.GITLEAKS_DISABLED` — emits `skipped` on push; must not be in needs.
     assert!(
         !needs.contains("security"),
         "FAIL: `security` must NOT be in `ci-gate.needs`.\n\
          The `security` job carries `if: github.event_name == 'pull_request'` \
-         and emits `skipped` on push events.  Including it poisons every \
-         push-triggered `ci-gate` run.\n\
-         Current needs: {:?}",
-        {
-            let mut v: Vec<_> = needs.iter().collect();
-            v.sort();
-            v
-        }
-    );
-
-    assert!(
-        !needs.contains("mutants"),
-        "FAIL: `mutants` must NOT be in `ci-gate.needs`.\n\
-         The `mutants` job carries `if: github.event_name == 'pull_request'` \
          and emits `skipped` on push events.  Including it poisons every \
          push-triggered `ci-gate` run.\n\
          Current needs: {:?}",
@@ -338,6 +346,57 @@ fn test_ci_gate_excludes_pr_only_jobs() {
          The `coverage` job uses `fail_ci_if_error: false` on the codecov \
          upload and is advisory by design.  Including it would let a flaky \
          coverage upload block legitimate merges.\n\
+         Current needs: {:?}",
+        {
+            let mut v: Vec<_> = needs.iter().collect();
+            v.sort();
+            v
+        }
+    );
+}
+
+// ---------------------------------------------------------------------------
+// MUTATION-CI-TIMEOUT — `mutants` is in `ci-gate.needs`
+// ---------------------------------------------------------------------------
+
+/// MUTATION-CI-TIMEOUT (2026-06-28): `mutants` must be in `ci-gate.needs`.
+///
+/// The `mutants` job was promoted to hard-required to enforce the 90% kill-rate
+/// gate on every PR.  It carries `if: github.event_name == 'pull_request'` and
+/// emits `skipped` on push events.  The ci-gate condition checks for `failure`
+/// or `cancelled` only — `skipped` is neither, so ci-gate passes on push events.
+///
+/// This test pins the promotion: a future edit that accidentally removes
+/// `mutants` from `ci-gate.needs` must explicitly update this test.
+///
+/// Anchoring: assertion is made only within the `ci-gate` job block.
+#[test]
+fn test_mutants_is_in_ci_gate_needs() {
+    let ci = read_ci_yml();
+    let gate_block = extract_job_block(&ci, "ci-gate").unwrap_or_else(|| {
+        panic!(
+            "FAIL: `.github/workflows/ci.yml` does not contain a `ci-gate:` job.\n\
+             Required: append the `ci-gate` aggregator job to ci.yml per \
+             S-CIGATE-1 AC-001."
+        )
+    });
+
+    let needs = parse_needs_set(gate_block).unwrap_or_else(|| {
+        panic!(
+            "FAIL: The `ci-gate` job block does not contain a `needs:` key.\n\
+             Current ci-gate block:\n{gate_block}"
+        )
+    });
+
+    assert!(
+        needs.contains("mutants"),
+        "FAIL (MUTATION-CI-TIMEOUT): `mutants` is missing from `ci-gate.needs`.\n\
+         The `mutants` job was promoted to hard-required in MUTATION-CI-TIMEOUT \
+         (2026-06-28) to enforce the 90% kill-rate gate on every PR.\n\
+         Push-event safety: `mutants` emits `skipped` on push events; the \
+         ci-gate condition checks `failure`/`cancelled` only — `skipped` is \
+         neither, so ci-gate passes on push events.\n\
+         To restore: add `mutants` to `ci-gate.needs` in ci.yml.\n\
          Current needs: {:?}",
         {
             let mut v: Vec<_> = needs.iter().collect();
@@ -413,14 +472,21 @@ fn test_ci_gate_fails_on_failed_or_cancelled_need() {
 // M1 — needs jobs must run unconditionally (no event-conditional job-level if:)
 // ---------------------------------------------------------------------------
 
-/// M1: For each job listed in `ci-gate.needs`, assert that the job's block
-/// contains NO job-level `if:` line that references `github.event_name`.
+/// M1: For each unconditionally-running job listed in `ci-gate.needs`, assert
+/// that the job's block contains NO job-level `if:` line that references
+/// `github.event_name`.
 ///
 /// Rationale: the existing exact-set test (`test_ci_gate_needs_exactly_the_required_jobs`)
 /// pins WHICH jobs are in `needs`, but not that those jobs run unconditionally.
 /// If a future maintainer adds `if: github.event_name == 'pull_request'` to
 /// e.g. `deny`, the gate would silently pass on push events (deny → skipped →
 /// not 'failure').  This is the exact drift vector EC-002 claims to prevent.
+///
+/// `mutants` is intentionally excluded from this list: it carries
+/// `if: github.event_name == 'pull_request'` by design (PR-only scope),
+/// emits `skipped` on push events, and the ci-gate condition checks `failure`
+/// or `cancelled` only — so `skipped` is safe.  The `test_mutants_is_in_ci_gate_needs`
+/// test pins that `mutants` remains in `ci-gate.needs`.
 ///
 /// Job-level `if:` lines are at 4-space indent immediately under the job key
 /// (e.g. `    if: github.event_name == 'pull_request'`).  Step-level `if:`
@@ -435,6 +501,8 @@ fn test_ci_gate_needs_jobs_have_no_event_conditional_if() {
     let ci = read_ci_yml();
 
     // The seven jobs that must run unconditionally on every push and PR.
+    // `mutants` is intentionally excluded — it is PR-only by design and
+    // emits `skipped` on push events (ci-gate-safe; see test docstring above).
     let required_jobs = [
         "fmt",
         "clippy",
