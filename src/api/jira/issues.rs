@@ -282,7 +282,7 @@ impl JiraClient {
     /// `BASE_ISSUE_FIELDS` incurs.
     ///
     /// Use this when the caller only needs keys (e.g., JQL-driven
-    /// bulk-edit selection at `cli/issue/create.rs::handle_edit`). For
+    /// bulk-edit selection at `cli/issue/edit.rs::handle_edit`). For
     /// body-bearing reads use [`Self::search_issues`].
     ///
     /// `has_more` is set to `true` in two cases: (1) the caller's `limit`

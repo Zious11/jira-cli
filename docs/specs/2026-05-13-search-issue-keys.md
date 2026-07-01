@@ -126,7 +126,7 @@ impl JiraClient {
     /// the ~10 KB-per-issue payload that `BASE_ISSUE_FIELDS` incurs.
     ///
     /// Use this when the caller only needs keys (e.g., JQL-driven bulk-edit
-    /// selection at `cli/issue/create.rs::handle_edit`). For all other
+    /// selection at `src/cli/issue/edit.rs::handle_edit`). For all other
     /// reads, use `search_issues`.
     ///
     /// Traces to BC-2.6.050.

@@ -173,7 +173,7 @@ C.1–C.4 in `api/jsm/requests.rs`).
 
 - BC-3.8.001–017 in `bc-3-issue-write.md` — full behavioral contracts for the JSM path
 - `docs/specs/jsm-e2e-coverage.md` — E2E coverage for JSM request creation scenarios
-- `src/cli/issue/create.rs::handle_jsm_create` — canonical JSM dispatch implementation
+- `src/cli/issue/jsm_create.rs::handle_jsm_create` — canonical JSM dispatch implementation
 - `src/api/jsm/requests.rs` — `JsmRequestBuilder` pure body helper and proptest suite
 - `src/api/jsm/servicedesks.rs::require_service_desk` — JSM project gate (step 4)
 - ADR-0015 — Proactive resolution enforcement on done-category transitions (parallel JSM context)
