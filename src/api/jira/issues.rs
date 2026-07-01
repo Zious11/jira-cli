@@ -701,7 +701,7 @@ impl JiraClient {
     ///   Most projects have ≤50 types (one page at `maxResults=200`); pagination
     ///   is a correctness guard for large enterprise type schemes.
     /// - Project-scoped: the same type name can have different IDs in different projects.
-    /// - Call site: `handle_edit_bulk_fields` in `src/cli/issue/create.rs` only.
+    /// - Call site: `handle_edit_bulk_fields` in `src/cli/issue/edit.rs` only.
     pub(crate) async fn get_issue_types_for_project(
         &self,
         project_key: &str,

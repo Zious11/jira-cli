@@ -91,7 +91,7 @@ Alternatives considered and rejected:
 /// `has_more` alone — the stderr warning fires only in case 2. When `limit`
 /// is `None`, case 1 cannot trigger, so `has_more = true` unambiguously
 /// signals case 2 (repeated-cursor guard abort). Today's sole caller
-/// (`handle_edit::effective_keys` in `cli/issue/create.rs`) requests
+/// (`handle_edit::effective_keys` in `cli/issue/edit.rs`) requests
 /// `limit = effective_max + 1` and treats `keys.len() > effective_max` as a
 /// truncation error. **This is NOT dup-tolerant**: a single drift-induced
 /// duplicate inflates `keys.len()` by 1 and can spuriously trip the
