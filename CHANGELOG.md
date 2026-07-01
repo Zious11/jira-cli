@@ -10,6 +10,9 @@ All notable changes to jr will be documented here.
 
 ### Security
 
+- **Bump `anyhow` 1.0.102 → 1.0.103 (RUSTSEC-2026-0190):** Resolves an unsoundness
+  in `Error::downcast_mut` present in anyhow < 1.0.103. No behaviour change; `Cargo.lock`-only update.
+
 ### Fixed
 
 ### Changed
