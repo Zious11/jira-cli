@@ -175,7 +175,7 @@ Discovery pattern:
    positive integers); if not numeric for any reason → skip with a warning.
 5. Use this id string as the `--request-type <id>` argument. Because the string is
    all-ASCII-digit, `handle_jsm_create` takes the numeric-bypass path
-   (`src/cli/issue/create.rs`: `if request_type_arg.chars().all(|c| c.is_ascii_digit())`)
+   (`src/cli/issue/jsm_create.rs`: `if request_type_arg.chars().all(|c| c.is_ascii_digit())`)
    and skips name resolution — the most robust path.
 
 The requesttype list test is declared before the create and fields tests in `e2e_live.rs`.
