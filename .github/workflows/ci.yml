@@ -192,7 +192,7 @@ jobs:
       - name: Run mutation tests on PR diff
         id: run-mutants
         # --in-diff scopes to lines changed vs origin/<base_ref> (the merge target).
-        # .cargo/mutants.toml further scopes to bulk + create modules.
+        # .cargo/mutants.toml further scopes to the modules listed in docs/specs/cargo-mutants-policy.md §Scope.
         # Use runner.temp + run_id to avoid /tmp race conditions on concurrent jobs.
         # continue-on-error: true so the Check-kill-rate step (the sole pass/fail
         # arbiter) always runs even when cargo-mutants exits non-zero on missed mutants.
