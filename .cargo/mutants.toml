@@ -14,10 +14,10 @@ examine_globs = [
     "src/cli/issue/create.rs",
     # HIGH-value: handle_edit, handle_edit_bulk_labels, handle_edit_bulk_fields —
     # bulk routing forks, C-1 guard, label endpoint fork, type-change path.
-    # Relocated from create.rs by ADR-0012 Seam B (PR #558). 99 mutants (DEC-149).
+    # Relocated from create.rs by ADR-0012 Seam B (PR #558). ~99 mutants (DEC-149).
     "src/cli/issue/edit.rs",
     # HIGH-value: handle_jsm_create — JSM dispatch, RT-id resolution, scope-hint.
-    # Relocated from create.rs by ADR-0012 Seam A (PR #556). 9 mutants (DEC-149).
+    # Relocated from create.rs by ADR-0012 Seam A (PR #556). ~9 mutants (DEC-149).
     "src/cli/issue/jsm_create.rs",
     "src/api/jsm/requests.rs",
     "src/api/jsm/request_types.rs",

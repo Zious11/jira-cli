@@ -16,7 +16,7 @@ high line coverage but untested assertion strength at the time of the F6 review.
 - `src/adf.rs` — ADF conversion core (`markdown_to_adf`, `adf_to_text`, `text_to_adf`); largest
   behavior-dense module with high weak-assertion surface across node normalization, pruning,
   mark deduplication, and the Algorithm B HTML block path (added F6 hardening)
-- `src/cli/issue/create.rs` — `parse_field_kv`, `handle_create` dispatcher (thin: immediately routes to `handle_jsm_create` or `handle_edit`; behavior-dense functions relocated by ADR-0012 Seam A/B — see entries below); ~10 mutants
+- `src/cli/issue/create.rs` — `handle_create` (platform-path `issue create` logic, JSM dispatch fork to `handle_jsm_create`) and `parse_field_kv`; ~10 mutants (behavior-dense clusters `handle_edit*` and `handle_jsm_create` relocated by ADR-0012 Seam A/B — see entries below)
 - `src/cli/issue/edit.rs` — `handle_edit`, `handle_edit_bulk_labels`, `handle_edit_bulk_fields` (extracted from `create.rs` by ADR-0012 Seam B, PR #558); bulk routing forks, C-1 guard, label endpoint fork, type-change path; ~99 mutants (added DEC-149)
 - `src/cli/issue/jsm_create.rs` — `handle_jsm_create` (extracted from `create.rs` by ADR-0012 Seam A, PR #556); JSM POST body dispatch, RT-id resolution, scope-hint; ~9 mutants (added DEC-149)
 - `src/api/jira/bulk.rs` — `await_bulk_task`, polling loop, deadline propagation
