@@ -17,6 +17,14 @@ All notable changes to jr will be documented here.
 
 ### Changed
 
+- **CI: mutation-test scope restored for `edit.rs` + `jsm_create.rs` after ADR-0012
+  Seam A/B split (DEC-149):** `src/cli/issue/edit.rs` (99 mutants) and
+  `src/cli/issue/jsm_create.rs` (9 mutants) are now in `examine_globs`. These
+  behavior-dense surfaces — bulk routing forks, C-1 guard, label endpoint fork, JSM
+  dispatch — were outside mutation coverage since the ADR-0012 Seam A (PR #556) and
+  Seam B (PR #558) splits that relocated `handle_edit*` and `handle_jsm_create` out of
+  `create.rs`. Total scope: 594 → 702 mutants. See `docs/specs/cargo-mutants-policy.md`.
+
 - **CI: `mutants` job is now a hard-required merge gate (MUTATION-CI-TIMEOUT):** The
   `cargo-mutants` mutation-testing job is wired into `ci-gate.needs`, so PRs touching
   scoped files block merge when the kill rate falls below 90%. The absolute per-mutant

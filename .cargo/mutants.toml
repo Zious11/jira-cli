@@ -5,13 +5,20 @@
 # .cargo/mutants.toml. Both are equivalent when passed via --config; the .cargo/ location
 # is the zero-flags default.
 
-# Scope mutation testing to adf, bulk/create, issues, cache, and jsm modules.
+# Scope mutation testing to adf, bulk/issue-write cluster, issues, cache, and jsm modules.
 # Canonical scope definition: docs/specs/cargo-mutants-policy.md §Scope.
 examine_globs = [
     "src/adf.rs",
     "src/api/jira/bulk.rs",
     "src/types/jira/bulk.rs",
     "src/cli/issue/create.rs",
+    # HIGH-value: handle_edit, handle_edit_bulk_labels, handle_edit_bulk_fields —
+    # bulk routing forks, C-1 guard, label endpoint fork, type-change path.
+    # Relocated from create.rs by ADR-0012 Seam B (PR #558). 99 mutants (DEC-149).
+    "src/cli/issue/edit.rs",
+    # HIGH-value: handle_jsm_create — JSM dispatch, RT-id resolution, scope-hint.
+    # Relocated from create.rs by ADR-0012 Seam A (PR #556). 9 mutants (DEC-149).
+    "src/cli/issue/jsm_create.rs",
     "src/api/jsm/requests.rs",
     "src/api/jsm/request_types.rs",
     "src/cli/requesttype.rs",
