@@ -10,12 +10,7 @@
 #   scripts/check-cargo-mutants-policy-citations.sh --self-test    # offline fixture run
 #   scripts/check-cargo-mutants-policy-citations.sh --policy-doc <path>  # alternate doc
 #
-# TODO(stub): implement §Scope parsing, definition-anchored grep.
-# See S-MUTANTS-SCOPE-GUARDS-1 / DEC-150 / BC-5.38.001.
-# RED-gate stub form: run_check() { return 0; } — NO output.
-# Under this stub every --self-test fixture fails RED:
-#   rc=1-expecting probes (A, B, C, D, E, K, F-b, H N=2/N=5) fail rc assertions;
-#   rc=0/content-asserting probes (F-a, G, I-a, I-b, J, L) fail on empty output.
+# Fully implemented (S-MUTANTS-SCOPE-GUARDS-1 / DEC-150). All 12 self-test fixtures pass.
 
 set -euo pipefail
 

@@ -641,13 +641,18 @@ Two static-analysis guards protect §Scope integrity (DEC-150):
   against source definitions via definition-anchored grep. Exits 1 with an offender list
   if any citation is stale. Runs in the spec-guard CI job after `check-bc-cumulative-counts`.
   `--self-test` flag runs 12 offline fixtures. `--policy-doc` / `--src-root` flags provide
-  seams for fixtures.
+  seams for fixtures. Reproduce locally: `bash scripts/check-cargo-mutants-policy-citations.sh`
+  (canonical) or `bash scripts/check-cargo-mutants-policy-citations.sh --self-test` (offline
+  fixture run). On failure: fix the stale citation in §Scope or, for an intentional
+  relocation, update the bullet to the new file/function.
 
 - **Guard 3 — `tests/mutants_glob_existence.rs`:**
   Validates every `examine_globs` entry in `.cargo/mutants.toml` resolves to ≥1 real file
   via `glob::glob()`. Panics with `MUTANTS-GLOBS-KEY-MISSING` if the key is absent or empty;
   panics with `MUTANTS-GLOBS-COVERAGE-FLOOR` if the entry count falls below 11. Runs as
-  part of the always-run `cargo test` suite.
+  part of the always-run `cargo test` suite. Reproduce locally:
+  `cargo test --test mutants_glob_existence`. On failure: fix the dead examine_globs entry
+  or update it for the file move.
 
 ## Future Path: Job Sharding (Path B)
 
