@@ -25,8 +25,18 @@ fn validate_globs(entries: &[String]) -> Vec<String> {
     // collecting entries where the pattern matched zero files.
     // Windows path note (F-C1 FIX): CARGO_MANIFEST_DIR uses backslashes on Windows;
     //   .replace('\\', "/") normalises before passing to glob 0.3.
-    let _ = entries;
-    todo!("validate_globs: not yet implemented — see S-MUTANTS-SCOPE-GUARDS-1")
+    let manifest_dir = env!("CARGO_MANIFEST_DIR").replace('\\', "/");
+    entries
+        .iter()
+        .filter(|entry| {
+            let pattern = format!("{}/{}", manifest_dir, entry);
+            match glob::glob(&pattern) {
+                Ok(paths) => paths.count() == 0,
+                Err(_) => true,
+            }
+        })
+        .cloned()
+        .collect()
 }
 
 /// Extracts the `examine_globs` array from a parsed TOML Value.
@@ -39,8 +49,23 @@ fn validate_globs(entries: &[String]) -> Vec<String> {
 /// BC-5.38.001: non-trivial body (TOML traversal, conditional panic) — todo!() required.
 /// BC-5.38.005 self-check: returning todo!() prevents tests 1 and 4 from passing.
 fn extract_examine_globs_or_panic(value: &toml::Value) -> Vec<String> {
-    let _ = value;
-    todo!("extract_examine_globs_or_panic: not yet implemented — see S-MUTANTS-SCOPE-GUARDS-1")
+    let entries: Vec<String> = value
+        .get("examine_globs")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    if entries.is_empty() {
+        panic!(
+            "MUTANTS-GLOBS-KEY-MISSING: examine_globs key not found in \
+             .cargo/mutants.toml — key renamed, section restructured, or examine_globs \
+             is present but empty"
+        );
+    }
+    entries
 }
 
 /// Asserts the `examine_globs` entry count meets the coverage floor.
@@ -57,8 +82,17 @@ fn extract_examine_globs_or_panic(value: &toml::Value) -> Vec<String> {
 /// BC-5.38.001: non-trivial body (comparison, conditional panic) — todo!() required.
 /// BC-5.38.005 self-check: returning todo!() prevents tests 1 and 6 from passing.
 fn assert_examine_globs_coverage_floor(entries: &[String]) {
-    let _ = entries;
-    todo!("assert_examine_globs_coverage_floor: not yet implemented — see S-MUTANTS-SCOPE-GUARDS-1")
+    // PIN: update when examine_globs adds/removes entries
+    const FLOOR: usize = 11;
+    if entries.len() < FLOOR {
+        panic!(
+            "MUTANTS-GLOBS-COVERAGE-FLOOR: expected >= {} examine_globs entries, got {}. \
+             Update this PIN when entries are intentionally removed \
+             (the floor is a lower bound; additions never fire it).",
+            FLOOR,
+            entries.len()
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -76,7 +110,11 @@ fn test_resolve_all_examine_globs_entries_to_real_files() {
     // Helper panics with MUTANTS-GLOBS-COVERAGE-FLOOR if entries.len() < FLOOR.
     assert_examine_globs_coverage_floor(&entries);
     let dead = validate_globs(&entries);
-    assert!(dead.is_empty(), "examine_globs entries resolve to no files: {:?}", dead);
+    assert!(
+        dead.is_empty(),
+        "examine_globs entries resolve to no files: {:?}",
+        dead
+    );
 }
 
 /// Test 2: seeded-failure — nonexistent pattern returns a non-empty dead list.
@@ -86,7 +124,8 @@ fn test_reject_nonexistent_examine_globs_entry_returns_dead_list() {
     let dead = validate_globs(&["src/nonexistent_dummy_for_selftest.rs".to_string()]);
     assert!(!dead.is_empty(), "expected dead list to be non-empty");
     assert!(
-        dead.iter().any(|p| p.contains("nonexistent_dummy_for_selftest")),
+        dead.iter()
+            .any(|p| p.contains("nonexistent_dummy_for_selftest")),
         "expected dead list to contain 'nonexistent_dummy_for_selftest', got: {:?}",
         dead
     );
@@ -103,7 +142,8 @@ fn test_validate_globs_via_toml_parse_returns_dead_entry() {
     let dead = validate_globs(&entries);
     assert!(!dead.is_empty(), "expected dead list to be non-empty");
     assert!(
-        dead.iter().any(|p| p.contains("nonexistent_dummy_for_selftest")),
+        dead.iter()
+            .any(|p| p.contains("nonexistent_dummy_for_selftest")),
         "expected dead list to contain 'nonexistent_dummy_for_selftest', got: {:?}",
         dead
     );
@@ -118,7 +158,10 @@ fn test_detect_missing_examine_globs_key_panics_with_key_missing_message() {
     let result = std::panic::catch_unwind(|| {
         extract_examine_globs_or_panic(&value);
     });
-    assert!(result.is_err(), "helper did not panic — expected MUTANTS-GLOBS-KEY-MISSING panic");
+    assert!(
+        result.is_err(),
+        "helper did not panic — expected MUTANTS-GLOBS-KEY-MISSING panic"
+    );
     let err = result.unwrap_err();
     let msg = err
         .downcast_ref::<String>()
@@ -153,7 +196,10 @@ fn test_coverage_floor_panics_when_entries_below_threshold() {
     let result = std::panic::catch_unwind(|| {
         assert_examine_globs_coverage_floor(&entries);
     });
-    assert!(result.is_err(), "helper did not panic — expected MUTANTS-GLOBS-COVERAGE-FLOOR panic");
+    assert!(
+        result.is_err(),
+        "helper did not panic — expected MUTANTS-GLOBS-COVERAGE-FLOOR panic"
+    );
     let err = result.unwrap_err();
     let msg = err
         .downcast_ref::<String>()
@@ -200,7 +246,10 @@ fn test_detect_empty_examine_globs_array_panics_with_key_missing_message() {
     let result = std::panic::catch_unwind(|| {
         extract_examine_globs_or_panic(&value);
     });
-    assert!(result.is_err(), "helper did not panic — expected MUTANTS-GLOBS-KEY-MISSING panic");
+    assert!(
+        result.is_err(),
+        "helper did not panic — expected MUTANTS-GLOBS-KEY-MISSING panic"
+    );
     let err = result.unwrap_err();
     let msg = err
         .downcast_ref::<String>()
@@ -235,7 +284,10 @@ fn test_coverage_floor_panics_at_ten_entries_below_threshold() {
     let result = std::panic::catch_unwind(|| {
         assert_examine_globs_coverage_floor(&entries);
     });
-    assert!(result.is_err(), "helper did not panic — expected MUTANTS-GLOBS-COVERAGE-FLOOR panic");
+    assert!(
+        result.is_err(),
+        "helper did not panic — expected MUTANTS-GLOBS-COVERAGE-FLOOR panic"
+    );
     let err = result.unwrap_err();
     let msg = err
         .downcast_ref::<String>()

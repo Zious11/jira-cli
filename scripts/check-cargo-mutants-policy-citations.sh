@@ -26,11 +26,178 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 bash -n "${BASH_SOURCE[0]}"
 
 # ---------------------------------------------------------------------------
-# STUB: run_check — RED-gate mandated form (BC-5.38.001 / story RED-gate para)
-# Returns 0 with NO output. All twelve --self-test fixtures fail RED against
-# this stub. Replaced by full implementation in S-MUTANTS-SCOPE-GUARDS-1.
+# run_check — Guard 2 implementation (DEC-150 / S-MUTANTS-SCOPE-GUARDS-1)
+#
+# Parses §Scope bulleted list from POLICY_DOC, verifies each (file, fn) pair
+# against source definitions via definition-anchored grep, and enforces
+# SCOPE-EMPTY and SCOPE-COVERAGE-FLOOR guards.
 # ---------------------------------------------------------------------------
 run_check() {
+    local policy_doc="${POLICY_DOC:-${REPO_ROOT}/docs/specs/cargo-mutants-policy.md}"
+    local src_root="${SRC_ROOT:-${REPO_ROOT}}"
+    local canonical="${CANONICAL_MODE:-0}"
+    local FLOOR=11
+
+    # ------------------------------------------------------------------
+    # Step 1: Extract §Scope range (inclusive start, exclusive of next
+    # ^## or ^### Sibling Candidates heading).
+    # ------------------------------------------------------------------
+    local scope_text
+    scope_text=$(awk '
+        /^## Scope$/ { in_scope=1; next }
+        in_scope && /^## / { exit }
+        in_scope && /^### Sibling Candidates/ { exit }
+        in_scope { print }
+    ' "$policy_doc")
+
+    # ------------------------------------------------------------------
+    # Step 2: Pre-filter fenced code spans (``` ... ```) from scope_text.
+    # Lines inside a triple-backtick fence are removed entirely.
+    # ------------------------------------------------------------------
+    local filtered_text
+    filtered_text=$(printf '%s\n' "$scope_text" | awk '
+        /^```/ { in_fence = !in_fence; next }
+        !in_fence { print }
+    ')
+
+    # ------------------------------------------------------------------
+    # Step 3: Group state machine — assemble bullet groups.
+    # A group starts at a line matching ^- .
+    # Continuation: ^[[:space:]]{2,} (but not ^- )
+    # Class-1 terminator: blank line (ends current group)
+    # Class-4 terminator: non-blank, not ^- , not ^[[:space:]]{2,} (ends group)
+    # Orphan continuation (no open group): ignored.
+    # ------------------------------------------------------------------
+    local groups=()
+    local current_group=""
+    local in_group=0
+
+    while IFS= read -r line; do
+        if printf '%s' "$line" | grep -qE '^- '; then
+            # Start of new bullet — commit previous group if open
+            if [ "$in_group" = "1" ] && [ -n "$current_group" ]; then
+                groups+=("$current_group")
+            fi
+            current_group="$line"
+            in_group=1
+        elif printf '%s' "$line" | grep -qE '^[[:space:]]{2,}' && [ "$in_group" = "1" ]; then
+            # Continuation line (indented ≥2 spaces, not a bullet)
+            current_group="${current_group}
+${line}"
+        elif [ -z "$line" ]; then
+            # Class-1 terminator: blank line — commit group if open
+            if [ "$in_group" = "1" ] && [ -n "$current_group" ]; then
+                groups+=("$current_group")
+                current_group=""
+                in_group=0
+            fi
+        else
+            # Class-4 terminator: non-blank, not bullet, not continuation
+            if [ "$in_group" = "1" ] && [ -n "$current_group" ]; then
+                groups+=("$current_group")
+                current_group=""
+                in_group=0
+            fi
+            # orphan non-continuation line: ignore
+        fi
+    done <<< "$filtered_text"
+    # Commit last open group
+    if [ "$in_group" = "1" ] && [ -n "$current_group" ]; then
+        groups+=("$current_group")
+    fi
+
+    # ------------------------------------------------------------------
+    # Step 4 + 5: For each assembled group, extract (file, fn) pairs and
+    # validate against source.
+    # ------------------------------------------------------------------
+    local N=0          # bullet count
+    local M=0          # (file, fn) pairs validated
+    local offenders=()
+
+    for group in "${groups[@]}"; do
+        N=$((N + 1))
+
+        # Extract the first bullet line from the group
+        local bullet_line
+        bullet_line=$(printf '%s\n' "$group" | grep -m1 '^- ' || true)
+
+        # Shape guard: first backtick token must match ^src/[a-zA-Z0-9_/.-]+\.rs$
+        # and must not contain ".."
+        local file
+        file=$(printf '%s\n' "$bullet_line" | grep -oE '`[^` ]+`' | head -1 | tr -d '`' || true)
+
+        if ! printf '%s' "$file" | grep -qE '^src/[a-zA-Z0-9_/.-]+\.rs$' \
+            || printf '%s' "$file" | grep -qF '..'; then
+            offenders+=("DEAD: malformed bullet skipped: ${bullet_line}")
+            continue
+        fi
+
+        # File existence check
+        if [ ! -f "${src_root}/${file}" ]; then
+            offenders+=("DEAD: ${file} not found")
+            continue
+        fi
+
+        # Extract function tokens: all backtick tokens after the file token,
+        # strip trailing ::anything (::strip transform), filter to ^[a-z_][a-z0-9_]*$
+        local all_tokens
+        all_tokens=$(printf '%s\n' "$group" | grep -oE '`[^` ]+`' | tr -d '`' || true)
+
+        # Skip the file token (first one matching the src/ pattern)
+        local fn_tokens=()
+        local file_seen=0
+        while IFS= read -r token; do
+            if [ "$file_seen" = "0" ] && printf '%s' "$token" | grep -qE '^src/[a-zA-Z0-9_/.-]+\.rs$'; then
+                file_seen=1
+                continue
+            fi
+            # Strip everything from last :: onward (::strip transform)
+            local stripped
+            stripped=$(printf '%s' "$token" | sed 's/.*:://')
+            # Filter: must match ^[a-z_][a-z0-9_]*$
+            if printf '%s' "$stripped" | grep -qE '^[a-z_][a-z0-9_]*$'; then
+                fn_tokens+=("$stripped")
+            fi
+        done <<< "$all_tokens"
+
+        # Validate each function via definition-anchored grep
+        for fn_name in "${fn_tokens[@]}"; do
+            M=$((M + 1))
+            if ! grep -Eq "^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?((unsafe|const|async|extern[[:space:]]+\"[^\"]*\")[[:space:]]+)*fn[[:space:]]+${fn_name}([^[:alnum:]_]|\$)" \
+                    "${src_root}/${file}"; then
+                offenders+=("DEAD: ${fn_name} not found in ${file}")
+            fi
+        done
+    done
+
+    # ------------------------------------------------------------------
+    # Step 6: SCOPE-EMPTY guard
+    # ------------------------------------------------------------------
+    if [ "$N" -eq 0 ]; then
+        echo "SCOPE-EMPTY: 0 bullets parsed from §Scope — §Scope section missing, empty, or policy doc restructured"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Step 7: SCOPE-COVERAGE-FLOOR guard (canonical mode only)
+    # ------------------------------------------------------------------
+    if [ "$canonical" = "1" ] && [ "$N" -lt "$FLOOR" ]; then
+        echo "SCOPE-COVERAGE-FLOOR: expected >= ${FLOOR} bullets in §Scope, got ${N}. §Scope entries removed without updating the floor pin."
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Step 8: Report offenders or success
+    # ------------------------------------------------------------------
+    if [ "${#offenders[@]}" -gt 0 ]; then
+        for o in "${offenders[@]}"; do
+            echo "$o"
+        done
+        echo "${#offenders[@]} stale citation(s) found in ${policy_doc} §Scope"
+        return 1
+    fi
+
+    echo "Check passed: ${N} bullets parsed, ${M} (file, fn) pairs validated"
     return 0
 }
 

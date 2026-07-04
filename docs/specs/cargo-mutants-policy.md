@@ -16,7 +16,7 @@ high line coverage but untested assertion strength at the time of the F6 review.
 - `src/adf.rs` — ADF conversion core (`markdown_to_adf`, `adf_to_text`, `text_to_adf`); largest
   behavior-dense module with high weak-assertion surface across node normalization, pruning,
   mark deduplication, and the Algorithm B HTML block path (added F6 hardening)
-- `src/cli/issue/create.rs` — `handle_create` (platform-path `issue create` logic, JSM dispatch fork to `handle_jsm_create`) and `parse_field_kv`; ~10 mutants (behavior-dense clusters `handle_edit*` and `handle_jsm_create` relocated by ADR-0012 Seam A/B — see entries below)
+- `src/cli/issue/create.rs` — `handle_create` (platform-path `issue create` logic) and `parse_field_kv`
 - `src/cli/issue/edit.rs` — `handle_edit`, `handle_edit_bulk_labels`, `handle_edit_bulk_fields` (extracted from `create.rs` by ADR-0012 Seam B, PR #558); bulk routing forks, C-1 guard, label endpoint fork, type-change path; ~99 mutants (added DEC-149)
 - `src/cli/issue/jsm_create.rs` — `handle_jsm_create` (extracted from `create.rs` by ADR-0012 Seam A, PR #556); JSM POST body dispatch, RT-id resolution, scope-hint; ~9 mutants (added DEC-149)
 - `src/api/jira/bulk.rs` — `await_bulk_task`, polling loop, deadline propagation
@@ -24,8 +24,8 @@ high line coverage but untested assertion strength at the time of the F6 review.
 - `src/api/jsm/requests.rs` — `JsmRequestBuilder::build` (JSM POST body construction) (added S-288-pr4)
 - `src/api/jsm/request_types.rs` — `list_request_types`, `get_request_type_fields` (added S-288-pr4)
 - `src/cli/requesttype.rs` — `handle_list`, `handle_fields`, `resolve_request_type_id` (added S-288-pr4)
-- `src/api/jira/issues.rs` — `search_issues`, `search_issue_keys` (anti-loop guard, `seen_keys` dedup,
-  `has_more` sentinel, cursor-vs-offset pagination branch); `list_comments` (added MAINT-MUTANTS-GLOBS-01)
+- `src/api/jira/issues.rs` — `search_issues`, `search_issue_keys` (anti-loop guard, seen_keys dedup,
+  has_more sentinel, cursor-vs-offset pagination branch); `list_comments` (added MAINT-MUTANTS-GLOBS-01)
 - `src/cache.rs` — TTL logic, per-profile path construction, model-a vs model-b error-handling split
   (`write_cmdb_fields_cache` / `write_object_type_attr_cache` swallow errors; others propagate)
   (added MAINT-MUTANTS-GLOBS-01)
@@ -47,6 +47,23 @@ are recorded here so future reviewers know they were considered, not overlooked.
 | `src/api/pagination.rs` | EXCLUDE | Simple serde structs + `items()` field accessor. No conditional logic or error-handling branches worth mutating; survivors would be caught by the broad integration test suite. Low payoff relative to baseline cost. |
 | `src/jql.rs` | EXCLUDE | Already property-tested inline with proptest. Mutation survivors in JQL escaping/validation would almost certainly be caught by existing proptest strategies. |
 | `src/api/jira/users.rs` | DEFER | Contains the `USER_PAGE_SIZE`-advance pagination workaround (JRACLOUD-71293 fix). Good candidate in principle, but test coverage via `tests/user_commands.rs` is limited — adding it without targeted pagination tests risks a noisy first-run kill rate. Revisit in a dedicated "users pagination hardening" cycle. |
+
+## Guards
+
+Two static-analysis guards protect §Scope integrity (DEC-150):
+
+- **Guard 2 — `scripts/check-cargo-mutants-policy-citations.sh` (CI-MUTANTS-CITE-001):**
+  Parses the §Scope bulleted list, extracts every (file, fn) pair, and verifies each
+  against source definitions via definition-anchored grep. Exits 1 with an offender list
+  if any citation is stale. Runs in the spec-guard CI job after `check-bc-cumulative-counts`.
+  `--self-test` flag runs 12 offline fixtures. `--policy-doc` / `--src-root` flags provide
+  seams for fixtures.
+
+- **Guard 3 — `tests/mutants_glob_existence.rs`:**
+  Validates every `examine_globs` entry in `.cargo/mutants.toml` resolves to ≥1 real file
+  via `glob::glob()`. Panics with `MUTANTS-GLOBS-KEY-MISSING` if the key is absent or empty;
+  panics with `MUTANTS-GLOBS-COVERAGE-FLOOR` if the entry count falls below 11. Runs as
+  part of the always-run `cargo test` suite.
 
 ## Kill-Rate Target
 
