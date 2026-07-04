@@ -1,24 +1,22 @@
 //! Guard 3 (DEC-150): validates every `examine_globs` entry in `.cargo/mutants.toml`
 //! resolves to at least one real file via `glob::glob()` expansion.
 //!
-//! S-MUTANTS-SCOPE-GUARDS-1 / BC-5.38.001 todo!() stubs.
-//! Helper bodies are todo!() per Red Gate discipline; test functions call the helpers
-//! (ensuring helpers are not dead code) and fail RED because the helpers panic.
+//! S-MUTANTS-SCOPE-GUARDS-1 / BC-5.38.001 implementation.
+//! Helper bodies are fully implemented; test functions call the helpers and exercise
+//! real glob expansion, TOML parsing, and coverage-floor enforcement.
 //!
 //! Full test names follow `test_<verb>_<subject>_<expected_outcome>` convention per
 //! `docs/specs/test-naming-convention.md`.
 
 // ---------------------------------------------------------------------------
-// Guard 3 helper functions — all todo!() per BC-5.38.001
+// Guard 3 helper functions — implemented per BC-5.38.001
 // ---------------------------------------------------------------------------
 
 /// Given a list of glob patterns, runs `glob::glob()` expansion on each and
 /// returns the list of patterns that matched zero files.
 ///
-/// BC-5.38.001: non-trivial body (I/O via glob, branching on results) — todo!() required.
-/// BC-5.38.005 self-check: "If I include this real implementation, will the test for
-/// this function pass trivially without any implementer work?" → YES (returns wrong value)
-/// → must remain todo!().
+/// BC-5.38.001: expands each pattern via `glob::glob()` and collects entries that
+/// match zero files; returns an empty Vec when all patterns resolve successfully.
 fn validate_globs(entries: &[String]) -> Vec<String> {
     // Implementation: for each entry, expand
     //   glob::glob(&format!("{}/{}", env!("CARGO_MANIFEST_DIR").replace('\\', "/"), entry))
@@ -46,8 +44,8 @@ fn validate_globs(entries: &[String]) -> Vec<String> {
 /// is present but empty` when the resulting Vec would be empty (key absent or
 /// renamed, or array is empty).
 ///
-/// BC-5.38.001: non-trivial body (TOML traversal, conditional panic) — todo!() required.
-/// BC-5.38.005 self-check: returning todo!() prevents tests 1 and 4 from passing.
+/// BC-5.38.001: traverses the TOML value, collects string entries from the array,
+/// and panics with `MUTANTS-GLOBS-KEY-MISSING` when the resulting Vec is empty.
 fn extract_examine_globs_or_panic(value: &toml::Value) -> Vec<String> {
     let entries: Vec<String> = value
         .get("examine_globs")
@@ -79,8 +77,8 @@ fn extract_examine_globs_or_panic(value: &toml::Value) -> Vec<String> {
 ///
 /// // PIN: update when examine_globs adds/removes entries
 ///
-/// BC-5.38.001: non-trivial body (comparison, conditional panic) — todo!() required.
-/// BC-5.38.005 self-check: returning todo!() prevents tests 1 and 6 from passing.
+/// BC-5.38.001: compares `entries.len()` against `FLOOR` and panics with
+/// `MUTANTS-GLOBS-COVERAGE-FLOOR` when the count falls below the threshold.
 fn assert_examine_globs_coverage_floor(entries: &[String]) {
     // PIN: update when examine_globs adds/removes entries
     const FLOOR: usize = 11;

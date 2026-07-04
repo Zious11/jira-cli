@@ -48,23 +48,6 @@ are recorded here so future reviewers know they were considered, not overlooked.
 | `src/jql.rs` | EXCLUDE | Already property-tested inline with proptest. Mutation survivors in JQL escaping/validation would almost certainly be caught by existing proptest strategies. |
 | `src/api/jira/users.rs` | DEFER | Contains the `USER_PAGE_SIZE`-advance pagination workaround (JRACLOUD-71293 fix). Good candidate in principle, but test coverage via `tests/user_commands.rs` is limited — adding it without targeted pagination tests risks a noisy first-run kill rate. Revisit in a dedicated "users pagination hardening" cycle. |
 
-## Guards
-
-Two static-analysis guards protect §Scope integrity (DEC-150):
-
-- **Guard 2 — `scripts/check-cargo-mutants-policy-citations.sh` (CI-MUTANTS-CITE-001):**
-  Parses the §Scope bulleted list, extracts every (file, fn) pair, and verifies each
-  against source definitions via definition-anchored grep. Exits 1 with an offender list
-  if any citation is stale. Runs in the spec-guard CI job after `check-bc-cumulative-counts`.
-  `--self-test` flag runs 12 offline fixtures. `--policy-doc` / `--src-root` flags provide
-  seams for fixtures.
-
-- **Guard 3 — `tests/mutants_glob_existence.rs`:**
-  Validates every `examine_globs` entry in `.cargo/mutants.toml` resolves to ≥1 real file
-  via `glob::glob()`. Panics with `MUTANTS-GLOBS-KEY-MISSING` if the key is absent or empty;
-  panics with `MUTANTS-GLOBS-COVERAGE-FLOOR` if the entry count falls below 11. Runs as
-  part of the always-run `cargo test` suite.
-
 ## Kill-Rate Target
 
 **90% on the PR diff scope.** The CI `mutants` job fails if the kill rate is below 90%.
@@ -648,6 +631,23 @@ chose not to author a BC for this cycle (F1 §8, Q3 resolution: policy-doc-only)
 mutation gate invariants need formal traceability in a future cycle, author a BC at that
 time. For F7 traceability: the governing artifact is this file at the `docs/specs/` path,
 not a PRD BC.
+
+## Guards
+
+Two static-analysis guards protect §Scope integrity (DEC-150):
+
+- **Guard 2 — `scripts/check-cargo-mutants-policy-citations.sh` (CI-MUTANTS-CITE-001):**
+  Parses the §Scope bulleted list, extracts every (file, fn) pair, and verifies each
+  against source definitions via definition-anchored grep. Exits 1 with an offender list
+  if any citation is stale. Runs in the spec-guard CI job after `check-bc-cumulative-counts`.
+  `--self-test` flag runs 12 offline fixtures. `--policy-doc` / `--src-root` flags provide
+  seams for fixtures.
+
+- **Guard 3 — `tests/mutants_glob_existence.rs`:**
+  Validates every `examine_globs` entry in `.cargo/mutants.toml` resolves to ≥1 real file
+  via `glob::glob()`. Panics with `MUTANTS-GLOBS-KEY-MISSING` if the key is absent or empty;
+  panics with `MUTANTS-GLOBS-COVERAGE-FLOOR` if the entry count falls below 11. Runs as
+  part of the always-run `cargo test` suite.
 
 ## Future Path: Job Sharding (Path B)
 
