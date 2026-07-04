@@ -177,7 +177,7 @@ ${line}"
     # Step 7: SCOPE-COVERAGE-FLOOR guard (canonical mode only)
     # ------------------------------------------------------------------
     if [ "$canonical" = "1" ] && [ "$N" -lt "$FLOOR" ]; then
-        echo "SCOPE-COVERAGE-FLOOR: expected >= ${FLOOR} bullets in §Scope, got ${N}. §Scope entries removed without updating the floor pin."
+        echo "SCOPE-COVERAGE-FLOOR: expected >= ${FLOOR} §Scope bullets, got ${N}. Update this PIN when bullets are intentionally removed (the floor is a lower bound; additions never fire it)."
         return 1
     fi
 
