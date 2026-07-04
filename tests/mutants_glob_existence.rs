@@ -1,7 +1,7 @@
 //! Guard 3 (DEC-150): validates every `examine_globs` entry in `.cargo/mutants.toml`
 //! resolves to at least one real file via `glob::glob()` expansion.
 //!
-//! S-MUTANTS-SCOPE-GUARDS-1 / BC-5.38.001 implementation.
+//! Governing artifacts: DEC-150 and `docs/specs/cargo-mutants-policy.md` §Guards.
 //! Helper bodies are fully implemented; test functions call the helpers and exercise
 //! real glob expansion, TOML parsing, and coverage-floor enforcement.
 //!
@@ -9,14 +9,15 @@
 //! `docs/specs/test-naming-convention.md`.
 
 // ---------------------------------------------------------------------------
-// Guard 3 helper functions — implemented per BC-5.38.001
+// Guard 3 helper functions — governed by DEC-150 (docs/specs/cargo-mutants-policy.md §Guards)
 // ---------------------------------------------------------------------------
 
 /// Given a list of glob patterns, runs `glob::glob()` expansion on each and
 /// returns the list of patterns that matched zero files.
 ///
-/// BC-5.38.001: expands each pattern via `glob::glob()` and collects entries that
-/// match zero files; returns an empty Vec when all patterns resolve successfully.
+/// DEC-150 / `docs/specs/cargo-mutants-policy.md` §Guards: expands each pattern via
+/// `glob::glob()` and collects entries that match zero files; returns an empty Vec
+/// when all patterns resolve successfully.
 fn validate_globs(entries: &[String]) -> Vec<String> {
     // Implementation: for each entry, expand
     //   glob::glob(&format!("{}/{}", env!("CARGO_MANIFEST_DIR").replace('\\', "/"), entry))
@@ -44,8 +45,9 @@ fn validate_globs(entries: &[String]) -> Vec<String> {
 /// is present but empty` when the resulting Vec would be empty (key absent or
 /// renamed, or array is empty).
 ///
-/// BC-5.38.001: traverses the TOML value, collects string entries from the array,
-/// and panics with `MUTANTS-GLOBS-KEY-MISSING` when the resulting Vec is empty.
+/// DEC-150 / `docs/specs/cargo-mutants-policy.md` §Guards: traverses the TOML value,
+/// collects string entries from the array, and panics with `MUTANTS-GLOBS-KEY-MISSING`
+/// when the resulting Vec is empty.
 fn extract_examine_globs_or_panic(value: &toml::Value) -> Vec<String> {
     let entries: Vec<String> = value
         .get("examine_globs")
@@ -77,8 +79,9 @@ fn extract_examine_globs_or_panic(value: &toml::Value) -> Vec<String> {
 ///
 /// // PIN: update when examine_globs adds/removes entries
 ///
-/// BC-5.38.001: compares `entries.len()` against `FLOOR` and panics with
-/// `MUTANTS-GLOBS-COVERAGE-FLOOR` when the count falls below the threshold.
+/// DEC-150 / `docs/specs/cargo-mutants-policy.md` §Guards: compares `entries.len()`
+/// against `FLOOR` and panics with `MUTANTS-GLOBS-COVERAGE-FLOOR` when the count
+/// falls below the threshold.
 fn assert_examine_globs_coverage_floor(entries: &[String]) {
     // PIN: update when examine_globs adds/removes entries
     const FLOOR: usize = 11;
@@ -94,7 +97,7 @@ fn assert_examine_globs_coverage_floor(entries: &[String]) {
 }
 
 // ---------------------------------------------------------------------------
-// Test functions — full bodies calling todo!() helpers → all RED per Red Gate
+// Test functions — call the fully-implemented helpers above
 // ---------------------------------------------------------------------------
 
 /// Test 1: real-data canonical run — all 11 current examine_globs entries
