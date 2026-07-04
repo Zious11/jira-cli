@@ -51,6 +51,8 @@ tokio = { version = "1", features = ["test-util"] }
 temp-env = "0.3"
 # scopeguard: defer! for cleanup-on-panic in integration tests (L-7 / S-396)
 scopeguard = "1"
+# glob: expand examine_globs patterns for Guard 3 existence check (S-MUTANTS-SCOPE-GUARDS-1 / DEC-150)
+glob = "0.3"
 
 [profile.release]
 opt-level = 3
