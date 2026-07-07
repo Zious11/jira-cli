@@ -29,8 +29,8 @@ bash -n "${BASH_SOURCE[0]}"
 #   (CANONICAL_MODE=1 set in shell scope before invoking run_check) requires
 #   this; a local CANONICAL_MODE would make the toggle a no-op.
 # ---------------------------------------------------------------------------
-FLOOR=228       # floor(0.75 × N); N=304 (measured on factory-artifacts 2b09313;
-                # non-.rs tokens silently skipped; 2 glob patterns skipped).
+FLOOR=231       # floor(0.75 × N); N=309 (304 .rs + 5 .snap, measured on factory-artifacts 2b09313).
+                # Previous: N=304, FLOOR=228 (non-.rs tokens were silently skipped, so 5 .snap not counted).
                 # Pre-hygiene DEC-154 census: N=326, FLOOR=244.
                 # Script-scope (NOT local) — single recalibration touchpoint.
 CANONICAL_MODE=0
@@ -84,6 +84,10 @@ run_check() {
         local file symbol
         if printf '%s' "$token" | grep -qF '::'; then
             file="${token%%::*}"
+            # BC-X.13.005 Step 2: single #*:: strips to after the FIRST :: (post-file portion).
+            # The BC pinned form is ##*:: (last-::-strip); branch (f) applies that form
+            # directly as method_name="${token##*::}". Here we store the full post-file
+            # component; individual dispatch branches narrow further as needed.
             symbol="${token#*::}"
         else
             file="$token"
@@ -113,9 +117,13 @@ run_check() {
             continue
         fi
 
-        # Non-.rs files (e.g., .snap, .toml): silently skip — out of scope for
-        # symbol checking; file-existence is not enforced for non-Rust sources.
+        # Non-.rs files (e.g., .snap, .toml): tier (ii) — count + file-existence check only;
+        # no symbol dispatch. (BC-X.13.005 tier ii)
         if ! printf '%s' "$file" | grep -qE '\.rs$'; then
+            total_citations=$((total_citations + 1))
+            if [ ! -f "$src_root/$file" ]; then
+                offenders+=("DEAD: $file not found")
+            fi
             continue
         fi
 
@@ -309,7 +317,7 @@ if [ "$self_test" = "1" ]; then
     fixtures_run=0
 
     # Register cleanup trap for all fixture dirs before creating any tmpdir.
-    trap 'rm -rf "${tmp_A:-}" "${tmp_B:-}" "${tmp_C:-}" "${tmp_D:-}" "${tmp_E:-}" "${tmp_F:-}" "${tmp_F_neg:-}" "${tmp_G:-}" "${tmp_G2:-}" "${tmp_I:-}" "${tmp_J:-}" "${tmp_K:-}"' EXIT
+    trap 'rm -rf "${tmp_A:-}" "${tmp_B:-}" "${tmp_B_snap_pos:-}" "${tmp_B_snap_neg:-}" "${tmp_C:-}" "${tmp_D:-}" "${tmp_E:-}" "${tmp_F:-}" "${tmp_F_neg:-}" "${tmp_G:-}" "${tmp_G2:-}" "${tmp_I:-}" "${tmp_J:-}" "${tmp_K:-}"' EXIT
 
     # -------------------------------------------------------------------
     # Fixture A — dead-symbol: file exists, fn NOT defined
@@ -337,6 +345,30 @@ if [ "$self_test" = "1" ]; then
         || { echo "Fixture B FAIL: expected rc=1, got $rc"; exit 1; }
     grep -qF 'DEAD: src/nonexistent_file_selftest.rs not found' <<<"$output" \
         || { echo "Fixture B FAIL: expected 'DEAD: src/nonexistent_file_selftest.rs not found' in output"; exit 1; }
+
+    # Fixture B sub-probe (snap-pos): .snap file exists → counted, rc=0, "1 citations checked"
+    # EC-CITE-060: non-.rs tokens use tier (ii) — file-existence check + count; no symbol dispatch.
+    tmp_B_snap_pos=$(mktemp -d)
+    mkdir -p "$tmp_B_snap_pos/src"
+    printf '**Trace**: `src/mock_b.snap`\n' > "$tmp_B_snap_pos/bc-mock.md"
+    touch "$tmp_B_snap_pos/src/mock_b.snap"   # file exists; no symbol check for non-.rs
+    set +e; BC_DIR="$tmp_B_snap_pos" SRC_ROOT="$tmp_B_snap_pos" output=$(run_check 2>&1); rc=$?; set -e
+    [ "$rc" -eq 0 ] \
+        || { echo "Fixture B FAIL (snap-pos): expected rc=0, got $rc"; exit 1; }
+    grep -qF '1 citations checked' <<<"$output" \
+        || { echo "Fixture B FAIL (snap-pos): '1 citations checked' missing (non-.rs file must be counted)"; exit 1; }
+
+    # Fixture B sub-probe (snap-neg): missing .snap → rc=1 + DEAD message
+    tmp_B_snap_neg=$(mktemp -d)
+    mkdir -p "$tmp_B_snap_neg/src"
+    printf '**Trace**: `src/missing_b.snap`\n' > "$tmp_B_snap_neg/bc-mock.md"
+    # $tmp_B_snap_neg/src/missing_b.snap intentionally NOT created
+    set +e; BC_DIR="$tmp_B_snap_neg" SRC_ROOT="$tmp_B_snap_neg" output=$(run_check 2>&1); rc=$?; set -e
+    [ "$rc" -eq 1 ] \
+        || { echo "Fixture B FAIL (snap-neg): expected rc=1, got $rc"; exit 1; }
+    grep -qF 'DEAD: src/missing_b.snap not found' <<<"$output" \
+        || { echo "Fixture B FAIL (snap-neg): 'DEAD: src/missing_b.snap not found' missing from output"; exit 1; }
+
     fixtures_run=$((fixtures_run + 1))
 
     # -------------------------------------------------------------------
@@ -445,7 +477,7 @@ if [ "$self_test" = "1" ]; then
     printf '**Trace**: `src/mock_g.rs::mock_g_fn_selftest`\n' > "$tmp_G/bc-mock.md"
     printf 'fn mock_g_fn_selftest() {}\n' > "$tmp_G/src/mock_g.rs"
     CANONICAL_MODE=1   # toggle floor guard ON (script-scope variable)
-    # G main probe: 1 citation, CANONICAL_MODE=1 → floor fires (1 < FLOOR=248)
+    # G main probe: 1 citation, CANONICAL_MODE=1 → floor fires (1 < FLOOR=231)
     set +e; BC_DIR="$tmp_G" SRC_ROOT="$tmp_G" output=$(run_check 2>&1); rc=$?; set -e
     [ "$rc" -eq 1 ] \
         || { echo "Fixture G FAIL (main probe): expected rc=1, got $rc"; exit 1; }
@@ -454,7 +486,7 @@ if [ "$self_test" = "1" ]; then
     grep -qF "expected >= ${FLOOR}" <<<"$output" \
         || { echo "Fixture G FAIL (main probe): 'expected >= \${FLOOR}' missing from output"; exit 1; }
 
-    # G second probe: 100 citations (still below FLOOR=248)
+    # G second probe: 100 citations (still below FLOOR=231)
     # Kill-trace: mutation -lt "$FLOOR" → -lt "5": 100 > 5 → rc=0 → assertion fails → caught.
     tmp_G2=$(mktemp -d)
     mkdir -p "$tmp_G2/src"
