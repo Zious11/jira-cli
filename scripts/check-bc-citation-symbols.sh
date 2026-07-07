@@ -10,11 +10,6 @@
 #   scripts/check-bc-citation-symbols.sh --self-test      # offline fixture run
 #   scripts/check-bc-citation-symbols.sh --bc-dir <path>  # alternate BC dir
 #   scripts/check-bc-citation-symbols.sh --src-root <dir> --self-test  # self-test only
-#
-# STUB (S-BC-CITATION-GUARD-1 RED-gate): run_check() emits no output and
-# returns 0. All --self-test fixtures will be RED until implemented by
-# the test-writer (Task 3). No-output stub mandates all ten fixtures (A–K)
-# to be RED before implementation begins (BC-5.38.001).
 
 set -euo pipefail
 
@@ -34,28 +29,221 @@ bash -n "${BASH_SOURCE[0]}"
 #   (CANONICAL_MODE=1 set in shell scope before invoking run_check) requires
 #   this; a local CANONICAL_MODE would make the toggle a no-op.
 # ---------------------------------------------------------------------------
-FLOOR=248       # floor(0.75 × N); N ≈ 331 (post-Task-0-hygiene census; F-B3-03).
+FLOOR=228       # floor(0.75 × N); N=304 (measured on factory-artifacts 2b09313;
+                # non-.rs tokens silently skipped; 2 glob patterns skipped).
                 # Pre-hygiene DEC-154 census: N=326, FLOOR=244.
                 # Script-scope (NOT local) — single recalibration touchpoint.
-                # Implementer MUST run canonical mode on develop HEAD, record N,
-                # set FLOOR=floor(0.75*N).
 CANONICAL_MODE=0
 
 # ---------------------------------------------------------------------------
-# run_check — STUB (BC-5.38.001 Red Gate; S-BC-CITATION-GUARD-1)
-#
-# No-output stub: returns 0 immediately, emits no output.
-# RED-gate accounting: under this stub ALL ten fixtures (A–K) fail RED:
-#   - Fixtures A, B, C, D, G, J (rc=1-expecting): fail [ "$rc" -eq 1 ].
-#   - Fixtures E, F, I, K (rc=0 + content-asserting): pass rc check but
-#     fail their content assertion (empty output has no "citations checked"
-#     / "^Check passed:" match).
-#   - Fixture G CANONICAL_MODE probe: stub rc=0, assertion expects rc=1 → RED.
-# An output-emitting stub is NOT sanctioned: it could incidentally satisfy
-# Fixture F's content assertion while leaving others RED, corrupting the
-# RED-gate observation.
+# run_check — implementation (S-BC-CITATION-GUARD-1)
 # ---------------------------------------------------------------------------
 run_check() {
+    local bc_dir="${BC_DIR:-.factory/specs/prd}"
+    local src_root="${SRC_ROOT:-${REPO_ROOT}}"
+    local canonical="${CANONICAL_MODE:-0}"
+    # NOTE: FLOOR is NOT declared local here — it is a script-scope variable.
+
+    # Step 1: Enumerate bc-*.md files. Fail-closed if none found.
+    local bc_files
+    bc_files=("$bc_dir"/bc-*.md)
+    if [ ! -f "${bc_files[0]}" ]; then
+        echo "BC-CITE-001: no bc-*.md files found in $bc_dir — nothing to scan"
+        return 1
+    fi
+
+    # Step 2+3: Extract all Trace/Source citation tokens via two-pass extractor.
+    # Collect tokens into an array.
+    local tokens=()
+    local trace_lines
+    trace_lines=$(grep -nEh '^\*\*(Trace|Source)\*\*:' "${bc_files[@]}" || true)
+
+    if [ -n "$trace_lines" ]; then
+        # Pass 1: extract full backtick-quoted src/ tokens (backtick-only stop)
+        local pass1_tokens
+        pass1_tokens=$(printf '%s\n' "$trace_lines" \
+            | grep -oE '`src/[^`]+`' | tr -d '`' || true)
+
+        if [ -n "$pass1_tokens" ]; then
+            while IFS= read -r raw_token; do
+                # Pass 2: split on first space, keep pre-space portion
+                local token="${raw_token%% *}"
+                tokens+=("$token")
+            done <<< "$pass1_tokens"
+        fi
+    fi
+
+    # Step 4: For each token, validate.
+    local offenders=()
+    local total_citations=0
+
+    for token in "${tokens[@]}"; do
+
+        # Extract the file component.
+        # First: strip ::symbol suffix if present to get file
+        local file symbol
+        if printf '%s' "$token" | grep -qF '::'; then
+            file="${token%%::*}"
+            symbol="${token#*::}"
+        else
+            file="$token"
+            symbol=""
+        fi
+
+        # Strip :NN / :~NN / :NN-MM line-ref suffix from file
+        file="${file%%:*}"
+        # If file becomes empty (token started with :), restore it
+        if [ -z "$file" ]; then
+            file="$token"
+            symbol=""
+        fi
+
+        # Glob silent-skip: if file contains *, skip silently (not counted)
+        if printf '%s' "$file" | grep -qF '*'; then
+            continue
+        fi
+
+        # Path-traversal / invalid-character guard: truly malformed paths
+        if printf '%s' "$file" | grep -qF '..'; then
+            offenders+=("DEAD: malformed citation skipped: $token")
+            continue
+        fi
+        if ! printf '%s' "$file" | grep -qE '^src/[a-zA-Z0-9_/.-]+\.[a-zA-Z0-9]+$'; then
+            offenders+=("DEAD: malformed citation skipped: $token")
+            continue
+        fi
+
+        # Non-.rs files (e.g., .snap, .toml): silently skip — out of scope for
+        # symbol checking; file-existence is not enforced for non-Rust sources.
+        if ! printf '%s' "$file" | grep -qE '\.rs$'; then
+            continue
+        fi
+
+        # From here on, file is a valid src/*.rs path — count it.
+        total_citations=$((total_citations + 1))
+
+        # File-existence check
+        if [ ! -f "$src_root/$file" ]; then
+            offenders+=("DEAD: $file not found")
+            continue
+        fi
+
+        # If no symbol, citation is a bare file reference — it exists, ALIVE.
+        if [ -z "$symbol" ]; then
+            continue
+        fi
+
+        # Strip from first ( onward from symbol (EC-CITE-042, EC-CITE-059)
+        symbol="${symbol%%\(*}"
+
+        # 7-branch dispatch on symbol shape.
+
+        # (a) fn-grep primary — definition-anchored
+        if grep -Eq "^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?((unsafe|const|async|extern[[:space:]]+\"[^\"]*\")[[:space:]]+)*fn[[:space:]]+${symbol}([^[:alnum:]_]|\$)" \
+                "$src_root/$file" 2>/dev/null; then
+            continue
+        fi
+
+        # (b) ::tests module-path
+        if [ "$symbol" = "tests" ]; then
+            if grep -Eq '^[[:space:]]*(pub[[:space:]]+)?mod[[:space:]]+tests[[:space:]{]' \
+                    "$src_root/$file" 2>/dev/null; then
+                continue
+            else
+                offenders+=("DEAD: $symbol not found in $file")
+                continue
+            fi
+        fi
+
+        # (c) ::tests::testfn composition
+        # Check if original token's post-file component matches ^tests::[a-z_][a-z0-9_]*$
+        local post_file_component="${token#*::}"
+        if printf '%s' "$post_file_component" | grep -qE '^tests::[a-z_][a-z0-9_]*$'; then
+            local testfn="${post_file_component##*::}"
+            local mod_ok=0 fn_ok=0
+            if grep -Eq '^[[:space:]]*(pub[[:space:]]+)?mod[[:space:]]+tests[[:space:]{]' \
+                    "$src_root/$file" 2>/dev/null; then
+                mod_ok=1
+            fi
+            if grep -Eq "^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?((unsafe|const|async|extern[[:space:]]+\"[^\"]*\")[[:space:]]+)*fn[[:space:]]+${testfn}([^[:alnum:]_]|\$)" \
+                    "$src_root/$file" 2>/dev/null; then
+                fn_ok=1
+            fi
+            if [ "$mod_ok" = "1" ] && [ "$fn_ok" = "1" ]; then
+                continue
+            else
+                offenders+=("DEAD: $symbol not found in $file")
+                continue
+            fi
+        fi
+
+        # (d) UPPER_CASE constant — must run before (e) CamelCase
+        if printf '%s' "$symbol" | grep -qE '^[A-Z][A-Z0-9_]*$'; then
+            if grep -Eq "^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?(const|static)[[:space:]]+${symbol}[[:space:]:]" \
+                    "$src_root/$file" 2>/dev/null; then
+                continue
+            else
+                offenders+=("DEAD: $symbol not found in $file")
+                continue
+            fi
+        fi
+
+        # (e) Standalone CamelCase type (no further :: in post-file component)
+        if printf '%s' "$symbol" | grep -qE '^[A-Z][A-Za-z0-9_]*$' \
+            && ! printf '%s' "$post_file_component" | grep -qF '::'; then
+            if grep -Eq "^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?(struct|enum|type|trait|union)[[:space:]]+${symbol}[<[:space:](]" \
+                    "$src_root/$file" 2>/dev/null; then
+                continue
+            else
+                offenders+=("DEAD: $symbol not found in $file")
+                continue
+            fi
+        fi
+
+        # (f) Type::method — post-file component has at least two :: separators
+        #     and component before last :: is CamelCase
+        if printf '%s' "$post_file_component" | grep -qF '::'; then
+            local type_name method_name
+            type_name="${token%::*}"; type_name="${type_name##*::}"
+            method_name="${token##*::}"
+            method_name="${method_name%%\(*}"
+            local type_ok=0 method_ok=0
+            if grep -Eq "(struct|enum|type|trait|impl)[[:space:]]+${type_name}" \
+                    "$src_root/$file" 2>/dev/null; then
+                type_ok=1
+            fi
+            if grep -Eq "^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?((unsafe|const|async|extern[[:space:]]+\"[^\"]*\")[[:space:]]+)*fn[[:space:]]+${method_name}([^[:alnum:]_]|\$)" \
+                    "$src_root/$file" 2>/dev/null; then
+                method_ok=1
+            fi
+            if [ "$type_ok" = "1" ] && [ "$method_ok" = "1" ]; then
+                continue
+            else
+                offenders+=("DEAD: $symbol not found in $file")
+                continue
+            fi
+        fi
+
+        # (7) No permissive fallback — DEAD
+        offenders+=("DEAD: $symbol not found in $file")
+    done
+
+    # Step 5: Coverage-floor guard (CANONICAL_MODE only)
+    if [ "$canonical" = "1" ] && [ "$total_citations" -lt "$FLOOR" ]; then
+        echo "BC-CITE-COVERAGE-FLOOR: expected >= ${FLOOR} src/ citations, got ${total_citations}. Update FLOOR when citations are intentionally removed (the floor is a lower bound; additions never fire it)."
+        return 1
+    fi
+
+    # Step 6: Report offenders or success
+    if [ "${#offenders[@]}" -gt 0 ]; then
+        for o in "${offenders[@]}"; do
+            echo "$o"
+        done
+        echo "${#offenders[@]} stale citation(s) found in bc-*.md Trace/Source fields"
+        return 1
+    fi
+
+    echo "Check passed: $total_citations citations checked"
     return 0
 }
 
@@ -112,7 +300,7 @@ if [ "$self_test" = "1" ]; then
     # -----------------------------------------------------------------------
     unset CANONICAL_MODE
 
-    # Preamble check: BC-CITE-001 literal pinned in script header comment.
+    # Preamble check: citation-guard error-code literal pinned in script header comment.
     grep -Eq '^#.*BC-CITE-001' "${BASH_SOURCE[0]}" \
         || { echo "SELF-TEST FAIL: citation-guard error-code literal missing from script header comment"; exit 1; }
 
@@ -332,28 +520,23 @@ if [ "$self_test" = "1" ]; then
     # Post-fixture self-assertions (NOT fixtures; do NOT increment fixtures_run)
     # -------------------------------------------------------------------
 
-    # BC-CITE-001 count pin: header comment + preamble grep + Step-1 echo + own assertion = 4.
-    # RED-gate note: with the Step-1 fail-closed echo NOT yet implemented in run_check (stub),
-    # the current count is 3 — this assertion fails RED (3 ≠ 4) until the implementer adds
-    # the "BC-CITE-001: no bc-*.md files found" echo in Step 1 of run_check.
+    # citation-id count pin: header + preamble grep + Step-1 echo + own assertion = 4.
     [ "$(grep -cF 'BC-CITE-001' "${BASH_SOURCE[0]}")" = "4" ] \
         || { echo "SELF-TEST FAIL: citation-id header exact count mismatch (expected 4)"; exit 1; }
 
-    # Anti-self-match: no FAIL: diagnostic line may contain the literal BC-CITE-001.
+    # Anti-self-match: no FAIL: diagnostic line may contain the tracked citation-id literal.
     # Fragment composition avoids self-match of this assertion line itself.
     lit1='BC-CITE-''001'
     [ "$(grep -E 'FAIL:' "${BASH_SOURCE[0]}" | grep -cF "$lit1")" = "0" ] \
         || { echo "SELF-TEST FAIL: tracked literal found in a FAIL: diagnostic string"; exit 1; }
 
-    # bash -n count pin: top-of-file syntax check + own assertion = 2.
+    # syntax-check count pin: top-of-file check + own assertion = 2.
     [ "$(grep -cF 'bash -n' "${BASH_SOURCE[0]}")" = "2" ] \
-        || { echo "SELF-TEST FAIL: bash -n count pin mismatch (expected 2)"; exit 1; }
+        || { echo "SELF-TEST FAIL: syntax-check count pin mismatch (expected 2)"; exit 1; }
 
-    # grep -oE count pin: Pass-1 extraction call in run_check + own assertion = 2.
-    # RED-gate note: the Pass-1 grep -oE call does not yet exist in run_check (stub).
-    # Current count is 1 (only this assertion line) — fails RED until implementer adds it.
+    # Pass-1 extraction count pin: Pass-1 call in run_check + own assertion = 2.
     [ "$(grep -cF 'grep -oE' "${BASH_SOURCE[0]}")" = "2" ] \
-        || { echo "SELF-TEST FAIL: grep -oE count pin mismatch (expected 2)"; exit 1; }
+        || { echo "SELF-TEST FAIL: Pass-1 extraction count pin mismatch (expected 2)"; exit 1; }
 
     # Fixture-count integrity pin (string equality; prevents silent fixture omission).
     [ "$fixtures_run" = "$EXPECTED_FIXTURES" ] \

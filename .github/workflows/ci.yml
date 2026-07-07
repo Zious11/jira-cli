@@ -108,7 +108,7 @@ jobs:
           fail_ci_if_error: false
 
   spec-guard:
-    name: Spec Guards (BC counts, numeric-count lint, mutants policy scope)
+    name: Spec Guards (BC counts, numeric-count lint, citation checks, mutants policy scope)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -134,6 +134,12 @@ jobs:
         run: bash scripts/check-cargo-mutants-policy-citations.sh --self-test
       - name: check-cargo-mutants-policy-citations (Guard 2, DEC-150)
         run: bash scripts/check-cargo-mutants-policy-citations.sh
+
+      - name: check-bc-citation-symbols self-test (BC-CITE-001)
+        run: bash scripts/check-bc-citation-symbols.sh --self-test
+
+      - name: check-bc-citation-symbols (BC-CITE-001)
+        run: bash scripts/check-bc-citation-symbols.sh
 
   security:
     name: Secret Scan (gitleaks)
