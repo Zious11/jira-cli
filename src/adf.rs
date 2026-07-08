@@ -3179,9 +3179,7 @@ mod tests {
     fn assert_code_mark_exclusivity(node: &Value) {
         // Inspect this node's marks if present.
         if let Some(marks_arr) = node.get("marks").and_then(|m| m.as_array()) {
-            let has_code = marks_arr
-                .iter()
-                .any(|m| m["type"].as_str() == Some("code"));
+            let has_code = marks_arr.iter().any(|m| m["type"].as_str() == Some("code"));
             if has_code {
                 const FORBIDDEN: &[&str] = &[
                     "strong",
@@ -9445,16 +9443,16 @@ mod tests {
     /// Inline code-composition template variant for VP-571-001 generator.
     #[derive(Debug, Clone)]
     enum MarkCompositionTemplate {
-        Plain(String),              // `{body}`
-        Strong(String),             // **`{body}`**
-        Em(String),                 // _`{body}`_
-        Strike(String),             // ~~`{body}`~~
-        SupCode(String),            // ^`{body}`^  (subsup sup — EC-4 primary)
-        SubCode(String),            // ~`{body}`~  (subsup sub — EC-4 variant)
-        LinkCode { body: String, seg: String },  // [`{body}`](https://x/{seg})
-        MixedStrong(String),        // **a `{body}` c**
-        MixedEm(String),            // _a `{body}` c_
-        NestedEmStrong(String),     // **_`{body}`_**
+        Plain(String),                                // `{body}`
+        Strong(String),                               // **`{body}`**
+        Em(String),                                   // _`{body}`_
+        Strike(String),                               // ~~`{body}`~~
+        SupCode(String),                              // ^`{body}`^  (subsup sup — EC-4 primary)
+        SubCode(String),                              // ~`{body}`~  (subsup sub — EC-4 variant)
+        LinkCode { body: String, seg: String },       // [`{body}`](https://x/{seg})
+        MixedStrong(String),                          // **a `{body}` c**
+        MixedEm(String),                              // _a `{body}` c_
+        NestedEmStrong(String),                       // **_`{body}`_**
         NestedLinkBold { body: String, seg: String }, // [**`{body}`**](https://x/{seg})
     }
 
@@ -9502,7 +9500,13 @@ mod tests {
             WrapKind571::None => content.to_owned(),
             WrapKind571::Blockquote => content
                 .lines()
-                .map(|l| if l.is_empty() { ">".to_owned() } else { format!("> {l}") })
+                .map(|l| {
+                    if l.is_empty() {
+                        ">".to_owned()
+                    } else {
+                        format!("> {l}")
+                    }
+                })
                 .collect::<Vec<_>>()
                 .join("\n"),
             WrapKind571::UnorderedList => format!("- {content}"),
@@ -9523,7 +9527,13 @@ mod tests {
                 // Prefix each content line with `> ` and prepend `> [!NOTE]`.
                 let prefixed = content
                     .lines()
-                    .map(|l| if l.is_empty() { ">".to_owned() } else { format!("> {l}") })
+                    .map(|l| {
+                        if l.is_empty() {
+                            ">".to_owned()
+                        } else {
+                            format!("> {l}")
+                        }
+                    })
                     .collect::<Vec<_>>()
                     .join("\n");
                 format!("> [!NOTE]\n{prefixed}\n")
