@@ -1258,6 +1258,26 @@ impl AdfBuilder {
         self.append_child(node);
     }
 
+    /// Emit an inline `code`-marked text node for `Event::Code`.
+    ///
+    /// **BC-7.2.015 (issue #571) — code-mark exclusivity invariant:**
+    /// The ADF schema (`code_inline_node`) only permits `link` and `annotation`
+    /// marks alongside `code`. All typographic marks (`strong`, `em`, `strike`,
+    /// `subsup`, `underline`, `textColor`, `backgroundColor`, and any future
+    /// mark types not currently emitted by pulldown-cmark) are stripped at
+    /// emission time. The filter is an allowlist: any mark type outside
+    /// `{link, annotation}` is excluded.
+    ///
+    /// The filter operates on a **clone** of `self.active_marks`; the original
+    /// is never mutated. Surrounding non-code text nodes in the same inline span
+    /// therefore retain their typographic marks unchanged (see EC-6).
+    ///
+    /// The trailing `dedup_marks_by_type` call is retained unchanged — it
+    /// preserves the BC-7.2.007 same-type dedup invariant on this code path.
+    ///
+    /// **BC-7.2.011 (issue #522) — CR/LF normalization:**
+    /// No `text` node may contain a raw `\r` or `\n`. `\r\n`, lone `\r`, and
+    /// bare `\n` are all normalized to a single space before building the node.
     fn push_code(&mut self, text: &str) {
         if text.is_empty() {
             return;
@@ -1281,7 +1301,20 @@ impl AdfBuilder {
         } else {
             text
         };
-        let mut marks = self.active_marks.clone();
+        // BC-7.2.015 (issue #571): allowlist filter — retain only `link` and
+        // `annotation` marks from active_marks; strip all typographic marks.
+        // Operates on a clone so self.active_marks is not mutated.
+        let mut marks: Vec<Value> = self
+            .active_marks
+            .iter()
+            .filter(|m| {
+                matches!(
+                    m.get("type").and_then(|t| t.as_str()),
+                    Some("link") | Some("annotation")
+                )
+            })
+            .cloned()
+            .collect();
         marks.push(json!({ "type": "code" }));
         self.append_child(json!({
             "type": "text",
@@ -2917,10 +2950,7 @@ mod tests {
             .iter()
             .find(|n| n["text"] == "code")
             .expect("expected a text node for 'code'");
-        assert_marks_eq(
-            &code_node["marks"],
-            &["code"],
-        );
+        assert_marks_eq(&code_node["marks"], &["code"]);
     }
 
     // ── BC-7.2.015 test suite ─────────────────────────────────────────────────
