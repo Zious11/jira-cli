@@ -23,6 +23,15 @@ All notable changes to jr will be documented here.
 
 ### Fixed
 
+- **ADF code-mark exclusivity — inline-code spans inside bold/superscript no longer emit
+  HTTP-400-rejected ADF (BC-7.2.015, #571):** `push_code` now strips typographic marks at
+  emission via an allowlist filter: `link` and `annotation` co-marks are retained; `strong`,
+  `em`, `strike`, `subsup`, and defensive `underline`/`textColor`/`backgroundColor` are
+  removed. The ADF `code_inline_node` schema forbids typographic marks alongside `code` —
+  without this fix, patterns such as `` **`x`** `` and `` ^`x`^ `` produced ADF that Jira
+  rejected with HTTP 400. The filter operates on a clone of `active_marks` so surrounding
+  non-code text retains its marks unchanged. `adf_to_text` stays read-lenient by design. (#593)
+
 ### Changed
 
 - **CI: mutation-test scope restored for `edit.rs` + `jsm_create.rs` after ADR-0012
