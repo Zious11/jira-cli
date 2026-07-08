@@ -2537,11 +2537,14 @@ fn wrap_code_span(text: &str) -> String {
 /// other markdown syntax. The remaining marks then wrap the code span in
 /// array order.
 ///
-/// This matters because the write-path `AdfBuilder::push_code` appends
-/// `{type: "code"}` to the active marks *after* any other marks, so on
-/// roundtrip we see `marks: [strong, code]` for `**`\x`**`; applying marks
-/// strictly in order would produce `` `**x**` `` (code outermost),
-/// losing the bold semantics.
+/// **Read-tolerance for externally-produced or legacy ADF (BC-7.2.015 EC-7):**
+/// The write path (`AdfBuilder::push_code`) never emits typographic marks
+/// alongside `code` — the allowlist filter (issue #571) strips them at
+/// emission time. However, externally-produced or legacy ADF may contain
+/// combinations such as `[strong, code]`. This function renders such nodes
+/// tolerantly (e.g., `[strong, code]` → `` **`x`** ``). The code-innermost
+/// behavior is intentional read-leniency and does NOT imply the write path
+/// may produce it — the write and read paths are orthogonal by design.
 ///
 /// Unknown mark types pass through without added syntax.
 fn apply_marks(text: &str, marks: Option<&Vec<Value>>) -> String {
@@ -6838,9 +6841,8 @@ mod tests {
 
     #[test]
     fn test_render_marks_code_and_strong() {
-        // The write-path emits `[strong, code]` for `**`x`**` because
-        // `push_code` appends `{type: "code"}` after active marks. This test
-        // covers the reverse-order case: even when the array is
+        // Externally-produced or legacy ADF that we must render tolerantly.
+        // This test covers the reverse-order case: even when the array is
         // `[code, strong]`, the `code` mark is applied innermost, so bold
         // wraps the code span rather than the other way around.
         let adf = json!({
@@ -6940,8 +6942,8 @@ mod tests {
 
     #[test]
     fn test_render_strong_with_code_applies_code_innermost() {
-        // Matches the write-path's marks ordering: strong + code produces
-        // marks = [strong, code]. Output must be **`code`** not `**code**`.
+        // Externally-produced or legacy ADF that we must render tolerantly.
+        // Output must be **`x`** not `**x**`.
         let adf = json!({
             "type": "doc",
             "content": [{"type": "paragraph", "content": [
