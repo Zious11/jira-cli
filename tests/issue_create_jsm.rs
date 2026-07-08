@@ -3824,3 +3824,240 @@ async fn test_jsm_create_platform_flag_warnings_emit_once_on_success() {
         );
     }
 }
+
+// ─── H-NEW-ADF-010 Call E: JSM path parity (BC-7.2.015 EC-4) ─────────────────
+
+/// H-NEW-ADF-010 Call E (BC-7.2.015 JSM path parity): `^\`code\`^` submitted
+/// via `handle_jsm_create` — `subsup` must be stripped from the code text node
+/// in `requestFieldValues.description` exactly as it is in `fields.description`
+/// on the platform path.
+///
+/// `markdown_to_adf` and `push_code` are the single shared conversion engine
+/// invoked by both `handle_create` (platform, ADR-0014 upstream fork) and
+/// `handle_jsm_create` (ADR-0014 JSM fork). This test confirms the exclusivity
+/// invariant holds regardless of which downstream endpoint receives the POST.
+///
+/// Five mocks:
+///   1. GET /rest/api/3/project/HELPDESK — `require_service_desk` project-meta fetch.
+///   2. GET /rest/servicedeskapi/servicedesk — service desk list; matches on projectId "77".
+///   3. GET /rest/servicedeskapi/servicedesk/3/requesttype?start=0&limit=50 — RT discovery.
+///   4. POST /rest/servicedeskapi/request `.expect(1)` — JSM submit.
+///   5. POST /rest/api/3/issue `.expect(0)` — platform endpoint must NOT be called.
+///
+/// BC-7.2.015 EC-4, H-NEW-ADF-010 Call E.
+#[tokio::test]
+async fn test_bc_7_2_015_call_e_jsm_path_subsup_code_mark_stripped() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_minimal_config(config_dir.path(), &server.uri());
+
+    // Mock 1: project meta — HELPDESK is a service_desk project with id "77".
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/HELPDESK"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "77",
+            "key": "HELPDESK",
+            "projectTypeKey": "service_desk",
+            "simplified": false
+        })))
+        .mount(&server)
+        .await;
+
+    // Mock 2: service desk list — entry for project_id "77" has service desk id "3".
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 1,
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "_links": {},
+            "values": [
+                {
+                    "id": "3",
+                    "projectId": "77",
+                    "projectName": "Help Desk"
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    // Mock 3: request type list for service desk 3.
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk/3/requesttype"))
+        .and(query_param("start", "0"))
+        .and(query_param("limit", "50"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 1,
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "_links": {},
+            "values": [
+                {
+                    "id": "5",
+                    "name": "Get IT Help",
+                    "description": "IT support"
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    // Mock 4: JSM POST — exactly once; body is captured via received_requests below.
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "issueId": "10042",
+            "issueKey": "HELP-42"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Mock 5: platform endpoint — must NEVER be called (H-NEW-ADF-010 Call E guard).
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("must not be called"))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("jr")
+        .unwrap()
+        .env("JR_BASE_URL", server.uri())
+        .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("XDG_CACHE_HOME", cache_dir.path())
+        .env("JR_CACHE_DIR", cache_dir.path().join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("JR_CONFIG_DIR", config_dir.path().join("jr"))
+        .args([
+            "--no-input",
+            "issue",
+            "create",
+            "--project",
+            "HELPDESK",
+            "--request-type",
+            "Get IT Help",
+            "--summary",
+            "jsm-code",
+            "--markdown",
+            "--description",
+            "^`code`^",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "Call E: expected exit 0; stderr={stderr:?} stdout={stdout:?}"
+    );
+
+    // Capture the POST body to /rest/servicedeskapi/request and inspect
+    // requestFieldValues.description for code-mark exclusivity.
+    let captured = server
+        .received_requests()
+        .await
+        .expect("wiremock must record received requests");
+    let jsm_post = captured
+        .iter()
+        .find(|r| {
+            r.url.path() == "/rest/servicedeskapi/request"
+                && r.method == wiremock::http::Method::POST
+        })
+        .expect("Call E: POST to /rest/servicedeskapi/request must have been captured");
+
+    let body_str =
+        std::str::from_utf8(&jsm_post.body).expect("Call E: POST body must be valid UTF-8");
+    let body_json: serde_json::Value = serde_json::from_str(body_str)
+        .unwrap_or_else(|e| panic!("Call E: POST body must be valid JSON: {e}; body={body_str}"));
+
+    let desc = &body_json["requestFieldValues"]["description"];
+    assert!(
+        !desc.is_null(),
+        "Call E: requestFieldValues.description must be present in POST body; body={body_str}"
+    );
+
+    // BC-7.2.015 exclusivity invariant over the JSM ADF.
+    assert_code_mark_exclusivity_local(desc);
+
+    // Specific assertion: text "code" carries marks [code] ONLY — NOT [subsup, code].
+    let mut text_nodes: Vec<&serde_json::Value> = Vec::new();
+    collect_text_nodes_local(desc, &mut text_nodes);
+    let code_node = text_nodes
+        .iter()
+        .find(|n| n["text"].as_str() == Some("code"))
+        .unwrap_or_else(|| {
+            panic!(
+                "Call E: expected text node 'code' in requestFieldValues.description; desc={desc}"
+            )
+        });
+    let marks = &code_node["marks"];
+    assert!(
+        has_mark_local(marks, "code"),
+        "Call E: 'code' node must carry `code` mark; marks={marks}"
+    );
+    assert!(
+        !has_mark_local(marks, "subsup"),
+        "Call E (issue #571 JSM-path regression guard): 'code' node must NOT carry \
+         `subsup` mark (stripped by push_code allowlist filter regardless of \
+         which endpoint the POST targets); marks={marks}"
+    );
+    assert_eq!(
+        marks.as_array().map(|a| a.len()).unwrap_or(0),
+        1,
+        "Call E: 'code' node must carry exactly 1 mark ([{{\"type\":\"code\"}}]); marks={marks}"
+    );
+    // The .expect(0) on the platform mock fires on server drop (enforced by wiremock).
+}
+
+// ADF-walking helpers local to Call E (defined here to avoid a cross-module
+// helper dependency; mirrors the helpers in `tests/adf_code_mark_exclusivity.rs`).
+
+fn collect_text_nodes_local<'a>(node: &'a serde_json::Value, out: &mut Vec<&'a serde_json::Value>) {
+    if node.get("type").and_then(|t| t.as_str()) == Some("text") {
+        out.push(node);
+    }
+    if let Some(children) = node.get("content").and_then(|c| c.as_array()) {
+        for child in children {
+            collect_text_nodes_local(child, out);
+        }
+    }
+}
+
+fn has_mark_local(marks: &serde_json::Value, mark_type: &str) -> bool {
+    marks
+        .as_array()
+        .is_some_and(|arr| arr.iter().any(|m| m["type"].as_str() == Some(mark_type)))
+}
+
+fn assert_code_mark_exclusivity_local(adf: &serde_json::Value) {
+    const FORBIDDEN: &[&str] = &[
+        "strong",
+        "em",
+        "strike",
+        "subsup",
+        "underline",
+        "textColor",
+        "backgroundColor",
+    ];
+    let mut text_nodes = Vec::new();
+    collect_text_nodes_local(adf, &mut text_nodes);
+    for tn in &text_nodes {
+        let marks = &tn["marks"];
+        if has_mark_local(marks, "code") {
+            for ftype in FORBIDDEN {
+                assert!(
+                    !has_mark_local(marks, ftype),
+                    "BC-7.2.015 (Call E JSM path): text node {:?} carries both `code` \
+                     mark and forbidden typographic mark {ftype:?}. marks={marks}",
+                    tn["text"]
+                );
+            }
+        }
+    }
+}
