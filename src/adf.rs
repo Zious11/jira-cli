@@ -2576,6 +2576,49 @@ mod tests {
         }
     }
 
+    /// Assert that the JSON `marks` array contains exactly the mark type names
+    /// in `expected`, treated as an unordered set (same length, same multiset
+    /// of `"type"` string values). Panics with a formatted message including
+    /// the actual mark-types vector on mismatch.
+    ///
+    /// AC-001 (BC-7.2.015 precondition: test helpers contract).
+    fn assert_marks_eq(marks: &Value, expected: &[&str]) {
+        let actual: Vec<&str> = match marks.as_array() {
+            Some(arr) => arr.iter().filter_map(|m| m["type"].as_str()).collect(),
+            None => vec![],
+        };
+        let mut actual_sorted = actual.clone();
+        actual_sorted.sort_unstable();
+        let mut expected_sorted = expected.to_vec();
+        expected_sorted.sort_unstable();
+        assert_eq!(
+            actual_sorted, expected_sorted,
+            "mark types mismatch — expected {expected:?}, got {actual:?}"
+        );
+    }
+
+    /// Assert that the JSON `marks` array contains a mark of type `"link"`
+    /// whose `attrs["href"]` field equals `expected_href` character-for-character.
+    /// Uses field-by-field access — does NOT assert on `attrs["title"]`
+    /// (absent for no-title links).
+    ///
+    /// AC-001 (BC-7.2.015 precondition: test helpers contract).
+    fn assert_link_mark_with_href(marks: &Value, expected_href: &str) {
+        let found = marks
+            .as_array()
+            .map(|arr| {
+                arr.iter().any(|m| {
+                    m["type"].as_str() == Some("link")
+                        && m["attrs"]["href"].as_str() == Some(expected_href)
+                })
+            })
+            .unwrap_or(false);
+        assert!(
+            found,
+            "expected link mark with href={expected_href:?} in marks: {marks}"
+        );
+    }
+
     #[test]
     fn test_text_to_adf() {
         let adf = text_to_adf("Hello world");
@@ -2863,7 +2906,10 @@ mod tests {
             .expect("expected a text node for 'foo'");
         assert_eq!(code_node["marks"][0]["type"], "code");
 
-        // Inline code inside bold: composes both marks on the same text node.
+        // Inline code inside bold: post-fix, the push_code allowlist filter strips
+        // `strong` from the code node's marks — only `code` remains.
+        // AC-002 (BC-7.2.015 EC-1 regression pin; BC-7.2.007 EC-2 pre-#571 write-strict
+        // clause). Pre-fix this assertion FAILS (old code emits strong+code on the node).
         let adf = markdown_to_adf("**bold `code` bold**").unwrap();
         let code_node = adf["content"][0]["content"]
             .as_array()
@@ -2871,17 +2917,217 @@ mod tests {
             .iter()
             .find(|n| n["text"] == "code")
             .expect("expected a text node for 'code'");
-        let mark_types: Vec<&str> = code_node["marks"]
+        assert_marks_eq(
+            &code_node["marks"],
+            &["code"],
+        );
+    }
+
+    // ── BC-7.2.015 test suite ─────────────────────────────────────────────────
+    // Control + EC-1..EC-6 + PANEL-ANCHOR anchors (VP-571-002).
+    // All "stripped" tests are RED pre-fix (push_code filter not yet applied)
+    // and GREEN post-fix. EC-5 (link preserved) and the control are GREEN both
+    // pre-fix and post-fix.
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// Control/baseline anchor (BC-7.2.015 CONTROL): bare inline code with no
+    /// surrounding marks produces exactly `[code]`. GREEN pre-fix AND post-fix —
+    /// validates the assertion harness and the plain-code path in push_code.
+    #[test]
+    fn test_bc_7_2_015_plain_code_baseline() {
+        let adf = markdown_to_adf("`x`").unwrap();
+        let code_node = adf["content"][0]["content"]
             .as_array()
             .unwrap()
             .iter()
-            .filter_map(|m| m["type"].as_str())
-            .collect();
-        assert!(
-            mark_types.contains(&"code") && mark_types.contains(&"strong"),
-            "expected code + strong on the inline-code inside bold, got: {mark_types:?}"
-        );
+            .find(|n| n["text"] == "x")
+            .expect("expected text node 'x'");
+        assert_marks_eq(&code_node["marks"], &["code"]);
     }
+
+    /// EC-1 (BC-7.2.015): `strong` wrapping inline code — `strong` must be
+    /// stripped from the code text node. RED pre-fix, GREEN post-fix.
+    #[test]
+    fn test_bc_7_2_015_strong_stripped_from_code_node() {
+        let adf = markdown_to_adf("**`x`**").unwrap();
+        let code_node = adf["content"][0]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["text"] == "x")
+            .expect("expected text node 'x'");
+        assert_marks_eq(&code_node["marks"], &["code"]);
+    }
+
+    /// EC-2 (BC-7.2.015): `em` wrapping inline code — `em` must be stripped.
+    /// Pre-fix RED/GREEN status empirically resolved by Task 2 observation.
+    #[test]
+    fn test_bc_7_2_015_em_stripped_from_code_node() {
+        let adf = markdown_to_adf("_`x`_").unwrap();
+        let code_node = adf["content"][0]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["text"] == "x")
+            .expect("expected text node 'x'");
+        assert_marks_eq(&code_node["marks"], &["code"]);
+    }
+
+    /// EC-3 (BC-7.2.015): `strike` wrapping inline code — `strike` must be
+    /// stripped. Pre-fix RED/GREEN status empirically resolved by Task 2.
+    #[test]
+    fn test_bc_7_2_015_strike_stripped_from_code_node() {
+        let adf = markdown_to_adf("~~`x`~~").unwrap();
+        let code_node = adf["content"][0]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["text"] == "x")
+            .expect("expected text node 'x'");
+        assert_marks_eq(&code_node["marks"], &["code"]);
+    }
+
+    /// EC-4 (BC-7.2.015): `subsup` wrapping inline code — `subsup` must be
+    /// stripped. Primary regression target; closes BC-7.2.007 EC-2 follow-up
+    /// (issue #474 → #571). Pre-fix RED/GREEN status empirically resolved by
+    /// Task 2 observation.
+    #[test]
+    fn test_bc_7_2_015_subsup_stripped_from_code_node() {
+        let adf = markdown_to_adf("^`x`^").unwrap();
+        let code_node = adf["content"][0]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["text"] == "x")
+            .expect("expected text node 'x'");
+        assert_marks_eq(&code_node["marks"], &["code"]);
+    }
+
+    /// EC-5 (BC-7.2.015): `link` coexisting with inline code — `link` MUST be
+    /// preserved (schema-valid co-mark). GREEN pre-fix AND post-fix.
+    /// Two-part assertion: mark-types set AND attrs["href"] field-by-field check.
+    #[test]
+    fn test_bc_7_2_015_link_preserved_on_code_node() {
+        let adf = markdown_to_adf("[`x`](https://ex/)").unwrap();
+        let code_node = adf["content"][0]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["text"] == "x")
+            .expect("expected text node 'x'");
+        // Both `code` and `link` marks must be present (unordered set).
+        assert_marks_eq(&code_node["marks"], &["code", "link"]);
+        // The link mark's attrs["href"] must be preserved verbatim.
+        assert_link_mark_with_href(&code_node["marks"], "https://ex/");
+    }
+
+    /// EC-6 / VP-571-003 (BC-7.2.015): mixed-range — code node strips `strong`,
+    /// surrounding non-code text nodes RETAIN `strong`. Catches the
+    /// "filter active_marks in-place" mutation. Pre-fix code-node RED, surrounds GREEN.
+    #[test]
+    fn test_bc_7_2_015_mixed_range_surrounding_marks_retained() {
+        let adf = markdown_to_adf("**a `b` c**").unwrap();
+        let para_content = adf["content"][0]["content"].as_array().unwrap();
+
+        // "a " — must keep strong.
+        let a_node = para_content
+            .iter()
+            .find(|n| n["text"] == "a ")
+            .expect("expected text node 'a '");
+        assert_marks_eq(&a_node["marks"], &["strong"]);
+
+        // "b" — code node; strong must be stripped.
+        let b_node = para_content
+            .iter()
+            .find(|n| n["text"] == "b")
+            .expect("expected text node 'b'");
+        assert_marks_eq(&b_node["marks"], &["code"]);
+
+        // " c" — must keep strong.
+        let c_node = para_content
+            .iter()
+            .find(|n| n["text"] == " c")
+            .expect("expected text node ' c'");
+        assert_marks_eq(&c_node["marks"], &["strong"]);
+    }
+
+    /// VP-571-003 (BC-7.2.015): multi-mark wrapper — code node strips BOTH `em`
+    /// and `strong`; all sibling text nodes retain their full mark stack.
+    #[test]
+    fn test_bc_7_2_015_multi_mark_wrapper_only_code_node_stripped() {
+        // _a **b `c` d** e_ → five text nodes; only "c" loses its marks.
+        let adf = markdown_to_adf("_a **b `c` d** e_").unwrap();
+        let para_content = adf["content"][0]["content"].as_array().unwrap();
+
+        // "c" — code node; BOTH em and strong stripped.
+        let c_node = para_content
+            .iter()
+            .find(|n| n["text"] == "c")
+            .expect("expected text node 'c'");
+        assert_marks_eq(&c_node["marks"], &["code"]);
+
+        // "a " — only em (not yet inside the strong span).
+        let a_node = para_content
+            .iter()
+            .find(|n| n["text"] == "a ")
+            .expect("expected text node 'a '");
+        assert_marks_eq(&a_node["marks"], &["em"]);
+
+        // "b " — em + strong.
+        let b_node = para_content
+            .iter()
+            .find(|n| n["text"] == "b ")
+            .expect("expected text node 'b '");
+        assert_marks_eq(&b_node["marks"], &["em", "strong"]);
+
+        // " d" — em + strong.
+        let d_node = para_content
+            .iter()
+            .find(|n| n["text"] == " d")
+            .expect("expected text node ' d'");
+        assert_marks_eq(&d_node["marks"], &["em", "strong"]);
+
+        // " e" — only em (outside the strong span).
+        let e_node = para_content
+            .iter()
+            .find(|n| n["text"] == " e")
+            .expect("expected text node ' e'");
+        assert_marks_eq(&e_node["marks"], &["em"]);
+    }
+
+    /// PANEL-ANCHOR (VP-571-002 supplementary anchor): `strong`+code inside a
+    /// GFM NOTE alert — `strong` must be stripped from the code text node even
+    /// inside `panel.content`. Pre-fix RED expected by class-transfer from EC-1.
+    #[test]
+    fn test_bc_7_2_015_alert_wrapper_strong_code_stripped() {
+        let adf = markdown_to_adf("> [!NOTE]\n> **`x`**").unwrap();
+
+        // Top-level node must be a panel with panelType "info".
+        let panel = &adf["content"][0];
+        assert_eq!(panel["type"], "panel", "expected panel at doc root: {adf}");
+        assert_eq!(
+            panel["attrs"]["panelType"], "info",
+            "expected panelType info: {adf}"
+        );
+
+        // Within panel.content, the paragraph holds the text node "x".
+        let panel_para = &panel["content"][0];
+        assert_eq!(
+            panel_para["type"], "paragraph",
+            "expected paragraph inside panel: {panel}"
+        );
+        let code_node = panel_para["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["text"] == "x")
+            .expect("expected text node 'x' inside panel paragraph");
+
+        // strong must be stripped; only code remains.
+        assert_marks_eq(&code_node["marks"], &["code"]);
+    }
+
+    // ── end BC-7.2.015 unit tests ─────────────────────────────────────────────
 
     #[test]
     fn test_markdown_blockquote_inside_list_item_is_unwrapped_to_paragraph() {
