@@ -3162,6 +3162,57 @@ mod tests {
 
     // ── end BC-7.2.015 unit tests ─────────────────────────────────────────────
 
+    /// Recursively walk an ADF node tree and assert that no text node whose
+    /// `marks` array contains `{"type":"code"}` also carries any mark type
+    /// outside the allow-set `{"code", "link", "annotation"}`.
+    ///
+    /// This is the BC-7.2.015 positive invariant expressed as a universal
+    /// quantifier over the emitted ADF document: used by
+    /// `prop_bc_7_2_015_no_code_marked_text_node_carries_typographic_marks`
+    /// (VP-571-001) and by the integration tests in
+    /// `tests/adf_code_mark_exclusivity.rs` (H-NEW-ADF-010 Calls A–D).
+    ///
+    /// Uses a generic recursive descent via the `content` array — any new
+    /// container node type added to the ADF schema is covered automatically.
+    /// Mark objects are flat (`{"type": "...", "attrs": {...}?}`) and are
+    /// inspected directly; they do not require further recursion.
+    fn assert_code_mark_exclusivity(node: &Value) {
+        // Inspect this node's marks if present.
+        if let Some(marks_arr) = node.get("marks").and_then(|m| m.as_array()) {
+            let has_code = marks_arr
+                .iter()
+                .any(|m| m["type"].as_str() == Some("code"));
+            if has_code {
+                const FORBIDDEN: &[&str] = &[
+                    "strong",
+                    "em",
+                    "strike",
+                    "subsup",
+                    "underline",
+                    "textColor",
+                    "backgroundColor",
+                ];
+                for mark in marks_arr {
+                    if let Some(t) = mark["type"].as_str() {
+                        assert!(
+                            !FORBIDDEN.contains(&t),
+                            "VP-571-001: text node with `code` mark carries forbidden \
+                             typographic mark '{t}'. Full marks: {marks_arr:?}. Node: {node}"
+                        );
+                    }
+                }
+            }
+        }
+        // Recurse into content array (generic descent — covers paragraph, heading,
+        // blockquote, listItem, bulletList, orderedList, taskList, taskItem,
+        // panel, table, tableRow, tableCell, tableHeader, and any future type).
+        if let Some(content) = node.get("content").and_then(|c| c.as_array()) {
+            for child in content {
+                assert_code_mark_exclusivity(child);
+            }
+        }
+    }
+
     #[test]
     fn test_markdown_blockquote_inside_list_item_is_unwrapped_to_paragraph() {
         // `- > quoted` → pulldown-cmark emits blockquote inside Item. The ADF
@@ -9375,6 +9426,225 @@ mod tests {
 
             // (d) the reverse render is total too.
             let _ = adf_to_text(&adf).unwrap();
+        }
+    }
+
+    // --- VP-571-001: code-mark exclusivity universal invariant (BC-7.2.015) ----
+    //
+    // Property: for every ADF text node anywhere in the tree whose `marks` array
+    // contains `{"type":"code"}`, that array contains NO mark type outside the
+    // allow-set `{"code", "link", "annotation"}`.  This is the BC-7.2.015
+    // positive invariant expressed as a universal quantifier over generated
+    // markdown inputs covering all 9 container contexts and all inline
+    // code-composition templates (VP-571-001 spec: verification-delta-571.md).
+    //
+    // Generator scope authority (F2 R9 locked): full generator required —
+    // 11 inline templates × 9 container wrapper kinds, wrapper depth ≤ 3,
+    // GFM alert wrapper OUTERMOST-ONLY (Footnote A).  No MVP subset authorized.
+
+    /// Inline code-composition template variant for VP-571-001 generator.
+    #[derive(Debug, Clone)]
+    enum MarkCompositionTemplate {
+        Plain(String),              // `{body}`
+        Strong(String),             // **`{body}`**
+        Em(String),                 // _`{body}`_
+        Strike(String),             // ~~`{body}`~~
+        SupCode(String),            // ^`{body}`^  (subsup sup — EC-4 primary)
+        SubCode(String),            // ~`{body}`~  (subsup sub — EC-4 variant)
+        LinkCode { body: String, seg: String },  // [`{body}`](https://x/{seg})
+        MixedStrong(String),        // **a `{body}` c**
+        MixedEm(String),            // _a `{body}` c_
+        NestedEmStrong(String),     // **_`{body}`_**
+        NestedLinkBold { body: String, seg: String }, // [**`{body}`**](https://x/{seg})
+    }
+
+    impl MarkCompositionTemplate {
+        fn render(&self) -> String {
+            match self {
+                MarkCompositionTemplate::Plain(b) => format!("`{b}`"),
+                MarkCompositionTemplate::Strong(b) => format!("**`{b}`**"),
+                MarkCompositionTemplate::Em(b) => format!("_`{b}`_"),
+                MarkCompositionTemplate::Strike(b) => format!("~~`{b}`~~"),
+                MarkCompositionTemplate::SupCode(b) => format!("^`{b}`^"),
+                MarkCompositionTemplate::SubCode(b) => format!("~`{b}`~"),
+                MarkCompositionTemplate::LinkCode { body, seg } => {
+                    format!("[`{body}`](https://x/{seg})")
+                }
+                MarkCompositionTemplate::MixedStrong(b) => format!("**a `{b}` c**"),
+                MarkCompositionTemplate::MixedEm(b) => format!("_a `{b}` c_"),
+                MarkCompositionTemplate::NestedEmStrong(b) => format!("**_`{b}`_**"),
+                MarkCompositionTemplate::NestedLinkBold { body, seg } => {
+                    format!("[**`{body}`**](https://x/{seg})")
+                }
+            }
+        }
+    }
+
+    /// Container wrapper variant for VP-571-001 generator.
+    /// Alert is excluded from inner levels (outermost-only constraint — Footnote A).
+    #[derive(Debug, Clone, Copy)]
+    enum WrapKind571 {
+        None,
+        Blockquote,
+        UnorderedList,
+        OrderedList,
+        TaskListUnchecked,
+        TaskListChecked,
+        Heading,
+        TableCell,
+        FootnoteDef,
+        Alert, // outermost-only (Footnote A)
+    }
+
+    /// Apply a single container wrapper to a (possibly multi-line) content string.
+    fn wrap_mk571(kind: WrapKind571, content: &str) -> String {
+        match kind {
+            WrapKind571::None => content.to_owned(),
+            WrapKind571::Blockquote => content
+                .lines()
+                .map(|l| if l.is_empty() { ">".to_owned() } else { format!("> {l}") })
+                .collect::<Vec<_>>()
+                .join("\n"),
+            WrapKind571::UnorderedList => format!("- {content}"),
+            WrapKind571::OrderedList => format!("1. {content}"),
+            WrapKind571::TaskListUnchecked => format!("- [ ] {content}"),
+            WrapKind571::TaskListChecked => format!("- [x] {content}"),
+            WrapKind571::Heading => format!("## {content}"),
+            WrapKind571::TableCell => {
+                // 2-column, 1-row header + 1-row body (VP-571-001 Footnote B).
+                format!("| {content} | plain |\n|---|---|\n| plain | {content} |")
+            }
+            WrapKind571::FootnoteDef => {
+                // Reference + definition body (VP-571-001 Footnote C).
+                format!("Body.[^fn]\n\n[^fn]: {content}")
+            }
+            WrapKind571::Alert => {
+                // GFM alert — outermost-only (VP-571-001 Footnote A).
+                // Prefix each content line with `> ` and prepend `> [!NOTE]`.
+                let prefixed = content
+                    .lines()
+                    .map(|l| if l.is_empty() { ">".to_owned() } else { format!("> {l}") })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                format!("> [!NOTE]\n{prefixed}\n")
+            }
+        }
+    }
+
+    /// Generate a short lowercase alphabetic body string for inline templates.
+    fn gen_mk571_body() -> impl Strategy<Value = String> {
+        proptest::string::string_regex("[a-z]{1,4}").unwrap()
+    }
+
+    /// Generate a short URL path segment.
+    fn gen_mk571_seg() -> impl Strategy<Value = String> {
+        proptest::string::string_regex("[a-z]{1,4}").unwrap()
+    }
+
+    /// Strategy for all 11 inline code-composition templates (VP-571-001).
+    /// Equal weights — each ~9% ≫ the ~5% floor.
+    fn gen_mark_composition_template() -> impl Strategy<Value = MarkCompositionTemplate> {
+        (gen_mk571_body(), gen_mk571_seg()).prop_flat_map(|(body, seg)| {
+            prop_oneof![
+                Just(MarkCompositionTemplate::Plain(body.clone())),
+                Just(MarkCompositionTemplate::Strong(body.clone())),
+                Just(MarkCompositionTemplate::Em(body.clone())),
+                Just(MarkCompositionTemplate::Strike(body.clone())),
+                Just(MarkCompositionTemplate::SupCode(body.clone())),
+                Just(MarkCompositionTemplate::SubCode(body.clone())),
+                Just(MarkCompositionTemplate::LinkCode {
+                    body: body.clone(),
+                    seg: seg.clone()
+                }),
+                Just(MarkCompositionTemplate::MixedStrong(body.clone())),
+                Just(MarkCompositionTemplate::MixedEm(body.clone())),
+                Just(MarkCompositionTemplate::NestedEmStrong(body.clone())),
+                Just(MarkCompositionTemplate::NestedLinkBold {
+                    body: body.clone(),
+                    seg: seg.clone()
+                }),
+            ]
+        })
+    }
+
+    /// Inner container wrapper strategy: 9 variants (excluding alert).
+    /// Alert is excluded here — it may only appear as the outermost wrap.
+    fn gen_inner_wrap571() -> impl Strategy<Value = WrapKind571> {
+        prop_oneof![
+            Just(WrapKind571::None),
+            Just(WrapKind571::Blockquote),
+            Just(WrapKind571::UnorderedList),
+            Just(WrapKind571::OrderedList),
+            Just(WrapKind571::TaskListUnchecked),
+            Just(WrapKind571::TaskListChecked),
+            Just(WrapKind571::Heading),
+            Just(WrapKind571::TableCell),
+            Just(WrapKind571::FootnoteDef),
+        ]
+    }
+
+    /// Outermost wrapper strategy: 10 variants (inner 9 + Alert).
+    /// Alert is included here because it is only valid as the outermost wrapper.
+    fn gen_outer_wrap571() -> impl Strategy<Value = WrapKind571> {
+        prop_oneof![
+            Just(WrapKind571::None),
+            Just(WrapKind571::Blockquote),
+            Just(WrapKind571::UnorderedList),
+            Just(WrapKind571::OrderedList),
+            Just(WrapKind571::TaskListUnchecked),
+            Just(WrapKind571::TaskListChecked),
+            Just(WrapKind571::Heading),
+            Just(WrapKind571::TableCell),
+            Just(WrapKind571::FootnoteDef),
+            Just(WrapKind571::Alert),
+        ]
+    }
+
+    /// Top-level generator for VP-571-001: inline template + ≤3 total wrapper
+    /// layers (0–2 inner, 1 outermost).  Alert is restricted to the outermost
+    /// layer (Footnote A).  All 9 container contexts are reachable; wrapper
+    /// depth budget ≤ 3 keeps ADF tree depth well below MAX_ADF_DEPTH = 256.
+    fn gen_mark_composition_markdown() -> impl Strategy<Value = String> {
+        (
+            gen_mark_composition_template(),
+            // 0–2 inner wrappers (no alert — Footnote A)
+            proptest::collection::vec(gen_inner_wrap571(), 0..=2),
+            // 1 outermost wrapper (alert permitted here only)
+            gen_outer_wrap571(),
+        )
+            .prop_map(|(tmpl, inner_wraps, outer)| {
+                let mut content = tmpl.render();
+                // Apply inner wrappers (each layers inside the previous).
+                for wk in inner_wraps {
+                    content = wrap_mk571(wk, &content);
+                }
+                // Apply the outermost wrapper last.
+                wrap_mk571(outer, &content)
+            })
+    }
+
+    proptest! {
+        // Default ~256 cases is sufficient for this universal invariant over
+        // a small-alphabet, bounded-depth generator.  Cap to 128 with
+        // `ProptestConfig { cases: 128, .. }` only if CI flake pressure appears
+        // (VP-571-001 §"Cases required from proptest").
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        /// VP-571-001: for every markdown input in `gen_mark_composition_markdown()`,
+        /// `markdown_to_adf` produces an ADF document where no text node with a
+        /// `code` mark carries any typographic mark (strong/em/strike/subsup/…).
+        ///
+        /// BC-7.2.015 positive invariant expressed as a universal quantifier.
+        /// Grounded in `src/adf.rs::push_code` (sole emit site for code marks).
+        #[test]
+        fn prop_bc_7_2_015_no_code_marked_text_node_carries_typographic_marks(
+            md in gen_mark_composition_markdown()
+        ) {
+            // markdown_to_adf must not panic or exceed depth limit on generated
+            // inputs (wrapper budget ≤ 3 keeps ADF depth well below 256).
+            let adf = markdown_to_adf(&md).expect("no depth error at this bound");
+            // Universal invariant: every code-marked text node is typographic-mark-free.
+            assert_code_mark_exclusivity(&adf);
         }
     }
 
