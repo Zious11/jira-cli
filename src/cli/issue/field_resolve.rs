@@ -495,6 +495,7 @@ pub(crate) async fn resolve_edit_fields(
                     None
                 };
                 if let Some(av) = id_match {
+                    // Defensive: unreachable today — the id_match predicate above already excludes id=None entries. Load-bearing only if that predicate is ever loosened (EC-3.4.016-8).
                     let Some(ref option_id) = av.id else {
                         return Err(JrError::UserError(format!(
                             "option '{value}' has no machine-readable id and cannot be set \
