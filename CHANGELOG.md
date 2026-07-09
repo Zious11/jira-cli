@@ -23,6 +23,10 @@ All notable changes to jr will be documented here.
 
 ### Fixed
 
+- **`jr api -X` / `--method` now accepts case-insensitive HTTP method values:** `DELETE`,
+  `delete`, and `Delete` are all accepted, matching `curl -X` / `gh api -X` convention.
+  Previously clap rejected uppercase inputs with `invalid value 'DELETE'` (#590, #582).
+
 - **ADF code-mark exclusivity — inline-code spans inside bold/superscript no longer emit
   HTTP-400-rejected ADF (BC-7.2.015, #571):** `push_code` now strips typographic marks at
   emission via an allowlist filter: `link` and `annotation` co-marks are retained; `strong`,
