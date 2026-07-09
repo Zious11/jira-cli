@@ -23,6 +23,13 @@ All notable changes to jr will be documented here.
 
 ### Fixed
 
+- **`jr issue edit --field` no longer crashes on GDPR-era Jira instances where
+  user/group picker fields use `accountId`-only `allowedValues` entries:** `AllowedValue.id`
+  changed from `String` to `Option<String>` so id-absent entries are tolerated silently.
+  If the user targets such an option entry directly, exit 64 with an actionable message
+  is emitted instead of a serde crash. All 44 pre-existing `--field` tests remain green
+  (#589).
+
 - **`jr api -X` / `--method` now accepts case-insensitive HTTP method values:** `DELETE`,
   `delete`, and `Delete` are all accepted, matching `curl -X` / `gh api -X` convention.
   Previously clap rejected uppercase inputs with `invalid value 'DELETE'` (#590, #582).

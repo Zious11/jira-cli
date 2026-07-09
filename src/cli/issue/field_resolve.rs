@@ -488,12 +488,22 @@ pub(crate) async fn resolve_edit_fields(
                 // raw VALUE instead of the stored-casing label.  Mirroring the H-1
                 // customfield_NNNNN guard: non-empty + all-digits.
                 let id_match = if !value.is_empty() && value.chars().all(|c| c.is_ascii_digit()) {
-                    allowed.iter().find(|av| av.id == value)
+                    allowed
+                        .iter()
+                        .find(|av| av.id.as_deref().map(|id| id == value).unwrap_or(false))
                 } else {
                     None
                 };
                 if let Some(av) = id_match {
-                    wire_value = serde_json::json!({"id": av.id});
+                    let Some(ref option_id) = av.id else {
+                        return Err(JrError::UserError(format!(
+                            "option '{value}' has no machine-readable id and cannot be set \
+                             via --field. This typically occurs with user/group picker fields. \
+                             Use the Jira UI or the field's native picker to set this value."
+                        ))
+                        .into());
+                    };
+                    wire_value = serde_json::json!({"id": option_id});
                     // Echo raw value (no reverse label lookup) when id-bypass fires.
                     display_value = value.clone();
                 } else {
@@ -511,14 +521,27 @@ pub(crate) async fn resolve_edit_fields(
 
                     if exact_av.len() == 1 {
                         let av = exact_av[0];
-                        wire_value = serde_json::json!({"id": av.id});
+                        let Some(ref option_id) = av.id else {
+                            return Err(JrError::UserError(format!(
+                                "option '{value}' has no machine-readable id and cannot be \
+                                 set via --field. This typically occurs with user/group picker \
+                                 fields. Use the Jira UI or the field's native picker to set \
+                                 this value."
+                            ))
+                            .into());
+                        };
+                        wire_value = serde_json::json!({"id": option_id});
                         // Echo human label (stored casing), not id.
                         display_value = av.value.clone().unwrap_or_else(|| value.clone());
                     } else if exact_av.len() > 1 {
                         let candidates: Vec<String> = exact_av
                             .iter()
                             .map(|av| {
-                                format!("{} (id: {})", av.value.as_deref().unwrap_or("?"), av.id)
+                                format!(
+                                    "{} (id: {})",
+                                    av.value.as_deref().unwrap_or("?"),
+                                    av.id.as_deref().unwrap_or("<no-id>")
+                                )
                             })
                             .collect();
                         return Err(JrError::UserError(format!(
@@ -542,7 +565,11 @@ pub(crate) async fn resolve_edit_fields(
                         if sub_av.is_empty() {
                             let allowed_labels: Vec<String> = allowed
                                 .iter()
-                                .map(|av| av.value.clone().unwrap_or_else(|| av.id.clone()))
+                                .map(|av| {
+                                    av.value.clone().unwrap_or_else(|| {
+                                        av.id.clone().unwrap_or_else(|| "<no-id>".to_string())
+                                    })
+                                })
                                 .collect();
                             return Err(JrError::UserError(format!(
                                 "Option value '{value}' not found for field '{human_name}'. \
@@ -557,7 +584,7 @@ pub(crate) async fn resolve_edit_fields(
                                     format!(
                                         "{} (id: {})",
                                         av.value.as_deref().unwrap_or("?"),
-                                        av.id
+                                        av.id.as_deref().unwrap_or("<no-id>")
                                     )
                                 })
                                 .collect();
@@ -569,7 +596,16 @@ pub(crate) async fn resolve_edit_fields(
                             .into());
                         } else {
                             let av = sub_av[0];
-                            wire_value = serde_json::json!({"id": av.id});
+                            let Some(ref option_id) = av.id else {
+                                return Err(JrError::UserError(format!(
+                                    "option '{value}' has no machine-readable id and cannot be \
+                                     set via --field. This typically occurs with user/group \
+                                     picker fields. Use the Jira UI or the field's native \
+                                     picker to set this value."
+                                ))
+                                .into());
+                            };
+                            wire_value = serde_json::json!({"id": option_id});
                             display_value = av.value.clone().unwrap_or_else(|| value.clone());
                         }
                     }

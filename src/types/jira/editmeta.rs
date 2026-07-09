@@ -61,9 +61,16 @@ pub struct EditMetaFieldSchema {
 /// parsed but unused in v1 — retained for future cascade-select matching.
 /// Add `#[allow(dead_code)]` on `name` ONLY if the compiler warns; see
 /// prd-delta-396.md §5 O-2 amendment.
+///
+/// `id` is `Option<String>` because the Jira Cloud OpenAPI schema for
+/// `allowedValues` entries has no required properties. GDPR-era user/group
+/// picker fields carry `accountId` instead of `id`, so `id` may be absent.
+/// A `None` id causes the entry to be excluded from the numeric id-bypass
+/// predicate and triggers exit 64 if the entry is matched at the wire-emission
+/// site (EC-3.4.016-8). See issue #589 and BC-3.4.015/BC-3.4.016.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct AllowedValue {
-    pub id: String,
+    pub id: Option<String>,
     /// Human-readable option label; used for case-insensitive matching.
     pub value: Option<String>,
     /// Secondary label present on some Jira option types (e.g. cascade-select
