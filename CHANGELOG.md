@@ -27,7 +27,7 @@ All notable changes to jr will be documented here.
   user/group picker fields use `accountId`-only `allowedValues` entries:** `AllowedValue.id`
   changed from `String` to `Option<String>` so id-absent entries are tolerated silently.
   If the user targets such an option entry directly, exit 64 with an actionable message
-  is emitted instead of a serde crash. All 44 pre-existing `--field` tests remain green
+  is emitted instead of a serde crash. All pre-existing `--field` tests remain green
   (#589).
 
 - **`jr api -X` / `--method` now accepts case-insensitive HTTP method values:** `DELETE`,
