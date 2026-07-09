@@ -3644,6 +3644,93 @@ async fn test_bc_3_4_016_option_idless_allowed_value_exits_64_with_actionable_me
 }
 
 // ---------------------------------------------------------------------------
+// Test 47 (adv-p2-F1) — BC-3.4.016 EC-3.4.016-8 substring-match arm
+// Fixture: single allowedValue with value="High-Priority", NO id.
+// Input: Urgency=high — "high" does NOT equal "high-priority" (exact miss),
+// but "high-priority".contains("high") is true (substring hit, sub_av.len()==1).
+// The resolver reaches field_resolve.rs::resolve_edit_fields §"Substring match"
+// → sub_av[0].id is None → exits 64 with actionable message.
+// No PUT dispatched.
+//
+// Branch verification: exact match filters `v.to_lowercase() == "high"` →
+// returns [] (len 0, not 1) → falls through to substring block. Substring
+// filters `v.to_lowercase().contains("high")` → "high-priority" matches →
+// sub_av.len() == 1 → hits the `let Some(ref option_id) = av.id else` guard.
+// ---------------------------------------------------------------------------
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_016_option_idless_substring_match_exits_64() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {
+                "id": "customfield_10176",
+                "name": "Urgency",
+                "custom": true,
+                "schema": { "type": "option" }
+            }
+        ])))
+        .mount(&server)
+        .await;
+
+    // Single allowedValues entry with value only, NO "id" key.
+    // "High-Priority" is NOT equal to "high" (exact miss) but contains "high"
+    // (substring hit) — so the resolver lands in sub_av.len()==1 arm.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1/editmeta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "fields": {
+                "customfield_10176": {
+                    "name": "Urgency",
+                    "schema": { "type": "option", "system": null, "custom": null },
+                    "operations": ["set"],
+                    "required": false,
+                    "allowedValues": [
+                        { "value": "High-Priority" }
+                    ]
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    // NO PUT mock — PUT must not be called (exit 64 before wire emission).
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "Urgency=high",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 when substring-matched option has no id (EC-3.4.016-8); \
+         stderr={stderr} stdout={stdout}"
+    );
+    assert!(
+        stderr.contains("no machine-readable id"),
+        "Stderr must contain 'no machine-readable id' (EC-3.4.016-8); stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--field"),
+        "Stderr must contain '--field' (EC-3.4.016-8); stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Test 47 — VP-396-008 extension / AC-003 / BC-3.4.015 EC-3.4.015-18
 // Dry-run with idless allowedValues on non-targeted field: exit 0, PUT not
 // called, planned-changes preview includes "Severity → Critical".
