@@ -3446,3 +3446,329 @@ async fn test_edit_field_multi_key_bulk_exits_64_with_c1_message() {
         "stdout must be empty when C-1 guard fires pre-HTTP; stdout={stdout}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Test 45 — VP-589-001 / AC-001 / BC-3.4.015
+// editmeta with idless allowedValues on a non-targeted field: deserialization
+// succeeds; targeted string-type field edit proceeds normally. Exit 0.
+//
+// Pre-impl (Red Gate) failure mode: AllowedValue.id is required String →
+// serde fails with "missing field `id`" on customfield_99001's allowedValues
+// → jr exits 1 (serde error), NOT 0. The targeted Severity edit never runs.
+// After the fix (AllowedValue.id: Option<String>): id=None accepted silently;
+// targeted edit proceeds; PUT dispatched; stderr echoes "Severity → Critical".
+// ---------------------------------------------------------------------------
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_BC_3_4_015_editmeta_idless_allowed_values_on_non_targeted_field_succeeds() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    // GET /rest/api/3/field — two fields: Severity (targeted) and Assignee
+    // (non-targeted user-picker with idless allowedValues in editmeta).
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {
+                "id": "customfield_10001",
+                "name": "Severity",
+                "custom": true,
+                "schema": { "type": "string" }
+            },
+            {
+                "id": "customfield_99001",
+                "name": "Assignee",
+                "custom": true,
+                "schema": { "type": "user" }
+            }
+        ])))
+        .mount(&server)
+        .await;
+
+    // GET /rest/api/3/issue/TEST-1/editmeta — customfield_99001 has GDPR-era
+    // idless allowedValues: accountId + displayName but NO "id" key.
+    // This is the bug trigger: serde currently fails on these entries.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1/editmeta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "fields": {
+                "customfield_10001": {
+                    "name": "Severity",
+                    "schema": { "type": "string", "system": null, "custom": null },
+                    "operations": ["set"],
+                    "required": false,
+                    "allowedValues": null
+                },
+                "customfield_99001": {
+                    "name": "Assignee",
+                    "schema": { "type": "user", "system": null, "custom": null },
+                    "operations": ["set"],
+                    "required": false,
+                    "allowedValues": [
+                        { "accountId": "abc123", "displayName": "Alice" },
+                        { "accountId": "def456", "displayName": "Bob" }
+                    ]
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    // PUT /rest/api/3/issue/TEST-1 — must carry the targeted string field value.
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/TEST-1"))
+        .and(body_partial_json(serde_json::json!({
+            "fields": { "customfield_10001": "Critical" }
+        })))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "Severity=Critical",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0; idless allowedValues on non-targeted field must not block the edit \
+         (VP-589-001, BC-3.4.015); stderr={stderr} stdout={stdout}"
+    );
+
+    assert!(
+        stderr.contains("  Severity \u{2192} Critical"),
+        "Expected '  Severity \u{2192} Critical' in stderr (two-space indent, unicode arrow); \
+         stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 46 — EC-3.4.016-8 / AC-002 / BC-3.4.016
+// Targeted option field whose matched allowedValues entry has id=None:
+// exit 64, stderr contains "no machine-readable id" AND "--field".
+// PUT must NOT be called.
+//
+// Pre-impl (Red Gate) failure mode: AllowedValue.id required String → serde
+// fails with "missing field `id`" → jr exits 1 (serde error), NOT 64.
+// The message does not contain "no machine-readable id". Both the exit-code
+// assertion and message assertions fail.
+// After the fix: deserialization succeeds (id=None); resolve_edit_fields
+// detects None at wire-emission site → exits 64 with EC-3.4.016-8 message.
+// ---------------------------------------------------------------------------
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_BC_3_4_016_option_idless_allowed_value_exits_64_with_actionable_message() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    // GET /rest/api/3/field — Urgency option field only.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {
+                "id": "customfield_10176",
+                "name": "Urgency",
+                "custom": true,
+                "schema": { "type": "option" }
+            }
+        ])))
+        .mount(&server)
+        .await;
+
+    // GET /rest/api/3/issue/TEST-1/editmeta — option field with allowedValues
+    // entries that have NO "id" key (only "value" present).
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1/editmeta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "fields": {
+                "customfield_10176": {
+                    "name": "Urgency",
+                    "schema": { "type": "option", "system": null, "custom": null },
+                    "operations": ["set"],
+                    "required": false,
+                    "allowedValues": [
+                        { "value": "High" },
+                        { "value": "Medium" },
+                        { "value": "Low" }
+                    ]
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    // NO PUT mock — PUT must not be called (exit 64 before wire emission).
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "Urgency=High",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 when targeted option has idless allowedValues entry \
+         (EC-3.4.016-8, BC-3.4.016); stderr={stderr} stdout={stdout}"
+    );
+
+    // Load-bearing substrings from BC-3.4.016 EC-3.4.016-8 — both must appear.
+    assert!(
+        stderr.contains("no machine-readable id"),
+        "Stderr must contain 'no machine-readable id' (EC-3.4.016-8 load-bearing substring); \
+         stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--field"),
+        "Stderr must contain '--field' (EC-3.4.016-8 load-bearing substring); stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 47 — VP-396-008 extension / AC-003 / BC-3.4.015 EC-3.4.015-18
+// Dry-run with idless allowedValues on non-targeted field: exit 0, PUT not
+// called, planned-changes preview includes "Severity → Critical".
+//
+// Pre-impl (Red Gate) failure mode: same serde crash as test 45 → jr exits 1,
+// NOT 0. Dry-run path is irrelevant: editmeta deserialization fails before
+// the dry-run guard is reached. Both exit-code and preview assertions fail.
+// After the fix: deserialization succeeds; dry-run exits 0; PUT not called.
+// ---------------------------------------------------------------------------
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_BC_3_4_015_field_dry_run_idless_nontargeted_allowedvalues_exits_0() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    // Same two-field mock as test 45 — idless Assignee alongside targeted Severity.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {
+                "id": "customfield_10001",
+                "name": "Severity",
+                "custom": true,
+                "schema": { "type": "string" }
+            },
+            {
+                "id": "customfield_99001",
+                "name": "Assignee",
+                "custom": true,
+                "schema": { "type": "user" }
+            }
+        ])))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1/editmeta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "fields": {
+                "customfield_10001": {
+                    "name": "Severity",
+                    "schema": { "type": "string", "system": null, "custom": null },
+                    "operations": ["set"],
+                    "required": false,
+                    "allowedValues": null
+                },
+                "customfield_99001": {
+                    "name": "Assignee",
+                    "schema": { "type": "user", "system": null, "custom": null },
+                    "operations": ["set"],
+                    "required": false,
+                    "allowedValues": [
+                        { "accountId": "abc123", "displayName": "Alice" },
+                        { "accountId": "def456", "displayName": "Bob" }
+                    ]
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    // NO PUT mock — dry-run must not call PUT.
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "Severity=Critical",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for dry-run with idless non-targeted allowedValues \
+         (VP-396-008 extension, BC-3.4.015); stderr={stderr} stdout={stdout}"
+    );
+
+    // Table-mode dry-run emits planned-changes to stdout (H-3(a) convention).
+    assert!(
+        stdout.contains("Severity") && stdout.contains("Critical"),
+        "Planned-changes preview must include 'Severity' and 'Critical' on stdout; \
+         stdout={stdout} stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 48 — AC-004 / BC-3.4.015 postcondition 1 — VP-589-001 regression pin
+// AllowedValue unit deserialization: an entry without an "id" field must
+// deserialize without error.
+//
+// Pre-impl (Red Gate) failure mode: AllowedValue.id is required String →
+// serde_json::from_str returns Err("missing field `id`") → result.is_ok()
+// is false → assertion panics with the serde error message.
+// After the fix (AllowedValue.id: Option<String>): deserializes cleanly;
+// value is Some("High"); the absent id key maps to None (confirmed by the
+// successful deserialize — serde would return Err if id were still required).
+// ---------------------------------------------------------------------------
+#[test]
+fn test_allowed_value_without_id_deserializes_to_none() {
+    let json = r#"{"value": "High"}"#;
+    // Red Gate: with id: String (required), from_str returns Err → is_ok() is false.
+    // After fix (id: Option<String>): from_str returns Ok with id=None.
+    let result: Result<jr::types::jira::AllowedValue, _> = serde_json::from_str(json);
+    assert!(
+        result.is_ok(),
+        "AllowedValue without id must deserialize without error (BC-3.4.015, VP-589-001); \
+         serde error: {:?}",
+        result.as_ref().err()
+    );
+    let av = result.unwrap();
+    assert_eq!(
+        av.value.as_deref(),
+        Some("High"),
+        "AllowedValue.value must be Some(\"High\")"
+    );
+    // Implicit: av.id is None after the fix (serde maps absent optional key to None).
+    // An explicit av.id.is_none() check cannot be written pre-fix because id is String
+    // (not Option<String>) in the current code — the is_ok() assertion above is the
+    // operative Red Gate pin for the type-change contract.
+}
