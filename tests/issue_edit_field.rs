@@ -3459,7 +3459,7 @@ async fn test_edit_field_multi_key_bulk_exits_64_with_c1_message() {
 // targeted edit proceeds; PUT dispatched; stderr echoes "Severity → Critical".
 // ---------------------------------------------------------------------------
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_BC_3_4_015_editmeta_idless_allowed_values_on_non_targeted_field_succeeds() {
+async fn test_bc_3_4_015_editmeta_idless_allowed_values_on_non_targeted_field_succeeds() {
     let server = MockServer::start().await;
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
@@ -3566,7 +3566,7 @@ async fn test_BC_3_4_015_editmeta_idless_allowed_values_on_non_targeted_field_su
 // detects None at wire-emission site → exits 64 with EC-3.4.016-8 message.
 // ---------------------------------------------------------------------------
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_BC_3_4_016_option_idless_allowed_value_exits_64_with_actionable_message() {
+async fn test_bc_3_4_016_option_idless_allowed_value_exits_64_with_actionable_message() {
     let server = MockServer::start().await;
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
@@ -3654,7 +3654,7 @@ async fn test_BC_3_4_016_option_idless_allowed_value_exits_64_with_actionable_me
 // After the fix: deserialization succeeds; dry-run exits 0; PUT not called.
 // ---------------------------------------------------------------------------
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_BC_3_4_015_field_dry_run_idless_nontargeted_allowedvalues_exits_0() {
+async fn test_bc_3_4_015_field_dry_run_idless_nontargeted_allowedvalues_exits_0() {
     let server = MockServer::start().await;
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
