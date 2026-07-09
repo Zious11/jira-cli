@@ -3730,9 +3730,10 @@ async fn test_bc_3_4_015_field_dry_run_idless_nontargeted_allowedvalues_exits_0(
     );
 
     // Table-mode dry-run emits planned-changes to stdout (H-3(a) convention).
+    // Adjacency form pins the exact arrow format emitted by edit.rs dry-run path.
     assert!(
-        stdout.contains("Severity") && stdout.contains("Critical"),
-        "Planned-changes preview must include 'Severity' and 'Critical' on stdout; \
+        stdout.contains("Severity \u{2192} Critical"),
+        "Planned-changes preview must include 'Severity \u{2192} Critical' on stdout; \
          stdout={stdout} stderr={stderr}"
     );
 }
@@ -3767,8 +3768,8 @@ fn test_allowed_value_without_id_deserializes_to_none() {
         Some("High"),
         "AllowedValue.value must be Some(\"High\")"
     );
-    // Implicit: av.id is None after the fix (serde maps absent optional key to None).
-    // An explicit av.id.is_none() check cannot be written pre-fix because id is String
-    // (not Option<String>) in the current code — the is_ok() assertion above is the
-    // operative Red Gate pin for the type-change contract.
+    assert!(
+        av.id.is_none(),
+        "AllowedValue.id must be None when the JSON key is absent (BC-3.4.015, VP-589-001)"
+    );
 }
