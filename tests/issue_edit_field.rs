@@ -3731,7 +3731,7 @@ async fn test_bc_3_4_016_option_idless_substring_match_exits_64() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 47 — VP-396-008 extension / AC-003 / BC-3.4.015 EC-3.4.015-18
+// Test 48 — VP-396-008 extension / AC-003 / BC-3.4.015 EC-3.4.015-18
 // Dry-run with idless allowedValues on non-targeted field: exit 0, PUT not
 // called, planned-changes preview includes "Severity → Critical".
 //
@@ -3826,7 +3826,7 @@ async fn test_bc_3_4_015_field_dry_run_idless_nontargeted_allowedvalues_exits_0(
 }
 
 // ---------------------------------------------------------------------------
-// Test 48 — AC-004 / BC-3.4.015 postcondition 1 — VP-589-001 regression pin
+// Test 49 — AC-004 / BC-3.4.015 postcondition 1 — VP-589-001 regression pin
 // AllowedValue unit deserialization: an entry without an "id" field must
 // deserialize without error.
 //
@@ -3858,5 +3858,103 @@ fn test_allowed_value_without_id_deserializes_to_none() {
     assert!(
         av.id.is_none(),
         "AllowedValue.id must be None when the JSON key is absent (BC-3.4.015, VP-589-001)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 50 (adv-p4) — EC-006 / BC-3.4.016 id-bypass exclusion of idless entry
+// Fixture: single allowedValue with value="123" (numeric string), NO id.
+// Input: --field Priority=123 (all-digit user input).
+//
+// Branch trace:
+//   1. value="123", all-digits → id-bypass predicate activates.
+//   2. id-bypass: None.as_deref().map(|id| id=="123").unwrap_or(false) = false
+//      → id_match = None (idless entry EXCLUDED — must NOT produce {"id":null}).
+//   3. Falls through to exact-match-on-value:
+//      "123".to_lowercase()=="123" → exact_av.len()==1.
+//   4. av.id==None → let Some(ref option_id) = av.id else fires
+//      → exit 64 with EC-3.4.016-8 message.
+//
+// Pins unwrap_or(false)→unwrap_or(true) mutation in field_resolve.rs::
+// resolve_edit_fields §"Option id bypass": with the mutation, id_match would be
+// Some(av) for the idless entry, hitting the defensive guard (same exit 64), but
+// the test documents the correct fall-through path.  If the defensive guard were
+// also relaxed, the mutation would wire {"id": null} → Jira 400.
+// ---------------------------------------------------------------------------
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_bc_3_4_016_option_idless_numeric_value_falls_through_to_label_matching() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    // GET /rest/api/3/field — single option field "Priority".
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/field"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {
+                "id": "customfield_10200",
+                "name": "Priority",
+                "custom": true,
+                "schema": { "type": "option" }
+            }
+        ])))
+        .mount(&server)
+        .await;
+
+    // GET /rest/api/3/issue/TEST-1/editmeta — single allowedValues entry with
+    // value="123" and NO "id" key.  The numeric value exercises the id-bypass
+    // predicate; the absent id forces label-match fall-through.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1/editmeta"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "fields": {
+                "customfield_10200": {
+                    "name": "Priority",
+                    "schema": { "type": "option", "system": null, "custom": null },
+                    "operations": ["set"],
+                    "required": false,
+                    "allowedValues": [
+                        { "value": "123" }
+                    ]
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    // NO PUT mock — must not be called (exit 64 before wire emission).
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "--no-input",
+            "issue",
+            "edit",
+            "TEST-1",
+            "--field",
+            "Priority=123",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "Expected exit 64 when numeric user input triggers id-bypass but idless entry is \
+         excluded and label-match guard fires (EC-006, EC-3.4.016-8, BC-3.4.016); \
+         stderr={stderr} stdout={stdout}"
+    );
+
+    // Load-bearing EC-3.4.016-8 substrings — both must appear.
+    assert!(
+        stderr.contains("no machine-readable id"),
+        "Stderr must contain 'no machine-readable id' (EC-3.4.016-8 load-bearing substring \
+         confirming label-match guard fired); stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--field"),
+        "Stderr must contain '--field' (EC-3.4.016-8 load-bearing substring); stderr={stderr}"
     );
 }
