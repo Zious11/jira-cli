@@ -39,11 +39,8 @@ pub fn extract_job_block<'a>(yaml: &'a str, job_name: &str) -> Option<&'a str> {
                     return Some(search_start);
                 }
                 // Advance past this `\n  ` candidate
-                if let Some(next) = rest[search_start..].find("\n  ") {
-                    search_start = search_start + next + 1;
-                } else {
-                    return None;
-                }
+                let next = rest[search_start..].find("\n  ")?;
+                search_start = search_start + next + 1;
             }
         })
         .unwrap_or(rest.len());
