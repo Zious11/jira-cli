@@ -140,7 +140,7 @@ impl JiraClient {
     /// Create a client for integration testing. This is **not** gated behind
     /// `#[cfg(test)]` so that integration tests in `tests/` can use it.
     pub fn new_for_test(base_url: String, auth_header: String) -> Self {
-        let assets_base_url = Some(format!("{}/jsm/assets", &base_url));
+        let assets_base_url = Some(format!("{}/jsm/assets", base_url));
         Self {
             client: Client::new(),
             instance_url: base_url.clone(),
@@ -163,7 +163,7 @@ impl JiraClient {
     /// This is **not** gated behind `#[cfg(test)]` so that integration tests in
     /// `tests/` can use it (mirrors the gating pattern of `new_for_test`).
     pub fn new_for_test_with_profile(base_url: String, auth_header: String, profile: &str) -> Self {
-        let assets_base_url = Some(format!("{}/jsm/assets", &base_url));
+        let assets_base_url = Some(format!("{}/jsm/assets", base_url));
         Self {
             client: Client::new(),
             instance_url: base_url.clone(),
