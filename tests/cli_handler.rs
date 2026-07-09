@@ -1121,6 +1121,65 @@ async fn test_handler_api_put_with_method_flag() {
         .success();
 }
 
+/// VP-590-001: uppercase DELETE is rejected by clap before fix (exit 2, not dispatched).
+/// Red Gate: this test MUST FAIL until `ignore_case = true` is added to `--method` in
+/// `src/cli/mod.rs`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_parse_api_method_uppercase_delete_dispatches_http_delete() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/issue/PROJ-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    jr_api_cmd(&server.uri())
+        .args(["api", "/rest/api/3/issue/PROJ-1", "-X", "DELETE"])
+        .assert()
+        .success();
+}
+
+/// VP-590-001 regression guard: lowercase delete is the pre-existing happy path and must
+/// continue to work both before and after the fix.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_parse_api_method_lowercase_delete_dispatches_http_delete() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/issue/PROJ-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    jr_api_cmd(&server.uri())
+        .args(["api", "/rest/api/3/issue/PROJ-1", "-X", "delete"])
+        .assert()
+        .success();
+}
+
+/// VP-590-001: mixed-case Delete is rejected by clap before fix (exit 2, not dispatched).
+/// Red Gate: this test MUST FAIL until `ignore_case = true` is added to `--method` in
+/// `src/cli/mod.rs`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_parse_api_method_mixedcase_delete_dispatches_http_delete() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/issue/PROJ-1"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    jr_api_cmd(&server.uri())
+        .args(["api", "/rest/api/3/issue/PROJ-1", "-X", "Delete"])
+        .assert()
+        .success();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_handler_api_custom_header_passes_through() {
     let server = MockServer::start().await;
