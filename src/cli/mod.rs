@@ -124,7 +124,7 @@ pub enum Command {
         path: String,
 
         /// HTTP method
-        #[arg(short = 'X', long, value_enum, default_value_t = api::HttpMethod::Get)]
+        #[arg(short = 'X', long, value_enum, ignore_case = true, default_value_t = api::HttpMethod::Get)]
         method: api::HttpMethod,
 
         /// Request body: inline JSON, @file to read from a file, or @- to read from stdin
