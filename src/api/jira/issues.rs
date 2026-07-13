@@ -643,8 +643,13 @@ impl JiraClient {
     /// silently omits the `properties` array (BC-3.5.010).
     ///
     /// Returns the raw `serde_json::Value` (no typed round-trip, per BC-3.5.010).
-    pub async fn get_comment(&self, _key: &str, _id: &str) -> Result<Value> {
-        todo!()
+    pub async fn get_comment(&self, key: &str, id: &str) -> Result<Value> {
+        let path = format!(
+            "/rest/api/3/issue/{}/comment/{}?expand=properties",
+            urlencoding::encode(key),
+            id
+        );
+        self.get(&path).await
     }
 
     /// Fetch the full audit changelog for an issue.
