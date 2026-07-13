@@ -1114,9 +1114,9 @@ fn test_bc_3_5_009_ec2_edit_file_and_stdin_exit_2() {
         .stderr(predicate::str::contains("cannot be used with"));
 }
 
-// EC-2b: positional text and --file are mutually exclusive on comment edit.
+// EC-3: positional text and --file are mutually exclusive on comment edit.
 #[test]
-fn test_bc_3_5_009_ec2_edit_text_and_file_exit_2() {
+fn test_bc_3_5_009_ec3_edit_file_and_positional_exit_2() {
     Command::cargo_bin("jr")
         .unwrap()
         .args([
@@ -1127,9 +1127,9 @@ fn test_bc_3_5_009_ec2_edit_text_and_file_exit_2() {
         .stderr(predicate::str::contains("cannot be used with"));
 }
 
-// EC-2c: positional text and --stdin are mutually exclusive on comment edit.
+// EC-4: positional text and --stdin are mutually exclusive on comment edit.
 #[test]
-fn test_bc_3_5_009_ec2_edit_text_and_stdin_exit_2() {
+fn test_bc_3_5_009_ec4_edit_stdin_and_positional_exit_2() {
     Command::cargo_bin("jr")
         .unwrap()
         .args([
@@ -1140,9 +1140,9 @@ fn test_bc_3_5_009_ec2_edit_text_and_stdin_exit_2() {
         .stderr(predicate::str::contains("cannot be used with"));
 }
 
-// EC-2d: --internal and --public are mutually exclusive on comment edit.
+// BC-3.5.011: --internal and --public are mutually exclusive on comment edit.
 #[test]
-fn test_bc_3_5_009_ec2_edit_internal_and_public_exit_2() {
+fn test_bc_3_5_011_edit_internal_and_public_both_exit_2() {
     Command::cargo_bin("jr")
         .unwrap()
         .args([
