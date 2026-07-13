@@ -20,7 +20,8 @@ src/
 │   │   ├── create.rs        # issue create (platform path + JSM dispatch fork); parse_field_kv helper
 │   │   ├── edit.rs          # issue edit: single + bulk field/label/type paths, dry-run, type-error enrichment; extracted from create.rs (Seam B, ADR-0012)
 │   │   ├── jsm_create.rs    # JSM `handle_jsm_create` path + RT-id resolution (extracted from create.rs, ADR-0012/ADR-0014)
-│   │   ├── workflow.rs      # move + transitions + assign + comment + open
+│   │   ├── workflow.rs      # move + transitions + assign + open
+│   │   ├── interactions.rs  # comment CRUD handlers: add, delete (stub), edit (stub), view (stub) (S-577-1+)
 │   │   ├── links.rs         # link + unlink + link-types
 │   │   ├── helpers.rs       # team/points resolution, user resolution, prompts
 │   │   ├── assets.rs        # linked assets (issue→asset lookup)
@@ -127,7 +128,7 @@ Product-namespaced `api/jira/` and `types/jira/` so future Confluence/JSM/Assets
 - `cli/issue/list.rs`: 1,256 LOC post-split (target was ≤750 per `docs/specs/list-rs-split.md`; spec target not achieved but split was partial — `view.rs` and `comments.rs` already extracted). NFR-O-G: DOCUMENT-AS-IS-COMPLETE (S-3.08).
 - `cli/issue/create.rs`: 394 LOC post-Seam-B split (was 2,447; edit cluster extracted to `edit.rs`). Handles `issue create` platform path + JSM dispatch fork + `parse_field_kv`. ADR-0012. (PF-016)
 - `cli/issue/edit.rs`: 2,067 LOC (Seam B extraction of `handle_edit` cluster from `create.rs`; ~2× the ADR-0012 1,000-LOC threshold). Handles `issue edit`: single-key + bulk field/label/type paths, dry-run, type-error enrichment. ADR-0012. (PF-016)
-- `cli/issue/workflow.rs`: 1,341 LOC — covers move/transitions/assign/comment/open; 34% over the threshold. DOCUMENT-AS-IS; candidate split = extract `handle_comment` + `handle_open` into an `interactions.rs` shard. ADR-0012. (PF-017)
+- `cli/issue/workflow.rs`: ~1,277 LOC — covers move/transitions/assign/open; 28% over the threshold. `handle_comment` extracted to `interactions.rs` (S-577-1). DOCUMENT-AS-IS. ADR-0012. (PF-017)
 
 ## Build & Test
 
