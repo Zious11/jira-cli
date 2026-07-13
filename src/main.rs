@@ -103,7 +103,13 @@ async fn main() {
     if !cli.no_input {
         use std::io::IsTerminal;
         let oauth_code_test_mode = std::env::var("JR_OAUTH_CODE").is_ok();
-        if !std::io::stdin().is_terminal() && !oauth_code_test_mode {
+        #[cfg(debug_assertions)]
+        let stdin_is_tty_forced = std::env::var("JR_STDIN_IS_TTY")
+            .map(|v| v == "1")
+            .unwrap_or(false);
+        #[cfg(not(debug_assertions))]
+        let stdin_is_tty_forced = false;
+        if !stdin_is_tty_forced && !std::io::stdin().is_terminal() && !oauth_code_test_mode {
             cli.no_input = true;
         }
     }
