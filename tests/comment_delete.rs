@@ -507,3 +507,105 @@ async fn test_bc_3_5_003_ec3_delete_prompt_eof_exits_130() {
         output.status.code()
     );
 }
+
+// ---------------------------------------------------------------------------
+// Mutation-kill AC-010 — interactive "y" confirm → DELETE proceeds
+// BC-3.5.003 — kills `answer != "y" && answer != "yes"` → `||` mutant
+// ---------------------------------------------------------------------------
+
+/// Verify that `jr issue comment delete FOO-1 --id 10001` with
+/// `JR_STDIN_IS_TTY=1` and "y\n" stdin confirms the delete, calls the HTTP
+/// DELETE endpoint exactly once, and exits 0.
+///
+/// This test kills the `&&` → `||` mutation at the answer-check condition:
+/// if `||` is used instead of `&&`, "y" would still trigger the cancel path
+/// (because `"y" != "y" || "y" != "yes"` = `false || true` = true), and the
+/// DELETE endpoint would receive 0 calls instead of 1.
+#[tokio::test]
+async fn test_bc_3_5_003_interactive_confirm_y_sends_delete() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/issue/FOO-1/comment/10001"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .env("JR_STDIN_IS_TTY", "1")
+        .args(["issue", "comment", "delete", "FOO-1", "--id", "10001"])
+        .write_stdin("y\n")
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "BC-3.5.003 confirm-y: interactive 'y' must exit 0 after DELETE 204; \
+         got {:?}\nstderr: {stderr}\nstdout: {stdout}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("Deleted comment 10001 on FOO-1"),
+        "BC-3.5.003 confirm-y: stderr must contain success message after 'y'; got: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Mutation-kill AC-011 — non-404/403 API error propagates as exit 1
+// BC-3.5.004 — kills guard `*status == 404 || *status == 403` → `true` mutant
+//              and `== 403` → `!= 403` mutant
+// ---------------------------------------------------------------------------
+
+/// Verify that a 500 Internal Server Error from the DELETE endpoint exits 1
+/// (not 64) and does NOT emit the "comment not found or permission denied"
+/// preamble.
+///
+/// This test kills two guard mutations in the 404/403 re-wrap block:
+/// 1. replacing the guard with `true` — ANY ApiError would get exit 64 + preamble
+/// 2. replacing `== 403` with `!= 403` — 500 would match `500 != 403` = true → exit 64
+///
+/// With the correct guard, 500 is neither 404 nor 403, so the error propagates
+/// as-is through `Err(e)`, which JrError maps to exit 1 (ApiError exit code).
+#[tokio::test]
+async fn test_bc_3_5_004_delete_500_exits_1_not_64() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/issue/FOO-1/comment/10001"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(serde_json::json!({
+            "errorMessages": ["Internal server error"]
+        })))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "issue", "comment", "delete", "FOO-1", "--id", "10001", "--yes",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "BC-3.5.004 500-guard: 500 error must exit 1 (not 64); \
+         got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        !stderr.contains("comment not found or permission denied"),
+        "BC-3.5.004 500-guard: 500 error must NOT emit the 404/403 preamble; got: {stderr}"
+    );
+}
