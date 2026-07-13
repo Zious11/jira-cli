@@ -272,3 +272,62 @@ pub(super) async fn handle_comment_view(
 ) -> Result<()> {
     todo!("comment view — implemented in S-577-6")
 }
+
+// ── Unit tests ────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::validate_comment_id;
+
+    // EC-3.5.002-1 charset validation — exercises every accepted token class
+    // and all three arms of the `.all()` closure so mutation testing can kill
+    // `||` → `&&` replacements in the condition.
+
+    #[test]
+    fn test_validate_comment_id_accepts_numeric() {
+        assert!(validate_comment_id("10001").is_ok());
+    }
+
+    #[test]
+    fn test_validate_comment_id_accepts_alphanumeric() {
+        assert!(validate_comment_id("abc123").is_ok());
+    }
+
+    #[test]
+    fn test_validate_comment_id_accepts_underscore() {
+        // Exercises the `c == '_'` branch — kills `|| c == '_'` → `&& c == '_'` mutant.
+        assert!(validate_comment_id("comment_id").is_ok());
+    }
+
+    #[test]
+    fn test_validate_comment_id_accepts_hyphen() {
+        // Exercises the `c == '-'` branch — kills `|| c == '-'` → `&& c == '-'` mutant.
+        assert!(validate_comment_id("comment-id-1").is_ok());
+    }
+
+    #[test]
+    fn test_validate_comment_id_accepts_mixed() {
+        assert!(validate_comment_id("FOO-123_bar").is_ok());
+    }
+
+    #[test]
+    fn test_validate_comment_id_rejects_empty() {
+        // Exercises the `id.is_empty()` guard — kills `|| !id.chars()...` → `&& !id.chars()...`.
+        assert!(validate_comment_id("").is_err());
+    }
+
+    #[test]
+    fn test_validate_comment_id_rejects_slash() {
+        assert!(validate_comment_id("../etc/passwd").is_err());
+    }
+
+    #[test]
+    fn test_validate_comment_id_rejects_space() {
+        assert!(validate_comment_id("bad id").is_err());
+    }
+
+    #[test]
+    fn test_validate_comment_id_rejects_dot() {
+        assert!(validate_comment_id("id.with.dots").is_err());
+    }
+}
