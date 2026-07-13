@@ -858,3 +858,141 @@ fn test_comment_real_dash_message_with_markdown_flag_both_bind_correctly() {
         panic!("expected Command::Issue");
     }
 }
+
+// ── S-577-1 Task-1: Red-Gate tests for CommentSubcommand refactor (issue #577) ──────────────
+//
+// VP-577-008 / VP-577-014 / VP-577-015 / VP-577-020: MUST FAIL (red) before the
+// IssueCommand::Comment enum change lands; MUST PASS (green) after the try_parse
+// InvalidSubcommand intercept is in place.
+// AC-013 positive: MUST FAIL pre-change; MUST PASS post-change.
+// AC-013 negative: GREEN throughout — proves the intercept is scoped to the
+// `issue comment` subpath and does not fire for unrelated InvalidSubcommand errors.
+
+/// Build a `jr` subprocess command for CLI smoke red-gate tests.
+///
+/// Sets `JR_AUTH_HEADER` and `JR_BASE_URL` (non-existent server at port 1) so
+/// that invocations which parse successfully pre-change proceed past keychain /
+/// config loading, attempt HTTP against a non-existent server, and exit with a
+/// non-2 exit code — making the red-gate assertions (exit 2 + migration hint)
+/// fail for the right reason before the enum change.
+///
+/// XDG/JR dir overrides isolate the subprocess from any real config or cache on
+/// the test machine.  Does NOT add `--no-input` or `--output` defaults; callers
+/// supply all args.
+fn jr_cmd_with_xdg(cache_dir: &std::path::Path, config_dir: &std::path::Path) -> Command {
+    let mut cmd = Command::cargo_bin("jr").unwrap();
+    cmd.env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
+        .env("JR_BASE_URL", "http://127.0.0.1:1")
+        .env("XDG_CACHE_HOME", cache_dir)
+        .env("JR_CACHE_DIR", cache_dir.join("jr"))
+        .env("XDG_CONFIG_HOME", config_dir)
+        .env("JR_CONFIG_DIR", config_dir.join("jr"));
+    cmd
+}
+
+// VP-577-008 — AC-001
+// Red-gate: pre-change `jr issue comment FOO-1 "some text"` parses OK as the leaf
+// Comment variant; handler proceeds to HTTP against the non-existent server and
+// exits non-2 → assertions on code(2) + migration hint fail (correct red).
+// Post-change: try_parse intercept catches InvalidSubcommand → exit 2 + hint.
+#[test]
+fn test_bc_3_5_012_old_flat_comment_form_exits_2_with_migration_hint() {
+    let cache_dir = tempfile::TempDir::new().unwrap();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    jr_cmd_with_xdg(cache_dir.path(), config_dir.path())
+        .args(["issue", "comment", "FOO-1", "some text"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "use `jr issue comment add` instead",
+        ));
+}
+
+// VP-577-014 — AC-002
+// Red-gate: pre-change `jr issue comment` exits 2 (missing required <key>), but
+// stderr contains the missing-arg error, not the add/delete/edit/view listing.
+// Post-change: Comment is a subcommand group; bare invocation shows the listing
+// and does NOT fire the custom InvalidSubcommand hint (MissingSubcommand path).
+#[test]
+fn test_bc_3_5_012_bare_comment_emits_clap_listing_not_custom_hint() {
+    Command::cargo_bin("jr")
+        .unwrap()
+        .args(["issue", "comment"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("add"))
+        .stderr(predicate::str::contains("delete"))
+        .stderr(predicate::str::contains("edit"))
+        .stderr(predicate::str::contains("view"))
+        .stderr(predicate::str::contains("use `jr issue comment").not());
+}
+
+// VP-577-015 — AC-003 (list token)
+// Red-gate: pre-change `jr issue comment list FOO-1` binds "list" as KEY and
+// "FOO-1" as message; handler proceeds to HTTP → non-2 exit → assertions fail.
+// Post-change: "list" triggers InvalidSubcommand intercept → exit 2 + plural hint.
+#[test]
+fn test_bc_3_5_012_comment_list_token_emits_plural_hint() {
+    let cache_dir = tempfile::TempDir::new().unwrap();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    jr_cmd_with_xdg(cache_dir.path(), config_dir.path())
+        .args(["issue", "comment", "list", "FOO-1"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("jr issue comments"));
+}
+
+// VP-577-020 — AC-003 (ls token + mixed-case)
+// Red-gate: pre-change "ls" and "LS" bind as KEY; same HTTP-fail failure mode as
+// VP-577-015. Post-change: eq_ignore_ascii_case match → plural hint for both forms.
+#[test]
+fn test_bc_3_5_012_comment_ls_mixed_case_emits_plural_hint() {
+    let cache_dir = tempfile::TempDir::new().unwrap();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    // lowercase "ls"
+    jr_cmd_with_xdg(cache_dir.path(), config_dir.path())
+        .args(["issue", "comment", "ls", "FOO-1"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("jr issue comments"));
+    // UPPERCASE "LS" — case-insensitive match via eq_ignore_ascii_case (EC-3.5.012-1)
+    jr_cmd_with_xdg(cache_dir.path(), config_dir.path())
+        .args(["issue", "comment", "LS", "FOO-1"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("jr issue comments"));
+}
+
+// AC-013 positive — EC-011
+// Red-gate: pre-change `jr --output json issue comment FOO-1 "text"` parses
+// --output json as a global flag, then Comment leaf variant parses key=FOO-1,
+// message="text"; handler proceeds to HTTP → non-2 exit → assertions fail.
+// Post-change: intercept uses err.context() (NOT argv positional scanning) to
+// detect `issue comment` under a global-flag-first invocation → exit 2 + hint.
+#[test]
+fn test_bc_3_5_012_global_flag_before_comment_uses_context_interception() {
+    let cache_dir = tempfile::TempDir::new().unwrap();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    jr_cmd_with_xdg(cache_dir.path(), config_dir.path())
+        .args(["--output", "json", "issue", "comment", "FOO-1", "text"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "use `jr issue comment add` instead",
+        ));
+}
+
+// AC-013 negative — EC-010 (GREEN throughout)
+// `jr issue foo BAR-1` triggers InvalidSubcommand under `issue`, NOT under
+// `issue comment` — the custom intercept must NOT fire here.  Clap renders its
+// own error. GREEN pre-change (no migration hint existed then either) and GREEN
+// post-change (intercept is scoped to the `issue comment` subpath only).
+#[test]
+fn test_bc_3_5_012_non_comment_invalid_subcommand_no_migration_hint() {
+    Command::cargo_bin("jr")
+        .unwrap()
+        .args(["issue", "foo", "BAR-1"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("use `jr issue comment add` instead").not());
+}
