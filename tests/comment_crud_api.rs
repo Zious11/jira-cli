@@ -255,3 +255,43 @@ async fn test_get_comment_sends_expand_properties_query_param() {
     let result = client.get_comment("FOO-1", "10001").await.unwrap();
     assert_eq!(result["id"], "10001");
 }
+
+// ---------------------------------------------------------------------------
+// Encoding pin — kills cargo-mutants survivors on this diff
+// EC-3.5.002-2 (all three methods share the same urlencoding::encode chokepoint)
+// ---------------------------------------------------------------------------
+
+/// Verify that a key containing a space is percent-encoded as `%20` in the
+/// DELETE request URL and that the raw space does NOT appear in the URL.
+///
+/// API-level encode pin (kills cargo-mutants survivors on the diff for
+/// delete_comment/update_comment/get_comment where replacing
+/// `urlencoding::encode(key)` with bare `key` would survive all other tests
+/// because "FOO-1" encodes as a no-op); formal VP-577-027 CLI-level ownership
+/// remains S-577-3.
+#[tokio::test]
+async fn test_delete_comment_encodes_key_with_space_in_url() {
+    let server = MockServer::start().await;
+
+    // Loose method-only matcher — the assertion is on the received URL, not the
+    // path matcher, so we don't need to pre-encode the expected path here.
+    Mock::given(method("DELETE"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let client = jr::api::client::JiraClient::new_for_test(server.uri(), TEST_AUTH.to_string());
+    client.delete_comment("MY KEY-1", "10001").await.unwrap();
+
+    let reqs = server.received_requests().await.unwrap();
+    assert_eq!(reqs.len(), 1, "expected exactly 1 DELETE request");
+    let url_str = reqs[0].url.as_str();
+    assert!(
+        url_str.contains("MY%20KEY-1"),
+        "space in key must be percent-encoded as %20; got: {url_str}"
+    );
+    assert!(
+        !url_str.contains("MY KEY-1"),
+        "raw space must not appear in URL; got: {url_str}"
+    );
+}
