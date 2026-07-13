@@ -120,8 +120,9 @@ fn validate_comment_id(id: &str) -> Result<()> {
 /// 2. Confirmation gate (BC-3.5.003):
 ///    - `--yes` → skip prompt
 ///    - `no_input && !yes` → exit 64 with pinned refusal wording
-///    - else → interactive `y/N` via `dialoguer::Confirm::interact_on(&Term::stderr())`
-///      (NEWLY INTRODUCED — no prior `src/` precedent; writes to stderr, reads from stdin)
+///    - else → interactive `y/N`: `eprint!` prompt to stderr + `io::stdin().lock().read_line()`.
+///      Do NOT switch to `dialoguer::interact_on` — console's `is_term()` gate returns
+///      `NotConnected` on piped stderr (DEC-174; empirically proven).
 /// 3. HTTP DELETE — 204 → success; 404/403 → exit 64 + two-line body surface (BC-3.5.004)
 ///
 /// `no_input` is the final parameter (confirmation-gate contract, mirrors

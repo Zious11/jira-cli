@@ -469,8 +469,8 @@ async fn test_bc_3_5_002_ec2_delete_key_url_encoding() {
 /// `JR_STDIN_IS_TTY=1` and empty stdin (EOF) exits 130 (JrError::Interrupted).
 /// The DELETE mock has `.expect(0)`.
 ///
-/// `interact_on(&Term::stderr())` propagates `dialoguer::Error` as
-/// `JrError::Interrupted` → exit 130 per error.rs exit_code().
+/// EOF on `io::stdin().lock().read_line()` returns `Ok(0)`, which the handler
+/// maps to `JrError::Interrupted` → exit 130 per `error.rs::exit_code()`.
 ///
 /// Seam: `JR_STDIN_IS_TTY=1` suppresses the auto-no-input flip so the
 /// interactive prompt fires. Without the seam, piped stdin auto-sets
