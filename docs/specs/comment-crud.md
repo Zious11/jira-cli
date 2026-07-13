@@ -1,7 +1,7 @@
 # Comment CRUD — `jr issue comment` subcommand group
 
-**Story:** S-577-1 (subcommand refactor) + S-577-3/4/5/6 (delete/edit/view implementations)
-**Status:** S-577-1 merged (add subcommand); S-577-3/4/5/6 pending.
+**Story:** S-577-1 (subcommand refactor) + S-577-2 (API methods) + S-577-3/4/5/6 (delete/edit/view CLI implementations)
+**Status:** S-577-1 + S-577-2 merged (subcommand group + API methods); S-577-3/4/5/6 pending.
 
 ## Background
 
@@ -50,7 +50,7 @@ Edit a comment body and/or visibility.
 - `--markdown` — convert body to ADF.
 - `--internal` — set JSM internal visibility. Mutually exclusive with `--public`.
 - `--public` — set JSM public visibility. Mutually exclusive with `--internal`.
-- `--yes` — skip confirmation when changing visibility from public to internal.
+- `--yes` — skip the confirmation prompt when making a comment public (`--public`); no effect on other paths (EC-3.5.008-1/-4).
 - `--output json` — `{"changed_fields": {...}, "id": str, "key": str, "updated": true}`.
 
 ### `jr issue comment view KEY --id ID` *(stub, S-577-6)*
@@ -113,10 +113,9 @@ Three behavioral contracts govern this:
   key-set is `{"body","properties"}`, where `properties` is
   `[{"key":"sd.public.comment","value":{"internal":false}}]`.
 
-Acceptance criterion AC-009(i) in S-577-1 enumerates these verdicts in the story's
-test-coverage table. The MERGE/PRESERVED path is covered by the body-only test variant;
-the properties-key variants are covered by the `--internal` and `--public` test
-variants respectively.
+These wire-shape verdicts are pinned by the API-method tests in `tests/comment_crud_api.rs`
+(S-577-2): body-only → key-set `{"body"}`; `--internal`/`--public` → key-set
+`{"body","properties"}`. CLI-level edit coverage lands with S-577-4/5.
 
 ## Behavioral contracts
 
