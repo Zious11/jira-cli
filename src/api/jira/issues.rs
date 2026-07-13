@@ -616,12 +616,24 @@ impl JiraClient {
     /// their success JSON from local state, not from the Jira response body.
     pub async fn update_comment(
         &self,
-        _key: &str,
-        _id: &str,
-        _body: Value,
-        _visibility_flag: Option<bool>,
+        key: &str,
+        id: &str,
+        body: Value,
+        visibility_flag: Option<bool>,
     ) -> Result<()> {
-        todo!()
+        let path = format!(
+            "/rest/api/3/issue/{}/comment/{}",
+            urlencoding::encode(key),
+            id
+        );
+        let mut payload = serde_json::json!({ "body": body });
+        if let Some(internal) = visibility_flag {
+            payload["properties"] = serde_json::json!([{
+                "key": "sd.public.comment",
+                "value": { "internal": internal }
+            }]);
+        }
+        self.put(&path, &payload).await
     }
 
     /// Fetch a single comment with entity properties expanded.
