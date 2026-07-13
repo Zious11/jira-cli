@@ -255,7 +255,7 @@ impl without additional mapping.
 |------|------|---------|---------------|
 | `src/cli/issue/create.rs` | ~179 | `issue create --description --markdown` | `?` in `handle_create`, exit 64 |
 | `src/cli/issue/create.rs` | ~925 | `issue edit --description --markdown` | `?` in `handle_edit`, exit 64 |
-| `src/cli/issue/workflow.rs` | ~1159 | `issue comment --markdown` | `?` in `handle_comment`, exit 64 |
+| `src/cli/issue/interactions.rs` | — | `issue comment add --markdown` | `?` in `handle_comment_add`, exit 64 |
 | `src/api/jsm/requests.rs` | ~96 | `JsmRequestBuilder::build()` | `build()` returns `Result<Value, JrError>` |
 
 `JsmRequestBuilder::build()` currently returns `serde_json::Value` (infallible).
@@ -446,7 +446,7 @@ value fixture at exactly depth 256):**
 - `src/adf.rs` — all functions enumerated in §4
 - `src/error.rs::JrError` — `UserError` variant, exit code 64
 - `src/cli/issue/create.rs` — `handle_create` (~line 179), `handle_edit` (~line 925)
-- `src/cli/issue/workflow.rs` — `handle_comment` (~line 1159)
+- `src/cli/issue/interactions.rs` — `handle_comment_add`
 - `src/cli/issue/view.rs` — `adf_to_text` call (~line 87)
 - `src/cli/issue/comments.rs` — comment body render (~lines 33, 49)
 - `src/api/jsm/requests.rs` — `JsmRequestBuilder::build` (~line 96)

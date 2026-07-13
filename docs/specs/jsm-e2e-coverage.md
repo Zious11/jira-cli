@@ -47,7 +47,7 @@ This feature is zero-`src/`. All JSM commands already exist:
 | `jr queue list/view` | `src/cli/queue.rs` + `src/api/jsm/queues.rs` |
 | `jr requesttype list/fields` | `src/cli/requesttype.rs` + `src/api/jsm/request_types.rs` |
 | `jr issue create --request-type` | `src/cli/issue/jsm_create.rs::handle_jsm_create` + `src/api/jsm/requests.rs` |
-| `jr issue comment --internal` | `src/cli/issue/workflow.rs` + `src/api/jira/issues.rs::add_comment` |
+| `jr issue comment add --internal` | `src/cli/issue/interactions.rs::handle_comment_add` + `src/api/jira/issues.rs::add_comment` |
 | `jr issue comments --output json` | `src/cli/issue/comments.rs` (serializes `properties[]` including `sd.public.comment`) |
 | `jr issue move` | existing platform transitions path |
 | `require_service_desk` guard | `src/api/jsm/servicedesks.rs` |
