@@ -16,6 +16,10 @@ Write operations use VERB-ALIGNED success-field names by intentional design. The
 | `issue assign` (unchanged) | `{"key": str, "assignee": str, "assignee_account_id": str, "changed": false}` | Idempotent: already assigned to target. |
 | `issue assign --unassign` | `{"key": str, "assignee": null, "changed": bool}` | `changed` is false when already unassigned. |
 | `issue remote-link` | `{"key": str, "id": int, "url": str, "title": str, "self": str}` | Verified at `src/cli/issue/json_output.rs` (`remote_link_response`). |
+| `issue comment add` | Jira Comment object (passthrough from `POST /rest/api/3/issue/{key}/comment`) | `{"id": str, "created": str, …}`. Passthrough; shape is Jira Cloud authoritative. Table output: `Added comment to KEY (id: N)`. Implemented in `src/cli/issue/interactions.rs::handle_comment_add`. |
+| `issue comment delete` | `{"deleted": bool, "id": str}` | Stub (S-577-3). Shape to be finalized on implementation. |
+| `issue comment edit` | `{"id": str, "updated": bool}` | Stub (S-577-4/5). Shape to be finalized on implementation. |
+| `issue comment view` | Jira Comment object (passthrough from `GET /rest/api/3/issue/{key}/comment/{id}`) | Stub (S-577-6). Shape to be finalized on implementation. |
 | `sprint add` | `{"sprint_id": int, "issues": [str], "added": true}` | Verified at `src/cli/sprint.rs` (`sprint_add_response`). |
 | `sprint remove` | `{"issues": [str], "removed": true}` | Verified at `src/cli/sprint.rs` (`sprint_remove_response`). |
 | `auth login` | `{"profile": str, "action": "login", "ok": true}` | NEW in S-2.07 v2.0.0 |

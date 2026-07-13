@@ -6,6 +6,7 @@ mod edit;
 mod field_resolve;
 mod format;
 mod helpers;
+pub mod interactions;
 mod jsm_create;
 mod json_output;
 mod links;
@@ -18,7 +19,7 @@ pub use format::{format_issue_row, format_issue_rows_public, format_points, issu
 use anyhow::Result;
 
 use crate::api::client::JiraClient;
-use crate::cli::{IssueCommand, OutputFormat};
+use crate::cli::{CommentSubcommand, IssueCommand, OutputFormat};
 use crate::config::Config;
 
 /// Handle all issue subcommands.
@@ -71,9 +72,26 @@ pub async fn handle(
         IssueCommand::Assign { .. } => {
             workflow::handle_assign(command, output_format, client, no_input).await
         }
-        IssueCommand::Comment { .. } => {
-            workflow::handle_comment(command, output_format, client).await
-        }
+        IssueCommand::Comment { command: sub } => match sub {
+            // Pass the whole Add variant so handle_comment_add can destructure it
+            // without exceeding the clippy::too_many_arguments threshold (mirrors
+            // handle_comment_edit / handle_move / handle_assign pattern).
+            sub @ CommentSubcommand::Add { .. } => {
+                interactions::handle_comment_add(sub, output_format, client).await
+            }
+            CommentSubcommand::Delete { key, id, yes } => {
+                interactions::handle_comment_delete(key, id, yes, output_format, client, no_input)
+                    .await
+            }
+            // Pass the whole Edit variant so handle_comment_edit (stub, S-577-4/5)
+            // can destructure individual fields when implemented.
+            sub @ CommentSubcommand::Edit { .. } => {
+                interactions::handle_comment_edit(sub, output_format, client, no_input).await
+            }
+            CommentSubcommand::View { key, id } => {
+                interactions::handle_comment_view(key, id, output_format, client).await
+            }
+        },
         IssueCommand::Comments { key, limit } => {
             comments::handle_comments(&key, limit, output_format, client).await
         }

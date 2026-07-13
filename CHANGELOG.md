@@ -6,7 +6,22 @@ All notable changes to jr will be documented here.
 
 ### Breaking Changes
 
+- **`jr issue comment` is now a subcommand group (S-577-1, issue #577):**
+  The flat form `jr issue comment KEY "message"` is no longer valid. Migrate to
+  `jr issue comment add KEY "message"`. Invoking the flat form now exits 2 with a
+  migration hint: `error: use \`jr issue comment add\` instead`.
+  The `add` subcommand accepts the same flags (`--stdin`, `--file`, `--markdown`,
+  `--internal`). New subcommands `delete`, `edit`, and `view` are stubs
+  (implemented in S-577-3/4/5/6).
+
 ### Added
+
+- **`jr issue comment add/delete/edit/view` subcommand group (S-577-1):**
+  `jr issue comment` is now a subcommand group. `add` is fully implemented
+  (replaces the old flat form). `delete`, `edit`, and `view` are stubs to be
+  completed in follow-on stories. Interaction handlers extracted from
+  `workflow.rs` to a new `src/cli/issue/interactions.rs` shard per ADR-0012 /
+  PF-017.
 
 - **CI: BC-body Trace/Source citation guard (Guard 1) (DEC-148):** adds
   `scripts/check-bc-citation-symbols.sh` (BC-CITE-001; validates `src/` file and symbol

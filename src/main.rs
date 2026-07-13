@@ -1,3 +1,4 @@
+use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{CommandFactory, Parser};
 use jr::api;
 use jr::cli;
@@ -41,7 +42,54 @@ fn init_tracing(cli: &Cli) {
 
 #[tokio::main]
 async fn main() {
-    let mut cli = Cli::parse();
+    let mut cli = Cli::try_parse().unwrap_or_else(|err| {
+        // Intercept `jr issue comment <TOKEN> …` when TOKEN is not a valid
+        // CommentSubcommand.  Walk err.context() to find the attempted token so
+        // the intercept works even when global flags precede the subcommand
+        // (e.g., `jr --output json issue comment KEY "text"`).
+        //
+        // Only `InvalidSubcommand` under the `issue comment` context is handled
+        // here.  All other ErrorKinds pass through to clap's own renderer via
+        // `err.exit()` — this preserves byte-identical output for
+        // `DisplayHelp`/`DisplayVersion` (stdout + exit 0) and all usage-error
+        // kinds (stderr + exit 2).  AC-011 / BC-3.5.012.
+        if err.kind() == ErrorKind::InvalidSubcommand {
+            // Detect that the error is scoped to `jr issue comment` by inspecting
+            // the Usage context entry — it contains the full command path as plain
+            // text (e.g. "Usage: jr issue comment <COMMAND>").  Using Usage is
+            // robust against global flag reordering (`jr --output json issue comment
+            // KEY "text"` shifts argv positions, but Usage always reflects the actual
+            // parse path).  AC-013 / BC-3.5.012.
+            let under_issue_comment = err.context().any(|(kind, value)| {
+                kind == ContextKind::Usage && value.to_string().contains("issue comment")
+            });
+            if under_issue_comment {
+                // Pull the attempted token from the InvalidSubcommand context entry.
+                let attempted_token = err.context().find_map(|(kind, value)| {
+                    if kind == ContextKind::InvalidSubcommand {
+                        if let ContextValue::String(s) = value {
+                            return Some(s.clone());
+                        }
+                    }
+                    None
+                });
+                if let Some(ref token) = attempted_token {
+                    if token.eq_ignore_ascii_case("list") || token.eq_ignore_ascii_case("ls") {
+                        eprintln!("error: to list all comments, use `jr issue comments` (plural)");
+                        std::process::exit(2);
+                    }
+                }
+                eprintln!("error: use `jr issue comment add` instead");
+                eprintln!(
+                    "       `jr issue comment KEY \"text\"` is no longer valid; \
+                     the comment command is now a subcommand group."
+                );
+                std::process::exit(2);
+            }
+        }
+        // All non-intercepted errors pass through clap's own renderer.
+        err.exit()
+    });
 
     if cli.no_color || std::env::var("NO_COLOR").is_ok() {
         colored::control::set_override(false);

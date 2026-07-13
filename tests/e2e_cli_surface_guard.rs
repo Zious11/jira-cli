@@ -112,12 +112,30 @@ const SURFACE: &[(&[&str], &[&str])] = &[
             "--field",
         ],
     ),
-    // issue comment  (--internal added in S-JSM-E2E-1 Scenario 5;
-    //                 --file/--stdin/--markdown added in E2E-HV-2 comment-channels test)
+    // issue comment add  (S-577-1 subcommand refactor: flat form → add/delete/edit/view)
+    //   --internal added in S-JSM-E2E-1 Scenario 5;
+    //   --file/--stdin/--markdown added in E2E-HV-2 comment-channels test
     (
-        &["issue", "comment"],
+        &["issue", "comment", "add"],
         &["--output", "--internal", "--file", "--stdin", "--markdown"],
     ),
+    // issue comment delete (stub — S-577-3; SURFACE row added by S-577-1 AC-007)
+    (&["issue", "comment", "delete"], &["--id", "--yes"]),
+    // issue comment edit (stub — S-577-4/5; SURFACE row added by S-577-1 AC-007)
+    (
+        &["issue", "comment", "edit"],
+        &[
+            "--id",
+            "--file",
+            "--stdin",
+            "--markdown",
+            "--internal",
+            "--public",
+            "--yes",
+        ],
+    ),
+    // issue comment view (stub — S-577-6; SURFACE row added by S-577-1 AC-007)
+    (&["issue", "comment", "view"], &["--id", "--output"]),
     // issue comments
     (&["issue", "comments"], &["--output"]),
     // issue move  (positional: key + status-name; --resolution added in S-JSM-E2E-3 Scenario 8;

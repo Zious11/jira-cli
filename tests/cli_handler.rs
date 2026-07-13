@@ -909,6 +909,7 @@ async fn test_handler_comment_internal_flag_adds_property() {
         .args([
             "issue",
             "comment",
+            "add",
             "HELP-42",
             "Internal note",
             "--internal",
@@ -937,7 +938,14 @@ async fn test_handler_comment_without_internal_omits_property() {
         .unwrap()
         .env("JR_BASE_URL", server.uri())
         .env("JR_AUTH_HEADER", "Basic dGVzdDp0ZXN0")
-        .args(["issue", "comment", "HELP-42", "External note", "--no-input"])
+        .args([
+            "issue",
+            "comment",
+            "add",
+            "HELP-42",
+            "External note",
+            "--no-input",
+        ])
         .assert()
         .success();
 }

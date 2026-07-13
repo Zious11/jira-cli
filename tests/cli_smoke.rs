@@ -488,21 +488,25 @@ fn test_worklog_add_message_leading_dash_value_accepted() {
     }
 }
 
-// F-L3: issue comment positional message accepts leading-dash values
+// F-L3: issue comment add positional message accepts leading-dash values
 #[test]
 fn test_comment_message_leading_dash_value_accepted() {
-    // `jr issue comment FOO-1 "- a note"` was rejected with "unexpected argument '- '"
-    // before allow_hyphen_values was added to the message positional.
-    let cli = Cli::try_parse_from(["jr", "issue", "comment", "FOO-1", "- a note"])
+    // `jr issue comment add FOO-1 "- a note"` — leading-dash message must land in
+    // message field, not be rejected as an unknown flag.
+    let cli = Cli::try_parse_from(["jr", "issue", "comment", "add", "FOO-1", "- a note"])
         .expect("leading-dash comment message must parse (allow_hyphen_values)");
     if let jr::cli::Command::Issue { command } = cli.command {
-        if let jr::cli::IssueCommand::Comment { key, message, .. } = *command {
-            assert_eq!(key, "FOO-1", "key must be FOO-1");
-            assert_eq!(
-                message.as_deref(),
-                Some("- a note"),
-                "leading-dash comment message must land in message field, not be absorbed as a flag"
-            );
+        if let jr::cli::IssueCommand::Comment { command: sub } = *command {
+            if let jr::cli::CommentSubcommand::Add { key, message, .. } = sub {
+                assert_eq!(key, "FOO-1", "key must be FOO-1");
+                assert_eq!(
+                    message.as_deref(),
+                    Some("- a note"),
+                    "leading-dash comment message must land in message field, not be absorbed as a flag"
+                );
+            } else {
+                panic!("expected CommentSubcommand::Add");
+            }
         } else {
             panic!("expected IssueCommand::Comment");
         }
@@ -615,11 +619,11 @@ fn test_remote_link_title_leading_dash_value_accepted() {
 // a named flag must not cause the message to greedily swallow the flag token.
 #[test]
 fn test_comment_message_leading_dash_followed_by_flag_does_not_swallow_flag() {
-    // `jr issue comment FOO-1 "- a note" --output json`
+    // `jr issue comment add FOO-1 "- a note" --output json`
     // The positional message has allow_hyphen_values; the trailing --output global flag
     // must still parse correctly (output == Json) rather than being consumed as message text.
     let cli = Cli::try_parse_from([
-        "jr", "issue", "comment", "FOO-1", "- a note", "--output", "json",
+        "jr", "issue", "comment", "add", "FOO-1", "- a note", "--output", "json",
     ])
     .expect("leading-dash comment message with trailing --output flag must parse");
     assert!(
@@ -627,13 +631,17 @@ fn test_comment_message_leading_dash_followed_by_flag_does_not_swallow_flag() {
         "--output json must parse correctly after a leading-dash positional message"
     );
     if let jr::cli::Command::Issue { command } = cli.command {
-        if let jr::cli::IssueCommand::Comment { key, message, .. } = *command {
-            assert_eq!(key, "FOO-1", "key must be FOO-1");
-            assert_eq!(
-                message.as_deref(),
-                Some("- a note"),
-                "message must be the dash value, not the flag token"
-            );
+        if let jr::cli::IssueCommand::Comment { command: sub } = *command {
+            if let jr::cli::CommentSubcommand::Add { key, message, .. } = sub {
+                assert_eq!(key, "FOO-1", "key must be FOO-1");
+                assert_eq!(
+                    message.as_deref(),
+                    Some("- a note"),
+                    "message must be the dash value, not the flag token"
+                );
+            } else {
+                panic!("expected CommentSubcommand::Add");
+            }
         } else {
             panic!("expected IssueCommand::Comment");
         }
@@ -725,36 +733,40 @@ fn test_edit_description_leading_dash_and_description_stdin_still_conflict() {
         .stderr(predicate::str::contains("cannot be used with"));
 }
 
-// F5-P5-01 regression tests: comment bool flags must not be absorbed as positional message.
+// F5-P5-01 regression tests: comment add bool flags must not be absorbed as positional message.
 //
 // `message` is an `Option<String>` with `allow_hyphen_values = true`, which means a
 // missing positional must NOT shadow named flags. Empirically verified (2026-06-10):
-//   - `jr issue comment FOO-1 --stdin`   → message=None, stdin=true  (CORRECT)
-//   - `jr issue comment FOO-1 --markdown` → message=None, markdown=true (CORRECT)
-//   - `jr issue comment FOO-1 --stdin --output json` → message=None, stdin=true (CORRECT)
+//   - `jr issue comment add FOO-1 --stdin`   → message=None, stdin=true  (CORRECT)
+//   - `jr issue comment add FOO-1 --markdown` → message=None, markdown=true (CORRECT)
+//   - `jr issue comment add FOO-1 --stdin --output json` → message=None, stdin=true (CORRECT)
 // These tests convert the nightly-only E2E guarantee into a fast-CI invariant and lock
 // the binding against future clap upgrades.
 
 #[test]
 fn test_comment_flag_stdin_not_absorbed_as_positional_message() {
-    // `jr issue comment FOO-1 --stdin` — with no positional message, --stdin must set
-    // the bool field, NOT be consumed as the message value.
-    let cli = Cli::try_parse_from(["jr", "issue", "comment", "FOO-1", "--stdin"])
-        .expect("jr issue comment FOO-1 --stdin must parse successfully");
+    // `jr issue comment add FOO-1 --stdin` — with no positional message, --stdin must
+    // set the bool field, NOT be consumed as the message value.
+    let cli = Cli::try_parse_from(["jr", "issue", "comment", "add", "FOO-1", "--stdin"])
+        .expect("jr issue comment add FOO-1 --stdin must parse successfully");
     if let jr::cli::Command::Issue { command } = cli.command {
-        if let jr::cli::IssueCommand::Comment {
-            key,
-            message,
-            stdin,
-            ..
-        } = *command
-        {
-            assert_eq!(key, "FOO-1");
-            assert_eq!(
-                message, None,
-                "--stdin must NOT be absorbed as message value; message must be None"
-            );
-            assert!(stdin, "--stdin flag must be true");
+        if let jr::cli::IssueCommand::Comment { command: sub } = *command {
+            if let jr::cli::CommentSubcommand::Add {
+                key,
+                message,
+                stdin,
+                ..
+            } = sub
+            {
+                assert_eq!(key, "FOO-1");
+                assert_eq!(
+                    message, None,
+                    "--stdin must NOT be absorbed as message value; message must be None"
+                );
+                assert!(stdin, "--stdin flag must be true");
+            } else {
+                panic!("expected CommentSubcommand::Add");
+            }
         } else {
             panic!("expected IssueCommand::Comment");
         }
@@ -765,24 +777,28 @@ fn test_comment_flag_stdin_not_absorbed_as_positional_message() {
 
 #[test]
 fn test_comment_flag_markdown_not_absorbed_as_positional_message() {
-    // `jr issue comment FOO-1 --markdown` — with no positional message, --markdown must
-    // set the bool field, NOT be consumed as the message value.
-    let cli = Cli::try_parse_from(["jr", "issue", "comment", "FOO-1", "--markdown"])
-        .expect("jr issue comment FOO-1 --markdown must parse successfully");
+    // `jr issue comment add FOO-1 --markdown` — with no positional message, --markdown
+    // must set the bool field, NOT be consumed as the message value.
+    let cli = Cli::try_parse_from(["jr", "issue", "comment", "add", "FOO-1", "--markdown"])
+        .expect("jr issue comment add FOO-1 --markdown must parse successfully");
     if let jr::cli::Command::Issue { command } = cli.command {
-        if let jr::cli::IssueCommand::Comment {
-            key,
-            message,
-            markdown,
-            ..
-        } = *command
-        {
-            assert_eq!(key, "FOO-1");
-            assert_eq!(
-                message, None,
-                "--markdown must NOT be absorbed as message value; message must be None"
-            );
-            assert!(markdown, "--markdown flag must be true");
+        if let jr::cli::IssueCommand::Comment { command: sub } = *command {
+            if let jr::cli::CommentSubcommand::Add {
+                key,
+                message,
+                markdown,
+                ..
+            } = sub
+            {
+                assert_eq!(key, "FOO-1");
+                assert_eq!(
+                    message, None,
+                    "--markdown must NOT be absorbed as message value; message must be None"
+                );
+                assert!(markdown, "--markdown flag must be true");
+            } else {
+                panic!("expected CommentSubcommand::Add");
+            }
         } else {
             panic!("expected IssueCommand::Comment");
         }
@@ -793,30 +809,34 @@ fn test_comment_flag_markdown_not_absorbed_as_positional_message() {
 
 #[test]
 fn test_comment_flag_stdin_with_output_json_not_absorbed_as_positional_message() {
-    // `jr issue comment FOO-1 --stdin --output json` — --stdin and the global --output
-    // flag must both parse; message must remain None.
+    // `jr issue comment add FOO-1 --stdin --output json` — --stdin and the global
+    // --output flag must both parse; message must remain None.
     let cli = Cli::try_parse_from([
-        "jr", "issue", "comment", "FOO-1", "--stdin", "--output", "json",
+        "jr", "issue", "comment", "add", "FOO-1", "--stdin", "--output", "json",
     ])
-    .expect("jr issue comment FOO-1 --stdin --output json must parse successfully");
+    .expect("jr issue comment add FOO-1 --stdin --output json must parse successfully");
     assert!(
         matches!(cli.output, jr::cli::OutputFormat::Json),
         "--output json must parse correctly"
     );
     if let jr::cli::Command::Issue { command } = cli.command {
-        if let jr::cli::IssueCommand::Comment {
-            key,
-            message,
-            stdin,
-            ..
-        } = *command
-        {
-            assert_eq!(key, "FOO-1");
-            assert_eq!(
-                message, None,
-                "--stdin must NOT be absorbed as message value; message must be None"
-            );
-            assert!(stdin, "--stdin flag must be true");
+        if let jr::cli::IssueCommand::Comment { command: sub } = *command {
+            if let jr::cli::CommentSubcommand::Add {
+                key,
+                message,
+                stdin,
+                ..
+            } = sub
+            {
+                assert_eq!(key, "FOO-1");
+                assert_eq!(
+                    message, None,
+                    "--stdin must NOT be absorbed as message value; message must be None"
+                );
+                assert!(stdin, "--stdin flag must be true");
+            } else {
+                panic!("expected CommentSubcommand::Add");
+            }
         } else {
             panic!("expected IssueCommand::Comment");
         }
@@ -827,30 +847,42 @@ fn test_comment_flag_stdin_with_output_json_not_absorbed_as_positional_message()
 
 #[test]
 fn test_comment_real_dash_message_with_markdown_flag_both_bind_correctly() {
-    // POSITIVE companion: `jr issue comment FOO-1 "- a note" --markdown`
+    // POSITIVE companion: `jr issue comment add FOO-1 "- a note" --markdown`
     // A real leading-dash message AND a trailing bool flag must both bind correctly.
     // Proves that allow_hyphen_values on the positional does not shadow trailing flags
     // when a real message value is present.
-    let cli = Cli::try_parse_from(["jr", "issue", "comment", "FOO-1", "- a note", "--markdown"])
-        .expect("jr issue comment FOO-1 \"- a note\" --markdown must parse successfully");
+    let cli = Cli::try_parse_from([
+        "jr",
+        "issue",
+        "comment",
+        "add",
+        "FOO-1",
+        "- a note",
+        "--markdown",
+    ])
+    .expect("jr issue comment add FOO-1 \"- a note\" --markdown must parse successfully");
     if let jr::cli::Command::Issue { command } = cli.command {
-        if let jr::cli::IssueCommand::Comment {
-            key,
-            message,
-            markdown,
-            ..
-        } = *command
-        {
-            assert_eq!(key, "FOO-1");
-            assert_eq!(
-                message.as_deref(),
-                Some("- a note"),
-                "leading-dash message must land in message field"
-            );
-            assert!(
+        if let jr::cli::IssueCommand::Comment { command: sub } = *command {
+            if let jr::cli::CommentSubcommand::Add {
+                key,
+                message,
                 markdown,
-                "--markdown flag must be true even when a real message precedes it"
-            );
+                ..
+            } = sub
+            {
+                assert_eq!(key, "FOO-1");
+                assert_eq!(
+                    message.as_deref(),
+                    Some("- a note"),
+                    "leading-dash message must land in message field"
+                );
+                assert!(
+                    markdown,
+                    "--markdown flag must be true even when a real message precedes it"
+                );
+            } else {
+                panic!("expected CommentSubcommand::Add");
+            }
         } else {
             panic!("expected IssueCommand::Comment");
         }
@@ -913,6 +945,9 @@ fn test_bc_3_5_012_old_flat_comment_form_exits_2_with_migration_hint() {
 // stderr contains the missing-arg error, not the add/delete/edit/view listing.
 // Post-change: Comment is a subcommand group; bare invocation shows the listing
 // and does NOT fire the custom InvalidSubcommand hint (MissingSubcommand path).
+// Note: the about-text for `IssueCommand::Comment` intentionally says
+// "use `jr issue comments`" (plural) — the `.not()` check is for the migration
+// hint specifically ("use `jr issue comment add` instead"), not that substring.
 #[test]
 fn test_bc_3_5_012_bare_comment_emits_clap_listing_not_custom_hint() {
     Command::cargo_bin("jr")
@@ -924,7 +959,7 @@ fn test_bc_3_5_012_bare_comment_emits_clap_listing_not_custom_hint() {
         .stderr(predicate::str::contains("delete"))
         .stderr(predicate::str::contains("edit"))
         .stderr(predicate::str::contains("view"))
-        .stderr(predicate::str::contains("use `jr issue comment").not());
+        .stderr(predicate::str::contains("use `jr issue comment add` instead").not());
 }
 
 // VP-577-015 — AC-003 (list token)
@@ -995,4 +1030,132 @@ fn test_bc_3_5_012_non_comment_invalid_subcommand_no_migration_hint() {
         .assert()
         .code(2)
         .stderr(predicate::str::contains("use `jr issue comment add` instead").not());
+}
+
+// ── VP-577-018 / VP-577-019 / AC-012 — parse-level tests for CommentSubcommand ──────────────
+//
+// VP-577-018 (BC-3.5.012, allow_hyphen_values on comment add): `jr issue comment add`
+// accepts a leading-dash positional body.  Parallel to the migrated F-L3 tests, but
+// named under the BC-3.5.012 namespace for traceability.
+#[test]
+fn test_bc_3_5_012_comment_add_allows_leading_dash_body() {
+    let cli = Cli::try_parse_from(["jr", "issue", "comment", "add", "FOO-1", "- a task"])
+        .expect("comment add with leading-dash body must parse successfully");
+    if let jr::cli::Command::Issue { command } = cli.command {
+        if let jr::cli::IssueCommand::Comment { command: sub } = *command {
+            if let jr::cli::CommentSubcommand::Add { key, message, .. } = sub {
+                assert_eq!(key, "FOO-1");
+                assert_eq!(
+                    message.as_deref(),
+                    Some("- a task"),
+                    "leading-dash body must land in message, not be absorbed as a flag"
+                );
+            } else {
+                panic!("expected CommentSubcommand::Add");
+            }
+        } else {
+            panic!("expected IssueCommand::Comment");
+        }
+    } else {
+        panic!("expected Command::Issue");
+    }
+}
+
+// VP-577-019 (BC-3.5.012, allow_hyphen_values on comment edit): `jr issue comment edit`
+// accepts a leading-dash positional body text.
+#[test]
+fn test_bc_3_5_012_comment_edit_allows_leading_dash_body() {
+    let cli = Cli::try_parse_from([
+        "jr",
+        "issue",
+        "comment",
+        "edit",
+        "FOO-1",
+        "- updated note",
+        "--id",
+        "10001",
+    ])
+    .expect("comment edit with leading-dash body must parse successfully");
+    if let jr::cli::Command::Issue { command } = cli.command {
+        if let jr::cli::IssueCommand::Comment { command: sub } = *command {
+            if let jr::cli::CommentSubcommand::Edit { key, text, id, .. } = sub {
+                assert_eq!(key, "FOO-1");
+                assert_eq!(id, "10001");
+                assert_eq!(
+                    text.as_deref(),
+                    Some("- updated note"),
+                    "leading-dash body must land in text, not be absorbed as a flag"
+                );
+            } else {
+                panic!("expected CommentSubcommand::Edit");
+            }
+        } else {
+            panic!("expected IssueCommand::Comment");
+        }
+    } else {
+        panic!("expected Command::Issue");
+    }
+}
+
+// AC-012 parse-level mutual-exclusion tests for `jr issue comment edit`.
+// Clap rejects conflicting flags before the handler runs, so these are
+// safe to test against the binary even with todo!() stubs.
+
+// EC-2a: --file and --stdin are mutually exclusive on comment edit.
+#[test]
+fn test_bc_3_5_009_ec2_edit_file_and_stdin_exit_2() {
+    Command::cargo_bin("jr")
+        .unwrap()
+        .args([
+            "issue", "comment", "edit", "FOO-1", "--id", "10001", "--file", "foo.txt", "--stdin",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
+// EC-2b: positional text and --file are mutually exclusive on comment edit.
+#[test]
+fn test_bc_3_5_009_ec2_edit_text_and_file_exit_2() {
+    Command::cargo_bin("jr")
+        .unwrap()
+        .args([
+            "issue", "comment", "edit", "FOO-1", "text", "--id", "10001", "--file", "foo.txt",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
+// EC-2c: positional text and --stdin are mutually exclusive on comment edit.
+#[test]
+fn test_bc_3_5_009_ec2_edit_text_and_stdin_exit_2() {
+    Command::cargo_bin("jr")
+        .unwrap()
+        .args([
+            "issue", "comment", "edit", "FOO-1", "text", "--id", "10001", "--stdin",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
+// EC-2d: --internal and --public are mutually exclusive on comment edit.
+#[test]
+fn test_bc_3_5_009_ec2_edit_internal_and_public_exit_2() {
+    Command::cargo_bin("jr")
+        .unwrap()
+        .args([
+            "issue",
+            "comment",
+            "edit",
+            "FOO-1",
+            "--id",
+            "10001",
+            "--internal",
+            "--public",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("cannot be used with"));
 }

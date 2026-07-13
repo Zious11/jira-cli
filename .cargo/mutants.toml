@@ -19,6 +19,10 @@ examine_globs = [
     # HIGH-value: handle_jsm_create — JSM dispatch, RT-id resolution, scope-hint.
     # Relocated from create.rs by ADR-0012 Seam A (PR #556). ~9 mutants (DEC-149).
     "src/cli/issue/jsm_create.rs",
+    # HIGH-value: handle_comment_add — ADF conversion fork (markdown vs plain text),
+    # internal flag, stdin/file/positional source resolution.
+    # Extracted from workflow.rs by ADR-0012 Seam (S-577-1 / PF-017).
+    "src/cli/issue/interactions.rs",
     "src/api/jsm/requests.rs",
     "src/api/jsm/request_types.rs",
     "src/cli/requesttype.rs",

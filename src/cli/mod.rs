@@ -536,27 +536,11 @@ pub enum IssueCommand {
         #[arg(long, conflicts_with_all = ["to", "account_id"])]
         unassign: bool,
     },
-    /// Add a comment
+    /// Comment operations: add, delete, edit, view.
+    /// To list all comments on an issue, use `jr issue comments`.
     Comment {
-        /// Issue key
-        key: String,
-        /// Comment text
-        #[arg(allow_hyphen_values = true)]
-        message: Option<String>,
-        /// Interpret input as Markdown
-        #[arg(long)]
-        markdown: bool,
-        /// Read comment from file
-        #[arg(long)]
-        file: Option<String>,
-        /// Read comment from stdin (for piping)
-        #[arg(long)]
-        stdin: bool,
-        /// Mark comment as internal — agent-only, not visible to the customer on the JSM
-        /// portal. Without this flag the comment is a public reply (the default). No-op on
-        /// standard (non-JSM) projects, where Jira ignores the `sd.public.comment` property.
-        #[arg(long)]
-        internal: bool,
+        #[command(subcommand)]
+        command: CommentSubcommand,
     },
     /// List comments on an issue
     Comments {
@@ -658,6 +642,81 @@ pub enum IssueCommand {
     Assets {
         /// Issue key (e.g., FOO-123)
         key: String,
+    },
+}
+
+/// Subcommands for `jr issue comment`.
+#[derive(Subcommand)]
+pub enum CommentSubcommand {
+    /// Add a comment (canonical form; replaces the old flat `jr issue comment KEY text`)
+    Add {
+        /// Issue key
+        key: String,
+        /// Comment text (leading-dash values accepted)
+        #[arg(allow_hyphen_values = true)]
+        message: Option<String>,
+        /// Interpret input as Markdown
+        #[arg(long)]
+        markdown: bool,
+        /// Read comment from file
+        #[arg(long)]
+        file: Option<String>,
+        /// Read comment from stdin (for piping)
+        #[arg(long)]
+        stdin: bool,
+        /// Mark comment as internal — agent-only, not visible to the customer on the JSM
+        /// portal. Without this flag the comment is a public reply (the default). No-op on
+        /// standard (non-JSM) projects, where Jira ignores the `sd.public.comment` property.
+        #[arg(long)]
+        internal: bool,
+    },
+    /// Delete a comment by ID — requires --yes or interactive confirmation
+    Delete {
+        /// Issue key
+        key: String,
+        /// Comment ID to delete
+        #[arg(long)]
+        id: String,
+        /// Skip interactive confirmation
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Edit a comment body (optionally set visibility)
+    Edit {
+        /// Issue key
+        key: String,
+        /// New comment body text (leading-dash values accepted)
+        #[arg(allow_hyphen_values = true, conflicts_with_all = ["file", "stdin"])]
+        text: Option<String>,
+        /// Comment ID to edit
+        #[arg(long)]
+        id: String,
+        /// Read new body from file
+        #[arg(long, conflicts_with_all = ["stdin", "text"])]
+        file: Option<String>,
+        /// Read new body from stdin
+        #[arg(long, conflicts_with_all = ["file", "text"])]
+        stdin: bool,
+        /// Interpret body as Markdown
+        #[arg(long)]
+        markdown: bool,
+        /// Mark comment as internal (agent-only visibility)
+        #[arg(long, conflicts_with = "public")]
+        internal: bool,
+        /// Mark comment as public (visible to customers on JSM portal)
+        #[arg(long, conflicts_with = "internal")]
+        public: bool,
+        /// Skip interactive confirmation
+        #[arg(long)]
+        yes: bool,
+    },
+    /// View a single comment by ID
+    View {
+        /// Issue key
+        key: String,
+        /// Comment ID to view
+        #[arg(long)]
+        id: String,
     },
 }
 

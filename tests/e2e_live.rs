@@ -2512,6 +2512,7 @@ fn test_e2e_jsm_comment_visibility() {
         .args([
             "issue",
             "comment",
+            "add",
             &key,
             &public_comment,
             "--output",
@@ -2540,6 +2541,7 @@ fn test_e2e_jsm_comment_visibility() {
         .args([
             "issue",
             "comment",
+            "add",
             &key,
             &internal_comment,
             "--internal",
@@ -3748,12 +3750,19 @@ fn test_e2e_write_flow_create_edit_comment_worklog_close() {
     // -------------------------------------------------------------------------
     // Step 3: add comment + read-back (AC-013)
     // -------------------------------------------------------------------------
-    // The `issue comment` subcommand takes the message as a positional argument,
-    // not via `--body`. See `IssueCommand::Comment { message: Option<String>, .. }`
-    // in src/cli/mod.rs.
+    // `jr issue comment add` takes the message as a positional argument (S-577-1).
+    // See `CommentSubcommand::Add { message: Option<String>, .. }` in src/cli/mod.rs.
     let comment_output = h
         .cmd()
-        .args(["issue", "comment", &key, &comment_text, "--output", "json"])
+        .args([
+            "issue",
+            "comment",
+            "add",
+            &key,
+            &comment_text,
+            "--output",
+            "json",
+        ])
         .output()
         .expect("failed to spawn jr for issue comment");
 
@@ -4827,7 +4836,7 @@ fn test_e2e_issue_comment_input_channels() {
     let out_file = h
         .cmd()
         .args([
-            "issue", "comment", &key, "--file", &file_arg, "--output", "json",
+            "issue", "comment", "add", &key, "--file", &file_arg, "--output", "json",
         ])
         .output()
         .expect("failed to spawn jr for comment --file");
@@ -4836,7 +4845,9 @@ fn test_e2e_issue_comment_input_channels() {
     // --stdin
     let out_stdin = h
         .cmd()
-        .args(["issue", "comment", &key, "--stdin", "--output", "json"])
+        .args([
+            "issue", "comment", "add", &key, "--stdin", "--output", "json",
+        ])
         .write_stdin("comment body from stdin")
         .output()
         .expect("failed to spawn jr for comment --stdin");
@@ -4848,6 +4859,7 @@ fn test_e2e_issue_comment_input_channels() {
         .args([
             "issue",
             "comment",
+            "add",
             &key,
             "**bold** comment via markdown",
             "--markdown",
@@ -6092,6 +6104,7 @@ fn test_e2e_issue_comments_returns_array() {
         .args([
             "issue",
             "comment",
+            "add",
             &key,
             "E2E standalone comments test comment",
             "--output",
@@ -9689,6 +9702,7 @@ fn test_e2e_adf_read_path_human_output() {
         .args([
             "issue",
             "comment",
+            "add",
             &key,
             "Comment **body** with _emphasis_",
             "--markdown",
