@@ -221,7 +221,7 @@ pub(super) async fn handle_comment_delete(
                         if *status == 404 || *status == 403 =>
                     {
                         Some(format!(
-                            "comment not found or permission denied\n{}",
+                            "comment not found or permission denied: {key}#{id}\n{}",
                             message
                         ))
                     }

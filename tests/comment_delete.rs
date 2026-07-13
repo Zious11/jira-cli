@@ -303,7 +303,8 @@ async fn test_bc_3_5_003_interactive_cancel_json_key_set() {
 /// Verify that `jr issue comment delete FOO-1 --id 10001 --yes` against a
 /// wiremock returning 404 with errorMessages body exits 64, and stderr
 /// contains BOTH:
-/// (a) preamble substring "comment not found or permission denied"
+/// (a) full preamble "comment not found or permission denied: FOO-1#10001"
+///     (spec BC-3.5.004 mandates the `KEY#ID` identifier suffix)
 /// (b) Jira error body text "Comment with id '10001' does not exist."
 ///
 /// 404 is NOT idempotent (DEC-168 ruling 3 override). Must exit 64, not 0.
@@ -340,9 +341,9 @@ async fn test_bc_3_5_004_delete_404_exits_64_with_body() {
         output.status.code()
     );
     assert!(
-        stderr.contains("comment not found or permission denied"),
-        "BC-3.5.004: stderr must contain preamble \
-         'comment not found or permission denied'; got: {stderr}"
+        stderr.contains("comment not found or permission denied: FOO-1#10001"),
+        "BC-3.5.004: stderr must contain full preamble with key#id \
+         'comment not found or permission denied: FOO-1#10001'; got: {stderr}"
     );
     assert!(
         stderr.contains("Comment with id '10001' does not exist."),
