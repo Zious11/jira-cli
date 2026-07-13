@@ -588,6 +588,48 @@ impl JiraClient {
         self.post(&path, &payload).await
     }
 
+    /// Delete a comment from an issue.
+    ///
+    /// Sends `DELETE /rest/api/3/issue/{encoded_key}/comment/{id}`.
+    /// Returns `Ok(())` on 204 No Content.
+    ///
+    /// Traces to BC-3.5.002 (EC-3.5.002-2: `urlencoding::encode(key)` applied).
+    pub async fn delete_comment(&self, _key: &str, _id: &str) -> Result<()> {
+        todo!()
+    }
+
+    /// Update the body (and optionally visibility) of an existing comment.
+    ///
+    /// Sends `PUT /rest/api/3/issue/{encoded_key}/comment/{id}`.
+    ///
+    /// When `visibility_flag` is `None`, the request body contains only `"body"` —
+    /// the `"properties"` key MUST NOT be present (BC-3.5.005).
+    /// When `Some(true)`, adds `properties:[{key:"sd.public.comment",value:{internal:true}}]`
+    /// (BC-3.5.006). When `Some(false)`, sets `internal:false` (BC-3.5.007).
+    ///
+    /// Returns `Result<()>`; the response body is discarded — handlers construct
+    /// their success JSON from local state, not from the Jira response body.
+    pub async fn update_comment(
+        &self,
+        _key: &str,
+        _id: &str,
+        _body: Value,
+        _visibility_flag: Option<bool>,
+    ) -> Result<()> {
+        todo!()
+    }
+
+    /// Fetch a single comment with entity properties expanded.
+    ///
+    /// Sends `GET /rest/api/3/issue/{encoded_key}/comment/{id}?expand=properties`.
+    /// The `?expand=properties` query parameter is mandatory — without it Jira
+    /// silently omits the `properties` array (BC-3.5.010).
+    ///
+    /// Returns the raw `serde_json::Value` (no typed round-trip, per BC-3.5.010).
+    pub async fn get_comment(&self, _key: &str, _id: &str) -> Result<Value> {
+        todo!()
+    }
+
     /// Fetch the full audit changelog for an issue.
     ///
     /// Offset-paginated under `values[]`. Always fetches every page;
