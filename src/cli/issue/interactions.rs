@@ -11,6 +11,7 @@ use anyhow::{Result, bail};
 use crate::adf;
 use crate::api::client::JiraClient;
 use crate::cli::{CommentSubcommand, OutputFormat};
+use crate::error::JrError;
 use crate::output;
 
 // ── Comment Add ──────────────────────────────────────────────────────────
@@ -86,22 +87,153 @@ pub(super) async fn handle_comment_add(
     Ok(())
 }
 
+// ── Shared Validation ─────────────────────────────────────────────────────
+
+/// Validates a comment ID argument per EC-3.5.002-1.
+///
+/// Accepts IDs matching `^[0-9A-Za-z_-]+$`; returns `Err(JrError::UserError)`
+/// on mismatch.
+///
+/// No `regex` or `once_cell` crate needed — the pattern is fully covered by
+/// `is_ascii_alphanumeric() || c == '_' || c == '-'` with an explicit
+/// empty-string guard.
+///
+/// Shared by `handle_comment_delete`, `handle_comment_edit`, and
+/// `handle_comment_view`.
+fn validate_comment_id(id: &str) -> Result<()> {
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(JrError::UserError(format!("invalid comment id: {id}")).into());
+    }
+    Ok(())
+}
+
 // ── Comment Delete ───────────────────────────────────────────────────────
 
 /// Delete a comment by ID — requires `--yes` or interactive confirmation.
 ///
-/// Stub. Implementation delivered in S-577-3.
-/// `_no_input` is the final parameter (confirmation-gate contract, mirrors
+/// Pipeline (BC-3.5.003 delete-pipeline ordering pin):
+/// 1. `validate_comment_id` (EC-3.5.002-1) — exit 64 on bad charset
+/// 2. Confirmation gate (BC-3.5.003):
+///    - `--yes` → skip prompt
+///    - `no_input && !yes` → exit 64 with pinned refusal wording
+///    - else → interactive `y/N` via `dialoguer::Confirm::interact_on(&Term::stderr())`
+///      (NEWLY INTRODUCED — no prior `src/` precedent; writes to stderr, reads from stdin)
+/// 3. HTTP DELETE — 204 → success; 404/403 → exit 64 + two-line body surface (BC-3.5.004)
+///
+/// `no_input` is the final parameter (confirmation-gate contract, mirrors
 /// `handle_move`/`handle_assign`/`handle_edit` at `src/cli/issue/mod.rs`).
+/// Test `no_input` ALONE — never re-derive `is_terminal()` here; the flag is
+/// already resolved by `src/main.rs` with the `JR_STDIN_IS_TTY` seam applied.
 pub(super) async fn handle_comment_delete(
-    _key: String,
-    _id: String,
-    _yes: bool,
-    _output_format: &OutputFormat,
-    _client: &JiraClient,
-    _no_input: bool,
+    key: String,
+    id: String,
+    yes: bool,
+    output_format: &OutputFormat,
+    client: &JiraClient,
+    no_input: bool,
 ) -> Result<()> {
-    todo!("comment delete — implemented in S-577-3")
+    // Step 1: validate --id charset (EC-3.5.002-1)
+    validate_comment_id(&id)?;
+
+    // Step 2: confirmation gate (BC-3.5.003)
+    if no_input && !yes {
+        return Err(JrError::UserError(format!(
+            "Delete comment {id} on {key}? Use --yes to confirm."
+        ))
+        .into());
+    }
+
+    if !yes {
+        // Interactive path: write prompt to stderr, read response from stdin.
+        //
+        // BC-3.5.003 delivery obligation: the prompt MUST go to stderr (not
+        // stdout or /dev/tty) so it is captured in `--output json` subprocess
+        // tests. Reading is done directly from `io::stdin()` rather than via
+        // `dialoguer::Confirm::interact_on(&Term::stderr())` because the console
+        // crate's `_interact_on` checks `term.is_term()` upfront and returns
+        // `NotConnected` when stderr is piped (as it is in all subprocess tests),
+        // making the dialoguer path non-functional for piped stdin/stderr.
+        // Direct stdin reading achieves the identical behavioral contract:
+        // prompt → stderr, y/N response from stdin, EOF → JrError::Interrupted.
+        use std::io::BufRead;
+        eprint!("Delete comment {id} on {key}? [y/N] ");
+        let _ = std::io::Write::flush(&mut std::io::stderr());
+
+        let mut line = String::new();
+        match std::io::stdin().lock().read_line(&mut line) {
+            Ok(0) | Err(_) => {
+                // EOF or I/O error → Interrupted (EC-3.5.003-3, exit 130)
+                return Err(JrError::Interrupted.into());
+            }
+            Ok(_) => {
+                let answer = line.trim().to_ascii_lowercase();
+                if answer != "y" && answer != "yes" {
+                    // User cancelled (N, empty, any non-y input — default is N)
+                    match output_format {
+                        OutputFormat::Json => {
+                            println!(
+                                "{}",
+                                output::render_json(&serde_json::json!({
+                                    "cancelled": true,
+                                    "deleted": false
+                                }))?
+                            );
+                        }
+                        OutputFormat::Table => {}
+                    }
+                    return Ok(());
+                }
+                // answer is "y" or "yes" → fall through to HTTP DELETE
+            }
+        }
+    }
+
+    // Step 3: HTTP DELETE
+    match client.delete_comment(&key, &id).await {
+        Ok(()) => {
+            match output_format {
+                OutputFormat::Json => {
+                    println!(
+                        "{}",
+                        output::render_json(&serde_json::json!({
+                            "deleted": true,
+                            "id": id,
+                            "key": key
+                        }))?
+                    );
+                }
+                OutputFormat::Table => {
+                    output::print_success(&format!("Deleted comment {id} on {key}"));
+                }
+            }
+            Ok(())
+        }
+        Err(e) => {
+            // 404/403 → exit 64 + two-line body surface (BC-3.5.004, DEC-168 ruling 3).
+            // 404 is NOT idempotent; re-wrap as UserError so main.rs emits exit 64.
+            let user_err_msg = {
+                match e.downcast_ref::<JrError>() {
+                    Some(JrError::ApiError { status, message })
+                        if *status == 404 || *status == 403 =>
+                    {
+                        Some(format!(
+                            "comment not found or permission denied\n{}",
+                            message
+                        ))
+                    }
+                    _ => None,
+                }
+            };
+            if let Some(msg) = user_err_msg {
+                return Err(JrError::UserError(msg).into());
+            }
+            Err(e)
+        }
+    }
 }
 
 // ── Comment Edit ─────────────────────────────────────────────────────────
