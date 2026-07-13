@@ -29,7 +29,7 @@ Add a comment. Replaces the old flat form.
 - `--internal` — JSM agent-only visibility (`sd.public.comment.internal = true`).
 - `--output json` — returns the raw Jira Comment object passthrough.
 
-Exit codes: 0 success, 1 API error, 1 empty body (legacy `anyhow::bail!`, not `JrError::UserError`; S-577-4 will normalize to exit 64).
+Exit codes: 0 success, 1 API error, 1 empty body (legacy `anyhow::bail!`, not `JrError::UserError`; the future edit subcommand exits 64 for empty body per BC-3.5.009 EC-3.5.009-5 — add's behavior is preserved as-is per EC-3.5.012-2).
 
 ### `jr issue comment delete KEY --id ID [--yes]` *(stub, S-577-3)*
 
