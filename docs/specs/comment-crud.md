@@ -37,7 +37,7 @@ Delete a comment by numeric ID. Requires `--yes` or interactive confirmation.
 
 - `--id ID` — comment ID (numeric string from `jr issue comments --output json`).
 - `--yes` — skip confirmation prompt (non-interactive usage).
-- `--output json` — `{"deleted": true, "id": str}`.
+- `--output json` — `{"deleted": true, "id": str, "key": str}`.
 
 ### `jr issue comment edit KEY [TEXT] --id ID [--file PATH] [--stdin] [--markdown] [--internal|--public] [--yes]` *(stub, S-577-4/5)*
 
@@ -51,7 +51,7 @@ Edit a comment body and/or visibility.
 - `--internal` — set JSM internal visibility. Mutually exclusive with `--public`.
 - `--public` — set JSM public visibility. Mutually exclusive with `--internal`.
 - `--yes` — skip confirmation when changing visibility from public to internal.
-- `--output json` — `{"id": str, "updated": true}`.
+- `--output json` — `{"changed_fields": {...}, "id": str, "key": str, "updated": true}`.
 
 ### `jr issue comment view KEY --id ID` *(stub, S-577-6)*
 
@@ -80,10 +80,40 @@ The intercept uses `ContextKind::Usage` (not argv positional scanning) so it wor
 when global flags precede the subcommand (e.g., `jr --output json issue comment KEY "text"`).
 Detail: AC-013 / BC-3.5.012.
 
+## Body-only PUT preservation guarantee
+
+When `jr issue comment edit` updates only the body (no `--internal` / `--public` flag
+supplied), the existing comment visibility must be preserved — not reset. This means the
+`PUT /rest/api/3/issue/{key}/comment/{id}` request body MUST NOT include the `visibility`
+field when no visibility change was requested.
+
+The Jira Cloud API treats a `PUT` that omits `visibility` as a MERGE/PRESERVED verdict:
+the server keeps the prior visibility value. Including `visibility: null` or `visibility: {}`
+would overwrite it to public, so omission is the only correct path.
+
+Three behavioral contracts govern this:
+
+- **BC-3.5.005** — body-only edit (no visibility flag): `PUT` omits `visibility`; Jira
+  preserves the existing setting (MERGE verdict).
+- **BC-3.5.006** — visibility-change edit (`--internal` or `--public`): `PUT` includes
+  the appropriate `visibility` object; Jira overwrites the prior setting (OVERWRITE
+  verdict).
+- **BC-3.5.007** — deferred EJ probe: JSM (EJ project) comments have portal-vs-agent
+  visibility semantics that may differ from the Jira Cloud standard comment API. A live
+  round-trip probe against the EJ project is deferred to S-577-5; until then, the
+  standard MERGE behaviour is assumed and documented as a known open question.
+
+Acceptance criterion AC-009(i) in S-577-1 enumerates these verdicts in the story's
+test-coverage table. The MERGE/PRESERVED path is covered by the body-only test variant;
+the OVERWRITE path is covered by the visibility-change test variant.
+
 ## Behavioral contracts
 
-- BC-3.5.012 — `jr issue comment add` accepts leading-dash positional body.
+- BC-3.5.005 — body-only `PUT` omits `visibility`; existing setting preserved (MERGE).
+- BC-3.5.006 — visibility-change `PUT` includes `visibility`; prior setting overwritten.
+- BC-3.5.007 — EJ/JSM visibility probe deferred to S-577-5.
 - BC-3.5.009 — `comment edit` mutual-exclusion pairs (text/file, text/stdin, file/stdin, internal/public).
+- BC-3.5.012 — `jr issue comment add` accepts leading-dash positional body.
 
 ## JSON output shapes
 
