@@ -257,18 +257,23 @@ async fn test_get_comment_sends_expand_properties_query_param() {
 }
 
 // ---------------------------------------------------------------------------
-// Encoding pin — kills cargo-mutants survivors on this diff
-// EC-3.5.002-2 (all three methods share the same urlencoding::encode chokepoint)
+// Whole-body mutant kill — delete_comment → Ok(()) survivor
+// The load-bearing assertion is reqs.len()==1; the %20 assertions document
+// encoding behavior but do NOT distinguish urlencoding::encode from bare key.
 // ---------------------------------------------------------------------------
 
-/// Verify that a key containing a space is percent-encoded as `%20` in the
-/// DELETE request URL and that the raw space does NOT appear in the URL.
+/// Kill the cargo-mutants whole-body mutant `delete_comment → Ok(())` via the
+/// `reqs.len() == 1` assertion — `test_delete_comment_204_returns_ok` never
+/// asserts that a request was sent, so a stub returning `Ok(())` immediately
+/// would pass that test but fail here.
 ///
-/// API-level encode pin (kills cargo-mutants survivors on the diff for
-/// delete_comment/update_comment/get_comment where replacing
-/// `urlencoding::encode(key)` with bare `key` would survive all other tests
-/// because "FOO-1" encodes as a no-op); formal VP-577-027 CLI-level ownership
-/// remains S-577-3.
+/// The `%20` assertions document percent-encoding of the key but do NOT
+/// distinguish `urlencoding::encode(key)` from bare `key` for a space: the
+/// `url` crate re-encodes a raw space to `%20` at parse time, so both paths
+/// produce `%20` in the received URL. A genuine encode-vs-bare distinction
+/// would need a character the URL path-encode set leaves alone but
+/// `urlencoding` escapes (e.g. `+` → `%2B`). Formal VP-577-027 CLI-level
+/// encoding ownership remains S-577-3.
 #[tokio::test]
 async fn test_delete_comment_encodes_key_with_space_in_url() {
     let server = MockServer::start().await;
