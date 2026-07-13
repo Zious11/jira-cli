@@ -83,35 +83,46 @@ Detail: AC-013 / BC-3.5.012.
 ## Body-only PUT preservation guarantee
 
 When `jr issue comment edit` updates only the body (no `--internal` / `--public` flag
-supplied), the existing comment visibility must be preserved — not reset. This means the
-`PUT /rest/api/3/issue/{key}/comment/{id}` request body MUST NOT include the `visibility`
-field when no visibility change was requested.
+supplied), the existing JSM comment visibility must be preserved — not reset. The
+`PUT /rest/api/3/issue/{key}/comment/{id}` request body achieves this by omitting the
+`"properties"` key entirely when no visibility change was requested.
 
-The Jira Cloud API treats a `PUT` that omits `visibility` as a MERGE/PRESERVED verdict:
-the server keeps the prior visibility value. Including `visibility: null` or `visibility: {}`
-would overwrite it to public, so omission is the only correct path.
+The Jira Cloud API treats a `PUT` that omits `"properties"` as a MERGE/PRESERVED verdict
+for each entity property: the server keeps all prior property values, including
+`sd.public.comment`. The dangerous path is explicitly sending a `properties` array the
+caller does not fully control. Body-only PUT is therefore the safe default (DEC-168
+ruling 1; research Claim 1 REFUTED-footgun).
+
+`jr` NEVER sends a `"visibility"` key on any `comment edit` path this cycle. The role/group
+visibility restriction field (a separate Jira Cloud mechanism, distinct from the JSM
+`sd.public.comment` property) has a PRESERVED verdict: a body-only PUT does not clear
+an existing role/group restriction. `jr` exposes no surface for changing role/group
+restrictions this cycle — the deferred EJ probe is a BC-3.5.006 delivery obligation.
 
 Three behavioral contracts govern this:
 
-- **BC-3.5.005** — body-only edit (no visibility flag): `PUT` omits `visibility`; Jira
-  preserves the existing setting (MERGE verdict).
-- **BC-3.5.006** — visibility-change edit (`--internal` or `--public`): `PUT` includes
-  the appropriate `visibility` object; Jira overwrites the prior setting (OVERWRITE
-  verdict).
-- **BC-3.5.007** — deferred EJ probe: JSM (EJ project) comments have portal-vs-agent
-  visibility semantics that may differ from the Jira Cloud standard comment API. A live
-  round-trip probe against the EJ project is deferred to S-577-5; until then, the
-  standard MERGE behaviour is assumed and documented as a known open question.
+- **BC-3.5.005** — body-only edit (no `--internal` / `--public` flag): `PUT` body
+  key-set is exactly `{"body"}`; the `"properties"` key MUST NOT be present. Jira
+  preserves the existing `sd.public.comment` property (MERGE verdict).
+- **BC-3.5.006** — `--internal` flag: `PUT` body key-set is `{"body","properties"}`,
+  where `properties` is `[{"key":"sd.public.comment","value":{"internal":true}}]`.
+  The deferred EJ probe (verifying MERGE semantics for other properties and the
+  PRESERVED verdict for the role/group `visibility` restriction) is a delivery
+  obligation of this BC.
+- **BC-3.5.007** — `--public` flag (always requires confirmation): `PUT` body
+  key-set is `{"body","properties"}`, where `properties` is
+  `[{"key":"sd.public.comment","value":{"internal":false}}]`.
 
 Acceptance criterion AC-009(i) in S-577-1 enumerates these verdicts in the story's
 test-coverage table. The MERGE/PRESERVED path is covered by the body-only test variant;
-the OVERWRITE path is covered by the visibility-change test variant.
+the properties-key variants are covered by the `--internal` and `--public` test
+variants respectively.
 
 ## Behavioral contracts
 
-- BC-3.5.005 — body-only `PUT` omits `visibility`; existing setting preserved (MERGE).
-- BC-3.5.006 — visibility-change `PUT` includes `visibility`; prior setting overwritten.
-- BC-3.5.007 — EJ/JSM visibility probe deferred to S-577-5.
+- BC-3.5.005 — body-only `PUT` key-set exactly `{"body"}`; `"properties"` key absent; Jira preserves existing `sd.public.comment` (MERGE).
+- BC-3.5.006 — `--internal` `PUT` key-set `{"body","properties"}`; `properties: [{key:"sd.public.comment",value:{internal:true}}]`; deferred EJ probe is a delivery obligation of this BC.
+- BC-3.5.007 — `--public` `PUT` key-set `{"body","properties"}`; `properties: [{key:"sd.public.comment",value:{internal:false}}]`; always requires confirmation.
 - BC-3.5.009 — `comment edit` mutual-exclusion pairs (text/file, text/stdin, file/stdin, internal/public).
 - BC-3.5.012 — `jr issue comment add` accepts leading-dash positional body.
 
