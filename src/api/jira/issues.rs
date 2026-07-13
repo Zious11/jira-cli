@@ -594,8 +594,13 @@ impl JiraClient {
     /// Returns `Ok(())` on 204 No Content.
     ///
     /// Traces to BC-3.5.002 (EC-3.5.002-2: `urlencoding::encode(key)` applied).
-    pub async fn delete_comment(&self, _key: &str, _id: &str) -> Result<()> {
-        todo!()
+    pub async fn delete_comment(&self, key: &str, id: &str) -> Result<()> {
+        let path = format!(
+            "/rest/api/3/issue/{}/comment/{}",
+            urlencoding::encode(key),
+            id
+        );
+        self.delete(&path).await
     }
 
     /// Update the body (and optionally visibility) of an existing comment.
