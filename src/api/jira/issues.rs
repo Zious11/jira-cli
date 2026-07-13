@@ -594,6 +594,10 @@ impl JiraClient {
     /// Returns `Ok(())` on 204 No Content.
     ///
     /// Traces to BC-3.5.002 (EC-3.5.002-2: `urlencoding::encode(key)` applied).
+    ///
+    /// # Preconditions
+    ///
+    /// Callers MUST validate `id` against `^[0-9A-Za-z_-]+$` (EC-3.5.002-1); it is interpolated raw into the URL path.
     pub async fn delete_comment(&self, key: &str, id: &str) -> Result<()> {
         let path = format!(
             "/rest/api/3/issue/{}/comment/{}",
@@ -614,6 +618,10 @@ impl JiraClient {
     ///
     /// Returns `Result<()>`; the response body is discarded — handlers construct
     /// their success JSON from local state, not from the Jira response body.
+    ///
+    /// # Preconditions
+    ///
+    /// Callers MUST validate `id` against `^[0-9A-Za-z_-]+$` (EC-3.5.002-1); it is interpolated raw into the URL path.
     pub async fn update_comment(
         &self,
         key: &str,
@@ -643,6 +651,10 @@ impl JiraClient {
     /// silently omits the `properties` array (BC-3.5.010).
     ///
     /// Returns the raw `serde_json::Value` (no typed round-trip, per BC-3.5.010).
+    ///
+    /// # Preconditions
+    ///
+    /// Callers MUST validate `id` against `^[0-9A-Za-z_-]+$` (EC-3.5.002-1); it is interpolated raw into the URL path.
     pub async fn get_comment(&self, key: &str, id: &str) -> Result<Value> {
         let path = format!(
             "/rest/api/3/issue/{}/comment/{}?expand=properties",
