@@ -43,7 +43,7 @@ examine_globs = [
 # Note: #[mutants::skip] attribute (policy §Whitelist Convention) requires the
 # `mutants` crate (not in Cargo.toml); comment-based skip does not work in
 # cargo-mutants 27.0.0; exclude_re is the supported crate-free alternative.
-exclude_re = ["handle_comment_(delete|edit|view)"]
+exclude_re = ["handle_comment_(edit|view)"]
 
 # The absolute per-mutant test ceiling is set via `--timeout 240` on the CLI
 # invocation (CI and local). There is no .cargo/mutants.toml key for it in
