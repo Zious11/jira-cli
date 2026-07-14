@@ -703,10 +703,13 @@ async fn test_bc_3_5_005_put_404_exits_64_with_dual_stderr() {
          got {:?}\nstderr: {stderr}",
         output.status.code()
     );
+    // BC-3.5.005 §Response 404 pins the full context form "comment not found or
+    // permission denied: <KEY>#<ID>" — mirrors the delete handler at interactions.rs:225.
     assert!(
-        stderr.contains("comment not found or permission denied"),
-        "AC-010: stderr must contain preamble 'comment not found or permission denied'; \
-         got: {stderr}"
+        stderr.contains("comment not found or permission denied: FOO-1#10001"),
+        "AC-010: stderr must contain full preamble \
+         'comment not found or permission denied: FOO-1#10001' \
+         (BC-3.5.005 §Response 404 verbatim pin); got: {stderr}"
     );
     assert!(
         stderr.contains("Comment with id '10001' does not exist."),
