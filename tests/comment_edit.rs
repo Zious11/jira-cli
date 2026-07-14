@@ -1860,3 +1860,159 @@ async fn test_bc_3_5_008_ec5_public_prompt_eof_exits_130() {
         output.status.code()
     );
 }
+
+// ---------------------------------------------------------------------------
+// Mutation-kill AC-008 — interactive "y" / "yes" confirm → PUT proceeds
+// BC-3.5.008 — kills `answer != "y" && answer != "yes"` → `||` mutant
+// ---------------------------------------------------------------------------
+
+/// Verify that `jr issue comment edit FOO-1 --id 10001 "body" --public --output json`
+/// with `JR_STDIN_IS_TTY=1` and stdin fed `"y\n"` confirms the visibility change,
+/// calls the HTTP PUT endpoint exactly once with
+/// `properties[0].value.internal == false`, and exits 0 with
+/// `changed_fields.jsm_internal == false` and `updated == true` in the JSON output.
+///
+/// This test kills the `&&` → `||` mutation at the answer-check condition in
+/// `interactions.rs::handle_comment_edit` step 3b:
+/// if `||` is used instead of `&&`, "y" would trigger the cancel path
+/// (`"y" != "y" || "y" != "yes"` = `false || true` = true), so the PUT
+/// endpoint would receive 0 calls instead of 1.
+///
+/// Also asserts stderr carries the confirmation prompt and the JSDCLOUD-6050
+/// hint (the hint fires on all confirmed `--internal`/`--public` paths, not on
+/// the cancel path, so its presence proves the confirmed branch was taken).
+///
+/// Variant 2 (`"yes\n"`) kills the `|| answer != "yes"` arm of the same mutant.
+#[tokio::test]
+async fn test_bc_3_5_008_public_interactive_yes_proceeds() {
+    // --- Variant 1: "y\n" confirms and causes PUT to fire ---
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1/comment/10001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(minimal_comment_response()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .env("JR_STDIN_IS_TTY", "1")
+        .args([
+            "issue", "comment", "edit", "FOO-1", "--id", "10001", "body", "--public", "--output",
+            "json",
+        ])
+        .write_stdin("y\n")
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "S-577-5 AC-008 mutant-kill: interactive 'y' must exit 0 after PUT 200; \
+         got {:?}\nstderr: {stderr}\nstdout: {stdout}",
+        output.status.code()
+    );
+
+    // Prompt must appear in stderr.
+    assert!(
+        stderr.contains("This will set the comment's visibility to public."),
+        "S-577-5 AC-008: stderr must contain the prompt text; got: {stderr}"
+    );
+
+    // JSDCLOUD-6050 hint must appear in stderr (fires on confirmed --public paths;
+    // NOT emitted on cancel path — confirms the y-branch was actually taken).
+    assert!(
+        stderr.contains("JSDCLOUD-6050"),
+        "S-577-5 AC-008: stderr must contain JSDCLOUD-6050 hint after confirmed 'y'; \
+         got: {stderr}"
+    );
+
+    // PUT must have fired with properties[0].value.internal == false.
+    let reqs = server.received_requests().await.unwrap();
+    assert_eq!(
+        reqs.len(),
+        1,
+        "S-577-5 AC-008: expected exactly 1 PUT request after 'y'; got {}",
+        reqs.len()
+    );
+    let put_body: Value =
+        serde_json::from_slice(&reqs[0].body).expect("PUT request body must be valid JSON");
+    let props = put_body
+        .get("properties")
+        .and_then(Value::as_array)
+        .expect("S-577-5 AC-008: PUT body must contain 'properties' array for confirmed --public");
+    assert_eq!(
+        props[0]["value"]["internal"].as_bool(),
+        Some(false),
+        "S-577-5 AC-008: properties[0].value.internal must be boolean false \
+         for confirmed --public; got: {:?}",
+        props[0]["value"]["internal"]
+    );
+
+    // JSON output must carry updated:true and jsm_internal:false.
+    let parsed: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("S-577-5 AC-008: stdout must be valid JSON; error: {e}\nstdout: {stdout}")
+    });
+    assert_eq!(
+        parsed["updated"].as_bool(),
+        Some(true),
+        "S-577-5 AC-008: 'updated' must be boolean true after confirmed PUT; \
+         got: {:?}",
+        parsed["updated"]
+    );
+    assert_eq!(
+        parsed["changed_fields"]["jsm_internal"].as_bool(),
+        Some(false),
+        "S-577-5 AC-008: changed_fields.jsm_internal must be boolean false \
+         for confirmed --public; got: {:?}",
+        parsed["changed_fields"]["jsm_internal"]
+    );
+
+    // --- Variant 2: "yes\n" also proceeds (kills the `|| answer != "yes"` arm mutant) ---
+    let server2 = MockServer::start().await;
+    let cache_dir2 = tempfile::tempdir().unwrap();
+    let config_dir2 = tempfile::tempdir().unwrap();
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1/comment/10001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(minimal_comment_response()))
+        .expect(1)
+        .mount(&server2)
+        .await;
+
+    let output2 = jr_cmd(&server2.uri(), cache_dir2.path(), config_dir2.path())
+        .env("JR_STDIN_IS_TTY", "1")
+        .args([
+            "issue", "comment", "edit", "FOO-1", "--id", "10001", "body", "--public", "--output",
+            "json",
+        ])
+        .write_stdin("yes\n")
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr2 = String::from_utf8_lossy(&output2.stderr);
+    let stdout2 = String::from_utf8_lossy(&output2.stdout);
+
+    assert_eq!(
+        output2.status.code(),
+        Some(0),
+        "S-577-5 AC-008 mutant-kill: interactive 'yes' must also exit 0 after PUT 200 \
+         (kills the `|| answer != \"yes\"` arm mutant); \
+         got {:?}\nstderr: {stderr2}\nstdout: {stdout2}",
+        output2.status.code()
+    );
+    let reqs2 = server2.received_requests().await.unwrap();
+    assert_eq!(
+        reqs2.len(),
+        1,
+        "S-577-5 AC-008: expected exactly 1 PUT request after 'yes'; got {}",
+        reqs2.len()
+    );
+}
