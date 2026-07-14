@@ -1,13 +1,22 @@
 //! CLI-level integration tests for `jr issue comment edit`.
 //!
-//! Red Gate: all tests FAIL because `handle_comment_edit` is `todo!()`.
-//! Every subprocess exits 101 (Rust panic/todo!() exit code) instead of the
-//! expected exit codes — exit 0 (success), exit 64 (user error).
+//! S-577-4 (11 tests): body-only PUT — handler implemented; all S-577-4 tests GREEN.
+//! S-577-5 (13 new tests, 12 ACs): visibility flags (--internal/--public/--yes).
 //!
-//! BC anchors: BC-3.5.005, BC-3.5.009
-//! VPs: VP-577-001, VP-577-011, VP-577-012, VP-577-022(b), VP-577-023,
-//!      VP-577-024, VP-577-026 (variant 3)
-//! Story: S-577-4, GitHub issue #577
+//! S-577-5 Red Gate: tests fail because visibility branches are ABSENT from
+//! `handle_comment_edit` — internal: _, public: _, yes: _ are currently ignored.
+//! Feature-absence failures (not compilation panics):
+//!   RED  — AC-001..009, AC-012: visibility branches not yet implemented → wrong
+//!           exit codes or wrong wire/response shape.
+//!   GREEN — AC-010 (2 variants), AC-011: pre-satisfied by S-577-4/S-577-1 (regression guards).
+//!
+//! BC anchors (S-577-4): BC-3.5.005, BC-3.5.009
+//! BC anchors (S-577-5): BC-3.5.006, BC-3.5.007, BC-3.5.008, BC-3.5.011
+//! VPs (S-577-4): VP-577-001, VP-577-011, VP-577-012, VP-577-022(b), VP-577-023,
+//!               VP-577-024, VP-577-026 (variant 3)
+//! VPs (S-577-5): VP-577-002, VP-577-003, VP-577-006, VP-577-010, VP-577-017,
+//!               VP-577-025, VP-577-026 (variants 1+2), VP-577-028, VP-577-029, VP-577-030 (v2)
+//! Stories: S-577-4, S-577-5, GitHub issue #577
 
 use assert_cmd::Command;
 use serde_json::Value;
@@ -899,5 +908,910 @@ async fn test_bc_3_5_009_no_body_source_exits_64() {
     assert!(
         stderr.contains("body is required"),
         "AC-011: stderr must contain 'body is required'; got: {stderr}"
+    );
+}
+
+// ===========================================================================
+// S-577-5 TESTS — 13 functions covering 12 ACs (AC-010 has 2 variants)
+//
+// Red Gate: AC-001..009, AC-012 fail because visibility branches are absent
+// (internal: _, public: _, yes: _ ignored in current handle_comment_edit).
+// Green pre-satisfied: AC-010 v1, AC-010 v2, AC-011.
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// S-577-5 AC-001 / VP-577-002
+// BC-3.5.006 postcondition — --internal adds properties array to PUT body
+// ---------------------------------------------------------------------------
+
+/// Verify that `jr issue comment edit FOO-1 --id 10001 "body" --internal --output json`
+/// against a wiremock → exit 0; inspect PUT wire body:
+/// - `"properties"` key present (VP-577-002 clause b)
+/// - `properties` array has exactly one element:
+///   `{"key":"sd.public.comment","value":{"internal":true}}` (VP-577-002 clause c)
+/// - Top-level PUT body key-set == `{"body","properties"}` (no "visibility" key)
+///
+/// Red Gate: fails because current code ignores `--internal` → sends only
+/// `{"body": adf}` → `"properties"` key absent → assertion panics.
+#[tokio::test]
+async fn test_bc_3_5_006_internal_puts_properties_true() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1/comment/10001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(minimal_comment_response()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "issue", "comment", "edit", "FOO-1", "--id", "10001", "body", "--internal",
+            "--output", "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "S-577-5 AC-001: must exit 0 on --internal PUT; \
+         got {:?}\nstderr: {stderr}\nstdout: {stdout}",
+        output.status.code()
+    );
+
+    let reqs = server.received_requests().await.unwrap();
+    assert_eq!(
+        reqs.len(),
+        1,
+        "S-577-5 AC-001: expected exactly 1 PUT request; got {}",
+        reqs.len()
+    );
+
+    let put_body: Value = serde_json::from_slice(&reqs[0].body)
+        .expect("S-577-5 AC-001: PUT request body must be valid JSON");
+
+    // VP-577-002 clause (b): "properties" key must be present
+    let props = put_body.get("properties").unwrap_or_else(|| {
+        panic!(
+            "S-577-5 AC-001 VP-577-002(b): PUT body must contain 'properties' key \
+             when --internal is passed; got body: {put_body}"
+        )
+    });
+
+    // VP-577-002 clause (c): properties[0] shape
+    let props_arr = props.as_array().expect("S-577-5 AC-001: 'properties' must be a JSON array");
+    assert_eq!(
+        props_arr.len(),
+        1,
+        "S-577-5 AC-001: 'properties' array must have exactly 1 element; got: {props_arr:?}"
+    );
+    assert_eq!(
+        props_arr[0]["key"].as_str(),
+        Some("sd.public.comment"),
+        "S-577-5 AC-001: properties[0].key must be 'sd.public.comment'; got: {:?}",
+        props_arr[0]["key"]
+    );
+    assert_eq!(
+        props_arr[0]["value"]["internal"].as_bool(),
+        Some(true),
+        "S-577-5 AC-001: properties[0].value.internal must be boolean true \
+         for --internal; got: {:?}",
+        props_arr[0]["value"]["internal"]
+    );
+
+    // VP-577-002 top-level key-set: exactly {"body","properties"}, no "visibility"
+    let top_keys: BTreeSet<&str> = put_body
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(|k| k.as_str())
+        .collect();
+    assert_eq!(
+        top_keys,
+        BTreeSet::from(["body", "properties"]),
+        "S-577-5 AC-001 VP-577-002: PUT body top-level key-set must be exactly \
+         {{\"body\",\"properties\"}}; got: {top_keys:?}"
+    );
+    assert!(
+        put_body.get("visibility").is_none(),
+        "S-577-5 AC-001: PUT body must NOT contain 'visibility' key \
+         (wrong Jira endpoint field); got: {put_body}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// S-577-5 AC-002 / VP-577-026 variant 1
+// BC-3.5.006 postcondition — changed_fields.jsm_internal is boolean true for --internal
+// ---------------------------------------------------------------------------
+
+/// Verify that `jr issue comment edit FOO-1 --id 10001 "body" --internal --output json`
+/// → exit 0; parsed `changed_fields` contains key `"jsm_internal"` with boolean `true`;
+/// AND `changed_fields` key-set == `{"body","jsm_internal"}` (exact; VP-577-026 variant 1).
+///
+/// Red Gate: fails because current code omits `jsm_internal` from changed_fields
+/// (the visibility response-building branch is not yet implemented).
+#[tokio::test]
+async fn test_bc_3_5_006_changed_fields_jsm_internal_true() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1/comment/10001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(minimal_comment_response()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "issue", "comment", "edit", "FOO-1", "--id", "10001", "body", "--internal",
+            "--output", "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "S-577-5 AC-002: must exit 0; got {:?}\nstderr: {stderr}\nstdout: {stdout}",
+        output.status.code()
+    );
+
+    let parsed: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("S-577-5 AC-002: stdout must be valid JSON; error: {e}\nstdout: {stdout}")
+    });
+
+    assert_eq!(
+        parsed["changed_fields"]["jsm_internal"].as_bool(),
+        Some(true),
+        "S-577-5 AC-002 VP-577-026(v1): changed_fields.jsm_internal must be boolean true \
+         for --internal; got: {:?}",
+        parsed["changed_fields"]["jsm_internal"]
+    );
+
+    let cf_keys: BTreeSet<&str> = parsed["changed_fields"]
+        .as_object()
+        .expect("S-577-5 AC-002: changed_fields must be a JSON object")
+        .keys()
+        .map(|k| k.as_str())
+        .collect();
+    assert_eq!(
+        cf_keys,
+        BTreeSet::from(["body", "jsm_internal"]),
+        "S-577-5 AC-002 VP-577-026(v1): changed_fields key-set must be exactly \
+         {{\"body\",\"jsm_internal\"}}; got: {cf_keys:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// S-577-5 AC-003 / VP-577-003
+// BC-3.5.007 postcondition — --public adds properties internal:false to PUT
+// ---------------------------------------------------------------------------
+
+/// Verify that `jr issue comment edit FOO-1 --id 10001 "body" --public --yes --output json`
+/// against a wiremock → exit 0; PUT wire body:
+/// - `"properties"` key present (VP-577-003 clause b)
+/// - `properties[0]` == `{"key":"sd.public.comment","value":{"internal":false}}` (clause c)
+/// - Top-level PUT body key-set == `{"body","properties"}`; no "visibility" key
+///
+/// Red Gate: fails because current code ignores --public → sends only `{"body": adf}`.
+#[tokio::test]
+async fn test_bc_3_5_007_public_puts_properties_false() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1/comment/10001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(minimal_comment_response()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "issue", "comment", "edit", "FOO-1", "--id", "10001", "body", "--public", "--yes",
+            "--output", "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "S-577-5 AC-003: must exit 0 on --public --yes PUT; \
+         got {:?}\nstderr: {stderr}\nstdout: {stdout}",
+        output.status.code()
+    );
+
+    let reqs = server.received_requests().await.unwrap();
+    assert_eq!(
+        reqs.len(),
+        1,
+        "S-577-5 AC-003: expected exactly 1 PUT request; got {}",
+        reqs.len()
+    );
+
+    let put_body: Value = serde_json::from_slice(&reqs[0].body)
+        .expect("S-577-5 AC-003: PUT request body must be valid JSON");
+
+    let props = put_body.get("properties").unwrap_or_else(|| {
+        panic!(
+            "S-577-5 AC-003 VP-577-003(b): PUT body must contain 'properties' key \
+             when --public; got body: {put_body}"
+        )
+    });
+
+    let props_arr = props.as_array().expect("S-577-5 AC-003: 'properties' must be an array");
+    assert_eq!(
+        props_arr.len(),
+        1,
+        "S-577-5 AC-003: 'properties' array must have exactly 1 element; got: {props_arr:?}"
+    );
+    assert_eq!(
+        props_arr[0]["key"].as_str(),
+        Some("sd.public.comment"),
+        "S-577-5 AC-003: properties[0].key must be 'sd.public.comment'; got: {:?}",
+        props_arr[0]["key"]
+    );
+    assert_eq!(
+        props_arr[0]["value"]["internal"].as_bool(),
+        Some(false),
+        "S-577-5 AC-003: properties[0].value.internal must be boolean false for --public; \
+         got: {:?}",
+        props_arr[0]["value"]["internal"]
+    );
+
+    let top_keys: BTreeSet<&str> = put_body
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(|k| k.as_str())
+        .collect();
+    assert_eq!(
+        top_keys,
+        BTreeSet::from(["body", "properties"]),
+        "S-577-5 AC-003 VP-577-003: PUT body top-level key-set must be exactly \
+         {{\"body\",\"properties\"}}; got: {top_keys:?}"
+    );
+    assert!(
+        put_body.get("visibility").is_none(),
+        "S-577-5 AC-003: PUT body must NOT contain 'visibility' key; got: {put_body}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// S-577-5 AC-004 / VP-577-026 variant 2
+// BC-3.5.007 postcondition — changed_fields.jsm_internal is boolean false for --public+yes
+// ---------------------------------------------------------------------------
+
+/// Verify that `jr issue comment edit FOO-1 --id 10001 "body" --public --yes --output json`
+/// → exit 0; `changed_fields.jsm_internal` is boolean `false` (NOT missing, NOT null,
+/// NOT string "false"); changed_fields key-set == `{"body","jsm_internal"}` (VP-577-026 v2).
+///
+/// Red Gate: fails because current code omits `jsm_internal` from changed_fields.
+#[tokio::test]
+async fn test_bc_3_5_007_changed_fields_jsm_internal_false() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1/comment/10001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(minimal_comment_response()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "issue", "comment", "edit", "FOO-1", "--id", "10001", "body", "--public", "--yes",
+            "--output", "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "S-577-5 AC-004: must exit 0; got {:?}\nstderr: {stderr}\nstdout: {stdout}",
+        output.status.code()
+    );
+
+    let parsed: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("S-577-5 AC-004: stdout must be valid JSON; error: {e}\nstdout: {stdout}")
+    });
+
+    // VP-577-026 variant 2: jsm_internal must be boolean false (not missing, not null,
+    // not the string "false" — as_bool() returns None for non-boolean JSON values)
+    assert_eq!(
+        parsed["changed_fields"]["jsm_internal"].as_bool(),
+        Some(false),
+        "S-577-5 AC-004 VP-577-026(v2): changed_fields.jsm_internal must be boolean false \
+         for --public --yes (VP-577-029 exact pin — NOT a missing key, NOT null, NOT \"false\"); \
+         got: {:?}",
+        parsed["changed_fields"]["jsm_internal"]
+    );
+
+    let cf_keys: BTreeSet<&str> = parsed["changed_fields"]
+        .as_object()
+        .expect("S-577-5 AC-004: changed_fields must be a JSON object")
+        .keys()
+        .map(|k| k.as_str())
+        .collect();
+    assert_eq!(
+        cf_keys,
+        BTreeSet::from(["body", "jsm_internal"]),
+        "S-577-5 AC-004 VP-577-026(v2): changed_fields key-set must be exactly \
+         {{\"body\",\"jsm_internal\"}}; got: {cf_keys:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// S-577-5 AC-005 / VP-577-025 variant 1
+// BC-3.5.006 EC-3.5.006-1 — JSDCLOUD-6050 hint fires before PUT on --internal path
+// ---------------------------------------------------------------------------
+
+/// Verify that `jr issue comment edit FOO-1 --id 10001 "body" --internal` (table mode) →
+/// exit 0; stderr contains both:
+/// - `"JSDCLOUD-6050"` (VP-577-025 variant 1 load-bearing substring)
+/// - `"(marked internal)"` (BC-3.5.005 human-channel echo marker)
+///
+/// Note: hint fires to stderr even with `--output json`; `"(marked internal)"` is
+/// table-mode-only (print_success is not called under --output json).
+///
+/// Red Gate: fails because current code ignores --internal → neither substring emitted.
+#[tokio::test]
+async fn test_bc_3_5_006_jsdcloud_hint_appears_on_internal() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1/comment/10001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(minimal_comment_response()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["issue", "comment", "edit", "FOO-1", "--id", "10001", "body", "--internal"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "S-577-5 AC-005: must exit 0 on --internal table-mode path; \
+         got {:?}\nstderr: {stderr}\nstdout: {stdout}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("JSDCLOUD-6050"),
+        "S-577-5 AC-005 VP-577-025(v1): stderr must contain 'JSDCLOUD-6050' \
+         on --internal path (load-bearing substring); got: {stderr}"
+    );
+    assert!(
+        stderr.contains("(marked internal)"),
+        "S-577-5 AC-005 VP-577-025(v1): stderr must contain '(marked internal)' \
+         (BC-3.5.005 human-channel echo marker for --internal table-mode path); got: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// S-577-5 AC-006 / VP-577-025 variant 2
+// BC-3.5.007 EC-3.5.007-1 + EC-3.5.008-1 — JSDCLOUD-6050 hint fires after --yes bypass
+// ---------------------------------------------------------------------------
+
+/// Verify that `jr issue comment edit FOO-1 --id 10001 "body" --public --yes` (table mode) →
+/// exit 0; stderr contains both:
+/// - `"JSDCLOUD-6050"` (VP-577-025 variant 2; also proves EC-3.5.008-1:
+///   `--yes` does NOT suppress the JSDCLOUD-6050 hint)
+/// - `"(marked public)"` (BC-3.5.005 human-channel echo marker for --public path)
+///
+/// Timing: hint fires AFTER confirmation bypass (--yes), AFTER ADF conversion, BEFORE PUT.
+///
+/// Red Gate: fails because current code ignores --public → neither substring emitted.
+#[tokio::test]
+async fn test_bc_3_5_007_jsdcloud_hint_appears_on_public_yes() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1/comment/10001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(minimal_comment_response()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "issue", "comment", "edit", "FOO-1", "--id", "10001", "body", "--public", "--yes",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "S-577-5 AC-006: must exit 0 on --public --yes table-mode path; \
+         got {:?}\nstderr: {stderr}\nstdout: {stdout}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("JSDCLOUD-6050"),
+        "S-577-5 AC-006 VP-577-025(v2): stderr must contain 'JSDCLOUD-6050' on \
+         --public --yes path (proves EC-3.5.008-1: --yes does NOT suppress the hint); \
+         got: {stderr}"
+    );
+    assert!(
+        stderr.contains("(marked public)"),
+        "S-577-5 AC-006 VP-577-025(v2): stderr must contain '(marked public)' \
+         (BC-3.5.005 human-channel echo marker for --public path); got: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// S-577-5 AC-007 / VP-577-006
+// BC-3.5.008 precondition — --public + --no-input without --yes → exit 64, no PUT
+// ---------------------------------------------------------------------------
+
+/// Verify that `jr issue comment edit FOO-1 --id 10001 "body" --public --no-input`
+/// (no `--yes`) → exit 64; stderr contains BOTH `"visibility to public"` AND `"--yes"`
+/// (VP-577-006 dual-pin: proves exit originates from the step-3 --public gate, not the
+/// step-2 body gate — the non-empty body `"body"` is required for this test to be
+/// meaningful); wiremock PUT has `.expect(0)`.
+///
+/// Red Gate: fails because current code ignores --public → does body-only PUT → exit 0.
+#[tokio::test]
+async fn test_bc_3_5_008_public_no_input_without_yes_exits_64() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1/comment/10001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(minimal_comment_response()))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "issue", "comment", "edit", "FOO-1", "--id", "10001", "body", "--public",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "S-577-5 AC-007 VP-577-006: must exit 64 on --public --no-input without --yes \
+         (confirmation gate fires — non-empty body proves exit is from --public gate, \
+         not body gate); got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("visibility to public"),
+        "S-577-5 AC-007 VP-577-006: stderr must contain 'visibility to public' \
+         (dual-pin load-bearing substring); got: {stderr}"
+    );
+    assert!(
+        stderr.contains("--yes"),
+        "S-577-5 AC-007 VP-577-006: stderr must contain '--yes' \
+         (hint to bypass with the confirmation flag); got: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// S-577-5 AC-008 / VP-577-029
+// BC-3.5.008 EC-3.5.008-2 — interactive N → exit 0, cancel envelope, no PUT
+// ---------------------------------------------------------------------------
+
+/// Verify that `jr issue comment edit FOO-1 --id 10001 "body" --public --output json`
+/// with `JR_STDIN_IS_TTY=1` and stdin fed `"N\n"` → exit 0; stdout JSON:
+/// - Top-level key-set == `{"cancelled","updated"}` (exact; VP-577-029)
+/// - `"cancelled"` == `true`
+/// - `"updated"` == `false` (boolean false — VP-577-029 exact pin: NOT a timestamp or
+///   empty string; `"id"` and `"key"` MUST NOT appear — not confirmed server-side)
+/// - Wiremock PUT has `.expect(0)`
+///
+/// Red Gate: fails because current code ignores --public → does body-only PUT →
+/// returns `{"changed_fields":{"body":"body"},"id":"10001","key":"FOO-1","updated":true}`,
+/// which has wrong key-set and wrong "updated" semantics.
+#[tokio::test]
+async fn test_bc_3_5_008_public_interactive_cancel_json_key_set() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1/comment/10001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(minimal_comment_response()))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .env("JR_STDIN_IS_TTY", "1")
+        .args([
+            "issue", "comment", "edit", "FOO-1", "--id", "10001", "body", "--public",
+            "--output", "json",
+        ])
+        .write_stdin("N\n")
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "S-577-5 AC-008 VP-577-029: must exit 0 on interactive cancel (N); \
+         got {:?}\nstderr: {stderr}\nstdout: {stdout}",
+        output.status.code()
+    );
+
+    let parsed: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("S-577-5 AC-008: stdout must be valid JSON; error: {e}\nstdout: {stdout}")
+    });
+
+    let top_keys: BTreeSet<&str> = parsed
+        .as_object()
+        .expect("S-577-5 AC-008: stdout must be a JSON object")
+        .keys()
+        .map(|k| k.as_str())
+        .collect();
+    assert_eq!(
+        top_keys,
+        BTreeSet::from(["cancelled", "updated"]),
+        "S-577-5 AC-008 VP-577-029: cancel envelope key-set must be exactly \
+         {{\"cancelled\",\"updated\"}} (no 'id' or 'key' — not confirmed server-side \
+         on cancel path); got: {top_keys:?}\nfull stdout: {stdout}"
+    );
+
+    assert_eq!(
+        parsed["cancelled"].as_bool(),
+        Some(true),
+        "S-577-5 AC-008 VP-577-029: 'cancelled' must be boolean true; got: {:?}",
+        parsed["cancelled"]
+    );
+    assert_eq!(
+        parsed["updated"].as_bool(),
+        Some(false),
+        "S-577-5 AC-008 VP-577-029: 'updated' must be boolean false (VP-577-029 exact \
+         pin — NOT a timestamp or empty string); got: {:?}",
+        parsed["updated"]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// S-577-5 AC-009 / VP-577-017, EC-3.5.008-3
+// BC-3.5.008 EC-3.5.008-3 — --stdin flag implies no_input gate; TTY-agnostic
+// ---------------------------------------------------------------------------
+
+/// Verify EC-3.5.008-3: `--stdin` flag-based no_input mutation is TTY-agnostic.
+///
+/// Both variants are in one test function (VP-577-017 prescriptive-rule pin):
+///
+/// **Variant 1 (pipe stdin, no JR_STDIN_IS_TTY):**
+/// stdin is a pipe → main.rs auto-sets no_input=true; `--stdin --public` (no `--yes`) →
+/// exit 64; stderr contains BOTH `"--stdin"` AND `"--yes"` (dual-pin).
+///
+/// **Variant 2 (JR_STDIN_IS_TTY=1, seam active — prescribed-rule pin):**
+/// Same flags but JR_STDIN_IS_TTY=1 suppresses the main.rs auto-flip → STILL exit 64;
+/// same stderr assertions. Proves the `--stdin` flag-based branch fires INDEPENDENTLY
+/// of TTY-detection state per EC-3.5.008-3.
+///
+/// Setup: stdin MUST contain a NON-EMPTY body (so EC-3.5.009-5 body-empty guard passes;
+/// the EC-3.5.008-3 targeted message fires at step-3, not as a handler-start short-circuit).
+///
+/// Red Gate: fails because current code ignores --public → reads body from stdin,
+/// does body-only PUT → exit 0.
+#[tokio::test]
+async fn test_bc_3_5_008_ec3_stdin_without_yes_public_exits_64() {
+    // --- Variant 1: pipe stdin, no JR_STDIN_IS_TTY ---
+    let server1 = MockServer::start().await;
+    let cache_dir1 = tempfile::tempdir().unwrap();
+    let config_dir1 = tempfile::tempdir().unwrap();
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1/comment/10001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(minimal_comment_response()))
+        .expect(0)
+        .mount(&server1)
+        .await;
+
+    let output1 = jr_cmd(&server1.uri(), cache_dir1.path(), config_dir1.path())
+        .args([
+            "issue", "comment", "edit", "FOO-1", "--id", "10001", "--stdin", "--public",
+        ])
+        .write_stdin("body")
+        .output()
+        .unwrap();
+
+    let stderr1 = String::from_utf8_lossy(&output1.stderr);
+
+    assert_eq!(
+        output1.status.code(),
+        Some(64),
+        "S-577-5 AC-009 VP-577-017(v1): must exit 64 on --stdin --public without --yes \
+         (pipe stdin, no JR_STDIN_IS_TTY); got {:?}\nstderr: {stderr1}",
+        output1.status.code()
+    );
+    assert!(
+        stderr1.contains("--stdin"),
+        "S-577-5 AC-009 VP-577-017(v1): stderr must contain '--stdin' \
+         (EC-3.5.008-3 targeted hint load-bearing substring); got: {stderr1}"
+    );
+    assert!(
+        stderr1.contains("--yes"),
+        "S-577-5 AC-009 VP-577-017(v1): stderr must contain '--yes' \
+         (EC-3.5.008-3 targeted hint load-bearing substring); got: {stderr1}"
+    );
+
+    // --- Variant 2: JR_STDIN_IS_TTY=1 — proves EC-3.5.008-3 is TTY-agnostic ---
+    let server2 = MockServer::start().await;
+    let cache_dir2 = tempfile::tempdir().unwrap();
+    let config_dir2 = tempfile::tempdir().unwrap();
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1/comment/10001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(minimal_comment_response()))
+        .expect(0)
+        .mount(&server2)
+        .await;
+
+    let output2 = jr_cmd(&server2.uri(), cache_dir2.path(), config_dir2.path())
+        .env("JR_STDIN_IS_TTY", "1")
+        .args([
+            "issue", "comment", "edit", "FOO-1", "--id", "10001", "--stdin", "--public",
+        ])
+        .write_stdin("body")
+        .output()
+        .unwrap();
+
+    let stderr2 = String::from_utf8_lossy(&output2.stderr);
+
+    assert_eq!(
+        output2.status.code(),
+        Some(64),
+        "S-577-5 AC-009 VP-577-017(v2): must STILL exit 64 on --stdin --public without \
+         --yes when JR_STDIN_IS_TTY=1 (proves EC-3.5.008-3 fires independently of TTY \
+         detection state); got {:?}\nstderr: {stderr2}",
+        output2.status.code()
+    );
+    assert!(
+        stderr2.contains("--stdin"),
+        "S-577-5 AC-009 VP-577-017(v2): stderr must contain '--stdin' \
+         (EC-3.5.008-3 targeted hint, TTY-agnostic); got: {stderr2}"
+    );
+    assert!(
+        stderr2.contains("--yes"),
+        "S-577-5 AC-009 VP-577-017(v2): stderr must contain '--yes' \
+         (EC-3.5.008-3 targeted hint, TTY-agnostic); got: {stderr2}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// S-577-5 AC-010 / VP-577-028, EC-3.5.008-4
+// BC-3.5.008 EC-3.5.008-4 — --yes without --public is silent no-op
+// PRE-SATISFIED by S-577-4 (body-only path) — regression assertion, GREEN
+// ---------------------------------------------------------------------------
+
+/// **Variant 1 (VP-577-028 v1 — silent no-op success):** [PRE-SATISFIED — GREEN]
+/// `jr issue comment edit FOO-1 --id 10001 "body" --yes --output json` (no `--public`) →
+/// exit 0; body-only PUT succeeds; `--yes` is a silent no-op; no error, no clap rejection.
+/// Clap MUST NOT have `requires("public")` on `--yes`.
+///
+/// S-577-4's body-only path handles this: `yes: _` in destructure = clap accepts `--yes`
+/// without `requires` enforcement. Regression assertion — must stay GREEN.
+#[tokio::test]
+async fn test_bc_3_5_008_ec4_yes_without_public_is_silent_noop() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1/comment/10001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(minimal_comment_response()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "issue", "comment", "edit", "FOO-1", "--id", "10001", "body", "--yes",
+            "--output", "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "S-577-5 AC-010(v1) VP-577-028: must exit 0 — --yes without --public is a silent \
+         no-op; clap MUST NOT have requires(\"public\") on --yes \
+         (EC-3.5.008-4, DEC-169); got {:?}\nstderr: {stderr}\nstdout: {stdout}",
+        output.status.code()
+    );
+}
+
+/// **Variant 2 (VP-577-028 v2 — runtime clap-requires probe):** [PRE-SATISFIED — GREEN]
+/// `jr issue comment edit FOO-1 --id 10001 "" --yes` (empty body, no `--public`) →
+/// exit 64 (NOT exit 2); stderr contains `"comment body cannot be empty"`.
+///
+/// The exit-64-vs-2 discrimination is the operative test signal:
+/// - exit 2 = clap rejected with `requires("public")` BEFORE the empty-body guard fires
+/// - exit 64 = handler's EC-3.5.009-5 guard fires (proves `requires("public")` is absent)
+///
+/// EC-3.5.009-5 empty-body guard already exits 64. Regression assertion — must stay GREEN.
+#[tokio::test]
+async fn test_bc_3_5_008_ec4_yes_without_public_runtime_probe_exit64() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    Mock::given(method("PUT"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(minimal_comment_response()))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["issue", "comment", "edit", "FOO-1", "--id", "10001", "", "--yes"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "S-577-5 AC-010(v2) VP-577-028: must exit 64 (EC-3.5.009-5 empty-body guard), \
+         NOT exit 2 (clap requires(\"public\") is forbidden on --yes); \
+         got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("comment body cannot be empty"),
+        "S-577-5 AC-010(v2) VP-577-028: stderr must contain 'comment body cannot be empty' \
+         (proves handler-level guard fires, not clap-level requires rejection); got: {stderr}"
+    );
+    assert_ne!(
+        output.status.code(),
+        Some(2),
+        "S-577-5 AC-010(v2) VP-577-028: must NOT exit 2 — exit 2 would indicate clap \
+         requires(\"public\") is present on --yes, which is forbidden (EC-3.5.008-4); \
+         got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// S-577-5 AC-011 / VP-577-010, BC-3.5.011
+// clap conflicts_with: --internal + --public → exit 2
+// PRE-SATISFIED by S-577-1 (conflicts_with added) — regression assertion, GREEN
+// ---------------------------------------------------------------------------
+
+/// Verify that `jr issue comment edit FOO-1 --id 10001 "body" --internal --public`
+/// → exit 2 (clap error); stderr contains `"cannot be used with"`
+/// (VP-577-010 discriminator for the clap conflicts_with error message).
+///
+/// S-577-1 added `conflicts_with` on `--internal`/`--public`. Regression assertion —
+/// must stay GREEN.
+#[tokio::test]
+async fn test_bc_3_5_011_internal_and_public_clap_exit_2() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    // Clap exits before any handler code runs → no PUT expected
+    Mock::given(method("PUT"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(minimal_comment_response()))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "issue", "comment", "edit", "FOO-1", "--id", "10001", "body", "--internal",
+            "--public",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "S-577-5 AC-011 VP-577-010: must exit 2 (clap conflicts_with on \
+         --internal + --public, BC-3.5.011); got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("cannot be used with"),
+        "S-577-5 AC-011 VP-577-010: stderr must contain 'cannot be used with' \
+         (clap error message discriminator for conflicts_with); got: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// S-577-5 AC-012 / VP-577-030 variant 2
+// BC-3.5.008 EC-3.5.008-5 — EOF during --public interactive prompt → exit 130
+// ---------------------------------------------------------------------------
+
+/// Verify that `jr issue comment edit FOO-1 --id 10001 "body" --public`
+/// with `JR_STDIN_IS_TTY=1` and stdin fed EOF (empty write_stdin) → exit 130
+/// (`JrError::Interrupted`); wiremock PUT has `.expect(0)`.
+///
+/// Body is from positional arg `"body"` (not stdin), so step-2 body resolution
+/// completes. The interactive path then attempts `io::stdin().lock().read_line()` →
+/// Ok(0) (EOF) → `JrError::Interrupted` → exit 130 (EC-3.5.008-5).
+///
+/// Red Gate: fails because current code ignores --public → does body-only PUT → exit 0.
+#[tokio::test]
+async fn test_bc_3_5_008_ec5_public_prompt_eof_exits_130() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1/comment/10001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(minimal_comment_response()))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .env("JR_STDIN_IS_TTY", "1")
+        .args([
+            "issue", "comment", "edit", "FOO-1", "--id", "10001", "body", "--public",
+        ])
+        .write_stdin("") // empty stdin = immediate EOF on read_line
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(130),
+        "S-577-5 AC-012 VP-577-030(v2): must exit 130 (JrError::Interrupted) on EOF \
+         during --public interactive prompt (EC-3.5.008-5: Ok(0) from read_line → \
+         JrError::Interrupted); got {:?}\nstderr: {stderr}\nstdout: {stdout}",
+        output.status.code()
     );
 }
