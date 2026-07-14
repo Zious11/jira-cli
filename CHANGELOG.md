@@ -33,7 +33,8 @@ All notable changes to jr will be documented here.
   `<type>:<value>`, or `None`). `--output json` passes the raw API response
   through losslessly (`serde_json::Value` passthrough — no typed round-trip that
   would silently drop extra fields). Invalid `--id` charset exits 64; 404/403
-  exits 64 with Jira's error body surfaced; deep ADF nesting exits 64.
+  exits 64 with Jira's error body surfaced. (Over-deep comment bodies are
+  rejected at the JSON parse layer, exit 1.)
 
 - **CI: BC-body Trace/Source citation guard (Guard 1) (DEC-148):** adds
   `scripts/check-bc-citation-symbols.sh` (BC-CITE-001; validates `src/` file and symbol
