@@ -210,6 +210,9 @@ jr issue comment add JSM-42 "customer is on the paid plan — prioritizing" --in
 | `jr issue resolutions` | List instance-scoped resolution values (cached 7 days; `--refresh` to bust). Discover what to pass to `--resolution` on `jr issue move`. |
 | `jr issue assign KEY` | Assign to self (or `--to USER`, `--unassign`) |
 | `jr issue comment add KEY "msg"` | Add a comment (`--stdin`, `--file`, `--markdown`, `--internal` for JSM agent-only notes) |
+| `jr issue comment delete KEY --id ID` | Delete a comment by ID (`--yes` to skip y/N confirmation) |
+| `jr issue comment edit KEY --id ID "msg"` | Edit a comment body (`--stdin`, `--file`, `--markdown`; `--internal`/`--public` visibility; `--yes` to skip confirmation) |
+| `jr issue comment view KEY --id ID` | View a single comment by ID (shows JSM visibility and restriction fields) |
 | `jr issue comments KEY` | List comments (`--limit N`; JSM issues show a Visibility column: External / Internal) |
 | `jr issue open KEY` | Open in browser (`--url-only` for scripts) |
 | `jr issue link KEY1 KEY2` | Link two issues (`--type blocks`, defaults to Relates) |
