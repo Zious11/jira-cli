@@ -719,6 +719,96 @@ async fn test_bc_3_5_005_put_404_exits_64_with_dual_stderr() {
 }
 
 // ---------------------------------------------------------------------------
+// AC-012 / BC-3.5.009 markdown body source
+// ---------------------------------------------------------------------------
+
+/// Verify that `jr issue comment edit FOO-1 --id 10001 "**bold**" --markdown --output json`
+/// → exit 0; AND wire-inspect: the PUT ADF contains a "strong" mark on the text node,
+/// proving `markdown_to_adf` was called (not `text_to_adf`).
+///
+/// `text_to_adf("**bold**")` would emit a literal text node with text "**bold**" and no marks.
+/// `markdown_to_adf("**bold**")` emits text "bold" with a `{"type":"strong"}` mark.
+/// This difference kills the if/else converter-swap mutant on the markdown fork.
+///
+/// Coverage-additive (not red-first): MUST pass against current code.
+#[tokio::test]
+async fn test_bc_3_5_009_edit_markdown_source() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/FOO-1/comment/10001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(minimal_comment_response()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "issue",
+            "comment",
+            "edit",
+            "FOO-1",
+            "--id",
+            "10001",
+            "**bold**",
+            "--markdown",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "AC-012: must exit 0 on --markdown happy path; \
+         got {:?}\nstderr: {stderr}\nstdout: {stdout}",
+        output.status.code()
+    );
+
+    // Wire-inspect: ADF must have a "strong" mark on the text node (markdown_to_adf path).
+    // text_to_adf("**bold**") emits literal text "**bold**" with NO marks — the two
+    // converters produce distinguishable ADF, which kills the converter-swap mutant.
+    let reqs = server.received_requests().await.unwrap();
+    assert_eq!(
+        reqs.len(),
+        1,
+        "AC-012: expected exactly 1 PUT request; got {}",
+        reqs.len()
+    );
+
+    let put_body: Value =
+        serde_json::from_slice(&reqs[0].body).expect("AC-012: PUT request body must be valid JSON");
+
+    // markdown_to_adf("**bold**") → doc → paragraph → text "bold" + strong mark
+    let text_node = &put_body["body"]["content"][0]["content"][0];
+
+    let has_strong = text_node["marks"]
+        .as_array()
+        .map(|marks| marks.iter().any(|m| m["type"].as_str() == Some("strong")))
+        .unwrap_or(false);
+    assert!(
+        has_strong,
+        "AC-012: PUT ADF text node must have a 'strong' mark when --markdown is used \
+         (proves markdown_to_adf was called, not text_to_adf which emits literal '**bold**'); \
+         text node: {text_node}\nfull PUT body: {put_body}"
+    );
+
+    // Secondary differentiator: markdown path strips the ** delimiters from the text
+    assert_eq!(
+        text_node["text"].as_str(),
+        Some("bold"),
+        "AC-012: text node text must be 'bold' (markdown parsed), not '**bold**' (literal); \
+         full PUT body: {put_body}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // AC-011
 // BC-3.5.009 top-level rule — no body source → exit 64
 // ---------------------------------------------------------------------------
