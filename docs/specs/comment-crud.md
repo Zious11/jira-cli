@@ -1,7 +1,7 @@
 # Comment CRUD — `jr issue comment` subcommand group
 
 **Story:** S-577-1 (subcommand refactor) + S-577-2 (API methods) + S-577-3/4/5/6 (delete/edit/view CLI implementations)
-**Status:** S-577-1 + S-577-2 merged (subcommand group + API methods); S-577-3/4/5/6 pending.
+**Status:** S-577-1 + S-577-2 + S-577-4 + S-577-6 merged; S-577-3 (delete) and S-577-5 (visibility flags) pending.
 
 ## Background
 
@@ -39,7 +39,7 @@ Delete a comment by numeric ID. Requires `--yes` or interactive confirmation.
 - `--yes` — skip confirmation prompt (non-interactive usage).
 - `--output json` — `{"deleted": true, "id": str, "key": str}`.
 
-### `jr issue comment edit KEY [TEXT] --id ID [--file PATH] [--stdin] [--markdown] [--internal|--public] [--yes]` *(stub, S-577-4/5)*
+### `jr issue comment edit KEY [TEXT] --id ID [--file PATH] [--stdin] [--markdown] [--internal|--public] [--yes]` *(body edit shipped, S-577-4; --internal/--public/--yes deferred to S-577-5)*
 
 Edit a comment body and/or visibility.
 
@@ -53,7 +53,7 @@ Edit a comment body and/or visibility.
 - `--yes` — skip the confirmation prompt when making a comment public (`--public`); no effect on other paths (EC-3.5.008-1/-4).
 - `--output json` — `{"changed_fields": {...}, "id": str, "key": str, "updated": true}`.
 
-### `jr issue comment view KEY --id ID` *(stub, S-577-6)*
+### `jr issue comment view KEY --id ID`
 
 View a single comment by ID.
 
@@ -132,6 +132,6 @@ See `docs/specs/json-output-shapes.md` for the canonical shapes.
 ## Implementation files
 
 - `src/cli/mod.rs` — `IssueCommand::Comment { command: CommentSubcommand }`, `CommentSubcommand` enum.
-- `src/cli/issue/interactions.rs` — `handle_comment_add` (implemented); stubs for delete/edit/view.
+- `src/cli/issue/interactions.rs` — `handle_comment_add`, `handle_comment_edit` (body-only, S-577-4), `handle_comment_view` (S-577-6) implemented; `handle_comment_delete` stub (S-577-3).
 - `src/cli/issue/mod.rs` — dispatch to interactions handlers.
 - `src/main.rs` — `try_parse` intercept for flat-form migration hint.
