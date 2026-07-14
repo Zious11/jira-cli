@@ -29,7 +29,7 @@ All notable changes to jr will be documented here.
   fires to stderr on either flag (best-effort on JSM; no-op on non-JSM). JSON
   response includes `changed_fields.jsm_internal: true/false` only when a visibility
   flag was passed; absent in the default body-only path.
-  `--yes` without `--public` exits 64 (caught at runtime via Clap `requires`).
+  `--yes` without `--public` is accepted as a silent no-op (DEC-169 leniency convention — no clap `requires` pairing).
   This is the last story of bundle SOH-COMMENT-CRUD-1 (wave D).
 
 - **`jr issue comment edit` — body sources + body-only PUT (S-577-4, issue #577):**
