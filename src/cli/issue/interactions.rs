@@ -414,7 +414,9 @@ pub(super) async fn handle_comment_edit(
             // 404 is NOT idempotent; re-wrap as UserError so main.rs emits exit 64.
             let user_err_msg = match e.downcast_ref::<JrError>() {
                 Some(JrError::ApiError { status, message }) if *status == 404 || *status == 403 => {
-                    Some(format!("comment not found or permission denied\n{message}"))
+                    Some(format!(
+                        "comment not found or permission denied: {key}#{id}\n{message}"
+                    ))
                 }
                 _ => None,
             };
