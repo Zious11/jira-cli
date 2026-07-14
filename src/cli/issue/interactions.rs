@@ -419,6 +419,8 @@ pub(super) async fn handle_comment_view(
 
 #[cfg(test)]
 mod tests {
+    use super::format_jsm_internal_field;
+    use super::format_restricted_field;
     use super::validate_comment_id;
     use crate::adf;
 
@@ -520,6 +522,64 @@ mod tests {
             "EC-3.5.010-2(a): adf_to_text depth-guard error must map to exit 64 \
              (JrError::UserError); got exit_code: {}; err: {err}",
             err.exit_code()
+        );
+    }
+
+    // ── BC-3.5.010 pure-helper unit tests ──────────────────────────────────
+    //
+    // Direct calls to format_restricted_field / format_jsm_internal_field with
+    // serde_json::json! fixtures.  No subprocess or mock server required.
+
+    // (a) format_restricted_field rung (c-id):
+    //     non-role/group type, empty value, non-empty identifier → "<type>:<identifier>"
+    //     AC-005 worked example: type=Team, value="", identifier=AlphaTeam → "Team:AlphaTeam"
+    #[test]
+    fn test_bc_3_5_010_format_restricted_rung_c_id_type_plus_identifier() {
+        let visibility = serde_json::json!({
+            "type": "Team",
+            "value": "",
+            "identifier": "AlphaTeam"
+        });
+        let result = format_restricted_field(Some(&visibility));
+        assert_eq!(
+            result, "Team:AlphaTeam",
+            "BC-3.5.010 rung (c-id): non-role/group type + empty value + non-empty \
+             identifier must render as '<type>:<identifier>'"
+        );
+    }
+
+    // (b) format_jsm_internal_field — stringly-typed internal → "N/A"
+    //     BC-3.5.010 §field-5: sd.public.comment key present, but value.internal is
+    //     the JSON string "true" (JSDCLOUD-9766), not a boolean.
+    //     as_bool() returns None for string values → inner None arm → "N/A".
+    #[test]
+    fn test_bc_3_5_010_jsm_internal_stringly_typed_returns_na() {
+        let props = serde_json::json!([{
+            "key": "sd.public.comment",
+            "value": { "internal": "true" }
+        }]);
+        let result = format_jsm_internal_field(Some(&props));
+        assert_eq!(
+            result, "N/A",
+            "BC-3.5.010 §field-5: stringly-typed internal must return N/A \
+             (as_bool() is None for string values)"
+        );
+    }
+
+    // (c) format_jsm_internal_field — unknown-key-only properties → "N/A"
+    //     EC-006: properties array present but contains no sd.public.comment entry.
+    //     Loop exhausts without matching → falls through to the post-loop "N/A".
+    #[test]
+    fn test_bc_3_5_010_jsm_internal_unknown_key_only_returns_na() {
+        let props = serde_json::json!([{
+            "key": "some.other.property",
+            "value": { "internal": true }
+        }]);
+        let result = format_jsm_internal_field(Some(&props));
+        assert_eq!(
+            result, "N/A",
+            "BC-3.5.010 EC-006: unknown-key-only properties must return N/A \
+             (loop exhausted without sd.public.comment match)"
         );
     }
 }
