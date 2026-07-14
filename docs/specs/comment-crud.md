@@ -1,7 +1,7 @@
 # Comment CRUD — `jr issue comment` subcommand group
 
 **Story:** S-577-1 (subcommand refactor) + S-577-2 (API methods) + S-577-3/4/5/6 (delete/edit/view CLI implementations)
-**Status:** S-577-1 + S-577-2 + S-577-4 + S-577-6 merged; S-577-3 (delete) and S-577-5 (visibility flags) pending.
+**Status:** S-577-1 + S-577-2 + S-577-3 + S-577-4 + S-577-6 merged; S-577-5 (visibility flags) pending.
 
 ## Background
 
@@ -31,7 +31,7 @@ Add a comment. Replaces the old flat form.
 
 Exit codes: 0 success, 1 API error, 1 empty body (legacy `anyhow::bail!`, not `JrError::UserError`; the future edit subcommand exits 64 for empty body per BC-3.5.009 EC-3.5.009-5 — add's behavior is preserved as-is per EC-3.5.012-2).
 
-### `jr issue comment delete KEY --id ID [--yes]` *(stub, S-577-3)*
+### `jr issue comment delete KEY --id ID [--yes]`
 
 Delete a comment by numeric ID. Requires `--yes` or interactive confirmation.
 
@@ -132,6 +132,6 @@ See `docs/specs/json-output-shapes.md` for the canonical shapes.
 ## Implementation files
 
 - `src/cli/mod.rs` — `IssueCommand::Comment { command: CommentSubcommand }`, `CommentSubcommand` enum.
-- `src/cli/issue/interactions.rs` — `handle_comment_add`, `handle_comment_edit` (body-only, S-577-4), `handle_comment_view` (S-577-6) implemented; `handle_comment_delete` stub (S-577-3).
+- `src/cli/issue/interactions.rs` — all four handlers implemented: `handle_comment_add`, `handle_comment_delete` (S-577-3), `handle_comment_edit` (body-only, S-577-4), `handle_comment_view` (S-577-6).
 - `src/cli/issue/mod.rs` — dispatch to interactions handlers.
 - `src/main.rs` — `try_parse` intercept for flat-form migration hint.

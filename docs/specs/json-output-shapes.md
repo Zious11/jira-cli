@@ -17,7 +17,7 @@ Write operations use VERB-ALIGNED success-field names by intentional design. The
 | `issue assign --unassign` | `{"key": str, "assignee": null, "changed": bool}` | `changed` is false when already unassigned. |
 | `issue remote-link` | `{"key": str, "id": int, "url": str, "title": str, "self": str}` | Verified at `src/cli/issue/json_output.rs` (`remote_link_response`). |
 | `issue comment add` | Jira Comment object (passthrough from `POST /rest/api/3/issue/{key}/comment`) | `{"id": str, "created": str, …}`. Passthrough; shape is Jira Cloud authoritative. Table output: `Added comment to KEY (id: N)`. Implemented in `src/cli/issue/interactions.rs::handle_comment_add`. |
-| `issue comment delete` | `{"deleted": bool, "id": str, "key": str}` | Stub (S-577-3). Shape pinned by S-577-1 AC-009(h). |
+| `issue comment delete` | Success: `{"deleted": true, "id": str, "key": str}`; interactive cancel: `{"cancelled": true, "deleted": false}` (no `id`/`key`) | Shipped (S-577-3). Cancel path emits when user answers N interactively; `--yes` bypasses the prompt. 404/403 → exit 64. |
 | `issue comment edit` | `{"changed_fields": {"body": str}, "id": str, "key": str, "updated": true}` | Body-only shipped (S-577-4). `changed_fields.body` carries the raw pre-trim user input string (BC-3.5.005 raw echo pin). Visibility fields (`--internal`/`--public`) deferred to S-577-5. |
 | `issue comment view` | Jira Comment object (passthrough from `GET /rest/api/3/issue/{key}/comment/{id}?expand=properties`) | Shipped (S-577-6). Raw `serde_json::Value` passthrough — no typed round-trip. Route: `output::render_json` (#526 invariant). |
 | `sprint add` | `{"sprint_id": int, "issues": [str], "added": true}` | Verified at `src/cli/sprint.rs` (`sprint_add_response`). |
