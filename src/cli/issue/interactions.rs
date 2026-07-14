@@ -279,6 +279,7 @@ pub(super) async fn handle_comment_view(
 #[cfg(test)]
 mod tests {
     use super::validate_comment_id;
+    use crate::adf;
 
     // EC-3.5.002-1 charset validation — exercises every accepted token class
     // and all three arms of the `.all()` closure so mutation testing can kill
@@ -330,5 +331,54 @@ mod tests {
     #[test]
     fn test_validate_comment_id_rejects_dot() {
         assert!(validate_comment_id("id.with.dots").is_err());
+    }
+
+    // ── AC-007 tier (i) — EC-3.5.010-2(a) propagation (GREEN-throughout) ──────
+    //
+    // Verifies that `adf_to_text` returns `Err` for a >256-deep ADF node and that
+    // the error kind maps to the UserError/exit-64 class.
+    //
+    // Strategy: programmatically BUILD (not parse) a serde_json::Value with nesting
+    // depth > 256. Construction via serde_json::json! loops has no recursion limit;
+    // only serde_json::from_slice (parsing) is bounded at 128. After building, we
+    // call adf::adf_to_text(&deep_node) directly — no HTTP boundary involved.
+    //
+    // Cross-reference: tests/adf_recursion_depth.rs uses the identical programmatic
+    // BUILD approach for the forward (markdown_to_adf) path
+    // (e.g. test_markdown_to_adf_depth_256_blockquote_is_err).
+    //
+    // This test is GREEN-throughout (not a Red Gate participant): it calls
+    // adf_to_text directly, which is fully implemented. The handle_comment_view
+    // stub being todo!() does NOT affect this test.
+    #[test]
+    fn test_bc_3_5_010_ec2a_adf_error_propagates_exit64() {
+        // Build a 257-deep ADF node entirely in memory via Value construction
+        // (no serde_json string parsing — avoids the 128-level parse limit).
+        // Depth 257 > MAX_ADF_DEPTH (256), so adf_to_text must return Err.
+        let mut node = serde_json::json!({"type": "text", "text": "leaf"});
+        for _ in 0..257 {
+            node = serde_json::json!({
+                "type": "paragraph",
+                "content": [node]
+            });
+        }
+
+        let result = adf::adf_to_text(&node);
+
+        assert!(
+            result.is_err(),
+            "EC-3.5.010-2(a): adf_to_text must return Err for a 257-deep ADF node \
+             (depth guard MAX_ADF_DEPTH=256); got Ok"
+        );
+
+        // Confirm the error maps to the UserError/exit-64 class.
+        let err = result.unwrap_err();
+        assert_eq!(
+            err.exit_code(),
+            64,
+            "EC-3.5.010-2(a): adf_to_text depth-guard error must map to exit 64 \
+             (JrError::UserError); got exit_code: {}; err: {err}",
+            err.exit_code()
+        );
     }
 }
