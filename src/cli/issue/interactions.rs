@@ -237,6 +237,65 @@ pub(super) async fn handle_comment_delete(
     }
 }
 
+// ── Comment View Format Helpers ──────────────────────────────────────────
+
+/// Format the `Restricted:` field (field 6) using the 4-rung ladder.
+///
+/// Rung ordering (non-negotiable per BC-3.5.010):
+/// (a) role/group with non-empty value → `<value>`
+/// (b) role/group with empty value, non-empty identifier → `id=<identifier>`
+/// (c) non-role/group type — value-OR-identifier preference:
+///     non-empty value → `<type>:<value>`
+///     empty value + non-empty identifier → `<type>:<identifier>`
+/// (d) fallback → `None`
+///
+/// `visibility` is `response.get("visibility")` — `Some(v)` when the key is
+/// present (even if the JSON value is null), `None` when the key is absent entirely.
+fn format_restricted_field(visibility: Option<&serde_json::Value>) -> String {
+    match visibility {
+        None => "None".to_string(),
+        Some(v) => {
+            let vtype = v["type"].as_str().unwrap_or("");
+            let value = v["value"].as_str().unwrap_or("");
+            let identifier = v["identifier"].as_str().unwrap_or("");
+            match (vtype, value.is_empty(), identifier.is_empty()) {
+                // Rung (a): role/group with non-empty value
+                ("role" | "group", false, _) => value.to_string(),
+                // Rung (b): role/group with empty value, non-empty identifier
+                ("role" | "group", true, false) => format!("id={identifier}"),
+                // Rung (c): non-role/group type — value-OR-identifier preference
+                (t, _, _) if !t.is_empty() && !value.is_empty() => {
+                    format!("{t}:{value}")
+                }
+                (t, _, false) if !t.is_empty() => format!("{t}:{identifier}"),
+                // Rung (d): fallback
+                _ => "None".to_string(),
+            }
+        }
+    }
+}
+
+/// Format the `JSM internal:` field (field 5) from the comment's `properties` array.
+///
+/// Scans for `{"key":"sd.public.comment","value":{"internal":bool}}` in the
+/// properties array. Returns `"Yes"` / `"No"` / `"N/A"` (BC-3.5.010 Field-5 ladder).
+fn format_jsm_internal_field(properties: Option<&serde_json::Value>) -> &'static str {
+    let props = match properties.and_then(|v| v.as_array()) {
+        Some(arr) => arr,
+        None => return "N/A",
+    };
+    for prop in props {
+        if prop["key"].as_str() == Some("sd.public.comment") {
+            return match prop["value"]["internal"].as_bool() {
+                Some(true) => "Yes",
+                Some(false) => "No",
+                None => "N/A",
+            };
+        }
+    }
+    "N/A"
+}
+
 // ── Comment Edit ─────────────────────────────────────────────────────────
 
 /// Edit a comment body (optionally set visibility).
@@ -263,15 +322,93 @@ pub(super) async fn handle_comment_edit(
 
 /// View a single comment by ID.
 ///
-/// Stub. Implementation delivered in S-577-6.
+/// Fetches `GET /rest/api/3/issue/{key}/comment/{id}?expand=properties` and renders
+/// six labeled fields + an unlabeled body block (BC-3.5.010).
+///
+/// Pipeline:
+/// 1. `validate_comment_id` (EC-3.5.002-1) — exit 64 on bad charset
+/// 2. `client.get_comment(key, id)` — returns raw `serde_json::Value`
+/// 3. 404/403 → exit 64 + two-line body surface (BC-3.5.004 pattern)
+/// 4. `--output json` → `render_json` passthrough (EC-3.5.010-1, #526 invariant)
+/// 5. Human render: 6 labeled fields + unlabeled body block via `adf_to_text`
+///    (EC-3.5.010-2a: depth error → exit 64)
+///
 /// No `no_input` parameter — read-only handler, no interactive prompt.
 pub(super) async fn handle_comment_view(
-    _key: String,
-    _id: String,
-    _output_format: &OutputFormat,
-    _client: &JiraClient,
+    key: String,
+    id: String,
+    output_format: &OutputFormat,
+    client: &JiraClient,
 ) -> Result<()> {
-    todo!("comment view — implemented in S-577-6")
+    // Step 1: validate --id charset (EC-3.5.002-1)
+    validate_comment_id(&id)?;
+
+    // Step 2: fetch the comment (returns raw serde_json::Value — no typed round-trip)
+    let response: serde_json::Value = match client.get_comment(&key, &id).await {
+        Ok(v) => v,
+        Err(e) => {
+            // 404/403 → exit 64 + two-line body surface (BC-3.5.004 pattern).
+            let user_err_msg = {
+                match e.downcast_ref::<JrError>() {
+                    Some(JrError::ApiError { status, message })
+                        if *status == 404 || *status == 403 =>
+                    {
+                        Some(format!(
+                            "comment not found or permission denied: {key}#{id}\n{message}",
+                        ))
+                    }
+                    _ => None,
+                }
+            };
+            if let Some(msg) = user_err_msg {
+                return Err(JrError::UserError(msg).into());
+            }
+            return Err(e);
+        }
+    };
+
+    // Step 3: route to output format
+    match output_format {
+        OutputFormat::Json => {
+            // EC-3.5.010-1: raw serde_json::Value passthrough — no typed round-trip
+            // (#526 JSON render invariant: all JSON routes through render_json)
+            println!("{}", output::render_json(&response)?);
+        }
+        OutputFormat::Table => {
+            // 7-element human render: 6 labeled plain key-value lines + unlabeled body block.
+            // Timestamps (fields 3/4) rendered as raw ISO 8601 strings — do NOT reformat.
+            let id_val = response["id"].as_str().unwrap_or("(unknown)");
+            let author = response["author"]["displayName"]
+                .as_str()
+                .unwrap_or("(unknown)");
+            let created = response["created"].as_str().unwrap_or("(unknown)");
+            let updated = response["updated"].as_str().unwrap_or("(unknown)");
+            let jsm_internal = format_jsm_internal_field(response.get("properties"));
+            let restricted = format_restricted_field(response.get("visibility"));
+
+            // Fields 1–6 as plain key-value lines; blank-line separator before body block.
+            print!(
+                "ID: {id_val}\n\
+                 Author: {author}\n\
+                 Created: {created}\n\
+                 Updated: {updated}\n\
+                 JSM internal: {jsm_internal}\n\
+                 Restricted: {restricted}\n\
+                 \n"
+            );
+
+            // Body block (unlabeled, field 7): ADF → text via adf_to_text.
+            // EC-3.5.010-2(a): JrError::UserError from depth guard propagates as exit 64.
+            // When body key is absent, response["body"] == Value::Null → adf_to_text
+            // returns Ok("") → nothing printed after the blank-line separator.
+            let body_text = adf::adf_to_text(&response["body"])?;
+            if !body_text.is_empty() {
+                println!("{body_text}");
+            }
+        }
+    }
+
+    Ok(())
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────

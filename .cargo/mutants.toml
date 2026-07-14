@@ -35,16 +35,15 @@ examine_globs = [
 ]
 
 # Exclude todo!() stubs in interactions.rs that are unkillable by design.
-# These two functions (handle_comment_edit, handle_comment_view) are implemented
-# in future stories (S-577-4/6) and must not be mutated until then — a todo!()
-# body produces only one possible mutation (replace return with Ok(())) which
-# always panics at runtime, never caught.
-# IMPORTANT: remove this exclude_re entry when S-577-4/6 implement these stubs
-# (whichever lands last removes the whole entry).
+# handle_comment_edit is implemented in a future story (S-577-4/5) and must not
+# be mutated until then — a todo!() body produces only one possible mutation
+# (replace return with Ok(())) which always panics at runtime, never caught.
+# IMPORTANT: remove this exclude_re entry when S-577-4/5 implement the edit stub
+# (handle_comment_view was removed here when S-577-6 implemented it).
 # Note: #[mutants::skip] attribute (policy §Whitelist Convention) requires the
 # `mutants` crate (not in Cargo.toml); comment-based skip does not work in
 # cargo-mutants 27.0.0; exclude_re is the supported crate-free alternative.
-exclude_re = ["handle_comment_(edit|view)"]
+exclude_re = ["handle_comment_(edit)"]
 
 # The absolute per-mutant test ceiling is set via `--timeout 240` on the CLI
 # invocation (CI and local). There is no .cargo/mutants.toml key for it in
