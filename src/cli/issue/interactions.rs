@@ -582,4 +582,32 @@ mod tests {
              (loop exhausted without sd.public.comment match)"
         );
     }
+
+    // ── Mutation-kill: format_restricted_field rung (d) fallback ───────────
+    //
+    // Kills mutant #3 (CI run 29299750396):
+    //   interactions.rs — replace guard `!t.is_empty()` with `true`
+    //   in the rung (c-id) arm `(t, _, false) if !t.is_empty()`.
+    //
+    // With guard → true, a visibility with type="" (empty) and a non-empty
+    // identifier would match rung (c-id) and produce ":some-id" instead of
+    // "None". This test asserts that rung (d) fires for empty type, forcing
+    // the guard to actually check `!t.is_empty()` to survive the mutant.
+    #[test]
+    fn test_bc_3_5_010_format_restricted_empty_type_with_identifier_returns_none() {
+        // type = "" (empty) — must fall through to rung (d) → "None"
+        // If the `!t.is_empty()` guard were replaced with `true`, this would
+        // match rung (c-id) and produce ":some-id" instead.
+        let visibility = serde_json::json!({
+            "type": "",
+            "value": "",
+            "identifier": "some-id"
+        });
+        let result = format_restricted_field(Some(&visibility));
+        assert_eq!(
+            result, "None",
+            "BC-3.5.010 rung (d): empty type + non-empty identifier must fall \
+             through to rung (d) → 'None', not ':some-id'"
+        );
+    }
 }

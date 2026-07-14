@@ -924,3 +924,51 @@ async fn test_bc_3_5_010_degraded_fixture_fallback_tokens() {
          got stdout: {stdout}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Mutation-kill — non-404/403 API error propagates as exit 1
+// BC-3.5.010 — kills two guard mutations in handle_comment_view:
+//   mutant #1: replace `*status == 404 || *status == 403` with true
+//              → ANY ApiError would get exit 64 + preamble; 500 would match
+//   mutant #2: replace `== 403` with `!= 403`
+//              → 500 matches `500 != 403` = true → exit 64
+// With the correct guard, 500 is neither 404 nor 403, so the error propagates
+// as-is through `Err(e)`, which JrError maps to exit 1 (ApiError exit code).
+// ---------------------------------------------------------------------------
+
+/// Verify that a 500 Internal Server Error from the GET endpoint exits 1
+/// (not 64) and does NOT emit the "comment not found or permission denied"
+/// preamble.
+#[tokio::test]
+async fn test_bc_3_5_010_view_500_exits_1_not_64() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1/comment/10001"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(serde_json::json!({
+            "errorMessages": ["Internal server error"]
+        })))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["issue", "comment", "view", "FOO-1", "--id", "10001"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "BC-3.5.010 500-guard: 500 error must exit 1 (not 64); \
+         got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        !stderr.contains("comment not found or permission denied"),
+        "BC-3.5.010 500-guard: 500 error must NOT emit the 404/403 preamble; got: {stderr}"
+    );
+}
