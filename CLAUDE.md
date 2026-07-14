@@ -21,7 +21,7 @@ src/
 │   │   ├── edit.rs          # issue edit: single + bulk field/label/type paths, dry-run, type-error enrichment; extracted from create.rs (Seam B, ADR-0012)
 │   │   ├── jsm_create.rs    # JSM `handle_jsm_create` path + RT-id resolution (extracted from create.rs, ADR-0012/ADR-0014)
 │   │   ├── workflow.rs      # move + transitions + assign + open
-│   │   ├── interactions.rs  # comment CRUD handlers: add, delete (stub), edit (stub), view (stub) (S-577-1+)
+│   │   ├── interactions.rs  # comment CRUD handlers: add, delete, edit (body-only), view (S-577-1..6); visibility flags deferred to S-577-5
 │   │   ├── links.rs         # link + unlink + link-types
 │   │   ├── helpers.rs       # team/points resolution, user resolution, prompts
 │   │   ├── assets.rs        # linked assets (issue→asset lookup)

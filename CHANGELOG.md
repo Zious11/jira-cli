@@ -11,7 +11,7 @@ All notable changes to jr will be documented here.
   `jr issue comment add KEY "message"`. Invoking the flat form now exits 2 with a
   migration hint: `error: use \`jr issue comment add\` instead`.
   The `add` subcommand accepts the same flags (`--stdin`, `--file`, `--markdown`,
-  `--internal`). New subcommands `delete` (S-577-3), `edit` (S-577-4), and `view`
+  `--internal`). New subcommands `delete` (S-577-3), `edit` (body-only, S-577-4), and `view`
   (S-577-6) are all fully implemented in this release.
 
 ### Added
