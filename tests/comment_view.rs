@@ -853,3 +853,74 @@ async fn test_bc_3_5_010_body_absent_empty_block_stdout_ends_restricted_none() {
          got stdout: {stdout:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// BC-3.5.010 — fallback tokens for absent/null header fields
+// ---------------------------------------------------------------------------
+
+/// Verify graceful-degradation tokens for all four required-but-possibly-absent
+/// header fields (BC-3.5.010 spec pins:
+///   field 1 ID  → "N/A" when `id` key absent
+///   field 2 Author → "Unknown" when `author` is null or `displayName` absent
+///   field 3 Created → "N/A" when `created` key absent
+///   field 4 Updated → "N/A" when `updated` key absent
+///
+/// Fixture: `author: null` (anonymized/deleted user — real Jira case);
+/// `id`, `created`, `updated` keys omitted.
+///
+/// Must be RED against code using `unwrap_or("(unknown)")` for all four fields.
+#[tokio::test]
+async fn test_bc_3_5_010_degraded_fixture_fallback_tokens() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1/comment/10001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            // id, created, updated keys deliberately absent
+            "author": null   // null author — GDPR-anonymized or deleted user
+            // no body, no visibility, no properties
+        })))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["issue", "comment", "view", "FOO-1", "--id", "10001"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "BC-3.5.010 degraded: must exit 0; got {:?}\nstderr: {stderr}\nstdout: {stdout}",
+        output.status.code()
+    );
+    // BC-3.5.010 pin: field 1 absent id → "N/A"
+    assert!(
+        stdout.contains("ID: N/A"),
+        "BC-3.5.010 degraded: stdout must contain 'ID: N/A' when id key absent; \
+         got stdout: {stdout}"
+    );
+    // BC-3.5.010 pin: field 2 null author → "Unknown"
+    assert!(
+        stdout.contains("Author: Unknown"),
+        "BC-3.5.010 degraded: stdout must contain 'Author: Unknown' when author is null; \
+         got stdout: {stdout}"
+    );
+    // BC-3.5.010 pin: field 3 absent created → "N/A"
+    assert!(
+        stdout.contains("Created: N/A"),
+        "BC-3.5.010 degraded: stdout must contain 'Created: N/A' when created key absent; \
+         got stdout: {stdout}"
+    );
+    // BC-3.5.010 pin: field 4 absent updated → "N/A"
+    assert!(
+        stdout.contains("Updated: N/A"),
+        "BC-3.5.010 degraded: stdout must contain 'Updated: N/A' when updated key absent; \
+         got stdout: {stdout}"
+    );
+}
