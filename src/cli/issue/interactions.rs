@@ -377,12 +377,16 @@ pub(super) async fn handle_comment_view(
         OutputFormat::Table => {
             // 7-element human render: 6 labeled plain key-value lines + unlabeled body block.
             // Timestamps (fields 3/4) rendered as raw ISO 8601 strings — do NOT reformat.
-            let id_val = response["id"].as_str().unwrap_or("(unknown)");
+            // BC-3.5.010 fallback tokens (normative per spec):
+            //   field 1 id  → "N/A" when absent/null
+            //   field 2 author.displayName → "Unknown" when author null or displayName absent
+            //   fields 3/4 created/updated → "N/A" when absent/null
+            let id_val = response["id"].as_str().unwrap_or("N/A");
             let author = response["author"]["displayName"]
                 .as_str()
-                .unwrap_or("(unknown)");
-            let created = response["created"].as_str().unwrap_or("(unknown)");
-            let updated = response["updated"].as_str().unwrap_or("(unknown)");
+                .unwrap_or("Unknown");
+            let created = response["created"].as_str().unwrap_or("N/A");
+            let updated = response["updated"].as_str().unwrap_or("N/A");
             let jsm_internal = format_jsm_internal_field(response.get("properties"));
             let restricted = format_restricted_field(response.get("visibility"));
 
