@@ -23,6 +23,18 @@ All notable changes to jr will be documented here.
   `workflow.rs` to a new `src/cli/issue/interactions.rs` shard per ADR-0012 /
   PF-017.
 
+- **`jr issue comment view KEY --id ID` — read a single comment (S-577-6, #577):**
+  `jr issue comment view FOO-1 --id 10001` fetches the comment with
+  `GET /rest/api/3/issue/{key}/comment/{id}?expand=properties` and renders six
+  labeled fields (ID, Author, Created, Updated, JSM internal, Restricted) plus
+  an unlabeled body block rendered via ADF-to-text. The `JSM internal:` field
+  shows `Yes`/`No`/`N/A` from the `sd.public.comment` entity property. The
+  `Restricted:` field uses a 4-rung ladder (role/group value, `id=<identifier>`,
+  `<type>:<value>`, or `None`). `--output json` passes the raw API response
+  through losslessly (`serde_json::Value` passthrough — no typed round-trip that
+  would silently drop extra fields). Invalid `--id` charset exits 64; 404/403
+  exits 64 with Jira's error body surfaced; deep ADF nesting exits 64.
+
 - **CI: BC-body Trace/Source citation guard (Guard 1) (DEC-148):** adds
   `scripts/check-bc-citation-symbols.sh` (BC-CITE-001; validates `src/` file and symbol
   citations in `**Trace**:`/`**Source**:` fields of all `bc-*.md` bodies; definition-anchored
