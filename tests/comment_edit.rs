@@ -89,9 +89,7 @@ async fn test_bc_3_5_005_edit_response_exact_key_set() {
     );
 
     let parsed: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
-        panic!(
-            "AC-001 JSON: stdout must be valid JSON; parse error: {e}\nstdout: {stdout}"
-        )
+        panic!("AC-001 JSON: stdout must be valid JSON; parse error: {e}\nstdout: {stdout}")
     });
 
     let top_keys: BTreeSet<&str> = parsed
@@ -135,7 +133,15 @@ async fn test_bc_3_5_005_edit_response_exact_key_set() {
         .await;
 
     let output2 = jr_cmd(&server2.uri(), cache_dir2.path(), config_dir2.path())
-        .args(["issue", "comment", "edit", "FOO-1", "--id", "10001", "Updated text"])
+        .args([
+            "issue",
+            "comment",
+            "edit",
+            "FOO-1",
+            "--id",
+            "10001",
+            "Updated text",
+        ])
         .output()
         .unwrap();
 
@@ -226,10 +232,15 @@ async fn test_bc_3_5_005_edit_changed_fields_body_is_raw_pre_trim() {
 
     // Assertion 2: PUT wire body ADF text node must be trimmed
     let reqs = server.received_requests().await.unwrap();
-    assert_eq!(reqs.len(), 1, "AC-002: expected exactly 1 PUT request; got {}", reqs.len());
+    assert_eq!(
+        reqs.len(),
+        1,
+        "AC-002: expected exactly 1 PUT request; got {}",
+        reqs.len()
+    );
 
-    let put_body: Value = serde_json::from_slice(&reqs[0].body)
-        .expect("AC-002: PUT request body must be valid JSON");
+    let put_body: Value =
+        serde_json::from_slice(&reqs[0].body).expect("AC-002: PUT request body must be valid JSON");
 
     let adf_text = put_body["body"]["content"][0]["content"][0]["text"].as_str();
     assert_eq!(
@@ -266,7 +277,15 @@ async fn test_bc_3_5_005_ec1_put_request_has_only_body_key() {
 
     let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
-            "issue", "comment", "edit", "FOO-1", "--id", "10001", "body text", "--output", "json",
+            "issue",
+            "comment",
+            "edit",
+            "FOO-1",
+            "--id",
+            "10001",
+            "body text",
+            "--output",
+            "json",
         ])
         .output()
         .unwrap();
@@ -282,10 +301,15 @@ async fn test_bc_3_5_005_ec1_put_request_has_only_body_key() {
     );
 
     let reqs = server.received_requests().await.unwrap();
-    assert_eq!(reqs.len(), 1, "AC-003: expected exactly 1 PUT request; got {}", reqs.len());
+    assert_eq!(
+        reqs.len(),
+        1,
+        "AC-003: expected exactly 1 PUT request; got {}",
+        reqs.len()
+    );
 
-    let body_json: Value = serde_json::from_slice(&reqs[0].body)
-        .expect("AC-003: PUT request body must be valid JSON");
+    let body_json: Value =
+        serde_json::from_slice(&reqs[0].body).expect("AC-003: PUT request body must be valid JSON");
 
     assert!(
         body_json.get("properties").is_none(),
@@ -328,7 +352,7 @@ async fn test_bc_3_5_009_edit_file_body_source() {
 
     // Create a temp file with body content
     let mut tmp = tempfile::NamedTempFile::new().unwrap();
-    write!(tmp, "body from file\n").unwrap();
+    writeln!(tmp, "body from file").unwrap();
     let file_path = tmp.path().to_str().unwrap().to_owned();
 
     Mock::given(method("PUT"))
@@ -340,15 +364,7 @@ async fn test_bc_3_5_009_edit_file_body_source() {
 
     let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
-            "issue",
-            "comment",
-            "edit",
-            "FOO-1",
-            "--id",
-            "10001",
-            "--file",
-            &file_path,
-            "--output",
+            "issue", "comment", "edit", "FOO-1", "--id", "10001", "--file", &file_path, "--output",
             "json",
         ])
         .output()

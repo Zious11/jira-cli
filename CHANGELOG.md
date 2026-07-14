@@ -16,6 +16,16 @@ All notable changes to jr will be documented here.
 
 ### Added
 
+- **`jr issue comment edit` — body sources + body-only PUT (S-577-4, issue #577):**
+  `jr issue comment edit KEY --id ID [BODY | --file F | --stdin]` updates a comment's
+  body via a body-only PUT request (`{"body": <adf>}` — no `"properties"` key in the
+  default path). Four body sources are supported: positional text, `--file`, `--stdin`,
+  and `--markdown` (modifier). Guards: `--id` charset validation (exit 64),
+  file-not-found → exit 64 (explicit remap, not exit 1), empty/whitespace body → exit 64.
+  `--output json` returns `{changed_fields:{body:<raw-pre-trim>},id,key,updated:true}`.
+  Human mode prints `"Updated comment ID on KEY"` to stderr.
+  404/403 → exit 64 with dual-line preamble + Jira error body surface.
+
 - **`jr issue comment add/delete/edit/view` subcommand group (S-577-1):**
   `jr issue comment` is now a subcommand group. `add` is fully implemented
   (replaces the old flat form). `delete`, `edit`, and `view` are stubs to be

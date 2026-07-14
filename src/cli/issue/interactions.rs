@@ -298,24 +298,132 @@ fn format_jsm_internal_field(properties: Option<&serde_json::Value>) -> &'static
 
 // ── Comment Edit ─────────────────────────────────────────────────────────
 
-/// Edit a comment body (optionally set visibility).
+/// Edit a comment body (body-only PUT; default no-visibility-flag path).
 ///
-/// Stub. Implementation delivered in S-577-4/5.
-/// Takes `_sub: CommentSubcommand` (the full `Edit` variant) so S-577-4/5 can
-/// destructure individual fields from the owned enum value without a signature
-/// change. Using a single enum parameter keeps the parameter count below the
-/// `clippy::too_many_arguments` threshold (mirrors the `handle_move` /
-/// `handle_assign` pattern in `workflow.rs`, which each receive the full
-/// `IssueCommand`).
-/// `_no_input` is the final parameter (confirmation-gate contract for the
-/// `--public` visibility-change confirmation prompt).
+/// Implemented in S-577-4 (body sources + body-only PUT). S-577-5 extends this
+/// handler with `--internal`/`--public` visibility flags and the `--public`
+/// confirmation gate that consumes `no_input`.
+///
+/// Pipeline (BC-3.5.009 edit-pipeline ordering pin):
+/// 1. `validate_comment_id` (EC-3.5.002-1) — exit 64 on bad charset
+/// 2. Body source resolution — `--file` (NotFound → exit 64), `--stdin`, positional,
+///    or no source → exit 64 "body is required"
+/// 3. Empty/whitespace guard (EC-3.5.009-5) — exit 64 "comment body cannot be empty"
+/// 4. ADF conversion: trim then `text_to_adf` or `markdown_to_adf`; raw pre-trim
+///    input stashed for `changed_fields.body` echo (BC-3.5.005 raw echo pin)
+/// 5. HTTP PUT — `update_comment(key, id, adf_body, None)` (None = body-only)
+///    200 → success; 404/403 → exit 64 + two-line body surface (BC-3.5.004)
+/// 6. JSON: `{changed_fields:{body:<raw>},id,key,updated:true}` via render_json (#526)
+///
+/// `_no_input` stays prefixed here — the body-only default path has no
+/// confirmation gate. S-577-5 will un-prefix it when the `--public` gate lands.
 pub(super) async fn handle_comment_edit(
-    _sub: CommentSubcommand,
-    _output_format: &OutputFormat,
-    _client: &JiraClient,
+    sub: CommentSubcommand,
+    output_format: &OutputFormat,
+    client: &JiraClient,
     _no_input: bool,
 ) -> Result<()> {
-    todo!("comment edit — implemented in S-577-4/S-577-5")
+    let CommentSubcommand::Edit {
+        key,
+        text,
+        id,
+        file,
+        stdin,
+        markdown,
+        internal: _,
+        public: _,
+        yes: _,
+    } = sub
+    else {
+        unreachable!("handle_comment_edit called with non-Edit variant")
+    };
+
+    // Step 1: validate --id charset (EC-3.5.002-1)
+    validate_comment_id(&id)?;
+
+    // Step 2: body source resolution (BC-3.5.009 pipeline step 2).
+    // Order: --file → --stdin → positional text → no source (exit 64).
+    let body = if let Some(ref path) = file {
+        // EC-3.5.009-1: NotFound → exit 64 via UserError; other IO errors propagate via ?
+        // (permission-denied, is-a-directory, etc. are NOT remapped to "file not found").
+        std::fs::read_to_string(path).map_err(|e| -> anyhow::Error {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                JrError::UserError(format!("file not found: {path}")).into()
+            } else {
+                e.into()
+            }
+        })?
+    } else if stdin {
+        // spawn_blocking isolates the blocking stdin read from the tokio runtime.
+        tokio::task::spawn_blocking(|| {
+            let mut buf = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;
+            Ok::<_, std::io::Error>(buf)
+        })
+        .await??
+    } else if let Some(ref msg) = text {
+        msg.clone()
+    } else {
+        return Err(JrError::UserError(
+            "body is required — use --file, --stdin, or pass text as a positional argument.".into(),
+        )
+        .into());
+    };
+
+    // Step 3: empty/whitespace guard (EC-3.5.009-5)
+    if body.trim().is_empty() {
+        return Err(JrError::UserError("comment body cannot be empty.".into()).into());
+    }
+
+    // Step 4: stash raw pre-trim body (BC-3.5.005 raw echo pin — changed_fields.body
+    // carries the raw user input, NOT the trimmed or ADF-converted value).
+    let raw = body; // body moved into raw; raw is the original untrimmed content
+    let trimmed = raw.trim().to_string();
+    let adf_body = if markdown {
+        adf::markdown_to_adf(&trimmed)?
+    } else {
+        adf::text_to_adf(&trimmed)
+    };
+
+    // Step 5: HTTP PUT — body-only (None = no visibility flag, this story's scope).
+    // update_comment returns Result<()>; the Jira response body is discarded.
+    match client.update_comment(&key, &id, adf_body, None).await {
+        Ok(()) => {
+            // Step 6: build response JSON from local state (NOT from Jira PUT response).
+            // "updated": true is a literal boolean constant — not parsed from the API.
+            match output_format {
+                OutputFormat::Json => {
+                    println!(
+                        "{}",
+                        output::render_json(&serde_json::json!({
+                            "changed_fields": { "body": raw },
+                            "id": id,
+                            "key": key,
+                            "updated": true
+                        }))?
+                    );
+                }
+                OutputFormat::Table => {
+                    output::print_success(&format!("Updated comment {id} on {key}"));
+                }
+            }
+            Ok(())
+        }
+        Err(e) => {
+            // 404/403 → exit 64 + two-line body surface (BC-3.5.004, mirrors delete handler).
+            // 404 is NOT idempotent; re-wrap as UserError so main.rs emits exit 64.
+            let user_err_msg = match e.downcast_ref::<JrError>() {
+                Some(JrError::ApiError { status, message }) if *status == 404 || *status == 403 => {
+                    Some(format!("comment not found or permission denied\n{message}"))
+                }
+                _ => None,
+            };
+            if let Some(msg) = user_err_msg {
+                return Err(JrError::UserError(msg).into());
+            }
+            Err(e)
+        }
+    }
 }
 
 // ── Comment View ─────────────────────────────────────────────────────────
