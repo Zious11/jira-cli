@@ -601,8 +601,8 @@ mod tests {
     // (e.g. test_markdown_to_adf_depth_256_blockquote_is_err).
     //
     // This test is GREEN-throughout (not a Red Gate participant): it calls
-    // adf_to_text directly, which is fully implemented. The handle_comment_view
-    // stub being todo!() does NOT affect this test.
+    // adf_to_text directly, which is fully implemented. This test is independent
+    // of handle_comment_view (which has its own subprocess coverage in tests/comment_view.rs).
     #[test]
     fn test_bc_3_5_010_ec2a_adf_error_propagates_exit64() {
         // Build a 257-deep ADF node entirely in memory via Value construction

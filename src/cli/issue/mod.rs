@@ -83,8 +83,8 @@ pub async fn handle(
                 interactions::handle_comment_delete(key, id, yes, output_format, client, no_input)
                     .await
             }
-            // Pass the whole Edit variant so handle_comment_edit (stub, S-577-4/5)
-            // can destructure individual fields when implemented.
+            // Pass the whole Edit variant so handle_comment_edit can destructure
+            // individual fields (body-only shipped S-577-4; visibility flags consumed in S-577-5).
             sub @ CommentSubcommand::Edit { .. } => {
                 interactions::handle_comment_edit(sub, output_format, client, no_input).await
             }
