@@ -16,6 +16,22 @@ All notable changes to jr will be documented here.
 
 ### Added
 
+- **`jr issue comment edit --internal/--public` — visibility flags + public confirmation gate (S-577-5, closes #577):**
+  `--internal` sets `sd.public.comment={internal:true}` on the comment (agent-only
+  on JSM projects); `--public` sets `{internal:false}` (visible to customers).
+  Both use **MERGE semantics**: the PUT `properties` array is merged with existing
+  properties — an unrelated property (e.g. `jr.test.marker`) is not clobbered.
+  A body-only edit (no flag) sends no `"properties"` key; existing visibility is
+  PRESERVED unchanged. `--public` requires confirmation: interactive mode prompts
+  `"Confirm? [y/N]"`; non-interactive exits 64 with a `--yes` hint unless `--yes`
+  is supplied. `--stdin` implies `--no-input` (flag-based, TTY-agnostic). On cancel
+  the JSON path returns `{"cancelled":true,"updated":false}`. JSDCLOUD-6050 hint
+  fires to stderr on either flag (best-effort on JSM; no-op on non-JSM). JSON
+  response includes `changed_fields.jsm_internal: true/false` only when a visibility
+  flag was passed; absent in the default body-only path.
+  `--yes` without `--public` exits 64 (caught at runtime via Clap `requires`).
+  This is the last story of bundle SOH-COMMENT-CRUD-1 (wave D).
+
 - **`jr issue comment edit` — body sources + body-only PUT (S-577-4, issue #577):**
   `jr issue comment edit KEY --id ID [BODY | --file F | --stdin]` updates a comment's
   body via a body-only PUT request (`{"body": <adf>}` — no `"properties"` key in the

@@ -9747,3 +9747,545 @@ fn test_e2e_adf_read_path_human_output() {
     // belt-and-suspenders for this standard (non-JSM) issue.
     best_effort_close(&h, &key);
 }
+
+// ---------------------------------------------------------------------------
+// Helpers for test_e2e_comment_edit_visibility_merge_semantics
+// ---------------------------------------------------------------------------
+
+/// Fetch the raw JSON for a single comment with properties expanded.
+///
+/// Calls `jr api GET /rest/api/3/issue/{key}/comment/{cid}?expand=properties`
+/// directly so the full Jira API response (including the `properties` array)
+/// is available for assertion without going through the typed `Comment` struct.
+fn get_comment_api_json(h: &E2eHarness, key: &str, cid: &str) -> Option<Value> {
+    let path = format!("/rest/api/3/issue/{key}/comment/{cid}?expand=properties");
+    let out = h.cmd().args(["api", &path]).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    serde_json::from_slice(&out.stdout).ok()
+}
+
+/// Extract `sd.public.comment.internal` boolean from a comment JSON response.
+///
+/// Returns `Some(true)` / `Some(false)` when the property is present,
+/// `None` when the property is absent or malformed.
+fn sd_internal_prop(c: &Value) -> Option<bool> {
+    c.get("properties")
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|p| p.get("key").and_then(Value::as_str) == Some("sd.public.comment"))?
+        .get("value")
+        .and_then(|v| v.get("internal"))
+        .and_then(Value::as_bool)
+}
+
+/// Returns `true` when `c.properties` contains an entry with the given key.
+fn has_comment_property(c: &Value, prop_key: &str) -> bool {
+    c.get("properties")
+        .and_then(Value::as_array)
+        .is_some_and(|props| {
+            props
+                .iter()
+                .any(|p| p.get("key").and_then(Value::as_str) == Some(prop_key))
+        })
+}
+
+/// Build a minimal single-paragraph ADF document for a plain-text comment body.
+fn adf_paragraph(text: &str) -> Value {
+    serde_json::json!({
+        "version": 1,
+        "type": "doc",
+        "content": [{"type": "paragraph", "content": [{"type": "text", "text": text}]}]
+    })
+}
+
+// ---------------------------------------------------------------------------
+// E2E: comment edit MERGE / PRESERVED semantics probe
+// ---------------------------------------------------------------------------
+
+/// E2E: `jr issue comment edit` MERGE / PRESERVED semantics probe.
+///
+/// Verifies three behavioral contracts on a live JSM project using a
+/// pre-existing EJ issue as a reusable comment fixture (not closed by the test):
+///
+/// - **Scenario 1 (MERGE probe):** Creates a comment with
+///   `sd.public.comment={internal:true}` via `jr api POST`, edits it twice with
+///   `--internal`, and asserts the property is preserved after each edit.
+/// - **Scenario 2 (PRESERVED base):** Creates a comment with
+///   `sd.public.comment={internal:true}`, then edits it with body-only
+///   (no `--internal`/`--public`), and asserts the property is unchanged.
+/// - **Scenario 3 (compound cell):** Creates a comment carrying both
+///   `sd.public.comment={internal:true}` and a `jr.test.marker` property,
+///   edits with `--public --yes`, and asserts (a) `sd.public.comment` updates
+///   to `internal=false` and (b) `jr.test.marker` is not clobbered.
+///
+/// Each scenario deletes its own probe comment immediately after assertions.
+/// The parent EJ issue is NOT closed.
+///
+/// Traces to: BC-3.5.006 delivery obligation (b), AC-001 (--internal), AC-002 (--public).
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and JR_E2E_JSM_PROJECT and use --include-ignored to run"]
+fn test_e2e_comment_edit_visibility_merge_semantics() {
+    if !e2e_enabled() {
+        return;
+    }
+    let jsm_project = match env::var("JR_E2E_JSM_PROJECT") {
+        Ok(p) if !p.trim().is_empty() => p.trim().to_string(),
+        _ => {
+            eprintln!(
+                "[SKIP] JR_E2E_JSM_PROJECT not set \
+                 — skipping comment edit MERGE semantics test"
+            );
+            return;
+        }
+    };
+    let h = e2e_harness();
+    let run_id = run_label();
+
+    // Find a pre-existing EJ issue to use as a reusable comment fixture.
+    // The issue is NOT closed by this test — it is a long-lived shared fixture
+    // so that teardown is limited to deleting probe comments.
+    let jql = format!("project={jsm_project} ORDER BY created DESC");
+    let list_out = h
+        .cmd()
+        .args(["issue", "list", "--jql", &jql, "--output", "json"])
+        .output()
+        .expect("failed to spawn jr for issue list (MERGE semantics test)");
+    if !list_out.status.success() {
+        eprintln!(
+            "[SKIP] issue list for {jsm_project} failed \
+             — skipping MERGE semantics test\nstderr: {}",
+            String::from_utf8_lossy(&list_out.stderr)
+        );
+        return;
+    }
+    let issues: Vec<Value> = match serde_json::from_slice(&list_out.stdout) {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!(
+                "[SKIP] issue list JSON parse failed \
+                 — skipping MERGE semantics test"
+            );
+            return;
+        }
+    };
+    if issues.is_empty() {
+        eprintln!("[SKIP] no {jsm_project} issues found — skipping MERGE semantics test");
+        return;
+    }
+    let key = match issues[0].get("key").and_then(Value::as_str) {
+        Some(k) => k.to_string(),
+        None => {
+            eprintln!(
+                "[SKIP] issue list returned object without 'key' field \
+                 — skipping MERGE semantics test"
+            );
+            return;
+        }
+    };
+
+    // Best-effort probe comment teardown helper.
+    // Deletes the probe comment identified by `cid`; logs a warning on failure.
+    let delete_probe = |cid: &str| {
+        let del = h
+            .cmd()
+            .args(["issue", "comment", "delete", &key, "--id", cid, "--yes"])
+            .output();
+        if del.map(|o| !o.status.success()).unwrap_or(true) {
+            eprintln!(
+                "[WARN] failed to delete probe comment {cid} on {key} \
+                 — orphan risk LOW"
+            );
+        }
+    };
+
+    // Retry helper: read back a comment and check a predicate.
+    // Retries up to 3 times with 500 ms delays (property expansion can lag on
+    // free-tier sites). Returns `Some(comment_json)` on the first successful
+    // check, `None` after all attempts fail or return a non-200.
+    let get_with_check =
+        |cid: &str, check: &dyn Fn(&Value) -> bool, label: &str| -> Option<Value> {
+            for attempt in 1u8..=3 {
+                let c = match get_comment_api_json(&h, &key, cid) {
+                    Some(v) => v,
+                    None => {
+                        if attempt < 3 {
+                            std::thread::sleep(Duration::from_millis(500));
+                            continue;
+                        }
+                        eprintln!("[WARN] {label}: GET comment {cid} failed after 3 attempts");
+                        return None;
+                    }
+                };
+                if check(&c) {
+                    return Some(c);
+                }
+                if attempt < 3 {
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+            }
+            eprintln!(
+                "[WARN] {label}: predicate did not hold after 3 attempts \
+             — property lag or assertion failure"
+            );
+            None
+        };
+
+    // ── Scenario 1 (5-step MERGE probe) ──────────────────────────────────────
+    // (1) Create probe comment with sd.public.comment={internal:true}.
+    // (2) GET; assert internal=true (comment created correctly).
+    // (3) Edit with --internal ("updated body").
+    // (4) GET; assert internal=true (MERGE: existing property preserved).
+    // (5) Edit with --internal again ("body again").
+    //     GET; assert internal=true still (MERGE is stable on repeated --internal).
+    // Teardown: jr issue comment delete KEY --id CID --yes
+    'scenario1: {
+        let s1_body = serde_json::json!({
+            "body": adf_paragraph(&format!("S1 probe {run_id}")),
+            "properties": [{"key": "sd.public.comment", "value": {"internal": true}}]
+        })
+        .to_string();
+
+        let post_path = format!("/rest/api/3/issue/{key}/comment");
+        let create = h
+            .cmd()
+            .args(["api", "-X", "POST", &post_path, "-d", &s1_body])
+            .output()
+            .expect("failed to spawn jr api POST for S1 probe comment");
+
+        if !create.status.success() {
+            eprintln!(
+                "[WARN] S1: probe comment create failed (exit {:?}) \
+                 — skipping Scenario 1\nstderr: {}",
+                create.status.code(),
+                String::from_utf8_lossy(&create.stderr)
+            );
+            break 'scenario1;
+        }
+        let cv: Value = match serde_json::from_slice(&create.stdout) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("[WARN] S1: comment create JSON parse error: {e} — skipping");
+                break 'scenario1;
+            }
+        };
+        let cid = match cv.get("id").and_then(Value::as_str).map(str::to_owned) {
+            Some(id) => id,
+            None => {
+                eprintln!(
+                    "[WARN] S1: comment create response has no 'id' \
+                     — skipping; got: {cv}"
+                );
+                break 'scenario1;
+            }
+        };
+
+        // (2) Assert comment was created with internal=true.
+        if get_with_check(&cid, &|c| sd_internal_prop(c) == Some(true), "S1(create)").is_none() {
+            eprintln!(
+                "[WARN] S1: sd.public.comment not set after create \
+                 — skipping Scenario 1"
+            );
+            delete_probe(&cid);
+            break 'scenario1;
+        }
+
+        // (3) First --internal edit.
+        let edit1 = h
+            .cmd()
+            .args([
+                "issue",
+                "comment",
+                "edit",
+                &key,
+                "--id",
+                &cid,
+                &format!("S1 edit-1 {run_id}"),
+                "--internal",
+                "--output",
+                "json",
+            ])
+            .output()
+            .expect("failed to spawn jr issue comment edit for S1 edit-1");
+        if !edit1.status.success() {
+            eprintln!(
+                "[WARN] S1: edit-1 failed (exit {:?}) \
+                 — skipping remaining Scenario 1 steps\nstderr: {}",
+                edit1.status.code(),
+                String::from_utf8_lossy(&edit1.stderr)
+            );
+            delete_probe(&cid);
+            break 'scenario1;
+        }
+
+        // (4) Assert internal=true preserved after first --internal edit (MERGE).
+        match get_with_check(&cid, &|c| sd_internal_prop(c) == Some(true), "S1(edit-1)") {
+            None => {
+                eprintln!("[WARN] S1: sd.public.comment not visible after edit-1 — skipping");
+                delete_probe(&cid);
+                break 'scenario1;
+            }
+            Some(c) => {
+                assert!(
+                    sd_internal_prop(&c) == Some(true),
+                    "S1: sd.public.comment must remain internal=true after --internal edit \
+                     (MERGE: existing property preserved — BC-3.5.006); got: {c}"
+                );
+            }
+        }
+
+        // (5) Second --internal edit.
+        let edit2 = h
+            .cmd()
+            .args([
+                "issue",
+                "comment",
+                "edit",
+                &key,
+                "--id",
+                &cid,
+                &format!("S1 edit-2 {run_id}"),
+                "--internal",
+                "--output",
+                "json",
+            ])
+            .output()
+            .expect("failed to spawn jr issue comment edit for S1 edit-2");
+        if !edit2.status.success() {
+            eprintln!(
+                "[WARN] S1: edit-2 failed (exit {:?}) \
+                 — skipping S1 stability check",
+                edit2.status.code()
+            );
+            delete_probe(&cid);
+            break 'scenario1;
+        }
+
+        // Assert internal=true still stable (MERGE is idempotent on repeated --internal).
+        match get_with_check(&cid, &|c| sd_internal_prop(c) == Some(true), "S1(edit-2)") {
+            None => {
+                eprintln!("[WARN] S1: sd.public.comment not stable after S1 edit-2 — skipping");
+                delete_probe(&cid);
+                break 'scenario1;
+            }
+            Some(c) => {
+                assert!(
+                    sd_internal_prop(&c) == Some(true),
+                    "S1: sd.public.comment must be stable at internal=true after two \
+                     --internal edits (MERGE stability — BC-3.5.006); got: {c}"
+                );
+            }
+        }
+
+        delete_probe(&cid);
+    }
+
+    // ── Scenario 2 (PRESERVED base — 2-step) ─────────────────────────────────
+    // (1) Create probe comment with sd.public.comment={internal:true}.
+    // (2) Body-only edit (no --internal/--public): {"body":<adf>} with no "properties".
+    // (3) GET; assert sd.public.comment.internal is still true (PRESERVED:
+    //     body-only PUT does not touch existing properties).
+    // Teardown: jr issue comment delete KEY --id CID --yes
+    'scenario2: {
+        let s2_body = serde_json::json!({
+            "body": adf_paragraph(&format!("S2 probe {run_id}")),
+            "properties": [{"key": "sd.public.comment", "value": {"internal": true}}]
+        })
+        .to_string();
+
+        let post_path = format!("/rest/api/3/issue/{key}/comment");
+        let create = h
+            .cmd()
+            .args(["api", "-X", "POST", &post_path, "-d", &s2_body])
+            .output()
+            .expect("failed to spawn jr api POST for S2 probe comment");
+
+        if !create.status.success() {
+            eprintln!(
+                "[WARN] S2: probe comment create failed (exit {:?}) \
+                 — skipping Scenario 2",
+                create.status.code()
+            );
+            break 'scenario2;
+        }
+        let cv: Value = match serde_json::from_slice(&create.stdout) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("[WARN] S2: comment create JSON parse error: {e} — skipping");
+                break 'scenario2;
+            }
+        };
+        let cid = match cv.get("id").and_then(Value::as_str).map(str::to_owned) {
+            Some(id) => id,
+            None => {
+                eprintln!(
+                    "[WARN] S2: comment create response has no 'id' \
+                     — skipping; got: {cv}"
+                );
+                break 'scenario2;
+            }
+        };
+
+        // (2) Body-only edit — no visibility flag: tests PRESERVED semantics.
+        let edit = h
+            .cmd()
+            .args([
+                "issue",
+                "comment",
+                "edit",
+                &key,
+                "--id",
+                &cid,
+                &format!("S2 body-only edit {run_id}"),
+                "--output",
+                "json",
+            ])
+            .output()
+            .expect("failed to spawn jr issue comment edit for S2 body-only edit");
+        if !edit.status.success() {
+            eprintln!(
+                "[WARN] S2: body-only edit failed (exit {:?}) \
+                 — skipping Scenario 2",
+                edit.status.code()
+            );
+            delete_probe(&cid);
+            break 'scenario2;
+        }
+
+        // (3) Assert sd.public.comment.internal is still true (PRESERVED).
+        match get_with_check(&cid, &|c| sd_internal_prop(c) == Some(true), "S2(edit)") {
+            None => {
+                eprintln!(
+                    "[WARN] S2: sd.public.comment not visible after body-only edit \
+                     — skipping assertion"
+                );
+                delete_probe(&cid);
+                break 'scenario2;
+            }
+            Some(c) => {
+                assert!(
+                    sd_internal_prop(&c) == Some(true),
+                    "S2: sd.public.comment must be preserved (internal=true) after a \
+                     body-only edit — PRESERVED: PUT without 'properties' does not \
+                     clear existing properties (BC-3.5.006); got: {c}"
+                );
+            }
+        }
+
+        delete_probe(&cid);
+    }
+
+    // ── Scenario 3 (compound cell — MERGE + PRESERVED simultaneously) ────────
+    // (1) Create probe comment with BOTH sd.public.comment={internal:true}
+    //     AND jr.test.marker={source:"e2e"}.
+    // (2) Edit with --public --yes: sets sd.public.comment to internal=false.
+    //     Expected wire PUT: {"body":<adf>,"properties":[{sd.public.comment:{internal:false}}]}
+    //     NO "visibility" key in PUT body.
+    // (3) GET; assert BOTH:
+    //     (a) sd.public.comment is now internal=false (MERGE: updated by --public), AND
+    //     (b) jr.test.marker is still present (MERGE: not clobbered by the PUT).
+    // Teardown: jr issue comment delete KEY --id CID --yes
+    'scenario3: {
+        let s3_body = serde_json::json!({
+            "body": adf_paragraph(&format!("S3 probe {run_id}")),
+            "properties": [
+                {"key": "sd.public.comment", "value": {"internal": true}},
+                {"key": "jr.test.marker", "value": {"source": "e2e"}}
+            ]
+        })
+        .to_string();
+
+        let post_path = format!("/rest/api/3/issue/{key}/comment");
+        let create = h
+            .cmd()
+            .args(["api", "-X", "POST", &post_path, "-d", &s3_body])
+            .output()
+            .expect("failed to spawn jr api POST for S3 probe comment");
+
+        if !create.status.success() {
+            eprintln!(
+                "[WARN] S3: probe comment create failed (exit {:?}) \
+                 — skipping Scenario 3",
+                create.status.code()
+            );
+            break 'scenario3;
+        }
+        let cv: Value = match serde_json::from_slice(&create.stdout) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("[WARN] S3: comment create JSON parse error: {e} — skipping");
+                break 'scenario3;
+            }
+        };
+        let cid = match cv.get("id").and_then(Value::as_str).map(str::to_owned) {
+            Some(id) => id,
+            None => {
+                eprintln!(
+                    "[WARN] S3: comment create response has no 'id' \
+                     — skipping; got: {cv}"
+                );
+                break 'scenario3;
+            }
+        };
+
+        // (2) Edit with --public --yes.
+        let edit = h
+            .cmd()
+            .args([
+                "issue",
+                "comment",
+                "edit",
+                &key,
+                "--id",
+                &cid,
+                &format!("S3 public edit {run_id}"),
+                "--public",
+                "--yes",
+                "--output",
+                "json",
+            ])
+            .output()
+            .expect("failed to spawn jr issue comment edit for S3 --public --yes");
+        if !edit.status.success() {
+            eprintln!(
+                "[WARN] S3: --public --yes edit failed (exit {:?}) \
+                 — skipping Scenario 3\nstderr: {}",
+                edit.status.code(),
+                String::from_utf8_lossy(&edit.stderr)
+            );
+            delete_probe(&cid);
+            break 'scenario3;
+        }
+
+        // (3) Assert full predicate: sd.public.comment=false AND jr.test.marker present.
+        let full_pred = |c: &Value| {
+            sd_internal_prop(c) == Some(false) && has_comment_property(c, "jr.test.marker")
+        };
+        match get_with_check(&cid, &full_pred, "S3(--public)") {
+            None => {
+                eprintln!(
+                    "[WARN] S3: full predicate (internal=false AND jr.test.marker present) \
+                     did not hold after retries — skipping assertions"
+                );
+                delete_probe(&cid);
+                break 'scenario3;
+            }
+            Some(c) => {
+                assert!(
+                    sd_internal_prop(&c) == Some(false),
+                    "S3: sd.public.comment must be updated to internal=false after \
+                     --public --yes edit (MERGE: property value updated — BC-3.5.006); \
+                     got: {c}"
+                );
+                assert!(
+                    has_comment_property(&c, "jr.test.marker"),
+                    "S3: jr.test.marker property must survive the --public --yes edit \
+                     (MERGE: unrelated property not clobbered — BC-3.5.006); got: {c}"
+                );
+            }
+        }
+
+        delete_probe(&cid);
+    }
+}

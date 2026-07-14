@@ -948,8 +948,16 @@ async fn test_bc_3_5_006_internal_puts_properties_true() {
 
     let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
-            "issue", "comment", "edit", "FOO-1", "--id", "10001", "body", "--internal",
-            "--output", "json",
+            "issue",
+            "comment",
+            "edit",
+            "FOO-1",
+            "--id",
+            "10001",
+            "body",
+            "--internal",
+            "--output",
+            "json",
         ])
         .output()
         .unwrap();
@@ -985,7 +993,9 @@ async fn test_bc_3_5_006_internal_puts_properties_true() {
     });
 
     // VP-577-002 clause (c): properties[0] shape
-    let props_arr = props.as_array().expect("S-577-5 AC-001: 'properties' must be a JSON array");
+    let props_arr = props
+        .as_array()
+        .expect("S-577-5 AC-001: 'properties' must be a JSON array");
     assert_eq!(
         props_arr.len(),
         1,
@@ -1051,8 +1061,16 @@ async fn test_bc_3_5_006_changed_fields_jsm_internal_true() {
 
     let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
-            "issue", "comment", "edit", "FOO-1", "--id", "10001", "body", "--internal",
-            "--output", "json",
+            "issue",
+            "comment",
+            "edit",
+            "FOO-1",
+            "--id",
+            "10001",
+            "body",
+            "--internal",
+            "--output",
+            "json",
         ])
         .output()
         .unwrap();
@@ -1155,7 +1173,9 @@ async fn test_bc_3_5_007_public_puts_properties_false() {
         )
     });
 
-    let props_arr = props.as_array().expect("S-577-5 AC-003: 'properties' must be an array");
+    let props_arr = props
+        .as_array()
+        .expect("S-577-5 AC-003: 'properties' must be an array");
     assert_eq!(
         props_arr.len(),
         1,
@@ -1291,7 +1311,16 @@ async fn test_bc_3_5_006_jsdcloud_hint_appears_on_internal() {
         .await;
 
     let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
-        .args(["issue", "comment", "edit", "FOO-1", "--id", "10001", "body", "--internal"])
+        .args([
+            "issue",
+            "comment",
+            "edit",
+            "FOO-1",
+            "--id",
+            "10001",
+            "body",
+            "--internal",
+        ])
         .output()
         .unwrap();
 
@@ -1401,7 +1430,14 @@ async fn test_bc_3_5_008_public_no_input_without_yes_exits_64() {
 
     let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
-            "issue", "comment", "edit", "FOO-1", "--id", "10001", "body", "--public",
+            "issue",
+            "comment",
+            "edit",
+            "FOO-1",
+            "--id",
+            "10001",
+            "body",
+            "--public",
             "--no-input",
         ])
         .output()
@@ -1461,8 +1497,8 @@ async fn test_bc_3_5_008_public_interactive_cancel_json_key_set() {
     let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
         .env("JR_STDIN_IS_TTY", "1")
         .args([
-            "issue", "comment", "edit", "FOO-1", "--id", "10001", "body", "--public",
-            "--output", "json",
+            "issue", "comment", "edit", "FOO-1", "--id", "10001", "body", "--public", "--output",
+            "json",
         ])
         .write_stdin("N\n")
         .output()
@@ -1648,8 +1684,8 @@ async fn test_bc_3_5_008_ec4_yes_without_public_is_silent_noop() {
 
     let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
-            "issue", "comment", "edit", "FOO-1", "--id", "10001", "body", "--yes",
-            "--output", "json",
+            "issue", "comment", "edit", "FOO-1", "--id", "10001", "body", "--yes", "--output",
+            "json",
         ])
         .output()
         .unwrap();
@@ -1689,7 +1725,9 @@ async fn test_bc_3_5_008_ec4_yes_without_public_runtime_probe_exit64() {
         .await;
 
     let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
-        .args(["issue", "comment", "edit", "FOO-1", "--id", "10001", "", "--yes"])
+        .args([
+            "issue", "comment", "edit", "FOO-1", "--id", "10001", "", "--yes",
+        ])
         .output()
         .unwrap();
 
@@ -1745,7 +1783,14 @@ async fn test_bc_3_5_011_internal_and_public_clap_exit_2() {
 
     let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
         .args([
-            "issue", "comment", "edit", "FOO-1", "--id", "10001", "body", "--internal",
+            "issue",
+            "comment",
+            "edit",
+            "FOO-1",
+            "--id",
+            "10001",
+            "body",
+            "--internal",
             "--public",
         ])
         .output()

@@ -5,6 +5,10 @@
 //! their final parameter — these handlers have confirmation gates that consult
 //! the no-input flag, mirroring the `handle_move`/`handle_assign`/`handle_edit`
 //! pattern at `src/cli/issue/mod.rs`.
+//!
+//! S-577-5 extends `handle_comment_edit` with `--internal`/`--public` visibility
+//! flags, the `--public` confirmation gate (DEC-174 mechanism), and the
+//! JSDCLOUD-6050 hint (BC-3.5.006/007/008).
 
 use anyhow::{Result, bail};
 
@@ -298,30 +302,50 @@ fn format_jsm_internal_field(properties: Option<&serde_json::Value>) -> &'static
 
 // ── Comment Edit ─────────────────────────────────────────────────────────
 
-/// Edit a comment body (body-only PUT; default no-visibility-flag path).
+/// Edit a comment body (and optionally visibility) via PUT.
 ///
 /// Implemented in S-577-4 (body sources + body-only PUT). S-577-5 extends this
 /// handler with `--internal`/`--public` visibility flags and the `--public`
-/// confirmation gate that consumes `no_input`.
+/// confirmation gate.
 ///
-/// Pipeline (BC-3.5.009 edit-pipeline ordering pin):
-/// 1. `validate_comment_id` (EC-3.5.002-1) — exit 64 on bad charset
-/// 2. Body source resolution — `--file` (NotFound → exit 64), `--stdin`, positional,
-///    or no source → exit 64 "body is required"
-/// 3. Empty/whitespace guard (EC-3.5.009-5) — exit 64 "comment body cannot be empty"
-/// 4. ADF conversion: trim then `text_to_adf` or `markdown_to_adf`; raw pre-trim
-///    input stashed for `changed_fields.body` echo (BC-3.5.005 raw echo pin)
-/// 5. HTTP PUT — `update_comment(key, id, adf_body, None)` (None = body-only)
-///    200 → success; 404/403 → exit 64 + two-line body surface (BC-3.5.004)
-/// 6. JSON: `{changed_fields:{body:<raw>},id,key,updated:true}` via render_json (#526)
+/// Pipeline (BC-3.5.005/BC-3.5.009 ordering pin):
 ///
-/// `_no_input` stays prefixed here — the body-only default path has no
-/// confirmation gate. S-577-5 will un-prefix it when the `--public` gate lands.
+/// Step 1: `validate_comment_id` — EC-3.5.002-1 charset gate (exit 64 on bad charset).
+///
+/// Step 2: body source resolution — `--file` (NotFound → exit 64), `--stdin`,
+/// positional, or no source → exit 64 "body is required".
+///
+/// Step 3: empty/whitespace guard — EC-3.5.009-5 (exit 64 "comment body cannot be empty").
+///
+/// Step 3b: `--public` confirmation gate (BC-3.5.008; fires BEFORE ADF conversion).
+/// EC-3.5.008-3: if `--stdin` flag set → mutate `no_input = true` (TTY-agnostic).
+/// `no_input && !yes` → exit 64 + targeted hint.
+/// `yes` → bypass prompt.
+/// Interactive: eprint! + read_line (DEC-174); Ok(0)/Err → exit 130.
+/// Cancel (non-y) → `{"cancelled":true,"updated":false}` JSON envelope.
+///
+/// Step 4: ADF conversion: trim then `text_to_adf` or `markdown_to_adf`; raw pre-trim
+/// input stashed for `changed_fields.body` echo (BC-3.5.005 raw echo pin).
+/// After ADF success: JSDCLOUD-6050 hint to stderr on `--internal`/`--public` paths
+/// (BC-3.5.006/007; fires BEFORE PUT).
+///
+/// Step 5: HTTP PUT — `update_comment(key, id, adf_body, visibility_flag)`:
+/// `None` = body-only; `Some(true)` = internal; `Some(false)` = public.
+/// 200 → success; 404/403 → exit 64 + two-line body surface (BC-3.5.004).
+///
+/// Step 6: JSON `{changed_fields:{body:<raw>[,jsm_internal:<bool>]},id,key,updated:true}`
+/// via render_json (#526). `jsm_internal` present only when visibility flag passed.
+///
+/// `no_input` is the final parameter (confirmation-gate contract, mirrors
+/// `handle_move`/`handle_assign`/`handle_edit` at `src/cli/issue/mod.rs`).
+/// Test `no_input` ALONE — never re-derive `is_terminal()` here (Architecture
+/// Compliance Rule 8, S-577-5). The flag is already resolved by `src/main.rs`
+/// with the `JR_STDIN_IS_TTY` seam applied.
 pub(super) async fn handle_comment_edit(
     sub: CommentSubcommand,
     output_format: &OutputFormat,
     client: &JiraClient,
-    _no_input: bool,
+    no_input: bool,
 ) -> Result<()> {
     let CommentSubcommand::Edit {
         key,
@@ -330,9 +354,9 @@ pub(super) async fn handle_comment_edit(
         file,
         stdin,
         markdown,
-        internal: _,
-        public: _,
-        yes: _,
+        internal,
+        public,
+        yes,
     } = sub
     else {
         unreachable!("handle_comment_edit called with non-Edit variant")
@@ -375,6 +399,83 @@ pub(super) async fn handle_comment_edit(
         return Err(JrError::UserError("comment body cannot be empty.".into()).into());
     }
 
+    // Step 3b: --public confirmation gate (BC-3.5.008; fires BEFORE ADF conversion).
+    //
+    // EC-3.5.008-3: if the `--stdin` flag is set, mutate `no_input = true` at the
+    // start of this gate — this check is TTY-agnostic (flag-based, not is_terminal()).
+    // This prevents the interactive prompt from trying to read a stdin that was
+    // already consumed for the body in step 2.
+    //
+    // Architecture Compliance Rule 8: test `no_input` ALONE — do NOT call
+    // `is_terminal()` or `refuse_noninteractive(no_input, is_terminal(...))` here.
+    // The `JR_STDIN_IS_TTY` seam in `src/main.rs` gates the auto-`--no-input` flip;
+    // re-deriving TTY state here would bypass that seam and break AC-008/AC-012.
+    let mut no_input = no_input;
+    if stdin {
+        no_input = true;
+    }
+
+    if public {
+        if no_input && !yes {
+            // Non-interactive: exit 64 with targeted hint.
+            // EC-3.5.008-3: different hint text when --stdin flag was passed.
+            if stdin {
+                return Err(JrError::UserError(
+                    "--stdin disables interactive prompts — pass --yes to confirm the visibility change.".into(),
+                )
+                .into());
+            } else {
+                return Err(JrError::UserError(
+                    "This will set the comment's visibility to public. Use --yes to confirm."
+                        .into(),
+                )
+                .into());
+            }
+        } else if !yes {
+            // Interactive path (DEC-174 mechanism: eprint! + read_line).
+            //
+            // Do NOT use `dialoguer::Confirm::interact_on(&Term::stderr())` — console
+            // crate's `_interact_on` checks `term.is_term()` upfront and returns
+            // `NotConnected` when stderr is piped (as it is in all subprocess tests).
+            // Direct stdin reading: prompt → stderr, y/N response from stdin.
+            use std::io::BufRead;
+            eprint!("This will set the comment's visibility to public. Confirm? [y/N] ");
+            let _ = std::io::Write::flush(&mut std::io::stderr());
+
+            let mut line = String::new();
+            match std::io::stdin().lock().read_line(&mut line) {
+                Ok(0) | Err(_) => {
+                    // EOF or I/O error → Interrupted (EC-3.5.008-5, exit 130)
+                    return Err(JrError::Interrupted.into());
+                }
+                Ok(_) => {
+                    let answer = line.trim().to_ascii_lowercase();
+                    if answer != "y" && answer != "yes" {
+                        // User cancelled (N, empty, any non-y input — default is N).
+                        // Return cancel envelope: {"cancelled":true,"updated":false}.
+                        // Key-set is exactly {"cancelled","updated"} — no "id" or "key"
+                        // (not confirmed server-side on cancel; VP-577-029 exact pin).
+                        match output_format {
+                            OutputFormat::Json => {
+                                println!(
+                                    "{}",
+                                    output::render_json(&serde_json::json!({
+                                        "cancelled": true,
+                                        "updated": false
+                                    }))?
+                                );
+                            }
+                            OutputFormat::Table => {}
+                        }
+                        return Ok(());
+                    }
+                    // y/yes → fall through to ADF + PUT
+                }
+            }
+        }
+        // yes == true → bypass gate entirely, fall through to ADF + PUT
+    }
+
     // Step 4: stash raw pre-trim body (BC-3.5.005 raw echo pin — changed_fields.body
     // carries the raw user input, NOT the trimmed or ADF-converted value).
     let raw = body; // body moved into raw; raw is the original untrimmed content
@@ -385,18 +486,49 @@ pub(super) async fn handle_comment_edit(
         adf::text_to_adf(&trimmed)
     };
 
-    // Step 5: HTTP PUT — body-only (None = no visibility flag, this story's scope).
+    // Step 4x: JSDCLOUD-6050 hint (fires AFTER ADF success, BEFORE HTTP PUT).
+    // Fires on both --internal and --public confirmed paths; does NOT fire on cancel
+    // (already returned above) or if ADF conversion failed (already returned via ?).
+    // Goes to stderr so it is always visible regardless of --output json (BC-3.5.006/007).
+    if internal || public {
+        eprintln!(
+            "note: visibility change is best-effort on JSM projects \
+             — verify in the portal (JSDCLOUD-6050); no-op on non-JSM projects."
+        );
+    }
+
+    // Determine the visibility flag for the PUT:
+    //   --internal → Some(true)  (sd.public.comment internal:true)
+    //   --public   → Some(false) (sd.public.comment internal:false)
+    //   neither    → None        (body-only PUT; S-577-4 regression)
+    let visibility_flag = if internal {
+        Some(true)
+    } else if public {
+        Some(false)
+    } else {
+        None
+    };
+
+    // Step 5: HTTP PUT.
     // update_comment returns Result<()>; the Jira response body is discarded.
-    match client.update_comment(&key, &id, adf_body, None).await {
+    match client
+        .update_comment(&key, &id, adf_body, visibility_flag)
+        .await
+    {
         Ok(()) => {
             // Step 6: build response JSON from local state (NOT from Jira PUT response).
             // "updated": true is a literal boolean constant — not parsed from the API.
+            // "jsm_internal" is present only when a visibility flag was passed (VP-577-026).
             match output_format {
                 OutputFormat::Json => {
+                    let changed_fields = match visibility_flag {
+                        Some(v) => serde_json::json!({ "body": raw, "jsm_internal": v }),
+                        None => serde_json::json!({ "body": raw }),
+                    };
                     println!(
                         "{}",
                         output::render_json(&serde_json::json!({
-                            "changed_fields": { "body": raw },
+                            "changed_fields": changed_fields,
                             "id": id,
                             "key": key,
                             "updated": true
@@ -404,7 +536,15 @@ pub(super) async fn handle_comment_edit(
                     );
                 }
                 OutputFormat::Table => {
-                    output::print_success(&format!("Updated comment {id} on {key}"));
+                    // BC-3.5.005 human-channel echo marker: append visibility label when set.
+                    let suffix = if internal {
+                        " (marked internal)"
+                    } else if public {
+                        " (marked public)"
+                    } else {
+                        ""
+                    };
+                    output::print_success(&format!("Updated comment {id} on {key}{suffix}"));
                 }
             }
             Ok(())

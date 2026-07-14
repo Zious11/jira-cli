@@ -122,6 +122,7 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     // issue comment delete (stub — S-577-3; SURFACE row added by S-577-1 AC-007)
     (&["issue", "comment", "delete"], &["--id", "--yes"]),
     // issue comment edit (stub — S-577-4/5; SURFACE row added by S-577-1 AC-007)
+    //   --output added in S-577-5 MERGE semantics e2e probe
     (
         &["issue", "comment", "edit"],
         &[
@@ -132,6 +133,7 @@ const SURFACE: &[(&[&str], &[&str])] = &[
             "--internal",
             "--public",
             "--yes",
+            "--output",
         ],
     ),
     // issue comment view (stub — S-577-6; SURFACE row added by S-577-1 AC-007)
