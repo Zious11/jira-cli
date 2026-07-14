@@ -1,7 +1,7 @@
 # Comment CRUD — `jr issue comment` subcommand group
 
 **Story:** S-577-1 (subcommand refactor) + S-577-2 (API methods) + S-577-3/4/5/6 (delete/edit/view CLI implementations)
-**Status:** S-577-1 + S-577-2 + S-577-3 + S-577-4 + S-577-6 merged; S-577-5 (visibility flags) pending.
+**Status:** S-577-1 + S-577-2 + S-577-3 + S-577-4 + S-577-5 + S-577-6 merged — fully shipped.
 
 ## Background
 
@@ -39,7 +39,7 @@ Delete a comment by numeric ID. Requires `--yes` or interactive confirmation.
 - `--yes` — skip confirmation prompt (non-interactive usage).
 - `--output json` — `{"deleted": true, "id": str, "key": str}`.
 
-### `jr issue comment edit KEY [TEXT] --id ID [--file PATH] [--stdin] [--markdown] [--internal|--public] [--yes]` *(body edit shipped, S-577-4; --internal/--public/--yes deferred to S-577-5)*
+### `jr issue comment edit KEY [TEXT] --id ID [--file PATH] [--stdin] [--markdown] [--internal|--public] [--yes]` *(body edit S-577-4; visibility flags --internal/--public/--yes S-577-5 — fully shipped)*
 
 Edit a comment body and/or visibility.
 
