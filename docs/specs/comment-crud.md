@@ -97,7 +97,9 @@ ruling 1; research Claim 1 REFUTED-footgun).
 visibility restriction field (a separate Jira Cloud mechanism, distinct from the JSM
 `sd.public.comment` property) has a PRESERVED verdict: a body-only PUT does not clear
 an existing role/group restriction. `jr` exposes no surface for changing role/group
-restrictions this cycle — the deferred EJ probe is a BC-3.5.006 delivery obligation.
+restrictions this cycle — the EJ probe (BC-3.5.006 delivery obligation) is satisfied:
+nightly e2e run 29398774009 (2026-07-15, scheduled) ran
+`test_e2e_comment_edit_visibility_merge_semantics` green on develop @ 56d5126.
 
 Three behavioral contracts govern this:
 
@@ -106,9 +108,10 @@ Three behavioral contracts govern this:
   preserves the existing `sd.public.comment` property (MERGE verdict).
 - **BC-3.5.006** — `--internal` flag: `PUT` body key-set is `{"body","properties"}`,
   where `properties` is `[{"key":"sd.public.comment","value":{"internal":true}}]`.
-  The deferred EJ probe (verifying MERGE semantics for other properties and the
-  PRESERVED verdict for the role/group `visibility` restriction) is a delivery
-  obligation of this BC.
+  The EJ probe (verifying MERGE semantics for other properties and the PRESERVED
+  verdict for the role/group `visibility` restriction) is satisfied — nightly e2e
+  run 29398774009 (2026-07-15, scheduled) ran
+  `test_e2e_comment_edit_visibility_merge_semantics` green on develop @ 56d5126.
 - **BC-3.5.007** — `--public` flag (always requires confirmation): `PUT` body
   key-set is `{"body","properties"}`, where `properties` is
   `[{"key":"sd.public.comment","value":{"internal":false}}]`.
@@ -120,7 +123,7 @@ These wire-shape verdicts are pinned by the API-method tests in `tests/comment_c
 ## Behavioral contracts
 
 - BC-3.5.005 — body-only `PUT` key-set exactly `{"body"}`; `"properties"` key absent; Jira preserves existing `sd.public.comment` (MERGE).
-- BC-3.5.006 — `--internal` `PUT` key-set `{"body","properties"}`; `properties: [{key:"sd.public.comment",value:{internal:true}}]`; deferred EJ probe is a delivery obligation of this BC.
+- BC-3.5.006 — `--internal` `PUT` key-set `{"body","properties"}`; `properties: [{key:"sd.public.comment",value:{internal:true}}]`; EJ probe delivery obligation satisfied (nightly e2e run 29398774009, 2026-07-15).
 - BC-3.5.007 — `--public` `PUT` key-set `{"body","properties"}`; `properties: [{key:"sd.public.comment",value:{internal:false}}]`; always requires confirmation.
 - BC-3.5.009 — `comment edit` mutual-exclusion pairs (text/file, text/stdin, file/stdin, internal/public).
 - BC-3.5.012 — `jr issue comment add` accepts leading-dash positional body.
