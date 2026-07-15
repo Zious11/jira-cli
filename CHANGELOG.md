@@ -4,6 +4,8 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+## [0.6.0-dev.10] - 2026-07-15
+
 ### Breaking Changes
 
 - **`jr issue comment` is now a subcommand group (S-577-1, issue #577):**
