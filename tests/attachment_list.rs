@@ -569,8 +569,7 @@ async fn test_bc_2_7_002_json_shape_curated_form() {
         let expected_author_keys_fa: std::collections::BTreeSet<&str> =
             ["accountId", "displayName"].iter().copied().collect();
         assert_eq!(
-            author_keys_fa,
-            expected_author_keys_fa,
+            author_keys_fa, expected_author_keys_fa,
             "BC-2.7.002 (a) P1-002: author must have EXACTLY {{accountId, displayName}}; \
              nested self/avatarUrls/accountType/timeZone MUST NOT appear; \
              got keys: {:?}\nstdout: {stdout_fa}",
@@ -619,11 +618,10 @@ async fn test_bc_2_7_002_json_shape_curated_form() {
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/FOO-1"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(issue_attachment_response(
-                        "FOO-1",
-                        vec![partial_author_attach],
-                    )),
+                ResponseTemplate::new(200).set_body_json(issue_attachment_response(
+                    "FOO-1",
+                    vec![partial_author_attach],
+                )),
             )
             .expect(1)
             .mount(&server_pa)
@@ -685,8 +683,7 @@ async fn test_bc_2_7_002_json_shape_curated_form() {
         let expected_pa_keys: std::collections::BTreeSet<&str> =
             ["accountId", "displayName"].iter().copied().collect();
         assert_eq!(
-            author_keys_pa,
-            expected_pa_keys,
+            author_keys_pa, expected_pa_keys,
             "BC-2.7.002 (b) partial-author: 'author' must have exactly \
              {{accountId, displayName}}; got: {:?}\nstdout: {stdout_pa}",
             author_keys_pa
@@ -1204,8 +1201,7 @@ async fn test_bc_2_7_003_mime_filter_image_wildcard() {
             arr_sc.len()
         );
         assert_eq!(
-            arr_sc[0]["mimeType"],
-            "image/png",
+            arr_sc[0]["mimeType"], "image/png",
             "BC-2.7.003 (b) star-crosses-slash: matched element must be image/png; stdout: {s_sc}"
         );
         assert!(
@@ -1286,8 +1282,7 @@ async fn test_bc_2_7_003_mime_filter_image_wildcard() {
             arr_q.len()
         );
         assert_eq!(
-            arr_q[0]["mimeType"],
-            "image/png",
+            arr_q[0]["mimeType"], "image/png",
             "BC-2.7.003 (a) ? glob: matched element must be image/png; stdout: {s_q}"
         );
         assert!(
@@ -1535,8 +1530,7 @@ async fn test_bc_2_7_004_name_filter_glob_and_composition() {
             arr_q4.len()
         );
         assert_eq!(
-            arr_q4[0]["filename"],
-            "report-1.pdf",
+            arr_q4[0]["filename"], "report-1.pdf",
             "BC-2.7.004 (a) ? glob: matched element must be report-1.pdf; stdout: {s_q4}"
         );
         assert!(
