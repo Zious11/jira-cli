@@ -107,23 +107,42 @@ async fn test_bc_2_7_001_table_six_columns_order() {
 
     let attachments = vec![
         // 43008 bytes = exactly 42.0 KB; displayName author
-        make_attachment("10001", "screenshot.png", "image/png", 43008,
-                        Some("Alice Operator"), Some("acct-001")),
+        make_attachment(
+            "10001",
+            "screenshot.png",
+            "image/png",
+            43008,
+            Some("Alice Operator"),
+            Some("acct-001"),
+        ),
         // accountId-only author (displayName = null)
-        make_attachment("10002", "report.pdf", "application/pdf", 1024,
-                        None, Some("acct-no-displayname")),
+        make_attachment(
+            "10002",
+            "report.pdf",
+            "application/pdf",
+            1024,
+            None,
+            Some("acct-no-displayname"),
+        ),
         // no author → "(anonymous)" in table
-        make_attachment("10003", "data.csv", "text/csv", 512,
-                        None, None),
+        make_attachment("10003", "data.csv", "text/csv", 512, None, None),
         // filename with bidi/control chars → sanitized in Filename cell
-        make_attachment("10004", bidi_filename, "text/plain", 100,
-                        Some("Mallory"), Some("acct-mallory")),
+        make_attachment(
+            "10004",
+            bidi_filename,
+            "text/plain",
+            100,
+            Some("Mallory"),
+            Some("acct-mallory"),
+        ),
     ];
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/FOO-1"))
-        .respond_with(ResponseTemplate::new(200)
-            .set_body_json(issue_attachment_response("FOO-1", attachments)))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(issue_attachment_response("FOO-1", attachments)),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -144,29 +163,45 @@ async fn test_bc_2_7_001_table_six_columns_order() {
     );
 
     // Column headers present and in BC-mandated display order
-    let id_pos = stdout.find("ID")
+    let id_pos = stdout
+        .find("ID")
         .expect("BC-2.7.001: 'ID' column header not found in stdout");
-    let filename_pos = stdout.find("Filename")
+    let filename_pos = stdout
+        .find("Filename")
         .expect("BC-2.7.001: 'Filename' column header not found in stdout");
-    let type_pos = stdout.find("Type")
+    let type_pos = stdout
+        .find("Type")
         .expect("BC-2.7.001: 'Type' column header not found in stdout");
-    let size_pos = stdout.find("Size")
+    let size_pos = stdout
+        .find("Size")
         .expect("BC-2.7.001: 'Size' column header not found in stdout");
-    let created_pos = stdout.find("Created")
+    let created_pos = stdout
+        .find("Created")
         .expect("BC-2.7.001: 'Created' column header not found in stdout");
-    let author_pos = stdout.find("Author")
+    let author_pos = stdout
+        .find("Author")
         .expect("BC-2.7.001: 'Author' column header not found in stdout");
 
-    assert!(id_pos < filename_pos,
-        "BC-2.7.001: 'ID' must appear before 'Filename'; stdout: {stdout}");
-    assert!(filename_pos < type_pos,
-        "BC-2.7.001: 'Filename' must appear before 'Type'; stdout: {stdout}");
-    assert!(type_pos < size_pos,
-        "BC-2.7.001: 'Type' must appear before 'Size'; stdout: {stdout}");
-    assert!(size_pos < created_pos,
-        "BC-2.7.001: 'Size' must appear before 'Created'; stdout: {stdout}");
-    assert!(created_pos < author_pos,
-        "BC-2.7.001: 'Created' must appear before 'Author'; stdout: {stdout}");
+    assert!(
+        id_pos < filename_pos,
+        "BC-2.7.001: 'ID' must appear before 'Filename'; stdout: {stdout}"
+    );
+    assert!(
+        filename_pos < type_pos,
+        "BC-2.7.001: 'Filename' must appear before 'Type'; stdout: {stdout}"
+    );
+    assert!(
+        type_pos < size_pos,
+        "BC-2.7.001: 'Type' must appear before 'Size'; stdout: {stdout}"
+    );
+    assert!(
+        size_pos < created_pos,
+        "BC-2.7.001: 'Size' must appear before 'Created'; stdout: {stdout}"
+    );
+    assert!(
+        created_pos < author_pos,
+        "BC-2.7.001: 'Created' must appear before 'Author'; stdout: {stdout}"
+    );
 
     // Thumbnail must NOT appear in table
     assert!(
@@ -236,8 +271,10 @@ async fn test_bc_2_7_001_zero_attachments_empty_stdout_stderr_hint() {
 
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/FOO-1"))
-            .respond_with(ResponseTemplate::new(200)
-                .set_body_json(issue_attachment_response("FOO-1", vec![])))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(issue_attachment_response("FOO-1", vec![])),
+            )
             .expect(1)
             .mount(&server)
             .await;
@@ -277,8 +314,10 @@ async fn test_bc_2_7_001_zero_attachments_empty_stdout_stderr_hint() {
 
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/FOO-1"))
-            .respond_with(ResponseTemplate::new(200)
-                .set_body_json(issue_attachment_response("FOO-1", vec![])))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(issue_attachment_response("FOO-1", vec![])),
+            )
             .expect(1)
             .mount(&server)
             .await;
@@ -341,17 +380,24 @@ async fn test_bc_2_7_002_json_shape_curated_form() {
 
     let attachments = vec![
         // Has all fields incl. "self" and "content" in the fixture
-        make_attachment("10042", "screenshot.png", "image/png", 43008,
-                        Some("Alice Operator"), Some("acct-001")),
+        make_attachment(
+            "10042",
+            "screenshot.png",
+            "image/png",
+            43008,
+            Some("Alice Operator"),
+            Some("acct-001"),
+        ),
         // Null author → JSON must emit "author": null
-        make_attachment("10043", "orphan.pdf", "application/pdf", 2048,
-                        None, None),
+        make_attachment("10043", "orphan.pdf", "application/pdf", 2048, None, None),
     ];
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/FOO-1"))
-        .respond_with(ResponseTemplate::new(200)
-            .set_body_json(issue_attachment_response("FOO-1", attachments)))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(issue_attachment_response("FOO-1", attachments)),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -374,16 +420,31 @@ async fn test_bc_2_7_002_json_shape_curated_form() {
     let parsed: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
         panic!("BC-2.7.002: stdout must be valid JSON; error: {e}\nstdout: {stdout}")
     });
-    let arr = parsed.as_array()
+    let arr = parsed
+        .as_array()
         .expect("BC-2.7.002: JSON output must be an array");
-    assert_eq!(arr.len(), 2, "BC-2.7.002: expected 2 elements in JSON array");
+    assert_eq!(
+        arr.len(),
+        2,
+        "BC-2.7.002: expected 2 elements in JSON array"
+    );
 
-    let expected_keys: std::collections::BTreeSet<&str> =
-        ["author", "contentUrl", "created", "filename", "id", "mimeType", "size"]
-            .iter().copied().collect();
+    let expected_keys: std::collections::BTreeSet<&str> = [
+        "author",
+        "contentUrl",
+        "created",
+        "filename",
+        "id",
+        "mimeType",
+        "size",
+    ]
+    .iter()
+    .copied()
+    .collect();
 
     for (i, elem) in arr.iter().enumerate() {
-        let obj = elem.as_object()
+        let obj = elem
+            .as_object()
             .unwrap_or_else(|| panic!("BC-2.7.002: element {i} must be a JSON object"));
 
         let actual_keys: std::collections::BTreeSet<&str> =
@@ -409,8 +470,7 @@ async fn test_bc_2_7_002_json_shape_curated_form() {
 
         // Exact key set (BTreeMap-alphabetical per P19-001)
         assert_eq!(
-            actual_keys,
-            expected_keys,
+            actual_keys, expected_keys,
             "BC-2.7.002: element {i} must have exactly keys \
              {{author,contentUrl,created,filename,id,mimeType,size}}; \
              got: {actual_keys:?}"
@@ -453,15 +513,21 @@ async fn test_bc_2_7_002_json_uses_render_json_not_string_pretty() {
     let cache_dir = tempfile::tempdir().unwrap();
     let config_dir = tempfile::tempdir().unwrap();
 
-    let attachments = vec![
-        make_attachment("10042", "file.png", "image/png", 1024,
-                        Some("Alice"), Some("acct-001")),
-    ];
+    let attachments = vec![make_attachment(
+        "10042",
+        "file.png",
+        "image/png",
+        1024,
+        Some("Alice"),
+        Some("acct-001"),
+    )];
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/FOO-1"))
-        .respond_with(ResponseTemplate::new(200)
-            .set_body_json(issue_attachment_response("FOO-1", attachments)))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(issue_attachment_response("FOO-1", attachments)),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -523,10 +589,22 @@ async fn test_bc_2_7_002_json_uses_render_json_not_string_pretty() {
 async fn test_bc_2_7_001_filter_count_hint_fires_when_reduced() {
     // Fixture: 2 attachments (1 image, 1 PDF)
     let mixed_two: Vec<Value> = vec![
-        make_attachment("10001", "photo.png",  "image/png",       1024,
-                        Some("Alice"), Some("acct-001")),
-        make_attachment("10002", "report.pdf", "application/pdf", 2048,
-                        Some("Bob"),   Some("acct-002")),
+        make_attachment(
+            "10001",
+            "photo.png",
+            "image/png",
+            1024,
+            Some("Alice"),
+            Some("acct-001"),
+        ),
+        make_attachment(
+            "10002",
+            "report.pdf",
+            "application/pdf",
+            2048,
+            Some("Bob"),
+            Some("acct-002"),
+        ),
     ];
 
     // --- (a) JSON mode + reducing filter: hint fires on stderr ---
@@ -537,32 +615,48 @@ async fn test_bc_2_7_001_filter_count_hint_fires_when_reduced() {
 
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/FOO-1"))
-            .respond_with(ResponseTemplate::new(200)
-                .set_body_json(issue_attachment_response("FOO-1", mixed_two.clone())))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(issue_attachment_response("FOO-1", mixed_two.clone())),
+            )
             .mount(&server)
             .await;
 
         let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
-            .args(["issue", "attachment", "list", "FOO-1",
-                   "--filter", "mime=image/*", "--output", "json"])
+            .args([
+                "issue",
+                "attachment",
+                "list",
+                "FOO-1",
+                "--filter",
+                "mime=image/*",
+                "--output",
+                "json",
+            ])
             .output()
             .unwrap();
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
-        assert_eq!(output.status.code(), Some(0),
+        assert_eq!(
+            output.status.code(),
+            Some(0),
             "EC-2.7.001-2 (a): must exit 0; got {:?}\nstderr: {stderr}",
-            output.status.code());
+            output.status.code()
+        );
 
         let arr = serde_json::from_str::<Value>(&stdout)
             .expect("(a): stdout must be valid JSON")
             .as_array()
             .expect("(a): output must be array")
             .clone();
-        assert_eq!(arr.len(), 1,
+        assert_eq!(
+            arr.len(),
+            1,
             "EC-2.7.001-2 (a): filtered JSON array must have 1 element (only image/*); \
-             stdout: {stdout}");
+             stdout: {stdout}"
+        );
 
         assert!(
             stderr.contains("Showing 1 of 2 attachments."),
@@ -575,10 +669,22 @@ async fn test_bc_2_7_001_filter_count_hint_fires_when_reduced() {
     {
         // Both attachments are images → filter mime=image/* → N=2, M=2 → no hint
         let two_images: Vec<Value> = vec![
-            make_attachment("10001", "photo.png",  "image/png",  1024,
-                            Some("Alice"), Some("acct-001")),
-            make_attachment("10002", "photo.jpg",  "image/jpeg", 2048,
-                            Some("Bob"),   Some("acct-002")),
+            make_attachment(
+                "10001",
+                "photo.png",
+                "image/png",
+                1024,
+                Some("Alice"),
+                Some("acct-001"),
+            ),
+            make_attachment(
+                "10002",
+                "photo.jpg",
+                "image/jpeg",
+                2048,
+                Some("Bob"),
+                Some("acct-002"),
+            ),
         ];
 
         let server = MockServer::start().await;
@@ -587,22 +693,35 @@ async fn test_bc_2_7_001_filter_count_hint_fires_when_reduced() {
 
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/FOO-1"))
-            .respond_with(ResponseTemplate::new(200)
-                .set_body_json(issue_attachment_response("FOO-1", two_images)))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(issue_attachment_response("FOO-1", two_images)),
+            )
             .mount(&server)
             .await;
 
         let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
-            .args(["issue", "attachment", "list", "FOO-1",
-                   "--filter", "mime=image/*", "--output", "json"])
+            .args([
+                "issue",
+                "attachment",
+                "list",
+                "FOO-1",
+                "--filter",
+                "mime=image/*",
+                "--output",
+                "json",
+            ])
             .output()
             .unwrap();
 
         let stderr = String::from_utf8_lossy(&output.stderr);
 
-        assert_eq!(output.status.code(), Some(0),
+        assert_eq!(
+            output.status.code(),
+            Some(0),
             "EC-2.7.001-2 (b) N==M: must exit 0; got {:?}\nstderr: {stderr}",
-            output.status.code());
+            output.status.code()
+        );
 
         assert!(
             !stderr.contains("Showing"),
@@ -619,22 +738,33 @@ async fn test_bc_2_7_001_filter_count_hint_fires_when_reduced() {
 
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/FOO-1"))
-            .respond_with(ResponseTemplate::new(200)
-                .set_body_json(issue_attachment_response("FOO-1", mixed_two.clone())))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(issue_attachment_response("FOO-1", mixed_two.clone())),
+            )
             .mount(&server)
             .await;
 
         let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
-            .args(["issue", "attachment", "list", "FOO-1",
-                   "--filter", "mime=image/*"])
+            .args([
+                "issue",
+                "attachment",
+                "list",
+                "FOO-1",
+                "--filter",
+                "mime=image/*",
+            ])
             .output()
             .unwrap();
 
         let stderr = String::from_utf8_lossy(&output.stderr);
 
-        assert_eq!(output.status.code(), Some(0),
+        assert_eq!(
+            output.status.code(),
+            Some(0),
             "EC-2.7.001-2 (c) human: must exit 0; got {:?}\nstderr: {stderr}",
-            output.status.code());
+            output.status.code()
+        );
 
         assert!(
             stderr.contains("Showing 1 of 2 attachments."),
@@ -660,48 +790,89 @@ async fn test_bc_2_7_003_mime_filter_image_wildcard() {
     let config_dir = tempfile::tempdir().unwrap();
 
     let attachments = vec![
-        make_attachment("10001", "photo.png",  "image/png",       1024,
-                        Some("Alice"), Some("acct-001")),
-        make_attachment("10002", "photo.jpg",  "image/jpeg",      2048,
-                        Some("Alice"), Some("acct-001")),
-        make_attachment("10003", "report.pdf", "application/pdf", 4096,
-                        Some("Bob"),   Some("acct-002")),
+        make_attachment(
+            "10001",
+            "photo.png",
+            "image/png",
+            1024,
+            Some("Alice"),
+            Some("acct-001"),
+        ),
+        make_attachment(
+            "10002",
+            "photo.jpg",
+            "image/jpeg",
+            2048,
+            Some("Alice"),
+            Some("acct-001"),
+        ),
+        make_attachment(
+            "10003",
+            "report.pdf",
+            "application/pdf",
+            4096,
+            Some("Bob"),
+            Some("acct-002"),
+        ),
     ];
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/FOO-1"))
-        .respond_with(ResponseTemplate::new(200)
-            .set_body_json(issue_attachment_response("FOO-1", attachments)))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(issue_attachment_response("FOO-1", attachments)),
+        )
         .mount(&server)
         .await;
 
     // --- lowercase wildcard ---
     let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
-        .args(["issue", "attachment", "list", "FOO-1",
-               "--filter", "mime=image/*", "--output", "json"])
+        .args([
+            "issue",
+            "attachment",
+            "list",
+            "FOO-1",
+            "--filter",
+            "mime=image/*",
+            "--output",
+            "json",
+        ])
         .output()
         .unwrap();
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert_eq!(output.status.code(), Some(0),
-        "BC-2.7.003: must exit 0; got {:?}\nstderr: {stderr}", output.status.code());
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "BC-2.7.003: must exit 0; got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
 
     let arr = serde_json::from_str::<Value>(&stdout)
         .expect("BC-2.7.003: must be valid JSON")
-        .as_array().expect("BC-2.7.003: must be array").clone();
+        .as_array()
+        .expect("BC-2.7.003: must be array")
+        .clone();
 
-    assert_eq!(arr.len(), 2,
-        "BC-2.7.003: mime=image/* must return 2 images (not the PDF); stdout: {stdout}");
+    assert_eq!(
+        arr.len(),
+        2,
+        "BC-2.7.003: mime=image/* must return 2 images (not the PDF); stdout: {stdout}"
+    );
 
     for (i, elem) in arr.iter().enumerate() {
         let mime = elem["mimeType"].as_str().unwrap_or_default();
-        assert!(mime.starts_with("image/"),
-            "BC-2.7.003: element {i} must have image/* mimeType; got: {mime}");
+        assert!(
+            mime.starts_with("image/"),
+            "BC-2.7.003: element {i} must have image/* mimeType; got: {mime}"
+        );
     }
-    assert!(!stdout.contains("application/pdf"),
-        "BC-2.7.003: PDF must be filtered out by mime=image/*; stdout: {stdout}");
+    assert!(
+        !stdout.contains("application/pdf"),
+        "BC-2.7.003: PDF must be filtered out by mime=image/*; stdout: {stdout}"
+    );
 
     // --- case-insensitive: uppercase filter must work identically ---
     let server2 = MockServer::start().await;
@@ -709,32 +880,59 @@ async fn test_bc_2_7_003_mime_filter_image_wildcard() {
     let config_dir2 = tempfile::tempdir().unwrap();
 
     let attachments2 = vec![
-        make_attachment("10001", "photo.png",  "image/png",       1024,
-                        Some("Alice"), Some("acct-001")),
-        make_attachment("10002", "report.pdf", "application/pdf", 4096,
-                        Some("Bob"),   Some("acct-002")),
+        make_attachment(
+            "10001",
+            "photo.png",
+            "image/png",
+            1024,
+            Some("Alice"),
+            Some("acct-001"),
+        ),
+        make_attachment(
+            "10002",
+            "report.pdf",
+            "application/pdf",
+            4096,
+            Some("Bob"),
+            Some("acct-002"),
+        ),
     ];
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/FOO-1"))
-        .respond_with(ResponseTemplate::new(200)
-            .set_body_json(issue_attachment_response("FOO-1", attachments2)))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(issue_attachment_response("FOO-1", attachments2)),
+        )
         .mount(&server2)
         .await;
 
     let output2 = jr_cmd(&server2.uri(), cache_dir2.path(), config_dir2.path())
-        .args(["issue", "attachment", "list", "FOO-1",
-               "--filter", "mime=IMAGE/*", "--output", "json"])
+        .args([
+            "issue",
+            "attachment",
+            "list",
+            "FOO-1",
+            "--filter",
+            "mime=IMAGE/*",
+            "--output",
+            "json",
+        ])
         .output()
         .unwrap();
 
     let stdout2 = String::from_utf8_lossy(&output2.stdout);
     let arr2 = serde_json::from_str::<Value>(&stdout2)
         .unwrap_or_else(|e| panic!("BC-2.7.003 uppercase: invalid JSON: {e}\nstdout: {stdout2}"))
-        .as_array().expect("must be array").clone();
-    assert_eq!(arr2.len(), 1,
+        .as_array()
+        .expect("must be array")
+        .clone();
+    assert_eq!(
+        arr2.len(),
+        1,
         "BC-2.7.003: mime=IMAGE/* (uppercase) must match image/png (case-insensitive); \
-         stdout: {stdout2}");
+         stdout: {stdout2}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -755,75 +953,153 @@ async fn test_bc_2_7_004_name_filter_glob_and_composition() {
 
     // Fixtures: 3 distinct names + 2 with the same filename "dupe.txt"
     let attachments = vec![
-        make_attachment("10001", "screenshot.png", "image/png",       1024,
-                        Some("A"), Some("a")),
-        make_attachment("10002", "screenshot.jpg", "image/jpeg",      2048,
-                        Some("A"), Some("a")),
-        make_attachment("10003", "report.pdf",     "application/pdf", 4096,
-                        Some("B"), Some("b")),
-        make_attachment("10004", "dupe.txt",       "text/plain",       100,
-                        Some("C"), Some("c")),
-        make_attachment("10005", "dupe.txt",       "text/plain",       200,
-                        Some("C"), Some("c")),  // same filename, different ID
+        make_attachment(
+            "10001",
+            "screenshot.png",
+            "image/png",
+            1024,
+            Some("A"),
+            Some("a"),
+        ),
+        make_attachment(
+            "10002",
+            "screenshot.jpg",
+            "image/jpeg",
+            2048,
+            Some("A"),
+            Some("a"),
+        ),
+        make_attachment(
+            "10003",
+            "report.pdf",
+            "application/pdf",
+            4096,
+            Some("B"),
+            Some("b"),
+        ),
+        make_attachment("10004", "dupe.txt", "text/plain", 100, Some("C"), Some("c")),
+        make_attachment("10005", "dupe.txt", "text/plain", 200, Some("C"), Some("c")), // same filename, different ID
     ];
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/FOO-1"))
-        .respond_with(ResponseTemplate::new(200)
-            .set_body_json(issue_attachment_response("FOO-1", attachments)))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(issue_attachment_response("FOO-1", attachments)),
+        )
         .mount(&server)
         .await;
 
     // --- (1) name glob: screenshot* matches screenshot.png + screenshot.jpg ---
     let out1 = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
-        .args(["issue", "attachment", "list", "FOO-1",
-               "--filter", "name=screenshot*", "--output", "json"])
-        .output().unwrap();
+        .args([
+            "issue",
+            "attachment",
+            "list",
+            "FOO-1",
+            "--filter",
+            "name=screenshot*",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
     let s1 = String::from_utf8_lossy(&out1.stdout);
-    assert_eq!(out1.status.code(), Some(0),
-        "BC-2.7.004 (1): must exit 0; got {:?}", out1.status.code());
+    assert_eq!(
+        out1.status.code(),
+        Some(0),
+        "BC-2.7.004 (1): must exit 0; got {:?}",
+        out1.status.code()
+    );
     let arr1 = serde_json::from_str::<Value>(&s1)
         .expect("BC-2.7.004 (1): must be valid JSON")
-        .as_array().expect("must be array").clone();
-    assert_eq!(arr1.len(), 2,
-        "BC-2.7.004 (1): name=screenshot* must return 2 files (png + jpg); stdout: {s1}");
+        .as_array()
+        .expect("must be array")
+        .clone();
+    assert_eq!(
+        arr1.len(),
+        2,
+        "BC-2.7.004 (1): name=screenshot* must return 2 files (png + jpg); stdout: {s1}"
+    );
 
     // --- (2) AND composition: name=screenshot* AND mime=image/png → 1 result ---
     let out2 = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
-        .args(["issue", "attachment", "list", "FOO-1",
-               "--filter", "name=screenshot*",
-               "--filter", "mime=image/png",
-               "--output", "json"])
-        .output().unwrap();
+        .args([
+            "issue",
+            "attachment",
+            "list",
+            "FOO-1",
+            "--filter",
+            "name=screenshot*",
+            "--filter",
+            "mime=image/png",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
     let s2 = String::from_utf8_lossy(&out2.stdout);
-    assert_eq!(out2.status.code(), Some(0),
-        "BC-2.7.004 (2): must exit 0; got {:?}", out2.status.code());
+    assert_eq!(
+        out2.status.code(),
+        Some(0),
+        "BC-2.7.004 (2): must exit 0; got {:?}",
+        out2.status.code()
+    );
     let arr2 = serde_json::from_str::<Value>(&s2)
         .expect("BC-2.7.004 (2): must be valid JSON")
-        .as_array().expect("must be array").clone();
-    assert_eq!(arr2.len(), 1,
-        "BC-2.7.004 (2): AND semantics must return only screenshot.png; stdout: {s2}");
-    assert_eq!(arr2[0]["mimeType"], "image/png",
-        "BC-2.7.004 (2): AND result must be image/png");
+        .as_array()
+        .expect("must be array")
+        .clone();
+    assert_eq!(
+        arr2.len(),
+        1,
+        "BC-2.7.004 (2): AND semantics must return only screenshot.png; stdout: {s2}"
+    );
+    assert_eq!(
+        arr2[0]["mimeType"], "image/png",
+        "BC-2.7.004 (2): AND result must be image/png"
+    );
 
     // --- (3) same filename: dupe.txt → both returned (no dedup, JRACLOUD-96384) ---
     let out3 = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
-        .args(["issue", "attachment", "list", "FOO-1",
-               "--filter", "name=dupe.txt", "--output", "json"])
-        .output().unwrap();
+        .args([
+            "issue",
+            "attachment",
+            "list",
+            "FOO-1",
+            "--filter",
+            "name=dupe.txt",
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
     let s3 = String::from_utf8_lossy(&out3.stdout);
-    assert_eq!(out3.status.code(), Some(0),
-        "BC-2.7.004 (3): must exit 0; got {:?}", out3.status.code());
+    assert_eq!(
+        out3.status.code(),
+        Some(0),
+        "BC-2.7.004 (3): must exit 0; got {:?}",
+        out3.status.code()
+    );
     let arr3 = serde_json::from_str::<Value>(&s3)
         .expect("BC-2.7.004 (3): must be valid JSON")
-        .as_array().expect("must be array").clone();
-    assert_eq!(arr3.len(), 2,
+        .as_array()
+        .expect("must be array")
+        .clone();
+    assert_eq!(
+        arr3.len(),
+        2,
         "BC-2.7.004 (3) JRACLOUD-96384: both dupe.txt attachments must be returned \
-         without dedup; stdout: {s3}");
-    assert_ne!(arr3[0]["id"], arr3[1]["id"],
-        "BC-2.7.004 (3): both dupe.txt entries must have different IDs");
-    assert_eq!(arr3[0]["filename"], arr3[1]["filename"],
-        "BC-2.7.004 (3): both entries must share the filename 'dupe.txt'");
+         without dedup; stdout: {s3}"
+    );
+    assert_ne!(
+        arr3[0]["id"], arr3[1]["id"],
+        "BC-2.7.004 (3): both dupe.txt entries must have different IDs"
+    );
+    assert_eq!(
+        arr3[0]["filename"], arr3[1]["filename"],
+        "BC-2.7.004 (3): both entries must share the filename 'dupe.txt'"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -845,35 +1121,69 @@ async fn test_bc_2_7_005_size_max_filter_and_parse_error() {
         let config_dir = tempfile::tempdir().unwrap();
 
         let attachments = vec![
-            make_attachment("10001", "small.txt",  "text/plain",              1000,
-                            Some("A"), Some("a")),
-            make_attachment("10002", "large.bin",  "application/octet-stream", 1_000_000,
-                            Some("B"), Some("b")),
+            make_attachment(
+                "10001",
+                "small.txt",
+                "text/plain",
+                1000,
+                Some("A"),
+                Some("a"),
+            ),
+            make_attachment(
+                "10002",
+                "large.bin",
+                "application/octet-stream",
+                1_000_000,
+                Some("B"),
+                Some("b"),
+            ),
         ];
 
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/FOO-1"))
-            .respond_with(ResponseTemplate::new(200)
-                .set_body_json(issue_attachment_response("FOO-1", attachments)))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(issue_attachment_response("FOO-1", attachments)),
+            )
             .mount(&server)
             .await;
 
         let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
-            .args(["issue", "attachment", "list", "FOO-1",
-                   "--filter", "size-max=50000", "--output", "json"])
-            .output().unwrap();
+            .args([
+                "issue",
+                "attachment",
+                "list",
+                "FOO-1",
+                "--filter",
+                "size-max=50000",
+                "--output",
+                "json",
+            ])
+            .output()
+            .unwrap();
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert_eq!(output.status.code(), Some(0),
-            "BC-2.7.005 (1): must exit 0; got {:?}", output.status.code());
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "BC-2.7.005 (1): must exit 0; got {:?}",
+            output.status.code()
+        );
         let arr = serde_json::from_str::<Value>(&stdout)
             .expect("BC-2.7.005 (1): valid JSON required")
-            .as_array().expect("must be array").clone();
-        assert_eq!(arr.len(), 1,
+            .as_array()
+            .expect("must be array")
+            .clone();
+        assert_eq!(
+            arr.len(),
+            1,
             "BC-2.7.005 (1): size-max=50000 must keep only the 1000-byte file; \
-             stdout: {stdout}");
-        assert_eq!(arr[0]["filename"], "small.txt",
-            "BC-2.7.005 (1): retained file must be 'small.txt'");
+             stdout: {stdout}"
+        );
+        assert_eq!(
+            arr[0]["filename"], "small.txt",
+            "BC-2.7.005 (1): retained file must be 'small.txt'"
+        );
     }
 
     // --- (2) non-integer: exit 64 BEFORE any HTTP (expect 0 requests) ---
@@ -883,21 +1193,34 @@ async fn test_bc_2_7_005_size_max_filter_and_parse_error() {
         let config_dir = tempfile::tempdir().unwrap();
 
         Mock::given(method("GET"))
-            .respond_with(ResponseTemplate::new(200)
-                .set_body_json(issue_attachment_response("FOO-1", vec![])))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(issue_attachment_response("FOO-1", vec![])),
+            )
             .expect(0)
             .mount(&server)
             .await;
 
         let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
-            .args(["issue", "attachment", "list", "FOO-1",
-                   "--filter", "size-max=not_a_number"])
-            .output().unwrap();
+            .args([
+                "issue",
+                "attachment",
+                "list",
+                "FOO-1",
+                "--filter",
+                "size-max=not_a_number",
+            ])
+            .output()
+            .unwrap();
 
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(output.status.code(), Some(64),
+        assert_eq!(
+            output.status.code(),
+            Some(64),
             "BC-2.7.005 EC-2.7.005-1: non-integer size-max must exit 64 BEFORE HTTP; \
-             got {:?}\nstderr: {stderr}", output.status.code());
+             got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
         // stderr must mention the invalid value or that an integer is expected
         assert!(
             stderr.to_lowercase().contains("size-max")
@@ -915,35 +1238,62 @@ async fn test_bc_2_7_005_size_max_filter_and_parse_error() {
         let config_dir = tempfile::tempdir().unwrap();
 
         let attachments = vec![
-            make_attachment("10001", "empty.txt",    "text/plain", 0,
-                            Some("A"), Some("a")),
-            make_attachment("10002", "nonempty.txt", "text/plain", 1,
-                            Some("B"), Some("b")),
+            make_attachment("10001", "empty.txt", "text/plain", 0, Some("A"), Some("a")),
+            make_attachment(
+                "10002",
+                "nonempty.txt",
+                "text/plain",
+                1,
+                Some("B"),
+                Some("b"),
+            ),
         ];
 
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/FOO-1"))
-            .respond_with(ResponseTemplate::new(200)
-                .set_body_json(issue_attachment_response("FOO-1", attachments)))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(issue_attachment_response("FOO-1", attachments)),
+            )
             .mount(&server)
             .await;
 
         let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
-            .args(["issue", "attachment", "list", "FOO-1",
-                   "--filter", "size-max=0", "--output", "json"])
-            .output().unwrap();
+            .args([
+                "issue",
+                "attachment",
+                "list",
+                "FOO-1",
+                "--filter",
+                "size-max=0",
+                "--output",
+                "json",
+            ])
+            .output()
+            .unwrap();
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert_eq!(output.status.code(), Some(0),
-            "BC-2.7.005 (3) size-max=0: must exit 0; got {:?}", output.status.code());
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "BC-2.7.005 (3) size-max=0: must exit 0; got {:?}",
+            output.status.code()
+        );
         let arr = serde_json::from_str::<Value>(&stdout)
             .expect("BC-2.7.005 (3): valid JSON required")
-            .as_array().expect("must be array").clone();
-        assert_eq!(arr.len(), 1,
+            .as_array()
+            .expect("must be array")
+            .clone();
+        assert_eq!(
+            arr.len(),
+            1,
             "BC-2.7.005 (3): size-max=0 must return only zero-byte files; \
-             stdout: {stdout}");
-        assert_eq!(arr[0]["filename"], "empty.txt",
-            "BC-2.7.005 (3): retained file must be 'empty.txt' (size=0)");
+             stdout: {stdout}"
+        );
+        assert_eq!(
+            arr[0]["filename"], "empty.txt",
+            "BC-2.7.005 (3): retained file must be 'empty.txt' (size=0)"
+        );
     }
 }
 
@@ -966,21 +1316,33 @@ async fn test_bc_2_7_003_invalid_filter_key_exits_64() {
         let config_dir = tempfile::tempdir().unwrap();
 
         Mock::given(method("GET"))
-            .respond_with(ResponseTemplate::new(200)
-                .set_body_json(issue_attachment_response("FOO-1", vec![])))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(issue_attachment_response("FOO-1", vec![])),
+            )
             .expect(0)
             .mount(&server)
             .await;
 
         let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
-            .args(["issue", "attachment", "list", "FOO-1",
-                   "--filter", "noequalssign"])
-            .output().unwrap();
+            .args([
+                "issue",
+                "attachment",
+                "list",
+                "FOO-1",
+                "--filter",
+                "noequalssign",
+            ])
+            .output()
+            .unwrap();
 
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(output.status.code(), Some(64),
+        assert_eq!(
+            output.status.code(),
+            Some(64),
             "EC-2.7.003-2 missing-=: must exit 64; got {:?}\nstderr: {stderr}",
-            output.status.code());
+            output.status.code()
+        );
         assert!(
             stderr.contains(
                 "Invalid filter 'noequalssign': expected key=value form. \
@@ -998,25 +1360,35 @@ async fn test_bc_2_7_003_invalid_filter_key_exits_64() {
         let config_dir = tempfile::tempdir().unwrap();
 
         Mock::given(method("GET"))
-            .respond_with(ResponseTemplate::new(200)
-                .set_body_json(issue_attachment_response("FOO-1", vec![])))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(issue_attachment_response("FOO-1", vec![])),
+            )
             .expect(0)
             .mount(&server)
             .await;
 
         let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
-            .args(["issue", "attachment", "list", "FOO-1",
-                   "--filter", "type=foo"])
-            .output().unwrap();
+            .args([
+                "issue",
+                "attachment",
+                "list",
+                "FOO-1",
+                "--filter",
+                "type=foo",
+            ])
+            .output()
+            .unwrap();
 
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(output.status.code(), Some(64),
+        assert_eq!(
+            output.status.code(),
+            Some(64),
             "EC-2.7.003-2 unknown-key: must exit 64; got {:?}\nstderr: {stderr}",
-            output.status.code());
+            output.status.code()
+        );
         assert!(
-            stderr.contains(
-                "Unknown filter key 'type'. Accepted keys: mime=, name=, size-max=."
-            ),
+            stderr.contains("Unknown filter key 'type'. Accepted keys: mime=, name=, size-max=."),
             "EC-2.7.003-2 unknown-key: stderr must contain canonical error string; \
              got: {stderr}"
         );

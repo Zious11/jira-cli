@@ -1,5 +1,5 @@
-pub mod attachments;
 mod assets;
+pub mod attachments;
 mod changelog;
 mod comments;
 mod create;
