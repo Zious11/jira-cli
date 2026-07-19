@@ -13,7 +13,7 @@
 
 use assert_cmd::Command;
 use serde_json::Value;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 // ---------------------------------------------------------------------------
@@ -139,6 +139,7 @@ async fn test_bc_2_7_001_table_six_columns_order() {
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/FOO-1"))
+        .and(query_param("fields", "attachment"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(issue_attachment_response("FOO-1", attachments)),
@@ -271,6 +272,7 @@ async fn test_bc_2_7_001_zero_attachments_empty_stdout_stderr_hint() {
 
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/FOO-1"))
+            .and(query_param("fields", "attachment"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_json(issue_attachment_response("FOO-1", vec![])),
@@ -314,6 +316,7 @@ async fn test_bc_2_7_001_zero_attachments_empty_stdout_stderr_hint() {
 
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/FOO-1"))
+            .and(query_param("fields", "attachment"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_json(issue_attachment_response("FOO-1", vec![])),
@@ -394,6 +397,7 @@ async fn test_bc_2_7_002_json_shape_curated_form() {
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/FOO-1"))
+        .and(query_param("fields", "attachment"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(issue_attachment_response("FOO-1", attachments)),
@@ -525,6 +529,7 @@ async fn test_bc_2_7_002_json_shape_curated_form() {
 
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/FOO-1"))
+            .and(query_param("fields", "attachment"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_json(issue_attachment_response("FOO-1", vec![full_author_attach])),
@@ -617,6 +622,7 @@ async fn test_bc_2_7_002_json_shape_curated_form() {
 
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/FOO-1"))
+            .and(query_param("fields", "attachment"))
             .respond_with(
                 ResponseTemplate::new(200).set_body_json(issue_attachment_response(
                     "FOO-1",
@@ -720,6 +726,7 @@ async fn test_bc_2_7_002_json_uses_render_json_not_string_pretty() {
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/FOO-1"))
+        .and(query_param("fields", "attachment"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(issue_attachment_response("FOO-1", attachments)),
@@ -811,6 +818,7 @@ async fn test_bc_2_7_001_filter_count_hint_fires_when_reduced() {
 
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/FOO-1"))
+            .and(query_param("fields", "attachment"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_json(issue_attachment_response("FOO-1", mixed_two.clone())),
@@ -889,6 +897,7 @@ async fn test_bc_2_7_001_filter_count_hint_fires_when_reduced() {
 
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/FOO-1"))
+            .and(query_param("fields", "attachment"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_json(issue_attachment_response("FOO-1", two_images)),
@@ -934,6 +943,7 @@ async fn test_bc_2_7_001_filter_count_hint_fires_when_reduced() {
 
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/FOO-1"))
+            .and(query_param("fields", "attachment"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_json(issue_attachment_response("FOO-1", mixed_two.clone())),
@@ -1014,6 +1024,7 @@ async fn test_bc_2_7_003_mime_filter_image_wildcard() {
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/FOO-1"))
+        .and(query_param("fields", "attachment"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(issue_attachment_response("FOO-1", attachments)),
@@ -1096,6 +1107,7 @@ async fn test_bc_2_7_003_mime_filter_image_wildcard() {
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/FOO-1"))
+        .and(query_param("fields", "attachment"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(issue_attachment_response("FOO-1", attachments2)),
@@ -1159,6 +1171,7 @@ async fn test_bc_2_7_003_mime_filter_image_wildcard() {
 
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/FOO-1"))
+            .and(query_param("fields", "attachment"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_json(issue_attachment_response("FOO-1", attachments_sc)),
@@ -1240,6 +1253,7 @@ async fn test_bc_2_7_003_mime_filter_image_wildcard() {
 
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/FOO-1"))
+            .and(query_param("fields", "attachment"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_json(issue_attachment_response("FOO-1", attachments_q)),
@@ -1340,6 +1354,7 @@ async fn test_bc_2_7_004_name_filter_glob_and_composition() {
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/FOO-1"))
+        .and(query_param("fields", "attachment"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(issue_attachment_response("FOO-1", attachments)),
@@ -1487,6 +1502,7 @@ async fn test_bc_2_7_004_name_filter_glob_and_composition() {
 
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/FOO-1"))
+            .and(query_param("fields", "attachment"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_json(issue_attachment_response("FOO-1", attachments_q4)),
@@ -1580,6 +1596,7 @@ async fn test_bc_2_7_005_size_max_filter_and_parse_error() {
 
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/FOO-1"))
+            .and(query_param("fields", "attachment"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_json(issue_attachment_response("FOO-1", attachments)),
@@ -1690,6 +1707,7 @@ async fn test_bc_2_7_005_size_max_filter_and_parse_error() {
 
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/FOO-1"))
+            .and(query_param("fields", "attachment"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_json(issue_attachment_response("FOO-1", attachments)),
@@ -1850,6 +1868,7 @@ async fn test_bc_2_7_006_unknown_key_exits_64() {
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/FAKE-999"))
+        .and(query_param("fields", "attachment"))
         .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
             "errorMessages": [
                 "Issue does not exist or you do not have permission to see it."
@@ -1896,6 +1915,7 @@ async fn test_bc_2_7_006_key_401_exit_2() {
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/FOO-1"))
+        .and(query_param("fields", "attachment"))
         .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
             "errorMessages": [
                 "Client must be authenticated to access this resource."
@@ -1944,6 +1964,7 @@ async fn test_bc_2_7_006_key_403_exit_1() {
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/FOO-1"))
+        .and(query_param("fields", "attachment"))
         .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
             "errorMessages": [
                 "You do not have permission to view this issue."
@@ -1988,6 +2009,7 @@ async fn test_bc_2_7_006_key_5xx_exit_1() {
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/FOO-1"))
+        .and(query_param("fields", "attachment"))
         .respond_with(ResponseTemplate::new(500).set_body_json(serde_json::json!({
             "errorMessages": ["Internal server error."]
         })))
