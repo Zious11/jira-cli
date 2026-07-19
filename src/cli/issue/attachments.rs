@@ -607,4 +607,26 @@ mod tests {
         let a = Some(serde_json::json!({"displayName": null, "accountId": "acct-no-displayname"}));
         assert_eq!(format_author(&a), "acct-no-displayname");
     }
+
+    // EC-2.7.001-3 (v1.3.96): empty-string displayName falls through to accountId.
+    #[test]
+    fn test_format_author_empty_display_name_falls_through_to_account_id() {
+        let a = Some(serde_json::json!({"displayName": "", "accountId": "acct-empty-dn"}));
+        assert_eq!(
+            format_author(&a),
+            "acct-empty-dn",
+            "EC-2.7.001-3: empty displayName must fall through to accountId"
+        );
+    }
+
+    // EC-2.7.001-3 (v1.3.96): empty displayName AND empty accountId → "(anonymous)".
+    #[test]
+    fn test_format_author_empty_display_name_and_empty_account_id_returns_anonymous() {
+        let a = Some(serde_json::json!({"displayName": "", "accountId": ""}));
+        assert_eq!(
+            format_author(&a),
+            "(anonymous)",
+            "EC-2.7.001-3: empty displayName + empty accountId must yield (anonymous)"
+        );
+    }
 }
