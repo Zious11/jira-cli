@@ -100,6 +100,15 @@ fn glob_inner(pattern: &str, input: &str) -> bool {
             }
             false
         }
+        Some('?') => {
+            let rest = p_chars.as_str();
+            // '?' matches exactly one character (any character).
+            let mut i_chars = input.chars();
+            match i_chars.next() {
+                Some(_) => glob_inner(rest, i_chars.as_str()),
+                None => false,
+            }
+        }
         Some(pc) => {
             let mut i_chars = input.chars();
             match i_chars.next() {
@@ -189,13 +198,6 @@ pub async fn handle_attachment_list(
         .collect();
     let n = filtered.len();
 
-    // Filter-count hint fires in BOTH modes when N < M (EC-2.7.001-2).
-    // Deliberate asymmetry: zero-attachment hint is suppressed in JSON mode
-    // (EC-2.7.001-1) but filter-count hint is not.
-    if n < total {
-        eprintln!("Showing {n} of {total} attachments.");
-    }
-
     match output_format {
         OutputFormat::Json => {
             // JSON mode: emit curated array; zero-attachment hint suppressed (EC-2.7.001-1).
@@ -204,14 +206,23 @@ pub async fn handle_attachment_list(
                 .map(|a| serialize_attachment_curated(a))
                 .collect();
             println!("{}", output::render_json(&curated)?);
+            // Filter-count hint fires AFTER the JSON array write (EC-2.7.001-2).
+            // Deliberate asymmetry: zero-attachment hint is suppressed in JSON mode
+            // (EC-2.7.001-1) but filter-count hint is not.
+            if n < total {
+                eprintln!("Showing {n} of {total} attachments.");
+            }
         }
         OutputFormat::Table => {
             if total == 0 {
                 // EC-2.7.001-1: zero-attachment hint on stderr; stdout empty (pipe-friendly).
                 eprintln!("No attachments on {key}.");
             } else if filtered.is_empty() {
-                // All filtered out — filter-count hint already emitted above.
+                // All filtered out — filter-count hint fires after the (empty) stdout write.
                 // stdout empty.
+                if n < total {
+                    eprintln!("Showing {n} of {total} attachments.");
+                }
             } else {
                 let headers = &["ID", "Filename", "Type", "Size", "Created", "Author"];
                 let rows: Vec<Vec<String>> = filtered
@@ -228,6 +239,10 @@ pub async fn handle_attachment_list(
                     })
                     .collect();
                 println!("{}", output::render_table(headers, &rows));
+                // Filter-count hint fires AFTER the table write (EC-2.7.001-2).
+                if n < total {
+                    eprintln!("Showing {n} of {total} attachments.");
+                }
             }
         }
     }
@@ -284,7 +299,30 @@ pub fn serialize_attachment_curated(attachment: &AttachmentObject) -> Value {
     let mut map: BTreeMap<String, Value> = BTreeMap::new();
     map.insert(
         "author".into(),
-        attachment.author.clone().unwrap_or(Value::Null),
+        match &attachment.author {
+            // Absent or explicitly null in API response → top-level null.
+            None | Some(Value::Null) => Value::Null,
+            // Author object present → curate to EXACTLY {accountId, displayName}.
+            // All other Jira author fields (self, avatarUrls, accountType, timeZone, …)
+            // are stripped (BC-2.7.002 v1.3.95 P1-002).  BTreeMap ensures
+            // accountId < displayName alphabetical ordering (BC-2.7.002 (d)).
+            Some(author_val) => {
+                let mut author_map: BTreeMap<String, Value> = BTreeMap::new();
+                author_map.insert(
+                    "accountId".into(),
+                    author_val.get("accountId").cloned().unwrap_or(Value::Null),
+                );
+                author_map.insert(
+                    "displayName".into(),
+                    author_val
+                        .get("displayName")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                );
+                serde_json::to_value(author_map)
+                    .expect("BTreeMap<String, Value> serialization is infallible")
+            }
+        },
     );
     map.insert(
         "contentUrl".into(),
@@ -493,9 +531,15 @@ mod tests {
 
     #[test]
     fn test_glob_match_star_crosses_slash() {
+        // "image/*" — '*' after the slash matches only the subtype.
         assert!(glob_match("image/*", "image/png"));
         assert!(glob_match("image/*", "image/jpeg"));
         assert!(!glob_match("image/*", "application/pdf"));
+        // "image*" — '*' must cross the '/' separator to match "image/png".
+        // This genuinely proves the glob allows '*' to cross '/'.
+        assert!(glob_match("image*", "image/png"));
+        assert!(glob_match("image*", "image/jpeg"));
+        assert!(!glob_match("image*", "application/pdf"));
     }
 
     #[test]
@@ -515,6 +559,34 @@ mod tests {
     fn test_glob_match_exact_no_wildcard() {
         assert!(glob_match("dupe.txt", "dupe.txt"));
         assert!(!glob_match("dupe.txt", "dupe.csv"));
+    }
+
+    #[test]
+    fn test_glob_match_question_mark_single_char() {
+        // '?' matches exactly one character.
+        assert!(glob_match("image/pn?", "image/png"));
+        assert!(glob_match("image/pn?", "image/pnx"));
+        // '?' does NOT match zero characters.
+        assert!(!glob_match("image/pn?", "image/pn"));
+        // '?' does NOT match two characters.
+        assert!(!glob_match("image/pn?", "image/pngg"));
+    }
+
+    #[test]
+    fn test_glob_match_question_mark_case_insensitive() {
+        assert!(glob_match("IMAGE/PN?", "image/png"));
+        assert!(glob_match("image/PN?", "IMAGE/PNG"));
+    }
+
+    #[test]
+    fn test_glob_match_question_mark_in_filename() {
+        // '?' in name pattern: report-?.pdf matches single char between '-' and '.'.
+        assert!(glob_match("report-?.pdf", "report-1.pdf"));
+        assert!(glob_match("report-?.pdf", "report-a.pdf"));
+        // Does NOT match two chars after '-'.
+        assert!(!glob_match("report-?.pdf", "report-10.pdf"));
+        // Does NOT match zero chars after '-'.
+        assert!(!glob_match("report-?.pdf", "report-.pdf"));
     }
 
     // format_author
