@@ -2034,6 +2034,111 @@ async fn test_bc_2_7_006_key_5xx_exit_1() {
         stderr.contains("API error ("),
         "BC-2.7.006 5xx: stderr must contain 'API error ('; got: {stderr}"
     );
+    // Must report the 500 status, NOT "Permission denied" (which belongs to 403 only).
+    // This assertion kills the mutant `*status == 403` → `true` (attachments.rs):
+    // with that mutation a 5xx response is re-wrapped as a 403 "Permission denied" error,
+    // which would produce "API error (403): Permission denied …" instead of
+    // "API error (500): …".
+    assert!(
+        stderr.contains("500"),
+        "BC-2.7.006 5xx: stderr must contain the 500 status code; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Permission denied"),
+        "BC-2.7.006 5xx: stderr must NOT contain 'Permission denied' \
+         (that message is reserved for 403 responses only); got: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// EC-MUTANT-001 — all-filtered-out: empty stdout + filter-count hint to stderr
+// ---------------------------------------------------------------------------
+
+/// Verify the filter-count hint fires when ALL attachments are filtered out (n=0 < total>0).
+///
+/// This test kills the surviving mutants on the `if n < total` guard inside the
+/// `else if filtered.is_empty()` arm (src/cli/issue/attachments.rs):
+/// - Mutation `<` → `==`: `if 0 == total` is false when total > 0 → hint suppressed → FAIL.
+/// - Mutation `<` → `>`:  `if 0 > total` is always false → hint suppressed → FAIL.
+/// - Mutation `<` → `<=`: `if 0 <= total` is always true (equivalent mutation) → hint fires
+///   → test passes. This is an EQUIVALENT mutation: when filtered.is_empty(), n is always 0,
+///   so `0 < total` and `0 <= total` are indistinguishable for any total > 0.
+///
+/// This test also verifies stdout is empty (pipe-friendly) when all rows are filtered out.
+#[tokio::test]
+async fn test_bc_2_7_001_all_filtered_out_empty_stdout_hint_to_stderr() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    // 2 PDF attachments — mime=image/* will match none of them.
+    let attachments = vec![
+        make_attachment(
+            "10001",
+            "report.pdf",
+            "application/pdf",
+            4096,
+            Some("Alice"),
+            Some("acct-001"),
+        ),
+        make_attachment(
+            "10002",
+            "contract.pdf",
+            "application/pdf",
+            8192,
+            Some("Bob"),
+            Some("acct-002"),
+        ),
+    ];
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FOO-1"))
+        .and(query_param("fields", "attachment"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(issue_attachment_response("FOO-1", attachments)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args([
+            "issue",
+            "attachment",
+            "list",
+            "FOO-1",
+            "--filter",
+            "mime=image/*",
+        ])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "EC-MUTANT-001 all-filtered-out: must exit 0; \
+         got {:?}\nstderr: {stderr}\nstdout: {stdout}",
+        output.status.code()
+    );
+
+    // stdout must be empty — no table rendered when filter removes all rows.
+    assert!(
+        stdout.trim().is_empty(),
+        "EC-MUTANT-001 all-filtered-out: stdout must be empty \
+         (pipe-friendly when filter removes all rows); got: {stdout}"
+    );
+
+    // Hint must fire on stderr: "Showing 0 of 2 attachments."
+    // This assertion kills `<` → `==` and `<` → `>` mutations.
+    assert!(
+        stderr.contains("Showing 0 of 2 attachments."),
+        "EC-MUTANT-001 all-filtered-out: stderr must contain \
+         'Showing 0 of 2 attachments.' when filter removes all rows; got: {stderr}"
+    );
 }
 
 // ---------------------------------------------------------------------------

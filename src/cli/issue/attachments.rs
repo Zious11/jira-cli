@@ -527,6 +527,24 @@ mod tests {
         assert_eq!(format_size(1024 * 1024), "1.0 MB");
     }
 
+    // These two tests kill the surviving `*` → `+` mutant on the GB constant
+    // (`const GB: u64 = 1024 * MB`).  With the mutation, GB = 1024 + MB = 1_049_600,
+    // so 2 MiB (2_097_152) would mis-classify as GB and 1 GiB would render as
+    // ~1023.0 GB.  EC-MUTANT-001 (cargo-mutants survivorship, S-576-1).
+    #[test]
+    fn test_format_size_2mb() {
+        // 2 MiB = 2 * 1024^2 = 2_097_152 bytes. Must render as "2.0 MB".
+        // With mutation GB = 1024 + MB = 1_049_600: 2_097_152 >= 1_049_600 → "2.0 GB" ≠ "2.0 MB".
+        assert_eq!(format_size(2 * 1024 * 1024), "2.0 MB");
+    }
+
+    #[test]
+    fn test_format_size_1gb() {
+        // 1 GiB = 1024^3 = 1_073_741_824 bytes. Must render as "1.0 GB".
+        // With mutation GB = 1_049_600: 1_073_741_824 / 1_049_600 ≈ 1023.0 → "1023.0 GB" ≠ "1.0 GB".
+        assert_eq!(format_size(1024 * 1024 * 1024), "1.0 GB");
+    }
+
     // glob_match
 
     #[test]
