@@ -493,6 +493,205 @@ async fn test_bc_2_7_002_json_shape_curated_form() {
          got: {}",
         arr[1]["author"]
     );
+
+    // --- (a) + (d): full-author fixture — extra Jira fields stripped; accountId < displayName order ---
+    //
+    // Jira API author sub-object includes fields beyond {accountId, displayName}:
+    // self, avatarUrls, accountType, timeZone. BC-2.7.002 v1.3.95 P1-002 ruling:
+    // emitted "author" must contain ONLY {accountId, displayName}; all other
+    // Jira author fields must be stripped. BTreeMap ordering (d): accountId < displayName.
+    {
+        let server_fa = MockServer::start().await;
+        let cache_fa = tempfile::tempdir().unwrap();
+        let config_fa = tempfile::tempdir().unwrap();
+
+        let full_author_attach = serde_json::json!({
+            "id": "10099",
+            "filename": "full-author.png",
+            "mimeType": "image/png",
+            "size": 1024,
+            "created": "2026-07-10T14:23:11.000+0000",
+            "author": {
+                "accountId": "acct-full",
+                "displayName": "Full Author",
+                "self": "https://example.atlassian.net/rest/api/3/user?accountId=acct-full",
+                "avatarUrls": {"48x48": "https://example.atlassian.net/avatar/acct-full"},
+                "accountType": "atlassian",
+                "timeZone": "America/New_York"
+            },
+            "self": "https://example.atlassian.net/rest/api/3/attachment/10099",
+            "content": "https://example.atlassian.net/rest/api/3/attachment/content/10099"
+        });
+
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/FOO-1"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(issue_attachment_response("FOO-1", vec![full_author_attach])),
+            )
+            .expect(1)
+            .mount(&server_fa)
+            .await;
+
+        let out_fa = jr_cmd(&server_fa.uri(), cache_fa.path(), config_fa.path())
+            .args(["issue", "attachment", "list", "FOO-1", "--output", "json"])
+            .output()
+            .unwrap();
+
+        let stdout_fa = String::from_utf8_lossy(&out_fa.stdout);
+        let stderr_fa = String::from_utf8_lossy(&out_fa.stderr);
+
+        assert_eq!(
+            out_fa.status.code(),
+            Some(0),
+            "BC-2.7.002 (a) full-author: must exit 0; stderr: {stderr_fa}\nstdout: {stdout_fa}"
+        );
+
+        let arr_fa = serde_json::from_str::<Value>(&stdout_fa)
+            .expect("BC-2.7.002 (a) full-author: must be valid JSON")
+            .as_array()
+            .expect("must be array")
+            .clone();
+        assert_eq!(
+            arr_fa.len(),
+            1,
+            "BC-2.7.002 (a) full-author: expected 1 element; stdout: {stdout_fa}"
+        );
+
+        let author_fa = arr_fa[0]["author"]
+            .as_object()
+            .expect("BC-2.7.002 (a) full-author: 'author' must be an object when present");
+
+        // Exact key set: ONLY {accountId, displayName}.
+        // Nested self/avatarUrls/accountType/timeZone from Jira response MUST NOT appear.
+        let author_keys_fa: std::collections::BTreeSet<&str> =
+            author_fa.keys().map(|k| k.as_str()).collect();
+        let expected_author_keys_fa: std::collections::BTreeSet<&str> =
+            ["accountId", "displayName"].iter().copied().collect();
+        assert_eq!(
+            author_keys_fa,
+            expected_author_keys_fa,
+            "BC-2.7.002 (a) P1-002: author must have EXACTLY {{accountId, displayName}}; \
+             nested self/avatarUrls/accountType/timeZone MUST NOT appear; \
+             got keys: {:?}\nstdout: {stdout_fa}",
+            author_keys_fa
+        );
+
+        // (d) BTreeMap key ordering within author: accountId < displayName (alphabetical).
+        let acct_pos = stdout_fa
+            .find("\"accountId\"")
+            .expect("BC-2.7.002 (d): 'accountId' key not found in stdout");
+        let disp_pos = stdout_fa
+            .find("\"displayName\"")
+            .expect("BC-2.7.002 (d): 'displayName' key not found in stdout");
+        assert!(
+            acct_pos < disp_pos,
+            "BC-2.7.002 (d) BTreeMap: 'accountId' must appear before 'displayName' in the \
+             serialized JSON (BTreeMap alphabetical order); \
+             acct_pos={acct_pos}, disp_pos={disp_pos}\nstdout: {stdout_fa}"
+        );
+    }
+
+    // --- (b): partial-author — author present, both subfields null → curated {accountId:null, displayName:null} ---
+    //
+    // BC-2.7.002 v1.3.95: when Jira returns an author object with null sub-fields,
+    // emit "author": {"accountId": null, "displayName": null} (the curated two-field
+    // form), NOT "author": null (top-level null is reserved for fully absent author).
+    {
+        let server_pa = MockServer::start().await;
+        let cache_pa = tempfile::tempdir().unwrap();
+        let config_pa = tempfile::tempdir().unwrap();
+
+        let partial_author_attach = serde_json::json!({
+            "id": "10098",
+            "filename": "partial-author.pdf",
+            "mimeType": "application/pdf",
+            "size": 512,
+            "created": "2026-07-10T14:23:11.000+0000",
+            "author": {
+                "accountId": null,
+                "displayName": null
+            },
+            "self": "https://example.atlassian.net/rest/api/3/attachment/10098",
+            "content": "https://example.atlassian.net/rest/api/3/attachment/content/10098"
+        });
+
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/FOO-1"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(issue_attachment_response(
+                        "FOO-1",
+                        vec![partial_author_attach],
+                    )),
+            )
+            .expect(1)
+            .mount(&server_pa)
+            .await;
+
+        let out_pa = jr_cmd(&server_pa.uri(), cache_pa.path(), config_pa.path())
+            .args(["issue", "attachment", "list", "FOO-1", "--output", "json"])
+            .output()
+            .unwrap();
+
+        let stdout_pa = String::from_utf8_lossy(&out_pa.stdout);
+        let stderr_pa = String::from_utf8_lossy(&out_pa.stderr);
+
+        assert_eq!(
+            out_pa.status.code(),
+            Some(0),
+            "BC-2.7.002 (b) partial-author: must exit 0; \
+             stderr: {stderr_pa}\nstdout: {stdout_pa}"
+        );
+
+        let arr_pa = serde_json::from_str::<Value>(&stdout_pa)
+            .expect("BC-2.7.002 (b) partial-author: must be valid JSON")
+            .as_array()
+            .expect("must be array")
+            .clone();
+        assert_eq!(
+            arr_pa.len(),
+            1,
+            "BC-2.7.002 (b) partial-author: expected 1 element; stdout: {stdout_pa}"
+        );
+
+        let author_pa = &arr_pa[0]["author"];
+
+        // Must NOT be top-level null; that is reserved for fully absent author.
+        assert!(
+            !author_pa.is_null(),
+            "BC-2.7.002 (b) P1-002 partial-author: 'author' must be the curated two-field \
+             object {{\"accountId\": null, \"displayName\": null}}, NOT top-level null; \
+             top-level null is reserved for Jira API returning null for 'author'; \
+             here the author object is present with null sub-fields; \
+             got: {author_pa}\nstdout: {stdout_pa}"
+        );
+
+        let author_obj_pa = author_pa
+            .as_object()
+            .expect("BC-2.7.002 (b) partial-author: 'author' must be a JSON object");
+        assert_eq!(
+            author_obj_pa.get("accountId"),
+            Some(&Value::Null),
+            "BC-2.7.002 (b) partial-author: accountId must be null; stdout: {stdout_pa}"
+        );
+        assert_eq!(
+            author_obj_pa.get("displayName"),
+            Some(&Value::Null),
+            "BC-2.7.002 (b) partial-author: displayName must be null; stdout: {stdout_pa}"
+        );
+        let author_keys_pa: std::collections::BTreeSet<&str> =
+            author_obj_pa.keys().map(|k| k.as_str()).collect();
+        let expected_pa_keys: std::collections::BTreeSet<&str> =
+            ["accountId", "displayName"].iter().copied().collect();
+        assert_eq!(
+            author_keys_pa,
+            expected_pa_keys,
+            "BC-2.7.002 (b) partial-author: 'author' must have exactly \
+             {{accountId, displayName}}; got: {:?}\nstdout: {stdout_pa}",
+            author_keys_pa
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -933,6 +1132,169 @@ async fn test_bc_2_7_003_mime_filter_image_wildcard() {
         "BC-2.7.003: mime=IMAGE/* (uppercase) must match image/png (case-insensitive); \
          stdout: {stdout2}"
     );
+
+    // --- (b) star-crosses-slash: mime=image* (no slash in pattern) MUST match image/png ---
+    // Proves '*' crosses the '/' boundary between media-type and subtype (BC-2.7.003 glob semantics).
+    // This sub-assertion MAY already pass (it's a pin — the current impl's '*' already crosses '/').
+    {
+        let server_sc = MockServer::start().await;
+        let cache_sc = tempfile::tempdir().unwrap();
+        let config_sc = tempfile::tempdir().unwrap();
+
+        let attachments_sc = vec![
+            make_attachment(
+                "20001",
+                "photo.png",
+                "image/png",
+                1024,
+                Some("A"),
+                Some("a"),
+            ),
+            make_attachment(
+                "20002",
+                "doc.pdf",
+                "application/pdf",
+                2048,
+                Some("B"),
+                Some("b"),
+            ),
+        ];
+
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/FOO-1"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(issue_attachment_response("FOO-1", attachments_sc)),
+            )
+            .mount(&server_sc)
+            .await;
+
+        let out_sc = jr_cmd(&server_sc.uri(), cache_sc.path(), config_sc.path())
+            .args([
+                "issue",
+                "attachment",
+                "list",
+                "FOO-1",
+                "--filter",
+                "mime=image*",
+                "--output",
+                "json",
+            ])
+            .output()
+            .unwrap();
+
+        let s_sc = String::from_utf8_lossy(&out_sc.stdout);
+        assert_eq!(
+            out_sc.status.code(),
+            Some(0),
+            "BC-2.7.003 (b) star-crosses-slash: must exit 0; got {:?}",
+            out_sc.status.code()
+        );
+        let arr_sc = serde_json::from_str::<Value>(&s_sc)
+            .expect("BC-2.7.003 (b) star-crosses-slash: must be valid JSON")
+            .as_array()
+            .expect("must be array")
+            .clone();
+        // mime=image* (no slash) must match image/png — '*' crosses '/' — and exclude application/pdf.
+        assert_eq!(
+            arr_sc.len(),
+            1,
+            "BC-2.7.003 (b) star-crosses-slash: mime=image* must match image/png \
+             (proves '*' crosses '/'); expected 1 result, got {}; stdout: {s_sc}",
+            arr_sc.len()
+        );
+        assert_eq!(
+            arr_sc[0]["mimeType"],
+            "image/png",
+            "BC-2.7.003 (b) star-crosses-slash: matched element must be image/png; stdout: {s_sc}"
+        );
+        assert!(
+            !s_sc.contains("application/pdf"),
+            "BC-2.7.003 (b) star-crosses-slash: application/pdf must NOT match mime=image*; \
+             stdout: {s_sc}"
+        );
+    }
+
+    // --- (a) ? wildcard: mime=image/pn? matches image/png but NOT image/jpeg ---
+    // BC-2.7.003: '?' matches any single character. image/pn? matches image/png (last char 'g')
+    // but not image/jpeg (multiple chars after 'image/').
+    {
+        let server_q = MockServer::start().await;
+        let cache_q = tempfile::tempdir().unwrap();
+        let config_q = tempfile::tempdir().unwrap();
+
+        let attachments_q = vec![
+            make_attachment(
+                "30001",
+                "photo.png",
+                "image/png",
+                1024,
+                Some("A"),
+                Some("a"),
+            ),
+            make_attachment(
+                "30002",
+                "photo.jpg",
+                "image/jpeg",
+                2048,
+                Some("B"),
+                Some("b"),
+            ),
+        ];
+
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/FOO-1"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(issue_attachment_response("FOO-1", attachments_q)),
+            )
+            .mount(&server_q)
+            .await;
+
+        let out_q = jr_cmd(&server_q.uri(), cache_q.path(), config_q.path())
+            .args([
+                "issue",
+                "attachment",
+                "list",
+                "FOO-1",
+                "--filter",
+                "mime=image/pn?",
+                "--output",
+                "json",
+            ])
+            .output()
+            .unwrap();
+
+        let s_q = String::from_utf8_lossy(&out_q.stdout);
+        assert_eq!(
+            out_q.status.code(),
+            Some(0),
+            "BC-2.7.003 (a) ? wildcard: must exit 0; got {:?}",
+            out_q.status.code()
+        );
+        let arr_q = serde_json::from_str::<Value>(&s_q)
+            .expect("BC-2.7.003 (a) ? wildcard: must be valid JSON")
+            .as_array()
+            .expect("must be array")
+            .clone();
+        // mime=image/pn? must match image/png (one char 'g') and NOT image/jpeg.
+        assert_eq!(
+            arr_q.len(),
+            1,
+            "BC-2.7.003 (a) ? glob: mime=image/pn? must match image/png (1 result) \
+             and NOT image/jpeg; got {} results; stdout: {s_q}",
+            arr_q.len()
+        );
+        assert_eq!(
+            arr_q[0]["mimeType"],
+            "image/png",
+            "BC-2.7.003 (a) ? glob: matched element must be image/png; stdout: {s_q}"
+        );
+        assert!(
+            !s_q.contains("image/jpeg"),
+            "BC-2.7.003 (a) ? glob: image/jpeg must NOT match mime=image/pn?; stdout: {s_q}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1100,6 +1462,89 @@ async fn test_bc_2_7_004_name_filter_glob_and_composition() {
         arr3[0]["filename"], arr3[1]["filename"],
         "BC-2.7.004 (3): both entries must share the filename 'dupe.txt'"
     );
+
+    // --- (a) ? wildcard in name filter: report-?.pdf matches report-1.pdf NOT report-10.pdf ---
+    // BC-2.7.004: '?' matches any single character. report-?.pdf matches report-1.pdf
+    // (single char '1' between '-' and '.') but NOT report-10.pdf (two chars '10').
+    {
+        let server_q4 = MockServer::start().await;
+        let cache_q4 = tempfile::tempdir().unwrap();
+        let config_q4 = tempfile::tempdir().unwrap();
+
+        let attachments_q4 = vec![
+            make_attachment(
+                "40001",
+                "report-1.pdf",
+                "application/pdf",
+                1024,
+                Some("A"),
+                Some("a"),
+            ),
+            make_attachment(
+                "40002",
+                "report-10.pdf",
+                "application/pdf",
+                2048,
+                Some("B"),
+                Some("b"),
+            ),
+        ];
+
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/FOO-1"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(issue_attachment_response("FOO-1", attachments_q4)),
+            )
+            .mount(&server_q4)
+            .await;
+
+        let out_q4 = jr_cmd(&server_q4.uri(), cache_q4.path(), config_q4.path())
+            .args([
+                "issue",
+                "attachment",
+                "list",
+                "FOO-1",
+                "--filter",
+                "name=report-?.pdf",
+                "--output",
+                "json",
+            ])
+            .output()
+            .unwrap();
+
+        let s_q4 = String::from_utf8_lossy(&out_q4.stdout);
+        assert_eq!(
+            out_q4.status.code(),
+            Some(0),
+            "BC-2.7.004 (a) ? wildcard: must exit 0; got {:?}",
+            out_q4.status.code()
+        );
+        let arr_q4 = serde_json::from_str::<Value>(&s_q4)
+            .expect("BC-2.7.004 (a) ? wildcard: must be valid JSON")
+            .as_array()
+            .expect("must be array")
+            .clone();
+        // report-?.pdf must match report-1.pdf (single char: '1') but NOT report-10.pdf (two chars: '10').
+        assert_eq!(
+            arr_q4.len(),
+            1,
+            "BC-2.7.004 (a) ? glob: name=report-?.pdf must match report-1.pdf (1 result, \
+             single char between '-' and '.') and NOT report-10.pdf (two chars after '-'); \
+             got {} results; stdout: {s_q4}",
+            arr_q4.len()
+        );
+        assert_eq!(
+            arr_q4[0]["filename"],
+            "report-1.pdf",
+            "BC-2.7.004 (a) ? glob: matched element must be report-1.pdf; stdout: {s_q4}"
+        );
+        assert!(
+            !s_q4.contains("report-10.pdf"),
+            "BC-2.7.004 (a) ? glob: report-10.pdf must NOT match name=report-?.pdf; \
+             stdout: {s_q4}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
