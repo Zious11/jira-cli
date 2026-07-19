@@ -32,6 +32,12 @@ examine_globs = [
     # HIGH-value: TTL logic, per-profile path construction, model-a vs model-b
     # error-handling split (F1 sibling analysis, MAINT-MUTANTS-GLOBS-01).
     "src/cache.rs",
+    # S-576-1 — attachment list surface. Added at file-creation time per S1 obligation (f)
+    # (prd-delta-576.md). CWE-116 rationale: display_sanitize_filename is a
+    # security-relevant display-sanitization function; S-577-1 precedent: new CLI
+    # handler file → add to mutants.toml at creation (P22-001).
+    "src/cli/issue/attachments.rs",
+    "src/api/jira/attachments.rs",
 ]
 
 # The absolute per-mutant test ceiling is set via `--timeout 240` on the CLI

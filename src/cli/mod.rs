@@ -643,6 +643,11 @@ pub enum IssueCommand {
         /// Issue key (e.g., FOO-123)
         key: String,
     },
+    /// Attachment operations: list. (S-576-1)
+    Attachment {
+        #[command(subcommand)]
+        command: AttachmentSubcommand,
+    },
 }
 
 /// Subcommands for `jr issue comment`.
@@ -717,6 +722,23 @@ pub enum CommentSubcommand {
         /// Comment ID to view
         #[arg(long)]
         id: String,
+    },
+}
+
+/// Subcommands for `jr issue attachment`. (S-576-1)
+///
+/// Defined here (in `src/cli/mod.rs`) — NOT in `src/cli/issue/attachments.rs`.
+/// S-576-2, S-576-3, S-576-4, and S-576-5 add variants to this enum.
+#[derive(Subcommand)]
+pub enum AttachmentSubcommand {
+    /// List attachments on an issue (table or JSON; client-side filters)
+    List {
+        /// Issue key (e.g., FOO-123)
+        key: String,
+        /// Client-side filter: `mime=<glob>`, `name=<glob>`, or `size-max=<bytes>`.
+        /// Repeatable; multiple filters combine with AND semantics.
+        #[arg(long = "filter")]
+        filter: Vec<String>,
     },
 }
 
