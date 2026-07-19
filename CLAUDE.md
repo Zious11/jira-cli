@@ -27,6 +27,7 @@ src/
 │   │   ├── assets.rs        # linked assets (issue→asset lookup)
 │   │   ├── changelog.rs     # issue changelog handler (`jr issue changelog`)
 │   │   ├── field_resolve.rs # field resolution helpers for `issue edit --field`
+│   │   ├── attachments.rs   # attachment list handler + display_sanitize_filename (CWE-116, S-576-1)
 │   │   └── json_output.rs   # JSON output helpers for issue commands
 │   ├── assets/          # assets commands (module directory)
 │   │   ├── mod.rs           # dispatch + re-exports
@@ -83,6 +84,7 @@ src/
 │   │   ├── teams.rs     # org metadata (GraphQL), list teams
 │   │   ├── worklogs.rs  # add/list worklogs
 │   │   ├── projects.rs  # project details
+│   │   ├── attachments.rs # list attachments on an issue (S-576-1; GET ?fields=attachment)
 │   │   └── users.rs     # current user, user search, assignable users, single-user lookup
 │   └── jsm/             # JSM-specific API call implementations
 │       ├── mod.rs           # module re-exports for api/jsm/

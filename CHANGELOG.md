@@ -18,6 +18,19 @@ All notable changes to jr will be documented here.
 
 ### Added
 
+- **`jr issue attachment list` — table + JSON output + client-side filters (S-576-1, #576):**
+  `jr issue attachment list KEY` lists all attachments on an issue in a six-column table
+  (ID, Filename, Type, Size, Created, Author). `--output json` returns a curated array
+  with keys `{author,contentUrl,created,filename,id,mimeType,size}` (alphabetical BTreeMap
+  order; `"self"` omitted, `"content"` renamed to `"contentUrl"`, `size` is a raw u64).
+  Three client-side filters: `--filter mime=<glob>` (case-insensitive, `*` crosses `/`),
+  `--filter name=<glob>`, `--filter size-max=<bytes>`; multiple `--filter` flags AND-compose.
+  Zero-attachment hint emitted to stderr in human mode only (suppressed in JSON mode per
+  BC-2.7.001 EC-2.7.001-1). Filter-count hint "Showing N of M attachments." fires on stderr
+  in BOTH modes when a filter reduces the count. CWE-116 display-sanitization: bidi/control
+  chars in filenames are replaced with `?` in the Filename column.
+  feat(issue): attachment list subcommand + JSON output + filters (#576)
+
 - **`jr issue comment edit --internal/--public` — visibility flags + public confirmation gate (S-577-5, closes #577):**
   `--internal` sets `sd.public.comment={internal:true}` on the comment (agent-only
   on JSM projects); `--public` sets `{internal:false}` (visible to customers).

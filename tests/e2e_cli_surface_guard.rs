@@ -169,6 +169,8 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     (&["issue", "transitions"], &["--output"]),
     // issue changelog  (positional: key)
     (&["issue", "changelog"], &["--output"]),
+    // issue attachment list  (S-576-1: positional: key; --filter repeatable)
+    (&["issue", "attachment", "list"], &["--filter", "--output"]),
     // board list
     (&["board", "list"], &["--output"]),
     // board view

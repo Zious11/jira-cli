@@ -269,6 +269,7 @@ jr issue comment add JSM-42 "customer is on the paid plan — prioritizing" --in
 | `jr issue link-types` | List available link types |
 | `jr issue remote-link KEY --url URL` | Attach a Confluence page or web URL (`--title` optional, defaults to URL) |
 | `jr issue assets KEY`          | Show assets linked to an issue                |
+| `jr issue attachment list KEY` | List attachments on an issue (`--filter mime=`, `--filter name=`, `--filter size-max=`) |
 | `jr issue changelog KEY` | Show the audit history (change log) for an issue |
 | `jr board list` | List boards (`--project`, `--type scrum\|kanban`) |
 | `jr board view --board 42` | Show current board issues (`--board` or config, `--limit`/`--all`) |
