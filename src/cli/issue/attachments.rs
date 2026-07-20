@@ -380,15 +380,17 @@ struct DownloadManifest {
 // ---------------------------------------------------------------------------
 
 /// Returns `true` when the stem of `name` (portion before the first `.`) is a
-/// Windows reserved device name (case-insensitive): CON, NUL, PRN, AUX, COM0–COM9,
-/// LPT0–LPT9.  Single-id call site only (SEC-576-001, BC-2.7.011).
+/// Windows reserved device name (case-insensitive): CON, NUL, PRN, AUX, COM1–COM9,
+/// LPT1–LPT9.  COM0/LPT0 are NOT Windows device names and are NOT escaped.
+/// Single-id call site only (SEC-576-001, BC-2.7.011, AC-016).
 fn is_windows_device_name_basename(name: &str) -> bool {
     let stem = name.split('.').next().unwrap_or(name);
     let upper = stem.to_ascii_uppercase();
     match upper.as_str() {
         "CON" | "NUL" | "PRN" | "AUX" => true,
         s if s.len() == 4 && (s.starts_with("COM") || s.starts_with("LPT")) => {
-            s.as_bytes()[3].is_ascii_digit()
+            // COM1–COM9 / LPT1–LPT9 only; COM0/LPT0 are NOT Windows device names.
+            matches!(s.as_bytes()[3], b'1'..=b'9')
         }
         _ => false,
     }
@@ -965,7 +967,7 @@ pub async fn handle_attachment_download(
         // Validate: --id must be numeric (EC-2.7.007-5, BC-2.7.012).
         if !id_str.chars().all(|c| c.is_ascii_digit()) || id_str.is_empty() {
             return Err(JrError::UserError(format!(
-                "invalid attachment id: '{id_str}' — must be a numeric Jira attachment ID."
+                "invalid attachment id: '{id_str}' (must be numeric)"
             ))
             .into());
         }
@@ -1274,6 +1276,22 @@ mod tests {
             sanitize_attachment_filename("COM1"),
             Some("COM1".to_string())
         );
+    }
+
+    #[test]
+    fn test_is_windows_device_name_basename_com0_not_device_name() {
+        // AC-016 / O-3: COM0 is NOT a Windows device name; range is COM1–COM9 only.
+        // is_windows_device_name_basename("COM0") must return false so "COM0.txt"
+        // is NOT escaped with a leading underscore at the single-id call site.
+        assert!(!is_windows_device_name_basename("COM0"));
+        assert!(!is_windows_device_name_basename("LPT0"));
+        assert!(!is_windows_device_name_basename("COM0.txt"));
+        assert!(!is_windows_device_name_basename("LPT0.txt"));
+        // Verify COM1–COM9 / LPT1–LPT9 still detected.
+        assert!(is_windows_device_name_basename("COM1"));
+        assert!(is_windows_device_name_basename("COM9"));
+        assert!(is_windows_device_name_basename("LPT1"));
+        assert!(is_windows_device_name_basename("LPT9"));
     }
 
     #[test]
