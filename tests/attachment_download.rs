@@ -2181,6 +2181,93 @@ async fn test_bc_2_7_007_single_id_success_hint_stderr() {
 }
 
 // ---------------------------------------------------------------------------
+// P8-001 — BC-2.7.011 ~936: success hint display-sanitizes filename (CWE-116)
+// ---------------------------------------------------------------------------
+
+/// P8-001 / BC-2.7.011 ~936: the single-id success hint (`Downloaded: <path> (<size>).`)
+/// MUST pass the filename portion through `display_sanitize_filename` (CWE-116
+/// every-call-site clause) before emitting to stderr.
+///
+/// Fixture: metadata returns `filename: "evil\u{202E}\rname.txt"` — contains:
+///   - U+202E (bidi RLO, cp 0x202E, in range 0x202A..=0x202E → `?`)
+///   - `\r`   (CR, cp 0x0D, <= 0x1F → `?`)
+///
+/// Expected hint: `Downloaded: <dir>/evil??name.txt (3 B).`
+///
+/// `sanitize_attachment_filename` disk-variant keeps U+202E and `\r` (they are NOT
+/// in the scrub set: `/`, `\`, `:`), so the ON-DISK file is named with raw chars.
+///
+/// RED: current impl uses `final_path.display()` raw → hint emits raw U+202E and `\r`.
+#[tokio::test]
+async fn test_bc_2_7_007_success_hint_display_sanitizes_filename() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    // subprocess CWD: default-path mode (no --out) → file lands in CWD.
+    let cwd_dir = TempDir::new().unwrap();
+
+    let poisoned_filename = "evil\u{202E}\rname.txt";
+    let display_safe = "evil??name.txt"; // display_sanitize_filename replaces U+202E and \r with '?'
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/attachment/96001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "96001",
+            "filename": poisoned_filename,
+            "size": 3,
+            "mimeType": "text/plain",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/attachment/content/96001"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"abc"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .current_dir(cwd_dir.path()) // default-path: file lands here
+        .args(["issue", "attachment", "download", "HINT-1", "--id", "96001"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "download with poisoned filename must succeed (exit 0); stderr: {stderr}"
+    );
+
+    // BC-2.7.011 ~936: every call site must display-sanitize. RED against current impl
+    // which uses final_path.display() raw.
+    assert!(
+        !stderr.contains('\u{202E}'),
+        "P8-001: raw U+202E (bidi RLO) MUST NOT appear in Downloaded: hint \
+         (BC-2.7.011 every-call-site CWE-116 clause); got: {stderr:?}"
+    );
+    assert!(
+        !stderr.contains('\r'),
+        "P8-001: raw \\r (CR, 0x0D) MUST NOT appear in Downloaded: hint \
+         (BC-2.7.011 every-call-site CWE-116 clause); got: {stderr:?}"
+    );
+    assert!(
+        stderr.contains(display_safe),
+        "P8-001: hint must contain display-sanitized filename '{display_safe}'; \
+         got: {stderr:?}"
+    );
+
+    // On-disk file keeps the disk-variant name (sanitize_attachment_filename does NOT
+    // scrub U+202E or \r — they are not /, \\, :, or NUL).
+    let disk_file = cwd_dir.path().join(poisoned_filename);
+    assert!(
+        disk_file.exists(),
+        "P8-001: on-disk file must use disk-variant name (raw chars preserved on disk); \
+         expected: {disk_file:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // AC-019 — EC-2.7.008-10 / EC-2.7.009-3: filtered-to-zero hint
 // ---------------------------------------------------------------------------
 
