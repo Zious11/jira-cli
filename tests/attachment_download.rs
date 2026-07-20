@@ -793,11 +793,7 @@ async fn test_bc_2_7_008_all_batch_fail_soft() {
         !stderr_d.contains("API error (1)"),
         "(d) all-fail batch must NOT emit spurious 'API error (1)' to stderr (BC-2.7.008) — got: {stderr_d}"
     );
-    let combined_d = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out_d.stdout),
-        &stderr_d
-    );
+    let combined_d = format!("{}{}", String::from_utf8_lossy(&out_d.stdout), &stderr_d);
     // P1-008 / BC-2.7.008 ~799: canonical summary must end with trailing period.
     let expected_summary_d = format!(
         "Downloaded 0 of 2 attachments to {}.",
