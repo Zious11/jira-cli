@@ -2200,6 +2200,139 @@ async fn test_bc_2_7_008_filtered_to_zero_hint() {
 }
 
 // ---------------------------------------------------------------------------
+// P3-003 — AC-008 / BC-2.7.009: filter-then-newest composition (regression pin)
+// ---------------------------------------------------------------------------
+
+/// P3-003 / AC-008 / BC-2.7.009: `--filter X --newest N` must apply filter FIRST, then select
+/// the top-N from the filtered set (filter-before-select order, story ~283).
+///
+/// Fixture design — the chronologically-NEWEST attachment does NOT match the filter:
+///   AID 55001  2026-07-10T14:00Z  mime=text/plain   ← matches filter, OLDER of filtered set
+///   AID 55002  2026-07-10T16:00Z  mime=text/plain   ← matches filter, NEWEST of filtered set
+///   AID 55003  2026-07-10T18:00Z  mime=image/png    ← NEWEST OVERALL but does NOT match filter
+///
+/// With `--filter mime=text/plain --newest 1`:
+///   filter-then-newest (CORRECT): filtered=[55001,55002] → newest=55002 → download 55002
+///   newest-then-filter (WRONG):   newest=[55003] → filter=[nothing] → zero downloads
+///
+/// .expect(0) on 55003 content mock + .expect(1) on 55002 ensure an order-swap
+/// regression fails at mock-server drop.
+///
+/// Expected status: GREEN — the implementation applies filter before newest truncation
+/// (src/cli/issue/attachments.rs::handle_batch_download, filter pass ~line 736 precedes
+/// newest truncation ~line 755). This is a regression pin per AC-008.
+#[tokio::test]
+async fn test_bc_2_7_009_filter_then_newest_composition() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    let out_dir = TempDir::new().unwrap();
+
+    let atts = vec![
+        make_attachment(
+            "55001",
+            "older_plain.txt",
+            "text/plain",
+            4,
+            "2026-07-10T14:00:00.000+0000", // oldest, matches --filter mime=text/plain
+        ),
+        make_attachment(
+            "55002",
+            "newer_plain.txt",
+            "text/plain",
+            4,
+            "2026-07-10T16:00:00.000+0000", // middle, matches filter — NEWEST of filtered set
+        ),
+        make_attachment(
+            "55003",
+            "newest_png.png",
+            "image/png",
+            4,
+            "2026-07-10T18:00:00.000+0000", // NEWEST OVERALL but does NOT match text/plain filter
+        ),
+    ];
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/FILTNEW-1"))
+        .and(query_param("fields", "attachment"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(issue_with_attachments("FILTNEW-1", atts)),
+        )
+        .mount(&server)
+        .await;
+
+    // Correct answer: 55002 must be downloaded (newest of text/plain-filtered set).
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/attachment/content/55002"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"newer_plain"))
+        .expect(1) // must be called exactly once
+        .mount(&server)
+        .await;
+
+    // Wrong answer: 55003 must NOT be downloaded — it is filtered out by --filter mime=text/plain.
+    // If newest-then-filter order were used, 55003 would be selected and this would fire → RED.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/attachment/content/55003"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"newest_png"))
+        .expect(0) // AC-008: filter-before-select; 55003 must never be content-fetched
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "download",
+            "FILTNEW-1",
+            "--newest",
+            "1",
+            "--filter",
+            "mime=text/plain",
+            "--out-dir",
+            out_dir.path().to_str().unwrap(),
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "--filter mime=text/plain --newest 1 must succeed (exit 0)"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let manifest: Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout must be valid JSON — {e}\nstdout: {stdout}"));
+    let downloaded = manifest["downloaded"].as_array().unwrap();
+    assert_eq!(
+        downloaded.len(),
+        1,
+        "--filter + --newest 1 must download exactly 1 attachment"
+    );
+    let ids: Vec<&str> = downloaded
+        .iter()
+        .map(|e| e["id"].as_str().unwrap())
+        .collect();
+    // 55002 is the newest of the text/plain-filtered set (AC-008 filter-before-select).
+    assert!(
+        ids.contains(&"55002"),
+        "newest of filtered set (55002, text/plain) must be selected \
+         (AC-008: filter-before-select) — got: {ids:?}"
+    );
+    // 55003 is the newest overall but does not pass the text/plain filter.
+    assert!(
+        !ids.contains(&"55003"),
+        "overall-newest (55003, image/png) must NOT be selected \
+         (filtered out by mime=text/plain) — got: {ids:?}"
+    );
+    // 55001 is filtered in but not selected (N=1 and 55002 is newer).
+    assert!(
+        !ids.contains(&"55001"),
+        "older text/plain (55001) must NOT be selected (newest-1 of filtered is 55002) — got: {ids:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // P1-005 — BC-2.7.010 R3.10: single-id degenerate-name fallback + exact canonical warning
 // ---------------------------------------------------------------------------
 
