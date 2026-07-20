@@ -786,8 +786,9 @@ pub enum AttachmentSubcommand {
         #[arg(long = "filter", conflicts_with = "id")]
         filter: Vec<String>,
 
-        /// Overwrite an existing output file without error (EC-2.7.007-12 bypass;
-        /// SEC-576-010; single-`--id` with `--out` only).
+        /// Overwrite existing output files without error. Single-`--id`: bypasses
+        /// the `--out` collision check (EC-2.7.007-12, SEC-576-010). Batch (`--all`
+        /// / `--newest`): silently overwrites on filename collision (BC-2.7.008).
         #[arg(long)]
         force: bool,
     },

@@ -34,7 +34,7 @@ All notable changes to jr will be documented here.
   Jira-supplied name (P27-001); `size` is bytes-actually-written, not metadata size (P31-002).
   Batch uses fail-soft semantics: per-file failures emit `warning:` to stderr and continue;
   partial failure exits 1 after printing the manifest. `--filter` and `--force` flags supported.
-  feat(issue): attachment download subcommand + streaming + CWE-22 sanitization (#576)
+  feat(issue): attachment download single/batch/newest + streaming + CWE-22 sanitization (#576)
 
 - **`jr issue attachment list` — table + JSON output + client-side filters (S-576-1, #576):**
   `jr issue attachment list KEY` lists all attachments on an issue in a six-column table
