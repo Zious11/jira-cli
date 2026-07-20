@@ -456,8 +456,16 @@ fn floor_char_boundary_at(s: &str, limit: usize) -> usize {
 /// 5. Length cap to 214 bytes on a valid UTF-8 char boundary; strip trailing
 ///    ASCII whitespace and `.` (step 5.5, SEC-576-007).
 pub fn sanitize_attachment_filename(name: &str) -> Option<String> {
+    // Step 1 (pre): Replace ':' before basename extraction for cross-platform
+    // consistency. On Windows, Path::file_name() treats "C:name.txt" as a
+    // drive-relative path and strips the "C:" prefix entirely, producing
+    // "name.txt" instead of the spec-required "C_name.txt" (BC-2.7.011 step 4
+    // mandates REPLACEMENT not stripping). Pre-replacing ensures uniform output
+    // on all platforms. Step 4 still scrubs any remaining occurrences.
+    let name_pre = name.replace(':', "_");
+
     // Step 1: Extract basename — strip Unix directory components.
-    let after_unix_strip = std::path::Path::new(name)
+    let after_unix_strip = std::path::Path::new(&name_pre)
         .file_name()
         .and_then(|f| f.to_str())?;
 
