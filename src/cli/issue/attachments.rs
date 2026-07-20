@@ -599,8 +599,11 @@ async fn handle_single_download(
     output_format: &OutputFormat,
     client: &JiraClient,
 ) -> anyhow::Result<()> {
-    // P32-001: pre-flight check on user-supplied --out BEFORE any HTTP call.
+    // P32-001: ALL pre-flights for --out case fire BEFORE step-1 metadata GET.
+    // Order per P32-001: EC-2.7.007-6 (parent-exists) → EC-2.7.007-11 (is-directory)
+    // → EC-2.7.007-12 (overwrite-refuse) → metadata GET.
     if let Some(p) = out {
+        // EC-2.7.007-6: parent-exists check.
         let parent = p.parent();
         let effective_parent = match parent {
             None => {
@@ -625,6 +628,21 @@ async fn handle_single_download(
             ))
             .into());
         }
+        // EC-2.7.007-11: path-is-directory check (P1-003, P32-001).
+        if p.is_dir() {
+            return Err(
+                JrError::UserError(format!("output path is a directory: {}", p.display())).into(),
+            );
+        }
+        // EC-2.7.007-12: overwrite-refuse pre-flight (SEC-576-010, P32-001).
+        // Fires before the metadata GET when --out is supplied.
+        if p.exists() && !force {
+            return Err(JrError::UserError(format!(
+                "File already exists: {}. Use --force to overwrite.",
+                p.display()
+            ))
+            .into());
+        }
     }
 
     // BC-2.7.007 step 1: fetch attachment metadata.
@@ -638,8 +656,21 @@ async fn handle_single_download(
         // Default: CWD + sanitized_filename, with Windows device-name escape.
         let cwd = std::env::current_dir()
             .map_err(|e| JrError::UserError(format!("Cannot determine current directory: {e}")))?;
-        let sanitized =
-            sanitize_attachment_filename(raw_filename).unwrap_or_else(|| id_str.to_string());
+        let sanitized = match sanitize_attachment_filename(raw_filename) {
+            Some(s) => s,
+            None => {
+                // Degenerate-name fallback: id-as-filename (BC-2.7.010 R3.10).
+                // Emit canonical warning in human mode only (hint, suppressed in JSON mode).
+                if matches!(output_format, OutputFormat::Table) {
+                    eprintln!(
+                        "warning: using id as filename for attachment {} \u{2014} original name '{}' could not be sanitized.",
+                        id_str,
+                        display_sanitize_filename(raw_filename),
+                    );
+                }
+                id_str.to_string()
+            }
+        };
         // SEC-576-001: device-name escape at single-id call site only.
         let name = if is_windows_device_name_basename(&sanitized) {
             format!("_{sanitized}")
@@ -649,8 +680,9 @@ async fn handle_single_download(
         cwd.join(name)
     };
 
-    // Collision check.
-    if final_path.exists() && !force {
+    // Collision check for default-path case (when --out is not supplied).
+    // When --out IS supplied, overwrite-refuse was already checked in the pre-flight above.
+    if out.is_none() && final_path.exists() && !force {
         return Err(JrError::UserError(format!(
             "File already exists: {}. Use --force to overwrite.",
             final_path.display()
@@ -679,7 +711,11 @@ async fn handle_single_download(
             );
         }
         OutputFormat::Table => {
-            eprintln!("Downloaded: {}", final_path.display());
+            eprintln!(
+                "Downloaded: {} ({}).",
+                final_path.display(),
+                format_size(bytes_written)
+            );
         }
     }
 
@@ -752,9 +788,19 @@ async fn handle_batch_download(
         return Ok(());
     }
 
-    // --newest N: sort by created descending, then truncate to N.
+    // --newest N: sort by created descending (chrono instant-based, NOT lexicographic —
+    // BC-2.7.009 ~830), then truncate to N.
     if let Some(n) = newest_n {
-        filtered.sort_by(|a, b| b.created.cmp(&a.created));
+        filtered.sort_by(|a, b| {
+            let parse_dt =
+                |s: &str| chrono::DateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.3f%z").ok();
+            match (parse_dt(&a.created), parse_dt(&b.created)) {
+                (Some(a_dt), Some(b_dt)) => b_dt.cmp(&a_dt), // newest first
+                (Some(_), None) => std::cmp::Ordering::Less, // parsed before unparseable
+                (None, Some(_)) => std::cmp::Ordering::Greater, // unparseable after parsed
+                (None, None) => b.created.cmp(&a.created),   // both fail: lex tiebreak
+            }
+        });
         filtered.truncate(n);
     }
 
@@ -762,24 +808,49 @@ async fn handle_batch_download(
     let mut entries: Vec<AttachmentDownloadEntry> = Vec::new();
     let mut fail_count: usize = 0;
 
+    // BC-2.7.011 defense-in-depth: pre-canonicalize base_dir once for containment checks.
+    let resolved_dir = base_dir
+        .canonicalize()
+        .unwrap_or_else(|_| base_dir.to_path_buf());
+
     for att in &filtered {
-        // Degenerate-name warning (human mode only; suppressed in JSON mode per AC-015).
+        // Degenerate-name warning (human mode only; hint, suppressed in JSON mode).
+        // Canonical format per BC-2.7.010 ~872: em-dash U+2014, "original name", trailing period.
         if sanitize_attachment_filename(&att.filename).is_none()
             && matches!(output_format, OutputFormat::Table)
         {
-            let display_name = display_sanitize_filename(&att.filename);
             eprintln!(
-                "warning: using id as filename for attachment {}: '{}' could not be sanitized",
-                att.id, display_name
+                "warning: using id as filename for attachment {} \u{2014} original name '{}' could not be sanitized.",
+                att.id,
+                display_sanitize_filename(&att.filename),
             );
         }
 
         let final_path = compute_default_output_path(&base_dir, &att.id, &att.filename, true);
 
-        // Collision check: skip (not a failure) if file exists and !force.
+        // BC-2.7.011 defense-in-depth: unreachable via API-supplied filenames after sanitization steps 1-5.
+        // Two-step containment check: canonicalize base_dir, then assert joined path starts_with it.
+        if let Some(fname) = final_path.file_name() {
+            if !resolved_dir.join(fname).starts_with(&resolved_dir) {
+                eprintln!(
+                    "warning: skipping attachment {} — path escape detected after sanitization.",
+                    att.id
+                );
+                continue;
+            }
+        }
+
+        // Collision check: skip (NON-ERROR per BC-2.7.008 ~797) if file exists and !force.
+        // Collision-skip is a hint — suppressed in JSON mode (P27-003).
         if final_path.exists() && !force {
             if matches!(output_format, OutputFormat::Table) {
-                eprintln!("warning: skipping existing file: {}", final_path.display());
+                let on_disk_name = final_path
+                    .file_name()
+                    .map(|n| display_sanitize_filename(&n.to_string_lossy()))
+                    .unwrap_or_else(|| display_sanitize_filename(&final_path.to_string_lossy()));
+                eprintln!(
+                    "Skipping {on_disk_name}: file already exists. Use --force to overwrite."
+                );
             }
             continue;
         }
@@ -824,8 +895,9 @@ async fn handle_batch_download(
             );
         }
         OutputFormat::Table => {
+            // Trailing period required per BC-2.7.008 ~799.
             eprintln!(
-                "Downloaded {} of {} attachments to {}",
+                "Downloaded {} of {} attachments to {}.",
                 success_count,
                 total_to_download,
                 base_dir.display()
@@ -834,12 +906,11 @@ async fn handle_batch_download(
     }
 
     if fail_count > 0 {
-        // Signal exit code 1. All per-file warnings were already emitted above.
-        return Err(JrError::ApiError {
-            status: 1,
-            message: "batch download completed with errors".to_string(),
-        }
-        .into());
+        // House pattern for silent exit-1 (P1-007): all per-file warnings and the
+        // summary have already been emitted above. Using std::process::exit(1) here
+        // avoids routing through main.rs error printing which would emit a spurious
+        // "Error: API error (1): ..." line to stderr (BC-2.7.008 fail-soft semantics).
+        std::process::exit(1);
     }
 
     Ok(())
