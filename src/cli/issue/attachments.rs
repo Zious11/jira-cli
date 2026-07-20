@@ -368,11 +368,11 @@ pub fn serialize_attachment_curated(attachment: &AttachmentObject) -> Value {
 /// - `path`     = on-disk path as-constructed by `jr` (NOT canonicalized; P18-004).
 /// - `size`     = bytes actually written to disk from the streaming write loop (P31-002).
 #[derive(serde::Serialize)]
-pub struct AttachmentDownloadEntry {
-    pub filename: String,
-    pub id: String,
-    pub path: String,
-    pub size: u64,
+struct AttachmentDownloadEntry {
+    filename: String,
+    id: String,
+    path: String,
+    size: u64,
 }
 
 /// JSON wrapper for the download manifest (`{"downloaded": [...]}`).
@@ -522,7 +522,7 @@ pub fn sanitize_attachment_filename(name: &str) -> Option<String> {
 /// - `attachment_id` — numeric attachment ID from the Jira API (trusted per SEC-576-008).
 /// - `filename`      — raw Jira-supplied filename.
 /// - `is_batch`      — `true` → batch path with SHA-1 prefix; `false` → single bare path.
-pub fn compute_default_output_path(
+fn compute_default_output_path(
     base_dir: &std::path::Path,
     attachment_id: &str,
     filename: &str,
