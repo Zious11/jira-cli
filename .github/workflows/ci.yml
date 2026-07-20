@@ -170,7 +170,7 @@ jobs:
   mutants:
     name: Mutation testing
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 240
     # PR-only — mutation testing is too slow for every push to develop/main.
     # --in-diff keeps per-PR cost bounded to changed lines only.
     if: github.event_name == 'pull_request'
