@@ -139,8 +139,26 @@ impl JiraClient {
     /// - 401 → `JrError::NotAuthenticated` (exit 2): handled by client.
     /// - 403 → `JrError::ApiError` (exit 1): `"Permission denied: cannot access attachment <id>."`.
     /// - 5xx / network → `JrError::ApiError` / `JrError::NetworkError` (exit 1).
-    pub async fn get_attachment_metadata(&self, _id: &str) -> Result<AttachmentMetadata> {
-        todo!("BC-2.7.007 step 1: GET /rest/api/3/attachment/{{id}} — implement in Task 4")
+    pub async fn get_attachment_metadata(&self, id: &str) -> Result<AttachmentMetadata> {
+        let path = format!("/rest/api/3/attachment/{}", id);
+        let result = self.get::<AttachmentMetadata>(&path).await;
+        match result {
+            Ok(meta) => Ok(meta),
+            Err(e) => match e.downcast_ref::<JrError>() {
+                Some(JrError::ApiError { status, .. }) if *status == 404 => Err(
+                    JrError::UserError(format!("Attachment {id} not found or not accessible."))
+                        .into(),
+                ),
+                Some(JrError::ApiError { status, .. }) if *status == 403 => {
+                    Err(JrError::ApiError {
+                        status: 403,
+                        message: format!("Permission denied: cannot access attachment {id}."),
+                    }
+                    .into())
+                }
+                _ => Err(e),
+            },
+        }
     }
 
     /// Stream attachment binary content (BC-2.7.007 step 2).
@@ -160,7 +178,11 @@ impl JiraClient {
     /// - 403 → `JrError::ApiError` (exit 1): permission denied.
     /// - 404 → `JrError::UserError` (exit 64): attachment not found.
     /// - 5xx / network → `JrError::ApiError` / `JrError::NetworkError` (exit 1).
-    pub async fn get_attachment_content(&self, _id: &str) -> Result<reqwest::Response> {
-        todo!("BC-2.7.007 step 2: GET /rest/api/3/attachment/content/{{id}} — implement in Task 4")
+    pub async fn get_attachment_content(&self, id: &str) -> Result<reqwest::Response> {
+        // ALWAYS use the platform URL (EC-2.7.007-2). MUST NOT use metadata.content —
+        // that field may be a servicedeskapi URL (JSDCLOUD-10841).
+        // MUST NOT append ?redirect=false (JRACLOUD-97046).
+        let path = format!("/rest/api/3/attachment/content/{}", id);
+        self.get_raw_response(&path).await
     }
 }

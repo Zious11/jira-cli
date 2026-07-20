@@ -169,7 +169,10 @@ async fn test_bc_2_7_007_no_redirect_false_param() {
         .iter()
         .filter(|r| r.url.path().contains("/attachment/content/"))
         .collect();
-    assert!(!content_reqs.is_empty(), "content GET must have been issued");
+    assert!(
+        !content_reqs.is_empty(),
+        "content GET must have been issued"
+    );
     for req in &content_reqs {
         assert!(
             !req.url.query().unwrap_or("").contains("redirect=false"),
@@ -192,10 +195,7 @@ async fn test_bc_2_7_007_auth_absent_on_redirect_target() {
     // CDN redirect target on [::1] — DISTINCT HOST per EC-2.7.007-3.
     // Same host + different port is vacuous: reqwest host_str() ignores port numbers.
     let cdn_listener = std::net::TcpListener::bind("[::1]:0").unwrap();
-    let cdn_server = MockServer::builder()
-        .listener(cdn_listener)
-        .start()
-        .await;
+    let cdn_server = MockServer::builder().listener(cdn_listener).start().await;
 
     let cdn_path = "/cdn/att/10003";
     let cdn_url = format!("{}{}", cdn_server.uri(), cdn_path);
@@ -215,9 +215,7 @@ async fn test_bc_2_7_007_auth_absent_on_redirect_target() {
     // Step-2: content GET on Jira → 302 redirect to CDN ([::1])
     Mock::given(method("GET"))
         .and(path("/rest/api/3/attachment/content/10003"))
-        .respond_with(
-            ResponseTemplate::new(302).insert_header("Location", cdn_url.as_str()),
-        )
+        .respond_with(ResponseTemplate::new(302).insert_header("Location", cdn_url.as_str()))
         .mount(&jira_server)
         .await;
 
@@ -253,7 +251,10 @@ async fn test_bc_2_7_007_auth_absent_on_redirect_target() {
     );
 
     let cdn_reqs = cdn_server.received_requests().await.unwrap();
-    assert!(!cdn_reqs.is_empty(), "CDN server must have received a request");
+    assert!(
+        !cdn_reqs.is_empty(),
+        "CDN server must have received a request"
+    );
     for req in &cdn_reqs {
         assert!(
             !req.headers.contains_key("authorization"),
@@ -383,10 +384,9 @@ async fn test_bc_2_7_010_default_path_sha1_prefix_batch() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/FOO-2"))
         .and(query_param("fields", "attachment"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(issue_with_attachments(
-            "FOO-2",
-            vec![att],
-        )))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(issue_with_attachments("FOO-2", vec![att])),
+        )
         .mount(&server)
         .await;
 
@@ -411,7 +411,10 @@ async fn test_bc_2_7_010_default_path_sha1_prefix_batch() {
 
     // RED GATE: todo!() → exit 101 → success() fails.
     // After implementation: exit 0 + file at <sha1("20001")>_report.pdf.
-    assert!(output.status.success(), "batch download must succeed (exit 0)");
+    assert!(
+        output.status.success(),
+        "batch download must succeed (exit 0)"
+    );
 
     let entries: Vec<_> = std::fs::read_dir(out_dir.path())
         .unwrap()
@@ -429,7 +432,10 @@ async fn test_bc_2_7_010_default_path_sha1_prefix_batch() {
         prefix.ends_with('_') && prefix[..40].chars().all(|c| c.is_ascii_hexdigit()),
         "first 40 chars must be hex SHA-1 followed by '_', got prefix: {prefix}"
     );
-    assert_eq!(rest, "report.pdf", "basename after SHA-1 prefix must be sanitized filename");
+    assert_eq!(
+        rest, "report.pdf",
+        "basename after SHA-1 prefix must be sanitized filename"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -481,7 +487,10 @@ async fn test_bc_2_7_007_json_manifest_raw_filename_written_size_p27_p31() {
 
     // RED GATE: todo!() → exit 101 → success() fails.
     // After implementation: exit 0, JSON manifest with filename=RAW, size=5.
-    assert!(output.status.success(), "JSON download must succeed (exit 0)");
+    assert!(
+        output.status.success(),
+        "JSON download must succeed (exit 0)"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let manifest: Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("stdout must be valid JSON — {e}\nstdout: {stdout}"));
@@ -584,10 +593,10 @@ async fn test_bc_2_7_008_all_batch_fail_soft() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/PARTIAL-1"))
         .and(query_param("fields", "attachment"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(issue_with_attachments(
-            "PARTIAL-1",
-            vec![att1, att2],
-        )))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(issue_with_attachments("PARTIAL-1", vec![att1, att2])),
+        )
         .mount(&server)
         .await;
     Mock::given(method("GET"))
@@ -624,11 +633,7 @@ async fn test_bc_2_7_008_all_batch_fail_soft() {
         stderr_c.contains("warning: failed to download attachment 30002:"),
         "(c) stderr must contain per-file failure warning — got: {stderr_c}"
     );
-    let combined_c = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out_c.stdout),
-        &stderr_c
-    );
+    let combined_c = format!("{}{}", String::from_utf8_lossy(&out_c.stdout), &stderr_c);
     assert!(
         combined_c.contains("Downloaded 1 of 2 attachments to "),
         "(c) must contain 'Downloaded 1 of 2 attachments to' — stdout+stderr: {combined_c}"
@@ -653,10 +658,10 @@ async fn test_bc_2_7_008_all_batch_fail_soft() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/ALLFAIL-1"))
         .and(query_param("fields", "attachment"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(issue_with_attachments(
-            "ALLFAIL-1",
-            vec![att3, att4],
-        )))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(issue_with_attachments("ALLFAIL-1", vec![att3, att4])),
+        )
         .mount(&server)
         .await;
     Mock::given(method("GET"))
@@ -717,10 +722,9 @@ async fn test_bc_2_7_008_all_no_out_dir_defaults_to_cwd() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/CWD-1"))
         .and(query_param("fields", "attachment"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(issue_with_attachments(
-            "CWD-1",
-            vec![att],
-        )))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(issue_with_attachments("CWD-1", vec![att])),
+        )
         .mount(&server)
         .await;
     Mock::given(method("GET"))
@@ -762,10 +766,9 @@ async fn test_bc_2_7_008_empty_issue_no_attachments_hint() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/EMPTY-1"))
         .and(query_param("fields", "attachment"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(issue_with_attachments(
-            "EMPTY-1",
-            vec![],
-        )))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(issue_with_attachments("EMPTY-1", vec![])),
+        )
         .mount(&server)
         .await;
 
@@ -911,10 +914,9 @@ async fn test_bc_2_7_009_newest_n_by_created_desc() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/NEWEST-1"))
         .and(query_param("fields", "attachment"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(issue_with_attachments(
-            "NEWEST-1",
-            atts,
-        )))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(issue_with_attachments("NEWEST-1", atts)),
+        )
         .mount(&server)
         .await;
 
@@ -953,14 +955,24 @@ async fn test_bc_2_7_009_newest_n_by_created_desc() {
     let manifest: Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("stdout must be valid JSON — {e}\nstdout: {stdout}"));
     let downloaded = manifest["downloaded"].as_array().unwrap();
-    assert_eq!(downloaded.len(), 2, "--newest 2 must download exactly 2 attachments");
+    assert_eq!(
+        downloaded.len(),
+        2,
+        "--newest 2 must download exactly 2 attachments"
+    );
     let ids: Vec<&str> = downloaded
         .iter()
         .map(|e| e["id"].as_str().unwrap())
         .collect();
     assert!(ids.contains(&"50005"), "newest (50005) must be in manifest");
-    assert!(ids.contains(&"50004"), "second-newest (50004) must be in manifest");
-    assert!(!ids.contains(&"50001"), "oldest (50001) must NOT be downloaded");
+    assert!(
+        ids.contains(&"50004"),
+        "second-newest (50004) must be in manifest"
+    );
+    assert!(
+        !ids.contains(&"50001"),
+        "oldest (50001) must NOT be downloaded"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -988,7 +1000,11 @@ async fn test_bc_2_7_012_error_taxonomy() {
         .output()
         .unwrap();
     // RED GATE: todo!() → exit 101 ≠ 64.
-    assert_eq!(out_inv.status.code(), Some(64), "non-numeric AID must exit 64");
+    assert_eq!(
+        out_inv.status.code(),
+        Some(64),
+        "non-numeric AID must exit 64"
+    );
     assert!(
         String::from_utf8_lossy(&out_inv.stderr).contains("invalid attachment id:"),
         "non-numeric AID stderr must contain 'invalid attachment id:'"
@@ -1045,7 +1061,11 @@ async fn test_bc_2_7_012_error_taxonomy() {
         .output()
         .unwrap();
     // RED GATE: todo!() → exit 101 ≠ 64.
-    assert_eq!(out_key404.status.code(), Some(64), "KEY 404 batch must exit 64");
+    assert_eq!(
+        out_key404.status.code(),
+        Some(64),
+        "KEY 404 batch must exit 64"
+    );
     let s = String::from_utf8_lossy(&out_key404.stderr);
     assert!(
         s.contains("Issue") && s.contains("not found or not accessible"),
@@ -1128,7 +1148,11 @@ async fn test_bc_2_7_012_error_taxonomy() {
         .output()
         .unwrap();
     // RED GATE: todo!() → exit 101 ≠ 1.
-    assert_eq!(out_403key.status.code(), Some(1), "KEY 403 batch must exit 1");
+    assert_eq!(
+        out_403key.status.code(),
+        Some(1),
+        "KEY 403 batch must exit 1"
+    );
     let s = String::from_utf8_lossy(&out_403key.stderr);
     assert!(
         s.contains("Permission denied: cannot access issue "),
@@ -1410,7 +1434,13 @@ async fn test_bc_2_7_008_json_mode_error_vs_hint_taxonomy() {
     let server = MockServer::start().await;
     let out_dir = TempDir::new().unwrap();
 
-    let att_ok = make_attachment("80001", "ok.txt", "text/plain", 2, "2026-07-10T14:00:00.000+0000");
+    let att_ok = make_attachment(
+        "80001",
+        "ok.txt",
+        "text/plain",
+        2,
+        "2026-07-10T14:00:00.000+0000",
+    );
     let att_fail = make_attachment(
         "80002",
         "fail.txt",
@@ -1422,10 +1452,10 @@ async fn test_bc_2_7_008_json_mode_error_vs_hint_taxonomy() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/JSONERR-1"))
         .and(query_param("fields", "attachment"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(issue_with_attachments(
-            "JSONERR-1",
-            vec![att_ok, att_fail],
-        )))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(issue_with_attachments("JSONERR-1", vec![att_ok, att_fail])),
+        )
         .mount(&server)
         .await;
 
@@ -1473,7 +1503,11 @@ async fn test_bc_2_7_008_json_mode_error_vs_hint_taxonomy() {
     let manifest: Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("stdout must be valid JSON — {e}\nstdout: {stdout}"));
     let downloaded = manifest["downloaded"].as_array().unwrap();
-    assert_eq!(downloaded.len(), 1, "manifest must contain only the successful entry");
+    assert_eq!(
+        downloaded.len(),
+        1,
+        "manifest must contain only the successful entry"
+    );
     assert_eq!(downloaded[0]["id"], "80001");
 
     // "Downloaded N of M" summary is a hint — must NOT appear in stdout (JSON mode)
@@ -1496,15 +1530,20 @@ async fn test_bc_2_7_010_degenerate_name_warning_display_sanitized() {
     let out_dir = TempDir::new().unwrap();
 
     // ".." sanitizes to None → degenerate fallback → warning
-    let att = make_attachment("90001", "..", "text/plain", 5, "2026-07-10T14:00:00.000+0000");
+    let att = make_attachment(
+        "90001",
+        "..",
+        "text/plain",
+        5,
+        "2026-07-10T14:00:00.000+0000",
+    );
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/DEGEN-1"))
         .and(query_param("fields", "attachment"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(issue_with_attachments(
-            "DEGEN-1",
-            vec![att],
-        )))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(issue_with_attachments("DEGEN-1", vec![att])),
+        )
         .mount(&server)
         .await;
     Mock::given(method("GET"))
@@ -1634,27 +1673,69 @@ fn test_bc_2_7_download_clap_structural_constraints() {
     let cases: &[(&[&str], &str)] = &[
         // (1) --id + --all → exit 2
         (
-            &["issue", "attachment", "download", "FOO-1", "--id", "10001", "--all"],
+            &[
+                "issue",
+                "attachment",
+                "download",
+                "FOO-1",
+                "--id",
+                "10001",
+                "--all",
+            ],
             "--id + --all must exit 2",
         ),
         // (2) --id + --newest 3 → exit 2
         (
-            &["issue", "attachment", "download", "FOO-1", "--id", "10001", "--newest", "3"],
+            &[
+                "issue",
+                "attachment",
+                "download",
+                "FOO-1",
+                "--id",
+                "10001",
+                "--newest",
+                "3",
+            ],
             "--id + --newest must exit 2",
         ),
         // (3) --all + --newest 3 → exit 2
         (
-            &["issue", "attachment", "download", "FOO-1", "--all", "--newest", "3"],
+            &[
+                "issue",
+                "attachment",
+                "download",
+                "FOO-1",
+                "--all",
+                "--newest",
+                "3",
+            ],
             "--all + --newest must exit 2",
         ),
         // (4) --all + --out /tmp → exit 2
         (
-            &["issue", "attachment", "download", "FOO-1", "--all", "--out", "/tmp/foo"],
+            &[
+                "issue",
+                "attachment",
+                "download",
+                "FOO-1",
+                "--all",
+                "--out",
+                "/tmp/foo",
+            ],
             "--all + --out must exit 2",
         ),
         // (5) --newest 3 + --out /tmp → exit 2
         (
-            &["issue", "attachment", "download", "FOO-1", "--newest", "3", "--out", "/tmp/foo"],
+            &[
+                "issue",
+                "attachment",
+                "download",
+                "FOO-1",
+                "--newest",
+                "3",
+                "--out",
+                "/tmp/foo",
+            ],
             "--newest + --out must exit 2",
         ),
         // (6) no selector → exit 2
@@ -1664,25 +1745,54 @@ fn test_bc_2_7_download_clap_structural_constraints() {
         ),
         // (7) --newest foo (non-integer) → exit 2
         (
-            &["issue", "attachment", "download", "FOO-1", "--newest", "foo"],
+            &[
+                "issue",
+                "attachment",
+                "download",
+                "FOO-1",
+                "--newest",
+                "foo",
+            ],
             "--newest non-integer must exit 2",
         ),
         // (8) --id + --filter k=v → exit 2
         (
             &[
-                "issue", "attachment", "download", "FOO-1",
-                "--id", "10001", "--filter", "mime=image/png",
+                "issue",
+                "attachment",
+                "download",
+                "FOO-1",
+                "--id",
+                "10001",
+                "--filter",
+                "mime=image/png",
             ],
             "--id + --filter must exit 2",
         ),
         // (9) --out-dir /tmp (no batch selector) → exit 2
         (
-            &["issue", "attachment", "download", "FOO-1", "--out-dir", "/tmp"],
+            &[
+                "issue",
+                "attachment",
+                "download",
+                "FOO-1",
+                "--out-dir",
+                "/tmp",
+            ],
             "--out-dir without batch selector must exit 2",
         ),
         // (10) --out-dir /tmp --id AID → exit 2
         (
-            &["issue", "attachment", "download", "FOO-1", "--out-dir", "/tmp", "--id", "10001"],
+            &[
+                "issue",
+                "attachment",
+                "download",
+                "FOO-1",
+                "--out-dir",
+                "/tmp",
+                "--id",
+                "10001",
+            ],
             "--out-dir + --id must exit 2",
         ),
     ];
@@ -1875,8 +1985,9 @@ async fn test_bc_2_7_007_single_id_success_hint_stderr() {
         "JSON mode must NOT emit 'Downloaded:' hint to stderr — got: {stderr_j}"
     );
     let stdout_j = String::from_utf8_lossy(&out_json.stdout);
-    let manifest: Value = serde_json::from_str(&stdout_j)
-        .unwrap_or_else(|e| panic!("JSON mode stdout must be valid JSON — {e}\nstdout: {stdout_j}"));
+    let manifest: Value = serde_json::from_str(&stdout_j).unwrap_or_else(|e| {
+        panic!("JSON mode stdout must be valid JSON — {e}\nstdout: {stdout_j}")
+    });
     assert!(
         manifest["downloaded"].is_array(),
         "JSON manifest must have 'downloaded' array"
@@ -1906,10 +2017,10 @@ async fn test_bc_2_7_008_filtered_to_zero_hint() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/FILTERED-1"))
         .and(query_param("fields", "attachment"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(issue_with_attachments(
-            "FILTERED-1",
-            vec![att],
-        )))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(issue_with_attachments("FILTERED-1", vec![att])),
+        )
         .mount(&server)
         .await;
 

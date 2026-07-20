@@ -265,6 +265,25 @@ impl JiraClient {
         Ok(serde_json::from_slice(&bytes)?)
     }
 
+    /// Perform a raw GET request and return the `Response` without deserializing.
+    ///
+    /// Used by streaming binary endpoints such as attachment content download
+    /// (BC-2.7.007 step 2 / ADR-0017 reqwest `stream` feature).  The caller is
+    /// responsible for consuming `response.bytes_stream()`.
+    ///
+    /// `Authorization` and `Cookie` headers are stripped by reqwest on cross-host
+    /// redirects (GHSA-9857-6MW7-FQ2M) — this is CORRECT CDN behaviour; the caller
+    /// MUST NOT fight it.  `?redirect=false` MUST NOT be appended to the path
+    /// (JRACLOUD-97046).
+    ///
+    /// Returns `Ok(Response)` for 2xx (including after redirect following).
+    /// Returns `Err` for 4xx/5xx or network failures (mapped via `send_inner`).
+    pub(crate) async fn get_raw_response(&self, path: &str) -> anyhow::Result<reqwest::Response> {
+        let url = format!("{}{}", self.base_url, path);
+        let request = self.client.get(&url);
+        self.send(request).await
+    }
+
     /// Deadline-aware GET-and-deserialize for callers with a wall-clock budget.
     /// Equivalent to `get` but routes through `send_bounded` so a 429-storm on
     /// this endpoint cannot push elapsed time past `deadline`.

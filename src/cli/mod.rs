@@ -772,7 +772,7 @@ pub enum AttachmentSubcommand {
 
         /// Output path for a single-file download (requires `--id`; not valid with
         /// `--all` or `--newest`; EC-2.7.007-9 ~769).
-        #[arg(long, requires = "id")]
+        #[arg(long, requires = "id", conflicts_with_all = ["all", "newest"])]
         out: Option<std::path::PathBuf>,
 
         /// Output directory for batch downloads.

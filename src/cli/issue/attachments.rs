@@ -16,8 +16,11 @@
 //! import it from here — do NOT duplicate.
 
 use anyhow::Result;
+use futures::StreamExt;
 use serde_json::Value;
+use sha1::Digest;
 use std::collections::BTreeMap;
+use tokio::io::AsyncWriteExt;
 
 use crate::api::client::JiraClient;
 use crate::api::jira::attachments::AttachmentObject;
@@ -366,8 +369,57 @@ pub struct AttachmentDownloadEntry {
     pub size: u64,
 }
 
+/// JSON wrapper for the download manifest (`{"downloaded": [...]}`).
+#[derive(serde::Serialize)]
+struct DownloadManifest {
+    downloaded: Vec<AttachmentDownloadEntry>,
+}
+
 // ---------------------------------------------------------------------------
-// S-576-2: pure helpers
+// S-576-2: private pure helpers
+// ---------------------------------------------------------------------------
+
+/// Returns `true` when the stem of `name` (portion before the first `.`) is a
+/// Windows reserved device name (case-insensitive): CON, NUL, PRN, AUX, COM0–COM9,
+/// LPT0–LPT9.  Single-id call site only (SEC-576-001, BC-2.7.011).
+fn is_windows_device_name_basename(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name);
+    let upper = stem.to_ascii_uppercase();
+    match upper.as_str() {
+        "CON" | "NUL" | "PRN" | "AUX" => true,
+        s if s.len() == 4 && (s.starts_with("COM") || s.starts_with("LPT")) => {
+            s.as_bytes()[3].is_ascii_digit()
+        }
+        _ => false,
+    }
+}
+
+/// Compute the 40-character lowercase hex SHA-1 of a string.
+/// Used for batch output path uniqueness (BC-2.7.010 ADV-010) — NOT security.
+fn sha1_hex(input: &str) -> String {
+    let mut hasher = sha1::Sha1::new();
+    hasher.update(input.as_bytes());
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Return the largest index `pos ≤ limit` such that `&s[..pos]` is a valid UTF-8 slice.
+fn floor_char_boundary_at(s: &str, limit: usize) -> usize {
+    if s.len() <= limit {
+        return s.len();
+    }
+    let mut pos = limit;
+    while !s.is_char_boundary(pos) {
+        pos -= 1;
+    }
+    pos
+}
+
+// ---------------------------------------------------------------------------
+// S-576-2: pure helpers (public)
 // ---------------------------------------------------------------------------
 
 /// CWE-22 disk-path sanitization (BC-2.7.011 5-step algorithm).
@@ -386,15 +438,63 @@ pub struct AttachmentDownloadEntry {
 /// **Containment check** (BC-2.7.011 two-step, SEC-576-002): performed at the
 /// call site after path construction, not inside this function.
 ///
-/// # Algorithm (BC-2.7.011 lines 902–911 — verbatim)
-/// 1. Basename extraction via `Path::file_name()` — strips directory components.
+/// # Algorithm (BC-2.7.011)
+/// 1. Basename extraction via `Path::file_name()` — strips Unix `/` components.
+///    Then split on `\` and take the last non-empty segment to handle Windows paths
+///    (since `\` is not a separator on Unix and `Path::file_name()` would not strip it).
 /// 2. Pseudo-name rejection: `"."`, `".."`, or empty → `None`.
-/// 3. NUL byte rejection: name contains `'\0'` → `None` (NOT stripped).
+/// 3. NUL byte rejection: name contains `'\0'` → `None` (NOT stripped, REJECTED).
 /// 4. Character scrub: replace `/`, `\`, `:` with `_`.
 /// 5. Length cap to 214 bytes on a valid UTF-8 char boundary; strip trailing
 ///    ASCII whitespace and `.` (step 5.5, SEC-576-007).
-pub fn sanitize_attachment_filename(_name: &str) -> Option<String> {
-    todo!("BC-2.7.011 5-step CWE-22 disk-path algorithm — implement in Task 2")
+pub fn sanitize_attachment_filename(name: &str) -> Option<String> {
+    // Step 1: Extract basename — strip Unix directory components.
+    let after_unix_strip = std::path::Path::new(name)
+        .file_name()
+        .and_then(|f| f.to_str())?;
+
+    // Step 1 (continued): Handle Windows backslash separators.
+    // On Unix, `\` is not a path separator, so "C:\path\file.txt" would yield
+    // the whole string above.  Split on `\` and take the last non-empty segment.
+    let basename = after_unix_strip
+        .rsplit('\\')
+        .find(|s| !s.is_empty())
+        .unwrap_or(after_unix_strip);
+
+    // Step 2: Reject pseudo-names.
+    if basename.is_empty() || basename == "." || basename == ".." {
+        return None;
+    }
+
+    // Step 3: Reject NUL bytes (NOT stripped — REJECTED entirely).
+    if basename.contains('\0') {
+        return None;
+    }
+
+    // Step 4: Character scrub — replace '/', '\', ':' with '_'.
+    let scrubbed: String = basename
+        .chars()
+        .map(|c| {
+            if c == '/' || c == '\\' || c == ':' {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+
+    // Step 5: Length cap to 214 bytes on a valid UTF-8 char boundary.
+    let end = floor_char_boundary_at(&scrubbed, 214);
+    let truncated = &scrubbed[..end];
+
+    // Step 5.5: Strip trailing ASCII whitespace and '.'.
+    let stripped = truncated.trim_end_matches(|c: char| c == '.' || c.is_ascii_whitespace());
+
+    if stripped.is_empty() {
+        return None;
+    }
+
+    Some(stripped.to_string())
 }
 
 /// Compute the default output path for a downloaded attachment (BC-2.7.010).
@@ -415,12 +515,334 @@ pub fn sanitize_attachment_filename(_name: &str) -> Option<String> {
 /// - `filename`      — raw Jira-supplied filename.
 /// - `is_batch`      — `true` → batch path with SHA-1 prefix; `false` → single bare path.
 pub fn compute_default_output_path(
-    _base_dir: &std::path::Path,
-    _attachment_id: &str,
-    _filename: &str,
-    _is_batch: bool,
+    base_dir: &std::path::Path,
+    attachment_id: &str,
+    filename: &str,
+    is_batch: bool,
 ) -> std::path::PathBuf {
-    todo!("BC-2.7.010 default output path computation — implement in Task 4/5")
+    let sanitized =
+        sanitize_attachment_filename(filename).unwrap_or_else(|| attachment_id.to_string());
+
+    if is_batch {
+        let hash = sha1_hex(attachment_id);
+        base_dir.join(format!("{hash}_{sanitized}"))
+    } else {
+        base_dir.join(sanitized)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// S-576-2: private async helpers
+// ---------------------------------------------------------------------------
+
+/// Stream `response` body to `final_path` using an atomic temp-file + rename pattern.
+///
+/// Temp file: `tmp_<16 random hex digits>` in the SAME directory as `final_path`
+/// (same device → `rename` is atomic on POSIX; BC-2.7.007 ~749).
+///
+/// Returns the number of bytes actually written (P31-002: used in the manifest).
+///
+/// On ANY error after temp-file creation, the temp file is deleted before returning
+/// the error (cleanup guarantee for BC-2.7.007 EC-2.7.007-4).
+async fn stream_to_file(
+    response: reqwest::Response,
+    final_path: &std::path::Path,
+) -> anyhow::Result<u64> {
+    let parent = final_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("output path has no parent directory"))?;
+
+    let token: u64 = rand::random();
+    let tmp_path = parent.join(format!("tmp_{token:016x}"));
+
+    let result: anyhow::Result<u64> = async {
+        let mut file = tokio::fs::File::create(&tmp_path).await.map_err(|e| {
+            anyhow::anyhow!("failed to create temp file {}: {e}", tmp_path.display())
+        })?;
+        let mut bytes_written: u64 = 0;
+
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| anyhow::anyhow!("stream error: {e}"))?;
+            file.write_all(&chunk)
+                .await
+                .map_err(|e| anyhow::anyhow!("write error to {}: {e}", tmp_path.display()))?;
+            bytes_written += chunk.len() as u64;
+        }
+
+        file.flush().await?;
+        drop(file);
+
+        tokio::fs::rename(&tmp_path, final_path)
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!("failed to rename temp to {}: {e}", final_path.display())
+            })?;
+
+        Ok(bytes_written)
+    }
+    .await;
+
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+    }
+
+    result
+}
+
+/// Handle a single-attachment download (`--id`).
+async fn handle_single_download(
+    _key: &str,
+    id_str: &str,
+    out: Option<&std::path::Path>,
+    force: bool,
+    output_format: &OutputFormat,
+    client: &JiraClient,
+) -> anyhow::Result<()> {
+    // P32-001: pre-flight check on user-supplied --out BEFORE any HTTP call.
+    if let Some(p) = out {
+        let parent = p.parent();
+        let effective_parent = match parent {
+            None => {
+                return Err(JrError::UserError(format!(
+                    "Output directory does not exist: {}",
+                    p.display()
+                ))
+                .into());
+            }
+            Some(pp) if pp == std::path::Path::new("") => {
+                // Bare filename (no directory component) → treat parent as CWD.
+                std::env::current_dir().map_err(|e| {
+                    JrError::UserError(format!("Cannot determine current directory: {e}"))
+                })?
+            }
+            Some(pp) => pp.to_path_buf(),
+        };
+        if !effective_parent.exists() {
+            return Err(JrError::UserError(format!(
+                "Output directory does not exist: {}",
+                effective_parent.display()
+            ))
+            .into());
+        }
+    }
+
+    // BC-2.7.007 step 1: fetch attachment metadata.
+    let metadata = client.get_attachment_metadata(id_str).await?;
+    let raw_filename = metadata.filename.as_deref().unwrap_or(id_str);
+
+    // Determine final output path.
+    let final_path = if let Some(p) = out {
+        p.to_path_buf()
+    } else {
+        // Default: CWD + sanitized_filename, with Windows device-name escape.
+        let cwd = std::env::current_dir()
+            .map_err(|e| JrError::UserError(format!("Cannot determine current directory: {e}")))?;
+        let sanitized =
+            sanitize_attachment_filename(raw_filename).unwrap_or_else(|| id_str.to_string());
+        // SEC-576-001: device-name escape at single-id call site only.
+        let name = if is_windows_device_name_basename(&sanitized) {
+            format!("_{sanitized}")
+        } else {
+            sanitized
+        };
+        cwd.join(name)
+    };
+
+    // Collision check.
+    if final_path.exists() && !force {
+        return Err(JrError::UserError(format!(
+            "File already exists: {}. Use --force to overwrite.",
+            final_path.display()
+        ))
+        .into());
+    }
+
+    // BC-2.7.007 step 2: stream attachment content.
+    let response = client.get_attachment_content(id_str).await?;
+    let bytes_written = stream_to_file(response, &final_path).await?;
+
+    let entry = AttachmentDownloadEntry {
+        filename: raw_filename.to_string(), // RAW Jira name (P27-001)
+        id: id_str.to_string(),
+        path: final_path.to_string_lossy().into_owned(),
+        size: bytes_written, // bytes-written, not metadata size (P31-002)
+    };
+
+    match output_format {
+        OutputFormat::Json => {
+            println!(
+                "{}",
+                output::render_json(&DownloadManifest {
+                    downloaded: vec![entry]
+                })?
+            );
+        }
+        OutputFormat::Table => {
+            eprintln!("Downloaded: {}", final_path.display());
+        }
+    }
+
+    Ok(())
+}
+
+/// Handle a batch download (`--all` / `--newest N`).
+async fn handle_batch_download(
+    key: &str,
+    newest_n: Option<usize>,
+    out_dir: Option<&std::path::Path>,
+    parsed_filters: &[AttachmentFilter],
+    force: bool,
+    output_format: &OutputFormat,
+    client: &JiraClient,
+) -> anyhow::Result<()> {
+    // P32-001: pre-flight checks BEFORE any HTTP call.
+    if let Some(d) = out_dir {
+        if !d.exists() {
+            return Err(JrError::UserError(format!(
+                "Output directory does not exist: {}",
+                d.display()
+            ))
+            .into());
+        }
+        if !d.is_dir() {
+            return Err(JrError::UserError(format!("Not a directory: {}", d.display())).into());
+        }
+    }
+
+    let base_dir: std::path::PathBuf = match out_dir {
+        Some(d) => d.to_path_buf(),
+        None => std::env::current_dir()
+            .map_err(|e| JrError::UserError(format!("Cannot determine current directory: {e}")))?,
+    };
+
+    // Fetch attachment list for this issue.
+    let attachments = client.list_attachments(key).await?;
+    let total_unfiltered = attachments.len();
+
+    // Empty issue — no attachments at all.
+    if total_unfiltered == 0 {
+        match output_format {
+            OutputFormat::Table => eprintln!("No attachments on {key}."),
+            OutputFormat::Json => println!(
+                "{}",
+                output::render_json(&DownloadManifest { downloaded: vec![] })?
+            ),
+        }
+        return Ok(());
+    }
+
+    // Apply --filter predicates (AND semantics).
+    let mut filtered: Vec<&AttachmentObject> = attachments
+        .iter()
+        .filter(|a| parsed_filters.iter().all(|f| apply_filter(a, f)))
+        .collect();
+
+    // Filtered-to-zero — issue has attachments but none matched.
+    if filtered.is_empty() {
+        match output_format {
+            OutputFormat::Table => {
+                eprintln!("No attachments matched the filter on {key}.")
+            }
+            OutputFormat::Json => println!(
+                "{}",
+                output::render_json(&DownloadManifest { downloaded: vec![] })?
+            ),
+        }
+        return Ok(());
+    }
+
+    // --newest N: sort by created descending, then truncate to N.
+    if let Some(n) = newest_n {
+        filtered.sort_by(|a, b| b.created.cmp(&a.created));
+        filtered.truncate(n);
+    }
+
+    let total_to_download = filtered.len();
+    let mut entries: Vec<AttachmentDownloadEntry> = Vec::new();
+    let mut fail_count: usize = 0;
+
+    for att in &filtered {
+        // Degenerate-name warning (human mode only; suppressed in JSON mode per AC-015).
+        if sanitize_attachment_filename(&att.filename).is_none()
+            && matches!(output_format, OutputFormat::Table)
+        {
+            let display_name = display_sanitize_filename(&att.filename);
+            eprintln!(
+                "warning: using id as filename for attachment {}: '{}' could not be sanitized",
+                att.id, display_name
+            );
+        }
+
+        let final_path = compute_default_output_path(&base_dir, &att.id, &att.filename, true);
+
+        // Collision check: skip (not a failure) if file exists and !force.
+        if final_path.exists() && !force {
+            if matches!(output_format, OutputFormat::Table) {
+                eprintln!("warning: skipping existing file: {}", final_path.display());
+            }
+            continue;
+        }
+
+        // Try download: get_attachment_content → stream_to_file.
+        let response = match client.get_attachment_content(&att.id).await {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("warning: failed to download attachment {}: {e}", att.id);
+                fail_count += 1;
+                continue;
+            }
+        };
+
+        match stream_to_file(response, &final_path).await {
+            Err(e) => {
+                eprintln!("warning: failed to download attachment {}: {e}", att.id);
+                fail_count += 1;
+            }
+            Ok(bytes_written) => {
+                entries.push(AttachmentDownloadEntry {
+                    filename: att.filename.clone(), // RAW Jira name (P27-001)
+                    id: att.id.clone(),
+                    path: final_path.to_string_lossy().into_owned(),
+                    size: bytes_written, // bytes-written (P31-002)
+                });
+            }
+        }
+    }
+
+    let success_count = entries.len();
+
+    // Emit manifest (JSON) or summary (human) — BEFORE the error return so output
+    // is flushed through the normal stdout path even on partial failure.
+    match output_format {
+        OutputFormat::Json => {
+            println!(
+                "{}",
+                output::render_json(&DownloadManifest {
+                    downloaded: entries
+                })?
+            );
+        }
+        OutputFormat::Table => {
+            eprintln!(
+                "Downloaded {} of {} attachments to {}",
+                success_count,
+                total_to_download,
+                base_dir.display()
+            );
+        }
+    }
+
+    if fail_count > 0 {
+        // Signal exit code 1. All per-file warnings were already emitted above.
+        return Err(JrError::ApiError {
+            status: 1,
+            message: "batch download completed with errors".to_string(),
+        }
+        .into());
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -448,18 +870,52 @@ pub fn compute_default_output_path(
 /// See AC-009 for full error → exit-code → message table.
 #[allow(clippy::too_many_arguments)]
 pub async fn handle_attachment_download(
-    _key: &str,
-    _id: Option<&str>,
+    key: &str,
+    id: Option<&str>,
     _all: bool,
-    _newest: Option<i64>,
-    _out: Option<&std::path::Path>,
-    _out_dir: Option<&std::path::Path>,
-    _filter: &[String],
-    _force: bool,
-    _output_format: &OutputFormat,
-    _client: &JiraClient,
+    newest: Option<i64>,
+    out: Option<&std::path::Path>,
+    out_dir: Option<&std::path::Path>,
+    filter: &[String],
+    force: bool,
+    output_format: &OutputFormat,
+    client: &JiraClient,
 ) -> anyhow::Result<()> {
-    todo!("attachment download handler: BC-2.7.007..012 — implement in Task 4/5")
+    // Handler-level --newest N > 0 guard (clap accepts any i64; EC-2.7.009-1).
+    if let Some(n) = newest {
+        if n <= 0 {
+            return Err(
+                JrError::UserError("--newest requires a positive integer.".to_string()).into(),
+            );
+        }
+    }
+
+    if let Some(id_str) = id {
+        // Validate: --id must be numeric (EC-2.7.007-5, BC-2.7.012).
+        if !id_str.chars().all(|c| c.is_ascii_digit()) || id_str.is_empty() {
+            return Err(JrError::UserError(format!(
+                "invalid attachment id: '{id_str}' — must be a numeric Jira attachment ID."
+            ))
+            .into());
+        }
+        return handle_single_download(key, id_str, out, force, output_format, client).await;
+    }
+
+    // Batch path (--all or --newest).
+    // Parse filter syntax before any HTTP call (P32-001 validation ordering).
+    let parsed_filters = parse_filters(filter)?;
+    let newest_n = newest.map(|n| n as usize);
+
+    handle_batch_download(
+        key,
+        newest_n,
+        out_dir,
+        &parsed_filters,
+        force,
+        output_format,
+        client,
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------------
@@ -733,19 +1189,13 @@ mod tests {
     #[test]
     fn test_sanitize_attachment_filename_windows_device_con_passes_through() {
         // BC-2.7.011 device names: CON → Some("CON") (caller escapes per SEC-576-001)
-        assert_eq!(
-            sanitize_attachment_filename("CON"),
-            Some("CON".to_string())
-        );
+        assert_eq!(sanitize_attachment_filename("CON"), Some("CON".to_string()));
     }
 
     #[test]
     fn test_sanitize_attachment_filename_windows_device_nul_passes_through() {
         // NUL as a FILENAME (no NUL BYTE in string) → Some("NUL") — distinct from \0
-        assert_eq!(
-            sanitize_attachment_filename("NUL"),
-            Some("NUL".to_string())
-        );
+        assert_eq!(sanitize_attachment_filename("NUL"), Some("NUL".to_string()));
     }
 
     #[test]

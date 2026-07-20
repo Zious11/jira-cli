@@ -18,6 +18,24 @@ All notable changes to jr will be documented here.
 
 ### Added
 
+- **`jr issue attachment download` — streaming download + CWE-22 path sanitization (S-576-2, #576):**
+  `jr issue attachment download KEY --id AID` downloads a single attachment by numeric ID.
+  `--all` downloads every attachment to the output directory; `--newest N` downloads the N
+  most-recent by created descending. Output path: bare sanitized filename for single-id; SHA-1
+  prefix (`<40hex>_<name>`) for batch to guarantee NAME_MAX safety (ADV-010, BC-2.7.010).
+  Streaming write uses an atomic temp-file + rename pattern — no partial files on error.
+  CWE-22 mitigation (BC-2.7.011): 5-step disk-path sanitization strips directory components,
+  rejects NUL bytes, scrubs `/\:`, and caps at 214 bytes. Windows device-name escape
+  (`CON`→`_CON`, `NUL`→`_NUL`, etc.) applied at the single-id call site only.
+  Two-step download: Step 1 = `GET /rest/api/3/attachment/{id}` (metadata); Step 2 =
+  `GET /rest/api/3/attachment/content/{id}` — NEVER uses the `content` URL from metadata
+  (JSDCLOUD-10841), NEVER appends `?redirect=false` (JRACLOUD-97046).
+  JSON manifest: `{"downloaded":[{"filename","id","path","size"}]}` — `filename` is the raw
+  Jira-supplied name (P27-001); `size` is bytes-actually-written, not metadata size (P31-002).
+  Batch uses fail-soft semantics: per-file failures emit `warning:` to stderr and continue;
+  partial failure exits 1 after printing the manifest. `--filter` and `--force` flags supported.
+  feat(issue): attachment download subcommand + streaming + CWE-22 sanitization (#576)
+
 - **`jr issue attachment list` — table + JSON output + client-side filters (S-576-1, #576):**
   `jr issue attachment list KEY` lists all attachments on an issue in a six-column table
   (ID, Filename, Type, Size, Created, Author). `--output json` returns a curated array
