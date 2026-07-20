@@ -277,6 +277,11 @@ version = "0.53"
 reason = "transitive arch crate for windows-targets 0.53.5 (via windows-sys 0.60/keyring windows-native); windows-sys 0.45 (via jni) pulls 0.42.2. Unavoidable until jni and keyring converge on the same windows-sys version."
 
 [[bans.skip]]
+name = "cpufeatures"
+version = "0.2"
+reason = "sha1 v0.10.7 (ADR-0017 S-576-2 dependency for BC-2.7.010 batch-download SHA-1 path prefix) requires cpufeatures 0.2.17; chacha20 v0.10.0 (via rand v0.10.1) requires cpufeatures 0.3.0. Unavoidable until sha1 0.11 or rand's chacha20 unify on the same cpufeatures major. Authorized DEC-185."
+
+[[bans.skip]]
 name = "winnow"
 version = "0.7"
 reason = "toml 0.8 (via figment) depends on toml_edit 0.22 which requires winnow 0.7; toml 1.x requires winnow 1.x. Transitive side-effect of the toml split; unification blocked by figment."

@@ -728,7 +728,7 @@ pub enum CommentSubcommand {
 /// Subcommands for `jr issue attachment`. (S-576-1)
 ///
 /// Defined here (in `src/cli/mod.rs`) — NOT in `src/cli/issue/attachments.rs`.
-/// S-576-2, S-576-3, S-576-4, and S-576-5 add variants to this enum.
+/// S-576-2, S-576-3, S-576-4, and S-576-5 add variants to this enum additively.
 #[derive(Subcommand)]
 pub enum AttachmentSubcommand {
     /// List attachments on an issue (table or JSON; client-side filters)
@@ -739,6 +739,57 @@ pub enum AttachmentSubcommand {
         /// Repeatable; multiple filters combine with AND semantics.
         #[arg(long = "filter")]
         filter: Vec<String>,
+    },
+
+    /// Download one or more attachments from an issue (S-576-2; BC-2.7.007..012).
+    ///
+    /// Requires exactly one selector: `--id`, `--all`, or `--newest N`.
+    #[command(
+        group(clap::ArgGroup::new("selector").required(true).args(["id", "all", "newest"])),
+        group(clap::ArgGroup::new("batch").args(["all", "newest"])),
+    )]
+    Download {
+        /// Issue key (e.g., FOO-123)
+        key: String,
+
+        /// Attachment ID to download (numeric).
+        /// Mutually exclusive with `--all` and `--newest` (via `selector` group).
+        #[arg(long)]
+        id: Option<String>,
+
+        /// Download all attachments from the issue to `--out-dir` (or cwd when omitted).
+        /// Mutually exclusive with `--id` and `--newest` (via `selector` group).
+        #[arg(long)]
+        all: bool,
+
+        /// Download the N most-recent attachments by `created` descending.
+        /// Accepts negative integers — N ≤ 0 is rejected in the handler (exit 64,
+        /// `--newest requires a positive integer.`; EC-2.7.009-1; `allow_negative_numbers`
+        /// lets clap accept them so the handler can emit the canonical message).
+        /// Mutually exclusive with `--id` and `--all` (via `selector` group).
+        #[arg(long, allow_negative_numbers = true)]
+        newest: Option<i64>,
+
+        /// Output path for a single-file download (requires `--id`; not valid with
+        /// `--all` or `--newest`; EC-2.7.007-9 ~769).
+        #[arg(long, requires = "id")]
+        out: Option<std::path::PathBuf>,
+
+        /// Output directory for batch downloads.
+        /// Requires the `batch` group (`--all` or `--newest`; EC-2.7.008-9 ~812).
+        /// Conflicts with `--id`.
+        #[arg(long = "out-dir", requires = "batch", conflicts_with = "id")]
+        out_dir: Option<std::path::PathBuf>,
+
+        /// Client-side filter: `mime=<glob>`, `name=<glob>`, or `size-max=<bytes>`.
+        /// Repeatable; AND semantics. Conflicts with `--id` (EC-2.7.007-10 ~770).
+        #[arg(long = "filter", conflicts_with = "id")]
+        filter: Vec<String>,
+
+        /// Overwrite an existing output file without error (EC-2.7.007-12 bypass;
+        /// SEC-576-010; single-`--id` with `--out` only).
+        #[arg(long)]
+        force: bool,
     },
 }
 

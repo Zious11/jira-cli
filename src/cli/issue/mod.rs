@@ -115,6 +115,31 @@ pub async fn handle(
             AttachmentSubcommand::List { key, filter } => {
                 attachments::handle_attachment_list(&key, &filter, output_format, client).await
             }
+            // S-576-2: single/batch/newest download + CWE-22 sanitization.
+            AttachmentSubcommand::Download {
+                key,
+                id,
+                all,
+                newest,
+                out,
+                out_dir,
+                filter,
+                force,
+            } => {
+                attachments::handle_attachment_download(
+                    &key,
+                    id.as_deref(),
+                    all,
+                    newest,
+                    out.as_deref(),
+                    out_dir.as_deref(),
+                    &filter,
+                    force,
+                    output_format,
+                    client,
+                )
+                .await
+            }
         },
     }
 }
