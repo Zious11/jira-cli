@@ -1141,6 +1141,35 @@ mod tests {
     }
 
     #[test]
+    fn test_serialize_attachment_curated_null_mimetype_when_none() {
+        // P5-002a: sparse AttachmentObject (mime_type: None) →
+        // "mimeType" key MUST be present with value null (not absent).
+        // BTreeMap order intact: mimeType sorts between "id" and "size".
+        let mut a = make_test_attachment();
+        a.mime_type = None;
+        let v = serialize_attachment_curated(&a);
+        let obj = v.as_object().unwrap();
+        assert!(
+            obj.contains_key("mimeType"),
+            "mimeType key must be present even when None (sparse tolerance)"
+        );
+        assert_eq!(
+            obj["mimeType"],
+            Value::Null,
+            "mimeType must be null when None, not a string"
+        );
+        // BTreeMap key-order check: keys are sorted, mimeType between id and size.
+        let keys: Vec<&str> = obj.keys().map(|k| k.as_str()).collect();
+        let id_pos = keys.iter().position(|k| *k == "id").unwrap();
+        let mime_pos = keys.iter().position(|k| *k == "mimeType").unwrap();
+        let size_pos = keys.iter().position(|k| *k == "size").unwrap();
+        assert!(
+            id_pos < mime_pos && mime_pos < size_pos,
+            "BTreeMap key order must be … id … mimeType … size …; got: {keys:?}"
+        );
+    }
+
+    #[test]
     fn test_serialize_attachment_curated_exact_keys() {
         let v = serialize_attachment_curated(&make_test_attachment());
         let obj = v.as_object().unwrap();

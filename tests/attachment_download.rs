@@ -1399,34 +1399,93 @@ async fn test_bc_2_7_007_uses_platform_content_url_not_jsm_links_ec_2_7_007_2() 
 // AC-011 — BC-2.7.007: write-to-temp + atomic rename; cleanup on error
 // ---------------------------------------------------------------------------
 
+/// Raw TCP server that handles attachment requests, sending partial body on the
+/// content endpoint to drive `stream_to_file`'s mid-stream-error + cleanup branch.
+///
+/// hyper 1.x panics server-side on Content-Length mismatch (role.rs:704), so a
+/// wiremock ResponseTemplate with mismatched content-length cannot be used.  Instead
+/// this raw server sends `Content-Length: 99999` in raw HTTP/1.1 headers but only
+/// writes 7 bytes of body before closing — no hyper validation involved.
+///
+/// Returns `"http://127.0.0.1:PORT"` for use as `JR_BASE_URL`.
+fn start_partial_stream_server() -> String {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = format!("http://{}", listener.local_addr().unwrap());
+
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            match stream {
+                Ok(mut conn) => {
+                    let mut buf = [0u8; 4096];
+                    let n = match conn.read(&mut buf) {
+                        Ok(n) if n > 0 => n,
+                        _ => continue,
+                    };
+                    let req = String::from_utf8_lossy(&buf[..n]);
+                    let first_line = req.lines().next().unwrap_or("");
+
+                    if first_line.contains("/attachment/content/") {
+                        // Content GET: return 200 with Content-Length: 99999 but only
+                        // 7 bytes of body ("partial"), then close the connection.
+                        // reqwest reads the 7-byte chunk, then hits EOF while still
+                        // expecting (99999 − 7) more bytes → stream error in chunk iterator.
+                        let _ = conn.write_all(
+                            b"HTTP/1.1 200 OK\r\n\
+                              Content-Type: application/octet-stream\r\n\
+                              Content-Length: 99999\r\n\
+                              Connection: close\r\n\r\n\
+                              partial",
+                        );
+                        // `conn` dropped here → FIN sent → reqwest gets incomplete body
+                    } else {
+                        // Metadata GET: return full valid JSON response.
+                        let body = r#"{"id":"70001","filename":"partial.bin","size":99999,"mimeType":"application/octet-stream"}"#;
+                        let header = format!(
+                            "HTTP/1.1 200 OK\r\n\
+                             Content-Type: application/json\r\n\
+                             Content-Length: {}\r\n\
+                             Connection: close\r\n\r\n",
+                            body.len()
+                        );
+                        let _ = conn.write_all(header.as_bytes());
+                        let _ = conn.write_all(body.as_bytes());
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    addr
+}
+
 /// AC-011 / BC-2.7.007: atomic rename from temp file; cleanup on mid-stream error.
+///
+/// Drives the `if result.is_err() { remove_file(&tmp_path) }` cleanup branch in
+/// `stream_to_file` (attachments.rs ~594-596).  Uses `start_partial_stream_server`
+/// (raw TCP, bypasses hyper) to return 200 OK + partial body + close so that:
+///   1. `get_attachment_content` returns `Ok(Response)` (200 headers received)
+///   2. `stream_to_file` is entered and creates the temp file
+///   3. A mid-stream EOF error fires in the chunk iterator
+///   4. The cleanup branch deletes the temp file
+///
+/// A plain 4xx/5xx response errors in `send_inner` BEFORE `stream_to_file` is
+/// called and is vacuous for this specific BC clause.
 #[tokio::test]
 async fn test_bc_2_7_007_atomic_rename_cleanup_on_error() {
     let cache = TempDir::new().unwrap();
     let config = TempDir::new().unwrap();
-    let server = MockServer::start().await;
     let out_dir = TempDir::new().unwrap();
     let final_path = out_dir.path().join("partial.bin");
 
-    Mock::given(method("GET"))
-        .and(path("/rest/api/3/attachment/70001"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "id": "70001",
-            "filename": "partial.bin",
-            "size": 1000,
-            "mimeType": "application/octet-stream",
-        })))
-        .mount(&server)
-        .await;
+    // Raw TCP server: metadata GET returns full response, content GET returns
+    // partial body then closes (drives mid-stream stream error).
+    let server_addr = start_partial_stream_server();
 
-    // Content GET fails → mid-stream error
-    Mock::given(method("GET"))
-        .and(path("/rest/api/3/attachment/content/70001"))
-        .respond_with(ResponseTemplate::new(500))
-        .mount(&server)
-        .await;
-
-    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+    let output = jr_cmd_with_xdg(&server_addr, cache.path(), config.path())
         .args([
             "issue",
             "attachment",
@@ -1440,17 +1499,17 @@ async fn test_bc_2_7_007_atomic_rename_cleanup_on_error() {
         .output()
         .unwrap();
 
-    // RED GATE: todo!() → exit 101 ≠ 1.
-    // After implementation: exit 1 + final path absent + no tmp_ files remain.
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(
         output.status.code(),
         Some(1),
-        "mid-stream error must exit 1 (EC-2.7.007-4)"
+        "mid-stream error must exit 1 (EC-2.7.007-4); stderr: {stderr}"
     );
     assert!(
         !final_path.exists(),
-        "final path must NOT exist after stream error (no partial file)"
+        "final path must NOT exist after stream error (no partial file left behind)"
     );
+    // No tmp_ files must remain: proves the cleanup branch ran and deleted the temp file.
     let tmp_files: Vec<_> = std::fs::read_dir(out_dir.path())
         .unwrap()
         .filter_map(|e| e.ok())
@@ -1458,7 +1517,22 @@ async fn test_bc_2_7_007_atomic_rename_cleanup_on_error() {
         .collect();
     assert!(
         tmp_files.is_empty(),
-        "no tmp_ files must remain after error (temp cleanup required)"
+        "no tmp_ files must remain after error (EC-2.7.007-4 cleanup required); found: {:?}",
+        tmp_files
+            .iter()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+    );
+    // Prove stream_to_file was entered: stderr must reference a stream/body/connection error,
+    // not an API-level error from send_inner (which would say "500 Internal Server Error").
+    assert!(
+        stderr.contains("stream error")
+            || stderr.contains("body error")
+            || stderr.contains("incomplete")
+            || stderr.contains("connection")
+            || stderr.contains("reset"),
+        "stderr must reference a mid-stream/body failure (proves stream_to_file branch was \
+         entered, not just the send_inner error path); got: {stderr}"
     );
 }
 

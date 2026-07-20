@@ -2186,3 +2186,77 @@ async fn test_bc_2_7_006_key_network_exit_1() {
          (full: 'Could not reach <host> — check your connection'); got: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// P5-002b — BC-2.7.001: Type column shows "-" for sparse attachment (mimeType absent)
+// ---------------------------------------------------------------------------
+
+/// P5-002b: when an attachment's `mimeType` field is absent in the API response
+/// (sparse `AttachmentObject`), the Type column in the list table MUST show "-"
+/// (the `a.mime_type.as_deref().unwrap_or("-")` fallback in attachments.rs).
+///
+/// Placement: `tests/attachment_list.rs` because the "-" fallback is part of the
+/// list-table rendering path (`handle_list`), not the download path.
+#[tokio::test]
+async fn test_bc_2_7_001_sparse_mime_type_shows_dash_in_type_column() {
+    let server = MockServer::start().await;
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+
+    // Sparse attachment: mimeType key is absent (not null, not empty — completely omitted).
+    // serde `#[serde(rename = "mimeType", default)]` on AttachmentObject.mime_type means
+    // a missing key deserializes as None → unwrap_or("-") in the Type column.
+    let sparse_attachment = serde_json::json!({
+        "id": "99001",
+        "filename": "noext",
+        "size": 100,
+        "created": "2026-07-10T14:23:11.000+0000",
+        "author": Value::Null,
+        "self": "https://example.atlassian.net/rest/api/3/attachment/99001",
+        "content": "https://example.atlassian.net/rest/api/3/attachment/content/99001",
+        // "mimeType" intentionally absent
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/SPARSE-1"))
+        .and(query_param("fields", "attachment"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(issue_attachment_response(
+                "SPARSE-1",
+                vec![sparse_attachment],
+            )),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["issue", "attachment", "list", "SPARSE-1"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "sparse attachment list must exit 0; got {:?}\nstderr: {stderr}\nstdout: {stdout}",
+        output.status.code()
+    );
+
+    // The Type column MUST contain "-" for the sparse attachment (no mimeType key).
+    // Using `contains` on the table output is sufficient — the "-" appears in the Type cell.
+    assert!(
+        stdout.contains(" - ") || stdout.contains("| - |") || stdout.contains("|-"),
+        "P5-002b: Type column must show '-' when mimeType is absent (sparse tolerance); \
+         stdout: {stdout}"
+    );
+
+    // Filename must appear (sanity: attachment was not dropped)
+    assert!(
+        stdout.contains("noext"),
+        "P5-002b: filename 'noext' must appear in list (sparse attachment not dropped); \
+         stdout: {stdout}"
+    );
+}
