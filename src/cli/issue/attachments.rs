@@ -1049,6 +1049,95 @@ pub async fn handle_attachment_download(
 }
 
 // ---------------------------------------------------------------------------
+// S-576-3: upload handler + helpers (BC-3.9.001..020)
+// ---------------------------------------------------------------------------
+
+/// Upload one or more files as attachments to a Jira issue (S-576-3; BC-3.9.001..020).
+///
+/// Dispatched from `src/cli/issue/mod.rs` with the whole `AttachmentSubcommand::Upload`
+/// variant (mirrors `handle_attachment_download` / `handle_comment_edit` pattern).
+///
+/// ## Behavioral summary
+///
+/// - Pre-checks BEFORE any HTTP (BC-3.9.001): rejects `--public`/`--internal` with an
+///   interim exit-64 message (AC-017; removed when S-576-5 wires JSM visibility); rejects
+///   stdin `-` as a file path (EC-3.9.001-6); rejects non-existent or unreadable files.
+/// - Sends a single multipart/form-data POST with `X-Atlassian-Token: no-check` (BC-3.9.001).
+/// - `--replace-existing`: calls `replace_existing_attachments` (BC-3.9.017; VP-576-003).
+/// - `--dry-run` (requires `--replace-existing` at clap parse time): calls `dry_run_upload`
+///   (BC-3.9.020 path-c; EC-3.9.020-6/7/9).
+/// - Human output: table of uploaded attachments (BC-3.9.001). JSON: curated array via
+///   `serialize_attachment_curated` (BC-3.9.009 / VP-576-004).
+pub async fn handle_attachment_upload(
+    sub: AttachmentSubcommand,
+    output_format: &OutputFormat,
+    client: &JiraClient,
+    no_input: bool,
+) -> anyhow::Result<()> {
+    todo!("S-576-3: destructure Upload variant, run pre-checks (--public/--internal interim, stdin, file-exists), then dispatch to upload/replace/dry-run paths")
+}
+
+/// Delete all same-filename existing attachments then upload the new files (BC-3.9.017).
+///
+/// VP-576-003: ALL `delete_attachment` calls MUST complete successfully before the first
+/// `upload_attachments` call is issued.
+///
+/// When `dry_run` is `true`, this function forwards to `dry_run_upload` — no mutations.
+/// When `yes` is `true` or `no_input` is `true`, skips the confirmation gate (BC-3.9.014).
+async fn replace_existing_attachments(
+    key: &str,
+    file_paths: &[std::path::PathBuf],
+    yes: bool,
+    dry_run: bool,
+    no_input: bool,
+    output_format: &OutputFormat,
+    client: &JiraClient,
+) -> anyhow::Result<()> {
+    todo!("S-576-3: list existing, derive would_delete, confirmation gate, delete-before-post (VP-576-003 ordering)")
+}
+
+/// Preview the upload operation without issuing any HTTP mutations (BC-3.9.020 path-c).
+///
+/// EC-3.9.020-9 three-category taxonomy:
+/// - **Category 1 (confirmation gates):** SUPPRESSED — no interactive prompts in dry-run.
+/// - **Category 2 (eligibility guards: file-not-found, stdin, issue-404):** NOT suppressed.
+/// - **Category 3 (parse-time: `--dry-run` without `--replace-existing`):** NOT suppressed.
+///
+/// The read-only list GET still fires to populate the `wouldDelete` preview array
+/// (mandatory per AC-008 / BC-3.9.020 path-c; only DELETE and POST are suppressed).
+async fn dry_run_upload(
+    key: &str,
+    file_paths: &[std::path::PathBuf],
+    replace_existing: bool,
+    output_format: &OutputFormat,
+    client: &JiraClient,
+) -> anyhow::Result<()> {
+    todo!("S-576-3: fetch attachment list (mandatory — populates wouldDelete), build preview JSON, print without issuing DELETE or POST")
+}
+
+/// Interactive `--replace-existing` confirmation gate (BC-3.9.014).
+///
+/// Uses `eprint!` + `io::stdin().read_line()` only — NOT `dialoguer::Confirm`.
+/// This exact mechanism is required by BC-3.9.014 gate mechanics.
+///
+/// Return semantics:
+/// - `yes` is `true` or `no_input` is `true` → skip prompt, return `Ok(true)`.
+/// - User inputs `"y"` / `"yes"` (case-insensitive, trimmed) → `Ok(true)`.
+/// - Any other non-empty input → `Ok(false)` (caller exits 0 — cancelled).
+/// - EOF or IO error → `Err(JrError::SignalInterrupt)` (exit 130).
+///
+/// Note: callers on `--no-input` paths MUST exit 64 BEFORE calling this function when
+/// `--yes` is absent (BC-3.9.014 non-interactive enforcement in `handle_attachment_upload`).
+async fn attachment_replace_confirmation_gate(
+    key: &str,
+    would_delete: &[&AttachmentObject],
+    yes: bool,
+    no_input: bool,
+) -> anyhow::Result<bool> {
+    todo!("S-576-3: eprint! prompt listing would_delete filenames, read_line three-way branch (y/yes→true, other→false, EOF/Err→exit 130)")
+}
+
+// ---------------------------------------------------------------------------
 // Unit tests
 // ---------------------------------------------------------------------------
 

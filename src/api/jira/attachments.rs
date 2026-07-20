@@ -162,6 +162,52 @@ impl JiraClient {
         }
     }
 
+    /// Upload one or more files as attachments to a Jira issue (S-576-3; BC-3.9.001).
+    ///
+    /// Issues `POST /rest/api/3/issue/{key}/attachments` with `Content-Type:
+    /// multipart/form-data`. All files are included as separate `"file"`-named parts
+    /// in a single request (EC-3.9.001-2 — one POST regardless of file count).
+    ///
+    /// **MANDATORY:** `X-Atlassian-Token: no-check` header on every request (BC-3.9.001
+    /// invariant — Jira XSRF protection returns an XSRF-related rejection without it,
+    /// regardless of authentication method; ADR-0017).
+    ///
+    /// **ADR-0017 retry constraint:** `Request::try_clone()` returns `None` for multipart
+    /// bodies. Retry MUST rebuild a fresh `tokio::fs::File::open` and a new
+    /// `reqwest::multipart::Form`; do NOT attempt to clone the original request.
+    ///
+    /// Error mapping (BC-3.9.012):
+    /// - 404 → `JrError::UserError` (exit 64): issue not found.
+    /// - 413 → `JrError::UserError` (exit 1): actionable `"Attachment too large"` message.
+    /// - 401 → `JrError::NotAuthenticated` (exit 2): handled by client.
+    /// - 403 → `JrError::ApiError { status: 403 }` (exit 1): permission denied.
+    /// - 5xx / network → `JrError::ApiError` / `JrError::NetworkError` (exit 1).
+    pub async fn upload_attachments(
+        &self,
+        key: &str,
+        file_paths: &[std::path::PathBuf],
+    ) -> Result<Vec<AttachmentObject>> {
+        todo!("S-576-3: multipart POST /rest/api/3/issue/{key}/attachments with X-Atlassian-Token: no-check (BC-3.9.001, ADR-0017)")
+    }
+
+    /// Delete a single attachment by ID (S-576-3; BC-3.9.017 / VP-576-003).
+    ///
+    /// Issues `DELETE /rest/api/3/attachment/{id}`.
+    ///
+    /// Used by `--replace-existing` to remove all same-filename attachments before
+    /// re-uploading (JRACLOUD-96384: multiple same-filename attachments may coexist;
+    /// ALL are deleted). VP-576-003: all DELETEs MUST complete before any POST upload
+    /// begins — ordering is enforced by the caller (`replace_existing_attachments`).
+    ///
+    /// Error mapping:
+    /// - 204 → success (`Ok(())`).
+    /// - 403 → `JrError::ApiError { status: 403 }` (exit 1): permission denied.
+    /// - 404 → `JrError::UserError` (exit 64): attachment not found or already deleted.
+    /// - 5xx / network → `JrError::ApiError` / `JrError::NetworkError` (exit 1).
+    pub async fn delete_attachment(&self, attachment_id: &str) -> Result<()> {
+        todo!("S-576-3: DELETE /rest/api/3/attachment/{attachment_id}")
+    }
+
     /// Stream attachment binary content (BC-2.7.007 step 2).
     ///
     /// Issues `GET /rest/api/3/attachment/content/{id}`.

@@ -122,6 +122,13 @@ pub async fn handle(
             sub @ AttachmentSubcommand::Download { .. } => {
                 attachments::handle_attachment_download(sub, output_format, client).await
             }
+            // S-576-3: multipart upload, --replace-existing, --dry-run path-c.
+            // Pass the whole Upload variant so handle_attachment_upload can destructure
+            // without exceeding the clippy::too_many_arguments threshold (mirrors
+            // handle_attachment_download / handle_comment_edit pattern).
+            sub @ AttachmentSubcommand::Upload { .. } => {
+                attachments::handle_attachment_upload(sub, output_format, client, no_input).await
+            }
         },
     }
 }

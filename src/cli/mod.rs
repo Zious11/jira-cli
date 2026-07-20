@@ -729,6 +729,9 @@ pub enum CommentSubcommand {
 ///
 /// Defined here (in `src/cli/mod.rs`) — NOT in `src/cli/issue/attachments.rs`.
 /// S-576-2, S-576-3, S-576-4, and S-576-5 add variants to this enum additively.
+///
+/// **Additive-only coordination:** each story appends its variant and dispatch arm;
+/// never remove or reorder a sibling story's variant or arm (P26-002).
 #[derive(Subcommand)]
 pub enum AttachmentSubcommand {
     /// List attachments on an issue (table or JSON; client-side filters)
@@ -791,6 +794,48 @@ pub enum AttachmentSubcommand {
         /// / `--newest`): silently overwrites on filename collision (BC-2.7.008).
         #[arg(long)]
         force: bool,
+    },
+
+    /// Upload one or more files as attachments to a Jira issue (S-576-3; BC-3.9.001..020).
+    ///
+    /// Sends a single `multipart/form-data` POST with `X-Atlassian-Token: no-check`
+    /// (BC-3.9.001). Multiple files are sent as separate `file`-named parts in one
+    /// request (EC-3.9.001-2). stdin `-` as FILE → exit 64 before any HTTP call
+    /// (EC-3.9.001-6).
+    Upload {
+        /// Issue key (e.g., FOO-123)
+        key: String,
+
+        /// File path(s) to upload. Repeatable. Leading-dash filenames accepted.
+        /// stdin `-` is rejected with exit 64 (EC-3.9.001-6 canonical).
+        #[arg(required = true, num_args = 1.., allow_hyphen_values = true)]
+        file: Vec<std::path::PathBuf>,
+
+        /// Delete existing same-filename attachments before uploading (BC-3.9.017).
+        /// Requires interactive confirmation unless `--yes` is also supplied.
+        /// Multiple same-filename attachments are ALL deleted (JRACLOUD-96384).
+        #[arg(long)]
+        replace_existing: bool,
+
+        /// Skip the `--replace-existing` confirmation gate (non-interactive bypass;
+        /// BC-3.9.014 consumer 2). No-op when `--replace-existing` is absent.
+        #[arg(long)]
+        yes: bool,
+
+        /// Preview the upload without issuing any HTTP mutations (BC-3.9.020 path-c).
+        /// Requires `--replace-existing` — exit 2 at parse time without it (EC-3.9.020-6).
+        #[arg(long, requires = "replace_existing")]
+        dry_run: bool,
+
+        /// Mark the upload as public on the JSM customer portal (BC-3.9.003).
+        /// S-576-3 INTERIM: exits 64 until S-576-5 wires full JSM visibility.
+        #[arg(long, conflicts_with = "internal")]
+        public: bool,
+
+        /// Mark the upload as internal (agent-only) on JSM (BC-3.9.004).
+        /// S-576-3 INTERIM: exits 64 until S-576-5 wires full JSM visibility.
+        #[arg(long, conflicts_with = "public")]
+        internal: bool,
     },
 }
 
