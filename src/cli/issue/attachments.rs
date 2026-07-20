@@ -1561,4 +1561,59 @@ mod tests {
             "EC-2.7.001-3: empty displayName + empty accountId must yield (anonymous)"
         );
     }
+
+    // ---------------------------------------------------------------------------
+    // Mutation-kill unit tests (PG-F4-10)
+    // ---------------------------------------------------------------------------
+
+    /// Mutant 2 — 397:27 `&&` → `||` in `is_windows_device_name_basename`.
+    ///
+    /// Under the mutant: `s.len() == 4 || (s.starts_with("COM") || s.starts_with("LPT"))`
+    /// A 5-char COM/LPT prefix (e.g. "COM1x") satisfies `starts_with("COM")` even though
+    /// `len() != 4`, so the arm fires and `s.as_bytes()[3] = b'1'` passes the `b'1'..=b'9'`
+    /// range check → returns `true` (wrong).
+    /// Original: `len() == 4 && ...` = `false && true` = `false` → `_ => false`.
+    #[test]
+    fn test_is_windows_device_name_basename_len5_com_prefix_not_device() {
+        // len=5 COM/LPT prefix → NOT a Windows device name.
+        assert!(!is_windows_device_name_basename("COM1x.txt"));
+        assert!(!is_windows_device_name_basename("LPT1x.txt"));
+        // Sanity: len=4 COM1/LPT1 are still device names.
+        assert!(is_windows_device_name_basename("COM1"));
+        assert!(is_windows_device_name_basename("LPT1"));
+    }
+
+    /// Mutants 3+4 — 424:13 `-=` → `/=` and `-=` → `+=` in `floor_char_boundary_at`.
+    ///
+    /// "a🎉b": "a" (1 byte), 🎉 U+1F389 (4 bytes at indices 1–4), "b" (1 byte) = 6 bytes.
+    /// Char boundaries: 0, 1, 5, 6.  Indices 2, 3, 4 are INSIDE the emoji.
+    ///
+    /// limit=4: pos=4 → NOT a boundary → walk back:
+    ///   `-=1` (original): 4→3→2→1; is_char_boundary(1)=true → return 1.
+    ///   `/=1` (mutant):   pos stays 4 forever → infinite loop → test times out → killed.
+    ///   `+=1` (mutant):   pos=4→5; is_char_boundary(5)=true → return 5 ≠ 1 → assertion fails → killed.
+    #[test]
+    fn test_floor_char_boundary_at_limit_inside_multibyte_char() {
+        // "a" + 🎉 (4 bytes) + "b": limit 4 is the last byte of 🎉 → walk back to start of 🎉 (index 1).
+        assert_eq!(floor_char_boundary_at("a\u{1F389}b", 4), 1);
+        // Indices 2 and 3 are also inside the emoji → also return 1.
+        assert_eq!(floor_char_boundary_at("a\u{1F389}b", 3), 1);
+        assert_eq!(floor_char_boundary_at("a\u{1F389}b", 2), 1);
+    }
+
+    /// Mutant 7 — 494:38 second `||` → `&&` in `sanitize_attachment_filename` step 4.
+    ///
+    /// Under the mutant: `c == '/' || (c == '\\' && c == ':')` — a bare `\` is no longer
+    /// replaced because `'\\' && ':'` is always false.
+    ///
+    /// `"\\\\"` (two backslash chars) on Unix:
+    ///   Step 1: `Path::file_name()` returns the whole string (no `/` separator on Unix).
+    ///   Backslash split: `rsplit('\\')` = `["", "", ""]`; no non-empty segment →
+    ///   `unwrap_or("\\\\")`; basename = `"\\\\"`.
+    ///   Step 4 (original): each `\` → `_` → `"__"`.
+    ///   Step 4 (mutant):  `\` alone fails `\\ && :` → stays as `\\` → result is `"\\\\"` ≠ `"__"`.
+    #[test]
+    fn test_sanitize_attachment_filename_pure_backslash_scrubbed_to_underscores() {
+        assert_eq!(sanitize_attachment_filename("\\\\"), Some("__".to_string()));
+    }
 }

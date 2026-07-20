@@ -2266,6 +2266,16 @@ async fn test_bc_2_7_007_success_hint_display_sanitizes_filename() {
         "P8-001: on-disk file must use disk-variant name (raw chars preserved on disk); \
          expected: {disk_file:?}"
     );
+
+    // Mutant 15 (760:28 delete!/always-false): success hint must include the parent dir path.
+    // Under delete! guard: `Some(d) if d.is_empty()` → fires only for empty parent →
+    // non-empty CWD parent → `_ => fname` (bare filename, no parent dir) → assertion fails.
+    // Under always-false: guard never fires → same bare-fname result → assertion fails.
+    assert!(
+        stderr.contains(cwd_dir.path().to_str().unwrap()),
+        "P8-001: success hint must contain parent dir path (non-empty parent guard at ~760); \
+         got: {stderr:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2372,6 +2382,285 @@ async fn test_bc_2_7_007_rename_failure_error_display_sanitizes_filename() {
     assert!(
         tmp_files.is_empty(),
         "P9-001: temp file not cleaned up after rename failure: {tmp_files:?}"
+    );
+
+    // Mutants 8,10 (602:32 delete!/always-false): rename-failure error must include the
+    // parent dir path.  Under delete! guard (`Some(d) if d.is_empty()`), the non-empty
+    // CWD parent fails the guard → `_ => fname` (bare filename) → assertion fails.
+    // Under always-false: same → assertion fails.
+    assert!(
+        stderr.contains(cwd_dir.path().to_str().unwrap()),
+        "P9-001: rename-failure error must contain parent dir path (non-empty parent guard at ~602); \
+         got: {stderr:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// PG-F4-10 mutation-kill integration tests
+// ---------------------------------------------------------------------------
+
+/// Mutant 1 (api/jira/attachments.rs 153:59): `*status == 403` → `true`.
+///
+/// Under the mutant, ANY `ApiError` status triggers the 403-specific
+/// "Permission denied: cannot access attachment" branch.  A 400 response
+/// must NOT produce that message.
+#[tokio::test]
+async fn test_bc_2_7_metadata_400_not_permission_denied() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/attachment/98001"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "errorMessages": ["bad request"],
+            "errors": {}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args(["issue", "attachment", "download", "TEST-1", "--id", "98001"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "400 metadata response must cause non-zero exit; stderr: {stderr}"
+    );
+    // Under the → true mutant, a 400 would produce "Permission denied" in the error.
+    assert!(
+        !stderr.contains("Permission denied"),
+        "400 metadata response must NOT produce 'Permission denied' (only 403 should); \
+         got: {stderr:?}"
+    );
+}
+
+/// Mutants 12,14 (721:24 delete!/always-false in default-path collision error format).
+///
+/// Default-path collision error must include the full parent dir path (CWD), not just the
+/// bare filename.  Under delete! or always-false, the guard `!d.as_os_str().is_empty()`
+/// never fires for non-empty CWD → falls to `_ => fname` → bare name only in error.
+#[tokio::test]
+async fn test_bc_2_7_single_download_collision_error_includes_parent_dir() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    let cwd_dir = TempDir::new().unwrap();
+
+    let filename = "collision.txt";
+
+    // Pre-create the file at cwd_dir/collision.txt so the collision check fires.
+    std::fs::write(cwd_dir.path().join(filename), b"existing").unwrap();
+
+    // Metadata GET fires before the collision check (no content GET needed).
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/attachment/98002"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "98002",
+            "filename": filename,
+            "size": 8,
+            "mimeType": "text/plain",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .current_dir(cwd_dir.path())
+        .args(["issue", "attachment", "download", "COLL-1", "--id", "98002"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "default-path collision must exit 64; stderr: {stderr}"
+    );
+    // Error must include the parent dir path (CWD), not just the bare filename.
+    assert!(
+        stderr.contains(cwd_dir.path().to_str().unwrap()),
+        "collision error must contain parent dir path; got: {stderr:?}"
+    );
+    assert!(
+        stderr.contains(filename),
+        "collision error must contain the filename; got: {stderr:?}"
+    );
+}
+
+/// Mutant 11 (644:25 bare-filename parent guard) and mutant 15 always-true (760:28).
+///
+/// Mutant 11: `pp == Path::new("")` → false (always-false guard).  For `--out "doc.txt"`,
+/// parent is `Some("")` → guard fails → falls to `Some(pp) => pp.to_path_buf()` →
+/// effective_parent = `""` → `"".exists()` = false → "Output directory does not exist" exit 64.
+/// Original: guard fires → effective_parent = CWD → exists → success.
+///
+/// Mutant 15 always-true (760:28): `!d.as_os_str().is_empty()` → `true`.
+/// For bare `--out "doc.txt"`, `final_path.parent() = Some("")` → always-true guard fires →
+/// `format!("{}{}{fname}", "".display(), MAIN_SEPARATOR)` = `"/doc.txt"` → hint
+/// = `"Downloaded: /doc.txt ..."`.
+/// Original: guard fails for empty parent → `_ => fname` → `"doc.txt"` (no separator).
+#[tokio::test]
+async fn test_bc_2_7_bare_out_filename_success_hint_no_leading_separator() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    let cwd_dir = TempDir::new().unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/attachment/98003"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "98003",
+            "filename": "doc.txt",
+            "size": 5,
+            "mimeType": "text/plain",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/attachment/content/98003"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"hello"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .current_dir(cwd_dir.path())
+        .args([
+            "issue",
+            "attachment",
+            "download",
+            "BARE-1",
+            "--id",
+            "98003",
+            "--out",
+            "doc.txt", // bare filename — no directory component
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Mutant 11 (guard → false): effective_parent="" → doesn't exist → exit 64.
+    // Original: CWD → exists → success.
+    assert!(
+        output.status.success(),
+        "bare --out 'doc.txt' must succeed (parent '' → CWD exists); stderr: {stderr}"
+    );
+
+    // Mutant 15 always-true (760:28): empty parent "" → format!("" + "/" + "doc.txt") =
+    // "/doc.txt" → hint = "Downloaded: /doc.txt (...)".
+    // Original: empty parent guard fails → `_ => "doc.txt"` → "Downloaded: doc.txt (...)".
+    assert!(
+        !stderr.contains("/doc.txt"),
+        "bare --out hint must NOT have a leading path separator before the filename \
+         (empty-parent guard at ~760); got: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("Downloaded: doc.txt"),
+        "bare --out hint must start with 'Downloaded: doc.txt'; got: {stderr:?}"
+    );
+
+    // File must exist at cwd_dir/doc.txt.
+    assert!(
+        cwd_dir.path().join("doc.txt").exists(),
+        "doc.txt must be created in CWD for bare --out path"
+    );
+}
+
+/// Mutants 16,17 (918:28): `fail_count += 1` in `stream_to_file` error branch.
+///
+/// Under `*= 1`: `fail_count = 0 * 1 = 0` → never triggers `fail_count > 0` → exit 0.
+/// Under `-=`:   `0 - 1` usize underflow → panic in debug → exit 101.
+/// Both fail: test asserts exit code = 1 and canonical "Downloaded 0 of 1" summary.
+///
+/// Route: batch `--all` with one attachment.  Content-GET returns 200, but a DIRECTORY
+/// is pre-created at the computed batch output path → `rename(tmp, dir)` = EISDIR →
+/// `stream_to_file` returns `Err` → line 918 `fail_count += 1` fires.
+#[tokio::test]
+async fn test_bc_2_7_stream_to_file_failure_increments_fail_count() {
+    use sha1::Digest as _;
+
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    let out_dir = TempDir::new().unwrap();
+
+    let att_id = "94001";
+    let att_filename = "payload.bin";
+
+    // Compute the batch output path: {sha1_hex(att_id)}_{sanitized_filename}.
+    // Mirrors compute_default_output_path(is_batch=true) in src/cli/issue/attachments.rs.
+    let hash: String = sha1::Sha1::new()
+        .chain_update(att_id.as_bytes())
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let batch_path = out_dir.path().join(format!("{hash}_{att_filename}"));
+
+    // Pre-create a DIRECTORY at the batch path so rename(tmp, dir) → EISDIR.
+    std::fs::create_dir(&batch_path)
+        .expect("pre-create directory at batch path for EISDIR trigger");
+
+    let att = make_attachment(
+        att_id,
+        att_filename,
+        "application/octet-stream",
+        4,
+        "2026-07-19T10:00:00.000+0000",
+    );
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/STFAIL-1"))
+        .and(query_param("fields", "attachment"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(issue_with_attachments("STFAIL-1", vec![att])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/rest/api/3/attachment/content/{att_id}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"data"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "download",
+            "STFAIL-1",
+            "--all",
+            "--out-dir",
+            out_dir.path().to_str().unwrap(),
+            "--force", // bypass batch collision-skip so stream_to_file is reached
+        ])
+        .output()
+        .unwrap();
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    // Under *=1 mutant: fail_count=0 → exit 0 (no error return) → code ≠ 1 → fails.
+    // Under -= mutant:  usize underflow panic in debug → exit 101 ≠ 1 → fails.
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "stream_to_file failure must cause exit 1 (fail_count > 0); output: {combined}"
+    );
+    // Canonical "Downloaded N of M" summary confirms the batch completed with 0 successes.
+    assert!(
+        combined.contains("Downloaded 0 of 1 attachments to"),
+        "batch must report 0 of 1 on stream_to_file failure; got: {combined}"
     );
 }
 
