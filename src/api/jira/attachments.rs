@@ -176,7 +176,8 @@ impl JiraClient {
     /// Error mapping (BC-2.7.012):
     /// - 401 → `JrError::NotAuthenticated` (exit 2).
     /// - 403 → `JrError::ApiError` (exit 1): permission denied.
-    /// - 404 → `JrError::UserError` (exit 64): attachment not found.
+    /// - 404 → `JrError::ApiError` (exit 1): attachment not found (AC-009: this
+    ///   endpoint does NOT remap 404→UserError; raw API status propagates).
     /// - 5xx / network → `JrError::ApiError` / `JrError::NetworkError` (exit 1).
     pub async fn get_attachment_content(&self, id: &str) -> Result<reqwest::Response> {
         // ALWAYS use the platform URL (EC-2.7.007-2). MUST NOT use metadata.content —
