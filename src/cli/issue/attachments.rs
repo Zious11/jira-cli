@@ -24,7 +24,7 @@ use tokio::io::AsyncWriteExt;
 
 use crate::api::client::JiraClient;
 use crate::api::jira::attachments::AttachmentObject;
-use crate::cli::OutputFormat;
+use crate::cli::{AttachmentSubcommand, OutputFormat};
 use crate::error::JrError;
 use crate::output;
 
@@ -947,19 +947,31 @@ async fn handle_batch_download(
 ///
 /// # Error taxonomy (BC-2.7.012)
 /// See AC-009 for full error → exit-code → message table.
-#[allow(clippy::too_many_arguments)]
+/// Takes the full `AttachmentSubcommand::Download` variant so callers avoid
+/// exceeding the `clippy::too_many_arguments` threshold, mirroring the
+/// `handle_comment_add` / `handle_comment_edit` pattern.
 pub async fn handle_attachment_download(
-    key: &str,
-    id: Option<&str>,
-    _all: bool,
-    newest: Option<i64>,
-    out: Option<&std::path::Path>,
-    out_dir: Option<&std::path::Path>,
-    filter: &[String],
-    force: bool,
+    sub: AttachmentSubcommand,
     output_format: &OutputFormat,
     client: &JiraClient,
 ) -> anyhow::Result<()> {
+    let AttachmentSubcommand::Download {
+        key,
+        id,
+        all: _,
+        newest,
+        out,
+        out_dir,
+        filter,
+        force,
+    } = sub
+    else {
+        unreachable!("handle_attachment_download called with non-Download variant")
+    };
+    let id = id.as_deref();
+    let out = out.as_deref();
+    let out_dir = out_dir.as_deref();
+
     // Handler-level --newest N > 0 guard (clap accepts any i64; EC-2.7.009-1).
     if let Some(n) = newest {
         if n <= 0 {
@@ -977,16 +989,16 @@ pub async fn handle_attachment_download(
             ))
             .into());
         }
-        return handle_single_download(key, id_str, out, force, output_format, client).await;
+        return handle_single_download(&key, id_str, out, force, output_format, client).await;
     }
 
     // Batch path (--all or --newest).
     // Parse filter syntax before any HTTP call (P32-001 validation ordering).
-    let parsed_filters = parse_filters(filter)?;
+    let parsed_filters = parse_filters(&filter)?;
     let newest_n = newest.map(|n| n as usize);
 
     handle_batch_download(
-        key,
+        &key,
         newest_n,
         out_dir,
         &parsed_filters,
