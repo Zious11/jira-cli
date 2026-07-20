@@ -417,7 +417,7 @@ fn test_bc_2_7_007_selector_required_aid_validation() {
         "no selector must exit 2 (clap required-group)"
     );
 
-    // Non-numeric --id → handler must exit 64 + "invalid attachment id:"
+    // Non-numeric --id → handler must exit 64 + exact canonical "invalid attachment id: '<VALUE>' (must be numeric)"
     let out_bad = jr_cmd_with_xdg("http://127.0.0.1:1", cache.path(), config.path())
         .args([
             "issue",
@@ -429,7 +429,8 @@ fn test_bc_2_7_007_selector_required_aid_validation() {
         ])
         .output()
         .unwrap();
-    // RED GATE: todo!() → exit 101 ≠ 64 → assertion fails.
+    // RED GATE: impl emits "invalid attachment id: 'not-a-number' — must be a numeric Jira attachment ID."
+    // Missing "(must be numeric)" suffix required by BC-2.7.007 ~735 → assertion fails.
     assert_eq!(
         out_bad.status.code(),
         Some(64),
@@ -437,8 +438,8 @@ fn test_bc_2_7_007_selector_required_aid_validation() {
     );
     let stderr = String::from_utf8_lossy(&out_bad.stderr);
     assert!(
-        stderr.contains("invalid attachment id:"),
-        "stderr must contain 'invalid attachment id:' — got: {stderr}"
+        stderr.contains("invalid attachment id: 'not-a-number' (must be numeric)"),
+        "stderr must contain exact canonical 'invalid attachment id: \\'not-a-number\\' (must be numeric)' (BC-2.7.007 ~735) — got: {stderr}"
     );
 }
 
@@ -1089,7 +1090,7 @@ async fn test_bc_2_7_012_error_taxonomy() {
     let server = MockServer::start().await;
     let out_dir = TempDir::new().unwrap();
 
-    // invalid AID (non-numeric) → exit 64 + "invalid attachment id:"
+    // invalid AID (non-numeric) → exit 64 + exact canonical "invalid attachment id: '<VALUE>' (must be numeric)"
     let out_inv = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
         .args([
             "issue",
@@ -1101,15 +1102,17 @@ async fn test_bc_2_7_012_error_taxonomy() {
         ])
         .output()
         .unwrap();
-    // RED GATE: todo!() → exit 101 ≠ 64.
+    // RED GATE: impl emits "invalid attachment id: 'not-numeric' — must be a numeric Jira attachment ID."
+    // Missing "(must be numeric)" suffix required by BC-2.7.012 ~960 → assertion fails.
     assert_eq!(
         out_inv.status.code(),
         Some(64),
         "non-numeric AID must exit 64"
     );
     assert!(
-        String::from_utf8_lossy(&out_inv.stderr).contains("invalid attachment id:"),
-        "non-numeric AID stderr must contain 'invalid attachment id:'"
+        String::from_utf8_lossy(&out_inv.stderr)
+            .contains("invalid attachment id: 'not-numeric' (must be numeric)"),
+        "non-numeric AID stderr must contain exact canonical 'invalid attachment id: \\'not-numeric\\' (must be numeric)' (BC-2.7.012 ~960)"
     );
 
     // AID 404 (--id path) → exit 64 + "Attachment" AND "not found or not accessible"
