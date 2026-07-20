@@ -2200,6 +2200,135 @@ async fn test_bc_2_7_008_filtered_to_zero_hint() {
 }
 
 // ---------------------------------------------------------------------------
+// P4-001 — BC-2.7.008 fail-soft spirit: sparse AttachmentObject tolerance
+// ---------------------------------------------------------------------------
+
+/// P4-001 residual / BC-2.7.008 fail-soft spirit: `--all` must NOT abort the whole batch
+/// when the issue-GET response contains a sparse `AttachmentObject` (a field that is non-Option
+/// in the current struct is absent from the JSON wire body).
+///
+/// Chosen sparse field: `mimeType` — optional in practice; Jira can omit it for certain
+/// attachment types (restricted, deleted, third-party integrations). The current struct has
+/// `mime_type: String` (non-Option, no `#[serde(default)]`) → serde fails with
+/// `missing field "mimeType"` → `list_attachments` returns an error → batch aborts (exit ≠ 0,
+/// no downloads).
+///
+/// Fixture:
+///   AID 70001: SPARSE — `mimeType` omitted; all other fields (id, filename, size, created,
+///              self, content) present.
+///   AID 70002: NORMAL — fully-populated attachment; must be downloaded in every graceful path.
+///
+/// Expected behavior after fix (BC-2.7.008 fail-soft spirit):
+///   Either: make `mime_type: Option<String>` or add `#[serde(default)]` so the sparse
+///   attachment deserializes without error and the batch proceeds.
+///   OR: filter the malformed entry at list level and process the rest (skip is non-error
+///   for the batch when the normal attachment still succeeds).
+///   In both cases: exit 0 + AID 70002 in manifest + no "missing field" in stderr.
+///
+/// RED against current impl: `mime_type: String` aborts list deserialization →
+///   exit 1 + "missing field" in stderr + no manifest output.
+#[tokio::test]
+async fn test_bc_2_7_008_sparse_attachment_object_tolerated() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    let out_dir = TempDir::new().unwrap();
+
+    // Sparse attachment: mimeType intentionally omitted.
+    // All other required fields are present so the issue is the missing mimeType only.
+    let sparse = serde_json::json!({
+        "id": "70001",
+        "filename": "sparse_no_mime.txt",
+        // "mimeType": intentionally absent — tests tolerance of AttachmentObject
+        "size": 4,
+        "created": "2026-07-10T14:00:00.000+0000",
+        "author": null,
+        "self": "https://example.atlassian.net/rest/api/3/attachment/70001",
+        "content": "https://example.atlassian.net/rest/api/3/attachment/content/70001",
+    });
+
+    // Normal attachment: fully populated.
+    let normal = make_attachment(
+        "70002",
+        "normal.txt",
+        "text/plain",
+        4,
+        "2026-07-10T15:00:00.000+0000",
+    );
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/SPARSE-1"))
+        .and(query_param("fields", "attachment"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(issue_with_attachments("SPARSE-1", vec![sparse, normal])),
+        )
+        .mount(&server)
+        .await;
+
+    // Content mock for sparse attachment (if the fix makes it download, it should succeed).
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/attachment/content/70001"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"sparse_content"))
+        .mount(&server)
+        .await;
+
+    // Content mock for normal attachment — must always be downloaded.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/attachment/content/70002"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"normal_content"))
+        .expect(1) // must be called: if batch aborts (serde error), this fires → RED
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "download",
+            "SPARSE-1",
+            "--all",
+            "--out-dir",
+            out_dir.path().to_str().unwrap(),
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    // RED GATE: current `mime_type: String` (non-Option) causes serde to fail on the
+    // entire IssueAttachmentResponse → list_attachments returns error → batch aborts.
+    // After fix (make mime_type Option<String> or #[serde(default)]): exit 0 + manifest.
+    assert!(
+        output.status.success(),
+        "sparse-attachment batch must NOT abort (BC-2.7.008 fail-soft spirit) — exit: {:?}, stderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Serde missing-field error must NOT appear — it signals batch-aborting parse failure.
+    assert!(
+        !stderr.contains("missing field"),
+        "batch must NOT emit serde 'missing field' error (AbortObject → BC-2.7.008 violation) — got: {stderr}"
+    );
+
+    // Normal attachment must appear in the manifest — proves the batch was not aborted.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let manifest: Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout must be valid JSON — {e}\nstdout: {stdout}"));
+    let downloaded = manifest["downloaded"].as_array().unwrap();
+    let ids: Vec<&str> = downloaded
+        .iter()
+        .map(|e| e["id"].as_str().unwrap())
+        .collect();
+    assert!(
+        ids.contains(&"70002"),
+        "normal attachment (70002) must appear in manifest after sparse-tolerant batch — got: {ids:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // P3-003 — AC-008 / BC-2.7.009: filter-then-newest composition (regression pin)
 // ---------------------------------------------------------------------------
 
