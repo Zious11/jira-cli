@@ -2268,6 +2268,114 @@ async fn test_bc_2_7_007_success_hint_display_sanitizes_filename() {
 }
 
 // ---------------------------------------------------------------------------
+// P9-001 — BC-2.7.011 / CWE-116: rename-failure error display-sanitizes filename
+// ---------------------------------------------------------------------------
+
+/// P9-001 (CWE-116 error-path sibling of P8-001): `stream_to_file` rename-failure
+/// branch must display-sanitize the filename in the error message.
+///
+/// Route: default-path (no `--out`) + pre-create DIRECTORY at the final path + `--force`.
+///   - EC-11 is-directory pre-flight only fires for `--out` case → SKIPPED here.
+///   - Collision check (`out.is_none() && final_path.exists() && !force`): `!force` is
+///     false with `--force` → SKIPPED.
+///   - `stream_to_file` enters: creates temp file, writes body, `rename(tmp, dir)` → EISDIR.
+///   - Error: `"failed to rename temp to <CWD>/evil\u{202E}\rname.txt: Is a directory"`.
+///
+/// `sanitize_attachment_filename("evil\u{202E}\rname.txt")` keeps both chars on disk
+/// (not in the scrub set: `/`, `\`, `:`). So the pre-created DIRECTORY uses raw chars.
+///
+/// RED: current impl uses `final_path.display()` raw at `stream_to_file` ~587 →
+/// error message emits raw U+202E and raw `\r`.
+#[tokio::test]
+async fn test_bc_2_7_007_rename_failure_error_display_sanitizes_filename() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    // subprocess CWD: default-path (no --out) → final_path is CWD/<sanitized>.
+    let cwd_dir = TempDir::new().unwrap();
+
+    let poisoned_filename = "evil\u{202E}\rname.txt";
+    // display_sanitize_filename: U+202E (cp 0x202E, in 0x202A..=0x202E) → '?',
+    //                            \r     (cp 0x0D,   <= 0x1F)             → '?'
+    let display_safe = "evil??name.txt";
+
+    // Pre-create a DIRECTORY at the on-disk path so rename(tmp, dir) → EISDIR.
+    // sanitize_attachment_filename keeps U+202E and \r (neither is /, \, :, or NUL),
+    // so the disk path is cwd_dir / "evil\u{202E}\rname.txt" verbatim.
+    std::fs::create_dir(cwd_dir.path().join(poisoned_filename))
+        .expect("P9-001 setup: failed to create pre-existing directory at final path");
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/attachment/97001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "97001",
+            "filename": poisoned_filename,
+            "size": 3,
+            "mimeType": "text/plain",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/attachment/content/97001"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"xyz"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .current_dir(cwd_dir.path())
+        .args([
+            "issue",
+            "attachment",
+            "download",
+            "RF-1",
+            "--id",
+            "97001",
+            "--force",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Must fail: rename of temp file to a directory → EISDIR.
+    assert!(
+        !output.status.success(),
+        "P9-001: rename to a pre-created directory must cause exit != 0; stderr: {stderr}"
+    );
+
+    // BC-2.7.011 ~936: every call site must display-sanitize. RED against current impl
+    // which uses `final_path.display()` raw in the rename-failure anyhow message (~587).
+    assert!(
+        !stderr.contains('\u{202E}'),
+        "P9-001: raw U+202E (bidi RLO) MUST NOT appear in rename-failure error \
+         (BC-2.7.011 every-call-site CWE-116 clause); got: {stderr:?}"
+    );
+    assert!(
+        !stderr.contains('\r'),
+        "P9-001: raw \\r (CR, 0x0D) MUST NOT appear in rename-failure error \
+         (BC-2.7.011 every-call-site CWE-116 clause); got: {stderr:?}"
+    );
+    assert!(
+        stderr.contains(display_safe),
+        "P9-001: error must contain display-sanitized filename '{display_safe}'; \
+         got: {stderr:?}"
+    );
+
+    // Cleanup guarantee (BC-2.7.007 EC-2.7.007-4): temp file removed on error.
+    let tmp_files: Vec<_> = std::fs::read_dir(cwd_dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().starts_with("tmp_"))
+        .collect();
+    assert!(
+        tmp_files.is_empty(),
+        "P9-001: temp file not cleaned up after rename failure: {tmp_files:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // AC-019 — EC-2.7.008-10 / EC-2.7.009-3: filtered-to-zero hint
 // ---------------------------------------------------------------------------
 
