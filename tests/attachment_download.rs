@@ -2188,18 +2188,19 @@ async fn test_bc_2_7_007_single_id_success_hint_stderr() {
 /// MUST pass the filename portion through `display_sanitize_filename` (CWE-116
 /// every-call-site clause) before emitting to stderr.
 ///
-/// Fixture: metadata returns `filename: "evil\u{202E}name.txt"` — contains:
-///   - U+202E (bidi RLO, cp 0x202E, in range 0x202A..=0x202E → `?`)
+/// Fixture: metadata returns `filename: "evil\u{7f}name.txt"` — contains:
+///   - U+007F (DEL, cp 0x7F, matches `cp == 0x7F` in `display_sanitize_filename` → `?`)
 ///
-/// CR (`\r`, 0x0D) is omitted from the poison: it is illegal in Windows NTFS filenames
-/// and cannot be used as a cross-platform integration-test poison character.
+/// U+202E (BiDi RLO) and CR (`\r`, 0x0D) are both rejected by the GitHub Actions
+/// Windows runner with OS error 123 (InvalidFilename). U+007F (DEL = 127) is NOT in
+/// the Windows forbidden range (1–31) and passes NTFS validation on all CI platforms.
 ///
 /// Expected hint: `Downloaded: <dir>/evil?name.txt (3 B).`
 ///
-/// `sanitize_attachment_filename` disk-variant keeps U+202E (it is NOT in the scrub
-/// set: `/`, `\`, `:`), so the ON-DISK file is named with the raw BiDi char.
+/// `sanitize_attachment_filename` disk-variant keeps U+007F (it is NOT in the scrub
+/// set: `/`, `\`, `:`), so the ON-DISK file is named with the raw DEL char.
 ///
-/// RED: current impl uses `final_path.display()` raw → hint emits raw U+202E.
+/// RED: current impl uses `final_path.display()` raw → hint emits raw U+007F.
 #[tokio::test]
 async fn test_bc_2_7_007_success_hint_display_sanitizes_filename() {
     let cache = TempDir::new().unwrap();
@@ -2208,11 +2209,11 @@ async fn test_bc_2_7_007_success_hint_display_sanitizes_filename() {
     // subprocess CWD: default-path mode (no --out) → file lands in CWD.
     let cwd_dir = TempDir::new().unwrap();
 
-    // U+202E (BiDi RLO override) is valid in both NTFS and ext4; CR (\r, 0x0D) is illegal
-    // on Windows NTFS so it cannot be used as a cross-platform poison. U+202E alone is
-    // sufficient to exercise display_sanitize_filename (it is in the 0x202A..=0x202E range).
-    let poisoned_filename = "evil\u{202E}name.txt";
-    let display_safe = "evil?name.txt"; // display_sanitize_filename replaces U+202E with '?'
+    // U+007F (DEL = 127, 0x7F) is valid on both NTFS and ext4: it is NOT in the Windows
+    // forbidden range (chars 1–31 are forbidden; 0x7F = 127 is not). U+202E (BiDi RLO)
+    // and CR (\r, 0x0D) are both rejected by the Windows runner (OS error 123).
+    let poisoned_filename = "evil\u{7f}name.txt";
+    let display_safe = "evil?name.txt"; // display_sanitize_filename replaces U+007F with '?'
 
     Mock::given(method("GET"))
         .and(path("/rest/api/3/attachment/96001"))
@@ -2247,13 +2248,8 @@ async fn test_bc_2_7_007_success_hint_display_sanitizes_filename() {
     // BC-2.7.011 ~936: every call site must display-sanitize. RED against current impl
     // which uses final_path.display() raw.
     assert!(
-        !stderr.contains('\u{202E}'),
-        "P8-001: raw U+202E (bidi RLO) MUST NOT appear in Downloaded: hint \
-         (BC-2.7.011 every-call-site CWE-116 clause); got: {stderr:?}"
-    );
-    assert!(
-        !stderr.contains('\r'),
-        "P8-001: raw \\r (CR, 0x0D) MUST NOT appear in Downloaded: hint \
+        !stderr.contains('\u{7f}'),
+        "P8-001: raw U+007F (DEL, 0x7F) MUST NOT appear in Downloaded: hint \
          (BC-2.7.011 every-call-site CWE-116 clause); got: {stderr:?}"
     );
     assert!(
@@ -2263,7 +2259,7 @@ async fn test_bc_2_7_007_success_hint_display_sanitizes_filename() {
     );
 
     // On-disk file keeps the disk-variant name (sanitize_attachment_filename does NOT
-    // scrub U+202E — it is not /, \\, :, or NUL).
+    // scrub U+007F — it is not /, \\, :, or NUL).
     let disk_file = cwd_dir.path().join(poisoned_filename);
     assert!(
         disk_file.exists(),
@@ -2284,14 +2280,16 @@ async fn test_bc_2_7_007_success_hint_display_sanitizes_filename() {
 ///   - Collision check (`out.is_none() && final_path.exists() && !force`): `!force` is
 ///     false with `--force` → SKIPPED.
 ///   - `stream_to_file` enters: creates temp file, writes body, `rename(tmp, dir)` → EISDIR.
-///   - Error: `"failed to rename temp to <CWD>/evil\u{202E}name.txt: Is a directory"`.
+///   - Error: `"failed to rename temp to <CWD>/evil\u{7f}name.txt: Is a directory"`.
 ///
-/// `sanitize_attachment_filename("evil\u{202E}name.txt")` keeps U+202E on disk
+/// `sanitize_attachment_filename("evil\u{7f}name.txt")` keeps U+007F on disk
 /// (not in the scrub set: `/`, `\`, `:`). So the pre-created DIRECTORY uses the raw char.
-/// CR (`\r`, 0x0D) is intentionally omitted from the poison — it is illegal on Windows NTFS.
+/// U+202E (BiDi RLO) and CR (`\r`, 0x0D) are both rejected by the Windows runner
+/// (OS error 123, InvalidFilename). U+007F (DEL = 127) is NOT in the Windows forbidden
+/// range (1–31) and is valid on all CI platforms.
 ///
 /// RED: current impl uses `final_path.display()` raw at `stream_to_file` ~587 →
-/// error message emits raw U+202E and raw `\r`.
+/// error message emits raw U+007F (DEL).
 #[tokio::test]
 async fn test_bc_2_7_007_rename_failure_error_display_sanitizes_filename() {
     let cache = TempDir::new().unwrap();
@@ -2300,15 +2298,15 @@ async fn test_bc_2_7_007_rename_failure_error_display_sanitizes_filename() {
     // subprocess CWD: default-path (no --out) → final_path is CWD/<sanitized>.
     let cwd_dir = TempDir::new().unwrap();
 
-    // U+202E (BiDi RLO override) is valid on both NTFS and ext4; CR (\r, 0x0D) is illegal
-    // on Windows NTFS so omitted here. U+202E alone exercises display_sanitize_filename.
-    let poisoned_filename = "evil\u{202E}name.txt";
-    // display_sanitize_filename: U+202E (cp 0x202E, in 0x202A..=0x202E) → '?'
+    // U+007F (DEL = 127, 0x7F) is valid on both NTFS and ext4: NOT in Windows forbidden
+    // range (1-31). U+202E (BiDi RLO) and CR (\r, 0x0D) are rejected by Windows runner.
+    let poisoned_filename = "evil\u{7f}name.txt";
+    // display_sanitize_filename: U+007F (DEL, cp 0x7F, matches cp == 0x7F) → '?'
     let display_safe = "evil?name.txt";
 
     // Pre-create a DIRECTORY at the on-disk path so rename(tmp, dir) → EISDIR.
-    // sanitize_attachment_filename keeps U+202E (it is not /, \, :, or NUL),
-    // so the disk path is cwd_dir / "evil\u{202E}name.txt" verbatim.
+    // sanitize_attachment_filename keeps U+007F (it is not /, \, :, or NUL),
+    // so the disk path is cwd_dir / "evil\u{7f}name.txt" verbatim.
     std::fs::create_dir(cwd_dir.path().join(poisoned_filename))
         .expect("P9-001 setup: failed to create pre-existing directory at final path");
 
@@ -2355,14 +2353,9 @@ async fn test_bc_2_7_007_rename_failure_error_display_sanitizes_filename() {
     // BC-2.7.011 ~936: every call site must display-sanitize. RED against current impl
     // which uses `final_path.display()` raw in the rename-failure anyhow message (~587).
     assert!(
-        !stderr.contains('\u{202E}'),
-        "P9-001: raw U+202E (bidi RLO) MUST NOT appear in rename-failure error \
+        !stderr.contains('\u{7f}'),
+        "P9-001: raw U+007F (DEL, 0x7F) MUST NOT appear in rename-failure error \
          (BC-2.7.011 every-call-site CWE-116 clause); got: {stderr:?}"
-    );
-    assert!(
-        !stderr.contains('\r'),
-        "P9-001: raw \\r (CR, 0x0D) MUST NOT appear in rename-failure error \
-         (defensive; BC-2.7.011 every-call-site CWE-116 clause); got: {stderr:?}"
     );
     assert!(
         stderr.contains(display_safe),
