@@ -13,6 +13,7 @@
 //! Story: S-576-2, GitHub issue #576
 
 use assert_cmd::Command;
+use proptest::prelude::*;
 use serde_json::Value;
 use tempfile::TempDir;
 use wiremock::matchers::{method, path, query_param};
@@ -312,6 +313,86 @@ async fn test_bc_2_7_007_out_preflight_before_get_p32_001() {
     assert!(
         stderr.contains("Output directory does not exist:"),
         "stderr must contain 'Output directory does not exist:' — got: {stderr}"
+    );
+
+    // Sub-assertion (b): P1-003 / EC-2.7.007-11 — --out names an existing DIRECTORY.
+    // Pre-flight must reject with "output path is a directory: <PATH>" BEFORE any metadata GET.
+    // Current impl: missing directory check → falls through to "File already exists:" at line 655
+    // AFTER the metadata GET at line 631 → both wrong message AND ordering violation → RED.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/attachment/10006"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "10006", "filename": "x.txt", "size": 1,
+        })))
+        .expect(0) // P32-001: must NOT be called — pre-flight fires first
+        .mount(&server)
+        .await;
+
+    let existing_dir = TempDir::new().unwrap();
+    let out_b = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "download",
+            "FOO-1",
+            "--id",
+            "10006",
+            "--out",
+            existing_dir.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    // RED GATE: impl calls metadata GET BEFORE collision check → .expect(0) violated at drop.
+    // Also wrong message: "File already exists:" not "output path is a directory:".
+    assert_eq!(
+        out_b.status.code(),
+        Some(64),
+        "(b) EC-2.7.007-11: --out existing directory must exit 64 before HTTP (P32-001)"
+    );
+    let stderr_b = String::from_utf8_lossy(&out_b.stderr);
+    assert!(
+        stderr_b.contains("output path is a directory:"),
+        "(b) stderr must contain 'output path is a directory:' (BC-2.7.007 EC-2.7.007-11) — got: {stderr_b}"
+    );
+
+    // Sub-assertion (c): P1-004 / EC-2.7.007-12 + P32-001 — --out is an existing file, no --force.
+    // Collision-refuse pre-flight must fire BEFORE the metadata GET.
+    // Current impl: metadata GET (line 631) fires BEFORE collision check (line 652) → RED.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/attachment/10007"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "10007", "filename": "y.txt", "size": 1,
+        })))
+        .expect(0) // P32-001: collision check must fire BEFORE metadata GET
+        .mount(&server)
+        .await;
+
+    let existing_file_dir = TempDir::new().unwrap();
+    let existing_file = existing_file_dir.path().join("already_here.txt");
+    std::fs::write(&existing_file, b"original").unwrap();
+    let out_c = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "download",
+            "FOO-1",
+            "--id",
+            "10007",
+            "--out",
+            existing_file.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    // RED GATE: impl calls metadata GET BEFORE collision check → .expect(0) violated at drop.
+    assert_eq!(
+        out_c.status.code(),
+        Some(64),
+        "(c) EC-2.7.007-12: --out existing file without --force must exit 64 before HTTP (P32-001)"
+    );
+    let stderr_c = String::from_utf8_lossy(&out_c.stderr);
+    assert!(
+        stderr_c.contains("File already exists:") && stderr_c.contains("Use --force to overwrite."),
+        "(c) stderr must contain 'File already exists: <path>. Use --force to overwrite.' — got: {stderr_c}"
     );
 }
 
@@ -633,10 +714,23 @@ async fn test_bc_2_7_008_all_batch_fail_soft() {
         stderr_c.contains("warning: failed to download attachment 30002:"),
         "(c) stderr must contain per-file failure warning — got: {stderr_c}"
     );
-    let combined_c = format!("{}{}", String::from_utf8_lossy(&out_c.stdout), &stderr_c);
+    // P1-007 / BC-2.7.008: fail-soft batch must NOT emit "API error (1)" on stderr.
+    // Current impl: JrError::ApiError { status: 1, message: "batch download completed with errors" }
+    // propagates through anyhow → main.rs prints "API error (1): ..." to stderr → RED.
     assert!(
-        combined_c.contains("Downloaded 1 of 2 attachments to "),
-        "(c) must contain 'Downloaded 1 of 2 attachments to' — stdout+stderr: {combined_c}"
+        !stderr_c.contains("API error (1)"),
+        "(c) batch fail-soft must NOT emit spurious 'API error (1)' to stderr (BC-2.7.008) — got: {stderr_c}"
+    );
+    let combined_c = format!("{}{}", String::from_utf8_lossy(&out_c.stdout), &stderr_c);
+    // P1-008 / BC-2.7.008 ~799: canonical summary must end with trailing period.
+    // Current impl: "Downloaded {} of {} attachments to {}" (no period) → RED.
+    let expected_summary_c = format!(
+        "Downloaded 1 of 2 attachments to {}.",
+        out_dir_c.path().to_str().unwrap()
+    );
+    assert!(
+        combined_c.contains(&expected_summary_c),
+        "(c) canonical summary 'Downloaded 1 of 2 attachments to <dir>.' required (BC-2.7.008 ~799) — stdout+stderr: {combined_c}"
     );
 
     // Sub-assertion (d): EC-2.7.008-8 all-fail: every content-GET fails → exit 1
@@ -693,14 +787,25 @@ async fn test_bc_2_7_008_all_batch_fail_soft() {
         Some(1),
         "(d) all-fail batch must exit 1 (EC-2.7.008-8)"
     );
+    let stderr_d = String::from_utf8_lossy(&out_d.stderr);
+    // P1-007 / BC-2.7.008: all-fail batch must NOT emit "API error (1)" on stderr.
+    assert!(
+        !stderr_d.contains("API error (1)"),
+        "(d) all-fail batch must NOT emit spurious 'API error (1)' to stderr (BC-2.7.008) — got: {stderr_d}"
+    );
     let combined_d = format!(
         "{}{}",
         String::from_utf8_lossy(&out_d.stdout),
-        String::from_utf8_lossy(&out_d.stderr)
+        &stderr_d
+    );
+    // P1-008 / BC-2.7.008 ~799: canonical summary must end with trailing period.
+    let expected_summary_d = format!(
+        "Downloaded 0 of 2 attachments to {}.",
+        out_dir_d.path().to_str().unwrap()
     );
     assert!(
-        combined_d.contains("Downloaded 0 of 2 attachments to "),
-        "(d) must contain 'Downloaded 0 of 2 attachments to' — stdout+stderr: {combined_d}"
+        combined_d.contains(&expected_summary_d),
+        "(d) canonical summary 'Downloaded 0 of 2 attachments to <dir>.' required (BC-2.7.008 ~799) — stdout+stderr: {combined_d}"
     );
 }
 
@@ -873,41 +978,37 @@ async fn test_bc_2_7_009_newest_n_by_created_desc() {
     let server = MockServer::start().await;
     let out_dir = TempDir::new().unwrap();
 
+    // P1-001 / BC-2.7.009: mixed UTC offsets disambiguate chrono sort from lexicographic sort.
+    //
+    // id=50002 "2026-07-10T20:00:00.000+0900" = 2026-07-10T11:00Z  ← lex-rank-1 (string "20:00" > "14:00")
+    // id=50003 "2026-07-10T14:00:00.000+0000" = 2026-07-10T14:00Z  ← chrono-rank-1 (TRULY newest)
+    //
+    // Lexicographic sort: would pick 50002 as the single newest (WRONG).
+    // Chronological sort: must pick 50003 (correct per BC-2.7.009 ~830).
+    //
+    // 50002 content mock is mounted with .expect(0): if lexicographic sort is used, the handler
+    // calls the 50002 content GET, the expectation is violated, and the mock server panics on drop.
     let atts = vec![
         make_attachment(
             "50001",
-            "old1.txt",
+            "oldest.txt",
             "text/plain",
             1,
-            "2026-01-10T10:00:00.000+0000",
+            "2026-01-10T10:00:00.000+0000", // 2026-01-10T10:00Z — clearly oldest
         ),
         make_attachment(
             "50002",
-            "old2.txt",
+            "lex_newer.txt",
             "text/plain",
             1,
-            "2026-02-10T10:00:00.000+0000",
+            "2026-07-10T20:00:00.000+0900", // = 2026-07-10T11:00Z — lex-newer string, chrono-OLDER
         ),
         make_attachment(
             "50003",
-            "mid.txt",
+            "chrono_newest.txt",
             "text/plain",
             1,
-            "2026-03-10T10:00:00.000+0000",
-        ),
-        make_attachment(
-            "50004",
-            "new1.txt",
-            "text/plain",
-            1,
-            "2026-06-10T10:00:00.000+0000",
-        ),
-        make_attachment(
-            "50005",
-            "new2.txt",
-            "text/plain",
-            1,
-            "2026-07-10T10:00:00.000+0000",
+            "2026-07-10T14:00:00.000+0000", // = 2026-07-10T14:00Z — lex-older string, chrono-NEWEST
         ),
     ];
 
@@ -920,15 +1021,18 @@ async fn test_bc_2_7_009_newest_n_by_created_desc() {
         .mount(&server)
         .await;
 
-    // Only the two newest (50005, 50004) should be downloaded
+    // Correct answer (chrono): only 50003 should be downloaded with --newest 1.
     Mock::given(method("GET"))
-        .and(path("/rest/api/3/attachment/content/50005"))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"new2"))
+        .and(path("/rest/api/3/attachment/content/50003"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"chrono_newest"))
         .mount(&server)
         .await;
+
+    // Wrong answer (lex): 50002 must NOT be called — if lexicographic sort is used, this fires.
     Mock::given(method("GET"))
-        .and(path("/rest/api/3/attachment/content/50004"))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"new1"))
+        .and(path("/rest/api/3/attachment/content/50002"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"lex_newer"))
+        .expect(0) // BC-2.7.009: chrono sort must be used; lex sort picks 50002 (WRONG)
         .mount(&server)
         .await;
 
@@ -939,7 +1043,7 @@ async fn test_bc_2_7_009_newest_n_by_created_desc() {
             "download",
             "NEWEST-1",
             "--newest",
-            "2",
+            "1",
             "--out-dir",
             out_dir.path().to_str().unwrap(),
             "--output",
@@ -948,30 +1052,32 @@ async fn test_bc_2_7_009_newest_n_by_created_desc() {
         .output()
         .unwrap();
 
-    // RED GATE: todo!() → exit 101 → success() fails.
-    // After implementation: exit 0 + exactly 2 entries (the 2 newest).
-    assert!(output.status.success(), "--newest 2 must succeed (exit 0)");
+    // RED GATE: lexicographic sort (b.created.cmp(&a.created)) picks 50002 (lex-rank-1); the
+    // .expect(0) on the 50002 content mock fires → test fails at server drop.
+    // After fix: chrono DateTime<FixedOffset> parsing picks 50003 (chrono-rank-1).
+    assert!(output.status.success(), "--newest 1 must succeed (exit 0)");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let manifest: Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("stdout must be valid JSON — {e}\nstdout: {stdout}"));
     let downloaded = manifest["downloaded"].as_array().unwrap();
     assert_eq!(
         downloaded.len(),
-        2,
-        "--newest 2 must download exactly 2 attachments"
+        1,
+        "--newest 1 must download exactly 1 attachment"
     );
     let ids: Vec<&str> = downloaded
         .iter()
         .map(|e| e["id"].as_str().unwrap())
         .collect();
-    assert!(ids.contains(&"50005"), "newest (50005) must be in manifest");
+    // Chrono-newest is 50003 (14:00Z) — must be selected.
     assert!(
-        ids.contains(&"50004"),
-        "second-newest (50004) must be in manifest"
+        ids.contains(&"50003"),
+        "chrono-newest (50003, 14:00Z) must be selected — BC-2.7.009 requires instant-based sort; got: {ids:?}"
     );
+    // Lex-newest is 50002 (20:00+09:00 = 11:00Z) — must NOT be selected.
     assert!(
-        !ids.contains(&"50001"),
-        "oldest (50001) must NOT be downloaded"
+        !ids.contains(&"50002"),
+        "lex-newest (50002, 11:00Z) must NOT be selected — BC-2.7.009 forbids lexicographic sort; got: {ids:?}"
     );
 }
 
@@ -1571,13 +1677,17 @@ async fn test_bc_2_7_010_degenerate_name_warning_display_sanitized() {
         "degenerate-name download must succeed (exit 0)"
     );
     let stderr = String::from_utf8_lossy(&out_human.stderr);
+    // P1-010 / BC-2.7.010 ~872: exact canonical wording with em-dash U+2014, "original name",
+    // single-quotes around raw name, and trailing period.
+    // Current impl (line 772): "warning: using id as filename for attachment {}: '{}' could not be sanitized"
+    // (wrong: no em-dash, no "original name", no period) → RED.
     assert!(
-        stderr.contains("warning: using id as filename for attachment 90001"),
-        "human mode must emit degenerate-name warning — got: {stderr}"
-    );
-    assert!(
-        stderr.contains("could not be sanitized"),
-        "warning must say 'could not be sanitized' — got: {stderr}"
+        stderr.contains(
+            "warning: using id as filename for attachment 90001 \u{2014} original name '..' could not be sanitized."
+        ),
+        "exact canonical degenerate-name warning required (BC-2.7.010 ~872): \
+         'warning: using id as filename for attachment <id> \u{2014} original name \'<raw>\' could not be sanitized.' \
+         — got: {stderr}"
     );
 
     // JSON mode: no warning (hint, suppressed in JSON mode)
@@ -1939,9 +2049,12 @@ async fn test_bc_2_7_007_single_id_success_hint_stderr() {
         "single-id download must succeed (exit 0)"
     );
     let stderr = String::from_utf8_lossy(&out_human.stderr);
+    // P1-002 / BC-2.7.007 ~751: exact canonical "Downloaded: <path> (<size_human>)." format.
+    // Current impl emits only "Downloaded: {path}" (no size, no period) → RED.
+    let path_str = out_path.to_str().unwrap();
     assert!(
-        stderr.contains("Downloaded:"),
-        "human mode must emit 'Downloaded:' hint to stderr — got: {stderr}"
+        stderr.contains(&format!("Downloaded: {path_str} (")) && stderr.contains(")."),
+        "human mode must emit canonical 'Downloaded: <path> (<size_human>).' hint to stderr (BC-2.7.007 ~751) — got: {stderr}"
     );
 
     // JSON mode: uses AID 92002 (distinct to avoid mock-matching ambiguity)
@@ -2084,5 +2197,212 @@ async fn test_bc_2_7_008_filtered_to_zero_hint() {
     assert!(
         !stderr_j.contains("No attachments matched"),
         "JSON mode must NOT emit filter hint to stderr — got: {stderr_j}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// P1-005 — BC-2.7.010 R3.10: single-id degenerate-name fallback + exact canonical warning
+// ---------------------------------------------------------------------------
+
+/// P1-005 / BC-2.7.010 ~872: single-id `--id` with a filename that sanitizes to None
+/// (e.g. "..") must use the attachment id as the filename AND emit the exact canonical
+/// warning with em-dash U+2014, "original name", single-quoted raw name, and trailing period.
+///
+/// Current impl: no warning emitted in `handle_single_download` (only batch path has it) → RED.
+#[tokio::test]
+async fn test_bc_2_7_010_single_id_degenerate_name_fallback() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    let cwd = TempDir::new().unwrap();
+
+    // filename=".." → sanitize_attachment_filename returns None → id "92010" used as filename.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/attachment/92010"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "92010",
+            "filename": "..",
+            "size": 4,
+            "mimeType": "text/plain",
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/attachment/content/92010"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"data"))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .current_dir(cwd.path())
+        .args(["issue", "attachment", "download", "FOO-1", "--id", "92010"])
+        .output()
+        .unwrap();
+
+    // RED GATE: no warning emitted → fails on the exact-canonical-warning assertion below.
+    assert!(
+        output.status.success(),
+        "single-id degenerate-name download must succeed (exit 0)"
+    );
+
+    // File must exist at CWD/"92010" (bare id as filename, no SHA-1 prefix in single-id path).
+    assert!(
+        cwd.path().join("92010").exists(),
+        "single-id degenerate fallback must write file named '92010' (the attachment id)"
+    );
+
+    // Exact canonical warning per BC-2.7.010 ~872: em-dash U+2014, "original name",
+    // single-quoted raw name, trailing period.
+    // Current impl: no warning in handle_single_download → assertion fails → RED.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "warning: using id as filename for attachment 92010 \u{2014} original name '..' could not be sanitized."
+        ),
+        "single-id must emit exact canonical degenerate-name warning (BC-2.7.010 ~872) — got: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// P1-006 — BC-2.7.011 VP-576-001: containment property via integration proptest
+// ---------------------------------------------------------------------------
+
+// VP-576-001 / BC-2.7.011 ~934: for any Some(name) produced by sanitize_attachment_filename,
+// resolved_dir.join(&name).starts_with(&resolved_dir) must hold (path-traversal containment).
+//
+// The src/ unit proptest lives in src/cli/issue/attachments.rs #[cfg(test)].
+// This integration-level proptest pins the same invariant from the public API surface,
+// ensuring it holds for any input string (including path-traversal attempts).
+//
+// Expected status: GREEN (sanitize_attachment_filename is correctly implemented).
+// Role: regression guard — any future breakage in the sanitizer would be caught here.
+proptest! {
+    #[test]
+    fn test_bc_2_7_011_vp576_001_containment_prop(name in any::<String>()) {
+        if let Some(sanitized) = jr::cli::issue::attachments::sanitize_attachment_filename(&name) {
+            // Use the OS temp dir as a fixed canonical base (avoids TempDir per proptest case).
+            let resolved_dir = std::env::temp_dir()
+                .canonicalize()
+                .expect("temp_dir() must canonicalize");
+            let joined = resolved_dir.join(&sanitized);
+            prop_assert!(
+                joined.starts_with(&resolved_dir),
+                "BC-2.7.011 containment violation: \
+                 {:?}.starts_with({:?}) is false; sanitized={:?} from input={:?}",
+                joined,
+                resolved_dir,
+                sanitized,
+                name
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// P1-009 — BC-2.7.008 ~797: batch collision-skip → exact canonical message + exit 0
+// ---------------------------------------------------------------------------
+
+/// P1-009 / BC-2.7.008 ~797: when a batch download (`--all`) encounters a file that
+/// already exists in the output directory and `--force` is NOT set, it must:
+///   1. Skip the file (exit 0 — collision is NON-ERROR per BC-2.7.008 ~797).
+///   2. Emit the exact canonical warning:
+///      "Skipping <filename>: file already exists. Use --force to overwrite."
+///
+/// Current impl (line 782): "warning: skipping existing file: <path>" (wrong format) → RED.
+#[tokio::test]
+async fn test_bc_2_7_008_batch_collision_skip_no_force() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    let out_dir = TempDir::new().unwrap();
+
+    let att = make_attachment(
+        "95001",
+        "collision.txt",
+        "text/plain",
+        5,
+        "2026-07-10T14:00:00.000+0000",
+    );
+
+    // Issue GET — responds to multiple calls (both the first and second run need it).
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/COLLIDE-1"))
+        .and(query_param("fields", "attachment"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(issue_with_attachments("COLLIDE-1", vec![att])),
+        )
+        .mount(&server)
+        .await;
+
+    // Content GET — expect exactly 1 call: the first run downloads, the second skips.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/attachment/content/95001"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"hello"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // First run: download the file so it exists in out_dir.
+    let first_run = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "download",
+            "COLLIDE-1",
+            "--all",
+            "--out-dir",
+            out_dir.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    // RED GATE: if handler is todo!() or broken, first run fails → test fails here.
+    assert!(
+        first_run.status.success(),
+        "first run must succeed (pre-condition for collision skip test)"
+    );
+
+    // Capture the SHA-1-prefixed filename created on the first run.
+    let entries: Vec<_> = std::fs::read_dir(out_dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+    assert_eq!(
+        entries.len(),
+        1,
+        "exactly one file must exist in out_dir after first run"
+    );
+    let created_filename = entries[0].file_name().to_string_lossy().into_owned();
+
+    // Second run: same --all without --force → collision-skip + exit 0.
+    let second_run = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "download",
+            "COLLIDE-1",
+            "--all",
+            "--out-dir",
+            out_dir.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    // RED GATE: wrong skip message → assertion fails.
+    // Also: .expect(1) on content GET enforces the second run does NOT re-download.
+    assert!(
+        second_run.status.success(),
+        "collision-skip must exit 0 (BC-2.7.008 ~797: collision is NON-ERROR)"
+    );
+    let stderr = String::from_utf8_lossy(&second_run.stderr);
+    // Exact canonical collision-skip message per BC-2.7.008 ~797.
+    // Current impl: "warning: skipping existing file: <path>" (wrong format) → RED.
+    assert!(
+        stderr.contains(&format!(
+            "Skipping {created_filename}: file already exists. Use --force to overwrite."
+        )),
+        "collision-skip stderr must match exact canonical format \
+         'Skipping <filename>: file already exists. Use --force to overwrite.' \
+         (BC-2.7.008 ~797) — got: {stderr}"
     );
 }
