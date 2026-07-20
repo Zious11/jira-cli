@@ -1122,8 +1122,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------------
-    // sanitize_attachment_filename — BC-2.7.011 unit tests (S-576-2 stubs)
-    // All todo!() — will pass once sanitize_attachment_filename is implemented.
+    // sanitize_attachment_filename — BC-2.7.011 unit tests (S-576-2)
     // ---------------------------------------------------------------------------
 
     #[test]

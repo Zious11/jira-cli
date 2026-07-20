@@ -171,6 +171,20 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     (&["issue", "changelog"], &["--output"]),
     // issue attachment list  (S-576-1: positional: key; --filter repeatable)
     (&["issue", "attachment", "list"], &["--filter", "--output"]),
+    // issue attachment download  (S-576-2: positional: key; selectors --id/--all/--newest; path flags --out/--out-dir; --filter/--force; AC-013)
+    (
+        &["issue", "attachment", "download"],
+        &[
+            "--id",
+            "--all",
+            "--newest",
+            "--out",
+            "--out-dir",
+            "--filter",
+            "--force",
+            "--output",
+        ],
+    ),
     // board list
     (&["board", "list"], &["--output"]),
     // board view
