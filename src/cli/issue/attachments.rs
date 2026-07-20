@@ -584,7 +584,19 @@ async fn stream_to_file(
         tokio::fs::rename(&tmp_path, final_path)
             .await
             .map_err(|e| {
-                anyhow::anyhow!("failed to rename temp to {}: {e}", final_path.display())
+                // BC-2.7.011 / CWE-116: display-sanitize the server-supplied filename
+                // portion; parent directory is operator-controlled and rendered verbatim.
+                let fname = final_path
+                    .file_name()
+                    .map(|n| display_sanitize_filename(&n.to_string_lossy()))
+                    .unwrap_or_else(|| display_sanitize_filename(&final_path.to_string_lossy()));
+                let display = match final_path.parent() {
+                    Some(d) if !d.as_os_str().is_empty() => {
+                        format!("{}{}{fname}", d.display(), std::path::MAIN_SEPARATOR)
+                    }
+                    _ => fname,
+                };
+                anyhow::anyhow!("failed to rename temp to {display}: {e}")
             })?;
 
         Ok(bytes_written)
@@ -691,9 +703,20 @@ async fn handle_single_download(
     // Collision check for default-path case (when --out is not supplied).
     // When --out IS supplied, overwrite-refuse was already checked in the pre-flight above.
     if out.is_none() && final_path.exists() && !force {
+        // BC-2.7.011 / CWE-116: final_path was built from a server-derived filename;
+        // display-sanitize the filename portion, parent (CWD) is operator-controlled.
+        let fname = final_path
+            .file_name()
+            .map(|n| display_sanitize_filename(&n.to_string_lossy()))
+            .unwrap_or_else(|| display_sanitize_filename(&final_path.to_string_lossy()));
+        let display = match final_path.parent() {
+            Some(d) if !d.as_os_str().is_empty() => {
+                format!("{}{}{fname}", d.display(), std::path::MAIN_SEPARATOR)
+            }
+            _ => fname,
+        };
         return Err(JrError::UserError(format!(
-            "File already exists: {}. Use --force to overwrite.",
-            final_path.display()
+            "File already exists: {display}. Use --force to overwrite."
         ))
         .into());
     }
