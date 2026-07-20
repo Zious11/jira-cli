@@ -1606,14 +1606,26 @@ mod tests {
     /// Under the mutant: `c == '/' || (c == '\\' && c == ':')` — a bare `\` is no longer
     /// replaced because `'\\' && ':'` is always false.
     ///
-    /// `"\\\\"` (two backslash chars) on Unix:
+    /// Platform behaviour differs for `"\\\\"` (two backslash chars):
+    ///
+    /// **Unix** (mutation job platform — kills the mutant):
     ///   Step 1: `Path::file_name()` returns the whole string (no `/` separator on Unix).
     ///   Backslash split: `rsplit('\\')` = `["", "", ""]`; no non-empty segment →
     ///   `unwrap_or("\\\\")`; basename = `"\\\\"`.
-    ///   Step 4 (original): each `\` → `_` → `"__"`.
-    ///   Step 4 (mutant):  `\` alone fails `\\ && :` → stays as `\\` → result is `"\\\\"` ≠ `"__"`.
+    ///   Step 4 (original): each `\` → `_` → `Some("__")`.
+    ///   Step 4 (mutant):  `\` alone fails `\\ && :` → stays as `\\` → `Some("\\\\")` ≠ `Some("__")`.
+    ///
+    /// **Windows** (CORRECT — NOT a bug):
+    ///   `\\` is a path separator on Windows; `Path::new("\\\\")` is the UNC-root path.
+    ///   `Path::file_name()` returns `None` → `and_then(|f| f.to_str())?` returns `None`
+    ///   from the function → `sanitize_attachment_filename("\\\\")` returns `None`.
+    ///   Both original and mutant code reach the same `None` result (step 1 short-circuits
+    ///   before step 4), so the test assertion is `None` on Windows.
     #[test]
     fn test_sanitize_attachment_filename_pure_backslash_scrubbed_to_underscores() {
+        #[cfg(not(windows))]
         assert_eq!(sanitize_attachment_filename("\\\\"), Some("__".to_string()));
+        #[cfg(windows)]
+        assert_eq!(sanitize_attachment_filename("\\\\"), None);
     }
 }
