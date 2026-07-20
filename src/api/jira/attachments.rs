@@ -41,8 +41,9 @@ pub struct AttachmentObject {
     pub size: u64,
 
     /// MIME type reported by Jira.
-    #[serde(rename = "mimeType")]
-    pub mime_type: String,
+    /// `None` when the field is absent in the API response (sparse object tolerance).
+    #[serde(rename = "mimeType", default)]
+    pub mime_type: Option<String>,
 
     /// Download URL for the attachment content (`content` in the Jira API;
     /// renamed to `contentUrl` in the curated JSON shape per BC-2.7.002 / #585).

@@ -133,7 +133,10 @@ fn glob_inner(pattern: &str, input: &str) -> bool {
 
 fn apply_filter(attachment: &AttachmentObject, filter: &AttachmentFilter) -> bool {
     match filter {
-        AttachmentFilter::Mime(pattern) => glob_match(pattern, &attachment.mime_type),
+        AttachmentFilter::Mime(pattern) => attachment
+            .mime_type
+            .as_deref()
+            .is_some_and(|m| glob_match(pattern, m)),
         AttachmentFilter::Name(pattern) => glob_match(pattern, &attachment.filename),
         AttachmentFilter::SizeMax(limit) => attachment.size <= *limit,
     }
@@ -239,7 +242,7 @@ pub async fn handle_attachment_list(
                         vec![
                             a.id.clone(),
                             display_sanitize_filename(&a.filename),
-                            a.mime_type.clone(),
+                            a.mime_type.as_deref().unwrap_or("-").to_string(),
                             format_size(a.size),
                             a.created.clone(),
                             format_author(&a.author),
@@ -344,7 +347,10 @@ pub fn serialize_attachment_curated(attachment: &AttachmentObject) -> Value {
     map.insert("id".into(), Value::String(attachment.id.clone()));
     map.insert(
         "mimeType".into(),
-        Value::String(attachment.mime_type.clone()),
+        attachment
+            .mime_type
+            .as_ref()
+            .map_or(Value::Null, |m| Value::String(m.clone())),
     );
     map.insert("size".into(), Value::from(attachment.size));
     serde_json::to_value(map).expect("BTreeMap<String, Value> serialization is infallible")
@@ -1088,7 +1094,7 @@ mod tests {
             author: Some(serde_json::json!({"accountId": "acct-001", "displayName": "Alice"})),
             created: "2026-07-10T14:23:11.000+0000".into(),
             size: 43008,
-            mime_type: "image/png".into(),
+            mime_type: Some("image/png".into()),
             content: "https://example.atlassian.net/rest/api/3/attachment/content/10042".into(),
         }
     }
