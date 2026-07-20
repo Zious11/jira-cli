@@ -719,11 +719,19 @@ async fn handle_single_download(
             );
         }
         OutputFormat::Table => {
-            eprintln!(
-                "Downloaded: {} ({}).",
-                final_path.display(),
-                format_size(bytes_written)
-            );
+            // BC-2.7.011 / CWE-116: display-sanitize the server-supplied filename
+            // portion; parent directory is operator-controlled and rendered verbatim.
+            let fname = final_path
+                .file_name()
+                .map(|n| display_sanitize_filename(&n.to_string_lossy()))
+                .unwrap_or_else(|| display_sanitize_filename(&final_path.to_string_lossy()));
+            let display = match final_path.parent() {
+                Some(d) if !d.as_os_str().is_empty() => {
+                    format!("{}{}{fname}", d.display(), std::path::MAIN_SEPARATOR)
+                }
+                _ => fname,
+            };
+            eprintln!("Downloaded: {display} ({}).", format_size(bytes_written));
         }
     }
 
