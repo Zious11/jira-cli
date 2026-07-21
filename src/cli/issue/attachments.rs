@@ -1330,7 +1330,11 @@ fn attachment_replace_confirmation_gate(
 
     eprintln!("Replace existing attachment(s) on {}:", key);
     for att in would_delete {
-        eprintln!("  {} (id: {})", display_sanitize_filename(&att.filename), att.id);
+        eprintln!(
+            "  {} (id: {})",
+            display_sanitize_filename(&att.filename),
+            att.id
+        );
     }
     eprint!("Continue? [y/N] ");
     let _ = std::io::Write::flush(&mut std::io::stderr());

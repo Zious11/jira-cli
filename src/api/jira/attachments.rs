@@ -403,7 +403,10 @@ mod tests {
     #[test]
     fn test_sec_576_004_safe_name_crlf_mapped_to_underscore() {
         // Both \r and \n in one filename → two underscores
-        assert_eq!(safe_name("file\r\nX-Injected: hdr"), "file__X-Injected: hdr");
+        assert_eq!(
+            safe_name("file\r\nX-Injected: hdr"),
+            "file__X-Injected: hdr"
+        );
         // Lone \r → single underscore
         assert_eq!(safe_name("only\r"), "only_");
         // Lone \n → single underscore
@@ -455,7 +458,10 @@ mod tests {
     fn test_sec_576_004_safe_name_normal_filenames_unchanged() {
         assert_eq!(safe_name("report.pdf"), "report.pdf");
         assert_eq!(safe_name("file;name.txt"), "file;name.txt");
-        assert_eq!(safe_name("file name with spaces.doc"), "file name with spaces.doc");
+        assert_eq!(
+            safe_name("file name with spaces.doc"),
+            "file name with spaces.doc"
+        );
         assert_eq!(safe_name(""), "");
         assert_eq!(safe_name("ascii_only-123.tar.gz"), "ascii_only-123.tar.gz");
     }

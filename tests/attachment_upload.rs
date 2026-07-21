@@ -1688,9 +1688,7 @@ async fn test_vp_576_004_curated_shape_upload_and_list_are_structurally_identica
         "VP-576-004 partial-author: accountId must be null; got: {partial_author_out}"
     );
     assert!(
-        partial_obj
-            .get("displayName")
-            .is_some_and(|v| v.is_null()),
+        partial_obj.get("displayName").is_some_and(|v| v.is_null()),
         "VP-576-004 partial-author: displayName must be null; got: {partial_author_out}"
     );
     assert_eq!(
@@ -1912,7 +1910,8 @@ async fn test_sec_576_004_content_disposition_crlf_injection_guard() {
                 //     as a malformed part structure; this count is the structural smoke signal.
                 let cd_count = body.matches("Content-Disposition").count();
                 assert_eq!(
-                    cd_count, 1,
+                    cd_count,
+                    1,
                     "SEC-576-004(semicolon): expected 1 Content-Disposition in multipart body; \
                      body excerpt: {}",
                     &body[..body.len().min(400)]
@@ -1978,7 +1977,8 @@ async fn test_sec_576_004_content_disposition_crlf_injection_guard() {
                 // (e.g., doubled header lines or missing part boundary).
                 let cd_count = body.matches("Content-Disposition").count();
                 assert_eq!(
-                    cd_count, 1,
+                    cd_count,
+                    1,
                     "SEC-576-004(DEL): expected 1 Content-Disposition in multipart body; \
                      body excerpt: {}",
                     &body[..body.len().min(400)]
