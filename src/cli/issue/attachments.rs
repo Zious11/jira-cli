@@ -1396,7 +1396,7 @@ pub async fn handle_attachment_delete(
     if !aids.is_empty() {
         // Validate all AIDs first (before any I/O or HTTP)
         for aid in &aids {
-            if !aid.chars().all(|c| c.is_ascii_digit()) {
+            if aid.is_empty() || !aid.chars().all(|c| c.is_ascii_digit()) {
                 return Err(JrError::UserError(format!(
                     "invalid attachment id: '{aid}' (must be numeric)"
                 ))
