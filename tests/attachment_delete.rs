@@ -1572,6 +1572,67 @@ async fn test_bc_3_9_019_older_than_parse_age_duration_filter() {
             "P2-001 chrono band: must NOT emit panic output; got stderr: {stderr}"
         );
     }
+
+    // Sub-case P6-001: DateTime-subtraction overflow band
+    // n=1e11 days → 8.64e15 seconds. try_seconds(8.64e15) succeeds (8.64e15 * 1000 = 8.64e18
+    // < i64::MAX 9.22e18), BUT `Utc::now() - duration` produces a date ~274 million years
+    // before epoch — before chrono::NaiveDate::MIN (~year −262144) — and panics at the
+    // subtraction site (attachments.rs::handle_attachment_delete_older_than ~1607).
+    // Implementation must guard with `Utc::now().checked_sub_signed(duration)` or clamp
+    // inside parse_age_duration with an additional bound check.
+    // RED: current impl panics instead of returning exit 64.
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        // Parse/subtraction guard must fire BEFORE any HTTP call
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args([
+                "issue",
+                "attachment",
+                "delete",
+                "--issue",
+                "FOO-1",
+                "--older-than",
+                "100000000000d", // n=1e11 days → 8.64e15 s — passes try_seconds but
+                // Utc::now()-duration panics (DateTime subtraction overflow band)
+                "--yes",
+            ])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert_eq!(
+            output.status.code(),
+            Some(64),
+            "P6-001 DateTime-subtraction band '100000000000d': must exit 64 (not SIGABRT/\
+             panic/101); got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+        assert!(
+            stderr.contains(
+                "invalid duration: '100000000000d'. Use formats like 30m, 2h, 1d, 7d, 2w."
+            ),
+            "P6-001 DateTime band: stderr must contain canonical error; got stderr: {stderr}"
+        );
+        assert!(
+            !stderr.contains("panicked"),
+            "P6-001 DateTime band: must NOT emit panic output; got stderr: {stderr}"
+        );
+    }
 }
 
 // Unit test test_bc_3_9_019_ec_8_parse_age_duration_1d_is_24h lives in

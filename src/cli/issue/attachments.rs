@@ -2510,4 +2510,32 @@ mod tests {
             "P2-001: error must contain 'invalid duration'; got: {msg}"
         );
     }
+
+    /// P6-001 unit pin: n=1e11 days → 8.64e15 seconds.
+    /// try_seconds(8.64e15) succeeds (8.64e15 * MILLIS_PER_SEC = 8.64e18 < i64::MAX 9.22e18),
+    /// but `Utc::now() - duration` panics because the resulting date (~274M years BC) is
+    /// before chrono::NaiveDate::MIN (~year -262144).
+    ///
+    /// If the fix clamps inside parse_age_duration (additional bound check before
+    /// try_seconds), this unit test is the discriminator.
+    /// If the fix lands at the subtraction site (checked_sub_signed), this test remains RED
+    /// and the integration test (attachment_delete.rs P6-001 sub-case) is the sole pin.
+    ///
+    /// Either way, pinning this behavior here ensures the full rejection band is covered
+    /// at the unit level regardless of the implementation approach chosen.
+    #[test]
+    fn test_bc_3_9_019_p6_001_datetime_band_1e11d_is_err() {
+        let result = parse_age_duration("100000000000d");
+        assert!(
+            result.is_err(),
+            "parse_age_duration(\"100000000000d\") must return Err; \
+             P6-001: n=1e11 days → 8.64e15 s passes try_seconds but \
+             Utc::now()-duration panics at the DateTime subtraction site"
+        );
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.contains("invalid duration"),
+            "P6-001: error must contain 'invalid duration'; got: {msg}"
+        );
+    }
 }
