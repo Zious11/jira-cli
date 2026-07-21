@@ -1480,22 +1480,41 @@ pub async fn handle_attachment_delete(
             // Metadata failure → {id}-only fallback row; never aborts (dry-run is read-only).
             let mut attachment_rows: Vec<serde_json::Value> = Vec::new();
             let ids: Vec<&str> = aids.iter().map(|s| s.as_str()).collect();
+            // Human table rows [ID, Filename, Size, Created] — built alongside JSON rows so
+            // the JSON shape ({filename,id} / {id}-only) remains unchanged (P2-002 pins GREEN).
+            let mut human_rows: Vec<Vec<String>> = Vec::new();
 
             for aid in &aids {
                 match client.get_attachment_metadata(aid).await {
                     Ok(meta) => {
                         let filename = meta.filename.unwrap_or_default();
-                        // BTreeMap key order: filename < id (alphabetical)
+                        let size = meta.size;
+                        let created = meta.created.clone().unwrap_or_default();
+                        // BTreeMap key order: filename < id (alphabetical); JSON shape unchanged.
                         let mut row = std::collections::BTreeMap::new();
-                        row.insert("filename", serde_json::Value::String(filename));
+                        row.insert("filename", serde_json::Value::String(filename.clone()));
                         row.insert("id", serde_json::Value::String(aid.clone()));
                         attachment_rows.push(serde_json::to_value(row)?);
+                        // Human row: display-sanitized filename (CWE-116), formatted size, created.
+                        human_rows.push(vec![
+                            aid.clone(),
+                            display_sanitize_filename(&filename),
+                            size.map(format_size).unwrap_or_else(|| "-".to_string()),
+                            created,
+                        ]);
                     }
                     Err(_) => {
                         // Metadata unavailable → id-only fallback row (no filename key)
                         let mut row = std::collections::BTreeMap::new();
                         row.insert("id", serde_json::Value::String(aid.clone()));
                         attachment_rows.push(serde_json::to_value(row)?);
+                        // Human fallback row (AC-009 per-row "(metadata unavailable)" marker).
+                        human_rows.push(vec![
+                            aid.clone(),
+                            "(metadata unavailable)".to_string(),
+                            "-".to_string(),
+                            "-".to_string(),
+                        ]);
                     }
                 }
             }
@@ -1508,18 +1527,11 @@ pub async fn handle_attachment_delete(
                 });
                 println!("{}", output::render_json(&payload)?);
             } else {
-                // Human mode: list each attachment filename (display-sanitized, CWE-116)
-                // so the user knows exactly what would be deleted.
-                for row in &attachment_rows {
-                    if let Some(filename) = row["filename"].as_str() {
-                        let id = row["id"].as_str().unwrap_or("");
-                        let safe = display_sanitize_filename(filename);
-                        eprintln!("  {safe} ({})", id);
-                    } else {
-                        let id = row["id"].as_str().unwrap_or("");
-                        eprintln!("  (metadata unavailable) ({})", id);
-                    }
-                }
+                // Human mode: AC-009 table [ID, Filename (CWE-116), Size, Created]
+                eprintln!(
+                    "{}",
+                    output::render_table(&["ID", "Filename", "Size", "Created"], &human_rows)
+                );
                 eprintln!(
                     "{} attachment(s) would be deleted. Run without --dry-run to confirm.",
                     aids.len()
@@ -1619,6 +1631,22 @@ pub async fn handle_attachment_delete(
             if n == 0 {
                 eprintln!("No attachments older than {age_str} found on {issue_key}.");
             } else {
+                // AC-009 human table [ID, Filename (CWE-116), Size, Created]
+                let table_rows: Vec<Vec<String>> = selected
+                    .iter()
+                    .map(|a| {
+                        vec![
+                            a.id.clone(),
+                            display_sanitize_filename(&a.filename),
+                            format_size(a.size),
+                            a.created.clone(),
+                        ]
+                    })
+                    .collect();
+                eprintln!(
+                    "{}",
+                    output::render_table(&["ID", "Filename", "Size", "Created"], &table_rows)
+                );
                 eprintln!("{n} attachment(s) would be deleted. Run without --dry-run to confirm.");
             }
         }

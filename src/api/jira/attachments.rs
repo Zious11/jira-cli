@@ -90,6 +90,11 @@ pub struct AttachmentMetadata {
 
     /// Download URL (the CDN redirect target that reqwest follows automatically).
     pub content: Option<String>,
+
+    /// ISO 8601 timestamp when the attachment was uploaded.
+    /// Optional: absent for older or restricted attachment metadata responses.
+    #[serde(default)]
+    pub created: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

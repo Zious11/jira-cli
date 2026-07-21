@@ -2327,9 +2327,10 @@ async fn test_bc_3_9_020_dry_run_multi_aid_metadata_fan_out() {
         // 20007: metadata GET fails (403) → "(metadata unavailable)" fallback row
         Mock::given(method("GET"))
             .and(path("/rest/api/3/attachment/20007"))
-            .respond_with(ResponseTemplate::new(403).set_body_json(
-                serde_json::json!({"errorMessages": ["Permission denied."]}),
-            ))
+            .respond_with(
+                ResponseTemplate::new(403)
+                    .set_body_json(serde_json::json!({"errorMessages": ["Permission denied."]})),
+            )
             .expect(1)
             .mount(&server)
             .await;
