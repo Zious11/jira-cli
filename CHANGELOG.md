@@ -52,7 +52,7 @@ All notable changes to jr will be documented here.
   message. `--public`/`--internal` interim-rejected at exit 64 (AC-017; removed at S-576-5).
   JSON success shape: array of curated attachment objects (identical to `attachment list`
   shape per VP-576-004). Table: 4-column (Filename / Size / ID / Created).
-  feat(S-576-3): implement attachment upload handler + API (BC-3.9.001..020)
+  feat(issue): attachment upload platform POST + --replace-existing + --dry-run path-c (#576)
 
 - **`jr issue attachment list` — table + JSON output + client-side filters (S-576-1, #576):**
   `jr issue attachment list KEY` lists all attachments on an issue in a six-column table
