@@ -1230,8 +1230,24 @@ async fn replace_existing_attachments(
     }
 
     // VP-576-003: ALL DELETEs must complete before the first POST.
+    // EC-3.9.017-4: a 404 on DELETE = attachment already deleted by a concurrent actor →
+    // benign silent skip; continue to the next DELETE and then to the POST.
+    // `delete_attachment` maps HTTP-404 → JrError::UserError("…not found or already deleted.").
+    // We detect via downcast_ref rather than modifying delete_attachment (DEC-168: its
+    // 404→UserError mapping is correct for the standalone delete command).
     for att in &would_delete {
-        client.delete_attachment(&att.id).await?;
+        match client.delete_attachment(&att.id).await {
+            Ok(()) => {}
+            Err(e) => {
+                let is_benign_404 = e
+                    .downcast_ref::<JrError>()
+                    .is_some_and(|jr| matches!(jr, JrError::UserError(msg) if msg.contains("not found or already deleted")));
+                if !is_benign_404 {
+                    return Err(e);
+                }
+                // 404 → already deleted; silent skip per EC-3.9.017-4.
+            }
+        }
     }
 
     let uploaded = client.upload_attachments(key, file_paths).await?;
