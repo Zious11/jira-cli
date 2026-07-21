@@ -1377,8 +1377,281 @@ pub async fn handle_attachment_delete(
     client: &JiraClient,
     no_input: bool,
 ) -> anyhow::Result<()> {
-    let _ = (sub, output_format, client, no_input);
-    todo!("S-576-4: handle_attachment_delete not yet implemented")
+    let is_json = matches!(output_format, OutputFormat::Json);
+
+    let (aids, issue, older_than, yes, dry_run) = match sub {
+        AttachmentSubcommand::Delete {
+            aids,
+            issue,
+            older_than,
+            yes,
+            dry_run,
+        } => (aids, issue, older_than, yes, dry_run),
+        _ => unreachable!("handle_attachment_delete called with non-Delete subcommand"),
+    };
+
+    // -------------------------------------------------------------------
+    // Path A: positional AID(s)
+    // -------------------------------------------------------------------
+    if !aids.is_empty() {
+        // Validate all AIDs first (before any I/O or HTTP)
+        for aid in &aids {
+            if !aid.chars().all(|c| c.is_ascii_digit()) {
+                return Err(JrError::UserError(format!(
+                    "invalid attachment id: '{aid}' (must be numeric)"
+                ))
+                .into());
+            }
+        }
+
+        if aids.len() == 1 {
+            let aid = &aids[0];
+
+            // Single-AID dry-run (EC-3.9.020-3): guards NOT suppressed, gate suppressed.
+            if dry_run {
+                if is_json {
+                    let payload = serde_json::json!({
+                        "attachments": [{"id": aid}],
+                        "dryRun": true,
+                        "ids": [aid]
+                    });
+                    println!("{}", output::render_json(&payload)?);
+                } else {
+                    eprintln!("--dry-run has no effect on single-ID delete; omit the flag.");
+                }
+                return Ok(());
+            }
+
+            // Non-interactive without --yes (BC-3.9.015 EC-3.9.015-3)
+            if no_input && !yes {
+                return Err(JrError::UserError(
+                    "Use --yes to confirm deletion without a prompt.".to_string(),
+                )
+                .into());
+            }
+
+            // Confirmation gate (BC-3.9.015; VP-576-002; DEC-174)
+            if !yes {
+                // Fetch metadata to get the filename for the gate prompt
+                let meta = client.get_attachment_metadata(aid).await?;
+                let filename = meta.filename.as_deref().unwrap_or(aid.as_str());
+                let display_name = display_sanitize_filename(filename);
+
+                let confirmed = attachment_delete_confirmation_gate(&display_name, aid)?;
+                if !confirmed {
+                    if is_json {
+                        let payload = serde_json::json!({
+                            "cancelled": true,
+                            "deleted": false
+                        });
+                        println!("{}", output::render_json(&payload)?);
+                    } else {
+                        eprintln!("Deletion cancelled.");
+                    }
+                    return Ok(());
+                }
+            }
+
+            // Issue the targeted DELETE (DEC-168 on 404)
+            client.delete_attachment_targeted(aid).await?;
+
+            if is_json {
+                let payload = serde_json::json!({"deleted": true, "id": aid});
+                println!("{}", output::render_json(&payload)?);
+            } else {
+                eprintln!("Deleted attachment {aid}.");
+            }
+            return Ok(());
+        }
+
+        // Multi-AID bulk path
+        // --yes required (BC-3.9.016 EC-3.9.016-8); dry-run exempts
+        if !yes && !dry_run {
+            return Err(JrError::UserError(
+                "--yes is required to delete multiple attachments without a confirmation prompt."
+                    .to_string(),
+            )
+            .into());
+        }
+
+        if dry_run {
+            // Bulk dry-run: emit what would be deleted (no DELETEs)
+            // For the positional multi-AID dry-run, IDs are already known
+            let attachments: Vec<serde_json::Value> = aids
+                .iter()
+                .map(|id| serde_json::json!({"id": id}))
+                .collect();
+            let ids: Vec<&str> = aids.iter().map(|s| s.as_str()).collect();
+            if is_json {
+                let payload = serde_json::json!({
+                    "attachments": attachments,
+                    "dryRun": true,
+                    "ids": ids
+                });
+                println!("{}", output::render_json(&payload)?);
+            } else {
+                let combined = format!(
+                    "{} attachment(s) would be deleted. Run without --dry-run to confirm.",
+                    aids.len()
+                );
+                eprintln!("{combined}");
+            }
+            return Ok(());
+        }
+
+        // Bulk sequential deletes — 404 is benign skip (BC-3.9.010)
+        let mut deleted_ids: Vec<String> = Vec::new();
+        for aid in &aids {
+            match client.delete_attachment(aid).await {
+                Ok(()) => {
+                    deleted_ids.push(aid.clone());
+                }
+                Err(e) => {
+                    // 404 → benign skip (BC-3.9.010)
+                    if e.chain()
+                        .find_map(|c| c.downcast_ref::<JrError>())
+                        .map(|je| matches!(je, JrError::UserError(msg) if msg.contains("not found or already deleted")))
+                        .unwrap_or(false)
+                    {
+                        // benign 404 skip — continue
+                    } else {
+                        // Non-404 error → abort sequence (BC-3.9.010 EC-3.9.010-4)
+                        return Err(e);
+                    }
+                }
+            }
+        }
+
+        let count = deleted_ids.len();
+        if is_json {
+            let payload = serde_json::json!({
+                "count": count,
+                "deleted": count > 0,
+                "ids": deleted_ids
+            });
+            println!("{}", output::render_json(&payload)?);
+        } else {
+            if count == 0 {
+                eprintln!("No attachments deleted (all were already removed or not found).");
+            } else {
+                for id in &deleted_ids {
+                    eprintln!("Deleted attachment {id}.");
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    // -------------------------------------------------------------------
+    // Path B: --issue KEY --older-than DURATION
+    // -------------------------------------------------------------------
+    let issue_key = issue.expect("clap ensures issue is Some when aids is empty");
+    let age_str = older_than.expect("clap ensures older_than is Some when issue is set");
+
+    // Parse duration (BC-3.9.019 EC-3.9.019-3)
+    let duration = parse_age_duration(&age_str)?;
+
+    // --yes required on bulk paths (BC-3.9.016 EC-3.9.016-1); dry-run exempts
+    if !yes && !dry_run {
+        return Err(JrError::UserError(
+            "--older-than requires --yes to confirm bulk deletion.".to_string(),
+        )
+        .into());
+    }
+
+    // Fetch attachment list
+    let attachments = client.list_attachments(&issue_key).await?;
+
+    // Apply age filter
+    let cutoff = chrono::Utc::now() - duration;
+    let selected = filter_attachments_older_than(attachments, cutoff);
+
+    if dry_run {
+        // Dry-run: emit would-delete manifest (no DELETEs)
+        let ids: Vec<&str> = selected.iter().map(|a| a.id.as_str()).collect();
+        let att_objs: Vec<serde_json::Value> = selected
+            .iter()
+            .map(|a| {
+                serde_json::json!({
+                    "filename": a.filename,
+                    "id": a.id
+                })
+            })
+            .collect();
+        if is_json {
+            let payload = serde_json::json!({
+                "attachments": att_objs,
+                "dryRun": true,
+                "ids": ids
+            });
+            println!("{}", output::render_json(&payload)?);
+        } else {
+            let n = selected.len();
+            if n == 0 {
+                eprintln!("No attachments older than {age_str} found on {issue_key}.");
+            } else {
+                eprintln!("{n} attachment(s) would be deleted. Run without --dry-run to confirm.");
+            }
+        }
+        return Ok(());
+    }
+
+    if selected.is_empty() {
+        if !is_json {
+            eprintln!("No attachments older than {age_str} found on {issue_key}.");
+        } else {
+            let payload = serde_json::json!({"count": 0, "deleted": false, "ids": []});
+            println!("{}", output::render_json(&payload)?);
+        }
+        return Ok(());
+    }
+
+    // Human mode: pre-deletion hint
+    if !is_json {
+        eprintln!(
+            "Deleting {} attachment(s) older than {} from {}.",
+            selected.len(),
+            age_str,
+            issue_key
+        );
+    }
+
+    // Sequential deletes — 404 is benign skip (BC-3.9.010)
+    let mut deleted_ids: Vec<String> = Vec::new();
+    for att in &selected {
+        match client.delete_attachment(&att.id).await {
+            Ok(()) => {
+                deleted_ids.push(att.id.clone());
+            }
+            Err(e) => {
+                if e.chain()
+                    .find_map(|c| c.downcast_ref::<JrError>())
+                    .map(|je| matches!(je, JrError::UserError(msg) if msg.contains("not found or already deleted")))
+                    .unwrap_or(false)
+                {
+                    // benign 404 skip
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    let count = deleted_ids.len();
+    if is_json {
+        let payload = serde_json::json!({
+            "count": count,
+            "deleted": count > 0,
+            "ids": deleted_ids
+        });
+        println!("{}", output::render_json(&payload)?);
+    } else {
+        eprintln!(
+            "Deleted {} attachment(s) older than {} from {}.",
+            count, age_str, issue_key
+        );
+    }
+    Ok(())
 }
 
 /// Single-AID confirmation gate (BC-3.9.015 step 2; VP-576-002; DEC-174).
@@ -1398,8 +1671,18 @@ pub async fn handle_attachment_delete(
 ///
 /// `filename` is already display-sanitized by the caller (SEC-576-011 / CWE-116).
 fn attachment_delete_confirmation_gate(filename: &str, aid: &str) -> anyhow::Result<bool> {
-    let _ = (filename, aid);
-    todo!("S-576-4: attachment_delete_confirmation_gate not yet implemented")
+    eprint!("Delete attachment {filename} ({aid})? [y/N] ");
+    let _ = std::io::Write::flush(&mut std::io::stderr());
+
+    use std::io::BufRead;
+    let mut line = String::new();
+    match std::io::stdin().lock().read_line(&mut line) {
+        Ok(0) | Err(_) => Err(JrError::Interrupted.into()),
+        Ok(_) => {
+            let trimmed = line.trim();
+            Ok(trimmed.eq_ignore_ascii_case("y") || trimmed.eq_ignore_ascii_case("yes"))
+        }
+    }
 }
 
 /// Filter `attachments` to those whose `created` timestamp is older than `cutoff`
@@ -1412,8 +1695,24 @@ pub fn filter_attachments_older_than(
     attachments: Vec<AttachmentObject>,
     cutoff: chrono::DateTime<chrono::Utc>,
 ) -> Vec<AttachmentObject> {
-    let _ = (attachments, cutoff);
-    todo!("S-576-4: filter_attachments_older_than not yet implemented")
+    attachments
+        .into_iter()
+        .filter(|att| {
+            match att.created.parse::<chrono::DateTime<chrono::FixedOffset>>() {
+                Ok(created_dt) => {
+                    let created_utc: chrono::DateTime<chrono::Utc> = created_dt.into();
+                    created_utc < cutoff
+                }
+                Err(_) => {
+                    eprintln!(
+                        "warning: could not parse created timestamp {:?} for attachment {}; skipping",
+                        att.created, att.id
+                    );
+                    false
+                }
+            }
+        })
+        .collect()
 }
 
 /// Parse an age-duration string into a `chrono::Duration` (BC-3.9.019; EC-3.9.019-3/8).
@@ -1431,8 +1730,29 @@ pub fn filter_attachments_older_than(
 /// MUST NOT import or call `src/duration.rs` arithmetic — that module is read for
 /// suffix-convention style only.
 fn parse_age_duration(s: &str) -> anyhow::Result<chrono::Duration> {
-    let _ = s;
-    todo!("S-576-4: parse_age_duration not yet implemented")
+    let canonical_error = || {
+        JrError::UserError(format!(
+            "invalid duration: '{s}'. Use formats like 30m, 2h, 1d, 7d, 2w."
+        ))
+    };
+
+    if s.is_empty() {
+        return Err(canonical_error().into());
+    }
+
+    let (digits, suffix) = s.split_at(s.len() - 1);
+    let n: i64 = digits.parse().map_err(|_| canonical_error())?;
+    if n <= 0 {
+        return Err(canonical_error().into());
+    }
+
+    match suffix {
+        "m" => Ok(chrono::Duration::minutes(n)),
+        "h" => Ok(chrono::Duration::hours(n)),
+        "d" => Ok(chrono::Duration::hours(n * 24)),
+        "w" => Ok(chrono::Duration::hours(n * 7 * 24)),
+        _ => Err(canonical_error().into()),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2028,8 +2348,7 @@ mod tests {
     /// Private helper — integration tests cannot call it; unit test lives here.
     #[test]
     fn test_bc_3_9_019_ec_8_parse_age_duration_1d_is_24h() {
-        let result = parse_age_duration("1d")
-            .expect("parse_age_duration(\"1d\") must return Ok");
+        let result = parse_age_duration("1d").expect("parse_age_duration(\"1d\") must return Ok");
         assert_eq!(
             result,
             chrono::Duration::hours(24),
