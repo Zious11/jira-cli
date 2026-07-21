@@ -185,6 +185,18 @@ const SURFACE: &[(&[&str], &[&str])] = &[
             "--output",
         ],
     ),
+    // issue attachment upload  (S-576-3: positional: key + FILE...; --replace-existing/--yes/--dry-run; --public/--internal interim; AC-017)
+    (
+        &["issue", "attachment", "upload"],
+        &[
+            "--replace-existing",
+            "--yes",
+            "--dry-run",
+            "--public",
+            "--internal",
+            "--output",
+        ],
+    ),
     // board list
     (&["board", "list"], &["--output"]),
     // board view

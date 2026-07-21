@@ -96,10 +96,9 @@ async fn test_bc_3_9_001_multipart_post_x_atlassian_token_mandatory() {
     Mock::given(method("POST"))
         .and(path("/rest/api/3/issue/TEST-1/attachments"))
         .and(header("X-Atlassian-Token", "no-check"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!([make_upload_attachment("10001", "report.pdf")])),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            make_upload_attachment("10001", "report.pdf")
+        ])))
         .expect(1)
         .mount(&server)
         .await;
@@ -184,10 +183,9 @@ async fn test_bc_3_9_001_rate_limit_retry_rebuilds_request() {
     Mock::given(method("POST"))
         .and(path("/rest/api/3/issue/TEST-1/attachments"))
         .and(header("X-Atlassian-Token", "no-check"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!([make_upload_attachment("10001", "retry_test.txt")])),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            make_upload_attachment("10001", "retry_test.txt")
+        ])))
         .up_to_n_times(1)
         .mount(&server)
         .await;
@@ -195,10 +193,7 @@ async fn test_bc_3_9_001_rate_limit_retry_rebuilds_request() {
     Mock::given(method("POST"))
         .and(path("/rest/api/3/issue/TEST-1/attachments"))
         .and(header("X-Atlassian-Token", "no-check"))
-        .respond_with(
-            ResponseTemplate::new(429)
-                .insert_header("Retry-After", "0"),
-        )
+        .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "0"))
         .up_to_n_times(1)
         .mount(&server)
         .await;
@@ -282,16 +277,18 @@ async fn test_bc_3_9_001_human_table_display() {
     Mock::given(method("POST"))
         .and(path("/rest/api/3/issue/TEST-1/attachments"))
         .and(header("X-Atlassian-Token", "no-check"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([{
-            "id": "10099",
-            "filename": "report.pdf",
-            "self": "https://example.atlassian.net/rest/api/3/attachment/10099",
-            "content": "https://example.atlassian.net/rest/api/3/attachment/content/10099",
-            "created": "2026-07-20T00:00:00.000+0000",
-            "size": 8_u64,
-            "mimeType": "application/pdf",
-            "author": { "accountId": "user123", "displayName": "Test User" }
-        }])))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!([{
+                "id": "10099",
+                "filename": "report.pdf",
+                "self": "https://example.atlassian.net/rest/api/3/attachment/10099",
+                "content": "https://example.atlassian.net/rest/api/3/attachment/content/10099",
+                "created": "2026-07-20T00:00:00.000+0000",
+                "size": 8_u64,
+                "mimeType": "application/pdf",
+                "author": { "accountId": "user123", "displayName": "Test User" }
+            }])),
+        )
         .mount(&server)
         .await;
 
@@ -401,10 +398,9 @@ async fn test_bc_3_9_002_jsm_no_flag_uses_platform_post_zero_servicedeskapi_call
     Mock::given(method("POST"))
         .and(path("/rest/api/3/issue/EJ-1/attachments"))
         .and(header("X-Atlassian-Token", "no-check"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!([make_upload_attachment("20001", "jsm_test.txt")])),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            make_upload_attachment("20001", "jsm_test.txt")
+        ])))
         .mount(&server)
         .await;
 
@@ -441,7 +437,10 @@ async fn test_bc_3_9_002_jsm_no_flag_uses_platform_post_zero_servicedeskapi_call
         servicedeskapi_calls.is_empty(),
         "BC-3.9.002: zero servicedeskapi calls expected; got {} calls: {:?}",
         servicedeskapi_calls.len(),
-        servicedeskapi_calls.iter().map(|r| r.url.as_str()).collect::<Vec<_>>()
+        servicedeskapi_calls
+            .iter()
+            .map(|r| r.url.as_str())
+            .collect::<Vec<_>>()
     );
 }
 
@@ -466,10 +465,9 @@ async fn test_bc_3_9_009_upload_json_shape_self_omitted_content_renamed() {
     Mock::given(method("POST"))
         .and(path("/rest/api/3/issue/TEST-1/attachments"))
         .and(header("X-Atlassian-Token", "no-check"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!([make_upload_attachment("10042", "shape_test.pdf")])),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            make_upload_attachment("10042", "shape_test.pdf")
+        ])))
         .mount(&server)
         .await;
 
@@ -497,12 +495,12 @@ async fn test_bc_3_9_009_upload_json_shape_self_omitted_content_renamed() {
     );
 
     // These JSON shape assertions are reached only when GREEN.
-    let parsed: Vec<Value> = serde_json::from_str(&stdout).unwrap_or_else(|e| {
-        panic!(
-            "BC-3.9.009: stdout must be JSON array: {e}\nstdout: {stdout}"
-        )
-    });
-    assert!(!parsed.is_empty(), "BC-3.9.009: parsed array must not be empty");
+    let parsed: Vec<Value> = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("BC-3.9.009: stdout must be JSON array: {e}\nstdout: {stdout}"));
+    assert!(
+        !parsed.is_empty(),
+        "BC-3.9.009: parsed array must not be empty"
+    );
     for elem in &parsed {
         let map = elem.as_object().expect("each element must be an object");
         assert!(
@@ -721,9 +719,11 @@ async fn test_bc_3_9_012_error_taxonomy() {
         Mock::given(method("POST"))
             .and(path("/rest/api/3/issue/TEST-1/attachments"))
             .and(header("X-Atlassian-Token", "no-check"))
-            .respond_with(ResponseTemplate::new(400).set_body_json(
-                serde_json::json!({"errorMessages": ["Bad request"], "errors": {}}),
-            ))
+            .respond_with(
+                ResponseTemplate::new(400).set_body_json(
+                    serde_json::json!({"errorMessages": ["Bad request"], "errors": {}}),
+                ),
+            )
             .mount(&server)
             .await;
         let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
@@ -782,21 +782,17 @@ async fn test_bc_3_9_012_error_taxonomy() {
     // ----- (9) network error → exit 1, stderr contains "Could not reach" -----
     // Use port 1 (reserved, never listening) to force connection-refused error.
     {
-        let output = jr_cmd_with_xdg(
-            "http://127.0.0.1:1",
-            cache.path(),
-            config.path(),
-        )
-        .args([
-            "issue",
-            "attachment",
-            "upload",
-            "TEST-1",
-            &existing_file.to_string_lossy(),
-        ])
-        .timeout(std::time::Duration::from_secs(10))
-        .output()
-        .unwrap();
+        let output = jr_cmd_with_xdg("http://127.0.0.1:1", cache.path(), config.path())
+            .args([
+                "issue",
+                "attachment",
+                "upload",
+                "TEST-1",
+                &existing_file.to_string_lossy(),
+            ])
+            .timeout(std::time::Duration::from_secs(10))
+            .output()
+            .unwrap();
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(
             output.status.code(),
@@ -853,10 +849,9 @@ async fn test_bc_3_9_014_gate_confirm_proceeds() {
     Mock::given(method("POST"))
         .and(path("/rest/api/3/issue/TEST-1/attachments"))
         .and(header("X-Atlassian-Token", "no-check"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!([make_upload_attachment("AID-NEW", "report.pdf")])),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            make_upload_attachment("AID-NEW", "report.pdf")
+        ])))
         .expect(1)
         .mount(&server)
         .await;
@@ -1088,9 +1083,7 @@ async fn test_bc_3_9_014_non_interactive_without_yes_exits_64() {
         output.status.code()
     );
     assert!(
-        stderr.contains(
-            "Use --yes to confirm deletion of existing same-filename attachments."
-        ),
+        stderr.contains("Use --yes to confirm deletion of existing same-filename attachments."),
         "BC-3.9.014 non-interactive VERBATIM: must contain canonical --yes hint; got: {stderr}"
     );
 }
@@ -1136,10 +1129,9 @@ async fn test_bc_3_9_017_replace_existing_delete_then_post() {
     Mock::given(method("POST"))
         .and(path("/rest/api/3/issue/TEST-1/attachments"))
         .and(header("X-Atlassian-Token", "no-check"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!([make_upload_attachment("AID-NEW", "report.pdf")])),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            make_upload_attachment("AID-NEW", "report.pdf")
+        ])))
         .mount(&server)
         .await;
 
@@ -1225,10 +1217,9 @@ async fn test_bc_3_9_018_replace_existing_no_match_direct_upload() {
     Mock::given(method("POST"))
         .and(path("/rest/api/3/issue/TEST-1/attachments"))
         .and(header("X-Atlassian-Token", "no-check"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!([make_upload_attachment("AID-NEW", "new_file.txt")])),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            make_upload_attachment("AID-NEW", "new_file.txt")
+        ])))
         .mount(&server)
         .await;
 
@@ -1456,10 +1447,9 @@ async fn test_vp_576_003_delete_before_post_ordering_invariant() {
     Mock::given(method("POST"))
         .and(path("/rest/api/3/issue/TEST-1/attachments"))
         .and(header("X-Atlassian-Token", "no-check"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!([make_upload_attachment("AID-NEW", "report.pdf")])),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            make_upload_attachment("AID-NEW", "report.pdf")
+        ])))
         .mount(&server)
         .await;
 
@@ -1623,7 +1613,9 @@ async fn test_vp_576_004_curated_shape_upload_and_list_are_structurally_identica
         content: "https://example.atlassian.net/rest/api/3/attachment/content/10002".into(),
     };
     let curated_partial = serialize_attachment_curated(&obj_partial);
-    let map_partial = curated_partial.as_object().expect("partial curated must be object");
+    let map_partial = curated_partial
+        .as_object()
+        .expect("partial curated must be object");
     let partial_author_out = map_partial.get("author").expect("'author' key must exist");
     assert!(
         partial_author_out.is_object(),
@@ -1636,7 +1628,9 @@ async fn test_vp_576_004_curated_shape_upload_and_list_are_structurally_identica
         "VP-576-004 partial-author: accountId must be null; got: {partial_author_out}"
     );
     assert!(
-        partial_obj.get("displayName").map_or(false, |v| v.is_null()),
+        partial_obj
+            .get("displayName")
+            .map_or(false, |v| v.is_null()),
         "VP-576-004 partial-author: displayName must be null; got: {partial_author_out}"
     );
     assert_eq!(
@@ -1696,9 +1690,14 @@ async fn test_vp_576_004_curated_shape_upload_and_list_are_structurally_identica
         let uploaded: Vec<Value> = serde_json::from_str(&stdout).unwrap_or_else(|e| {
             panic!("VP-576-004 Part B: stdout must be JSON array: {e}\nstdout: {stdout}")
         });
-        assert!(!uploaded.is_empty(), "VP-576-004 Part B: uploaded array must not be empty");
+        assert!(
+            !uploaded.is_empty(),
+            "VP-576-004 Part B: uploaded array must not be empty"
+        );
         for elem in &uploaded {
-            let m = elem.as_object().expect("each uploaded element must be object");
+            let m = elem
+                .as_object()
+                .expect("each uploaded element must be object");
             assert!(
                 !m.contains_key("self"),
                 "VP-576-004 Part B: upload output must omit 'self'; got: {elem}"
@@ -1810,10 +1809,9 @@ async fn test_sec_576_004_content_disposition_crlf_injection_guard() {
         Mock::given(method("POST"))
             .and(path("/rest/api/3/issue/TEST-1/attachments"))
             .and(header("X-Atlassian-Token", "no-check"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!([make_upload_attachment("10301", "file;name.txt")])),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                make_upload_attachment("10301", "file;name.txt")
+            ])))
             .mount(&server)
             .await;
 
@@ -1861,10 +1859,9 @@ async fn test_sec_576_004_content_disposition_crlf_injection_guard() {
         Mock::given(method("POST"))
             .and(path("/rest/api/3/issue/TEST-1/attachments"))
             .and(header("X-Atlassian-Token", "no-check"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!([make_upload_attachment("10302", "file\x7fname.txt")])),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                make_upload_attachment("10302", "file\x7fname.txt")
+            ])))
             .mount(&server)
             .await;
 

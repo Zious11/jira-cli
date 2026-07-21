@@ -806,9 +806,11 @@ pub enum AttachmentSubcommand {
         /// Issue key (e.g., FOO-123)
         key: String,
 
-        /// File path(s) to upload. Repeatable. Leading-dash filenames accepted.
-        /// stdin `-` is rejected with exit 64 (EC-3.9.001-6 canonical).
-        #[arg(required = true, num_args = 1.., allow_hyphen_values = true)]
+        /// File path(s) to upload. Repeatable. stdin `-` is rejected with exit 64
+        /// (EC-3.9.001-6 canonical). Bare `-` passes through clap without
+        /// `allow_hyphen_values`; that flag is intentionally absent here to
+        /// prevent greedy consumption of `--output` and other trailing flags.
+        #[arg(required = true, num_args = 1..)]
         file: Vec<std::path::PathBuf>,
 
         /// Delete existing same-filename attachments before uploading (BC-3.9.017).

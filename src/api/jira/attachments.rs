@@ -187,7 +187,133 @@ impl JiraClient {
         key: &str,
         file_paths: &[std::path::PathBuf],
     ) -> Result<Vec<AttachmentObject>> {
-        todo!("S-576-3: multipart POST /rest/api/3/issue/{key}/attachments with X-Atlassian-Token: no-check (BC-3.9.001, ADR-0017)")
+        use crate::api::rate_limit::{MAX_RETRY_AFTER_SECS, RateLimitInfo};
+        use reqwest::StatusCode;
+        use tokio_util::io::ReaderStream;
+
+        const MAX_RETRIES: u32 = 3;
+        const DEFAULT_RETRY_SECS: u64 = 1;
+        let url = format!("{}/rest/api/3/issue/{}/attachments", self.base_url(), key);
+
+        for attempt in 0..=MAX_RETRIES {
+            // ADR-0017: multipart bodies cannot be cloned; rebuild from fresh file
+            // handles on every retry attempt (Request::try_clone() returns None).
+            let mut form = reqwest::multipart::Form::new();
+            for path in file_paths {
+                let raw_name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.to_string_lossy().into_owned());
+                // SEC-576-004: strip CR, LF, and NUL from the filename before
+                // embedding in a Content-Disposition header value to prevent
+                // header-injection (CWE-93). These three chars are the only ones
+                // that can break MIME boundary framing or inject a new header line.
+                let safe_name: String = raw_name
+                    .chars()
+                    .map(|c| {
+                        if matches!(c, '\r' | '\n' | '\0') {
+                            '_'
+                        } else {
+                            c
+                        }
+                    })
+                    .collect();
+                let file = tokio::fs::File::open(path).await.map_err(|_| {
+                    JrError::UserError(format!("file not found: {}", path.display()))
+                })?;
+                let body = reqwest::Body::wrap_stream(ReaderStream::new(file));
+                form = form.part(
+                    "file",
+                    reqwest::multipart::Part::stream(body).file_name(safe_name),
+                );
+            }
+
+            let response = self
+                .reqwest_client()
+                .post(&url)
+                .header("Authorization", self.authorization_header())
+                .header("X-Atlassian-Token", "no-check")
+                .multipart(form)
+                .send()
+                .await
+                .map_err(|e| {
+                    let host = e
+                        .url()
+                        .and_then(|u| u.host_str().map(str::to_string))
+                        .unwrap_or_else(|| "Jira".to_string());
+                    JrError::NetworkError(host)
+                })?;
+
+            let status = response.status();
+
+            // 429: rebuild request and retry (ADR-0017 — try_clone returns None for multipart).
+            if status == StatusCode::TOO_MANY_REQUESTS && attempt < MAX_RETRIES {
+                let rate_info = RateLimitInfo::from_headers(response.headers());
+                let delay = rate_info.retry_after_secs.unwrap_or(DEFAULT_RETRY_SECS);
+                if delay > MAX_RETRY_AFTER_SECS {
+                    return Err(JrError::ApiError {
+                        status: 429,
+                        message: format!(
+                            "Rate limited; Retry-After {}s exceeds {}s cap. Rerun later.",
+                            delay, MAX_RETRY_AFTER_SECS
+                        ),
+                    }
+                    .into());
+                }
+                if delay > 0 {
+                    tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                }
+                continue;
+            }
+
+            if status == StatusCode::PAYLOAD_TOO_LARGE {
+                return Err(JrError::ApiError {
+                    status: 413,
+                    message: "Attachment too large: the file exceeds the server-configured limit."
+                        .to_string(),
+                }
+                .into());
+            }
+            if status == StatusCode::NOT_FOUND {
+                return Err(JrError::UserError(format!(
+                    "Issue {key} not found or not accessible."
+                ))
+                .into());
+            }
+            if status == StatusCode::UNAUTHORIZED {
+                let body = response.bytes().await.unwrap_or_default();
+                let msg = String::from_utf8_lossy(&body).to_string();
+                if msg.to_ascii_lowercase().contains("scope does not match") {
+                    return Err(JrError::InsufficientScope {
+                        message: msg,
+                        required_scope: None,
+                    }
+                    .into());
+                }
+                return Err(JrError::NotAuthenticated {
+                    hint: "Run \"jr auth login\" to connect.".to_string(),
+                }
+                .into());
+            }
+            if !status.is_success() {
+                let status_u16 = status.as_u16();
+                let body = response.bytes().await.unwrap_or_default();
+                return Err(JrError::ApiError {
+                    status: status_u16,
+                    message: String::from_utf8_lossy(&body).to_string(),
+                }
+                .into());
+            }
+
+            let bytes = response.bytes().await?;
+            return Ok(serde_json::from_slice(&bytes)?);
+        }
+
+        // Unreachable: every loop iteration either returns or continues; the
+        // 429 path cannot continue past attempt == MAX_RETRIES because
+        // `attempt < MAX_RETRIES` is false and the code falls through to the
+        // `!status.is_success()` return above.
+        unreachable!("upload retry loop must return before exhausting iterations");
     }
 
     /// Delete a single attachment by ID (S-576-3; BC-3.9.017 / VP-576-003).
@@ -205,7 +331,20 @@ impl JiraClient {
     /// - 404 → `JrError::UserError` (exit 64): attachment not found or already deleted.
     /// - 5xx / network → `JrError::ApiError` / `JrError::NetworkError` (exit 1).
     pub async fn delete_attachment(&self, attachment_id: &str) -> Result<()> {
-        todo!("S-576-3: DELETE /rest/api/3/attachment/{attachment_id}")
+        let path = format!("/rest/api/3/attachment/{}", attachment_id);
+        let result = self.delete(&path).await;
+        match result {
+            Ok(()) => Ok(()),
+            Err(e) => match e.downcast_ref::<JrError>() {
+                Some(JrError::ApiError { status, .. }) if *status == 404 => {
+                    Err(JrError::UserError(format!(
+                        "Attachment {attachment_id} not found or already deleted."
+                    ))
+                    .into())
+                }
+                _ => Err(e),
+            },
+        }
     }
 
     /// Stream attachment binary content (BC-2.7.007 step 2).

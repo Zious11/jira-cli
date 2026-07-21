@@ -231,6 +231,25 @@ impl JiraClient {
         self.auth_header.starts_with("Bearer ")
     }
 
+    /// Raw `reqwest::Client` accessor for multipart upload (ADR-0017).
+    ///
+    /// `pub(crate)` — not for use outside this crate. Required because
+    /// `Request::try_clone()` returns `None` for multipart bodies — upload
+    /// must build and send requests directly rather than via `send()`.
+    /// Call site: `src/api/jira/attachments.rs::upload_attachments`.
+    pub(crate) fn reqwest_client(&self) -> &reqwest::Client {
+        &self.client
+    }
+
+    /// `Authorization` header value accessor for multipart upload (ADR-0017).
+    ///
+    /// `pub(crate)` — not for use outside this crate. Required because upload
+    /// builds requests directly (bypassing `send()`) due to the multipart
+    /// body-clone constraint. Call site: `src/api/jira/attachments.rs::upload_attachments`.
+    pub(crate) fn authorization_header(&self) -> &str {
+        &self.auth_header
+    }
+
     /// Read a response body as raw bytes, optionally printing it to stderr
     /// when `--verbose-bodies` is enabled. Returns the bytes for deserialization.
     ///

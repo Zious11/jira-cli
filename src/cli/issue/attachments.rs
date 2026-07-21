@@ -214,7 +214,8 @@ pub async fn handle_attachment_list(
             // JSON mode: emit curated array; zero-attachment hint suppressed (EC-2.7.001-1).
             let curated: Vec<Value> = filtered
                 .iter()
-                .map(|a| serialize_attachment_curated(a))
+                .copied()
+                .map(serialize_attachment_curated)
                 .collect();
             println!("{}", output::render_json(&curated)?);
             // Filter-count hint fires AFTER the JSON array write (EC-2.7.001-2).
@@ -1052,16 +1053,38 @@ pub async fn handle_attachment_download(
 // S-576-3: upload handler + helpers (BC-3.9.001..020)
 // ---------------------------------------------------------------------------
 
-/// Upload one or more files as attachments to a Jira issue (S-576-3; BC-3.9.001..020).
+/// Render the result of a successful upload as either a JSON array or a
+/// 4-column table (Filename / Size / ID / Created).
+fn render_upload_result(
+    uploaded: &[AttachmentObject],
+    output_format: &OutputFormat,
+) -> anyhow::Result<()> {
+    match output_format {
+        OutputFormat::Json => {
+            let curated: Vec<Value> = uploaded.iter().map(serialize_attachment_curated).collect();
+            println!("{}", output::render_json(&curated)?);
+        }
+        OutputFormat::Table => {
+            let headers = &["Filename", "Size", "ID", "Created"];
+            let rows: Vec<Vec<String>> = uploaded
+                .iter()
+                .map(|a| {
+                    vec![
+                        display_sanitize_filename(&a.filename),
+                        format_size(a.size),
+                        a.id.clone(),
+                        a.created.clone(),
+                    ]
+                })
+                .collect();
+            println!("{}", output::render_table(headers, &rows));
+        }
+    }
+    Ok(())
+}
+
+/// Upload one or more files as attachments to a Jira issue (BC-3.9.001).
 ///
-/// Dispatched from `src/cli/issue/mod.rs` with the whole `AttachmentSubcommand::Upload`
-/// variant (mirrors `handle_attachment_download` / `handle_comment_edit` pattern).
-///
-/// ## Behavioral summary
-///
-/// - Pre-checks BEFORE any HTTP (BC-3.9.001): rejects `--public`/`--internal` with an
-///   interim exit-64 message (AC-017; removed when S-576-5 wires JSM visibility); rejects
-///   stdin `-` as a file path (EC-3.9.001-6); rejects non-existent or unreadable files.
 /// - Sends a single multipart/form-data POST with `X-Atlassian-Token: no-check` (BC-3.9.001).
 /// - `--replace-existing`: calls `replace_existing_attachments` (BC-3.9.017; VP-576-003).
 /// - `--dry-run` (requires `--replace-existing` at clap parse time): calls `dry_run_upload`
@@ -1074,7 +1097,67 @@ pub async fn handle_attachment_upload(
     client: &JiraClient,
     no_input: bool,
 ) -> anyhow::Result<()> {
-    todo!("S-576-3: destructure Upload variant, run pre-checks (--public/--internal interim, stdin, file-exists), then dispatch to upload/replace/dry-run paths")
+    let AttachmentSubcommand::Upload {
+        key,
+        file,
+        replace_existing,
+        yes,
+        dry_run,
+        public,
+        internal,
+    } = sub
+    else {
+        unreachable!("handle_attachment_upload called with non-Upload variant");
+    };
+
+    // AC-017: interim rejection fires BEFORE any file pre-check or HTTP call.
+    // REMOVED-AT-S5: this guard is removed when S-576-5 wires JSM visibility.
+    if public || internal {
+        return Err(JrError::UserError(
+            "--public and --internal are not yet supported. \
+             JSM visibility will be shipped in a follow-on story."
+                .to_string(),
+        )
+        .into());
+    }
+
+    // EC-3.9.001-6: stdin '-' is rejected before any HTTP call.
+    for path in &file {
+        if path.to_str() == Some("-") {
+            return Err(JrError::UserError(
+                "stdin upload is not supported; provide a file path.".to_string(),
+            )
+            .into());
+        }
+    }
+
+    // EC-3.9.001-4: file existence pre-check fires before HTTP.
+    for path in &file {
+        if !path.is_file() {
+            return Err(JrError::UserError(format!("file not found: {}", path.display())).into());
+        }
+    }
+
+    if dry_run {
+        return dry_run_upload(&key, &file, replace_existing, output_format, client).await;
+    }
+
+    if replace_existing {
+        return replace_existing_attachments(
+            &key,
+            &file,
+            yes,
+            false,
+            no_input,
+            output_format,
+            client,
+        )
+        .await;
+    }
+
+    // Direct upload: single multipart POST (EC-3.9.001-2: one POST regardless of file count).
+    let uploaded = client.upload_attachments(&key, &file).await?;
+    render_upload_result(&uploaded, output_format)
 }
 
 /// Delete all same-filename existing attachments then upload the new files (BC-3.9.017).
@@ -1093,7 +1176,60 @@ async fn replace_existing_attachments(
     output_format: &OutputFormat,
     client: &JiraClient,
 ) -> anyhow::Result<()> {
-    todo!("S-576-3: list existing, derive would_delete, confirmation gate, delete-before-post (VP-576-003 ordering)")
+    if dry_run {
+        return dry_run_upload(key, file_paths, true, output_format, client).await;
+    }
+
+    // Fetch existing attachments to find same-filename matches.
+    let existing = client.list_attachments(key).await?;
+
+    let upload_names: std::collections::HashSet<String> = file_paths
+        .iter()
+        .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .collect();
+
+    let would_delete: Vec<&AttachmentObject> = existing
+        .iter()
+        .filter(|a| upload_names.contains(&a.filename))
+        .collect();
+
+    // No same-filename matches → direct upload without any confirmation.
+    if would_delete.is_empty() {
+        let uploaded = client.upload_attachments(key, file_paths).await?;
+        return render_upload_result(&uploaded, output_format);
+    }
+
+    // BC-3.9.014: non-interactive guard — exit 64 when --yes is absent.
+    if no_input && !yes {
+        return Err(JrError::UserError(
+            "Use --yes to confirm deletion of existing same-filename attachments.".to_string(),
+        )
+        .into());
+    }
+
+    // Interactive or --yes confirmation gate.
+    let proceed = attachment_replace_confirmation_gate(key, &would_delete, yes, no_input)?;
+    if !proceed {
+        eprintln!("Upload cancelled.");
+        if let OutputFormat::Json = output_format {
+            println!(
+                "{}",
+                output::render_json(&serde_json::json!({
+                    "cancelled": true,
+                    "uploaded": false
+                }))?
+            );
+        }
+        return Ok(());
+    }
+
+    // VP-576-003: ALL DELETEs must complete before the first POST.
+    for att in &would_delete {
+        client.delete_attachment(&att.id).await?;
+    }
+
+    let uploaded = client.upload_attachments(key, file_paths).await?;
+    render_upload_result(&uploaded, output_format)
 }
 
 /// Preview the upload operation without issuing any HTTP mutations (BC-3.9.020 path-c).
@@ -1112,29 +1248,104 @@ async fn dry_run_upload(
     output_format: &OutputFormat,
     client: &JiraClient,
 ) -> anyhow::Result<()> {
-    todo!("S-576-3: fetch attachment list (mandatory — populates wouldDelete), build preview JSON, print without issuing DELETE or POST")
+    // AC-008: the list GET MUST fire to populate wouldDelete — only DELETE and POST are suppressed.
+    let existing = if replace_existing {
+        client.list_attachments(key).await?
+    } else {
+        vec![]
+    };
+
+    let upload_names: std::collections::HashSet<String> = file_paths
+        .iter()
+        .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .collect();
+
+    let would_delete: Vec<Value> = existing
+        .iter()
+        .filter(|a| upload_names.contains(&a.filename))
+        .map(|a| serde_json::json!({"id": a.id, "filename": a.filename}))
+        .collect();
+
+    let would_upload: Vec<Value> = file_paths
+        .iter()
+        .filter_map(|p| {
+            p.file_name()
+                .map(|n| serde_json::json!({"filename": n.to_string_lossy()}))
+        })
+        .collect();
+
+    let preview = serde_json::json!({
+        "dryRun": true,
+        "wouldDelete": would_delete,
+        "wouldUpload": would_upload,
+    });
+
+    match output_format {
+        OutputFormat::Json => {
+            println!("{}", output::render_json(&preview)?);
+        }
+        OutputFormat::Table => {
+            println!("DRY RUN — no changes will be made.");
+            if !would_delete.is_empty() {
+                println!(
+                    "Would delete {} existing attachment(s).",
+                    would_delete.len()
+                );
+            }
+            println!("Would upload {} file(s).", would_upload.len());
+        }
+    }
+    Ok(())
 }
 
 /// Interactive `--replace-existing` confirmation gate (BC-3.9.014).
 ///
 /// Uses `eprint!` + `io::stdin().read_line()` only — NOT `dialoguer::Confirm`.
-/// This exact mechanism is required by BC-3.9.014 gate mechanics.
+/// This exact mechanism is required by BC-3.9.014 gate mechanics (same pattern
+/// as `interactions.rs::handle_delete_comment`).
 ///
 /// Return semantics:
 /// - `yes` is `true` or `no_input` is `true` → skip prompt, return `Ok(true)`.
 /// - User inputs `"y"` / `"yes"` (case-insensitive, trimmed) → `Ok(true)`.
 /// - Any other non-empty input → `Ok(false)` (caller exits 0 — cancelled).
-/// - EOF or IO error → `Err(JrError::SignalInterrupt)` (exit 130).
+/// - EOF or IO error → `Err(JrError::Interrupted)` (exit 130).
 ///
 /// Note: callers on `--no-input` paths MUST exit 64 BEFORE calling this function when
-/// `--yes` is absent (BC-3.9.014 non-interactive enforcement in `handle_attachment_upload`).
-async fn attachment_replace_confirmation_gate(
+/// `--yes` is absent (BC-3.9.014 non-interactive enforcement in `replace_existing_attachments`).
+fn attachment_replace_confirmation_gate(
     key: &str,
     would_delete: &[&AttachmentObject],
     yes: bool,
     no_input: bool,
 ) -> anyhow::Result<bool> {
-    todo!("S-576-3: eprint! prompt listing would_delete filenames, read_line three-way branch (y/yes→true, other→false, EOF/Err→exit 130)")
+    if yes || no_input {
+        return Ok(true);
+    }
+
+    eprintln!(
+        "About to delete {} existing attachment(s) on {}:",
+        would_delete.len(),
+        key
+    );
+    for att in would_delete {
+        eprintln!(
+            "  - {} ({})",
+            display_sanitize_filename(&att.filename),
+            att.id
+        );
+    }
+    eprint!("Continue? [y/N] ");
+    let _ = std::io::Write::flush(&mut std::io::stderr());
+
+    use std::io::BufRead;
+    let mut line = String::new();
+    match std::io::stdin().lock().read_line(&mut line) {
+        Ok(0) | Err(_) => Err(JrError::Interrupted.into()),
+        Ok(_) => {
+            let trimmed = line.trim();
+            Ok(trimmed.eq_ignore_ascii_case("y") || trimmed.eq_ignore_ascii_case("yes"))
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
