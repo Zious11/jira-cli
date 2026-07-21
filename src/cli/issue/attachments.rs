@@ -1149,16 +1149,8 @@ pub async fn handle_attachment_upload(
     }
 
     if replace_existing {
-        return replace_existing_attachments(
-            &key,
-            &file,
-            yes,
-            false,
-            no_input,
-            output_format,
-            client,
-        )
-        .await;
+        return replace_existing_attachments(&key, &file, yes, no_input, output_format, client)
+            .await;
     }
 
     // Direct upload: single multipart POST (EC-3.9.001-2: one POST regardless of file count).
@@ -1177,15 +1169,10 @@ async fn replace_existing_attachments(
     key: &str,
     file_paths: &[std::path::PathBuf],
     yes: bool,
-    dry_run: bool,
     no_input: bool,
     output_format: &OutputFormat,
     client: &JiraClient,
 ) -> anyhow::Result<()> {
-    if dry_run {
-        return dry_run_upload(key, file_paths, true, output_format, client).await;
-    }
-
     // Fetch existing attachments to find same-filename matches.
     let existing = client.list_attachments(key).await?;
 
