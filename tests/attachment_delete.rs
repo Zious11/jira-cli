@@ -1562,7 +1562,9 @@ async fn test_bc_3_9_019_older_than_parse_age_duration_filter() {
             output.status.code()
         );
         assert!(
-            stderr.contains("invalid duration: '1000000000000d'. Use formats like 30m, 2h, 1d, 7d, 2w."),
+            stderr.contains(
+                "invalid duration: '1000000000000d'. Use formats like 30m, 2h, 1d, 7d, 2w."
+            ),
             "P2-001 chrono band: stderr must contain canonical error; got stderr: {stderr}"
         );
         assert!(
@@ -1943,7 +1945,9 @@ async fn test_bc_3_9_020_dry_run_bulk() {
         );
     }
 
-    // --dry-run human: would-delete summary line
+    // P3-001: --dry-run human: full [ID, Filename, Size, Created] table + final count line.
+    // Two attachments; second has U+007F in filename for CWE-116 display-sanitization pin.
+    // RED: current impl prints count line only — no table rows with ID/Filename/Size/Created.
     {
         let server = MockServer::start().await;
         let cache = TempDir::new().unwrap();
@@ -1953,7 +1957,10 @@ async fn test_bc_3_9_020_dry_run_bulk() {
             .and(path("/rest/api/3/issue/FOO-1"))
             .respond_with(
                 ResponseTemplate::new(200).set_body_json(issue_attachments_json(&[
+                    // size=512 → "512 B"; created="2000-01-01T..."
                     old_attachment("10001", "report.pdf"),
+                    // U+007F prefix → display_sanitize_filename → "?poisoned.pdf" (CWE-116)
+                    old_attachment("10002", "\x7fpoisoned.pdf"),
                 ])),
             )
             .expect(1)
@@ -1982,19 +1989,62 @@ async fn test_bc_3_9_020_dry_run_bulk() {
 
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
+        let combined = format!("{stderr}{stdout}");
 
         assert_eq!(
             output.status.code(),
             Some(0),
-            "BC-3.9.020 dry-run human: must exit 0; got {:?}\nstderr: {stderr}",
+            "P3-001 issue/older-than dry-run human: must exit 0; got {:?}\nstderr: {stderr}",
             output.status.code()
         );
-        // Human dry-run output goes to stdout (table) or stderr; accept either channel
-        let combined = format!("{stderr}{stdout}");
+
+        // Per-attachment table row: ID column
         assert!(
-            combined.contains("would be deleted"),
-            "BC-3.9.020 dry-run human: output must contain 'would be deleted' summary; \
-             got stderr: {stderr}\nstdout: {stdout}"
+            combined.contains("10001"),
+            "P3-001 issue/older-than dry-run: table must contain ID '10001'; got combined: {combined}"
+        );
+        assert!(
+            combined.contains("10002"),
+            "P3-001 issue/older-than dry-run: table must contain ID '10002'; got combined: {combined}"
+        );
+
+        // Filename column
+        assert!(
+            combined.contains("report.pdf"),
+            "P3-001 issue/older-than dry-run: table must contain filename 'report.pdf'; \
+             got combined: {combined}"
+        );
+        // CWE-116: U+007F must be sanitized to '?'
+        assert!(
+            combined.contains("?poisoned.pdf"),
+            "P3-001 CWE-116: U+007F in filename must be sanitized to '?' in dry-run table; \
+             got combined: {combined}"
+        );
+        assert!(
+            !combined.contains("\x7fpoisoned.pdf"),
+            "P3-001 CWE-116: raw U+007F (0x7F) must NOT appear in any output channel; \
+             got combined: {combined}"
+        );
+
+        // Size column: format_size(512) = "512 B"
+        assert!(
+            combined.contains("512 B"),
+            "P3-001 issue/older-than dry-run: table must contain human size '512 B'; \
+             got combined: {combined}"
+        );
+
+        // Created column: both fixtures have created="2000-01-01T..."
+        assert!(
+            combined.contains("2000"),
+            "P3-001 issue/older-than dry-run: table must contain created date fragment '2000'; \
+             got combined: {combined}"
+        );
+
+        // Final count line (AC-009 canonical)
+        assert!(
+            combined.contains("2 attachment(s) would be deleted"),
+            "P3-001 issue/older-than dry-run: output must contain \
+             '2 attachment(s) would be deleted'; got combined: {combined}"
         );
     }
 }
@@ -2024,26 +2074,22 @@ async fn test_bc_3_9_020_dry_run_multi_aid_metadata_fan_out() {
 
         Mock::given(method("GET"))
             .and(path("/rest/api/3/attachment/20001"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "id": "20001",
-                    "filename": "archive.zip",
-                    "size": 4096
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "20001",
+                "filename": "archive.zip",
+                "size": 4096
+            })))
             .expect(1)
             .mount(&server)
             .await;
 
         Mock::given(method("GET"))
             .and(path("/rest/api/3/attachment/20002"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "id": "20002",
-                    "filename": "notes.txt",
-                    "size": 512
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "20002",
+                "filename": "notes.txt",
+                "size": 512
+            })))
             .expect(1)
             .mount(&server)
             .await;
@@ -2081,9 +2127,7 @@ async fn test_bc_3_9_020_dry_run_multi_aid_metadata_fan_out() {
         );
 
         let parsed: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
-            panic!(
-                "AC-009 P2-002 sub-A: stdout must be valid JSON; error: {e}\nstdout: {stdout}"
-            )
+            panic!("AC-009 P2-002 sub-A: stdout must be valid JSON; error: {e}\nstdout: {stdout}")
         });
 
         let atts = parsed["attachments"]
@@ -2153,12 +2197,10 @@ async fn test_bc_3_9_020_dry_run_multi_aid_metadata_fan_out() {
 
         Mock::given(method("GET"))
             .and(path("/rest/api/3/attachment/20003"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "id": "20003",
-                    "filename": "report.pdf"
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "20003",
+                "filename": "report.pdf"
+            })))
             .expect(1)
             .mount(&server)
             .await;
@@ -2166,9 +2208,10 @@ async fn test_bc_3_9_020_dry_run_multi_aid_metadata_fan_out() {
         // 20004: metadata fetch fails
         Mock::given(method("GET"))
             .and(path("/rest/api/3/attachment/20004"))
-            .respond_with(ResponseTemplate::new(403).set_body_json(
-                serde_json::json!({"errorMessages": ["Permission denied."]}),
-            ))
+            .respond_with(
+                ResponseTemplate::new(403)
+                    .set_body_json(serde_json::json!({"errorMessages": ["Permission denied."]})),
+            )
             .expect(1)
             .mount(&server)
             .await;
@@ -2205,15 +2248,17 @@ async fn test_bc_3_9_020_dry_run_multi_aid_metadata_fan_out() {
         );
 
         let parsed: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
-            panic!(
-                "AC-009 P2-002 sub-B: stdout must be valid JSON; error: {e}\nstdout: {stdout}"
-            )
+            panic!("AC-009 P2-002 sub-B: stdout must be valid JSON; error: {e}\nstdout: {stdout}")
         });
 
         let atts = parsed["attachments"]
             .as_array()
             .expect("AC-009 P2-002 sub-B: 'attachments' must be an array");
-        assert_eq!(atts.len(), 2, "AC-009 P2-002 sub-B: 2 elements in attachments");
+        assert_eq!(
+            atts.len(),
+            2,
+            "AC-009 P2-002 sub-B: 2 elements in attachments"
+        );
 
         // Row for 20003 must have filename
         let att_20003 = atts
@@ -2221,8 +2266,7 @@ async fn test_bc_3_9_020_dry_run_multi_aid_metadata_fan_out() {
             .find(|a| a["id"] == "20003")
             .expect("AC-009 P2-002 sub-B: must have entry for 20003");
         assert_eq!(
-            att_20003["filename"],
-            "report.pdf",
+            att_20003["filename"], "report.pdf",
             "AC-009 P2-002 sub-B: 20003 filename must be 'report.pdf'"
         );
 
@@ -2245,32 +2289,47 @@ async fn test_bc_3_9_020_dry_run_multi_aid_metadata_fan_out() {
         );
     }
 
-    // Sub-case C: human mode — filename column populated (not id-only)
+    // Sub-case C (P3-001): human mode — full [ID, Filename, Size, Created] table
+    // + fallback "(metadata unavailable)" for failed metadata GET (AID 20007)
+    // + U+007F poison in 20006 filename for CWE-116 pin
+    // RED: impl emits count line only — no per-row table, no size/created columns.
     {
         let server = MockServer::start().await;
         let cache = TempDir::new().unwrap();
         let cfg = TempDir::new().unwrap();
 
+        // 20005: normal metadata — size=2048 → "2.0 KB", created fragment "2023"
         Mock::given(method("GET"))
             .and(path("/rest/api/3/attachment/20005"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "id": "20005",
-                    "filename": "diagram.png"
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "20005",
+                "filename": "diagram.png",
+                "size": 2048,
+                "created": "2023-06-15T10:00:00.000+0000"
+            })))
             .expect(1)
             .mount(&server)
             .await;
 
+        // 20006: U+007F in filename (CWE-116) — must appear as "s?pec.docx" in table
         Mock::given(method("GET"))
             .and(path("/rest/api/3/attachment/20006"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "id": "20006",
-                    "filename": "spec.docx"
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "20006",
+                "filename": "s\u{007F}pec.docx",
+                "size": 512,
+                "created": "2023-06-15T11:00:00.000+0000"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // 20007: metadata GET fails (403) → "(metadata unavailable)" fallback row
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/attachment/20007"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(
+                serde_json::json!({"errorMessages": ["Permission denied."]}),
+            ))
             .expect(1)
             .mount(&server)
             .await;
@@ -2288,6 +2347,7 @@ async fn test_bc_3_9_020_dry_run_multi_aid_metadata_fan_out() {
                 "delete",
                 "20005",
                 "20006",
+                "20007",
                 "--dry-run",
                 // human mode (no --output json)
             ])
@@ -2301,25 +2361,60 @@ async fn test_bc_3_9_020_dry_run_multi_aid_metadata_fan_out() {
         assert_eq!(
             output.status.code(),
             Some(0),
-            "AC-009 P2-002 sub-C: human dry-run must exit 0; \
-             got {:?}\nstderr: {stderr}",
+            "AC-009 P3-001 sub-C: human dry-run must exit 0; got {:?}\nstderr: {stderr}",
             output.status.code()
         );
-        // Human output must contain actual filenames, not just IDs
+
+        // Table row 20005: ID, filename, size "2.0 KB", created "2023"
+        assert!(
+            combined.contains("20005"),
+            "P3-001 sub-C: table must contain ID '20005'; got combined: {combined}"
+        );
         assert!(
             combined.contains("diagram.png"),
-            "AC-009 P2-002 sub-C: human output must contain filename 'diagram.png' \
-             (populated from metadata GET); got combined: {combined}"
+            "P3-001 sub-C: table must contain filename 'diagram.png'; got combined: {combined}"
         );
         assert!(
-            combined.contains("spec.docx"),
-            "AC-009 P2-002 sub-C: human output must contain filename 'spec.docx'; \
+            combined.contains("2.0 KB"),
+            "P3-001 sub-C: table must contain human size '2.0 KB' (2048 B); got combined: {combined}"
+        );
+        assert!(
+            combined.contains("2023"),
+            "P3-001 sub-C: table must contain created date fragment '2023'; got combined: {combined}"
+        );
+
+        // Table row 20006: U+007F sanitized to '?' (CWE-116)
+        assert!(
+            combined.contains("20006"),
+            "P3-001 sub-C: table must contain ID '20006'; got combined: {combined}"
+        );
+        assert!(
+            combined.contains("s?pec.docx"),
+            "P3-001 sub-C CWE-116: U+007F in filename must be sanitized to '?' in dry-run table; \
              got combined: {combined}"
         );
         assert!(
-            combined.contains("would be deleted"),
-            "AC-009 P2-002 sub-C: human output must contain 'would be deleted' summary; \
+            !combined.contains("s\x7fpec.docx"),
+            "P3-001 sub-C CWE-116: raw U+007F must NOT appear in any output channel; \
              got combined: {combined}"
+        );
+
+        // Table row 20007: failed metadata → "(metadata unavailable)" fallback
+        assert!(
+            combined.contains("20007"),
+            "P3-001 sub-C: table must contain ID '20007' even for failed metadata; \
+             got combined: {combined}"
+        );
+        assert!(
+            combined.contains("(metadata unavailable)"),
+            "P3-001 sub-C: failed metadata row must show '(metadata unavailable)'; \
+             got combined: {combined}"
+        );
+
+        // Final count line
+        assert!(
+            combined.contains("3 attachment(s) would be deleted"),
+            "P3-001 sub-C: must emit '3 attachment(s) would be deleted'; got combined: {combined}"
         );
     }
 }
