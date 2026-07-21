@@ -69,5 +69,5 @@ Implemented: `src/cli/issue/attachments.rs::handle_attachment_upload`. API: `src
 
 - `docs/specs/json-output-shapes.md` — canonical JSON shapes for all three subcommands
 - `CLAUDE.md` — Gotchas: `sanitize_attachment_filename`, redirect behavior, upload multipart retry, SEC-576-004, JRACLOUD-96384, `allow_hyphen_values` variadic caveat
-- `.factory/specs/prd/bc-2.7.md` — list/download behavioral contracts
-- `.factory/specs/prd/bc-3.9.md` — upload behavioral contracts
+- `.factory/specs/prd/bc-2-issue-read.md` — list/download behavioral contracts
+- `.factory/specs/prd/bc-3-issue-write.md` — upload behavioral contracts
