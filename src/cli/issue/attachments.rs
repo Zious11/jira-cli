@@ -1748,7 +1748,7 @@ fn attachment_delete_confirmation_gate(filename: &str, aid: &str) -> anyhow::Res
 /// Pure function — no I/O. Unparseable `created` fields are silently skipped with
 /// a stderr warning; they do NOT abort the call.
 /// `created` is an ISO 8601 string; parsed via `chrono`.
-pub fn filter_attachments_older_than(
+fn filter_attachments_older_than(
     attachments: Vec<AttachmentObject>,
     cutoff: chrono::DateTime<chrono::Utc>,
 ) -> Vec<AttachmentObject> {
