@@ -2028,6 +2028,13 @@ mod tests {
     /// Private helper — integration tests cannot call it; unit test lives here.
     #[test]
     fn test_bc_3_9_019_ec_8_parse_age_duration_1d_is_24h() {
-        todo!("S-576-4: stub — parse_age_duration(\"1d\") must equal chrono::Duration::hours(24)")
+        let result = parse_age_duration("1d")
+            .expect("parse_age_duration(\"1d\") must return Ok");
+        assert_eq!(
+            result,
+            chrono::Duration::hours(24),
+            "EC-3.9.019-8: parse_age_duration(\"1d\") must equal chrono::Duration::hours(24) \
+             (24 clock-hours, NOT 8h worklog-day)"
+        );
     }
 }

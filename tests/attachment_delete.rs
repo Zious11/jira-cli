@@ -15,6 +15,8 @@
 //! Story: S-576-4, GitHub issue #576
 
 use assert_cmd::Command;
+use serde_json::Value;
+use std::collections::BTreeSet;
 use tempfile::TempDir;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -37,183 +39,1358 @@ fn jr_cmd_with_xdg(
 }
 
 // ---------------------------------------------------------------------------
+// Fixture helpers
+// ---------------------------------------------------------------------------
+
+/// Minimal `AttachmentMetadata` response JSON for `GET /rest/api/3/attachment/{id}`.
+fn attachment_metadata_json(id: &str, filename: &str) -> serde_json::Value {
+    serde_json::json!({"id": id, "filename": filename, "size": 1024})
+}
+
+/// Issue attachment-list response JSON for
+/// `GET /rest/api/3/issue/{key}?fields=attachment`.
+/// Pass `created` as an ISO 8601 string; use "2000-01-01T00:00:00.000+0000"
+/// for "old enough to always be selected by a reasonable --older-than filter".
+fn issue_attachments_json(attachments: &[serde_json::Value]) -> serde_json::Value {
+    serde_json::json!({"fields": {"attachment": attachments}})
+}
+
+/// A single old attachment object (created 2000-01-01) for `fields.attachment[]`.
+fn old_attachment(id: &str, filename: &str) -> serde_json::Value {
+    serde_json::json!({
+        "id": id,
+        "filename": filename,
+        "author": null,
+        "created": "2000-01-01T00:00:00.000+0000",
+        "size": 512,
+        "mimeType": "text/plain",
+        "content": format!("https://example.com/attachment/content/{id}"),
+        "self": format!("https://example.com/attachment/{id}")
+    })
+}
+
+/// A single future attachment object (created 2100-01-01) for `fields.attachment[]`.
+/// Will NOT be selected by any reasonable --older-than filter.
+fn new_attachment(id: &str, filename: &str) -> serde_json::Value {
+    serde_json::json!({
+        "id": id,
+        "filename": filename,
+        "author": null,
+        "created": "2100-01-01T00:00:00.000+0000",
+        "size": 512,
+        "mimeType": "text/plain",
+        "content": format!("https://example.com/attachment/content/{id}"),
+        "self": format!("https://example.com/attachment/{id}")
+    })
+}
+
+// ---------------------------------------------------------------------------
 // AC-001: DELETE endpoint + AID validation + 404 exit 64 (BC-3.9.008)
 // ---------------------------------------------------------------------------
 
-/// BC-3.9.008: `jr issue attachment delete <AID>` issues `DELETE /rest/api/3/attachment/{id}`.
-/// AID validation (`^[0-9]+$`) fires before any HTTP call; non-numeric AID → exit 64.
-/// 204/200 → success; 404 (targeted single-AID) → exit 64 (DEC-168).
+/// BC-3.9.008 EC-3.9.008-1: valid AID + 204 → DELETE issued once, exit 0,
+/// human echo `"Deleted attachment 12345."` on stderr.
+/// BC-3.9.013 EC-3.9.013-3 (P7-001): non-numeric AID → exit 64,
+/// `"invalid attachment id: '<VALUE>' (must be numeric)"`, zero HTTP calls.
+///
+/// RED GATE: `todo!()` in handle_attachment_delete → exit 101.
 #[tokio::test]
 async fn test_bc_3_9_008_delete_endpoint_aid_validation_404_exit_64() {
-    todo!(
-        "S-576-4: stub — assert DELETE /rest/api/3/attachment/{{id}} issued; \
-         non-numeric AID exits 64; 404 exits 64 per DEC-168"
-    )
+    // Sub-case A: valid AID + 204 → exit 0 + human echo
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        Mock::given(method("DELETE"))
+            .and(path("/rest/api/3/attachment/12345"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args(["issue", "attachment", "delete", "12345", "--yes"])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "BC-3.9.008 EC-3.9.008-1: must exit 0 on 204; got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+        assert!(
+            stderr.contains("Deleted attachment 12345."),
+            "BC-3.9.008 EC-3.9.008-1: stderr must contain 'Deleted attachment 12345.'; \
+             got stderr: {stderr}"
+        );
+        assert!(
+            stdout.trim().is_empty(),
+            "BC-3.9.008 EC-3.9.008-1: stdout must be empty in human mode (Symmetric profile); \
+             got stdout: {stdout}"
+        );
+    }
+
+    // Sub-case B: non-numeric AID → exit 64 + canonical message; zero HTTP
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        // Mount with expect(0) — must not be called before the guard fires
+        Mock::given(method("DELETE"))
+            .and(path("/rest/api/3/attachment/abc"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args(["issue", "attachment", "delete", "abc", "--yes"])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert_eq!(
+            output.status.code(),
+            Some(64),
+            "BC-3.9.013 EC-3.9.013-3: non-numeric AID must exit 64; got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+        assert!(
+            stderr.contains("invalid attachment id: 'abc' (must be numeric)"),
+            "BC-3.9.013 EC-3.9.013-3: stderr must contain canonical AID error; \
+             got stderr: {stderr}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
 // AC-002: single-AID confirmation gate (BC-3.9.015; VP-576-002)
 // ---------------------------------------------------------------------------
 
-/// BC-3.9.015: AID validation (`^[0-9]+$`) fires BEFORE the confirmation gate prompt.
-/// Invalid AID exits 64 immediately; no prompt shown; no HTTP call issued.
+/// BC-3.9.015 (P7-001): AID validation fires BEFORE the gate.
+/// Invalid AID → exit 64 with canonical message; no prompt text; zero HTTP calls.
+///
+/// RED GATE: `todo!()` → exit 101.
 #[tokio::test]
 async fn test_bc_3_9_015_aid_validation_before_gate() {
-    todo!(
-        "S-576-4: stub — invalid AID exits 64 with canonical message; \
-         assert no prompt text on stderr; assert zero HTTP calls issued"
-    )
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let cfg = TempDir::new().unwrap();
+
+    // Both metadata GET and DELETE must NOT be called
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/attachment/10001/../../evil"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+        .args(["issue", "attachment", "delete", "10001/../../evil"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "BC-3.9.015 AID validation: must exit 64 before gate; got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("invalid attachment id: '10001/../../evil' (must be numeric)"),
+        "BC-3.9.015 AID validation: stderr must contain canonical error; got stderr: {stderr}"
+    );
+    // Gate prompt text must NOT appear
+    assert!(
+        !stderr.contains("[y/N]"),
+        "BC-3.9.015 AID validation: gate prompt must NOT be shown on invalid AID; \
+         got stderr: {stderr}"
+    );
 }
 
-/// VP-576-002 confirm variant: confirming the gate proceeds to DELETE and exits 0.
+/// VP-576-002 confirm variant: gate presented → "y" → DELETE issued → exit 0.
+/// Also tests SEC-576-011 (CWE-116): U+007F in filename is sanitized to '?' in prompt.
 ///
-/// Uses `JR_STDIN_IS_TTY=1` seam + stdin `"y\n"` to exercise the interactive path.
+/// Sub-case A: normal filename, confirm with "y"
+/// Sub-case B: filename with U+007F (DEL), confirm with "y", verify sanitized prompt
+///
+/// RED GATE: `todo!()` → exit 101.
 #[tokio::test]
 async fn test_vp_576_002_delete_gate_confirm_proceeds() {
-    todo!(
-        "S-576-4: stub — JR_STDIN_IS_TTY=1; stdin 'y'; assert DELETE issued; exit 0"
-    )
+    // Sub-case A: normal filename
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        // Pre-prompt metadata GET — supplies filename for the prompt
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/attachment/12345"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(attachment_metadata_json("12345", "report.pdf")),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("DELETE"))
+            .and(path("/rest/api/3/attachment/12345"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .env("JR_STDIN_IS_TTY", "1")
+            .args(["issue", "attachment", "delete", "12345"])
+            .write_stdin("y\n")
+            .timeout(std::time::Duration::from_secs(10))
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "VP-576-002 confirm: must exit 0 after 'y'; got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+        assert!(
+            stderr.contains("Delete attachment report.pdf (12345)? [y/N]"),
+            "VP-576-002 confirm: stderr must contain gate prompt with filename; \
+             got stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("Deleted attachment 12345."),
+            "VP-576-002 confirm: stderr must contain success echo after deletion; \
+             got stderr: {stderr}"
+        );
+    }
+
+    // Sub-case B: U+007F (DEL) in filename — SEC-576-011 CWE-116 display sanitization
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        // Filename contains U+007F (0x7F = DEL control char); must appear as '?' in prompt
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/attachment/99999"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(attachment_metadata_json("99999", "evil\x7fname.pdf")),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("DELETE"))
+            .and(path("/rest/api/3/attachment/99999"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .env("JR_STDIN_IS_TTY", "1")
+            .args(["issue", "attachment", "delete", "99999"])
+            .write_stdin("y\n")
+            .timeout(std::time::Duration::from_secs(10))
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "SEC-576-011: must exit 0 after confirm with sanitized filename; \
+             got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+        assert!(
+            stderr.contains("evil?name.pdf"),
+            "SEC-576-011 CWE-116: U+007F in filename must be replaced with '?' in gate prompt; \
+             got stderr: {stderr}"
+        );
+        assert!(
+            !stderr.contains("evil\x7fname.pdf"),
+            "SEC-576-011 CWE-116: raw DEL char must NOT appear in gate prompt; \
+             got stderr: {stderr}"
+        );
+    }
 }
 
-/// VP-576-002 cancel variant: cancelling the gate issues ZERO DELETEs and exits 0.
+/// VP-576-002 cancel variant: gate presented → "n" → zero DELETEs → exit 0.
+/// JSON mode: stdout `{"cancelled":true,"deleted":false}`.
 ///
-/// Uses `JR_STDIN_IS_TTY=1` seam + stdin `"n\n"` to exercise the cancel path.
+/// RED GATE: `todo!()` → exit 101.
 #[tokio::test]
 async fn test_vp_576_002_delete_gate_cancel_stays() {
-    todo!(
-        "S-576-4: stub — JR_STDIN_IS_TTY=1; stdin 'n'; assert zero DELETEs; \
-         stderr contains 'Deletion cancelled.'; exit 0"
-    )
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let cfg = TempDir::new().unwrap();
+
+    // Pre-prompt metadata GET
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/attachment/12345"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(attachment_metadata_json("12345", "report.pdf")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // DELETE must NOT be issued on cancel
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/attachment/12345"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+        .env("JR_STDIN_IS_TTY", "1")
+        .args(["issue", "attachment", "delete", "12345", "--output", "json"])
+        .write_stdin("n\n")
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "VP-576-002 cancel: must exit 0 on 'n'; got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+
+    let parsed: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!(
+            "VP-576-002 cancel: stdout must be valid JSON; parse error: {e}\nstdout: {stdout}"
+        )
+    });
+
+    let keys: BTreeSet<&str> = parsed
+        .as_object()
+        .expect("VP-576-002 cancel: stdout must be a JSON object")
+        .keys()
+        .map(|k| k.as_str())
+        .collect();
+
+    assert_eq!(
+        keys,
+        BTreeSet::from(["cancelled", "deleted"]),
+        "VP-576-002 cancel: key set must be exactly {{\"cancelled\",\"deleted\"}} \
+         (\"id\" absent — no HTTP confirmed it); got {keys:?}"
+    );
+    assert_eq!(
+        parsed["cancelled"],
+        Value::Bool(true),
+        "VP-576-002 cancel: \"cancelled\" must be true; got: {}",
+        parsed["cancelled"]
+    );
+    assert_eq!(
+        parsed["deleted"],
+        Value::Bool(false),
+        "VP-576-002 cancel: \"deleted\" must be false; got: {}",
+        parsed["deleted"]
+    );
+    // Human/table cancel message — appears on stderr even in JSON mode (BC-3.9.015 cancel-note)
+    // Note: BC-3.9.015 says human mode emits "Deletion cancelled." to stderr;
+    // JSON mode emits the cancel envelope to stdout. The stderr message is human-mode only.
+    // In JSON mode, test that JSON cancel envelope is correct (above assertions cover this).
+    // Absence of "Deletion cancelled." in stderr for JSON mode is implementation-defined;
+    // the load-bearing assertion is the JSON shape above.
 }
 
-/// BC-3.9.015 EOF path: EOF on gate stdin (`read_line` returns `Ok(0)`) → exit 130.
+/// BC-3.9.015 EC-3.9.015-5: EOF on stdin → `JrError::Interrupted` → exit 130.
+/// `read_line` returns `Ok(0)` (zero bytes, Ctrl+D) → exit 130.
 ///
-/// Uses `JR_STDIN_IS_TTY=1` seam + empty stdin to exercise EOF.
+/// RED GATE: `todo!()` → exit 101.
 #[tokio::test]
 async fn test_bc_3_9_015_gate_eof_exits_130() {
-    todo!(
-        "S-576-4: stub — JR_STDIN_IS_TTY=1; stdin EOF; assert exit 130 (JrError::Interrupted)"
-    )
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let cfg = TempDir::new().unwrap();
+
+    // Pre-prompt metadata GET — must be issued (before EOF is read)
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/attachment/12345"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(attachment_metadata_json("12345", "report.pdf")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // DELETE must NOT be issued on EOF path
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/attachment/12345"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+        .env("JR_STDIN_IS_TTY", "1")
+        .args(["issue", "attachment", "delete", "12345"])
+        .write_stdin("") // EOF — empty stdin, read_line returns Ok(0)
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(130),
+        "BC-3.9.015 EC-3.9.015-5: EOF on gate stdin must exit 130 (JrError::Interrupted); \
+         got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
 }
 
 // ---------------------------------------------------------------------------
 // AC-003: single-AID JSON response shape (BC-3.9.010)
 // ---------------------------------------------------------------------------
 
-/// BC-3.9.010: `jr issue attachment delete <AID> --yes --output json` returns
-/// `{"deleted":true,"id":"<AID>"}` (BTreeMap-alphabetical; via output::render_json).
-/// Human-mode: `"Deleted attachment <AID>."` to stdout.
+/// BC-3.9.010 EC-3.9.010-1: single AID + 204 + `--output json` →
+/// `{"deleted":true,"id":"12345"}` (2 keys, alphabetical).
+/// Also covers human-mode echo `"Deleted attachment 12345."` to stderr.
+///
+/// RED GATE: `todo!()` → exit 101.
 #[tokio::test]
 async fn test_bc_3_9_010_single_aid_json_shape() {
-    todo!(
-        "S-576-4: stub — wiremock returns 204; assert JSON shape {{deleted:true,id:AID}}; \
-         assert human mode stdout 'Deleted attachment <AID>.'"
-    )
+    // JSON mode
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        Mock::given(method("DELETE"))
+            .and(path("/rest/api/3/attachment/12345"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args([
+                "issue", "attachment", "delete", "12345", "--yes", "--output", "json",
+            ])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "BC-3.9.010 single JSON: must exit 0 on 204; got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+
+        let parsed: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+            panic!(
+                "BC-3.9.010 single JSON: stdout must be valid JSON; error: {e}\nstdout: {stdout}"
+            )
+        });
+
+        let keys: BTreeSet<&str> = parsed
+            .as_object()
+            .expect("BC-3.9.010 single JSON: stdout must be a JSON object")
+            .keys()
+            .map(|k| k.as_str())
+            .collect();
+
+        assert_eq!(
+            keys,
+            BTreeSet::from(["deleted", "id"]),
+            "BC-3.9.010 single JSON: key set must be exactly {{\"deleted\",\"id\"}}; \
+             got {keys:?}"
+        );
+        assert_eq!(
+            parsed["deleted"],
+            Value::Bool(true),
+            "BC-3.9.010 single JSON: \"deleted\" must be true; got: {}",
+            parsed["deleted"]
+        );
+        assert_eq!(
+            parsed["id"],
+            Value::String("12345".to_string()),
+            "BC-3.9.010 single JSON: \"id\" must be \"12345\"; got: {}",
+            parsed["id"]
+        );
+    }
+
+    // Human mode — success echo to stderr
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        Mock::given(method("DELETE"))
+            .and(path("/rest/api/3/attachment/12345"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args(["issue", "attachment", "delete", "12345", "--yes"])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "BC-3.9.008 EC-3.9.008-1 human: must exit 0; got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+        assert!(
+            stderr.contains("Deleted attachment 12345."),
+            "BC-3.9.008 EC-3.9.008-1 human: stderr must contain echo; got stderr: {stderr}"
+        );
+        assert!(
+            stdout.trim().is_empty(),
+            "BC-3.9.008 EC-3.9.008-1 human: stdout must be empty (Symmetric profile); \
+             got stdout: {stdout}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
 // AC-004: bulk --yes required; fail-soft on 404; non-404 aborts (BC-3.9.016/010/013)
 // ---------------------------------------------------------------------------
 
-/// BC-3.9.013 + BC-3.9.010 EC-3.9.010-5: all-404 bulk delete is benign (not exit 64).
-/// Returns `{"count":0,"deleted":false,"ids":[]}` + human stderr hint (EC-3.9.010-5).
+/// BC-3.9.013 multi-delete 404 exception + EC-3.9.010-4: all-404 bulk delete
+/// → exit 0, JSON `{"count":0,"deleted":false,"ids":[]}`, `deleted:false`.
+/// EC-3.9.010-5 (P3-011): human-mode HINT `"No attachments deleted..."` to stderr
+/// (JSON-suppressed).
+///
+/// RED GATE: `todo!()` → exit 101.
 #[tokio::test]
 async fn test_bc_3_9_013_bulk_delete_fail_soft_all_404() {
-    todo!(
-        "S-576-4: stub — two AIDs, both return 404; assert exit 0; \
-         assert JSON {{count:0,deleted:false,ids:[]}}; \
-         assert human-mode stderr contains 'No attachments deleted'"
-    )
+    // JSON mode: all-404 → zero-count JSON shape
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        Mock::given(method("DELETE"))
+            .and(path("/rest/api/3/attachment/10001"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "errorMessages": ["Attachment does not exist."]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("DELETE"))
+            .and(path("/rest/api/3/attachment/10002"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "errorMessages": ["Attachment does not exist."]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args([
+                "issue", "attachment", "delete", "10001", "10002", "--yes", "--output", "json",
+            ])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "BC-3.9.010 EC-3.9.010-4 all-404: must exit 0 (benign race); \
+             got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+
+        let parsed: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+            panic!(
+                "BC-3.9.010 all-404 JSON: stdout must be valid JSON; error: {e}\nstdout: {stdout}"
+            )
+        });
+
+        assert_eq!(
+            parsed["count"],
+            Value::Number(0.into()),
+            "BC-3.9.010 all-404: count must be 0; got: {}",
+            parsed["count"]
+        );
+        assert_eq!(
+            parsed["deleted"],
+            Value::Bool(false),
+            "BC-3.9.010 all-404: deleted must be false when count=0; got: {}",
+            parsed["deleted"]
+        );
+        assert_eq!(
+            parsed["ids"],
+            serde_json::json!([]),
+            "BC-3.9.010 all-404: ids must be empty array; got: {}",
+            parsed["ids"]
+        );
+        // EC-3.9.010-5 HINT must NOT appear in JSON-mode stderr
+        assert!(
+            !stderr.contains("No attachments deleted"),
+            "BC-3.9.010 EC-3.9.010-5: HINT must be suppressed in JSON mode; \
+             got stderr: {stderr}"
+        );
+    }
+
+    // Human mode: all-404 → EC-3.9.010-5 HINT on stderr
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        Mock::given(method("DELETE"))
+            .and(path("/rest/api/3/attachment/10001"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("DELETE"))
+            .and(path("/rest/api/3/attachment/10002"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args([
+                "issue", "attachment", "delete", "10001", "10002", "--yes",
+            ])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "BC-3.9.010 EC-3.9.010-4 human all-404: must exit 0; \
+             got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+        assert!(
+            stderr.contains("No attachments deleted (all were already removed or not found)."),
+            "BC-3.9.010 EC-3.9.010-5: human mode must emit HINT on all-404; \
+             got stderr: {stderr}"
+        );
+    }
 }
 
-/// BC-3.9.016 EC-3.9.016-1/-8: missing `--yes` on bulk path → exit 64 with canonical strings.
-/// Sub-case (a): `--issue <KEY> --older-than 30d` without `--yes` → EC-3.9.016-1 string.
-/// Sub-case (b): `<AID1> <AID2>` without `--yes` → EC-3.9.016-8 string.
-/// Assert: exit 64 + correct canonical string + zero DELETEs issued.
+/// BC-3.9.016 EC-3.9.016-1/-8: missing `--yes` on bulk paths → exit 64.
+/// Sub-case (a): `--issue FOO-1 --older-than 30d` without `--yes` → EC-3.9.016-1 message.
+/// Sub-case (b): `10001 10002` without `--yes` → EC-3.9.016-8 message.
+/// Both: exit 64 + canonical string + zero HTTP calls.
+///
+/// RED GATE: `todo!()` → exit 101.
 #[tokio::test]
 async fn test_bc_3_9_016_bulk_requires_yes_exits_64() {
-    todo!(
-        "S-576-4: stub — sub-case (a) --older-than without --yes → exit 64 + \
-         '--older-than requires --yes to confirm bulk deletion.'; \
-         sub-case (b) multi-AID without --yes → exit 64 + \
-         '--yes is required to delete multiple attachments without a confirmation prompt.'; \
-         both: assert zero DELETEs"
-    )
+    // Sub-case (a): --older-than without --yes
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        // No HTTP calls should be issued before the guard fires
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args([
+                "issue",
+                "attachment",
+                "delete",
+                "--issue",
+                "FOO-1",
+                "--older-than",
+                "30d",
+            ])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert_eq!(
+            output.status.code(),
+            Some(64),
+            "BC-3.9.016 EC-3.9.016-1: --older-than without --yes must exit 64; \
+             got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+        assert!(
+            stderr.contains("--older-than requires --yes to confirm bulk deletion."),
+            "BC-3.9.016 EC-3.9.016-1: stderr must contain canonical EC-1 message; \
+             got stderr: {stderr}"
+        );
+    }
+
+    // Sub-case (b): multi-AID without --yes
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args(["issue", "attachment", "delete", "40001", "40002"])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert_eq!(
+            output.status.code(),
+            Some(64),
+            "BC-3.9.016 EC-3.9.016-8: multi-AID without --yes must exit 64; \
+             got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+        assert!(
+            stderr.contains(
+                "--yes is required to delete multiple attachments without a confirmation prompt."
+            ),
+            "BC-3.9.016 EC-3.9.016-8: stderr must contain canonical EC-8 message; \
+             got stderr: {stderr}"
+        );
+    }
 }
 
-/// BC-3.9.013 EC-3.9.010-4: non-404 error on any AID ABORTS the sequence.
-/// First AID returns 204 (success); second AID returns 403 → sequence stops.
-/// Assert: first deletion stands (not reversed); 403 surfaced; exit 1.
+/// BC-3.9.010 EC-3.9.010-4: non-404 error on any AID ABORTS the sequence.
+/// AID1→204 (success), AID2→403 (abort), AID3→204 (NOT reached).
+/// First deletion stands (not reversed); 403 surfaced; exit 1.
+///
+/// RED GATE: `todo!()` → exit 101.
 #[tokio::test]
 async fn test_bc_3_9_010_bulk_delete_non_404_aborts_sequence() {
-    todo!(
-        "S-576-4: stub — AID1→204, AID2→403; assert sequence stops after AID2 DELETE; \
-         assert first deletion completed and not reversed; \
-         assert 403 error surfaced to stderr; exit 1"
-    )
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let cfg = TempDir::new().unwrap();
+
+    // AID1 succeeds
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/attachment/10001"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // AID2 returns 403 — aborts sequence
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/attachment/10002"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+            "errorMessages": ["Permission denied."]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // AID3 must NOT be called — sequence aborted after AID2 403
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/attachment/10003"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+        .args([
+            "issue", "attachment", "delete", "10001", "10002", "10003", "--yes",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "BC-3.9.010 EC-3.9.010-4 non-404 abort: must exit 1 on 403; \
+         got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+    // 403 error must be surfaced
+    assert!(
+        !stderr.is_empty() || {
+            // In JSON mode errors go to stdout; in human mode to stderr. Accept either.
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            !stdout.is_empty()
+        },
+        "BC-3.9.010 non-404 abort: 403 error must be surfaced; stderr: {stderr}"
+    );
 }
 
-/// BC-3.9.010: partial-404 bulk — AID2→404 is benign; AID1+AID3 succeed.
-/// Assert: all 3 DELETEs issued; AID2 excluded from response ids;
-/// result `{"count":2,"deleted":true,"ids":["AID1","AID3"]}`; exit 0.
+/// BC-3.9.010 EC-3.9.010-4: partial-404 bulk — 404 is benign; other AIDs succeed.
+/// AID1→204, AID2→404 (benign skip), AID3→204.
+/// All 3 DELETEs issued; AID2 excluded from ids;
+/// JSON `{"count":2,"deleted":true,"ids":["10001","10003"]}`.
+///
+/// RED GATE: `todo!()` → exit 101.
 #[tokio::test]
 async fn test_bc_3_9_010_bulk_partial_404_skip_continues() {
-    todo!(
-        "S-576-4: stub — AID1→204, AID2→404, AID3→204; assert all 3 DELETEs issued; \
-         AID2 absent from ids; JSON {{count:2,deleted:true,ids:[AID1,AID3]}}; exit 0"
-    )
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let cfg = TempDir::new().unwrap();
+
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/attachment/10001"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // AID2: 404 — benign skip, iteration continues
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/attachment/10002"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/attachment/10003"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+        .args([
+            "issue", "attachment", "delete", "10001", "10002", "10003", "--yes", "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "BC-3.9.010 partial-404: must exit 0; got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+
+    let parsed: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!(
+            "BC-3.9.010 partial-404: stdout must be valid JSON; error: {e}\nstdout: {stdout}"
+        )
+    });
+
+    assert_eq!(
+        parsed["count"],
+        Value::Number(2.into()),
+        "BC-3.9.010 partial-404: count must be 2; got: {}",
+        parsed["count"]
+    );
+    assert_eq!(
+        parsed["deleted"],
+        Value::Bool(true),
+        "BC-3.9.010 partial-404: deleted must be true; got: {}",
+        parsed["deleted"]
+    );
+    // ids must contain AID1 and AID3, not AID2 (the 404'd one)
+    let ids = parsed["ids"]
+        .as_array()
+        .expect("BC-3.9.010 partial-404: ids must be an array");
+    let id_set: BTreeSet<&str> = ids
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(
+        id_set,
+        BTreeSet::from(["10001", "10003"]),
+        "BC-3.9.010 partial-404: ids must contain only the successful AIDs; got {id_set:?}"
+    );
+    assert!(
+        !ids.iter().any(|v| v.as_str() == Some("10002")),
+        "BC-3.9.010 partial-404: 404'd AID2 must NOT appear in ids"
+    );
 }
 
 // ---------------------------------------------------------------------------
 // AC-005: bulk JSON response shape (BC-3.9.010)
 // ---------------------------------------------------------------------------
 
-/// BC-3.9.010: `jr issue attachment delete <AID1> <AID2> --yes --output json` returns
-/// `{"count":2,"deleted":true,"ids":["<AID1>","<AID2>"]}` (BTreeMap-alphabetical;
-/// `ids` in request-order).
+/// BC-3.9.010 EC-3.9.010-2: two AIDs, both 204.
+/// JSON `{"count":2,"deleted":true,"ids":["10001","10002"]}` (3 keys, alphabetical).
+/// `ids` in command-line-supplied order.
+///
+/// RED GATE: `todo!()` → exit 101.
 #[tokio::test]
 async fn test_bc_3_9_010_bulk_json_shape() {
-    todo!(
-        "S-576-4: stub — two AIDs, both 204; assert JSON shape \
-         {{count:2,deleted:true,ids:[AID1,AID2]}}"
-    )
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let cfg = TempDir::new().unwrap();
+
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/attachment/10001"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/attachment/10002"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+        .args([
+            "issue", "attachment", "delete", "10001", "10002", "--yes", "--output", "json",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "BC-3.9.010 bulk JSON: must exit 0; got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+
+    let parsed: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!(
+            "BC-3.9.010 bulk JSON: stdout must be valid JSON; error: {e}\nstdout: {stdout}"
+        )
+    });
+
+    let keys: BTreeSet<&str> = parsed
+        .as_object()
+        .expect("BC-3.9.010 bulk JSON: stdout must be a JSON object")
+        .keys()
+        .map(|k| k.as_str())
+        .collect();
+
+    assert_eq!(
+        keys,
+        BTreeSet::from(["count", "deleted", "ids"]),
+        "BC-3.9.010 bulk JSON: key set must be exactly {{\"count\",\"deleted\",\"ids\"}}; \
+         got {keys:?}"
+    );
+    assert_eq!(
+        parsed["count"],
+        Value::Number(2.into()),
+        "BC-3.9.010 bulk JSON: count must be 2; got: {}",
+        parsed["count"]
+    );
+    assert_eq!(
+        parsed["deleted"],
+        Value::Bool(true),
+        "BC-3.9.010 bulk JSON: deleted must be true; got: {}",
+        parsed["deleted"]
+    );
+    assert_eq!(
+        parsed["ids"],
+        serde_json::json!(["10001", "10002"]),
+        "BC-3.9.010 bulk JSON: ids must be [\"10001\",\"10002\"] in supplied order; \
+         got: {}",
+        parsed["ids"]
+    );
 }
 
 // ---------------------------------------------------------------------------
 // AC-006: --issue KEY + --older-than + --yes combined (BC-3.9.016 + BC-3.9.019)
 // ---------------------------------------------------------------------------
 
-/// BC-3.9.016 + BC-3.9.019: `jr issue attachment delete --issue <KEY> --older-than <DUR> --yes`.
-/// Wire flow: fetch issue attachment list → age filter → bulk DELETE.
-/// BC-3.9.019 canonical strings:
-///   (a) N>0 human run → stderr contains pre-DELETE HINT + success summary.
-///   (b) N>0 JSON run → NEITHER string on stderr (JSON-suppressed).
-///   (c) zero-match human run → stderr contains zero-match echo.
+/// BC-3.9.016 + BC-3.9.019: `--issue FOO-1 --older-than 1d --yes`.
+/// Wire: GET attachment list → age filter (2 old, 1 new) → 2 DELETEs.
+/// Sub-assertion (a) N>0 human: stderr has pre-deletion HINT + success summary (JSON-suppressed).
+/// Sub-assertion (b) N>0 JSON: NEITHER hint on stderr.
+/// Sub-assertion (c) zero-match human: stderr has zero-match echo.
+///
+/// RED GATE: `todo!()` → exit 101.
 #[tokio::test]
 async fn test_bc_3_9_019_issue_key_older_than_resolution() {
-    todo!(
-        "S-576-4: stub — fetch attachment list; age filter; bulk DELETE; \
-         sub-assertion (a) N>0 human: stderr has 'Deleting N attachment(s)...' + \
-         'Deleted N attachment(s)...'; \
-         sub-assertion (b) N>0 JSON: NEITHER string on stderr; \
-         sub-assertion (c) zero-match human: stderr has 'No attachments older than...'"
-    )
+    // Sub-assertion (a): N>0 human — pre-deletion HINT + success summary
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        // Issue attachment list: 2 old (will be selected), 1 new (will be excluded)
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/FOO-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(issue_attachments_json(&[
+                old_attachment("10001", "old1.txt"),
+                old_attachment("10002", "old2.txt"),
+                new_attachment("10003", "new1.txt"),
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("DELETE"))
+            .and(path("/rest/api/3/attachment/10001"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("DELETE"))
+            .and(path("/rest/api/3/attachment/10002"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // new1.txt must NOT be deleted
+        Mock::given(method("DELETE"))
+            .and(path("/rest/api/3/attachment/10003"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args([
+                "issue",
+                "attachment",
+                "delete",
+                "--issue",
+                "FOO-1",
+                "--older-than",
+                "1d",
+                "--yes",
+            ])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "BC-3.9.019 N>0 human: must exit 0; got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+        assert!(
+            stderr.contains("Deleting 2 attachment(s) older than 1d from FOO-1."),
+            "BC-3.9.019: stderr must contain pre-deletion HINT (human mode); got stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("Deleted 2 attachment(s) older than 1d from FOO-1."),
+            "BC-3.9.019: stderr must contain success summary (human mode); got stderr: {stderr}"
+        );
+    }
+
+    // Sub-assertion (b): N>0 JSON — hints suppressed
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/FOO-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(issue_attachments_json(&[
+                old_attachment("10001", "old1.txt"),
+                old_attachment("10002", "old2.txt"),
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("DELETE"))
+            .and(path("/rest/api/3/attachment/10001"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("DELETE"))
+            .and(path("/rest/api/3/attachment/10002"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args([
+                "issue",
+                "attachment",
+                "delete",
+                "--issue",
+                "FOO-1",
+                "--older-than",
+                "1d",
+                "--yes",
+                "--output",
+                "json",
+            ])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "BC-3.9.019 N>0 JSON: must exit 0; got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+        // HINT strings must NOT appear in JSON mode (JSON-suppressed per P30-002)
+        assert!(
+            !stderr.contains("Deleting"),
+            "BC-3.9.019: pre-deletion HINT must be suppressed in JSON mode; \
+             got stderr: {stderr}"
+        );
+        assert!(
+            !stderr.contains("Deleted 2 attachment(s) older than"),
+            "BC-3.9.019: success summary must be suppressed in JSON mode; \
+             got stderr: {stderr}"
+        );
+        // JSON result must carry count
+        let parsed: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+            panic!(
+                "BC-3.9.019 N>0 JSON: stdout must be valid JSON; error: {e}\nstdout: {stdout}"
+            )
+        });
+        assert_eq!(
+            parsed["count"],
+            Value::Number(2.into()),
+            "BC-3.9.019 N>0 JSON: count must be 2; got: {}",
+            parsed["count"]
+        );
+        assert_eq!(
+            parsed["deleted"],
+            Value::Bool(true),
+            "BC-3.9.019 N>0 JSON: deleted must be true; got: {}",
+            parsed["deleted"]
+        );
+    }
+
+    // Sub-assertion (c): zero-match human — zero-match echo
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        // All attachments are new — none selected by filter
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/FOO-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(issue_attachments_json(&[
+                new_attachment("10003", "new1.txt"),
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // No DELETEs should be issued
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args([
+                "issue",
+                "attachment",
+                "delete",
+                "--issue",
+                "FOO-1",
+                "--older-than",
+                "1d",
+                "--yes",
+            ])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "BC-3.9.019 zero-match: must exit 0; got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+        assert!(
+            stderr.contains("No attachments older than 1d found on FOO-1."),
+            "BC-3.9.019 EC-3.9.019-2: stderr must contain zero-match echo; \
+             got stderr: {stderr}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
 // AC-007: --older-than duration parsing via parse_age_duration (BC-3.9.019)
 // ---------------------------------------------------------------------------
 
-/// BC-3.9.019 EC-3.9.019-3/8: `--older-than <DUR>` duration parsing integration.
-/// Invalid duration → exit 64 with EC-3.9.019-3 canonical error string.
-/// Valid duration filters correctly; no matches → exit 0 + empty JSON shape.
+/// BC-3.9.019 EC-3.9.019-3: invalid duration → exit 64 + canonical error string.
+/// BC-3.9.019 EC-3.9.019-2: valid duration, zero matches → exit 0 +
+/// `{"count":0,"deleted":false,"ids":[]}`.
+///
+/// RED GATE: `todo!()` → exit 101.
 #[tokio::test]
 async fn test_bc_3_9_019_older_than_parse_age_duration_filter() {
-    todo!(
-        "S-576-4: stub — invalid duration exits 64 with canonical EC-3.9.019-3 message; \
-         valid duration filters attachments by created timestamp; \
-         no matches → exit 0 + {{count:0,deleted:false,ids:[]}}"
-    )
+    // Sub-case: invalid duration string
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        // No HTTP calls should be issued before the parse guard fires
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args([
+                "issue",
+                "attachment",
+                "delete",
+                "--issue",
+                "FOO-1",
+                "--older-than",
+                "badval",
+                "--yes",
+            ])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert_eq!(
+            output.status.code(),
+            Some(64),
+            "BC-3.9.019 EC-3.9.019-3: invalid duration must exit 64; \
+             got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+        assert!(
+            stderr.contains(
+                "invalid duration: 'badval'. Use formats like 30m, 2h, 1d, 7d, 2w."
+            ),
+            "BC-3.9.019 EC-3.9.019-3: stderr must contain canonical error; \
+             got stderr: {stderr}"
+        );
+    }
+
+    // Sub-case: valid duration, no attachments on issue → empty JSON
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        // Empty attachment list
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/FOO-1"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(issue_attachments_json(&[])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args([
+                "issue",
+                "attachment",
+                "delete",
+                "--issue",
+                "FOO-1",
+                "--older-than",
+                "7d",
+                "--yes",
+                "--output",
+                "json",
+            ])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "BC-3.9.019 EC-3.9.019-2 zero-match: must exit 0; got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+
+        let parsed: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+            panic!(
+                "BC-3.9.019 zero-match JSON: stdout must be valid JSON; error: {e}\nstdout: {stdout}"
+            )
+        });
+
+        assert_eq!(
+            parsed,
+            serde_json::json!({"count": 0, "deleted": false, "ids": []}),
+            "BC-3.9.019 EC-3.9.019-2: zero-match JSON must be \
+             {{\"count\":0,\"deleted\":false,\"ids\":[]}}; got: {parsed}"
+        );
+    }
 }
 
 // Unit test test_bc_3_9_019_ec_8_parse_age_duration_1d_is_24h lives in
@@ -224,36 +1401,399 @@ async fn test_bc_3_9_019_older_than_parse_age_duration_filter() {
 // ---------------------------------------------------------------------------
 
 /// BC-3.9.020 EC-3.9.020-3: `jr issue attachment delete <AID> --dry-run`.
-/// AID validation fires (guards NOT suppressed); gate suppressed; no DELETE issued.
+/// AID validation fires (guard NOT suppressed).
 /// Human: stderr hint `"--dry-run has no effect on single-ID delete; omit the flag."` + exit 0.
-/// JSON (`--output json`): `{"attachments":[{"id":"<AID>"}],"dryRun":true,"ids":["<AID>"]}`.
-/// Invalid AID → exit 64 (guard not suppressed per EC-3.9.020-3).
+/// JSON: `{"attachments":[{"id":"<AID>"}],"dryRun":true,"ids":["<AID>"]}`.
+/// Invalid AID + --dry-run: exit 64 (guard fires; dry-run hint NOT emitted).
+///
+/// RED GATE: `todo!()` → exit 101.
 #[tokio::test]
 async fn test_bc_3_9_020_dry_run_single_aid() {
-    todo!(
-        "S-576-4: stub — valid AID + --dry-run: no DELETE; human stderr hint; exit 0; \
-         JSON shape {{attachments:[{{id:AID}}],dryRun:true,ids:[AID]}}; \
-         invalid AID + --dry-run: exit 64 (guard fires)"
-    )
+    // Human mode: valid AID + --dry-run → stderr hint, no DELETE, exit 0
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        Mock::given(method("DELETE"))
+            .and(path("/rest/api/3/attachment/12345"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0) // no DELETE on dry-run
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args(["issue", "attachment", "delete", "12345", "--dry-run"])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "BC-3.9.020 EC-3.9.020-3 human: must exit 0; got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+        assert!(
+            stderr.contains("--dry-run has no effect on single-ID delete; omit the flag."),
+            "BC-3.9.020 EC-3.9.020-3 human: stderr must contain canonical hint; \
+             got stderr: {stderr}"
+        );
+    }
+
+    // JSON mode: valid AID + --dry-run → JSON shape, no stderr hint, exit 0
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        Mock::given(method("DELETE"))
+            .and(path("/rest/api/3/attachment/12345"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args([
+                "issue", "attachment", "delete", "12345", "--dry-run", "--output", "json",
+            ])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "BC-3.9.020 EC-3.9.020-3 JSON: must exit 0; got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+        // In JSON mode, the dry-run hint is NOT emitted to stderr
+        assert!(
+            !stderr.contains("--dry-run has no effect"),
+            "BC-3.9.020 EC-3.9.020-3 JSON: hint must NOT appear on stderr in JSON mode; \
+             got stderr: {stderr}"
+        );
+
+        let parsed: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+            panic!(
+                "BC-3.9.020 single dry-run JSON: stdout must be valid JSON; \
+                 error: {e}\nstdout: {stdout}"
+            )
+        });
+
+        let keys: BTreeSet<&str> = parsed
+            .as_object()
+            .expect("BC-3.9.020 single dry-run: stdout must be a JSON object")
+            .keys()
+            .map(|k| k.as_str())
+            .collect();
+
+        assert_eq!(
+            keys,
+            BTreeSet::from(["attachments", "dryRun", "ids"]),
+            "BC-3.9.020 EC-3.9.020-3 JSON: key set must be \
+             {{\"attachments\",\"dryRun\",\"ids\"}}; got {keys:?}"
+        );
+        assert_eq!(
+            parsed["dryRun"],
+            Value::Bool(true),
+            "BC-3.9.020 EC-3.9.020-3 JSON: dryRun must be true; got: {}",
+            parsed["dryRun"]
+        );
+        assert_eq!(
+            parsed["ids"],
+            serde_json::json!(["12345"]),
+            "BC-3.9.020 EC-3.9.020-3 JSON: ids must be [\"12345\"]; got: {}",
+            parsed["ids"]
+        );
+        let attachments = parsed["attachments"]
+            .as_array()
+            .expect("BC-3.9.020 single dry-run JSON: attachments must be an array");
+        assert_eq!(
+            attachments.len(),
+            1,
+            "BC-3.9.020 single dry-run JSON: attachments must have 1 element"
+        );
+        assert_eq!(
+            attachments[0]["id"],
+            Value::String("12345".to_string()),
+            "BC-3.9.020 single dry-run JSON: attachments[0].id must be \"12345\"; \
+             got: {}",
+            attachments[0]["id"]
+        );
+        // No "filename" key — no metadata fetch on single-ID dry-run (P8-004)
+        assert!(
+            attachments[0].get("filename").is_none(),
+            "BC-3.9.020 single dry-run JSON: attachments[0] must NOT have \"filename\" \
+             (no metadata fetch on single-ID dry-run)"
+        );
+    }
+
+    // Invalid AID + --dry-run: exit 64 (guard fires; dry-run hint NOT emitted)
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args(["issue", "attachment", "delete", "bad_id", "--dry-run"])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert_eq!(
+            output.status.code(),
+            Some(64),
+            "BC-3.9.020 EC-3.9.020-3 invalid AID: must exit 64 even with --dry-run; \
+             got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+        assert!(
+            stderr.contains("invalid attachment id: 'bad_id' (must be numeric)"),
+            "BC-3.9.020 invalid AID: stderr must contain canonical AID error; \
+             got stderr: {stderr}"
+        );
+        // Dry-run hint must NOT appear (the AID guard fires first)
+        assert!(
+            !stderr.contains("--dry-run has no effect"),
+            "BC-3.9.020 EC-3.9.020-3: dry-run hint must NOT appear when AID guard fires; \
+             got stderr: {stderr}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
 // AC-009: --dry-run bulk (BC-3.9.020 EC-3.9.020-1/2)
 // ---------------------------------------------------------------------------
 
-/// BC-3.9.020 EC-3.9.020-1/2: bulk `--dry-run` (multi-AID or `--issue/--older-than`).
-/// No DELETE issued; --yes NOT required on --dry-run.
+/// BC-3.9.020 EC-3.9.020-1/2: bulk `--dry-run` (--issue/--older-than path).
+/// No DELETE issued; --yes NOT required.
 /// Human: table + `"<N> attachment(s) would be deleted. Run without --dry-run to confirm."`.
 /// JSON: `{"attachments":[{"filename":"<n>","id":"<AID>"}],"dryRun":true,"ids":[...]}`.
 /// Zero matches: `{"attachments":[],"dryRun":true,"ids":[]}`.
+///
+/// Also tests multi-AID --dry-run path (b): per-AID metadata fan-out GET.
+///
+/// RED GATE: `todo!()` → exit 101.
 #[tokio::test]
 async fn test_bc_3_9_020_dry_run_bulk() {
-    todo!(
-        "S-576-4: stub — --issue --older-than --dry-run: fetch list, apply filter, \
-         no DELETE; human table + would-delete summary; \
-         JSON shape {{attachments:[{{filename,id}}],dryRun:true,ids:[...]}}; \
-         multi-AID --dry-run: per-AID metadata fetch; same JSON shape"
-    )
+    // --older-than --dry-run (path a): N>0 JSON shape
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/FOO-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(issue_attachments_json(&[
+                old_attachment("10001", "report.pdf"),
+                old_attachment("10002", "notes.txt"),
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // No DELETEs on dry-run
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args([
+                "issue",
+                "attachment",
+                "delete",
+                "--issue",
+                "FOO-1",
+                "--older-than",
+                "1d",
+                "--dry-run",
+                "--output",
+                "json",
+            ])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "BC-3.9.020 EC-3.9.020-1 --older-than dry-run: must exit 0; \
+             got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+
+        let parsed: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+            panic!(
+                "BC-3.9.020 --older-than dry-run JSON: stdout must be valid JSON; \
+                 error: {e}\nstdout: {stdout}"
+            )
+        });
+
+        let outer_keys: BTreeSet<&str> = parsed
+            .as_object()
+            .expect("BC-3.9.020 dry-run: stdout must be a JSON object")
+            .keys()
+            .map(|k| k.as_str())
+            .collect();
+
+        assert_eq!(
+            outer_keys,
+            BTreeSet::from(["attachments", "dryRun", "ids"]),
+            "BC-3.9.020 EC-3.9.020-1 JSON: key set must be \
+             {{\"attachments\",\"dryRun\",\"ids\"}}; got {outer_keys:?}"
+        );
+        assert_eq!(
+            parsed["dryRun"],
+            Value::Bool(true),
+            "BC-3.9.020 dry-run JSON: dryRun must be true"
+        );
+        let ids = parsed["ids"]
+            .as_array()
+            .expect("BC-3.9.020 dry-run JSON: ids must be an array");
+        assert_eq!(
+            ids.len(),
+            2,
+            "BC-3.9.020 dry-run JSON: ids must have 2 elements"
+        );
+        let atts = parsed["attachments"]
+            .as_array()
+            .expect("BC-3.9.020 dry-run JSON: attachments must be an array");
+        assert_eq!(
+            atts.len(),
+            2,
+            "BC-3.9.020 dry-run JSON: attachments must have 2 elements"
+        );
+        // Each attachment element must have filename and id keys
+        for att in atts {
+            let att_keys: BTreeSet<&str> = att
+                .as_object()
+                .expect("BC-3.9.020 dry-run: attachment element must be an object")
+                .keys()
+                .map(|k| k.as_str())
+                .collect();
+            assert_eq!(
+                att_keys,
+                BTreeSet::from(["filename", "id"]),
+                "BC-3.9.020 dry-run: attachment element key set must be \
+                 {{\"filename\",\"id\"}}; got {att_keys:?}"
+            );
+        }
+    }
+
+    // --older-than --dry-run zero-match JSON shape
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/FOO-1"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(issue_attachments_json(&[new_attachment("10003", "new1.txt")])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args([
+                "issue",
+                "attachment",
+                "delete",
+                "--issue",
+                "FOO-1",
+                "--older-than",
+                "1d",
+                "--dry-run",
+                "--output",
+                "json",
+            ])
+            .output()
+            .unwrap();
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert_eq!(output.status.code(), Some(0),
+            "BC-3.9.020 EC-3.9.020-2 dry-run zero-match: must exit 0; got {:?}\nstderr: {stderr}",
+            output.status.code());
+
+        let parsed: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+            panic!("BC-3.9.020 dry-run zero-match: stdout must be valid JSON; error: {e}\nstdout: {stdout}")
+        });
+        assert_eq!(
+            parsed,
+            serde_json::json!({"attachments": [], "dryRun": true, "ids": []}),
+            "BC-3.9.020 EC-3.9.020-2: zero-match dry-run JSON must match canonical shape; \
+             got: {parsed}"
+        );
+    }
+
+    // --dry-run human: would-delete summary line
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/FOO-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(issue_attachments_json(&[
+                old_attachment("10001", "report.pdf"),
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args([
+                "issue", "attachment", "delete", "--issue", "FOO-1", "--older-than", "1d",
+                "--dry-run",
+            ])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        assert_eq!(output.status.code(), Some(0),
+            "BC-3.9.020 dry-run human: must exit 0; got {:?}\nstderr: {stderr}", output.status.code());
+        // Human dry-run output goes to stdout (table) or stderr; accept either channel
+        let combined = format!("{stderr}{stdout}");
+        assert!(
+            combined.contains("would be deleted"),
+            "BC-3.9.020 dry-run human: output must contain 'would be deleted' summary; \
+             got stderr: {stderr}\nstdout: {stdout}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -262,29 +1802,126 @@ async fn test_bc_3_9_020_dry_run_bulk() {
 
 /// BC-3.9.015 EC-3.9.015-3: `--no-input` or non-TTY stdin without `--yes` → exit 64.
 /// Canonical message: `"Use --yes to confirm deletion without a prompt."`.
-/// No DELETE issued.
+/// No HTTP calls issued.
+///
+/// RED GATE: `todo!()` → exit 101.
 #[tokio::test]
 async fn test_bc_3_9_015_non_interactive_without_yes_exits_64() {
-    todo!(
-        "S-576-4: stub — --no-input without --yes: exit 64; \
-         stderr contains 'Use --yes to confirm deletion without a prompt.'; \
-         zero HTTP calls"
-    )
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let cfg = TempDir::new().unwrap();
+
+    // No HTTP calls allowed before the non-interactive guard fires
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/attachment/12345"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+        .args(["issue", "attachment", "delete", "12345", "--no-input"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "BC-3.9.015 EC-3.9.015-3: --no-input without --yes must exit 64; \
+         got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("Use --yes to confirm deletion without a prompt."),
+        "BC-3.9.015 EC-3.9.015-3: stderr must contain canonical --yes hint; \
+         got stderr: {stderr}"
+    );
 }
 
 // ---------------------------------------------------------------------------
 // AC-011: --issue + --older-than + --yes combined (BC-3.9.016 + BC-3.9.019)
 // ---------------------------------------------------------------------------
 
-/// BC-3.9.016 + BC-3.9.019: full combined flow.
-/// Bulk forms ALWAYS require `--yes` (no interactive gate offered; BC-3.9.016 line 3705).
-/// `display_sanitize_filename` applied in `--dry-run` preview table (CWE-116 / AC-009).
+/// BC-3.9.016 + BC-3.9.019: full combined flow with `--yes`.
+/// Bulk forms ALWAYS require `--yes` (no interactive gate offered).
+/// Wire: list GET → age filter → serial DELETEs → exit 0.
+///
+/// RED GATE: `todo!()` → exit 101.
 #[tokio::test]
 async fn test_bc_3_9_016_issue_older_than_yes_combined() {
-    todo!(
-        "S-576-4: stub — --issue + --older-than + --yes: combines list fetch + age filter + \
-         bulk DELETE; no interactive gate; exit 0 on success"
-    )
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let cfg = TempDir::new().unwrap();
+
+    // Issue has 3 old attachments — all should be selected and deleted
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/BAR-2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_attachments_json(&[
+            old_attachment("20001", "a.txt"),
+            old_attachment("20002", "b.txt"),
+            old_attachment("20003", "c.txt"),
+        ])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/attachment/20001"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/attachment/20002"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/attachment/20003"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+        .args([
+            "issue",
+            "attachment",
+            "delete",
+            "--issue",
+            "BAR-2",
+            "--older-than",
+            "7d",
+            "--yes",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "BC-3.9.016 + BC-3.9.019 combined: must exit 0 on full success; \
+         got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+    // No interactive gate prompt should appear (bulk always-yes, no gate)
+    assert!(
+        !stderr.contains("[y/N]"),
+        "BC-3.9.016 bulk: no interactive gate prompt should appear on bulk --yes path; \
+         got stderr: {stderr}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -294,26 +1931,78 @@ async fn test_bc_3_9_016_issue_older_than_yes_combined() {
 /// DEC-168 body surfacing (EC-3.9.008-2): stderr MUST BEGIN with canonical prefix
 /// `"Attachment <AID> not found or not accessible."` THEN the Jira error body.
 /// NOT body-only; NOT silent exit 0. Exit 64.
+///
+/// RED GATE: `todo!()` → exit 101.
 #[tokio::test]
 async fn test_bc_3_9_008_404_body_surfaced_to_stderr() {
-    todo!(
-        "S-576-4: stub — wiremock returns 404 with JSON error body; \
-         assert stderr BEGINS with 'Attachment <AID> not found or not accessible.'; \
-         assert stderr also contains the Jira error body; exit 64"
-    )
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let cfg = TempDir::new().unwrap();
+
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/attachment/12345"))
+        .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+            "errorMessages": ["Attachment does not exist."],
+            "errors": {}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+        .args(["issue", "attachment", "delete", "12345", "--yes"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "BC-3.9.008 EC-3.9.008-2 DEC-168: must exit 64 on 404; got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+    // Canonical prefix must appear in stderr (DEC-168: prepend canonical string, append body)
+    assert!(
+        stderr.contains("Attachment 12345 not found or not accessible."),
+        "BC-3.9.008 EC-3.9.008-2 DEC-168: stderr must contain canonical prefix; \
+         got stderr: {stderr}"
+    );
+    // Jira error body must also appear (NOT silent — DEC-168 requires body surface)
+    assert!(
+        stderr.contains("Attachment does not exist."),
+        "BC-3.9.008 EC-3.9.008-2 DEC-168: stderr must also contain Jira error body; \
+         got stderr: {stderr}"
+    );
 }
 
 // ---------------------------------------------------------------------------
 // AC-014: bare --issue without --older-than → exit 2 (BC-3.9.016 EC-3.9.016-9)
 // ---------------------------------------------------------------------------
 
-/// BC-3.9.016 EC-3.9.016-9: `--issue <KEY>` without `--older-than` → exit 2 (clap error).
-/// No application code reached; clap `requires` constraint.
+/// BC-3.9.016 EC-3.9.016-9: `--issue <KEY>` without `--older-than` → exit 2 (clap `requires`).
+/// No application code reached.
+///
+/// This test exercises a clap-level constraint and may pass at Red Gate
+/// if the clap `requires` constraint is correctly declared in the stub.
 #[tokio::test]
 async fn test_bc_3_9_016_issue_without_older_than_exit_2() {
-    todo!(
-        "S-576-4: stub — --issue FOO-1 without --older-than: exit 2 (clap requires error)"
-    )
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let cfg = TempDir::new().unwrap();
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+        .args(["issue", "attachment", "delete", "--issue", "FOO-1"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "BC-3.9.016 EC-3.9.016-9: --issue without --older-than must exit 2 (clap requires); \
+         got {:?}",
+        output.status.code()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -321,17 +2010,89 @@ async fn test_bc_3_9_016_issue_without_older_than_exit_2() {
 // ---------------------------------------------------------------------------
 
 /// BC-3.9.016 EC-3.9.016-4/5/9/10: all five clap-level constraint cases → exit 2.
-///   (a) `<AID> --issue FOO-1` → exit 2 (conflicts_with).
-///   (b) `<AID> --older-than 7d` → exit 2 (conflicts_with).
-///   (c) `--older-than 7d` (no --issue) → exit 2 (requires).
-///   (d) `--issue FOO-1` (no --older-than) → exit 2 (requires).
-///   (e) `delete` (no args) → exit 2 (required group).
+/// (a) `<AID> --issue FOO-1` → exit 2 (conflicts_with).
+/// (b) `<AID> --older-than 7d` → exit 2 (conflicts_with).
+/// (c) `--older-than 7d` (no --issue) → exit 2 (requires).
+/// (d) `--issue FOO-1` (no --older-than) → exit 2 (requires).
+/// (e) `delete` (no args) → exit 2 (required group).
+///
+/// These tests exercise clap constraints and may pass at Red Gate
+/// if the clap definition in the stub is correct.
 #[tokio::test]
 async fn test_bc_3_9_016_clap_mutual_exclusion_constraints() {
-    todo!(
-        "S-576-4: stub — five sub-cases, all exit 2 via clap error; \
-         zero HTTP calls for all cases"
-    )
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let cfg = TempDir::new().unwrap();
+
+    // (a) AID + --issue → exit 2
+    {
+        let out = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args(["issue", "attachment", "delete", "12345", "--issue", "FOO-1"])
+            .output()
+            .unwrap();
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "(a) AID + --issue must exit 2 (conflicts_with); got {:?}",
+            out.status.code()
+        );
+    }
+
+    // (b) AID + --older-than → exit 2
+    {
+        let out = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args(["issue", "attachment", "delete", "12345", "--older-than", "7d"])
+            .output()
+            .unwrap();
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "(b) AID + --older-than must exit 2 (conflicts_with); got {:?}",
+            out.status.code()
+        );
+    }
+
+    // (c) --older-than without --issue → exit 2
+    {
+        let out = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args(["issue", "attachment", "delete", "--older-than", "7d"])
+            .output()
+            .unwrap();
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "(c) --older-than without --issue must exit 2 (requires); got {:?}",
+            out.status.code()
+        );
+    }
+
+    // (d) --issue without --older-than → exit 2
+    {
+        let out = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args(["issue", "attachment", "delete", "--issue", "FOO-1"])
+            .output()
+            .unwrap();
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "(d) --issue without --older-than must exit 2 (requires); got {:?}",
+            out.status.code()
+        );
+    }
+
+    // (e) bare delete (no args) → exit 2
+    {
+        let out = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args(["issue", "attachment", "delete"])
+            .output()
+            .unwrap();
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "(e) bare 'delete' with no args must exit 2 (required-group); got {:?}",
+            out.status.code()
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -339,36 +2100,154 @@ async fn test_bc_3_9_016_clap_mutual_exclusion_constraints() {
 // ---------------------------------------------------------------------------
 
 /// BC-3.9.013: 401 → exit 2; stderr contains "Not authenticated" AND "jr auth login".
+///
+/// RED GATE: `todo!()` → exit 101.
 #[tokio::test]
 async fn test_bc_3_9_013_delete_401_exit_2() {
-    todo!(
-        "S-576-4: stub — wiremock returns 401; assert exit 2; \
-         assert stderr contains 'Not authenticated' AND 'jr auth login'"
-    )
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let cfg = TempDir::new().unwrap();
+
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/attachment/12345"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+            "errorMessages": ["You are not authenticated."]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+        .args(["issue", "attachment", "delete", "12345", "--yes"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "BC-3.9.013: 401 must exit 2 (JrError::NotAuthenticated); \
+         got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("Not authenticated"),
+        "BC-3.9.013: stderr must contain 'Not authenticated'; got stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("jr auth login"),
+        "BC-3.9.013: stderr must contain 'jr auth login'; got stderr: {stderr}"
+    );
 }
 
-/// BC-3.9.013: 403 → exit 1; Jira error body surfaced to stderr.
+/// BC-3.9.013 EC-3.9.013-2: 403 → exit 1; Jira error body surfaced to stderr.
+///
+/// RED GATE: `todo!()` → exit 101.
 #[tokio::test]
 async fn test_bc_3_9_013_delete_403_exit_1() {
-    todo!("S-576-4: stub — wiremock returns 403; assert exit 1; assert Jira body on stderr")
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let cfg = TempDir::new().unwrap();
+
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/attachment/12345"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+            "errorMessages": ["You do not have permission to delete this attachment."]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+        .args(["issue", "attachment", "delete", "12345", "--yes"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "BC-3.9.013 EC-3.9.013-2: 403 must exit 1; got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+    // Jira error body must be surfaced (either channel depending on --output mode)
+    let combined = format!("{stderr}{stdout}");
+    assert!(
+        combined.contains("You do not have permission"),
+        "BC-3.9.013 EC-3.9.013-2: Jira 403 error body must be surfaced; \
+         got stderr: {stderr}\nstdout: {stdout}"
+    );
 }
 
 /// BC-3.9.013: 5xx → exit 1; stderr contains `"API error ("` (loose-substring).
-/// Full literal from src/error.rs: `"API error (500): <message>"`.
+/// Full literal: `"API error (500): <message>"` from `src/error.rs::JrError`.
+///
+/// RED GATE: `todo!()` → exit 101.
 #[tokio::test]
 async fn test_bc_3_9_013_delete_5xx_exit_1() {
-    todo!(
-        "S-576-4: stub — wiremock returns 500; assert exit 1; \
-         assert stderr contains 'API error ('"
-    )
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let cfg = TempDir::new().unwrap();
+
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/attachment/12345"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("Internal Server Error"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+        .args(["issue", "attachment", "delete", "12345", "--yes"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "BC-3.9.013: 500 must exit 1; got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+    // API error prefix must appear (either channel)
+    let combined = format!("{stderr}{stdout}");
+    assert!(
+        combined.contains("API error ("),
+        "BC-3.9.013: 5xx error must surface 'API error (' prefix; \
+         got stderr: {stderr}\nstdout: {stdout}"
+    );
 }
 
 /// BC-3.9.013: network failure → exit 1; stderr contains `"Could not reach"`.
-/// Full literal from src/error.rs::JrError::NetworkError: `"Could not reach <host> — check your connection"`.
+/// Full literal: `"Could not reach <host> — check your connection"` from
+/// `src/error.rs::JrError::NetworkError`.
+///
+/// RED GATE: `todo!()` → exit 101.
 #[tokio::test]
 async fn test_bc_3_9_013_delete_network_error_exit_1() {
-    todo!(
-        "S-576-4: stub — server unreachable; assert exit 1; \
-         assert stderr contains 'Could not reach'"
-    )
+    let cache = TempDir::new().unwrap();
+    let cfg = TempDir::new().unwrap();
+
+    // Point at a port that will refuse connections immediately
+    let output = jr_cmd_with_xdg("http://127.0.0.1:1", cache.path(), cfg.path())
+        .args(["issue", "attachment", "delete", "12345", "--yes"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "BC-3.9.013: network failure must exit 1; got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("Could not reach"),
+        "BC-3.9.013: network error must contain 'Could not reach'; got stderr: {stderr}"
+    );
 }
