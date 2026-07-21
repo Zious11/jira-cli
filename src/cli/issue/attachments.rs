@@ -1475,26 +1475,55 @@ pub async fn handle_attachment_delete(
         }
 
         if dry_run {
-            // Bulk dry-run: emit what would be deleted (no DELETEs)
-            // For the positional multi-AID dry-run, IDs are already known
-            let attachments: Vec<serde_json::Value> = aids
-                .iter()
-                .map(|id| serde_json::json!({"id": id}))
-                .collect();
+            // Bulk dry-run: fan out per-AID metadata GETs to populate filenames
+            // (AC-009 P2-002: GET /rest/api/3/attachment/{id} for each AID).
+            // Metadata failure → {id}-only fallback row; never aborts (dry-run is read-only).
+            let mut attachment_rows: Vec<serde_json::Value> = Vec::new();
             let ids: Vec<&str> = aids.iter().map(|s| s.as_str()).collect();
+
+            for aid in &aids {
+                match client.get_attachment_metadata(aid).await {
+                    Ok(meta) => {
+                        let filename = meta.filename.unwrap_or_default();
+                        // BTreeMap key order: filename < id (alphabetical)
+                        let mut row = std::collections::BTreeMap::new();
+                        row.insert("filename", serde_json::Value::String(filename));
+                        row.insert("id", serde_json::Value::String(aid.clone()));
+                        attachment_rows.push(serde_json::to_value(row)?);
+                    }
+                    Err(_) => {
+                        // Metadata unavailable → id-only fallback row (no filename key)
+                        let mut row = std::collections::BTreeMap::new();
+                        row.insert("id", serde_json::Value::String(aid.clone()));
+                        attachment_rows.push(serde_json::to_value(row)?);
+                    }
+                }
+            }
+
             if is_json {
                 let payload = serde_json::json!({
-                    "attachments": attachments,
+                    "attachments": attachment_rows,
                     "dryRun": true,
                     "ids": ids
                 });
                 println!("{}", output::render_json(&payload)?);
             } else {
-                let combined = format!(
+                // Human mode: list each attachment filename (display-sanitized, CWE-116)
+                // so the user knows exactly what would be deleted.
+                for row in &attachment_rows {
+                    if let Some(filename) = row["filename"].as_str() {
+                        let id = row["id"].as_str().unwrap_or("");
+                        let safe = display_sanitize_filename(filename);
+                        eprintln!("  {safe} ({})", id);
+                    } else {
+                        let id = row["id"].as_str().unwrap_or("");
+                        eprintln!("  (metadata unavailable) ({})", id);
+                    }
+                }
+                eprintln!(
                     "{} attachment(s) would be deleted. Run without --dry-run to confirm.",
                     aids.len()
                 );
-                eprintln!("{combined}");
             }
             return Ok(());
         }
@@ -1754,25 +1783,28 @@ fn parse_age_duration(s: &str) -> anyhow::Result<chrono::Duration> {
         return Err(canonical_error().into());
     }
 
-    // Overflow-checked arithmetic: `Duration::minutes/hours(n)` internally
-    // multiplies n by 60/3600, which overflows i64 for very large n (debug panic).
-    // Use checked_mul with explicit multipliers so overflow → canonical exit-64 error.
+    // Two-layer overflow guard (P1-001 + P2-001):
+    // Layer 1 (P1-001): checked_mul prevents i64 multiplication overflow on `n * factor`.
+    // Layer 2 (P2-001): chrono::Duration::try_seconds handles the TimeDelta "panic band"
+    //   ~(i64::MAX/1000, i64::MAX] where Duration::seconds(s) multiplies by MILLIS_PER_SEC
+    //   (1000), overflowing i64 and panicking (confirmed chrono 0.4.45 src/lib.rs:717).
+    //   try_seconds returns None for out-of-bounds values → canonical exit-64 error.
     match suffix {
         "m" => n
             .checked_mul(60)
-            .map(chrono::Duration::seconds)
+            .and_then(chrono::Duration::try_seconds)
             .ok_or_else(|| canonical_error().into()),
         "h" => n
             .checked_mul(3_600)
-            .map(chrono::Duration::seconds)
+            .and_then(chrono::Duration::try_seconds)
             .ok_or_else(|| canonical_error().into()),
         "d" => n
             .checked_mul(24 * 3_600)
-            .map(chrono::Duration::seconds)
+            .and_then(chrono::Duration::try_seconds)
             .ok_or_else(|| canonical_error().into()),
         "w" => n
             .checked_mul(7 * 24 * 3_600)
-            .map(chrono::Duration::seconds)
+            .and_then(chrono::Duration::try_seconds)
             .ok_or_else(|| canonical_error().into()),
         _ => Err(canonical_error().into()),
     }
