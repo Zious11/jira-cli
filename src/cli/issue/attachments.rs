@@ -1163,7 +1163,8 @@ pub async fn handle_attachment_upload(
 /// VP-576-003: ALL `delete_attachment` calls MUST complete successfully before the first
 /// `upload_attachments` call is issued.
 ///
-/// When `dry_run` is `true`, this function forwards to `dry_run_upload` — no mutations.
+/// Dry-run dispatching is handled upstream in `handle_attachment_upload` before this
+/// function is called; this function always performs real mutations.
 /// When `yes` is `true` or `no_input` is `true`, skips the confirmation gate (BC-3.9.014).
 async fn replace_existing_attachments(
     key: &str,
