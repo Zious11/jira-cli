@@ -2431,4 +2431,23 @@ mod tests {
             "parse_age_duration(\"2h\") must equal chrono::Duration::hours(2)"
         );
     }
+
+    /// P2-001 unit pin: n=1e12 days → 8.64e16 seconds, inside the chrono panic band
+    /// ~(i64::MAX/1000, i64::MAX]. Duration::hours(n*24) calls Duration::seconds(8.64e16)
+    /// which internally multiplies by MILLIS_PER_SEC=1000 → 8.64e19 overflows i64 →
+    /// checked_mul panics. Implementation must use try_hours/try_seconds and map None→Err.
+    #[test]
+    fn test_bc_3_9_019_p2_001_chrono_band_1e12d_is_err() {
+        let result = parse_age_duration("1000000000000d");
+        assert!(
+            result.is_err(),
+            "parse_age_duration(\"1000000000000d\") must return Err (chrono out-of-bounds); \
+             P2-001: must use try_hours/try_seconds to catch the Duration panic band"
+        );
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.contains("invalid duration"),
+            "P2-001: error must contain 'invalid duration'; got: {msg}"
+        );
+    }
 }

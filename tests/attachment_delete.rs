@@ -1516,6 +1516,60 @@ async fn test_bc_3_9_019_older_than_parse_age_duration_filter() {
             "P1-001b overflow: must NOT emit panic output; got stderr: {stderr}"
         );
     }
+
+    // Sub-case P2-001: chrono::Duration::seconds panic band
+    // n=1e12 days → 8.64e16 seconds — inside the range (i64::MAX/1000, i64::MAX] where
+    // Duration::hours calls Duration::seconds which multiplies by MILLIS_PER_SEC (1000),
+    // overflowing i64 and panicking via checked_mul(...).expect("out of bounds").
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        // Parse guard must fire BEFORE any HTTP call
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args([
+                "issue",
+                "attachment",
+                "delete",
+                "--issue",
+                "FOO-1",
+                "--older-than",
+                "1000000000000d", // n=1e12 days → 8.64e16 s → inside chrono panic band
+                "--yes",
+            ])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert_eq!(
+            output.status.code(),
+            Some(64),
+            "P2-001 chrono band '1000000000000d': must exit 64 (not SIGABRT/panic/101); \
+             got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+        assert!(
+            stderr.contains("invalid duration: '1000000000000d'. Use formats like 30m, 2h, 1d, 7d, 2w."),
+            "P2-001 chrono band: stderr must contain canonical error; got stderr: {stderr}"
+        );
+        assert!(
+            !stderr.contains("panicked"),
+            "P2-001 chrono band: must NOT emit panic output; got stderr: {stderr}"
+        );
+    }
 }
 
 // Unit test test_bc_3_9_019_ec_8_parse_age_duration_1d_is_24h lives in
@@ -1941,6 +1995,331 @@ async fn test_bc_3_9_020_dry_run_bulk() {
             combined.contains("would be deleted"),
             "BC-3.9.020 dry-run human: output must contain 'would be deleted' summary; \
              got stderr: {stderr}\nstdout: {stdout}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AC-009 P2-002: multi-AID dry-run metadata fan-out
+// ---------------------------------------------------------------------------
+
+/// AC-009 P2-002: `jr issue attachment delete <AID1> <AID2> --dry-run`
+/// performs per-AID GET /rest/api/3/attachment/{id} to populate filename.
+///
+/// Current impl (lines ~1480-1483) emits `{"id": id}` with zero metadata calls.
+/// This test pins the required behavior:
+/// - Sub-case A: both GETs succeed → JSON `{filename, id}` per attachment
+/// - Sub-case B: one GET fails (403) → {id}-only fallback; still exit 0
+/// - Sub-case C: human mode → "Filename" column populated (not blank / id-only)
+///
+/// RED: current impl emits id-only with zero metadata calls; `.expect(1)` mock
+/// verification will abort OR assertion on `filename` key will fail.
+#[tokio::test]
+async fn test_bc_3_9_020_dry_run_multi_aid_metadata_fan_out() {
+    // Sub-case A: both metadata GETs succeed → JSON has {filename,id} for each
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/attachment/20001"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "20001",
+                    "filename": "archive.zip",
+                    "size": 4096
+                })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/attachment/20002"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "20002",
+                    "filename": "notes.txt",
+                    "size": 512
+                })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // No DELETEs on dry-run
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args([
+                "issue",
+                "attachment",
+                "delete",
+                "20001",
+                "20002",
+                "--dry-run",
+                "--output",
+                "json",
+            ])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "AC-009 P2-002 sub-A: multi-AID dry-run must exit 0; \
+             got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+
+        let parsed: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+            panic!(
+                "AC-009 P2-002 sub-A: stdout must be valid JSON; error: {e}\nstdout: {stdout}"
+            )
+        });
+
+        let atts = parsed["attachments"]
+            .as_array()
+            .expect("AC-009 P2-002 sub-A: 'attachments' must be an array");
+        assert_eq!(
+            atts.len(),
+            2,
+            "AC-009 P2-002 sub-A: attachments array must have 2 elements"
+        );
+
+        // Every attachment element must carry {filename, id}
+        for att in atts {
+            let att_keys: BTreeSet<&str> = att
+                .as_object()
+                .expect("AC-009 P2-002 sub-A: attachment element must be a JSON object")
+                .keys()
+                .map(|k| k.as_str())
+                .collect();
+            assert_eq!(
+                att_keys,
+                BTreeSet::from(["filename", "id"]),
+                "AC-009 P2-002 sub-A: each attachment must have exactly \
+                 {{\"filename\",\"id\"}} keys (from metadata GET); got {att_keys:?}\n\
+                 full att: {att}"
+            );
+        }
+
+        // Filenames must be populated from the metadata responses
+        let filenames: Vec<&str> = atts
+            .iter()
+            .map(|a| {
+                a["filename"]
+                    .as_str()
+                    .expect("AC-009 P2-002 sub-A: filename must be a string")
+            })
+            .collect();
+        assert!(
+            filenames.contains(&"archive.zip"),
+            "AC-009 P2-002 sub-A: must contain filename 'archive.zip'; got {filenames:?}"
+        );
+        assert!(
+            filenames.contains(&"notes.txt"),
+            "AC-009 P2-002 sub-A: must contain filename 'notes.txt'; got {filenames:?}"
+        );
+
+        // ids array must contain both AIDs
+        let ids = parsed["ids"]
+            .as_array()
+            .expect("AC-009 P2-002 sub-A: 'ids' must be an array");
+        let id_strs: Vec<&str> = ids.iter().map(|v| v.as_str().unwrap_or("")).collect();
+        assert!(
+            id_strs.contains(&"20001"),
+            "AC-009 P2-002 sub-A: ids must contain '20001'; got {id_strs:?}"
+        );
+        assert!(
+            id_strs.contains(&"20002"),
+            "AC-009 P2-002 sub-A: ids must contain '20002'; got {id_strs:?}"
+        );
+    }
+
+    // Sub-case B: one metadata GET fails (403) → that row is {id}-only; still exit 0
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/attachment/20003"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "20003",
+                    "filename": "report.pdf"
+                })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // 20004: metadata fetch fails
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/attachment/20004"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(
+                serde_json::json!({"errorMessages": ["Permission denied."]}),
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args([
+                "issue",
+                "attachment",
+                "delete",
+                "20003",
+                "20004",
+                "--dry-run",
+                "--output",
+                "json",
+            ])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "AC-009 P2-002 sub-B: metadata-fail dry-run must exit 0 (fallback, not abort); \
+             got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+
+        let parsed: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+            panic!(
+                "AC-009 P2-002 sub-B: stdout must be valid JSON; error: {e}\nstdout: {stdout}"
+            )
+        });
+
+        let atts = parsed["attachments"]
+            .as_array()
+            .expect("AC-009 P2-002 sub-B: 'attachments' must be an array");
+        assert_eq!(atts.len(), 2, "AC-009 P2-002 sub-B: 2 elements in attachments");
+
+        // Row for 20003 must have filename
+        let att_20003 = atts
+            .iter()
+            .find(|a| a["id"] == "20003")
+            .expect("AC-009 P2-002 sub-B: must have entry for 20003");
+        assert_eq!(
+            att_20003["filename"],
+            "report.pdf",
+            "AC-009 P2-002 sub-B: 20003 filename must be 'report.pdf'"
+        );
+
+        // Row for 20004 (failed GET) must have ONLY "id" key (no "filename")
+        let att_20004 = atts
+            .iter()
+            .find(|a| a["id"] == "20004")
+            .expect("AC-009 P2-002 sub-B: must have entry for 20004");
+        let keys_20004: BTreeSet<&str> = att_20004
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|k| k.as_str())
+            .collect();
+        assert_eq!(
+            keys_20004,
+            BTreeSet::from(["id"]),
+            "AC-009 P2-002 sub-B: metadata-fail row must have only 'id' key \
+             (no 'filename'); got {keys_20004:?}"
+        );
+    }
+
+    // Sub-case C: human mode — filename column populated (not id-only)
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/attachment/20005"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "20005",
+                    "filename": "diagram.png"
+                })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/attachment/20006"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "20006",
+                    "filename": "spec.docx"
+                })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args([
+                "issue",
+                "attachment",
+                "delete",
+                "20005",
+                "20006",
+                "--dry-run",
+                // human mode (no --output json)
+            ])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let combined = format!("{stdout}{stderr}");
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "AC-009 P2-002 sub-C: human dry-run must exit 0; \
+             got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+        // Human output must contain actual filenames, not just IDs
+        assert!(
+            combined.contains("diagram.png"),
+            "AC-009 P2-002 sub-C: human output must contain filename 'diagram.png' \
+             (populated from metadata GET); got combined: {combined}"
+        );
+        assert!(
+            combined.contains("spec.docx"),
+            "AC-009 P2-002 sub-C: human output must contain filename 'spec.docx'; \
+             got combined: {combined}"
+        );
+        assert!(
+            combined.contains("would be deleted"),
+            "AC-009 P2-002 sub-C: human output must contain 'would be deleted' summary; \
+             got combined: {combined}"
         );
     }
 }
