@@ -385,9 +385,7 @@ async fn test_vp_576_002_delete_gate_cancel_stays() {
     );
 
     let parsed: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
-        panic!(
-            "VP-576-002 cancel: stdout must be valid JSON; parse error: {e}\nstdout: {stdout}"
-        )
+        panic!("VP-576-002 cancel: stdout must be valid JSON; parse error: {e}\nstdout: {stdout}")
     });
 
     let keys: BTreeSet<&str> = parsed
@@ -497,7 +495,13 @@ async fn test_bc_3_9_010_single_aid_json_shape() {
 
         let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
             .args([
-                "issue", "attachment", "delete", "12345", "--yes", "--output", "json",
+                "issue",
+                "attachment",
+                "delete",
+                "12345",
+                "--yes",
+                "--output",
+                "json",
             ])
             .output()
             .unwrap();
@@ -622,7 +626,14 @@ async fn test_bc_3_9_013_bulk_delete_fail_soft_all_404() {
 
         let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
             .args([
-                "issue", "attachment", "delete", "10001", "10002", "--yes", "--output", "json",
+                "issue",
+                "attachment",
+                "delete",
+                "10001",
+                "10002",
+                "--yes",
+                "--output",
+                "json",
             ])
             .output()
             .unwrap();
@@ -691,9 +702,7 @@ async fn test_bc_3_9_013_bulk_delete_fail_soft_all_404() {
             .await;
 
         let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
-            .args([
-                "issue", "attachment", "delete", "10001", "10002", "--yes",
-            ])
+            .args(["issue", "attachment", "delete", "10001", "10002", "--yes"])
             .output()
             .unwrap();
 
@@ -844,7 +853,13 @@ async fn test_bc_3_9_010_bulk_delete_non_404_aborts_sequence() {
 
     let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
         .args([
-            "issue", "attachment", "delete", "10001", "10002", "10003", "--yes",
+            "issue",
+            "attachment",
+            "delete",
+            "10001",
+            "10002",
+            "10003",
+            "--yes",
         ])
         .output()
         .unwrap();
@@ -905,7 +920,14 @@ async fn test_bc_3_9_010_bulk_partial_404_skip_continues() {
 
     let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
         .args([
-            "issue", "attachment", "delete", "10001", "10002", "10003", "--yes", "--output",
+            "issue",
+            "attachment",
+            "delete",
+            "10001",
+            "10002",
+            "10003",
+            "--yes",
+            "--output",
             "json",
         ])
         .output()
@@ -922,9 +944,7 @@ async fn test_bc_3_9_010_bulk_partial_404_skip_continues() {
     );
 
     let parsed: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
-        panic!(
-            "BC-3.9.010 partial-404: stdout must be valid JSON; error: {e}\nstdout: {stdout}"
-        )
+        panic!("BC-3.9.010 partial-404: stdout must be valid JSON; error: {e}\nstdout: {stdout}")
     });
 
     assert_eq!(
@@ -943,10 +963,7 @@ async fn test_bc_3_9_010_bulk_partial_404_skip_continues() {
     let ids = parsed["ids"]
         .as_array()
         .expect("BC-3.9.010 partial-404: ids must be an array");
-    let id_set: BTreeSet<&str> = ids
-        .iter()
-        .filter_map(|v| v.as_str())
-        .collect();
+    let id_set: BTreeSet<&str> = ids.iter().filter_map(|v| v.as_str()).collect();
     assert_eq!(
         id_set,
         BTreeSet::from(["10001", "10003"]),
@@ -989,7 +1006,14 @@ async fn test_bc_3_9_010_bulk_json_shape() {
 
     let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
         .args([
-            "issue", "attachment", "delete", "10001", "10002", "--yes", "--output", "json",
+            "issue",
+            "attachment",
+            "delete",
+            "10001",
+            "10002",
+            "--yes",
+            "--output",
+            "json",
         ])
         .output()
         .unwrap();
@@ -1005,9 +1029,7 @@ async fn test_bc_3_9_010_bulk_json_shape() {
     );
 
     let parsed: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
-        panic!(
-            "BC-3.9.010 bulk JSON: stdout must be valid JSON; error: {e}\nstdout: {stdout}"
-        )
+        panic!("BC-3.9.010 bulk JSON: stdout must be valid JSON; error: {e}\nstdout: {stdout}")
     });
 
     let keys: BTreeSet<&str> = parsed
@@ -1066,11 +1088,13 @@ async fn test_bc_3_9_019_issue_key_older_than_resolution() {
         // Issue attachment list: 2 old (will be selected), 1 new (will be excluded)
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/FOO-1"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(issue_attachments_json(&[
-                old_attachment("10001", "old1.txt"),
-                old_attachment("10002", "old2.txt"),
-                new_attachment("10003", "new1.txt"),
-            ])))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(issue_attachments_json(&[
+                    old_attachment("10001", "old1.txt"),
+                    old_attachment("10002", "old2.txt"),
+                    new_attachment("10003", "new1.txt"),
+                ])),
+            )
             .expect(1)
             .mount(&server)
             .await;
@@ -1137,10 +1161,12 @@ async fn test_bc_3_9_019_issue_key_older_than_resolution() {
 
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/FOO-1"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(issue_attachments_json(&[
-                old_attachment("10001", "old1.txt"),
-                old_attachment("10002", "old2.txt"),
-            ])))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(issue_attachments_json(&[
+                    old_attachment("10001", "old1.txt"),
+                    old_attachment("10002", "old2.txt"),
+                ])),
+            )
             .expect(1)
             .mount(&server)
             .await;
@@ -1197,9 +1223,7 @@ async fn test_bc_3_9_019_issue_key_older_than_resolution() {
         );
         // JSON result must carry count
         let parsed: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
-            panic!(
-                "BC-3.9.019 N>0 JSON: stdout must be valid JSON; error: {e}\nstdout: {stdout}"
-            )
+            panic!("BC-3.9.019 N>0 JSON: stdout must be valid JSON; error: {e}\nstdout: {stdout}")
         });
         assert_eq!(
             parsed["count"],
@@ -1224,9 +1248,11 @@ async fn test_bc_3_9_019_issue_key_older_than_resolution() {
         // All attachments are new — none selected by filter
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/FOO-1"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(issue_attachments_json(&[
-                new_attachment("10003", "new1.txt"),
-            ])))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(issue_attachments_json(&[
+                    new_attachment("10003", "new1.txt"),
+                ])),
+            )
             .expect(1)
             .mount(&server)
             .await;
@@ -1321,9 +1347,7 @@ async fn test_bc_3_9_019_older_than_parse_age_duration_filter() {
             output.status.code()
         );
         assert!(
-            stderr.contains(
-                "invalid duration: 'badval'. Use formats like 30m, 2h, 1d, 7d, 2w."
-            ),
+            stderr.contains("invalid duration: 'badval'. Use formats like 30m, 2h, 1d, 7d, 2w."),
             "BC-3.9.019 EC-3.9.019-3: stderr must contain canonical error; \
              got stderr: {stderr}"
         );
@@ -1338,10 +1362,7 @@ async fn test_bc_3_9_019_older_than_parse_age_duration_filter() {
         // Empty attachment list
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/FOO-1"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(issue_attachments_json(&[])),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(issue_attachments_json(&[])))
             .expect(1)
             .mount(&server)
             .await;
@@ -1457,7 +1478,13 @@ async fn test_bc_3_9_020_dry_run_single_aid() {
 
         let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
             .args([
-                "issue", "attachment", "delete", "12345", "--dry-run", "--output", "json",
+                "issue",
+                "attachment",
+                "delete",
+                "12345",
+                "--dry-run",
+                "--output",
+                "json",
             ])
             .output()
             .unwrap();
@@ -1596,10 +1623,12 @@ async fn test_bc_3_9_020_dry_run_bulk() {
 
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/FOO-1"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(issue_attachments_json(&[
-                old_attachment("10001", "report.pdf"),
-                old_attachment("10002", "notes.txt"),
-            ])))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(issue_attachments_json(&[
+                    old_attachment("10001", "report.pdf"),
+                    old_attachment("10002", "notes.txt"),
+                ])),
+            )
             .expect(1)
             .mount(&server)
             .await;
@@ -1705,8 +1734,9 @@ async fn test_bc_3_9_020_dry_run_bulk() {
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/FOO-1"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(issue_attachments_json(&[new_attachment("10003", "new1.txt")])),
+                ResponseTemplate::new(200).set_body_json(issue_attachments_json(&[
+                    new_attachment("10003", "new1.txt"),
+                ])),
             )
             .expect(1)
             .mount(&server)
@@ -1737,9 +1767,12 @@ async fn test_bc_3_9_020_dry_run_bulk() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
-        assert_eq!(output.status.code(), Some(0),
+        assert_eq!(
+            output.status.code(),
+            Some(0),
             "BC-3.9.020 EC-3.9.020-2 dry-run zero-match: must exit 0; got {:?}\nstderr: {stderr}",
-            output.status.code());
+            output.status.code()
+        );
 
         let parsed: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
             panic!("BC-3.9.020 dry-run zero-match: stdout must be valid JSON; error: {e}\nstdout: {stdout}")
@@ -1760,9 +1793,11 @@ async fn test_bc_3_9_020_dry_run_bulk() {
 
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/FOO-1"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(issue_attachments_json(&[
-                old_attachment("10001", "report.pdf"),
-            ])))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(issue_attachments_json(&[
+                    old_attachment("10001", "report.pdf"),
+                ])),
+            )
             .expect(1)
             .mount(&server)
             .await;
@@ -1775,7 +1810,13 @@ async fn test_bc_3_9_020_dry_run_bulk() {
 
         let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
             .args([
-                "issue", "attachment", "delete", "--issue", "FOO-1", "--older-than", "1d",
+                "issue",
+                "attachment",
+                "delete",
+                "--issue",
+                "FOO-1",
+                "--older-than",
+                "1d",
                 "--dry-run",
             ])
             .output()
@@ -1784,8 +1825,12 @@ async fn test_bc_3_9_020_dry_run_bulk() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
 
-        assert_eq!(output.status.code(), Some(0),
-            "BC-3.9.020 dry-run human: must exit 0; got {:?}\nstderr: {stderr}", output.status.code());
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "BC-3.9.020 dry-run human: must exit 0; got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
         // Human dry-run output goes to stdout (table) or stderr; accept either channel
         let combined = format!("{stderr}{stdout}");
         assert!(
@@ -1863,11 +1908,13 @@ async fn test_bc_3_9_016_issue_older_than_yes_combined() {
     // Issue has 3 old attachments — all should be selected and deleted
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/BAR-2"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(issue_attachments_json(&[
-            old_attachment("20001", "a.txt"),
-            old_attachment("20002", "b.txt"),
-            old_attachment("20003", "c.txt"),
-        ])))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(issue_attachments_json(&[
+                old_attachment("20001", "a.txt"),
+                old_attachment("20002", "b.txt"),
+                old_attachment("20003", "c.txt"),
+            ])),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -2041,7 +2088,14 @@ async fn test_bc_3_9_016_clap_mutual_exclusion_constraints() {
     // (b) AID + --older-than → exit 2
     {
         let out = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
-            .args(["issue", "attachment", "delete", "12345", "--older-than", "7d"])
+            .args([
+                "issue",
+                "attachment",
+                "delete",
+                "12345",
+                "--older-than",
+                "7d",
+            ])
             .output()
             .unwrap();
         assert_eq!(

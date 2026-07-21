@@ -197,6 +197,11 @@ const SURFACE: &[(&[&str], &[&str])] = &[
             "--output",
         ],
     ),
+    // issue attachment delete  (S-576-4: positional AID(s) or --issue+--older-than; --yes/--dry-run; --output)
+    (
+        &["issue", "attachment", "delete"],
+        &["--yes", "--dry-run", "--issue", "--older-than", "--output"],
+    ),
     // board list
     (&["board", "list"], &["--output"]),
     // board view

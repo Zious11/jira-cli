@@ -1,6 +1,6 @@
-# Attachment Commands Spec (S-576-1..3)
+# Attachment Commands Spec (S-576-1..4)
 
-`jr issue attachment` — list, download, and upload attachments on Jira issues.
+`jr issue attachment` — list, download, upload, and delete attachments on Jira issues.
 
 ## Subcommands
 
@@ -66,9 +66,48 @@ construct a new `reqwest::multipart::Form`, and POST. `src/api/jira/attachments.
 
 Implemented: `src/cli/issue/attachments.rs::handle_attachment_upload`. API: `src/api/jira/attachments.rs::upload_attachments`, `delete_attachment`.
 
+### `jr issue attachment delete`
+
+Deletes attachments by AID or by age filter.
+
+**Three invocation forms:**
+- `jr issue attachment delete AID [--yes]` — single targeted delete.
+- `jr issue attachment delete AID1 AID2 … --yes` — multi-AID bulk (always requires `--yes`).
+- `jr issue attachment delete --issue KEY --older-than DURATION --yes` — age-based bulk.
+
+**Single-AID gate (BC-3.9.015; DEC-174):** Without `--yes`, fetches attachment metadata (GET
+`/rest/api/3/attachment/{id}`) to get filename, then prompts `"Delete attachment <name> (AID)? [y/N]"`
+via `eprint!` + flush + `stdin().lock().read_line()`. `"y"/"yes"` → proceed; other input → cancelled
+(exit 0); EOF → `JrError::Interrupted` (exit 130). Non-interactive (`--no-input` / non-TTY stdin)
+without `--yes` exits 64 `"Use --yes to confirm deletion without a prompt."`.
+
+**DEC-168 targeted 404:** Single-AID DELETE that returns 404 exits 64 with canonical prefix
+`"Attachment <AID> not found or not accessible."` followed by the raw Jira error body.
+Uses `delete_attachment_targeted` (separate from the benign-skip `delete_attachment` used by S-576-3).
+
+**Bulk 404 — benign skip (BC-3.9.010):** In multi-AID and `--older-than` paths, 404 is silently
+skipped (the attachment was already deleted). Non-404 errors abort the sequence; prior deletions stand.
+
+**`--older-than DURATION`:** Duration formats: `Nm` (minutes), `Nh` (hours), `Nd` (24 clock-hours),
+`Nw` (7-day weeks). `1d` = 24h (NOT the 8h Jira workday of `src/duration.rs`).
+Invalid duration → exit 64 `"invalid duration: '<VAL>'. Use formats like 30m, 2h, 1d, 7d, 2w."`.
+
+**`--dry-run`:** On single-AID: AID validation guard fires; gate suppressed; no DELETE.
+On bulk (`--issue/--older-than`): list GET fires; age filter applied; NO DELETEs; `--yes` not required.
+JSON dry-run shape: `{"attachments":[{id[,filename]}],"dryRun":true,"ids":[…]}`.
+
+**JSON success shapes:**
+- Single-AID: `{"deleted":true,"id":"<AID>"}`.
+- Cancel: `{"cancelled":true,"deleted":false}` (no `id`).
+- Bulk: `{"count":N,"deleted":bool,"ids":[…]}`.
+
+Implemented: `src/cli/issue/attachments.rs::handle_attachment_delete`. API:
+`src/api/jira/attachments.rs::delete_attachment_targeted` (single-AID DEC-168),
+`src/api/jira/attachments.rs::delete_attachment` (bulk benign-skip).
+
 ## See Also
 
-- `docs/specs/json-output-shapes.md` — canonical JSON shapes for all three subcommands
-- `CLAUDE.md` — Gotchas: `sanitize_attachment_filename`, redirect behavior, upload multipart retry, SEC-576-004, JRACLOUD-96384, `allow_hyphen_values` variadic caveat
+- `docs/specs/json-output-shapes.md` — canonical JSON shapes for all four subcommands
+- `CLAUDE.md` — Gotchas: `sanitize_attachment_filename`, redirect behavior, upload multipart retry, SEC-576-004, JRACLOUD-96384, `allow_hyphen_values` variadic caveat, DEC-168 targeted-vs-bulk 404 asymmetry
 - `.factory/specs/prd/bc-2-issue-read.md` — list/download behavioral contracts
-- `.factory/specs/prd/bc-3-issue-write.md` — upload behavioral contracts
+- `.factory/specs/prd/bc-3-issue-write.md` — upload/delete behavioral contracts

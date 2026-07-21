@@ -54,6 +54,27 @@ All notable changes to jr will be documented here.
   shape per VP-576-004). Table: 4-column (Filename / Size / ID / Created).
   feat(issue): attachment upload platform POST + --replace-existing + --dry-run path-c (#576)
 
+- **`jr issue attachment delete` — single-AID + bulk + --older-than + --dry-run (S-576-4, #576):**
+  `jr issue attachment delete AID [--yes]` deletes a single attachment by numeric ID.
+  Without `--yes`, an interactive gate prompts `"Delete attachment <name> (AID)? [y/N]"`
+  (metadata GET fetches the filename; CWE-116 `display_sanitize_filename` applied to prompt).
+  DEC-168: targeted single-AID 404 → exit 64 + canonical prefix
+  `"Attachment <AID> not found or not accessible."` + Jira error body (surfaced, not silent).
+  Non-interactive mode (`--no-input` or non-TTY stdin) without `--yes` → exit 64
+  `"Use --yes to confirm deletion without a prompt."`. EOF on gate stdin → exit 130.
+  Multi-AID bulk: `jr issue attachment delete AID1 AID2 … --yes` — `--yes` always required
+  for multi-AID. Bulk 404 is a BENIGN SKIP (asymmetry from targeted single-AID 404).
+  Non-404 error on any AID ABORTS the sequence; first deletions stand.
+  Age-based bulk: `jr issue attachment delete --issue KEY --older-than DURATION --yes` fetches
+  the issue's attachment list and deletes those older than the parsed duration. Duration formats:
+  `Nm` (minutes), `Nh` (hours), `Nd` (24 clock-hours), `Nw` (7-day weeks); `1d` = 24h (NOT
+  Jira's 8h workday). Invalid duration → exit 64 canonical error message.
+  `--dry-run` on single-AID: emits hint (human) or `{"attachments":[{"id":"…"}],"dryRun":true,"ids":[…]}`
+  (JSON), no DELETE. `--dry-run` on bulk: read-only (list GET, age filter, NO DELETEs), emits
+  manifest; `--yes` NOT required in dry-run. JSON shapes: single-AID success → `{"deleted":true,"id":"…"}`;
+  bulk success → `{"count":N,"deleted":true/false,"ids":[…]}`; cancel → `{"cancelled":true,"deleted":false}`.
+  feat(issue): attachment delete single/bulk/older-than/dry-run (S-576-4, #576)
+
 - **`jr issue attachment list` — table + JSON output + client-side filters (S-576-1, #576):**
   `jr issue attachment list KEY` lists all attachments on an issue in a six-column table
   (ID, Filename, Type, Size, Created, Author). `--output json` returns a curated array
