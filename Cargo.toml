@@ -24,7 +24,7 @@ keyring = { version = "3", features = ["apple-native", "linux-native", "windows-
 open = "5"
 reqwest = { version = "0.13", default-features = false, features = ["json", "multipart", "rustls", "stream"] }
 tokio-util = { version = "^0.7", features = ["io-util"] }
-sha1 = { version = "^0.10" }
+sha1 = { version = "^0.11" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -56,7 +56,7 @@ scopeguard = "1"
 # glob: expand examine_globs patterns for Guard 3 existence check (S-MUTANTS-SCOPE-GUARDS-1 / DEC-150)
 glob = "0.3"
 # sha1: compute batch-path prefixes in mutation-kill tests (PG-F4-10)
-sha1 = { version = "^0.10" }
+sha1 = { version = "^0.11" }
 
 [profile.release]
 opt-level = 3
