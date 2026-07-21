@@ -73,7 +73,7 @@ All notable changes to jr will be documented here.
   (JSON), no DELETE. `--dry-run` on bulk: read-only (list GET, age filter, NO DELETEs), emits
   manifest; `--yes` NOT required in dry-run. JSON shapes: single-AID success → `{"deleted":true,"id":"…"}`;
   bulk success → `{"count":N,"deleted":true/false,"ids":[…]}`; cancel → `{"cancelled":true,"deleted":false}`.
-  feat(issue): attachment delete single/bulk/older-than/dry-run (S-576-4, #576)
+  feat(issue): attachment delete single/bulk/older-than + dry-run paths a/b (#576)
 
 - **`jr issue attachment list` — table + JSON output + client-side filters (S-576-1, #576):**
   `jr issue attachment list KEY` lists all attachments on an issue in a six-column table
