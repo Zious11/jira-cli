@@ -129,6 +129,10 @@ pub async fn handle(
             sub @ AttachmentSubcommand::Upload { .. } => {
                 attachments::handle_attachment_upload(sub, output_format, client, no_input).await
             }
+            // S-576-4: single/bulk/older-than delete + --dry-run (EC-3.9.020-1/2/3).
+            sub @ AttachmentSubcommand::Delete { .. } => {
+                attachments::handle_attachment_delete(sub, output_format, client, no_input).await
+            }
         },
     }
 }

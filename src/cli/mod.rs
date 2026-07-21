@@ -839,6 +839,50 @@ pub enum AttachmentSubcommand {
         #[arg(long, conflicts_with = "public")]
         internal: bool,
     },
+
+    /// Delete one or more attachments by ID (S-576-4; BC-3.9.008..020).
+    ///
+    /// Three forms:
+    ///   (1) Single-AID: `jr issue attachment delete <AID>` — confirmation gate (BC-3.9.015).
+    ///   (2) Multi-AID:  `jr issue attachment delete <AID1> <AID2>... --yes` — bulk, no gate.
+    ///   (3) Issue+age:  `jr issue attachment delete --issue <KEY> --older-than <DUR> --yes`.
+    ///
+    /// Clap constraints (EC-3.9.016-4/5/9/10):
+    ///   - Positional `<AID>...` conflicts with `--issue` and `--older-than`.
+    ///   - `--issue` requires `--older-than`; `--older-than` requires `--issue`.
+    ///   - Must supply at least one form; bare `delete` (no AID, no flags) → exit 2.
+    #[command(
+        group(
+            clap::ArgGroup::new("delete_target")
+                .required(true)
+                .multiple(true)
+                .args(["aids", "issue"])
+        ),
+    )]
+    Delete {
+        /// Attachment IDs to delete (numeric; repeatable).
+        /// Conflicts with `--issue` and `--older-than` (EC-3.9.016-4).
+        #[arg(conflicts_with_all = ["issue", "older_than"])]
+        aids: Vec<String>,
+
+        /// Issue key for age-based bulk delete.
+        /// Requires `--older-than`; conflicts with positional AIDs (EC-3.9.016-9).
+        #[arg(long, conflicts_with = "aids", requires = "older_than")]
+        issue: Option<String>,
+
+        /// Delete attachments older than this duration (e.g. 30d, 2w, 1h).
+        /// Requires `--issue`; conflicts with positional AIDs (EC-3.9.016-5).
+        #[arg(long, conflicts_with = "aids", requires = "issue")]
+        older_than: Option<String>,
+
+        /// Bypass the single-AID confirmation gate; required for bulk delete (BC-3.9.016).
+        #[arg(long)]
+        yes: bool,
+
+        /// Preview the delete without issuing any HTTP DELETEs (BC-3.9.020 EC-3.9.020-1/2/3).
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]

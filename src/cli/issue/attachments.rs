@@ -1356,6 +1356,86 @@ fn attachment_replace_confirmation_gate(
 }
 
 // ---------------------------------------------------------------------------
+// S-576-4: `jr issue attachment delete` — single-AID + bulk + --older-than + --dry-run
+// ---------------------------------------------------------------------------
+
+/// Handle `jr issue attachment delete` (S-576-4; BC-3.9.008/010/013/015/016/019/020).
+///
+/// Three forms:
+///   (1) Single-AID: AID validation → confirmation gate (BC-3.9.015) → DELETE.
+///   (2) Multi-AID bulk: AID validation → `--yes` required (BC-3.9.016) → sequential DELETEs.
+///   (3) Issue+age: fetch list → `parse_age_duration` → filter → `--yes` required → DELETEs.
+///
+/// **DEC-168 (targeted single-AID 404):** exit 64; stderr MUST BEGIN with the canonical
+/// prefix `"Attachment <AID> not found or not accessible."` then the Jira error body.
+/// **BC-3.9.010 (bulk 404):** BENIGN SKIP — asymmetry from targeted single-AID 404.
+/// **EC-3.9.020-3:** single-AID `--dry-run` — guards active, gate suppressed, no DELETE.
+/// **EC-3.9.020-1/2:** bulk `--dry-run` — guards active, gate suppressed, no DELETE.
+pub async fn handle_attachment_delete(
+    sub: AttachmentSubcommand,
+    output_format: &OutputFormat,
+    client: &JiraClient,
+    no_input: bool,
+) -> anyhow::Result<()> {
+    let _ = (sub, output_format, client, no_input);
+    todo!("S-576-4: handle_attachment_delete not yet implemented")
+}
+
+/// Single-AID confirmation gate (BC-3.9.015 step 2; VP-576-002; DEC-174).
+///
+/// Uses `eprint!` (NOT `eprintln!`, NOT `dialoguer`) + `io::stdin().read_line`.
+///
+/// Three-way branch (EC-3.9.015):
+///   - `"y"`/`"yes"` (case-insensitive, after trim) → `Ok(true)` → proceed with DELETE.
+///   - Other non-empty text / empty Enter (`Ok(n ≥ 1)`, buffer `"\n"`) → `Ok(false)` →
+///     caller emits `"Deletion cancelled."` to stderr + exits 0.
+///   - EOF (`read_line` returns `Ok(0)`) / `Err(_)` → `Err(JrError::Interrupted)` → exit 130.
+///
+/// Pre-conditions (caller responsibility):
+///   - AID `^[0-9]+$` validation must fire BEFORE this fn.
+///   - `no_input && !yes` must exit 64 BEFORE this fn is called.
+///   - `yes == true` must bypass this fn entirely.
+///
+/// `filename` is already display-sanitized by the caller (SEC-576-011 / CWE-116).
+fn attachment_delete_confirmation_gate(filename: &str, aid: &str) -> anyhow::Result<bool> {
+    let _ = (filename, aid);
+    todo!("S-576-4: attachment_delete_confirmation_gate not yet implemented")
+}
+
+/// Filter `attachments` to those whose `created` timestamp is older than `cutoff`
+/// (BC-3.9.019; EC-3.9.019-8).
+///
+/// Pure function — no I/O. Unparseable `created` fields are silently skipped with
+/// a stderr warning; they do NOT abort the call.
+/// `created` is an ISO 8601 string; parsed via `chrono`.
+pub fn filter_attachments_older_than(
+    attachments: Vec<AttachmentObject>,
+    cutoff: chrono::DateTime<chrono::Utc>,
+) -> Vec<AttachmentObject> {
+    let _ = (attachments, cutoff);
+    todo!("S-576-4: filter_attachments_older_than not yet implemented")
+}
+
+/// Parse an age-duration string into a `chrono::Duration` (BC-3.9.019; EC-3.9.019-3/8).
+///
+/// Supported suffixes:
+///   `m` = minutes, `h` = hours, `d` = 24 clock-hours (NOT Jira's 8-hour workday),
+///   `w` = 7 × 24 clock-hours.
+///
+/// **EC-3.9.019-8 BOUNDARY PIN:** `parse_age_duration("1d")` MUST equal
+/// `chrono::Duration::hours(24)`. A worklog-style `1d = 8h` is WRONG here.
+///
+/// Invalid / malformed input → `JrError::UserError` with EC-3.9.019-3 canonical message:
+///   `"invalid duration: '<VALUE>'. Use formats like 30m, 2h, 1d, 7d, 2w."`
+///
+/// MUST NOT import or call `src/duration.rs` arithmetic — that module is read for
+/// suffix-convention style only.
+fn parse_age_duration(s: &str) -> anyhow::Result<chrono::Duration> {
+    let _ = s;
+    todo!("S-576-4: parse_age_duration not yet implemented")
+}
+
+// ---------------------------------------------------------------------------
 // Unit tests
 // ---------------------------------------------------------------------------
 
@@ -1934,5 +2014,20 @@ mod tests {
         assert_eq!(sanitize_attachment_filename("\\\\"), Some("__".to_string()));
         #[cfg(windows)]
         assert_eq!(sanitize_attachment_filename("\\\\"), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // S-576-4: parse_age_duration unit tests
+    // -----------------------------------------------------------------------
+
+    /// EC-3.9.019-8 boundary pin (AC-007 / S-576-4).
+    ///
+    /// `parse_age_duration("1d")` MUST equal `chrono::Duration::hours(24)`.
+    /// A worklog-style `1d = 8h` computation is WRONG for this function.
+    ///
+    /// Private helper — integration tests cannot call it; unit test lives here.
+    #[test]
+    fn test_bc_3_9_019_ec_8_parse_age_duration_1d_is_24h() {
+        todo!("S-576-4: stub — parse_age_duration(\"1d\") must equal chrono::Duration::hours(24)")
     }
 }
