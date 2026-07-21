@@ -2586,16 +2586,12 @@ async fn test_bc_3_9_001_rate_limit_retry_after_at_cap_proceeds() {
         .mount(&server)
         .await;
 
-    let client =
-        JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let client = JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
     let file_path = file.to_path_buf();
 
     // Spawn `upload_attachments` as a task so we can apply an outer timeout.
-    let handle = tokio::spawn(async move {
-        client
-            .upload_attachments("TEST-1", &[file_path])
-            .await
-    });
+    let handle =
+        tokio::spawn(async move { client.upload_attachments("TEST-1", &[file_path]).await });
 
     // 5-second wall-clock gate.
     //   Original code: sleep(60s) → timeout fires at ~5s → result.is_err() ✓
@@ -2642,12 +2638,10 @@ async fn test_bc_3_9_001_rate_limit_retry_after_above_cap_aborts() {
     Mock::given(method("POST"))
         .and(path("/rest/api/3/issue/TEST-1/attachments"))
         .and(header("X-Atlassian-Token", "no-check"))
-        .respond_with(
-            ResponseTemplate::new(429).insert_header(
-                "Retry-After",
-                (MAX_RETRY_AFTER_SECS + 1).to_string().as_str(),
-            ),
-        )
+        .respond_with(ResponseTemplate::new(429).insert_header(
+            "Retry-After",
+            (MAX_RETRY_AFTER_SECS + 1).to_string().as_str(),
+        ))
         .expect(1)
         .mount(&server)
         .await;
