@@ -28,7 +28,7 @@ Windows device-name escape at single-id call site only. Batch uses SHA-1 prefix.
 Atomic write: temp-file + rename. Fail-soft batch semantics.
 JSON: `{"downloaded":[{filename, id, path, size}]}`.
 
-Implemented: `src/cli/issue/attachments.rs::handle_attachment_download`. API: `src/api/jira/attachments.rs::list_attachments`.
+Implemented: `src/cli/issue/attachments.rs::handle_attachment_download`. API (single-id): `src/api/jira/attachments.rs::get_attachment_metadata` + `src/api/jira/attachments.rs::get_attachment_content`. API (batch): `src/api/jira/attachments.rs::list_attachments` (used by `--all` / `--newest`).
 
 ### `jr issue attachment upload KEY FILE [FILE…]`
 
