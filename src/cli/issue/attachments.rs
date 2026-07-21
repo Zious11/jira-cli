@@ -1132,9 +1132,15 @@ pub async fn handle_attachment_upload(
     }
 
     // EC-3.9.001-4: file existence pre-check fires before HTTP.
+    // Two distinct branches: missing → "file not found:"; exists-but-not-regular → "not a regular file:".
     for path in &file {
-        if !path.is_file() {
+        if !path.exists() {
             return Err(JrError::UserError(format!("file not found: {}", path.display())).into());
+        }
+        if !path.is_file() {
+            return Err(
+                JrError::UserError(format!("not a regular file: {}", path.display())).into(),
+            );
         }
     }
 
