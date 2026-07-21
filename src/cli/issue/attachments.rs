@@ -1740,17 +1740,40 @@ fn parse_age_duration(s: &str) -> anyhow::Result<chrono::Duration> {
         return Err(canonical_error().into());
     }
 
-    let (digits, suffix) = s.split_at(s.len() - 1);
+    // Char-aware split: `split_at(len-1)` panics on multi-byte trailing chars
+    // (e.g. "5€" — '€' is 3 UTF-8 bytes). Use `chars().next_back()` instead.
+    // `next_back()` is always Some here — the is_empty guard above already returned.
+    let Some(last_char) = s.chars().next_back() else {
+        return Err(canonical_error().into());
+    };
+    let suffix = &s[s.len() - last_char.len_utf8()..];
+    let digits = &s[..s.len() - last_char.len_utf8()];
+
     let n: i64 = digits.parse().map_err(|_| canonical_error())?;
     if n <= 0 {
         return Err(canonical_error().into());
     }
 
+    // Overflow-checked arithmetic: `Duration::minutes/hours(n)` internally
+    // multiplies n by 60/3600, which overflows i64 for very large n (debug panic).
+    // Use checked_mul with explicit multipliers so overflow → canonical exit-64 error.
     match suffix {
-        "m" => Ok(chrono::Duration::minutes(n)),
-        "h" => Ok(chrono::Duration::hours(n)),
-        "d" => Ok(chrono::Duration::hours(n * 24)),
-        "w" => Ok(chrono::Duration::hours(n * 7 * 24)),
+        "m" => n
+            .checked_mul(60)
+            .map(chrono::Duration::seconds)
+            .ok_or_else(|| canonical_error().into()),
+        "h" => n
+            .checked_mul(3_600)
+            .map(chrono::Duration::seconds)
+            .ok_or_else(|| canonical_error().into()),
+        "d" => n
+            .checked_mul(24 * 3_600)
+            .map(chrono::Duration::seconds)
+            .ok_or_else(|| canonical_error().into()),
+        "w" => n
+            .checked_mul(7 * 24 * 3_600)
+            .map(chrono::Duration::seconds)
+            .ok_or_else(|| canonical_error().into()),
         _ => Err(canonical_error().into()),
     }
 }
@@ -2361,8 +2384,7 @@ mod tests {
     /// If either is replaced by 1, this test fails.
     #[test]
     fn test_bc_3_9_019_2w_equals_336_hours() {
-        let result =
-            parse_age_duration("2w").expect("parse_age_duration(\"2w\") must return Ok");
+        let result = parse_age_duration("2w").expect("parse_age_duration(\"2w\") must return Ok");
         assert_eq!(
             result,
             chrono::Duration::hours(2 * 7 * 24),
@@ -2391,8 +2413,7 @@ mod tests {
     /// Mutation pre-empt: `"30m"` must parse as exactly 30 minutes.
     #[test]
     fn test_bc_3_9_019_30m_exact() {
-        let result =
-            parse_age_duration("30m").expect("parse_age_duration(\"30m\") must return Ok");
+        let result = parse_age_duration("30m").expect("parse_age_duration(\"30m\") must return Ok");
         assert_eq!(
             result,
             chrono::Duration::minutes(30),
@@ -2403,8 +2424,7 @@ mod tests {
     /// Mutation pre-empt: `"2h"` must parse as exactly 2 hours.
     #[test]
     fn test_bc_3_9_019_2h_exact() {
-        let result =
-            parse_age_duration("2h").expect("parse_age_duration(\"2h\") must return Ok");
+        let result = parse_age_duration("2h").expect("parse_age_duration(\"2h\") must return Ok");
         assert_eq!(
             result,
             chrono::Duration::hours(2),
