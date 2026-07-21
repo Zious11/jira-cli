@@ -1603,8 +1603,16 @@ pub async fn handle_attachment_delete(
     // Fetch attachment list
     let attachments = client.list_attachments(&issue_key).await?;
 
-    // Apply age filter
-    let cutoff = chrono::Utc::now() - duration;
+    // Apply age filter — belt+braces: checked_sub_signed guards against any future
+    // duration magnitude regression that bypasses parse_age_duration's Layer 3 clamp
+    // (P6-001: Utc::now() - duration panics when result precedes NaiveDate::MIN).
+    let cutoff = chrono::Utc::now()
+        .checked_sub_signed(duration)
+        .ok_or_else(|| {
+            JrError::UserError(format!(
+                "invalid duration: '{age_str}'. Use formats like 30m, 2h, 1d, 7d, 2w."
+            ))
+        })?;
     let selected = filter_attachments_older_than(attachments, cutoff);
 
     if dry_run {
@@ -1811,31 +1819,34 @@ fn parse_age_duration(s: &str) -> anyhow::Result<chrono::Duration> {
         return Err(canonical_error().into());
     }
 
-    // Two-layer overflow guard (P1-001 + P2-001):
+    // Three-layer overflow guard (P1-001 + P2-001 + P6-001):
     // Layer 1 (P1-001): checked_mul prevents i64 multiplication overflow on `n * factor`.
     // Layer 2 (P2-001): chrono::Duration::try_seconds handles the TimeDelta "panic band"
     //   ~(i64::MAX/1000, i64::MAX] where Duration::seconds(s) multiplies by MILLIS_PER_SEC
     //   (1000), overflowing i64 and panicking (confirmed chrono 0.4.45 src/lib.rs:717).
-    //   try_seconds returns None for out-of-bounds values → canonical exit-64 error.
-    match suffix {
-        "m" => n
-            .checked_mul(60)
-            .and_then(chrono::Duration::try_seconds)
-            .ok_or_else(|| canonical_error().into()),
-        "h" => n
-            .checked_mul(3_600)
-            .and_then(chrono::Duration::try_seconds)
-            .ok_or_else(|| canonical_error().into()),
-        "d" => n
-            .checked_mul(24 * 3_600)
-            .and_then(chrono::Duration::try_seconds)
-            .ok_or_else(|| canonical_error().into()),
-        "w" => n
-            .checked_mul(7 * 24 * 3_600)
-            .and_then(chrono::Duration::try_seconds)
-            .ok_or_else(|| canonical_error().into()),
-        _ => Err(canonical_error().into()),
+    //   try_seconds returns None for out-of-bounds values.
+    // Layer 3 (P6-001): MAX_AGE_SECS magnitude clamp rejects durations that pass
+    //   try_seconds but would panic at `Utc::now() - duration` because the resulting
+    //   DateTime falls before chrono::NaiveDate::MIN (~year -262143, ≈-8.34e12 s from
+    //   epoch). 8_000_000_000_000 s (≈253,400 years) leaves a 340e9-second safety margin
+    //   and is far below the try_seconds panic band (~9.2e15 s).
+    const MAX_AGE_SECS: i64 = 8_000_000_000_000;
+
+    let total_secs: i64 = match suffix {
+        "m" => n.checked_mul(60),
+        "h" => n.checked_mul(3_600),
+        "d" => n.checked_mul(24 * 3_600),
+        "w" => n.checked_mul(7 * 24 * 3_600),
+        _ => return Err(canonical_error().into()),
     }
+    .ok_or_else(canonical_error)?; // Layer 1: checked_mul overflow → canonical error
+
+    if total_secs > MAX_AGE_SECS {
+        return Err(canonical_error().into()); // Layer 3: DateTime-subtraction band
+    }
+
+    chrono::Duration::try_seconds(total_secs) // Layer 2: TimeDelta panic band
+        .ok_or_else(|| canonical_error().into())
 }
 
 // ---------------------------------------------------------------------------
