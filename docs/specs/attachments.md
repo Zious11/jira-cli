@@ -57,7 +57,7 @@ construct a new `reqwest::multipart::Form`, and POST. `src/api/jira/attachments.
 **SEC-576-004 CRLF guard:** `\r`, `\n`, `\0` in filename → `_` before `Part::file_name()` (CWE-93).
 
 **Error taxonomy:** 413 → exit 1 "Attachment too large: the file exceeds the server-configured limit."
-404 (issue) → exit 64. 401 → exit 78. 403/400/5xx → exit 1.
+404 (issue) → exit 64. 401 → exit 2. 403/400/5xx → exit 1.
 
 **Cancel JSON:** `{"cancelled": true, "uploaded": false}` on stdout + "Upload cancelled." on stderr; exit 0.
 **Success JSON:** curated array identical to `attachment list` shape (VP-576-004).
