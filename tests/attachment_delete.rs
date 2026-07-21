@@ -1412,6 +1412,110 @@ async fn test_bc_3_9_019_older_than_parse_age_duration_filter() {
              {{\"count\":0,\"deleted\":false,\"ids\":[]}}; got: {parsed}"
         );
     }
+
+    // Sub-case P1-001a: multibyte trailing char — must exit 64, NOT panic
+    // `s.split_at(s.len()-1)` on "5€" is off a char boundary → panic without guard.
+    // Assertion also verifies "panicked" is absent from stderr.
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        // Parse guard must fire BEFORE any HTTP call
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args([
+                "issue",
+                "attachment",
+                "delete",
+                "--issue",
+                "FOO-1",
+                "--older-than",
+                "5\u{20AC}", // "5€" — multibyte (3 UTF-8 bytes) trailing char
+                "--yes",
+            ])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert_eq!(
+            output.status.code(),
+            Some(64),
+            "P1-001a multibyte trailing char '5€': must exit 64 (not panic/101); \
+             got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+        assert!(
+            stderr.contains("invalid duration: '5\u{20AC}'. Use formats like 30m, 2h, 1d, 7d, 2w."),
+            "P1-001a multibyte: stderr must contain canonical error; got stderr: {stderr}"
+        );
+        assert!(
+            !stderr.contains("panicked"),
+            "P1-001a multibyte: must NOT emit panic output; got stderr: {stderr}"
+        );
+    }
+
+    // Sub-case P1-001b: overflow-large week value — must exit 64, NOT overflow-panic
+    // In debug builds, `n * 7 * 24` overflows i64 for n=99999999999999999.
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args([
+                "issue",
+                "attachment",
+                "delete",
+                "--issue",
+                "FOO-1",
+                "--older-than",
+                "99999999999999999w",
+                "--yes",
+            ])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert_eq!(
+            output.status.code(),
+            Some(64),
+            "P1-001b overflow weeks '99999999999999999w': must exit 64 (not overflow-panic); \
+             got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+        assert!(
+            stderr.contains("invalid duration"),
+            "P1-001b overflow: stderr must contain 'invalid duration'; got stderr: {stderr}"
+        );
+        assert!(
+            !stderr.contains("panicked"),
+            "P1-001b overflow: must NOT emit panic output; got stderr: {stderr}"
+        );
+    }
 }
 
 // Unit test test_bc_3_9_019_ec_8_parse_age_duration_1d_is_24h lives in

@@ -2356,4 +2356,59 @@ mod tests {
              (24 clock-hours, NOT 8h worklog-day)"
         );
     }
+
+    /// Mutation pre-empt: kills the `7` multiplier mutant and the `24` multiplier mutant.
+    /// If either is replaced by 1, this test fails.
+    #[test]
+    fn test_bc_3_9_019_2w_equals_336_hours() {
+        let result =
+            parse_age_duration("2w").expect("parse_age_duration(\"2w\") must return Ok");
+        assert_eq!(
+            result,
+            chrono::Duration::hours(2 * 7 * 24),
+            "parse_age_duration(\"2w\") must equal 2*7*24 = 336 clock-hours; \
+             kills week→day multiplier mutant and day→hour multiplier mutant"
+        );
+    }
+
+    /// Mutation pre-empt: `"0d"` must return Err (zero duration is not a useful filter).
+    /// Kills the `> 0` → `>= 0` boundary mutant.
+    #[test]
+    fn test_bc_3_9_019_0d_is_err() {
+        let result = parse_age_duration("0d");
+        assert!(
+            result.is_err(),
+            "parse_age_duration(\"0d\") must return Err; \
+             kills <=→< boundary mutant on the zero-value guard"
+        );
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.contains("invalid duration"),
+            "parse_age_duration(\"0d\") error must contain 'invalid duration'; got: {msg}"
+        );
+    }
+
+    /// Mutation pre-empt: `"30m"` must parse as exactly 30 minutes.
+    #[test]
+    fn test_bc_3_9_019_30m_exact() {
+        let result =
+            parse_age_duration("30m").expect("parse_age_duration(\"30m\") must return Ok");
+        assert_eq!(
+            result,
+            chrono::Duration::minutes(30),
+            "parse_age_duration(\"30m\") must equal chrono::Duration::minutes(30)"
+        );
+    }
+
+    /// Mutation pre-empt: `"2h"` must parse as exactly 2 hours.
+    #[test]
+    fn test_bc_3_9_019_2h_exact() {
+        let result =
+            parse_age_duration("2h").expect("parse_age_duration(\"2h\") must return Ok");
+        assert_eq!(
+            result,
+            chrono::Duration::hours(2),
+            "parse_age_duration(\"2h\") must equal chrono::Duration::hours(2)"
+        );
+    }
 }
