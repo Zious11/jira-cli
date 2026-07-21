@@ -1242,8 +1242,8 @@ async fn replace_existing_attachments(
 ///
 /// EC-3.9.020-9 three-category taxonomy:
 /// - **Category 1 (confirmation gates):** SUPPRESSED — no interactive prompts in dry-run.
-/// - **Category 2 (eligibility guards: file-not-found, stdin, issue-404):** NOT suppressed.
-/// - **Category 3 (parse-time: `--dry-run` without `--replace-existing`):** NOT suppressed.
+/// - **Category 2 (eligibility guards: BC-3.9.005 non-JSM, BC-3.9.017 step-0 validity, flag combos):** NOT suppressed.
+/// - **Category 3 (pre-flight file checks: file-not-found, not-a-regular-file, issue-404):** NOT suppressed.
 ///
 /// The read-only list GET still fires to populate the `wouldDelete` preview array
 /// (mandatory per AC-008 / BC-3.9.020 path-c; only DELETE and POST are suppressed).

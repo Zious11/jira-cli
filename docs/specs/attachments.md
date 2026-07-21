@@ -47,7 +47,8 @@ non-interactive (`--no-input` / non-TTY stdin) requires `--yes` or exits 64. Int
 `eprint!` + flush + `stdin().lock().read_line()` — NOT `dialoguer::Confirm`.
 
 **`--dry-run`:** previews without mutating. Category 1 gates (confirmation) suppressed;
-category 2 guards (file-not-found, stdin, issue-404) NOT suppressed (EC-3.9.020-9).
+category 2 eligibility guards (BC-3.9.005 non-JSM, flag combos) NOT suppressed;
+category 3 pre-flight file checks (file-not-found, issue-404) NOT suppressed (EC-3.9.020-9).
 JSON dry-run shape: `{"dryRun": true, "wouldDelete": [{filename, id}], "wouldUpload": [{filename}]}`.
 
 **Retry (ADR-0017):** `Request::try_clone()` returns `None` for multipart bodies.
