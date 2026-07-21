@@ -36,6 +36,24 @@ All notable changes to jr will be documented here.
   partial failure exits 1 after printing the manifest. `--filter` and `--force` flags supported.
   feat(issue): attachment download single/batch/newest + streaming + CWE-22 sanitization (#576)
 
+- **`jr issue attachment upload` — multipart upload + replace-existing + dry-run (S-576-3, #576):**
+  `jr issue attachment upload KEY FILE [FILE…]` uploads one or more files to an issue via
+  multipart/form-data POST with `X-Atlassian-Token: no-check` (required by Jira's XSRF
+  check on all upload endpoints). Multiple same-name attachments can coexist in Jira
+  (JRACLOUD-96384); `--replace-existing` deletes ALL filename matches BEFORE the new upload
+  (`wouldDelete` set in dry-run). `--yes` skips the interactive confirmation prompt;
+  `--dry-run` previews the operation without mutating state (prints JSON or table).
+  Confirmation prompt reads from stdin via `stdin().lock().read_line()` (BC-3.9.014 gate);
+  non-interactive mode (`--no-input` / non-TTY stdin) requires `--yes` or exits 64.
+  SEC-576-004: `\r`/`\n`/`\0` are stripped from filenames in `Content-Disposition` headers
+  to prevent CRLF/quote injection (CWE-93). ADR-0017 retry constraint: 429 rebuilds the
+  entire multipart form from fresh `tokio::fs::File::open` (multipart bodies are not
+  cloneable via `Request::try_clone()`). 413 → exit 1 with verbatim "Attachment too large"
+  message. `--public`/`--internal` interim-rejected at exit 64 (AC-017; removed at S-576-5).
+  JSON success shape: array of curated attachment objects (identical to `attachment list`
+  shape per VP-576-004). Table: 4-column (Filename / Size / ID / Created).
+  feat(S-576-3): implement attachment upload handler + API (BC-3.9.001..020)
+
 - **`jr issue attachment list` — table + JSON output + client-side filters (S-576-1, #576):**
   `jr issue attachment list KEY` lists all attachments on an issue in a six-column table
   (ID, Filename, Type, Size, Created, Author). `--output json` returns a curated array
