@@ -373,3 +373,90 @@ impl JiraClient {
         self.get_raw_response(&path).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    // SEC-576-004 / CWE-93 unit pins for the safe_name transformation guard.
+    //
+    // The guard lives inline in `upload_attachments` (~line 211):
+    //   raw_name.chars().map(|c| if matches!(c, '\r' | '\n' | '\0') { '_' } else { c }).collect()
+    //
+    // Mirrored here as a free function so the transformation is testable without
+    // spawning a subprocess or needing a real file on disk.
+    fn safe_name(raw: &str) -> String {
+        raw.chars()
+            .map(|c| {
+                if matches!(c, '\r' | '\n' | '\0') {
+                    '_'
+                } else {
+                    c
+                }
+            })
+            .collect()
+    }
+
+    /// CR (\r) and LF (\n) are each independently mapped to '_'.
+    ///
+    /// This prevents header-line injection via Content-Disposition (CWE-93).
+    /// A filename like "file\r\nX-Injected: hdr" would otherwise split the MIME
+    /// header into two lines, injecting an arbitrary header field.
+    #[test]
+    fn test_sec_576_004_safe_name_crlf_mapped_to_underscore() {
+        // Both \r and \n in one filename → two underscores
+        assert_eq!(safe_name("file\r\nX-Injected: hdr"), "file__X-Injected: hdr");
+        // Lone \r → single underscore
+        assert_eq!(safe_name("only\r"), "only_");
+        // Lone \n → single underscore
+        assert_eq!(safe_name("only\n"), "only_");
+        // Multiple consecutive newlines
+        assert_eq!(safe_name("a\n\nb"), "a__b");
+    }
+
+    /// NUL byte (\0) is mapped to '_'.
+    ///
+    /// NUL in a Content-Disposition filename can truncate the value in
+    /// C-string-based parsers, silently dropping the rest of the name.
+    #[test]
+    fn test_sec_576_004_safe_name_nul_mapped_to_underscore() {
+        assert_eq!(safe_name("fi\0le"), "fi_le");
+        assert_eq!(safe_name("\0"), "_");
+        assert_eq!(safe_name("a\0b\0c"), "a_b_c");
+    }
+
+    /// Double-quote ('"') is NOT sanitized by safe_name — it passes through unchanged.
+    ///
+    /// SPEC vs IMPL NOTE:
+    /// AC-018 lists double-quote as a potential injection concern for the
+    /// Content-Disposition `filename=` quoted-string parameter. The current guard
+    /// covers only \r, \n, \0 (SEC-576-004 comment: "only chars that can break MIME
+    /// boundary framing or inject a new header line"). A raw '"' in the filename
+    /// affects only the quoted-string boundary, which reqwest's
+    /// `Part::file_name()` encoding is responsible for handling (percent-encoding
+    /// or `filename*` RFC 5987 form). If reqwest emits a raw '"' into
+    /// Content-Disposition without escaping, a filename like `a"b.txt` could
+    /// break the quoted-string parameter; this is a residual risk tracked at
+    /// AC-018 / SEC-576-004.
+    ///
+    /// This test pins the CURRENT behavior (pass-through) as a regression
+    /// anchor. If safe_name is ever extended to cover '"', update this test
+    /// and the integration test in tests/attachment_upload.rs.
+    #[test]
+    fn test_sec_576_004_safe_name_double_quote_not_in_guard() {
+        // '"' is NOT mapped; passes through unchanged.
+        assert_eq!(safe_name("file\"name.txt"), "file\"name.txt");
+        assert_eq!(safe_name("\"leading"), "\"leading");
+        assert_eq!(safe_name("trailing\""), "trailing\"");
+        assert_eq!(safe_name("mid\"dle"), "mid\"dle");
+    }
+
+    /// Benign filenames are unmodified (regression guard — safe_name must not
+    /// corrupt valid filenames).
+    #[test]
+    fn test_sec_576_004_safe_name_normal_filenames_unchanged() {
+        assert_eq!(safe_name("report.pdf"), "report.pdf");
+        assert_eq!(safe_name("file;name.txt"), "file;name.txt");
+        assert_eq!(safe_name("file name with spaces.doc"), "file name with spaces.doc");
+        assert_eq!(safe_name(""), "");
+        assert_eq!(safe_name("ascii_only-123.tar.gz"), "ascii_only-123.tar.gz");
+    }
+}

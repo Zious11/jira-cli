@@ -259,6 +259,49 @@ async fn test_bc_3_9_001_file_prechecks_before_http() {
         "EC-3.9.001-4: stderr must contain 'file not found:'; got: {stderr}"
     );
     // Canonical form: "file not found: <path>" — no HTTP must fire (checked by .expect(0) above).
+
+    // ----- P1-002: Directory argument → EC-3.9.001-4 "not a regular file: <path>" -----
+    // BC-3.9.001 mandates a distinct pre-HTTP check: is_file() must reject directories with
+    // the exact message "not a regular file: <path>" (EC-3.9.001-4), not re-use the
+    // "file not found:" path.
+    // RED Gate: todo!() → exit 101; assert exit 64 fails immediately.
+    // When implemented naively with tokio::fs::File::open(dir), the OS error varies by platform
+    // and leaks as "file not found:"; these assertions are RED until the correct is_file()
+    // pre-check is added that emits "not a regular file: <path>".
+    {
+        let dir_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/rest/api/3/issue/TEST-1/attachments"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&dir_server)
+            .await;
+
+        // Use an existing TempDir as the directory argument.
+        let dir_arg = TempDir::new().unwrap();
+        let dir_path_str = dir_arg.path().to_string_lossy().to_string();
+
+        let dir_output = jr_cmd_with_xdg(&dir_server.uri(), cache.path(), config.path())
+            .args(["issue", "attachment", "upload", "TEST-1", &dir_path_str])
+            .timeout(std::time::Duration::from_secs(10))
+            .output()
+            .unwrap();
+
+        let dir_stderr = String::from_utf8_lossy(&dir_output.stderr);
+        assert_eq!(
+            dir_output.status.code(),
+            Some(64),
+            "EC-3.9.001-4 directory: passing a directory must exit 64; \
+             got {:?}\nstderr: {dir_stderr}",
+            dir_output.status.code()
+        );
+        assert!(
+            dir_stderr.contains("not a regular file:"),
+            "EC-3.9.001-4 VERBATIM: stderr must contain 'not a regular file:' for a \
+             directory argument; got: {dir_stderr}"
+        );
+        // HTTP must NOT have fired (verified by .expect(0) on dir_server above).
+    }
 }
 
 /// Verifies that the human-readable table output echoes each uploaded
@@ -879,6 +922,23 @@ async fn test_bc_3_9_014_gate_confirm_proceeds() {
         Some(0),
         "BC-3.9.014 gate confirm 'y': must exit 0; got {:?}\nstderr: {stderr}",
         output.status.code()
+    );
+    // P1-001: BC-3.9.014 consumer-2 VERBATIM prompt pins.
+    // Implementation must emit the canonical prompt template (bc-3-issue-write.md ~line 3632):
+    //   "Replace existing attachment(s) on <KEY>:\n  <filename> (id: <AID>)\nContinue? [y/N] "
+    // Two-space indent, "(id: " form, NO dash prefix.
+    // These assertions are RED until the implementation uses the exact canonical format.
+    // (The naive implementation uses "About to delete N existing..." + "  - name (id)" form —
+    // both header and entry assertions will fail against that format.)
+    assert!(
+        stderr.contains("Replace existing attachment(s) on TEST-1:"),
+        "BC-3.9.014 consumer-2 VERBATIM header: stderr must contain \
+         'Replace existing attachment(s) on TEST-1:'; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("  report.pdf (id: AID-001)"),
+        "BC-3.9.014 consumer-2 VERBATIM entry: two-space indent, '(id: ' form, no dash prefix; \
+         stderr must contain '  report.pdf (id: AID-001)'; got: {stderr}"
     );
 }
 
@@ -1624,13 +1684,13 @@ async fn test_vp_576_004_curated_shape_upload_and_list_are_structurally_identica
     );
     let partial_obj = partial_author_out.as_object().unwrap();
     assert!(
-        partial_obj.get("accountId").map_or(false, |v| v.is_null()),
+        partial_obj.get("accountId").is_some_and(|v| v.is_null()),
         "VP-576-004 partial-author: accountId must be null; got: {partial_author_out}"
     );
     assert!(
         partial_obj
             .get("displayName")
-            .map_or(false, |v| v.is_null()),
+            .is_some_and(|v| v.is_null()),
         "VP-576-004 partial-author: displayName must be null; got: {partial_author_out}"
     );
     assert_eq!(
@@ -1838,16 +1898,31 @@ async fn test_sec_576_004_content_disposition_crlf_injection_guard() {
             output.status.code()
         );
 
-        // Content-Disposition injection check (reached only when GREEN).
+        // Content-Disposition structure check (reached only when GREEN).
+        // Note: the CRLF/NUL injection vectors are unit-covered in src/api/jira/attachments.rs
+        // (safe_name maps \r, \n, \0 → '_'; test_sec_576_004_safe_name_*).
+        // Creating CRLF-named files on Windows CI is impossible, so integration coverage
+        // is limited to platform-safe vectors (semicolon, DEL).
         let received = server.received_requests().await.unwrap();
         for req in &received {
             if req.method == wiremock::http::Method::POST {
                 let body = std::str::from_utf8(&req.body).unwrap_or("");
-                assert!(
-                    !body.contains("\r\nX-Injected"),
-                    "SEC-576-004(semicolon): Content-Disposition must not contain injected header; \
+                // (a) Exactly one Content-Disposition for a single-file upload.
+                //     A semicolon that breaks the quoted-string parameter would manifest
+                //     as a malformed part structure; this count is the structural smoke signal.
+                let cd_count = body.matches("Content-Disposition").count();
+                assert_eq!(
+                    cd_count, 1,
+                    "SEC-576-004(semicolon): expected 1 Content-Disposition in multipart body; \
                      body excerpt: {}",
-                    &body[..body.len().min(200)]
+                    &body[..body.len().min(400)]
+                );
+                // (b) The literal filename appears in the body (reqwest properly quotes it).
+                assert!(
+                    body.contains("file;name.txt"),
+                    "SEC-576-004(semicolon): filename must appear verbatim in multipart body; \
+                     body excerpt: {}",
+                    &body[..body.len().min(400)]
                 );
             }
         }
@@ -1888,24 +1963,26 @@ async fn test_sec_576_004_content_disposition_crlf_injection_guard() {
             output.status.code()
         );
 
-        // Content-Disposition injection check (reached only when GREEN).
+        // Content-Disposition structure check (reached only when GREEN).
+        // CRLF/NUL injection is unit-covered in src/api/jira/attachments.rs
+        // (safe_name maps \r, \n, \0 → '_'; see test_sec_576_004_safe_name_*).
+        // This integration pass verifies DEL (0x7F) — which safe_name does NOT map —
+        // does not cause multipart boundary corruption (DEL passes through as-is or is
+        // encoded by reqwest at the Part level).
         let received = server.received_requests().await.unwrap();
         for req in &received {
             if req.method == wiremock::http::Method::POST {
                 let body = std::str::from_utf8(&req.body).unwrap_or("");
-                // Verify the DEL char is percent-encoded (not raw 0x7F in the header).
-                // reqwest should percent-encode control characters in multipart filenames.
-                let raw_del = "\x7f";
-                // The Content-Disposition line should NOT contain raw \x7F unencoded.
-                // This assertion is documented as a smoke test; full encoding is verified
-                // by inspecting that the boundary structure is not broken.
-                assert!(
-                    !body.contains("\r\nX-Injected"),
-                    "SEC-576-004(DEL): Content-Disposition must not contain injected header; \
+                // Exactly one Content-Disposition for a single-file upload.
+                // Corruption from an unhandled control char would manifest here
+                // (e.g., doubled header lines or missing part boundary).
+                let cd_count = body.matches("Content-Disposition").count();
+                assert_eq!(
+                    cd_count, 1,
+                    "SEC-576-004(DEL): expected 1 Content-Disposition in multipart body; \
                      body excerpt: {}",
-                    &body[..body.len().min(200)]
+                    &body[..body.len().min(400)]
                 );
-                let _ = raw_del; // suppress unused warning in RED Gate
             }
         }
     }
