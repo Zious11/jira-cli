@@ -1227,10 +1227,8 @@ async fn test_bc_3_9_017_replace_existing_delete_then_post() {
     let post_pos = received
         .iter()
         .position(|r| r.method == wiremock::http::Method::POST);
-    let d = delete_pos
-        .expect("VP-576-003: DELETE must be present in request journal");
-    let p = post_pos
-        .expect("VP-576-003: POST must be present in request journal");
+    let d = delete_pos.expect("VP-576-003: DELETE must be present in request journal");
+    let p = post_pos.expect("VP-576-003: POST must be present in request journal");
     assert!(
         d < p,
         "VP-576-003: DELETE must precede POST; DELETE at {d}, POST at {p}"
@@ -1675,8 +1673,7 @@ async fn test_vp_576_003_delete_before_post_ordering_invariant() {
         .map(|(i, _)| i)
         .collect();
 
-    let p = post_pos
-        .expect("VP-576-003: POST must be present in request journal");
+    let p = post_pos.expect("VP-576-003: POST must be present in request journal");
     assert_eq!(
         delete_positions.len(),
         2,
@@ -2179,7 +2176,8 @@ async fn test_ac_018_double_quote_filename_well_formed_content_disposition() {
             // (a) Exactly one Content-Disposition — structural smoke test.
             let cd_count = body.matches("Content-Disposition").count();
             assert_eq!(
-                cd_count, 1,
+                cd_count,
+                1,
                 "AC-018: expected 1 Content-Disposition in multipart body; \
                  body excerpt: {}",
                 &body[..body.len().min(400)]
