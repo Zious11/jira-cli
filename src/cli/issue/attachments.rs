@@ -1202,7 +1202,7 @@ async fn replace_existing_attachments(
     }
 
     // Interactive or --yes confirmation gate.
-    let proceed = attachment_replace_confirmation_gate(key, &would_delete, yes, no_input)?;
+    let proceed = attachment_replace_confirmation_gate(key, &would_delete, yes)?;
     if !proceed {
         eprintln!("Upload cancelled.");
         if let OutputFormat::Json = output_format {
@@ -1315,7 +1315,7 @@ async fn dry_run_upload(
 /// as `interactions.rs::handle_delete_comment`).
 ///
 /// Return semantics:
-/// - `yes` is `true` or `no_input` is `true` → skip prompt, return `Ok(true)`.
+/// - `yes` is `true` → skip prompt, return `Ok(true)`.
 /// - User inputs `"y"` / `"yes"` (case-insensitive, trimmed) → `Ok(true)`.
 /// - Any other non-empty input → `Ok(false)` (caller exits 0 — cancelled).
 /// - EOF or IO error → `Err(JrError::Interrupted)` (exit 130).
@@ -1326,9 +1326,10 @@ fn attachment_replace_confirmation_gate(
     key: &str,
     would_delete: &[&AttachmentObject],
     yes: bool,
-    no_input: bool,
 ) -> anyhow::Result<bool> {
-    if yes || no_input {
+    // Caller invariant: `no_input && !yes` has already exited 64 before reaching here,
+    // so `no_input=true, yes=false` is unreachable at this point.
+    if yes {
         return Ok(true);
     }
 

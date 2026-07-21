@@ -178,9 +178,13 @@ impl JiraClient {
     ///
     /// Error mapping (BC-3.9.012):
     /// - 404 → `JrError::UserError` (exit 64): issue not found.
-    /// - 413 → `JrError::UserError` (exit 1): actionable `"Attachment too large"` message.
-    /// - 401 → `JrError::NotAuthenticated` (exit 2): handled by client.
+    /// - 413 → `JrError::ApiError { status: 413 }` (exit 1): file exceeds server-configured limit.
+    /// - 401 (scope mismatch) → `JrError::InsufficientScope` (exit 2): body contains "scope does
+    ///   not match"; handled inline — NOT delegated to the client retry layer.
+    /// - 401 (other) → `JrError::NotAuthenticated` (exit 2): handled inline with login hint.
     /// - 403 → `JrError::ApiError { status: 403 }` (exit 1): permission denied.
+    /// - 429 (Retry-After ≤ cap) → retry; 429 (Retry-After > cap) → `JrError::ApiError
+    ///   { status: 429 }` (exit 1): rate-limit cap exceeded.
     /// - 5xx / network → `JrError::ApiError` / `JrError::NetworkError` (exit 1).
     pub async fn upload_attachments(
         &self,
