@@ -1227,13 +1227,134 @@ async fn test_bc_3_9_017_replace_existing_delete_then_post() {
     let post_pos = received
         .iter()
         .position(|r| r.method == wiremock::http::Method::POST);
-    if let (Some(d), Some(p)) = (delete_pos, post_pos) {
+    let d = delete_pos
+        .expect("VP-576-003: DELETE must be present in request journal");
+    let p = post_pos
+        .expect("VP-576-003: POST must be present in request journal");
+    assert!(
+        d < p,
+        "VP-576-003: DELETE must precede POST; DELETE at {d}, POST at {p}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// EC-3.9.017-4: DELETE 404 on --replace-existing is a benign skip (BC-3.9.017)
+// ---------------------------------------------------------------------------
+
+/// A 404 response on DELETE during --replace-existing is a benign skip
+/// (the attachment was already deleted by a concurrent actor); the handler
+/// MUST continue to the next DELETE and to the POST upload.
+///
+/// EC-3.9.017-4 / AC-006 step 4.
+///
+/// RED Gate: current implementation propagates the 404 as exit 64, halting
+/// before the second DELETE and the POST.
+#[tokio::test]
+async fn test_bc_3_9_017_delete_404_is_benign_skip() {
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("report.pdf");
+    std::fs::write(&file, b"new report").unwrap();
+
+    // List: TWO same-filename attachments (JRACLOUD-96384 coexistence).
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1"))
+        .and(query_param("fields", "attachment"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(issue_with_attachments(
+                "TEST-1",
+                vec![
+                    make_upload_attachment("AID-001", "report.pdf"),
+                    make_upload_attachment("AID-002", "report.pdf"),
+                ],
+            )),
+        )
+        .mount(&server)
+        .await;
+
+    // FIRST DELETE: returns 404 (already-deleted; concurrent race).
+    // .expect(1): the impl must CALL this DELETE exactly once and treat the
+    // 404 as a benign skip — it must NOT abort on 404.
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/attachment/AID-001"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // SECOND DELETE: returns 204 (nominal). Must still fire after the 404.
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/attachment/AID-002"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // POST must fire after BOTH deletes (including the 404-returning one).
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/TEST-1/attachments"))
+        .and(header("X-Atlassian-Token", "no-check"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            make_upload_attachment("AID-NEW", "report.pdf")
+        ])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            "TEST-1",
+            &file.to_string_lossy(),
+            "--replace-existing",
+            "--yes",
+            "--output",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "EC-3.9.017-4: DELETE-404 must be treated as benign skip; flow must continue \
+         to second DELETE and POST (exit 0); got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+
+    // VP-576-003 hard ordering: all DELETEs must precede POST.
+    let received = server.received_requests().await.unwrap();
+    let post_pos = received
+        .iter()
+        .position(|r| r.method == wiremock::http::Method::POST)
+        .expect("VP-576-003: POST must be present in request journal (EC-3.9.017-4 flow)");
+    let delete_positions: Vec<usize> = received
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.method == wiremock::http::Method::DELETE)
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(
+        delete_positions.len(),
+        2,
+        "EC-3.9.017-4: both DELETEs must fire (the 404 does not suppress the second); \
+         got {} DELETE(s) in journal",
+        delete_positions.len()
+    );
+    for &d in &delete_positions {
         assert!(
-            d < p,
-            "VP-576-003: DELETE must precede POST; DELETE at {d}, POST at {p}"
+            d < post_pos,
+            "VP-576-003: DELETE at {d} must precede POST at {post_pos}"
         );
     }
-    // If either is None, the test is already RED from the exit-code assertion.
+    // wiremock .expect(1) on both DELETE mocks and .expect(1) on POST enforces
+    // that each fires exactly once (verified at server drop).
 }
 
 // ---------------------------------------------------------------------------
@@ -1554,21 +1675,20 @@ async fn test_vp_576_003_delete_before_post_ordering_invariant() {
         .map(|(i, _)| i)
         .collect();
 
-    if let Some(p) = post_pos {
-        assert_eq!(
-            delete_positions.len(),
-            2,
-            "VP-576-003: expected 2 DELETE requests; got {} in journal",
-            delete_positions.len()
+    let p = post_pos
+        .expect("VP-576-003: POST must be present in request journal");
+    assert_eq!(
+        delete_positions.len(),
+        2,
+        "VP-576-003: expected 2 DELETE requests; got {} in journal",
+        delete_positions.len()
+    );
+    for &d in &delete_positions {
+        assert!(
+            d < p,
+            "VP-576-003: DELETE at position {d} must precede POST at position {p}"
         );
-        for &d in &delete_positions {
-            assert!(
-                d < p,
-                "VP-576-003: DELETE at position {d} must precede POST at position {p}"
-            );
-        }
     }
-    // If post_pos is None, the test is already RED from exit-code assertion.
 }
 
 // ---------------------------------------------------------------------------
@@ -1984,6 +2104,110 @@ async fn test_sec_576_004_content_disposition_crlf_injection_guard() {
                     &body[..body.len().min(400)]
                 );
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AC-018: double-quote filename → Content-Disposition well-formed (Unix only)
+// ---------------------------------------------------------------------------
+
+/// AC-018 double-quote vector — regression pin for reqwest Content-Disposition encoding.
+///
+/// Unix-only: `"` is a valid filename character on Unix; Windows rejects it at the
+/// OS/filesystem level before `jr` sees the file.
+///
+/// Verifies:
+/// (a) Exactly one Content-Disposition header (no split at the `"` boundary).
+/// (b) The escaped form appears in the multipart body — reqwest 0.13 uses RFC 2616/7230
+///     backslash-escape (`\"`) within the quoted-string, producing `filename="file\"name.txt"`.
+/// (c) The raw broken form `filename="file"name` does NOT appear (a bare `"` would end
+///     the quoted-string prematurely and could inject arbitrary header content).
+///
+/// Expected GREEN (reqwest 0.13 escapes `"` as `\"` inside the filename quoted-string).
+/// A reqwest encoding regression (raw `"` emitted unescaped) would cause (b) and (c) to fail.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_ac_018_double_quote_filename_well_formed_content_disposition() {
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let tmp = TempDir::new().unwrap();
+
+    // `"` is valid on Unix but forbidden on Windows — #[cfg(unix)] gates this block.
+    let file_quote = tmp.path().join("file\"name.txt");
+    std::fs::write(&file_quote, b"quote content").unwrap();
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/TEST-1/attachments"))
+        .and(header("X-Atlassian-Token", "no-check"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            make_upload_attachment("10401", "file\"name.txt")
+        ])))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            "TEST-1",
+            &file_quote.to_string_lossy(),
+            "--output",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "AC-018 double-quote filename: upload must exit 0; \
+         got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+
+    // Content-Disposition well-formedness assertions (reached only when GREEN).
+    let received = server.received_requests().await.unwrap();
+    for req in &received {
+        if req.method == wiremock::http::Method::POST {
+            let body = std::str::from_utf8(&req.body).unwrap_or("");
+
+            // (a) Exactly one Content-Disposition — structural smoke test.
+            let cd_count = body.matches("Content-Disposition").count();
+            assert_eq!(
+                cd_count, 1,
+                "AC-018: expected 1 Content-Disposition in multipart body; \
+                 body excerpt: {}",
+                &body[..body.len().min(400)]
+            );
+
+            // (b) The encoded/escaped form MUST be present.
+            // reqwest 0.13 uses RFC 2616/7230 quoted-string escaping: '"' → '\"'
+            // (backslash-escape within the quoted-string), NOT percent-encoding.
+            // Body form: filename="file\"name.txt"
+            // Accept either form in case reqwest ever switches to %22 or filename*:
+            assert!(
+                body.contains(r#"\""#) || body.contains("%22"),
+                "AC-018: filename must contain encoded '\"' (backslash-escape \\\" or %22) \
+                 in Content-Disposition; body excerpt: {}",
+                &body[..body.len().min(400)]
+            );
+
+            // (c) The raw broken form MUST be absent.
+            // If a bare '"' after 'file' ended the quoted-string, the Content-Disposition
+            // value would be: filename="file"name.txt" — the first '"' closes the parameter,
+            // and "name.txt" becomes unexpected trailing data, which can inject headers.
+            assert!(
+                !body.contains("filename=\"file\"name"),
+                "AC-018: raw unescaped '\"' must NOT appear as a Content-Disposition \
+                 quoted-string boundary; got broken form 'filename=\"file\"name' in body; \
+                 body excerpt: {}",
+                &body[..body.len().min(400)]
+            );
         }
     }
 }
