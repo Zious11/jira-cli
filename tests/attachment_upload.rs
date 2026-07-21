@@ -2434,6 +2434,258 @@ async fn test_sec_576_004_content_disposition_crlf_injection_guard() {
 }
 
 // ---------------------------------------------------------------------------
+// Mutation-kill tests: retry-boundary comparisons in upload_attachments
+//
+// Surviving mutants (cargo-mutants, PR #635 diff scope):
+//   Line 257: `if delay > MAX_RETRY_AFTER_SECS`
+//     - replace > with == (kills Test 3 below — delay=61, abort is expected;
+//       mutant sees 61==60 = false → proceeds to sleep 61s → timeout fires)
+//     - replace > with >= (kills Test 2 below — delay=60, proceed expected;
+//       mutant sees 60>=60 = true → aborts immediately → assertion fails)
+//   Line 267: `if delay > 0 { tokio::time::sleep(...).await }`
+//     - replace > with == / < / >= : all produce indistinguishable behavior
+//       when delay=0 (sleep(0) ≈ no-op on tokio). Test 1 documents the
+//       boundary path but these three are genuinely equivalent mutants for
+//       delay=0 and cannot be killed via black-box subprocess testing without
+//       timing assertions or a src-level seam.
+// ---------------------------------------------------------------------------
+
+/// BC-3.9.001 retry boundary: Retry-After:0 proceeds and retries immediately (no sleep).
+///
+/// Mutation-kill targets (line 267: `if delay > 0 { sleep }`):
+///   - `replace > with ==`: `if delay == 0 { sleep }` — sleep(0) is a no-op for u64
+///   - `replace > with <`:  `if delay < 0 { sleep }` — never fires for u64 (equivalent)
+///   - `replace > with >=`: `if delay >= 0 { sleep }` — always true for u64 (equivalent)
+///
+/// Note: all three line-267 mutations are behaviorally equivalent for `u64 delay`:
+/// sleep(Duration::ZERO) is a near-instant no-op and `u64 >= 0` is always true.
+/// This test documents the boundary and kills any abort-on-zero regression (line 257
+/// path) but cannot distinguish equivalent sleep-vs-no-sleep u64 variants.
+///
+/// Design: subprocess via `jr_cmd_with_xdg` (proven pattern — same as
+/// `test_bc_3_9_001_rate_limit_retry_rebuilds_request`). Wiremock priority:
+/// most-recently-registered-wins — register 200 first, 429 second so 429 (higher
+/// priority) serves the initial request; once exhausted, 200 serves the retry.
+/// `.expect(1)` on the 429 mock is a drop-time guard that fires if jr never hit
+/// the 429 path (which would mean the test is testing the wrong code path).
+#[tokio::test]
+async fn test_bc_3_9_001_rate_limit_retry_after_zero_skips_sleep() {
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("zero_delay_test.txt");
+    std::fs::write(&file, b"zero delay content").unwrap();
+
+    // Register 429 FIRST so it is served on the initial request; once its
+    // up_to_n_times(1) capacity is exhausted, the second-registered 200 mock
+    // serves the retry.  Empirically, wiremock 0.6 matches in registration order
+    // (first-registered wins when multiple mocks match the same request), so the
+    // 429 mock must be registered before the 200 fallback.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/TEST-1/attachments"))
+        .and(header("X-Atlassian-Token", "no-check"))
+        .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "0"))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/TEST-1/attachments"))
+        .and(header("X-Atlassian-Token", "no-check"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            make_upload_attachment("10501", "zero_delay_test.txt")
+        ])))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            "TEST-1",
+            &file.to_string_lossy(),
+            "--output",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(15))
+        .output()
+        .unwrap();
+
+    // wiremock .expect(1) on the 429 mock fires at drop if the 429 path was never hit.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "BC-3.9.001 delay=0: Retry-After:0 must not abort (delay 0 <= cap 60) and \
+         must retry immediately (delay=0 skips sleep) → exit 0; \
+         got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+}
+
+/// BC-3.9.001 retry boundary: Retry-After equal to MAX_RETRY_AFTER_SECS should
+/// proceed (not abort).
+///
+/// Mutation-kill target: `replace > with >=` at line 257 of
+/// `src/api/jira/attachments.rs`.
+///
+/// The comparison is `if delay > MAX_RETRY_AFTER_SECS` (currently 60). When
+/// delay == 60:
+/// - Original (`> 60`): 60 > 60 = false → does NOT abort → starts sleeping 60s
+/// - `>=` mutant:       60 >= 60 = true  → ABORTS immediately → returns ApiError
+///
+/// Design: uses `JiraClient::new_for_test` directly (no subprocess) with a
+/// `tokio::time::timeout(5s)` outer gate. The original code sleeps 60 real seconds
+/// before retrying — the 5-second timeout fires first, causing `result.is_err()`
+/// (the task is still sleeping, not aborted). The `>=` mutant aborts immediately
+/// → `result.is_ok()` with inner Err → assertion `result.is_err()` FAILS → mutant
+/// KILLED.
+///
+/// Note: `start_paused = true` is intentionally absent — incompatible with wiremock
+/// (see `tests/rate_limit_cap_tests.rs::ac_001_retry_after_exceeds_cap_aborts_retry`
+/// for the known incompatibility). This test intentionally waits up to 5 real
+/// seconds.
+#[tokio::test]
+async fn test_bc_3_9_001_rate_limit_retry_after_at_cap_proceeds() {
+    use jr::api::client::JiraClient;
+    use jr::api::rate_limit::MAX_RETRY_AFTER_SECS;
+
+    let server = MockServer::start().await;
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("cap_boundary_test.txt");
+    std::fs::write(&file, b"cap boundary content").unwrap();
+
+    // First request: 429 with Retry-After exactly equal to MAX_RETRY_AFTER_SECS (60).
+    // Original code: delay=60, `60 > 60` = false → proceeds, sleeps 60s then retries.
+    // `>=` mutant:   delay=60, `60 >= 60` = true → aborts → returns ApiError.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/TEST-1/attachments"))
+        .and(header("X-Atlassian-Token", "no-check"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("Retry-After", MAX_RETRY_AFTER_SECS.to_string().as_str()),
+        )
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+
+    // Success response reachable only after the 60s sleep elapses (never in this test
+    // because the 5-second timeout fires first — the point is to demonstrate the code
+    // is sleeping, not aborting).
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/TEST-1/attachments"))
+        .and(header("X-Atlassian-Token", "no-check"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            make_upload_attachment("10502", "cap_boundary_test.txt")
+        ])))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+
+    let client =
+        JiraClient::new_for_test(server.uri(), "Basic dGVzdDp0ZXN0".to_string());
+    let file_path = file.to_path_buf();
+
+    // Spawn `upload_attachments` as a task so we can apply an outer timeout.
+    let handle = tokio::spawn(async move {
+        client
+            .upload_attachments("TEST-1", &[file_path])
+            .await
+    });
+
+    // 5-second wall-clock gate.
+    //   Original code: sleep(60s) → timeout fires at ~5s → result.is_err() ✓
+    //   `>=` mutant:   aborts immediately → result.is_ok() with inner Err → assertion ✗
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+
+    assert!(
+        result.is_err(),
+        "BC-3.9.001 at-cap boundary: Retry-After:{cap} (== MAX_RETRY_AFTER_SECS) must \
+         NOT abort — code must sleep and then retry. Original code sleeps {cap}s, so a \
+         5s timeout must fire first (result.is_err()). If result.is_ok(), the `>= {cap}` \
+         mutant is active and is aborting when it should proceed.",
+        cap = MAX_RETRY_AFTER_SECS
+    );
+}
+
+/// BC-3.9.001 retry boundary: Retry-After one above MAX_RETRY_AFTER_SECS aborts.
+///
+/// Mutation-kill target: `replace > with ==` at line 257 of
+/// `src/api/jira/attachments.rs`.
+///
+/// The comparison is `if delay > MAX_RETRY_AFTER_SECS` (currently 60). With delay=61:
+/// - Original (`> 60`): 61 > 60 = true  → ABORTS immediately → ApiError → exit 1
+/// - `==` mutant:       61 == 60 = false → does NOT abort → sleeps 61s → timeout
+///   kills subprocess at 15s → exit signal (None) → assertion `Some(1)` FAILS → KILLED
+///
+/// The `.expect(1)` on the mock pins that exactly 1 POST was made (the initial request
+/// that got 429 — no retry after abort).
+#[tokio::test]
+async fn test_bc_3_9_001_rate_limit_retry_after_above_cap_aborts() {
+    use jr::api::rate_limit::MAX_RETRY_AFTER_SECS;
+
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("above_cap_test.txt");
+    std::fs::write(&file, b"above cap content").unwrap();
+
+    // ONE mock: 429 with Retry-After one above the cap (MAX_RETRY_AFTER_SECS + 1 = 61).
+    // Original code: 61 > 60 = true → aborts → only 1 request.
+    // `==` mutant:   61 == 60 = false → proceeds → sleeps 61s → subprocess killed by
+    //                15s timeout → exit code is signal (None), not Some(1) → test fails.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/TEST-1/attachments"))
+        .and(header("X-Atlassian-Token", "no-check"))
+        .respond_with(
+            ResponseTemplate::new(429).insert_header(
+                "Retry-After",
+                (MAX_RETRY_AFTER_SECS + 1).to_string().as_str(),
+            ),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            "TEST-1",
+            &file.to_string_lossy(),
+            "--output",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(15))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "BC-3.9.001 above-cap: Retry-After:{above} (> MAX_RETRY_AFTER_SECS={cap}) \
+         must abort immediately and exit 1; got {:?}\nstderr: {stderr}",
+        output.status.code(),
+        above = MAX_RETRY_AFTER_SECS + 1,
+        cap = MAX_RETRY_AFTER_SECS
+    );
+
+    // Error message must describe the cap exceedance (not generic).
+    assert!(
+        stderr.contains("cap") || stderr.contains("exceeds") || stderr.contains("Retry-After"),
+        "BC-3.9.001 above-cap: stderr must mention cap/exceeds/Retry-After; got: {stderr}"
+    );
+    // wiremock .expect(1) validates exactly 1 POST on drop (abort = no retry).
+}
+
+// ---------------------------------------------------------------------------
 // AC-018: double-quote filename → Content-Disposition well-formed (Unix only)
 // ---------------------------------------------------------------------------
 
