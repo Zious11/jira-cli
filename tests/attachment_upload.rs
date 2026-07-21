@@ -222,6 +222,66 @@ async fn test_bc_3_9_001_rate_limit_retry_rebuilds_request() {
     );
 }
 
+/// Persistent 429 across all retry attempts terminates with exit 1.
+///
+/// MAX_RETRIES = 3 → loop `for attempt in 0..=MAX_RETRIES` → 4 total POST attempts.
+/// `.expect(4)` pins the exact count, killing:
+///   - MAX_RETRIES off-by-one mutants (2 or 4 instead of 3)
+///   - Exclusive-range mutant (`0..MAX_RETRIES` = 3 attempts instead of 4)
+///   - Boundary-operator mutant (`attempt <= MAX_RETRIES` = 5 attempts instead of 4)
+///
+/// GREEN pin (impl's `!status.is_success()` fallthrough on exhaustion is correct;
+/// `JrError::ApiError { status: 429 }` → exit 1).
+#[tokio::test]
+async fn test_bc_3_9_001_persistent_429_exhausts_retries() {
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("report.pdf");
+    std::fs::write(&file, b"pdf content").unwrap();
+
+    // All 4 attempts return 429.  Retry-After: 0 avoids actual sleeps in tests.
+    // .expect(4) is the mutation-killing assertion: any change to MAX_RETRIES or the
+    // loop bound changes the request count and fails wiremock's expectation on drop.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/TEST-1/attachments"))
+        .and(header("X-Atlassian-Token", "no-check"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("Retry-After", "0")
+                .set_body_string("Rate limit exceeded."),
+        )
+        .expect(4)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            "TEST-1",
+            &file.to_string_lossy(),
+            "--output",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(15))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Exhausted retries → JrError::ApiError { status: 429, ... } → exit 1.
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "BC-3.9.012: persistent 429 terminal failure must exit 1; \
+         got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+    // wiremock .expect(4) validates exactly 4 attempts on server drop.
+}
+
 /// Verifies that all file pre-checks (is_file() / existence) fire BEFORE any
 /// HTTP call (EC-3.9.001-4 / BC-3.9.001).
 ///
@@ -942,6 +1002,79 @@ async fn test_bc_3_9_014_gate_confirm_proceeds() {
     );
 }
 
+/// P4-003: gate accepts uppercase "Y" — case-insensitive match.
+///
+/// BC-3.9.014 mandates `eq_ignore_ascii_case("y")` / `eq_ignore_ascii_case("yes")`.
+/// This test kills the `eq_ignore_ascii_case → ==` mutant (which would reject "Y").
+///
+/// GREEN pin (impl is correct).
+#[tokio::test]
+async fn test_bc_3_9_014_gate_confirm_uppercase_y_proceeds() {
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("report.pdf");
+    std::fs::write(&file, b"pdf data").unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1"))
+        .and(query_param("fields", "attachment"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(issue_with_attachments(
+                "TEST-1",
+                vec![make_upload_attachment("AID-001", "report.pdf")],
+            )),
+        )
+        .mount(&server)
+        .await;
+
+    // Both DELETE and POST must fire — uppercase "Y" must proceed like "y".
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/attachment/AID-001"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/TEST-1/attachments"))
+        .and(header("X-Atlassian-Token", "no-check"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            make_upload_attachment("AID-NEW", "report.pdf")
+        ])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .env("JR_STDIN_IS_TTY", "1")
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            "TEST-1",
+            &file.to_string_lossy(),
+            "--replace-existing",
+            "--output",
+            "json",
+        ])
+        .write_stdin("Y\n")
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "BC-3.9.014: uppercase 'Y' must be accepted (eq_ignore_ascii_case); \
+         got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+    // .expect(1) on DELETE and POST verify the flow proceeded (not cancelled).
+}
+
 /// Verifies that when the user inputs 'n' (anything other than y/yes), the
 /// upload is cancelled: exit 0, stderr "Upload cancelled.",
 /// JSON `{"cancelled":true,"uploaded":false}`, zero DELETE/POST calls.
@@ -1355,6 +1488,99 @@ async fn test_bc_3_9_017_delete_404_is_benign_skip() {
     // that each fires exactly once (verified at server drop).
 }
 
+/// P4-002: non-404 DELETE error during --replace-existing must ABORT the flow.
+///
+/// EC-3.9.017-4: DELETE 404 = benign skip (tested separately). Any other HTTP
+/// error (403, 5xx) is a hard abort — `delete_attachment` returns `Err(e)` which
+/// propagates up through the upload handler.
+///
+/// Fixture determinism: GET returns [AID-001, AID-002] in that order; the
+/// delete loop iterates `would_delete` in GET-response order, so AID-001 is
+/// attempted first. AID-001 → 403 → abort immediately; AID-002 DELETE must not
+/// fire; POST must not fire.
+///
+/// `.expect(0)` on AID-002 DELETE and POST kills:
+///   - the `return Err(e)` deletion mutant (which would ignore the error and continue)
+///   - the `!is_benign_404 → true/false` boundary mutants
+///
+/// GREEN pin (implementation is correct).
+#[tokio::test]
+async fn test_bc_3_9_017_delete_403_aborts_flow() {
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("report.pdf");
+    std::fs::write(&file, b"pdf data").unwrap();
+
+    // GET returns two attachments both named "report.pdf"; loop processes AID-001 first.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1"))
+        .and(query_param("fields", "attachment"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(issue_with_attachments(
+                "TEST-1",
+                vec![
+                    make_upload_attachment("AID-001", "report.pdf"),
+                    make_upload_attachment("AID-002", "report.pdf"),
+                ],
+            )),
+        )
+        .mount(&server)
+        .await;
+
+    // AID-001 DELETE returns 403 — non-benign error triggers abort.
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/attachment/AID-001"))
+        .respond_with(ResponseTemplate::new(403).set_body_string("Forbidden"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // AID-002 DELETE must NOT fire after the 403 abort.
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/attachment/AID-002"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    // POST (upload) must NOT fire if DELETE aborted.
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/TEST-1/attachments"))
+        .and(header("X-Atlassian-Token", "no-check"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            "TEST-1",
+            &file.to_string_lossy(),
+            "--replace-existing",
+            "--yes",
+            "--output",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "EC-3.9.017-4: DELETE 403 must abort with exit 1 (ApiError); \
+         got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+    // .expect(0) on AID-002 DELETE and POST are verified at MockServer drop.
+}
+
 // ---------------------------------------------------------------------------
 // AC-012: --replace-existing with no match → direct upload (BC-3.9.018)
 // ---------------------------------------------------------------------------
@@ -1575,6 +1801,108 @@ async fn test_bc_3_9_020_dry_run_path_c_guards_not_suppressed_gates_suppressed()
             output.status.code()
         );
     }
+}
+
+/// Mutation pre-empt: table dry-run arm (OutputFormat::Table) exact-string pins.
+///
+/// BC-3.9.020 / `dry_run_upload` `OutputFormat::Table` arm:
+///   1. "DRY RUN — no changes will be made."  (U+2014 em-dash)
+///   2. "Would delete N existing attachment(s)."  (N ≥ 2)
+///   3. "Would upload N file(s)."
+///
+/// `.expect(0)` on DELETE and POST ensures no network I/O occurs in dry-run.
+/// The assertions kill:
+///   - any mutation that alters or removes the em-dash (em-dash vs hyphen)
+///   - any mutation that changes N in "Would delete N" (off-by-one on count)
+///   - any mutation that omits the "Would upload" line
+///
+/// GREEN pin (implementation is correct).
+#[tokio::test]
+async fn test_bc_3_9_020_dry_run_table_output_strings() {
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("report.pdf");
+    std::fs::write(&file, b"pdf data").unwrap();
+
+    // Two attachments with same filename — "Would delete 2 existing attachment(s)."
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TEST-1"))
+        .and(query_param("fields", "attachment"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(issue_with_attachments(
+                "TEST-1",
+                vec![
+                    make_upload_attachment("AID-001", "report.pdf"),
+                    make_upload_attachment("AID-002", "report.pdf"),
+                ],
+            )),
+        )
+        .mount(&server)
+        .await;
+
+    // No DELETE or POST should fire in dry-run mode.
+    Mock::given(method("DELETE"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/TEST-1/attachments"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    // No --output json → default Table output channel.
+    // --yes suppresses the interactive gate (dry-run flag suppresses it anyway,
+    // but --yes prevents needing JR_STDIN_IS_TTY and .write_stdin()).
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            "TEST-1",
+            &file.to_string_lossy(),
+            "--replace-existing",
+            "--dry-run",
+            "--yes",
+        ])
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "BC-3.9.020: table dry-run must exit 0; got {:?}\nstdout: {stdout}\nstderr: {stderr}",
+        output.status.code()
+    );
+
+    // Exact string pin — em-dash U+2014, not hyphen-minus U+002D.
+    assert!(
+        stdout.contains("DRY RUN \u{2014} no changes will be made."),
+        "BC-3.9.020: stdout must contain 'DRY RUN \u{2014} no changes will be made.' (em-dash); \
+         got: {stdout}"
+    );
+
+    // Count pin: N=2 (two same-filename attachments in GET fixture).
+    assert!(
+        stdout.contains("Would delete 2 existing attachment(s)."),
+        "BC-3.9.020: stdout must contain 'Would delete 2 existing attachment(s).'; got: {stdout}"
+    );
+
+    // Upload count pin: N=1 (one file argument).
+    assert!(
+        stdout.contains("Would upload 1 file(s)."),
+        "BC-3.9.020: stdout must contain 'Would upload 1 file(s).'; got: {stdout}"
+    );
+    // .expect(0) on DELETE and POST mocks are verified at MockServer drop.
 }
 
 // ---------------------------------------------------------------------------
