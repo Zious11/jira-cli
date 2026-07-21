@@ -168,6 +168,143 @@ async fn test_bc_3_9_008_delete_endpoint_aid_validation_404_exit_64() {
              got stderr: {stderr}"
         );
     }
+
+    // Sub-case P8-001 (a): empty-string AID, single form
+    // `delete "" --yes` → exit 64 canonical; no HTTP calls at all.
+    // BUG: `"".chars().all(|c| c.is_ascii_digit())` is vacuously true →
+    // empty-string passes the numeric guard and proceeds to HTTP.
+    // RED: current impl accepts "" as valid.
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args(["issue", "attachment", "delete", "", "--yes"])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert_eq!(
+            output.status.code(),
+            Some(64),
+            "P8-001 (a) empty AID single: must exit 64; got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+        assert!(
+            stderr.contains("invalid attachment id: '' (must be numeric)"),
+            "P8-001 (a) empty AID: stderr must contain canonical error; got stderr: {stderr}"
+        );
+    }
+
+    // Sub-case P8-001 (b): empty-string AID in multi-form
+    // `delete "" 12345 --yes` → exit 64 canonical; 12345 NOT deleted (no partial delete).
+    // RED: current impl accepts "" and proceeds to attempt deletes.
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        // 12345 must NOT be deleted even though it is a valid AID in the list
+        Mock::given(method("DELETE"))
+            .and(path("/rest/api/3/attachment/12345"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args(["issue", "attachment", "delete", "", "12345", "--yes"])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert_eq!(
+            output.status.code(),
+            Some(64),
+            "P8-001 (b) empty AID multi: must exit 64 before any delete; got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+        assert!(
+            stderr.contains("invalid attachment id: '' (must be numeric)"),
+            "P8-001 (b) empty AID multi: stderr must contain canonical error; got stderr: {stderr}"
+        );
+    }
+
+    // Sub-case P8-001 (c): empty-string AID + --dry-run
+    // Must exit 64 (AID guard fires); must NOT emit a `{"id":""}` preview.
+    // RED: current impl emits the single-AID dry-run hint/JSON preview for empty string.
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args(["issue", "attachment", "delete", "", "--dry-run"])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        assert_eq!(
+            output.status.code(),
+            Some(64),
+            "P8-001 (c) empty AID dry-run: must exit 64 (guard fires before dry-run); \
+             got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+        assert!(
+            stderr.contains("invalid attachment id: '' (must be numeric)"),
+            "P8-001 (c) empty AID dry-run: stderr must contain canonical error; \
+             got stderr: {stderr}"
+        );
+        // Must NOT emit a preview JSON with an empty-string id
+        assert!(
+            !stdout.contains("\"id\""),
+            "P8-001 (c) empty AID dry-run: must NOT emit JSON preview; got stdout: {stdout}"
+        );
+        // Must NOT emit the single-AID dry-run hint
+        assert!(
+            !stderr.contains("--dry-run has no effect"),
+            "P8-001 (c) empty AID dry-run: hint must NOT appear when guard fires; \
+             got stderr: {stderr}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
