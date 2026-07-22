@@ -10570,6 +10570,20 @@ fn test_e2e_jsm_attachment_upload_public() {
         .output()
         .expect("failed to spawn jr attachment upload");
 
+    // Probe hardening: emit sanitized stderr BEFORE teardown so failure evidence
+    // always reaches the CI log even when upload exits non-zero (P2-3c fix,
+    // S-576-5 re-probe run after 29940792930).
+    if !upload_out.status.success() {
+        let stderr_raw = String::from_utf8_lossy(&upload_out.stderr);
+        let stderr_val = serde_json::from_str::<Value>(&stderr_raw)
+            .unwrap_or_else(|_| Value::String(stderr_raw.into_owned()));
+        let sanitized = p2_3c_sanitize(&stderr_val);
+        println!(
+            "P2-3C-SCHEMA-ERROR: {}",
+            serde_json::to_string(&sanitized).unwrap_or_else(|_| format!("{sanitized:?}"))
+        );
+    }
+
     // Step 5 (teardown — runs before assertions so no residue survives test failure):
     // (a) Best-effort parse the attachment AID and delete it.
     //     The attachment persists independently of ticket status (BC-3.9.011).
@@ -10787,6 +10801,20 @@ fn test_e2e_jsm_attachment_upload_internal() {
         ])
         .output()
         .expect("failed to spawn jr attachment upload");
+
+    // Probe hardening: emit sanitized stderr BEFORE teardown so failure evidence
+    // always reaches the CI log even when upload exits non-zero (P2-3c fix,
+    // S-576-5 re-probe run after 29940792930).
+    if !upload_out.status.success() {
+        let stderr_raw = String::from_utf8_lossy(&upload_out.stderr);
+        let stderr_val = serde_json::from_str::<Value>(&stderr_raw)
+            .unwrap_or_else(|_| Value::String(stderr_raw.into_owned()));
+        let sanitized = p2_3c_sanitize(&stderr_val);
+        println!(
+            "P2-3C-SCHEMA-ERROR: {}",
+            serde_json::to_string(&sanitized).unwrap_or_else(|_| format!("{sanitized:?}"))
+        );
+    }
 
     // Step 5 (teardown — runs before assertions so no residue survives test failure):
     // (a) Best-effort parse the attachment AID and delete it.
