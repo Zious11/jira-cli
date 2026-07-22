@@ -170,6 +170,97 @@ pub async fn attach_temporary_file(
     unreachable!("attach_temporary_file retry loop must return before exhausting iterations");
 }
 
+/// Defensively curate one entry from the servicedeskapi
+/// `AttachmentCreateResultDTO.attachments.values[]` array into an
+/// `AttachmentObject`.
+///
+/// The servicedeskapi `AttachmentDTO` shape differs from the platform
+/// `AttachmentObject` (confirmed by P2-3c schema probe run 29940792930):
+/// - `created` is an OBJECT `{"iso8601":"…","jira":"…","friendly":"…","epochMillis":N}`,
+///   NOT a bare string.
+/// - There is NO top-level `id` field — the attachment ID is the last path
+///   segment of `_links.jiraRest`.
+/// - The download URL lives at `_links.content`, NOT a top-level `content` field.
+/// - `author` is a full `UserDTO` object — downstream `serialize_attachment_curated`
+///   extracts `accountId` and `displayName` from whatever value is present here.
+///
+/// All fields have graceful fallbacks (empty string / `None` / 0) so schema
+/// drift or a missing field NEVER errors the upload command — the upload
+/// succeeded server-side; the echo MUST NOT fail it (BC-3.9.007 intent).
+fn curate_jsm_attachment_entry(v: &serde_json::Value) -> AttachmentObject {
+    // id: last path segment of _links.jiraRest; fallback top-level "id"; else "".
+    let id = v
+        .get("_links")
+        .and_then(|l| l.get("jiraRest"))
+        .and_then(|u| u.as_str())
+        .and_then(|url| url.rsplit('/').next())
+        .map(str::to_string)
+        .or_else(|| v.get("id").and_then(|i| i.as_str()).map(str::to_string))
+        .unwrap_or_default();
+
+    // content (→ contentUrl in curated JSON): _links.content; fallback top-level
+    // "content" or "contentUrl"; else "".
+    let content = v
+        .get("_links")
+        .and_then(|l| l.get("content"))
+        .and_then(|u| u.as_str())
+        .or_else(|| v.get("content").and_then(|c| c.as_str()))
+        .or_else(|| v.get("contentUrl").and_then(|c| c.as_str()))
+        .unwrap_or_default()
+        .to_string();
+
+    // created: object → .iso8601; string → direct; else "".
+    let created = match v.get("created") {
+        Some(serde_json::Value::Object(obj)) => obj
+            .get("iso8601")
+            .and_then(|s| s.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        Some(serde_json::Value::String(s)) => s.clone(),
+        _ => String::new(),
+    };
+
+    // filename: direct string; fallback "".
+    let filename = v
+        .get("filename")
+        .and_then(|f| f.as_str())
+        .unwrap_or_default()
+        .to_string();
+
+    // mimeType: optional.
+    let mime_type = v
+        .get("mimeType")
+        .and_then(|m| m.as_str())
+        .map(str::to_string);
+
+    // size: fallback 0.
+    let size = v.get("size").and_then(|s| s.as_u64()).unwrap_or(0);
+
+    // author: preserve full UserDTO Value — downstream serialize_attachment_curated
+    // extracts accountId + displayName from whatever object is present here
+    // (BC-2.7.002 curation layer).  null/absent → None.
+    let author = v.get("author").cloned().filter(|a| !a.is_null());
+
+    // self_url: _links.self; fallback "".
+    let self_url = v
+        .get("_links")
+        .and_then(|l| l.get("self"))
+        .and_then(|u| u.as_str())
+        .unwrap_or_default()
+        .to_string();
+
+    AttachmentObject {
+        self_url,
+        id,
+        filename,
+        author,
+        created,
+        size,
+        mime_type,
+        content,
+    }
+}
+
 /// POST `/rest/servicedeskapi/request/{issue_key}/attachment`
 ///
 /// Publishes the collected `temporaryAttachmentIds` to the JSM request,
@@ -227,6 +318,16 @@ pub async fn post_request_attachment(
         //   {"comment": {...} | null,
         //    "attachments": {"size": N, "start": N, "limit": N, "isLastPage": bool,
         //                    "values": [...AttachmentDTO...]}}
+        //
+        // The servicedeskapi AttachmentDTO shape differs from the platform
+        // AttachmentObject — confirmed by P2-3c schema probe run 29940792930:
+        //   - `created` is an OBJECT {"iso8601":"…","jira":"…","friendly":"…","epochMillis":N}
+        //   - NO top-level `id` — extract from `_links.jiraRest` URL tail
+        //   - Content URL lives at `_links.content`, not top-level `content`
+        //
+        // Parse defensively field-by-field so future schema drift never fails the
+        // command — the upload succeeded server-side; the echo MUST NOT fail it
+        // (BC-3.9.007 intent).
         let bytes = response.bytes().await?;
         let resp: serde_json::Value = serde_json::from_slice(&bytes)?;
         let values = resp
@@ -237,7 +338,7 @@ pub async fn post_request_attachment(
                 JrError::Internal("step-2 response missing attachments.values".to_string())
             })?;
         let attachments: Vec<AttachmentObject> =
-            serde_json::from_value(serde_json::Value::Array(values.clone()))?;
+            values.iter().map(curate_jsm_attachment_entry).collect();
         return Ok(attachments);
     }
 

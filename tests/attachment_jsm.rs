@@ -114,8 +114,44 @@ fn issue_get_response(key: &str, project_key: &str) -> Value {
     })
 }
 
-/// Raw attachment object as returned by the Jira API.
+/// Raw attachment object as returned by the servicedeskapi AttachmentDTO (JSM-specific shape).
+///
+/// Confirmed by P2-3c schema probe run 29940792930 (S-576-5):
+/// - `created` is an OBJECT with an `iso8601` sub-key (NOT a bare string).
+/// - NO top-level `id` — the attachment ID is derived from `_links.jiraRest` URL tail.
+/// - Content URL lives at `_links.content` (NOT a top-level `content` field).
+/// - `author` is a full `UserDTO` object (more fields than the curated `{accountId, displayName}`).
 fn attachment_object(id: &str, filename: &str) -> Value {
+    serde_json::json!({
+        "filename": filename,
+        "author": {
+            "accountId": "user123",
+            "displayName": "Test User",
+            "timeZone": "UTC",
+            "accountType": "atlassian"
+        },
+        "created": {
+            "iso8601": "2026-07-20T00:00:00.000+0000",
+            "jira": "20/Jul/26 12:00 AM",
+            "friendly": "Jul 20, 2026",
+            "epochMillis": 1753056000000_u64
+        },
+        "size": 1024_u64,
+        "mimeType": "text/plain",
+        "_links": {
+            "jiraRest": format!("https://example.atlassian.net/rest/api/3/attachment/{id}"),
+            "content": format!("https://example.atlassian.net/rest/api/3/attachment/content/{id}"),
+            "self": "https://example.atlassian.net/rest/servicedeskapi/request/EJ-1/attachment"
+        }
+    })
+}
+
+/// Raw attachment object in the PLATFORM shape (`POST /rest/api/3/issue/{key}/attachments`).
+///
+/// The platform upload endpoint returns a bare array of platform AttachmentObjects — NOT the
+/// servicedeskapi AttachmentDTO shape.  Use this helper for mocking `/rest/api/3/issue/…/attachments`
+/// responses (non-JSM and OQ-9 no-op paths).  For servicedeskapi step-2 mocks use `attachment_object`.
+fn platform_attachment_object(id: &str, filename: &str) -> Value {
     serde_json::json!({
         "id": id,
         "filename": filename,
@@ -905,12 +941,12 @@ async fn test_bc_3_9_004_internal_on_non_jsm_silent_noop_oq9() {
         .mount(&server)
         .await;
 
-    // Platform POST — returns a successful upload.
+    // Platform POST — returns a successful upload (platform DTO shape, not JSM DTO).
     Mock::given(method("POST"))
         .and(path("/rest/api/3/issue/DEV-1/attachments"))
         .and(header("X-Atlassian-Token", "no-check"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-            attachment_object("20006", "nonjsm.txt")
+            platform_attachment_object("20006", "nonjsm.txt")
         ])))
         .mount(&server)
         .await;
@@ -1775,13 +1811,13 @@ async fn test_bc_3_9_011_internal_json_shape_jsm_vs_non_jsm_asymmetry() {
         .respond_with(ResponseTemplate::new(200).set_body_json(non_jsm_project_response("DEV")))
         .mount(&server)
         .await;
+    // Platform POST for non-JSM path — uses platform DTO shape (NOT JSM DTO).
     Mock::given(method("POST"))
         .and(path("/rest/api/3/issue/DEV-2/attachments"))
         .and(header("X-Atlassian-Token", "no-check"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!([attachment_object("20013b", "asym.txt")])),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            platform_attachment_object("20013b", "asym.txt")
+        ])))
         .mount(&server)
         .await;
 
