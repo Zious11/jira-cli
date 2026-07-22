@@ -10554,7 +10554,6 @@ fn test_e2e_jsm_attachment_upload_public() {
     std::fs::write(&upload_file, b"S-576-5 e2e public attachment").expect("write test file");
 
     // Step 4: upload --public --yes → two-step servicedeskapi flow.
-    // Self-close BEFORE assertions so no issue is orphaned on test failure.
     let upload_out = h
         .cmd()
         .args([
@@ -10571,7 +10570,34 @@ fn test_e2e_jsm_attachment_upload_public() {
         .output()
         .expect("failed to spawn jr attachment upload");
 
-    // Step 5: self-close regardless of upload result (F-2b teardown).
+    // Step 5 (teardown — runs before assertions so no residue survives test failure):
+    // (a) Best-effort parse the attachment AID and delete it.
+    //     The attachment persists independently of ticket status (BC-3.9.011).
+    //     Do NOT panic on parse failure — teardown must always reach jsm_self_close.
+    let upload_stdout_raw = String::from_utf8_lossy(&upload_out.stdout);
+    let teardown_aid: Option<String> = serde_json::from_str::<Vec<Value>>(&upload_stdout_raw)
+        .ok()
+        .and_then(|arr| arr.into_iter().next())
+        .and_then(|item| item.get("id").and_then(Value::as_str).map(str::to_string));
+    if let Some(aid) = &teardown_aid {
+        match h
+            .cmd()
+            .args(["issue", "attachment", "delete", aid, "--yes"])
+            .output()
+        {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => {
+                let s = String::from_utf8_lossy(&o.stderr);
+                eprintln!("[WARN] E2E public: failed to delete attachment {aid}: {s}");
+            }
+            Err(e) => eprintln!("[WARN] E2E public: failed to spawn attachment delete: {e}"),
+        }
+    } else {
+        eprintln!(
+            "[WARN] E2E public: could not parse AID from upload stdout — attachment not deleted"
+        );
+    }
+    // (b) Self-close regardless of upload/delete result (F-2b teardown).
     jsm_self_close(&key, &h);
 
     // Step 6: assert upload succeeded.
@@ -10591,7 +10617,7 @@ fn test_e2e_jsm_attachment_upload_public() {
         "AC-011 E2E public: uploaded attachment array must be non-empty; stdout: {upload_stdout}"
     );
 
-    // P2-3c schema probe A: print sanitized curated upload output BEFORE assertions
+    // P2-3c schema probe A: print sanitized curated upload output BEFORE shape assertions
     // (BC-3.9.011).  Schema is captured even if the shape check below fails.
     p2_3c_print("CURATED-UPLOAD-public", &Value::Array(arr.clone()));
 
@@ -10762,7 +10788,34 @@ fn test_e2e_jsm_attachment_upload_internal() {
         .output()
         .expect("failed to spawn jr attachment upload");
 
-    // Step 5: self-close regardless of upload result (F-2b teardown).
+    // Step 5 (teardown — runs before assertions so no residue survives test failure):
+    // (a) Best-effort parse the attachment AID and delete it.
+    //     The attachment persists independently of ticket status (BC-3.9.011).
+    //     Do NOT panic on parse failure — teardown must always reach jsm_self_close.
+    let upload_stdout_raw = String::from_utf8_lossy(&upload_out.stdout);
+    let teardown_aid: Option<String> = serde_json::from_str::<Vec<Value>>(&upload_stdout_raw)
+        .ok()
+        .and_then(|arr| arr.into_iter().next())
+        .and_then(|item| item.get("id").and_then(Value::as_str).map(str::to_string));
+    if let Some(aid) = &teardown_aid {
+        match h
+            .cmd()
+            .args(["issue", "attachment", "delete", aid, "--yes"])
+            .output()
+        {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => {
+                let s = String::from_utf8_lossy(&o.stderr);
+                eprintln!("[WARN] E2E internal: failed to delete attachment {aid}: {s}");
+            }
+            Err(e) => eprintln!("[WARN] E2E internal: failed to spawn attachment delete: {e}"),
+        }
+    } else {
+        eprintln!(
+            "[WARN] E2E internal: could not parse AID from upload stdout — attachment not deleted"
+        );
+    }
+    // (b) Self-close regardless of upload/delete result (F-2b teardown).
     jsm_self_close(&key, &h);
 
     // Step 6: assert upload succeeded.
@@ -10782,7 +10835,7 @@ fn test_e2e_jsm_attachment_upload_internal() {
         "AC-011 E2E internal: uploaded attachment array must be non-empty; stdout: {upload_stdout}"
     );
 
-    // P2-3c schema probe A: print sanitized curated upload output BEFORE assertions
+    // P2-3c schema probe A: print sanitized curated upload output BEFORE shape assertions
     // (BC-3.9.011).  Schema is captured even if the shape check below fails.
     p2_3c_print("CURATED-UPLOAD-internal", &Value::Array(arr.clone()));
 
