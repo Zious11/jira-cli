@@ -223,15 +223,46 @@ pub fn write_project_meta(profile: &str, project_key: &str, meta: &ProjectMeta) 
 ///
 /// Model-b cache writer: disk errors are swallowed with a warning so a failed
 /// invalidation never breaks the upload command. Returns `()` unconditionally.
-///
-/// **RED-phase stub — implement in Task 4.**
-#[allow(dead_code)] // RED-phase stub — remove when wired in Task 4.
 pub fn invalidate_project_meta_cache(profile: &str, project_key: &str) {
-    todo!(
-        "S-576-5 RED stub: invalidate_project_meta_cache(profile={:?}, project_key={:?}) — implement in Task 4",
-        profile,
-        project_key
-    )
+    let path = cache_dir(profile).join("project_meta.json");
+    if !path.exists() {
+        return;
+    }
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "warning: failed to invalidate project_meta cache for {project_key}: {e}"
+            );
+            return;
+        }
+    };
+    let mut map: HashMap<String, ProjectMeta> = match serde_json::from_str(&content) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!(
+                "warning: failed to invalidate project_meta cache for {project_key}: {e}"
+            );
+            return;
+        }
+    };
+    if map.remove(project_key).is_none() {
+        return;
+    }
+    let new_content = match serde_json::to_string_pretty(&map) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "warning: failed to invalidate project_meta cache for {project_key}: {e}"
+            );
+            return;
+        }
+    };
+    if let Err(e) = std::fs::write(&path, new_content) {
+        eprintln!(
+            "warning: failed to invalidate project_meta cache for {project_key}: {e}"
+        );
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
