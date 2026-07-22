@@ -2168,15 +2168,19 @@ async fn test_bc_3_9_020_dry_run_public_visibility_annotation() {
         .mount(&server)
         .await;
     // --replace-existing requires list attachments.
+    // .with_priority(1) ensures this mock wins over the plain EJ-15 issue GET mock
+    // registered above (same path, same default priority → FIFO, first-registered wins).
+    // platform_attachment_object provides the top-level `id` field required for wouldDelete.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/EJ-15"))
         .and(wiremock::matchers::query_param("fields", "attachment"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(attachments_list_response(
                 "EJ-15",
-                vec![attachment_object("AID-01", "dry.txt")],
+                vec![platform_attachment_object("AID-01", "dry.txt")],
             )),
         )
+        .with_priority(1)
         .mount(&server)
         .await;
 
@@ -2229,6 +2233,26 @@ async fn test_bc_3_9_020_dry_run_public_visibility_annotation() {
             "BC-3.9.020 EC-3.9.020-7: each wouldUpload entry must have visibility:public; got: {entry}"
         );
     }
+    let would_delete = preview
+        .get("wouldDelete")
+        .and_then(Value::as_array)
+        .expect("BC-3.9.020 AC-015: wouldDelete must be array");
+    assert!(
+        !would_delete.is_empty(),
+        "BC-3.9.020 AC-015: wouldDelete must be non-empty (attachment-list mock was shadowed if empty)"
+    );
+    assert_eq!(
+        would_delete[0].get("filename").and_then(Value::as_str),
+        Some("dry.txt"),
+        "BC-3.9.020 AC-015: wouldDelete[0].filename must be 'dry.txt'; got: {:?}",
+        would_delete[0]
+    );
+    assert_eq!(
+        would_delete[0].get("id").and_then(Value::as_str),
+        Some("AID-01"),
+        "BC-3.9.020 AC-015: wouldDelete[0].id must be 'AID-01'; got: {:?}",
+        would_delete[0]
+    );
 
     // --- Primary assertion: human mode ---
     let out_human = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
