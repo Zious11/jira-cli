@@ -1699,13 +1699,7 @@ async fn handle_attachment_upload_jsm(
                                             ))
                                             .into())
                                         }
-                                        Ok(JrError::ApiError { status: 401, .. }) => {
-                                            Err(JrError::NotAuthenticated {
-                                                hint: "Run `jr auth login` to re-authenticate."
-                                                    .to_string(),
-                                            }
-                                            .into())
-                                        }
+                                        // Post-retry 401 arrives as JrError::NotAuthenticated (exit 2); falls through to Ok(other).
                                         Ok(other) => Err(anyhow::anyhow!(other)),
                                         Err(other) => Err(other),
                                     };
