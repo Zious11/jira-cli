@@ -1142,11 +1142,13 @@ pub async fn handle_attachment_upload(
         return handle_attachment_upload_jsm(
             &key,
             &file,
-            replace_existing,
-            yes,
-            dry_run,
-            no_input,
-            public,
+            &JsmUploadOpts {
+                replace_existing,
+                yes,
+                dry_run,
+                no_input,
+                public,
+            },
             output_format,
             client,
         )
@@ -1387,7 +1389,7 @@ fn attachment_replace_confirmation_gate(
 /// Uses the rightmost `-` as the separator so keys like `"MY-PROJ-42"` also
 /// parse correctly.  Falls back to the full key if no `-` is present.
 fn extract_project_key(key: &str) -> &str {
-    key.rsplitn(2, '-').nth(1).unwrap_or(key)
+    key.rsplit_once('-').map(|x| x.0).unwrap_or(key)
 }
 
 /// Interactive `--public` confirmation gate (single-file upload, no replace).
@@ -1442,6 +1444,15 @@ fn jsm_public_combined_gate(key: &str, would_delete: &[AttachmentObject]) -> any
     }
 }
 
+/// Boolean-flag bundle for `handle_attachment_upload_jsm` (reduces argument count).
+struct JsmUploadOpts {
+    replace_existing: bool,
+    yes: bool,
+    dry_run: bool,
+    no_input: bool,
+    public: bool,
+}
+
 /// JSM-aware upload handler (S-576-5).
 ///
 /// Called from `handle_attachment_upload` when `--public` or `--internal` is set.
@@ -1465,14 +1476,17 @@ fn jsm_public_combined_gate(key: &str, would_delete: &[AttachmentObject]) -> any
 async fn handle_attachment_upload_jsm(
     key: &str,
     file_paths: &[std::path::PathBuf],
-    replace_existing: bool,
-    yes: bool,
-    dry_run: bool,
-    no_input: bool,
-    public: bool,
+    opts: &JsmUploadOpts,
     output_format: &OutputFormat,
     client: &JiraClient,
 ) -> anyhow::Result<()> {
+    let JsmUploadOpts {
+        replace_existing,
+        yes,
+        dry_run,
+        no_input,
+        public,
+    } = *opts;
     // Derive project key from issue key without an HTTP round-trip.
     let project_key = extract_project_key(key);
 
@@ -1484,19 +1498,32 @@ async fn handle_attachment_upload_jsm(
         if public {
             // BC-3.9.005: --public on non-JSM → exit 64.
             return Err(JrError::UserError(
-                "--public is only supported on Jira Service Management (JSM) issues."
-                    .to_string(),
+                "--public is only supported on Jira Service Management (JSM) issues.".to_string(),
             )
             .into());
         }
         // OQ-9: --internal on non-JSM → silent no-op, fall through to platform path.
         if dry_run {
-            return dry_run_upload(key, file_paths, replace_existing, false, output_format, client)
-                .await;
+            return dry_run_upload(
+                key,
+                file_paths,
+                replace_existing,
+                false,
+                output_format,
+                client,
+            )
+            .await;
         }
         if replace_existing {
-            return replace_existing_attachments(key, file_paths, yes, no_input, output_format, client)
-                .await;
+            return replace_existing_attachments(
+                key,
+                file_paths,
+                yes,
+                no_input,
+                output_format,
+                client,
+            )
+            .await;
         }
         let uploaded = client.upload_attachments(key, file_paths).await?;
         return render_upload_result(&uploaded, output_format);
@@ -1511,15 +1538,22 @@ async fn handle_attachment_upload_jsm(
                  The project may still be provisioning; \
                  verify with `jr queue list --project {project_key}`."
             ))
-            .into())
+            .into());
         }
     };
 
     // JSM dry-run: preview without step-1/step-2, with visibility annotation.
     // The non-JSM guard already fired above so EC-3.9.020-8 is satisfied.
     if dry_run {
-        return dry_run_upload(key, file_paths, replace_existing, public, output_format, client)
-            .await;
+        return dry_run_upload(
+            key,
+            file_paths,
+            replace_existing,
+            public,
+            output_format,
+            client,
+        )
+        .await;
     }
 
     // --public visibility gate (--internal has no gate).
@@ -1612,8 +1646,7 @@ async fn handle_attachment_upload_jsm(
 
     for path in file_paths {
         let result =
-            crate::api::jsm::attachments::attach_temporary_file(client, &current_sd_id, path)
-                .await;
+            crate::api::jsm::attachments::attach_temporary_file(client, &current_sd_id, path).await;
 
         let tmp_id = match result {
             Ok(id) => id,
@@ -1630,7 +1663,7 @@ async fn handle_attachment_upload_jsm(
                             return Err(JrError::UserError(format!(
                                 "Service desk for {project_key} not found after refresh."
                             ))
-                            .into())
+                            .into());
                         }
                         Some(new_id) => {
                             current_sd_id = new_id;

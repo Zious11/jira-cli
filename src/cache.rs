@@ -231,18 +231,14 @@ pub fn invalidate_project_meta_cache(profile: &str, project_key: &str) {
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!(
-                "warning: failed to invalidate project_meta cache for {project_key}: {e}"
-            );
+            eprintln!("warning: failed to invalidate project_meta cache for {project_key}: {e}");
             return;
         }
     };
     let mut map: HashMap<String, ProjectMeta> = match serde_json::from_str(&content) {
         Ok(m) => m,
         Err(e) => {
-            eprintln!(
-                "warning: failed to invalidate project_meta cache for {project_key}: {e}"
-            );
+            eprintln!("warning: failed to invalidate project_meta cache for {project_key}: {e}");
             return;
         }
     };
@@ -252,16 +248,12 @@ pub fn invalidate_project_meta_cache(profile: &str, project_key: &str) {
     let new_content = match serde_json::to_string_pretty(&map) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!(
-                "warning: failed to invalidate project_meta cache for {project_key}: {e}"
-            );
+            eprintln!("warning: failed to invalidate project_meta cache for {project_key}: {e}");
             return;
         }
     };
     if let Err(e) = std::fs::write(&path, new_content) {
-        eprintln!(
-            "warning: failed to invalidate project_meta cache for {project_key}: {e}"
-        );
+        eprintln!("warning: failed to invalidate project_meta cache for {project_key}: {e}");
     }
 }
 

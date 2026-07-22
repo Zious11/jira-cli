@@ -66,7 +66,13 @@ pub async fn attach_temporary_file(
     // SEC-576-004 CRLF/NUL guard — prevent header-injection in Content-Disposition.
     let safe_name: String = raw_name
         .chars()
-        .map(|c| if matches!(c, '\r' | '\n' | '\0') { '_' } else { c })
+        .map(|c| {
+            if matches!(c, '\r' | '\n' | '\0') {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
 
     for attempt in 0..=MAX_RETRIES {
@@ -184,8 +190,7 @@ pub async fn post_request_attachment(
     tmp_ids: &[String],
     public: bool,
 ) -> Result<Vec<AttachmentObject>> {
-    const RETRY_HINT: &str =
-        "Temporary attachment IDs may have expired. Try the upload again.";
+    const RETRY_HINT: &str = "Temporary attachment IDs may have expired. Try the upload again.";
 
     let url = format!(
         "{}/rest/servicedeskapi/request/{}/attachment",
@@ -229,17 +234,13 @@ pub async fn post_request_attachment(
     // BC-3.9.006 step-2 failure taxonomy + append retry hint.
     let err: JrError = match status_u16 {
         401 => JrError::NotAuthenticated {
-            hint: format!(
-                "{RETRY_HINT}\nRun \"jr auth login\" to reconnect."
-            ),
+            hint: format!("{RETRY_HINT}\nRun \"jr auth login\" to reconnect."),
         },
         403 => JrError::ApiError {
             status: 403,
             message: format!("{body_str}\n{RETRY_HINT}"),
         },
-        _ if status.is_client_error() => {
-            JrError::UserError(format!("{body_str}\n{RETRY_HINT}"))
-        }
+        _ if status.is_client_error() => JrError::UserError(format!("{body_str}\n{RETRY_HINT}")),
         _ => JrError::ApiError {
             status: status_u16,
             message: format!("{body_str}\n{RETRY_HINT}"),
