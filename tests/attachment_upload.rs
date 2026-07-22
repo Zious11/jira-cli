@@ -2213,69 +2213,9 @@ async fn test_vp_576_004_curated_shape_upload_and_list_are_structurally_identica
     }
 }
 
-// ---------------------------------------------------------------------------
-// AC-017: --public/--internal interim rejection (temporary until S-576-5)
-// ---------------------------------------------------------------------------
-
-/// Verifies that --public and --internal are rejected with exit 64 and the
-/// verbatim interim-rejection message BEFORE any file pre-check or HTTP call.
-/// Ordering proof: using a nonexistent file with --public → interim rejection
-/// fires first; stderr must NOT contain "file not found:".
-///
-/// REMOVED-AT-S5: this guard and the test are removed when S-576-5 wires
-/// actual JSM visibility behavior (attachment --public/--internal).
-///
-/// RED Gate: todo!() → subprocess exits 101; assertion "exit 64" fails.
-#[tokio::test]
-async fn test_bc_3_9_001_public_internal_interim_rejection_exits_64() {
-    let server = MockServer::start().await;
-    let cache = TempDir::new().unwrap();
-    let config = TempDir::new().unwrap();
-
-    // HTTP must not fire — interim rejection fires before file pre-check or HTTP.
-    Mock::given(method("POST"))
-        .respond_with(ResponseTemplate::new(200))
-        .expect(0)
-        .mount(&server)
-        .await;
-
-    // Use a nonexistent file to prove interim rejection fires BEFORE file pre-check.
-    let nonexistent = "/nonexistent/__s576_3_interim_public.txt";
-    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
-        .args([
-            "issue",
-            "attachment",
-            "upload",
-            "TEST-1",
-            nonexistent,
-            "--public",
-        ])
-        .timeout(std::time::Duration::from_secs(10))
-        .output()
-        .unwrap();
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(
-        output.status.code(),
-        Some(64),
-        "AC-017 interim --public: must exit 64; got {:?}\nstderr: {stderr}",
-        output.status.code()
-    );
-    // Verbatim interim-rejection message (BC-3.9.001 / AC-017).
-    assert!(
-        stderr.contains(
-            "--public and --internal are not yet supported. \
-             JSM visibility will be shipped in a follow-on story."
-        ),
-        "AC-017 VERBATIM: stderr must contain canonical interim message; got: {stderr}"
-    );
-    // Ordering proof: "file not found:" must NOT appear (interim fires before file check).
-    assert!(
-        !stderr.contains("file not found:"),
-        "AC-017 ordering: interim rejection must fire BEFORE file pre-check; \
-         'file not found:' must not appear in stderr; got: {stderr}"
-    );
-}
+// AC-017: removed at S-576-5 — --public/--internal now routes to the JSM visibility
+// handler instead of the interim rejection guard. See tests/attachment_jsm.rs for
+// AC-001 through AC-016 coverage of the new behavior.
 
 // ---------------------------------------------------------------------------
 // AC-018: SEC-576-004 CWE-93 Content-Disposition CRLF injection guard

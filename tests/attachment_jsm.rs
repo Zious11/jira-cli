@@ -1972,7 +1972,7 @@ async fn test_bc_3_9_020_dry_run_public_visibility_annotation() {
         .filter(|r| {
             r.url.path().contains("DEV-3")
                 && r.method == wiremock::http::Method::GET
-                && r.url.query().map_or(false, |q| q.contains("attachment"))
+                && r.url.query().is_some_and(|q| q.contains("attachment"))
         })
         .collect();
     assert!(
