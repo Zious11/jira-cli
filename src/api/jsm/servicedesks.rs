@@ -98,7 +98,7 @@ pub async fn get_or_fetch_project_meta(
     Ok(meta)
 }
 
-/// Resolve the JSM serviceDeskId for a project key from the existing project_meta cache.
+/// Resolve the JSM serviceDeskId for a project key.
 ///
 /// Calls `get_or_fetch_project_meta`, which ALREADY performs
 /// `ServiceDesk.project_id: String` equality match and stores the result in
@@ -115,14 +115,18 @@ pub async fn get_or_fetch_project_meta(
 /// **Do NOT reuse `require_service_desk`** (P19-001): that function uses a
 /// different error string and fuses the non-JSM guard with sdId resolution —
 /// the attachment flow keeps them separated (EC-3.9.003-7).
-///
-/// **RED-phase stub — implement in Task 3.**
-#[allow(dead_code)] // RED-phase stub — remove when wired in Task 3.
 pub async fn resolve_service_desk_id(
-    _client: &JiraClient,
-    _project_key: &str,
+    client: &JiraClient,
+    project_key: &str,
 ) -> anyhow::Result<String> {
-    todo!("S-576-5 RED stub: resolve_service_desk_id — implement in Task 3")
+    let meta = get_or_fetch_project_meta(client, project_key).await?;
+    meta.service_desk_id.ok_or_else(|| {
+        anyhow::anyhow!(JrError::UserError(format!(
+            "No JSM service desk found for project {project_key}. \
+             The project may still be provisioning; \
+             verify with `jr queue list --project {project_key}`."
+        )))
+    })
 }
 
 /// Require the project to be a JSM service desk. Returns the serviceDeskId or errors.
