@@ -10386,6 +10386,54 @@ fn test_e2e_comment_edit_visibility_merge_semantics() {
 }
 
 // ---------------------------------------------------------------------------
+// P2-3c schema-capture helpers — test-code only, never compiled into src/
+// ---------------------------------------------------------------------------
+
+/// Recursively replaces every JSON leaf value with a type placeholder so the
+/// structural schema can be printed to CI logs without emitting any real data
+/// (account IDs, URLs, issue keys, attachment IDs, timestamps, emails, etc.).
+///
+/// Rules:
+/// - Object  → keys kept verbatim, values sanitized recursively.
+/// - Array   → one-element array with the first element sanitized
+///   (or an empty array if the source array is empty).
+/// - String  → `"<string>"`
+/// - Number  → `"<number>"`
+/// - Bool    → `"<bool>"`
+/// - Null    → `null` (unchanged — null is structural information)
+fn p2_3c_sanitize(v: &Value) -> Value {
+    match v {
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(k, v)| (k.clone(), p2_3c_sanitize(v)))
+                .collect(),
+        ),
+        Value::Array(arr) => {
+            if arr.is_empty() {
+                Value::Array(vec![])
+            } else {
+                Value::Array(vec![p2_3c_sanitize(&arr[0])])
+            }
+        }
+        Value::String(_) => Value::String("<string>".to_string()),
+        Value::Number(_) => Value::String("<number>".to_string()),
+        Value::Bool(_) => Value::String("<bool>".to_string()),
+        Value::Null => Value::Null,
+    }
+}
+
+/// Prints a sanitized structural JSON schema to stdout.  Each line is prefixed
+/// with `P2-3C-SCHEMA: [<label>]` so the capture can be grepped from CI
+/// `--show-output` logs.  No real values are ever printed.
+fn p2_3c_print(label: &str, v: &Value) {
+    let sanitized = p2_3c_sanitize(v);
+    let pretty = serde_json::to_string_pretty(&sanitized).unwrap_or_default();
+    for line in pretty.lines() {
+        println!("P2-3C-SCHEMA: [{label}] {line}");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // S-576-5: JSM attachment upload --public / --internal E2E tests
 // AC-011 (Scenario 9 in jsm-e2e-coverage.md)
 // ---------------------------------------------------------------------------
@@ -10563,6 +10611,22 @@ fn test_e2e_jsm_attachment_upload_public() {
         item.get("self").is_none(),
         "AC-011 E2E public: curated attachment must NOT contain 'self'; got: {item}"
     );
+
+    // P2-3c schema probe A: print sanitized curated upload output (BC-3.9.011).
+    // Schema label allows grepping CI --show-output logs for structural analysis.
+    p2_3c_print("CURATED-UPLOAD-public", &Value::Array(arr.clone()));
+
+    // P2-3c schema probe B: raw platform attachment JSON (BC-3.9.007 wire source).
+    // GET /rest/api/3/issue/{key}?fields=attachment returns the raw Jira attachment
+    // objects before jr curates them — the platform wire format evidence for BC-3.9.007.
+    let raw_path = format!("/rest/api/3/issue/{key}?fields=attachment");
+    if let Ok(raw_out) = h.cmd().args(["api", &raw_path]).output() {
+        if raw_out.status.success() {
+            if let Ok(raw_v) = serde_json::from_slice::<Value>(&raw_out.stdout) {
+                p2_3c_print("RAW-PLATFORM-attachment-public", &raw_v);
+            }
+        }
+    }
 }
 
 /// E2E smoke test: `jr issue attachment upload <JSM-KEY> <FILE> --internal`
@@ -10738,4 +10802,17 @@ fn test_e2e_jsm_attachment_upload_internal() {
         item.get("self").is_none(),
         "AC-011 E2E internal: curated attachment must NOT contain 'self'; got: {item}"
     );
+
+    // P2-3c schema probe A: print sanitized curated upload output (BC-3.9.011).
+    p2_3c_print("CURATED-UPLOAD-internal", &Value::Array(arr.clone()));
+
+    // P2-3c schema probe B: raw platform attachment JSON (BC-3.9.007 wire source).
+    let raw_path = format!("/rest/api/3/issue/{key}?fields=attachment");
+    if let Ok(raw_out) = h.cmd().args(["api", &raw_path]).output() {
+        if raw_out.status.success() {
+            if let Ok(raw_v) = serde_json::from_slice::<Value>(&raw_out.stdout) {
+                p2_3c_print("RAW-PLATFORM-attachment-internal", &raw_v);
+            }
+        }
+    }
 }
