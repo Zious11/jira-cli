@@ -1500,7 +1500,11 @@ async fn test_bc_3_9_006_jsm_upload_error_taxonomy() {
             "service_desk_id": "SD7-OLD",
             "fetched_at": "2099-01-01T00:00:00Z"
         });
-        std::fs::write(&cache_path, serde_json::to_string_pretty(&existing).unwrap()).unwrap();
+        std::fs::write(
+            &cache_path,
+            serde_json::to_string_pretty(&existing).unwrap(),
+        )
+        .unwrap();
 
         let out = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
             .args([
@@ -2598,7 +2602,9 @@ async fn test_bc_3_9_014_consumer3_combined_prompt_text() {
     // BC-3.9.014 consumer 3: prompt must begin with "Upload to KEY as customer-visible (public)
     // and replace existing attachment(s):".
     assert!(
-        stderr.contains("Upload to EJ-19 as customer-visible (public) and replace existing attachment(s):"),
+        stderr.contains(
+            "Upload to EJ-19 as customer-visible (public) and replace existing attachment(s):"
+        ),
         "BC-3.9.014 consumer3: combined prompt must start with correct text; got:\n{stderr}"
     );
 

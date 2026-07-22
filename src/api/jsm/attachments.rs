@@ -310,9 +310,7 @@ pub async fn post_request_attachment(
             // BC-3.9.006: network errors in step-2 must exit 1 and append RETRY_HINT.
             JrError::ApiError {
                 status: 0,
-                message: format!(
-                    "Could not reach {host} — check your connection\n{RETRY_HINT}"
-                ),
+                message: format!("Could not reach {host} — check your connection\n{RETRY_HINT}"),
             }
         })?;
 
@@ -385,9 +383,11 @@ mod tests {
             "http://127.0.0.1:1".to_string(),
             "Basic dGVzdA==".to_string(),
         );
-        let result =
-            post_request_attachment(&client, "EJ-1", &["tmp-123".to_string()], true).await;
-        assert!(result.is_err(), "expected an error when server is unreachable");
+        let result = post_request_attachment(&client, "EJ-1", &["tmp-123".to_string()], true).await;
+        assert!(
+            result.is_err(),
+            "expected an error when server is unreachable"
+        );
         let err_string = format!("{}", result.unwrap_err());
         assert!(
             err_string.contains("Temporary attachment IDs may have expired"),

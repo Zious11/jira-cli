@@ -466,14 +466,14 @@ impl JiraClient {
                 Ok(project_key)
             }
             Err(e) => {
-                let is_404 = e.downcast_ref::<JrError>().is_some_and(|jr| {
-                    matches!(jr, JrError::ApiError { status: 404, .. })
-                });
+                let is_404 = e
+                    .downcast_ref::<JrError>()
+                    .is_some_and(|jr| matches!(jr, JrError::ApiError { status: 404, .. }));
                 if is_404 {
-                    Err(JrError::UserError(format!(
-                        "Issue {key} not found or not accessible."
-                    ))
-                    .into())
+                    Err(
+                        JrError::UserError(format!("Issue {key} not found or not accessible."))
+                            .into(),
+                    )
                 } else {
                     Err(e)
                 }

@@ -1683,13 +1683,12 @@ async fn handle_attachment_upload_jsm(
                             current_sd_id = new_id;
                             // P1-001: explicit EC-4 mapping on retry — bare .await? would
                             // propagate ApiError{status:404} as exit 1 instead of exit 64.
-                            let retry_result =
-                                crate::api::jsm::attachments::attach_temporary_file(
-                                    client,
-                                    &current_sd_id,
-                                    path,
-                                )
-                                .await;
+                            let retry_result = crate::api::jsm::attachments::attach_temporary_file(
+                                client,
+                                &current_sd_id,
+                                path,
+                            )
+                            .await;
                             match retry_result {
                                 Ok(id) => id,
                                 Err(e) => {
