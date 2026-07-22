@@ -10384,3 +10384,358 @@ fn test_e2e_comment_edit_visibility_merge_semantics() {
         delete_comment_probe(&h, &key, &cid);
     }
 }
+
+// ---------------------------------------------------------------------------
+// S-576-5: JSM attachment upload --public / --internal E2E tests
+// AC-011 (Scenario 9 in jsm-e2e-coverage.md)
+// ---------------------------------------------------------------------------
+
+/// E2E smoke test: `jr issue attachment upload <JSM-KEY> <FILE> --public --yes`
+/// uploads a temporary file as a customer-visible attachment via the
+/// servicedeskapi two-step flow (BC-3.9.003) and returns a non-empty curated
+/// attachment array.
+///
+/// Gated by `JR_E2E_JSM_PROJECT` (same as other JSM tests). Uses `jsm_self_close`
+/// for teardown convention (S-JSM-E2E-2). The temporary attachment is NOT deleted
+/// by this test (attachments on a closed issue are inert; they expire naturally).
+///
+/// Traces to: AC-011, BC-3.9.003, BC-3.9.007.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and JR_E2E_JSM_PROJECT and use --include-ignored to run"]
+fn test_e2e_jsm_attachment_upload_public() {
+    if !e2e_enabled() {
+        return;
+    }
+    let jsm_project = match env::var("JR_E2E_JSM_PROJECT") {
+        Ok(p) if !p.trim().is_empty() => p.trim().to_string(),
+        _ => {
+            eprintln!(
+                "[SKIP] JR_E2E_JSM_PROJECT not set — skipping JSM attachment upload --public test"
+            );
+            return;
+        }
+    };
+    let h = e2e_harness();
+    let run_id = run_label();
+
+    // Step 1: discover a request type to create a fresh JSM request.
+    let list_out = h
+        .cmd()
+        .args([
+            "requesttype",
+            "list",
+            "--project",
+            &jsm_project,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr requesttype list");
+
+    if !list_out.status.success() {
+        let s = String::from_utf8_lossy(&list_out.stderr);
+        eprintln!("[SKIP] requesttype list failed — skipping JSM attachment upload --public: {s}");
+        return;
+    }
+
+    let rts: Vec<Value> = match serde_json::from_slice(&list_out.stdout) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[SKIP] requesttype list not a JSON array: {e} — skipping");
+            return;
+        }
+    };
+    if rts.is_empty() {
+        eprintln!(
+            "[SKIP] no request types found on {jsm_project} — skipping attachment upload --public"
+        );
+        return;
+    }
+    let first_rt_id = {
+        let id_val = &rts[0]["id"];
+        if let Some(s) = id_val.as_str() {
+            s.to_string()
+        } else if let Some(n) = id_val.as_i64() {
+            n.to_string()
+        } else {
+            eprintln!("[SKIP] rts[0].id is not a usable type — skipping");
+            return;
+        }
+    };
+
+    // Step 2: create a JSM request.
+    let summary = format!("[e2e-jsm {run_id}] attachment upload --public");
+    let create_out = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &jsm_project,
+            "--request-type",
+            &first_rt_id,
+            "--summary",
+            &summary,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr issue create");
+
+    if !create_out.status.success() {
+        let s = String::from_utf8_lossy(&create_out.stderr);
+        eprintln!("[SKIP] issue create failed — skipping attachment upload --public: {s}");
+        return;
+    }
+
+    let create_v: Value = serde_json::from_slice(&create_out.stdout)
+        .expect("issue create --output json must be valid JSON");
+    let key = create_v
+        .get("key")
+        .and_then(Value::as_str)
+        .expect("issue create JSON must contain 'key' field")
+        .to_string();
+    assert!(
+        !key.is_empty(),
+        "created key must be non-empty; got: {create_v}"
+    );
+
+    // Step 3: write a temp file to upload.
+    let upload_dir = tempfile::TempDir::new().expect("failed to create upload temp dir");
+    let upload_file = upload_dir.path().join("e2e_public.txt");
+    std::fs::write(&upload_file, b"S-576-5 e2e public attachment").expect("write test file");
+
+    // Step 4: upload --public --yes → two-step servicedeskapi flow.
+    // Self-close BEFORE assertions so no issue is orphaned on test failure.
+    let upload_out = h
+        .cmd()
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            &key,
+            &upload_file.to_string_lossy(),
+            "--public",
+            "--yes",
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr attachment upload");
+
+    // Step 5: self-close regardless of upload result (F-2b teardown).
+    jsm_self_close(&key, &h);
+
+    // Step 6: assert upload succeeded.
+    let upload_stderr = String::from_utf8_lossy(&upload_out.stderr);
+    let upload_stdout = String::from_utf8_lossy(&upload_out.stdout);
+    assert!(
+        upload_out.status.success(),
+        "AC-011 E2E public: upload must exit 0; got {:?}\nstdout: {upload_stdout}\nstderr: {upload_stderr}",
+        upload_out.status.code()
+    );
+
+    // Step 7: parse curated array.
+    let arr: Vec<Value> = serde_json::from_str(&upload_stdout)
+        .expect("AC-011 E2E public: --output json must be a JSON array");
+    assert!(
+        !arr.is_empty(),
+        "AC-011 E2E public: uploaded attachment array must be non-empty; stdout: {upload_stdout}"
+    );
+
+    // Step 8: minimal shape check (BC-3.9.007 curated keys).
+    let item = &arr[0];
+    for field in &[
+        "id",
+        "filename",
+        "contentUrl",
+        "mimeType",
+        "size",
+        "author",
+        "created",
+    ] {
+        assert!(
+            item.get(field).is_some(),
+            "AC-011 E2E public: curated attachment must have key '{field}'; got: {item}"
+        );
+    }
+    assert!(
+        item.get("self").is_none(),
+        "AC-011 E2E public: curated attachment must NOT contain 'self'; got: {item}"
+    );
+}
+
+/// E2E smoke test: `jr issue attachment upload <JSM-KEY> <FILE> --internal`
+/// uploads a temporary file as a staff-only (internal) attachment via the
+/// servicedeskapi two-step flow with `public:false` (BC-3.9.004) and returns a
+/// non-empty curated attachment array. No interactive confirmation gate is
+/// needed for `--internal`.
+///
+/// Gated by `JR_E2E_JSM_PROJECT`. Uses `jsm_self_close` for teardown.
+///
+/// Traces to: AC-011, BC-3.9.004, BC-3.9.007.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and JR_E2E_JSM_PROJECT and use --include-ignored to run"]
+fn test_e2e_jsm_attachment_upload_internal() {
+    if !e2e_enabled() {
+        return;
+    }
+    let jsm_project = match env::var("JR_E2E_JSM_PROJECT") {
+        Ok(p) if !p.trim().is_empty() => p.trim().to_string(),
+        _ => {
+            eprintln!(
+                "[SKIP] JR_E2E_JSM_PROJECT not set — skipping JSM attachment upload --internal test"
+            );
+            return;
+        }
+    };
+    let h = e2e_harness();
+    let run_id = run_label();
+
+    // Step 1: discover a request type.
+    let list_out = h
+        .cmd()
+        .args([
+            "requesttype",
+            "list",
+            "--project",
+            &jsm_project,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr requesttype list");
+
+    if !list_out.status.success() {
+        let s = String::from_utf8_lossy(&list_out.stderr);
+        eprintln!(
+            "[SKIP] requesttype list failed — skipping JSM attachment upload --internal: {s}"
+        );
+        return;
+    }
+
+    let rts: Vec<Value> = match serde_json::from_slice(&list_out.stdout) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[SKIP] requesttype list not a JSON array: {e} — skipping");
+            return;
+        }
+    };
+    if rts.is_empty() {
+        eprintln!(
+            "[SKIP] no request types found on {jsm_project} — skipping attachment upload --internal"
+        );
+        return;
+    }
+    let first_rt_id = {
+        let id_val = &rts[0]["id"];
+        if let Some(s) = id_val.as_str() {
+            s.to_string()
+        } else if let Some(n) = id_val.as_i64() {
+            n.to_string()
+        } else {
+            eprintln!("[SKIP] rts[0].id is not a usable type — skipping");
+            return;
+        }
+    };
+
+    // Step 2: create a JSM request.
+    let summary = format!("[e2e-jsm {run_id}] attachment upload --internal");
+    let create_out = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &jsm_project,
+            "--request-type",
+            &first_rt_id,
+            "--summary",
+            &summary,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr issue create");
+
+    if !create_out.status.success() {
+        let s = String::from_utf8_lossy(&create_out.stderr);
+        eprintln!("[SKIP] issue create failed — skipping attachment upload --internal: {s}");
+        return;
+    }
+
+    let create_v: Value = serde_json::from_slice(&create_out.stdout)
+        .expect("issue create --output json must be valid JSON");
+    let key = create_v
+        .get("key")
+        .and_then(Value::as_str)
+        .expect("issue create JSON must contain 'key' field")
+        .to_string();
+    assert!(
+        !key.is_empty(),
+        "created key must be non-empty; got: {create_v}"
+    );
+
+    // Step 3: write a temp file to upload.
+    let upload_dir = tempfile::TempDir::new().expect("failed to create upload temp dir");
+    let upload_file = upload_dir.path().join("e2e_internal.txt");
+    std::fs::write(&upload_file, b"S-576-5 e2e internal attachment").expect("write test file");
+
+    // Step 4: upload --internal → two-step servicedeskapi flow with public:false.
+    // No --yes needed; --internal has no interactive confirmation gate.
+    let upload_out = h
+        .cmd()
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            &key,
+            &upload_file.to_string_lossy(),
+            "--internal",
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr attachment upload");
+
+    // Step 5: self-close regardless of upload result (F-2b teardown).
+    jsm_self_close(&key, &h);
+
+    // Step 6: assert upload succeeded.
+    let upload_stderr = String::from_utf8_lossy(&upload_out.stderr);
+    let upload_stdout = String::from_utf8_lossy(&upload_out.stdout);
+    assert!(
+        upload_out.status.success(),
+        "AC-011 E2E internal: upload must exit 0; got {:?}\nstdout: {upload_stdout}\nstderr: {upload_stderr}",
+        upload_out.status.code()
+    );
+
+    // Step 7: parse curated array.
+    let arr: Vec<Value> = serde_json::from_str(&upload_stdout)
+        .expect("AC-011 E2E internal: --output json must be a JSON array");
+    assert!(
+        !arr.is_empty(),
+        "AC-011 E2E internal: uploaded attachment array must be non-empty; stdout: {upload_stdout}"
+    );
+
+    // Step 8: minimal shape check (BC-3.9.007 curated keys).
+    let item = &arr[0];
+    for field in &[
+        "id",
+        "filename",
+        "contentUrl",
+        "mimeType",
+        "size",
+        "author",
+        "created",
+    ] {
+        assert!(
+            item.get(field).is_some(),
+            "AC-011 E2E internal: curated attachment must have key '{field}'; got: {item}"
+        );
+    }
+    assert!(
+        item.get("self").is_none(),
+        "AC-011 E2E internal: curated attachment must NOT contain 'self'; got: {item}"
+    );
+}
