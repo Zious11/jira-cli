@@ -1271,18 +1271,22 @@ async fn test_bc_3_9_006_jsm_upload_error_taxonomy() {
         .respond_with(ResponseTemplate::new(200).set_body_json(jsm_project_response("EJ", "10099")))
         .mount(&server)
         .await;
-    // Returns both EJ (sd42, pid 10099) and EJSA (SD7-NEW, pid 70001) so sub-assertion 7
-    // can test the P1-001 retry path without any scoped priority overrides.
+    // Returns EJ, EJSA, and the dedicated SD IDs for sub-assertions 13/14 (P3-005).
+    // Sub-13 uses EJSC (pid "70002") → SD7-403 (permanent 403 response).
+    // Sub-14 uses EJSD (pid "70003") → SD7-401 (permanent 401 response).
+    // Each uses its own SD path to avoid scoped-mock ordering races.
     Mock::given(method("GET"))
         .and(path("/rest/servicedeskapi/servicedesk"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "size": 2,
+            "size": 4,
             "start": 0,
             "limit": 50,
             "isLastPage": true,
             "values": [
                 {"id": "42",      "projectId": "10099", "projectName": "EJ JSM"},
-                {"id": "SD7-NEW", "projectId": "70001", "projectName": "JSM SA7"}
+                {"id": "SD7-NEW", "projectId": "70001", "projectName": "JSM SA7"},
+                {"id": "SD7-403", "projectId": "70002", "projectName": "JSM SC (403)"},
+                {"id": "SD7-401", "projectId": "70003", "projectName": "JSM SD (401)"}
             ]
         })))
         .mount(&server)
@@ -1529,6 +1533,85 @@ async fn test_bc_3_9_006_jsm_upload_error_taxonomy() {
         .mount(&server)
         .await;
 
+    // --- Permanent mocks for sub-assertions 13/14 (P3-005) ---
+    // Each uses a distinct project + SD chain to avoid scoped-mock ordering races.
+
+    // Sub-13: EJSC (pid "70002") chain — stale SD8-OLD → 404, fresh SD7-403 → 403.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJSC-1"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(issue_get_response("EJSC-1", "EJSC")),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/EJSC"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "70002",
+            "key": "EJSC",
+            "name": "JSM SC",
+            "projectTypeKey": "service_desk",
+            "simplified": false
+        })))
+        .mount(&server)
+        .await;
+    // Step-1 on stale sd "SD8-OLD" → 404 (triggers stale-heal for sub-13).
+    Mock::given(method("POST"))
+        .and(path(
+            "/rest/servicedeskapi/servicedesk/SD8-OLD/attachTemporaryFile",
+        ))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    // Step-1 retry on fresh sd "SD7-403" → 403 (permanent; post-retry 403 path).
+    Mock::given(method("POST"))
+        .and(path(
+            "/rest/servicedeskapi/servicedesk/SD7-403/attachTemporaryFile",
+        ))
+        .and(header("X-Atlassian-Token", "no-check"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+
+    // Sub-14: EJSD (pid "70003") chain — stale SD9-OLD → 404, fresh SD7-401 → 401.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJSD-1"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(issue_get_response("EJSD-1", "EJSD")),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/EJSD"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "70003",
+            "key": "EJSD",
+            "name": "JSM SD",
+            "projectTypeKey": "service_desk",
+            "simplified": false
+        })))
+        .mount(&server)
+        .await;
+    // Step-1 on stale sd "SD9-OLD" → 404 (triggers stale-heal for sub-14).
+    Mock::given(method("POST"))
+        .and(path(
+            "/rest/servicedeskapi/servicedesk/SD9-OLD/attachTemporaryFile",
+        ))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    // Step-1 retry on fresh sd "SD7-401" → 401 (permanent; post-retry 401 path).
+    Mock::given(method("POST"))
+        .and(path(
+            "/rest/servicedeskapi/servicedesk/SD7-401/attachTemporaryFile",
+        ))
+        .and(header("X-Atlassian-Token", "no-check"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&server)
+        .await;
+
     // --- Sub-assertion 7: post-retry 404 after stale-heal → exit 64 + "not found after refresh" ---
     // P1-001/P1-002: the stale-heal retry branch ends with bare `.await?` which propagates
     // ApiError{status:404} → exit 1. After P1-001 fix, it maps to exit 64 + "not found after refresh".
@@ -1766,6 +1849,111 @@ async fn test_bc_3_9_006_jsm_upload_error_taxonomy() {
             "taxonomy sub-12: step-1 401 → NotAuthenticated hint in stderr; got: {stderr}"
         );
     } // _step1_401_guard drops → permanent 200 mock restored
+
+    // --- Sub-assertion 13: post-retry 403 after stale-heal → exit 1 (P3-005) ---
+    // After P3-004 (dead arm removed), a 403 from attach_temporary_file is
+    // JrError::ApiError { status: 403 } → falls through Ok(other) → exit 1.
+    //
+    // Uses EJSC (pid "70002") with its own stale SD8-OLD → 404 → stale-heal → SD7-403 → 403.
+    // Permanent mocks avoid scoped-mock ordering races (DeadMock race on SD7-NEW).
+    {
+        // Pre-populate cache with stale sd "SD8-OLD" for project "EJSC".
+        let profile_dir = cache.path().join("v1").join("default");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        let cache_path = profile_dir.join("project_meta.json");
+        let mut existing: serde_json::Value = if cache_path.exists() {
+            std::fs::read_to_string(&cache_path)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_else(|| serde_json::json!({}))
+        } else {
+            serde_json::json!({})
+        };
+        existing["EJSC"] = serde_json::json!({
+            "project_type": "service_desk",
+            "simplified": false,
+            "project_id": "70002",
+            "service_desk_id": "SD8-OLD",
+            "fetched_at": "2099-01-01T00:00:00Z"
+        });
+        std::fs::write(&cache_path, serde_json::to_string_pretty(&existing).unwrap()).unwrap();
+
+        let out = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+            .args([
+                "issue",
+                "attachment",
+                "upload",
+                "EJSC-1",
+                &file.to_string_lossy(),
+                "--public",
+                "--yes",
+            ])
+            .timeout(std::time::Duration::from_secs(10))
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "taxonomy sub-13: post-retry 403 after stale-heal → exit 1; got {:?}; stderr: {stderr}",
+            out.status.code()
+        );
+    }
+
+    // --- Sub-assertion 14: post-retry 401 after stale-heal → exit 2 (P3-005) ---
+    // attach_temporary_file maps 401 → JrError::NotAuthenticated (P2-003 / BC-3.9.012).
+    // After P3-004 (dead ApiError{status:401} arm removed), NotAuthenticated falls through
+    // to Ok(other) → propagates as exit 2.
+    //
+    // Uses EJSD (pid "70003") with its own stale SD9-OLD → 404 → stale-heal → SD7-401 → 401.
+    // Permanent mocks avoid scoped-mock ordering races (DeadMock race on SD7-NEW).
+    {
+        // Pre-populate cache with stale sd "SD9-OLD" for project "EJSD".
+        let profile_dir = cache.path().join("v1").join("default");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        let cache_path = profile_dir.join("project_meta.json");
+        let mut existing: serde_json::Value = if cache_path.exists() {
+            std::fs::read_to_string(&cache_path)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_else(|| serde_json::json!({}))
+        } else {
+            serde_json::json!({})
+        };
+        existing["EJSD"] = serde_json::json!({
+            "project_type": "service_desk",
+            "simplified": false,
+            "project_id": "70003",
+            "service_desk_id": "SD9-OLD",
+            "fetched_at": "2099-01-01T00:00:00Z"
+        });
+        std::fs::write(&cache_path, serde_json::to_string_pretty(&existing).unwrap()).unwrap();
+
+        let out = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+            .args([
+                "issue",
+                "attachment",
+                "upload",
+                "EJSD-1",
+                &file.to_string_lossy(),
+                "--public",
+                "--yes",
+            ])
+            .timeout(std::time::Duration::from_secs(10))
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "taxonomy sub-14: post-retry 401 after stale-heal → exit 2; got {:?}; stderr: {stderr}",
+            out.status.code()
+        );
+        assert!(
+            stderr.contains("Not authenticated") || stderr.contains("jr auth login"),
+            "taxonomy sub-14: post-retry 401 → auth hint in stderr; got: {stderr}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
