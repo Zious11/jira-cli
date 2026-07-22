@@ -115,7 +115,7 @@ jobs:
           JR_AUTH_HEADER="Basic $(printf '%s:%s' "$JR_E2E_EMAIL" "$JR_E2E_API_TOKEN" | base64 | tr -d '\n')"
           export JR_AUTH_HEADER
 
-          cargo test --test e2e_live test_e2e_jsm_attachment_upload -- --include-ignored --test-threads=1 --show-output
+          cargo test --test e2e_live -- --include-ignored --test-threads=1
 
       - name: Classify failure (runs only when the test step itself fails)
         # Gated on the test step's outcome, not blanket failure(), so that a preflight
