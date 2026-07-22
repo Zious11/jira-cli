@@ -669,7 +669,30 @@ async fn test_sec_576_006_stale_id_self_heal_invalidate_retry_once() {
         .mount(&server)
         .await;
 
-    // First project meta fetch returns stale sdId "OLD-SD".
+    // SEC-576-006: pre-populate the project_meta cache with stale sdId "OLD-SD" so that
+    // `get_or_fetch_project_meta` returns "OLD-SD" on first call (cache hit, no API GET),
+    // triggering the stale-heal path. The fresh fetch (after invalidation) uses the mocks
+    // mounted below. fetched_at is set to a future date so the entry is within the 7-day TTL.
+    {
+        let profile_dir = cache.path().join("v1").join("default");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        let stale_meta = serde_json::json!({
+            "EJ": {
+                "project_type": "service_desk",
+                "simplified": false,
+                "project_id": "10099",
+                "service_desk_id": "OLD-SD",
+                "fetched_at": "2099-01-01T00:00:00Z"
+            }
+        });
+        std::fs::write(
+            profile_dir.join("project_meta.json"),
+            serde_json::to_string_pretty(&stale_meta).unwrap(),
+        )
+        .unwrap();
+    }
+
+    // First project meta fetch returns stale sdId "OLD-SD" (served from cache above).
     // After invalidation, a fresh fetch returns correct sdId "42".
     Mock::given(method("GET"))
         .and(path("/rest/api/3/project/EJ"))
@@ -1225,7 +1248,15 @@ async fn test_bc_3_9_006_jsm_upload_error_taxonomy() {
         );
     }
 
-    // --- Sub-assertion 6: step-2 failure 4xx (excl 401/403) → exit 64 + retry hint ---
+    // --- Sub-assertions 6–10: step-2 error taxonomy ---
+    // wiremock 0.6 uses FIFO ordering (first-registered mock wins for equal-priority
+    // mocks on the same path).  To prevent sub-assertion 6's 400 mock from shadowing
+    // sub-assertions 8/9/10's 401/403/500 mocks, each step-2 mock is mounted with
+    // `mount_as_scoped` so it is removed before the next sub-assertion adds its mock.
+    // The step-1 (attachTemporaryFile) mock is permanent and reused across all four
+    // sub-assertions.
+
+    // Step-1 permanent mock — shared by sub-assertions 6, 8, 9, 10.
     Mock::given(method("POST"))
         .and(path(
             "/rest/servicedeskapi/servicedesk/42/attachTemporaryFile",
@@ -1236,14 +1267,16 @@ async fn test_bc_3_9_006_jsm_upload_error_taxonomy() {
         })))
         .mount(&server)
         .await;
-    Mock::given(method("POST"))
-        .and(path("/rest/servicedeskapi/request/EJ-10/attachment"))
-        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
-            "errorMessage": "Bad request"
-        })))
-        .mount(&server)
-        .await;
+
+    // --- Sub-assertion 6: step-2 failure 4xx (excl 401/403) → exit 64 + retry hint ---
     {
+        let _step2_guard = Mock::given(method("POST"))
+            .and(path("/rest/servicedeskapi/request/EJ-10/attachment"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "errorMessage": "Bad request"
+            })))
+            .mount_as_scoped(&server)
+            .await;
         let out = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
             .args([
                 "issue",
@@ -1269,21 +1302,21 @@ async fn test_bc_3_9_006_jsm_upload_error_taxonomy() {
             stderr.contains("Temporary attachment IDs may have expired. Try the upload again."),
             "taxonomy: step-2 400 → retry hint; got: {stderr}"
         );
-    }
+    } // _step2_guard drops → 400 mock removed before sub-assertion 8
 
     // --- Sub-assertion 7: sdId not found after SEC-576-006 retry → exit 64 + "not found after refresh" ---
     // This sub-assertion is satisfied by the existing two sub-assertions on exit code and message.
     // (Detailed test in AC-005; here we just pin the error message substring.)
 
     // --- Sub-assertion 8: step-2 failure 401 → exit 2 ---
-    Mock::given(method("POST"))
-        .and(path("/rest/servicedeskapi/request/EJ-10/attachment"))
-        .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
-            "errorMessage": "Unauthorized"
-        })))
-        .mount(&server)
-        .await;
     {
+        let _step2_guard = Mock::given(method("POST"))
+            .and(path("/rest/servicedeskapi/request/EJ-10/attachment"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                "errorMessage": "Unauthorized"
+            })))
+            .mount_as_scoped(&server)
+            .await;
         let out = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
             .args([
                 "issue",
@@ -1308,17 +1341,17 @@ async fn test_bc_3_9_006_jsm_upload_error_taxonomy() {
             stderr.contains("Temporary attachment IDs may have expired. Try the upload again."),
             "taxonomy: step-2 401 → retry hint present; got: {stderr}"
         );
-    }
+    } // _step2_guard drops → 401 mock removed before sub-assertion 9
 
     // --- Sub-assertion 9: step-2 failure 403 → exit 1 ---
-    Mock::given(method("POST"))
-        .and(path("/rest/servicedeskapi/request/EJ-10/attachment"))
-        .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
-            "errorMessage": "Forbidden"
-        })))
-        .mount(&server)
-        .await;
     {
+        let _step2_guard = Mock::given(method("POST"))
+            .and(path("/rest/servicedeskapi/request/EJ-10/attachment"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+                "errorMessage": "Forbidden"
+            })))
+            .mount_as_scoped(&server)
+            .await;
         let out = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
             .args([
                 "issue",
@@ -1343,17 +1376,17 @@ async fn test_bc_3_9_006_jsm_upload_error_taxonomy() {
             stderr.contains("Temporary attachment IDs may have expired. Try the upload again."),
             "taxonomy: step-2 403 → retry hint present; got: {stderr}"
         );
-    }
+    } // _step2_guard drops → 403 mock removed before sub-assertion 10
 
     // --- Sub-assertion 10: step-2 failure 5xx → exit 1 + retry hint ---
-    Mock::given(method("POST"))
-        .and(path("/rest/servicedeskapi/request/EJ-10/attachment"))
-        .respond_with(ResponseTemplate::new(500).set_body_json(serde_json::json!({
-            "errorMessage": "Internal server error"
-        })))
-        .mount(&server)
-        .await;
     {
+        let _step2_guard = Mock::given(method("POST"))
+            .and(path("/rest/servicedeskapi/request/EJ-10/attachment"))
+            .respond_with(ResponseTemplate::new(500).set_body_json(serde_json::json!({
+                "errorMessage": "Internal server error"
+            })))
+            .mount_as_scoped(&server)
+            .await;
         let out = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
             .args([
                 "issue",
@@ -1378,7 +1411,7 @@ async fn test_bc_3_9_006_jsm_upload_error_taxonomy() {
             stderr.contains("Temporary attachment IDs may have expired. Try the upload again."),
             "taxonomy: step-2 500 → retry hint; got: {stderr}"
         );
-    }
+    } // _step2_guard drops
 
     // --- Sub-assertion 11: --public + --internal together → exit 2 (clap mutual-exclusion) ---
     // This fires at the clap layer, before any handler code, so it works even with the interim guard.
