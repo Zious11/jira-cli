@@ -71,7 +71,7 @@ When `--public` or `--internal` is set, the upload routes through the JSM two-st
 
 **`--public` gates:** Non-interactive (`--no-input`/non-TTY, no `--yes`): exit 64 with "Use --yes to confirm uploading …" message. `--public + --replace-existing` → combined message. Interactive: `eprint!` + read_line single prompt (VP-576-005 — ONE prompt, not two). Cancel → exit 0; EOF → exit 130.
 
-**`--public` on non-JSM (BC-3.9.005):** exit 64 "–-public is only supported on Jira Service Management (JSM) issues."
+**`--public` on non-JSM (BC-3.9.005):** exit 64 "--public is only supported on Jira Service Management (JSM) issues."
 
 **`--internal` on non-JSM (OQ-9):** silent no-op — falls through to the platform POST path (no error, no warning, no servicedeskapi calls).
 

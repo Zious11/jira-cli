@@ -21,7 +21,7 @@
 use assert_cmd::Command;
 use serde_json::Value;
 use tempfile::TempDir;
-use wiremock::matchers::{header, method, path};
+use wiremock::matchers::{body_partial_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 // ---------------------------------------------------------------------------
@@ -582,6 +582,7 @@ async fn test_bc_3_9_003_two_step_attach_temporary_then_request_attachment() {
     // Step 2: post_request_attachment with public:true.
     Mock::given(method("POST"))
         .and(path("/rest/servicedeskapi/request/EJ-2/attachment"))
+        .and(body_partial_json(serde_json::json!({"public": true})))
         .respond_with(
             ResponseTemplate::new(201).set_body_json(attachment_create_result_dto(vec![
                 attachment_object("20002", "upload.txt"),
@@ -890,11 +891,13 @@ async fn test_bc_3_9_004_internal_on_jsm_two_step() {
     // Step 2 must send public:false.
     Mock::given(method("POST"))
         .and(path("/rest/servicedeskapi/request/EJ-5/attachment"))
+        .and(body_partial_json(serde_json::json!({"public": false})))
         .respond_with(
             ResponseTemplate::new(201).set_body_json(attachment_create_result_dto(vec![
                 attachment_object("20005", "internal.txt"),
             ])),
         )
+        .expect(1)
         .mount(&server)
         .await;
 
