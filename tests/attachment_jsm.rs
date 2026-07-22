@@ -578,6 +578,32 @@ async fn test_vp_576_005_combined_gate_single_prompt_fires_once() {
         !stderr.contains("as customer-visible (public)?"),
         "VP-576-005: consumer-1 text must NOT appear when consumer-3 fires; got: {stderr}"
     );
+
+    // P5-001 VP-576-003 ordering pin: all DELETEs must precede first attachTemporaryFile POST.
+    let reqs = server.received_requests().await.unwrap();
+    let last_delete_idx = reqs
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| {
+            r.method == wiremock::http::Method::DELETE
+                && r.url.path().starts_with("/rest/api/3/attachment/")
+        })
+        .map(|(i, _)| i)
+        .next_back()
+        .expect("VP-576-003: at least one DELETE must have been received");
+    let first_step1_idx = reqs
+        .iter()
+        .enumerate()
+        .find(|(_, r)| {
+            r.method == wiremock::http::Method::POST && r.url.path().contains("attachTemporaryFile")
+        })
+        .map(|(i, _)| i)
+        .expect("VP-576-003: at least one step-1 POST must have been received");
+    assert!(
+        last_delete_idx < first_step1_idx,
+        "VP-576-003 ordering: all DELETEs must precede first attachTemporaryFile POST; \
+         last DELETE at {last_delete_idx}, first step-1 at {first_step1_idx}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1737,6 +1763,11 @@ async fn test_bc_3_9_006_jsm_upload_error_taxonomy() {
             stderr.contains("Temporary attachment IDs may have expired. Try the upload again."),
             "taxonomy: step-2 403 → retry hint present; got: {stderr}"
         );
+        assert!(
+            stderr.contains("Forbidden"),
+            "taxonomy sub-9: step-2 403 Jira error body text must reach stderr; \
+             AC-008 'Jira error body + retry hint'; got: {stderr}"
+        );
     } // _step2_guard drops → 403 mock removed before sub-assertion 10
 
     // --- Sub-assertion 10: step-2 failure 5xx → exit 1 + retry hint ---
@@ -2073,6 +2104,112 @@ async fn test_bc_3_9_006_jsm_upload_error_taxonomy() {
             Some(1),
             "taxonomy sub-15: post-retry 5xx after stale-heal → exit 1; got {:?}; stderr: {stderr}",
             out.status.code()
+        );
+    }
+
+    // --- Sub-assertion 16: first-attempt step-1 500 → exit 1, exactly ONE step-1 POST (P5-005) ---
+    //
+    // 500 is NOT a stale-heal trigger (only 404/403 are). A first-attempt 500 must
+    // propagate immediately as exit 1 without any retry or stale-heal. Exactly ONE
+    // step-1 POST must be observed.
+    //
+    // Kill-test mutation: add `|| 500` to the stale-heal guard at the 404/403 check →
+    // stale-heal fires → cache invalidated → re-fetch project meta → SD list miss →
+    // exit 64 (not exit 1) → exit-code assertion fires.
+    //
+    // Uses pre-populated cache (service_desk_id = "SD11-500") so no SD list fetch
+    // is needed on the fresh-fetch path. Avoids scoped-mock priority races.
+    {
+        // EJSF issue GET mock (step 0 — issue key resolution).
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/EJSF-1"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(issue_get_response("EJSF-1", "EJSF")),
+            )
+            .mount(&server)
+            .await;
+        // EJSF project GET mock (needed only if stale-heal fires — defensive).
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/project/EJSF"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "80001",
+                "key": "EJSF",
+                "name": "JSM SF",
+                "projectTypeKey": "service_desk",
+                "simplified": false
+            })))
+            .mount(&server)
+            .await;
+        // Step-1 on sd "SD11-500" → 500 (no stale-heal retry expected).
+        Mock::given(method("POST"))
+            .and(path(
+                "/rest/servicedeskapi/servicedesk/SD11-500/attachTemporaryFile",
+            ))
+            .and(header("X-Atlassian-Token", "no-check"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        // Pre-populate EJSF project meta with service_desk_id = "SD11-500" (future TTL).
+        // This avoids an SD list fetch and establishes the SD ID needed by step-1.
+        let profile_dir = cache.path().join("v1").join("default");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        let cache_path_p16 = profile_dir.join("project_meta.json");
+        let mut existing_p16: serde_json::Value = if cache_path_p16.exists() {
+            std::fs::read_to_string(&cache_path_p16)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_else(|| serde_json::json!({}))
+        } else {
+            serde_json::json!({})
+        };
+        existing_p16["EJSF"] = serde_json::json!({
+            "project_type": "service_desk",
+            "simplified": false,
+            "project_id": "80001",
+            "service_desk_id": "SD11-500",
+            "fetched_at": "2099-01-01T00:00:00Z"
+        });
+        std::fs::write(
+            &cache_path_p16,
+            serde_json::to_string_pretty(&existing_p16).unwrap(),
+        )
+        .unwrap();
+
+        let out = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+            .args([
+                "issue",
+                "attachment",
+                "upload",
+                "EJSF-1",
+                &file.to_string_lossy(),
+                "--public",
+                "--yes",
+            ])
+            .timeout(std::time::Duration::from_secs(10))
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "taxonomy sub-16: first-attempt step-1 500 → exit 1; got {:?}; stderr: {stderr}",
+            out.status.code()
+        );
+
+        // Assert exactly ONE step-1 POST (no stale-heal retry on 500).
+        let reqs = server.received_requests().await.unwrap();
+        let step1_count = reqs
+            .iter()
+            .filter(|r| {
+                r.method == wiremock::http::Method::POST
+                    && r.url.path().contains("SD11-500/attachTemporaryFile")
+            })
+            .count();
+        assert_eq!(
+            step1_count, 1,
+            "taxonomy sub-16: first-attempt 500 must make exactly ONE step-1 POST (no stale-heal); \
+             got {step1_count}"
         );
     }
 }
@@ -3394,6 +3531,32 @@ async fn test_jsm_internal_replace_existing_issues_delete_then_two_step() {
         output.status.code()
     );
     // DELETE mock .expect(1) verified on MockServer drop
+
+    // P5-001 VP-576-003 ordering pin: DELETE must precede first step-1 POST.
+    let reqs = server.received_requests().await.unwrap();
+    let last_delete_idx = reqs
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| {
+            r.method == wiremock::http::Method::DELETE
+                && r.url.path().starts_with("/rest/api/3/attachment/")
+        })
+        .map(|(i, _)| i)
+        .next_back()
+        .expect("P5-001 VP-576-003: at least one DELETE must have been received");
+    let first_step1_idx = reqs
+        .iter()
+        .enumerate()
+        .find(|(_, r)| {
+            r.method == wiremock::http::Method::POST && r.url.path().contains("attachTemporaryFile")
+        })
+        .map(|(i, _)| i)
+        .expect("P5-001 VP-576-003: at least one step-1 POST must have been received");
+    assert!(
+        last_delete_idx < first_step1_idx,
+        "P5-001 VP-576-003 ordering: DELETE must precede step-1 POST; \
+         last DELETE at {last_delete_idx}, first step-1 at {first_step1_idx}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -3732,4 +3895,302 @@ async fn test_ec_3_9_003_3_multi_file_jsm_upload_two_step_1_posts() {
         tmp_ids
     );
     // step-1 .expect(2) and step-2 .expect(1) verified on MockServer drop
+}
+
+// ---------------------------------------------------------------------------
+// P5-002: test_sec_576_004_jsm_step1_content_disposition_crlf_guard
+//
+// SEC-576-004 CWE-93: `attach_temporary_file` guard (L66-76 in api/jsm/attachments.rs)
+// replaces '\r', '\n', '\0' with '_' in the multipart Content-Disposition filename
+// before passing to Part::file_name(). Verify on the JSM step-1 path.
+//
+// RED evidence (kill-test): removing L66-76 sets safe_name = raw_name; step-1 body
+// then contains the raw '\n' between "evil" and "name.txt" → last assertion fires.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_sec_576_004_jsm_step1_content_disposition_crlf_guard() {
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let tmp = TempDir::new().unwrap();
+
+    // Create a file with a literal LF in the name (legal on macOS/Linux).
+    let hostile_name = "evil\nname.txt";
+    let file = tmp.path().join(hostile_name);
+    std::fs::write(&file, b"crlf guard test").unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJCWE-1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(issue_get_response("EJCWE-1", "EJCWE")),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/EJCWE"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(jsm_project_response("EJCWE", "92001")),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(service_desk_list_response("60099", "92001")),
+        )
+        .mount(&server)
+        .await;
+
+    // Step-1: responds with sanitized fileName (server echoes what it received).
+    Mock::given(method("POST"))
+        .and(path(
+            "/rest/servicedeskapi/servicedesk/60099/attachTemporaryFile",
+        ))
+        .and(header("X-Atlassian-Token", "no-check"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "temporaryAttachments": [{"temporaryAttachmentId": "tmp-cwe93", "fileName": "evil_name.txt"}]
+        })))
+        .mount(&server)
+        .await;
+
+    // Step-2: complete the upload so exit 0.
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request/EJCWE-1/attachment"))
+        .respond_with(
+            ResponseTemplate::new(201).set_body_json(attachment_create_result_dto(vec![
+                attachment_object("cwe93-01", "evil_name.txt"),
+            ])),
+        )
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            "EJCWE-1",
+            &file.to_string_lossy(),
+            "--public",
+            "--yes",
+        ])
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "SEC-576-004 JSM step-1: upload with LF in filename → exit 0; got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+
+    // Inspect step-1 POST body for sanitized Content-Disposition filename.
+    let reqs = server.received_requests().await.unwrap();
+    let step1_req = reqs
+        .iter()
+        .find(|r| {
+            r.method == wiremock::http::Method::POST && r.url.path().contains("attachTemporaryFile")
+        })
+        .expect("SEC-576-004 JSM: step-1 POST must have been received");
+
+    let body = String::from_utf8_lossy(&step1_req.body);
+    // Guard present: '\n' → '_' → "evil_name.txt" in Content-Disposition.
+    assert!(
+        body.contains("evil_name.txt"),
+        "SEC-576-004 JSM: sanitized filename 'evil_name.txt' must appear in step-1 body; \
+         body excerpt: {}",
+        &body[..body.len().min(400)]
+    );
+    // Guard absent (kill-test mutation): raw LF would appear between "evil" and "name.txt".
+    assert!(
+        !body.contains("evil\nname.txt"),
+        "SEC-576-004 JSM: raw LF must NOT appear in Content-Disposition filename in step-1 body; \
+         body excerpt: {}",
+        &body[..body.len().min(400)]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// P5-003 Test A: test_p5_003_consumer3_combined_prompt_hostile_server_filename_sanitized
+//
+// CWE-116: server-supplied hostile filename (U+202E bidi) in the attachment list
+// must be sanitized by display_sanitize_filename before appearing in the consumer-3
+// combined gate prompt. Higher-risk vector: the attacker controls server-returned names.
+//
+// RED evidence (kill-test): remove display_sanitize_filename() call in consumer-3
+// prompt display → raw U+202E appears in stderr → last assertion fires.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_p5_003_consumer3_combined_prompt_hostile_server_filename_sanitized() {
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let tmp = TempDir::new().unwrap();
+
+    // Hostile name shared by local file and server-returned attachment.
+    let hostile_name = "evil\u{202E}name.txt";
+    let file = tmp.path().join(hostile_name);
+    std::fs::write(&file, b"hostile c3").unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJ-P5C3"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_get_response("EJ-P5C3", "EJ")))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/EJ"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(jsm_project_response("EJ", "10099")))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(service_desk_list_response("42", "10099")),
+        )
+        .mount(&server)
+        .await;
+
+    // Server-supplied hostile filename in attachment list → replace-existing matches →
+    // consumer-3 fires. Use .with_priority(1) to shadow the plain issue GET mock.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJ-P5C3"))
+        .and(wiremock::matchers::query_param("fields", "attachment"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(attachments_list_response(
+                "EJ-P5C3",
+                vec![platform_attachment_object("AID-P5C3-01", hostile_name)],
+            )),
+        )
+        .with_priority(1)
+        .mount(&server)
+        .await;
+
+    // Cancel via "n\n" so no upload mocks needed.
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .env("JR_STDIN_IS_TTY", "1")
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            "EJ-P5C3",
+            &file.to_string_lossy(),
+            "--public",
+            "--replace-existing",
+        ])
+        .write_stdin("n\n")
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "P5-003 consumer-3: cancel 'n' → exit 0; got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+    // CWE-116: U+202E must be replaced by '?' in the consumer-3 prompt.
+    assert!(
+        stderr.contains("evil?name.txt"),
+        "P5-003 consumer-3: sanitized 'evil?name.txt' must appear in prompt; got: {stderr}"
+    );
+    // Raw bidi char must NOT appear in stderr.
+    assert!(
+        !stderr.contains('\u{202E}'),
+        "P5-003 consumer-3: raw U+202E must NOT appear in stderr; got: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// P5-003 Test B: test_p5_003_consumer2_internal_replace_hostile_server_filename_sanitized
+//
+// CWE-116: same as P5-003 Test A but for the consumer-2 (--internal --replace-existing)
+// interactive gate prompt.
+//
+// RED evidence (kill-test): remove display_sanitize_filename() in consumer-2 prompt
+// display → raw U+202E appears in stderr → last assertion fires.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_p5_003_consumer2_internal_replace_hostile_server_filename_sanitized() {
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let tmp = TempDir::new().unwrap();
+
+    let hostile_name = "evil\u{202E}name.txt";
+    let file = tmp.path().join(hostile_name);
+    std::fs::write(&file, b"hostile c2").unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJ-P5C2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_get_response("EJ-P5C2", "EJ")))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/EJ"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(jsm_project_response("EJ", "10099")))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(service_desk_list_response("42", "10099")),
+        )
+        .mount(&server)
+        .await;
+
+    // Server-supplied hostile filename in attachment list → consumer-2 fires.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJ-P5C2"))
+        .and(wiremock::matchers::query_param("fields", "attachment"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(attachments_list_response(
+                "EJ-P5C2",
+                vec![platform_attachment_object("AID-P5C2-01", hostile_name)],
+            )),
+        )
+        .with_priority(1)
+        .mount(&server)
+        .await;
+
+    // Cancel via "n\n" so no upload mocks needed.
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .env("JR_STDIN_IS_TTY", "1")
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            "EJ-P5C2",
+            &file.to_string_lossy(),
+            "--internal",
+            "--replace-existing",
+        ])
+        .write_stdin("n\n")
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "P5-003 consumer-2: cancel 'n' → exit 0; got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+    // CWE-116: U+202E must be replaced by '?' in the consumer-2 prompt.
+    assert!(
+        stderr.contains("evil?name.txt"),
+        "P5-003 consumer-2: sanitized 'evil?name.txt' must appear in prompt; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains('\u{202E}'),
+        "P5-003 consumer-2: raw U+202E must NOT appear in stderr; got: {stderr}"
+    );
 }
