@@ -222,8 +222,22 @@ pub async fn post_request_attachment(
     let status = response.status();
 
     if status.is_success() {
+        // The real Jira API returns AttachmentCreateResultDTO — an object, not a bare
+        // array.  Confirmed by P2-3c schema probe run 29936980027 (S-576-5):
+        //   {"comment": {...} | null,
+        //    "attachments": {"size": N, "start": N, "limit": N, "isLastPage": bool,
+        //                    "values": [...AttachmentDTO...]}}
         let bytes = response.bytes().await?;
-        let attachments: Vec<AttachmentObject> = serde_json::from_slice(&bytes)?;
+        let resp: serde_json::Value = serde_json::from_slice(&bytes)?;
+        let values = resp
+            .get("attachments")
+            .and_then(|a| a.get("values"))
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| {
+                JrError::Internal("step-2 response missing attachments.values".to_string())
+            })?;
+        let attachments: Vec<AttachmentObject> =
+            serde_json::from_value(serde_json::Value::Array(values.clone()))?;
         return Ok(attachments);
     }
 

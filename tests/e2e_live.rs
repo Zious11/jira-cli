@@ -10591,6 +10591,22 @@ fn test_e2e_jsm_attachment_upload_public() {
         "AC-011 E2E public: uploaded attachment array must be non-empty; stdout: {upload_stdout}"
     );
 
+    // P2-3c schema probe A: print sanitized curated upload output BEFORE assertions
+    // (BC-3.9.011).  Schema is captured even if the shape check below fails.
+    p2_3c_print("CURATED-UPLOAD-public", &Value::Array(arr.clone()));
+
+    // P2-3c schema probe B: raw platform attachment JSON (BC-3.9.007 wire source).
+    // GET /rest/api/3/issue/{key}?fields=attachment returns the raw Jira attachment
+    // objects before jr curates them — the platform wire format evidence for BC-3.9.007.
+    let raw_path = format!("/rest/api/3/issue/{key}?fields=attachment");
+    if let Ok(raw_out) = h.cmd().args(["api", &raw_path]).output() {
+        if raw_out.status.success() {
+            if let Ok(raw_v) = serde_json::from_slice::<Value>(&raw_out.stdout) {
+                p2_3c_print("RAW-PLATFORM-attachment-public", &raw_v);
+            }
+        }
+    }
+
     // Step 8: minimal shape check (BC-3.9.007 curated keys).
     let item = &arr[0];
     for field in &[
@@ -10611,22 +10627,6 @@ fn test_e2e_jsm_attachment_upload_public() {
         item.get("self").is_none(),
         "AC-011 E2E public: curated attachment must NOT contain 'self'; got: {item}"
     );
-
-    // P2-3c schema probe A: print sanitized curated upload output (BC-3.9.011).
-    // Schema label allows grepping CI --show-output logs for structural analysis.
-    p2_3c_print("CURATED-UPLOAD-public", &Value::Array(arr.clone()));
-
-    // P2-3c schema probe B: raw platform attachment JSON (BC-3.9.007 wire source).
-    // GET /rest/api/3/issue/{key}?fields=attachment returns the raw Jira attachment
-    // objects before jr curates them — the platform wire format evidence for BC-3.9.007.
-    let raw_path = format!("/rest/api/3/issue/{key}?fields=attachment");
-    if let Ok(raw_out) = h.cmd().args(["api", &raw_path]).output() {
-        if raw_out.status.success() {
-            if let Ok(raw_v) = serde_json::from_slice::<Value>(&raw_out.stdout) {
-                p2_3c_print("RAW-PLATFORM-attachment-public", &raw_v);
-            }
-        }
-    }
 }
 
 /// E2E smoke test: `jr issue attachment upload <JSM-KEY> <FILE> --internal`
@@ -10782,6 +10782,20 @@ fn test_e2e_jsm_attachment_upload_internal() {
         "AC-011 E2E internal: uploaded attachment array must be non-empty; stdout: {upload_stdout}"
     );
 
+    // P2-3c schema probe A: print sanitized curated upload output BEFORE assertions
+    // (BC-3.9.011).  Schema is captured even if the shape check below fails.
+    p2_3c_print("CURATED-UPLOAD-internal", &Value::Array(arr.clone()));
+
+    // P2-3c schema probe B: raw platform attachment JSON (BC-3.9.007 wire source).
+    let raw_path = format!("/rest/api/3/issue/{key}?fields=attachment");
+    if let Ok(raw_out) = h.cmd().args(["api", &raw_path]).output() {
+        if raw_out.status.success() {
+            if let Ok(raw_v) = serde_json::from_slice::<Value>(&raw_out.stdout) {
+                p2_3c_print("RAW-PLATFORM-attachment-internal", &raw_v);
+            }
+        }
+    }
+
     // Step 8: minimal shape check (BC-3.9.007 curated keys).
     let item = &arr[0];
     for field in &[
@@ -10802,17 +10816,4 @@ fn test_e2e_jsm_attachment_upload_internal() {
         item.get("self").is_none(),
         "AC-011 E2E internal: curated attachment must NOT contain 'self'; got: {item}"
     );
-
-    // P2-3c schema probe A: print sanitized curated upload output (BC-3.9.011).
-    p2_3c_print("CURATED-UPLOAD-internal", &Value::Array(arr.clone()));
-
-    // P2-3c schema probe B: raw platform attachment JSON (BC-3.9.007 wire source).
-    let raw_path = format!("/rest/api/3/issue/{key}?fields=attachment");
-    if let Ok(raw_out) = h.cmd().args(["api", &raw_path]).output() {
-        if raw_out.status.success() {
-            if let Ok(raw_v) = serde_json::from_slice::<Value>(&raw_out.stdout) {
-                p2_3c_print("RAW-PLATFORM-attachment-internal", &raw_v);
-            }
-        }
-    }
 }

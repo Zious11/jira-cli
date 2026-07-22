@@ -155,6 +155,26 @@ fn attachments_list_response(key: &str, attachments: Vec<Value>) -> Value {
     })
 }
 
+/// Step-2 `POST .../request/{key}/attachment` response (AttachmentCreateResultDTO).
+///
+/// Confirmed by P2-3c schema probe run 29936980027 (S-576-5): the real Jira
+/// API returns an OBJECT, not a bare array:
+///   `{"comment": null, "attachments": {"size": N, "start": 0, "limit": 50,
+///     "isLastPage": true, "values": [...]}}`.
+fn attachment_create_result_dto(attachments: Vec<Value>) -> Value {
+    let size = attachments.len();
+    serde_json::json!({
+        "comment": null,
+        "attachments": {
+            "size": size,
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "values": attachments
+        }
+    })
+}
+
 // ---------------------------------------------------------------------------
 // AC-001: test_bc_3_9_003_public_on_non_jsm_exits_64_before_gate
 //
@@ -264,9 +284,11 @@ async fn test_bc_3_9_003_public_gate_confirm_proceeds() {
     // Step 2: post_request_attachment.
     Mock::given(method("POST"))
         .and(path("/rest/servicedeskapi/request/EJ-1/attachment"))
-        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!([
-            attachment_object("20001", "attach.txt")
-        ])))
+        .respond_with(
+            ResponseTemplate::new(201).set_body_json(attachment_create_result_dto(vec![
+                attachment_object("20001", "attach.txt"),
+            ])),
+        )
         .mount(&server)
         .await;
 
@@ -520,9 +542,11 @@ async fn test_bc_3_9_003_two_step_attach_temporary_then_request_attachment() {
     // Step 2: post_request_attachment with public:true.
     Mock::given(method("POST"))
         .and(path("/rest/servicedeskapi/request/EJ-2/attachment"))
-        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!([
-            attachment_object("20002", "upload.txt")
-        ])))
+        .respond_with(
+            ResponseTemplate::new(201).set_body_json(attachment_create_result_dto(vec![
+                attachment_object("20002", "upload.txt"),
+            ])),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -616,8 +640,9 @@ async fn test_bc_x_8_010_service_desk_id_from_project_meta_projectid_match() {
     Mock::given(method("POST"))
         .and(path("/rest/servicedeskapi/request/EJ-3/attachment"))
         .respond_with(
-            ResponseTemplate::new(201)
-                .set_body_json(serde_json::json!([attachment_object("20003", "test.txt")])),
+            ResponseTemplate::new(201).set_body_json(attachment_create_result_dto(vec![
+                attachment_object("20003", "test.txt"),
+            ])),
         )
         .mount(&server)
         .await;
@@ -733,8 +758,9 @@ async fn test_sec_576_006_stale_id_self_heal_invalidate_retry_once() {
     Mock::given(method("POST"))
         .and(path("/rest/servicedeskapi/request/EJ-4/attachment"))
         .respond_with(
-            ResponseTemplate::new(201)
-                .set_body_json(serde_json::json!([attachment_object("20004", "stale.txt")])),
+            ResponseTemplate::new(201).set_body_json(attachment_create_result_dto(vec![
+                attachment_object("20004", "stale.txt"),
+            ])),
         )
         .mount(&server)
         .await;
@@ -824,9 +850,11 @@ async fn test_bc_3_9_004_internal_on_jsm_two_step() {
     // Step 2 must send public:false.
     Mock::given(method("POST"))
         .and(path("/rest/servicedeskapi/request/EJ-5/attachment"))
-        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!([
-            attachment_object("20005", "internal.txt")
-        ])))
+        .respond_with(
+            ResponseTemplate::new(201).set_body_json(attachment_create_result_dto(vec![
+                attachment_object("20005", "internal.txt"),
+            ])),
+        )
         .mount(&server)
         .await;
 
@@ -978,8 +1006,9 @@ async fn test_bc_3_9_007_servicedeskapi_response_shape() {
     Mock::given(method("POST"))
         .and(path("/rest/servicedeskapi/request/EJ-6/attachment"))
         .respond_with(
-            ResponseTemplate::new(201)
-                .set_body_json(serde_json::json!([attachment_object("20007", "shape.txt")])),
+            ResponseTemplate::new(201).set_body_json(attachment_create_result_dto(vec![
+                attachment_object("20007", "shape.txt"),
+            ])),
         )
         .mount(&server)
         .await;
@@ -1558,8 +1587,9 @@ async fn test_bc_3_9_011_public_json_output_shape() {
     Mock::given(method("POST"))
         .and(path("/rest/servicedeskapi/request/EJ-7/attachment"))
         .respond_with(
-            ResponseTemplate::new(201)
-                .set_body_json(serde_json::json!([attachment_object("20012", "shape.txt")])),
+            ResponseTemplate::new(201).set_body_json(attachment_create_result_dto(vec![
+                attachment_object("20012", "shape.txt"),
+            ])),
         )
         .mount(&server)
         .await;
@@ -1693,8 +1723,9 @@ async fn test_bc_3_9_011_internal_json_shape_jsm_vs_non_jsm_asymmetry() {
     Mock::given(method("POST"))
         .and(path("/rest/servicedeskapi/request/EJ-8/attachment"))
         .respond_with(
-            ResponseTemplate::new(201)
-                .set_body_json(serde_json::json!([attachment_object("20013", "asym.txt")])),
+            ResponseTemplate::new(201).set_body_json(attachment_create_result_dto(vec![
+                attachment_object("20013", "asym.txt"),
+            ])),
         )
         .mount(&server)
         .await;
