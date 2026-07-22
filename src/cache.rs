@@ -213,6 +213,27 @@ pub fn write_project_meta(profile: &str, project_key: &str, meta: &ProjectMeta) 
     Ok(())
 }
 
+/// Invalidate the cached project metadata for a specific project key.
+///
+/// Removes the entry for `project_key` from `project_meta.json` for the given
+/// profile. Used by SEC-576-006 stale-ID self-heal: when
+/// `attach_temporary_file` returns 404/403 with a cached `sdId`, the caller
+/// invalidates this entry so `get_or_fetch_project_meta` does a fresh HTTP
+/// fetch on the next call.
+///
+/// Model-b cache writer: disk errors are swallowed with a warning so a failed
+/// invalidation never breaks the upload command. Returns `()` unconditionally.
+///
+/// **RED-phase stub — implement in Task 4.**
+#[allow(dead_code)] // RED-phase stub — remove when wired in Task 4.
+pub fn invalidate_project_meta_cache(profile: &str, project_key: &str) {
+    todo!(
+        "S-576-5 RED stub: invalidate_project_meta_cache(profile={:?}, project_key={:?}) — implement in Task 4",
+        profile,
+        project_key
+    )
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WorkspaceCache {
     pub workspace_id: String,

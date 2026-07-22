@@ -1850,6 +1850,104 @@ fn parse_age_duration(s: &str) -> anyhow::Result<chrono::Duration> {
 }
 
 // ---------------------------------------------------------------------------
+// S-576-5: JSM upload handler + confirmation gates (BC-3.9.003/004/005/006)
+//
+// RED-phase stubs — todo!() bodies; wired in Task 5 after interim guard removal.
+// The S-576-3 AC-017 interim rejection guard in `handle_attachment_upload` is
+// PRESERVED here; the implementer removes it in Task 5 per the REMOVAL OBLIGATION.
+// ---------------------------------------------------------------------------
+
+/// Upload option flags for `handle_attachment_upload_jsm` (reduces argument count).
+///
+/// Groups the five boolean/output parameters so the handler stays within
+/// clippy's 7-argument limit.  The implementer fills these fields in Task 5.
+#[allow(dead_code)] // RED-phase struct — remove `#[allow]` when wired in Task 5.
+pub struct UploadJsmOpts<'a> {
+    /// `--public`: upload as customer-visible (true) or internal (false).
+    pub public: bool,
+    /// `--replace-existing`: delete same-name attachments before upload.
+    pub replace_existing: bool,
+    /// `--yes`: skip interactive confirmation gate.
+    pub yes: bool,
+    /// `--dry-run`: preview only; no HTTP writes.
+    pub dry_run: bool,
+    /// Output format (human or JSON).
+    pub output_format: &'a OutputFormat,
+    /// `--no-input`: non-interactive mode (stdin not a TTY).
+    pub no_input: bool,
+}
+
+/// Handle `jr issue attachment upload <KEY> <FILE> --public/--internal` on a
+/// JSM issue via the servicedeskapi two-step flow (BC-3.9.003/004).
+///
+/// Wire sequence (BC-3.9.003):
+///   Step 0 — GET /rest/api/3/issue/{key}: existence + project.key
+///   Step 1 — per-file: attach_temporary_file → temporaryAttachmentId
+///   Step 2 — post_request_attachment → published attachment objects
+///
+/// EC-3.9.003-7: non-JSM guard fires BEFORE non-interactive gate.
+/// OQ-9: --internal on non-JSM → silent no-op; platform POST only.
+/// VP-576-005: --public + --replace-existing → single combined prompt.
+/// SEC-576-006: step-1 404/403 → invalidate cache + retry once.
+///
+/// **RED-phase stub — implement in Task 5.**
+#[allow(dead_code)] // RED-phase stub — remove when wired in Task 5.
+pub async fn handle_attachment_upload_jsm(
+    _key: &str,
+    _file: &[std::path::PathBuf],
+    _opts: UploadJsmOpts<'_>,
+    _client: &JiraClient,
+) -> anyhow::Result<()> {
+    todo!("S-576-5 RED stub: handle_attachment_upload_jsm — implement in Task 5")
+}
+
+/// Interactive `--public` confirmation gate (BC-3.9.014 consumer 1).
+///
+/// Standalone gate for `--public` without `--replace-existing`.
+/// DEC-174: uses `eprint!` + `io::stdin().read_line()` only — NOT dialoguer.
+///
+/// Prompt format (N ≤ 3 files):
+/// `"Upload <f1>, <f2> to <KEY> as customer-visible (public)? [y/N] "`
+/// Prompt format (N > 3 files):
+/// `"Upload <N> files to <KEY> as customer-visible (public)? [y/N] "`
+///
+/// Returns `Ok(true)` on confirm, `Ok(false)` on cancel, `Err(JrError::Interrupted)` on EOF.
+///
+/// **RED-phase stub — implement in Task 5.**
+#[allow(dead_code)] // RED-phase stub — remove when wired in Task 5.
+fn attachment_public_confirmation_gate(
+    _key: &str,
+    _file_paths: &[std::path::PathBuf],
+    _yes: bool,
+) -> anyhow::Result<bool> {
+    todo!("S-576-5 RED stub: attachment_public_confirmation_gate — implement in Task 5")
+}
+
+/// Interactive combined gate for `--public` + `--replace-existing` (BC-3.9.014 consumer 3).
+///
+/// VP-576-005: fires ONCE with a combined prompt covering both replacement and
+/// visibility. Two separate prompts are FORBIDDEN.
+///
+/// Prompt (BC-3.9.014 consumer 3 verbatim):
+/// `"Upload to <KEY> as customer-visible (public) and replace existing attachment(s):\n
+///   <filename1> (id: <AID1>)\n  ...\nContinue? [y/N] "`
+///
+/// Returns `Ok(true)` on confirm, `Ok(false)` on cancel, `Err(JrError::Interrupted)` on EOF.
+///
+/// **RED-phase stub — implement in Task 5.**
+#[allow(dead_code)] // RED-phase stub — remove when wired in Task 5.
+fn attachment_combined_confirmation_gate(
+    _key: &str,
+    _file_paths: &[std::path::PathBuf],
+    _would_delete: &[&crate::api::jira::attachments::AttachmentObject],
+    _yes: bool,
+) -> anyhow::Result<bool> {
+    todo!(
+        "S-576-5 RED stub: attachment_combined_confirmation_gate (VP-576-005) — implement in Task 5"
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Unit tests
 // ---------------------------------------------------------------------------
 
