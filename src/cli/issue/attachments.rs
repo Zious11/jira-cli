@@ -1394,12 +1394,13 @@ fn attachment_replace_confirmation_gate(
 /// `Err(JrError::Interrupted)` → EOF/IO error (exit 130).
 fn jsm_public_gate(file_paths: &[std::path::PathBuf], key: &str) -> anyhow::Result<bool> {
     if file_paths.len() <= 3 {
-        let names: Vec<&str> = file_paths
+        let names: Vec<String> = file_paths
             .iter()
             .map(|p| {
                 p.file_name()
                     .and_then(|n| n.to_str())
-                    .unwrap_or("<unknown>")
+                    .map(display_sanitize_filename)
+                    .unwrap_or_else(|| "<unknown>".to_string())
             })
             .collect();
         eprint!(

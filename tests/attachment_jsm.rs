@@ -2829,3 +2829,117 @@ async fn test_bc_3_9_014_noinput_replace_no_match_uses_consumer1_hint() {
         "P1-007: consumer 3 hint must NOT appear when there are 0 matches; got:\n{stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// P3-001 (CWE-116): test_cwe116_jsm_public_gate_sanitizes_hostile_filename
+//
+// jsm_public_gate (N≤3 path) must pass filenames through display_sanitize_filename
+// before printing to stderr. A file with U+202E (RIGHT-TO-LEFT OVERRIDE) in its
+// name must be rendered as '?' in the confirmation prompt.
+//
+// RED evidence: before fix, jsm_public_gate calls
+//   `p.file_name().and_then(|n| n.to_str()).unwrap_or("<unknown>")`
+// directly — the raw bidi char appears in stderr and the sanitized assertion fails.
+//
+// GREEN: after fix, display_sanitize_filename maps U+202E → '?' so stderr contains
+// "evil?name.txt" and does NOT contain the raw U+202E byte sequence.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_cwe116_jsm_public_gate_sanitizes_hostile_filename() {
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let tmp = TempDir::new().unwrap();
+
+    // Create a file whose name contains U+202E (RIGHT-TO-LEFT OVERRIDE, 0x202E).
+    // This is a valid UTF-8 codepoint and a valid filename on macOS/Linux.
+    let hostile_name = "evil\u{202E}name.txt";
+    let file = tmp.path().join(hostile_name);
+    std::fs::write(&file, b"hostile").unwrap();
+
+    // JSM project mocks for EJ-21.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJ-21"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(issue_get_response("EJ-21", "EJ")),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/EJ"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(jsm_project_response("EJ", "10099")),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(service_desk_list_response("42", "10099")),
+        )
+        .mount(&server)
+        .await;
+
+    // Step 1: attachTemporaryFile → success.
+    Mock::given(method("POST"))
+        .and(path(
+            "/rest/servicedeskapi/servicedesk/42/attachTemporaryFile",
+        ))
+        .and(header("X-Atlassian-Token", "no-check"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "temporaryAttachments": [{"temporaryAttachmentId": "tmp-bidi-001", "fileName": hostile_name}]
+        })))
+        .mount(&server)
+        .await;
+
+    // Step 2: post_request_attachment → success.
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request/EJ-21/attachment"))
+        .respond_with(
+            ResponseTemplate::new(201).set_body_json(attachment_create_result_dto(vec![
+                attachment_object("bidi-001", hostile_name),
+            ])),
+        )
+        .mount(&server)
+        .await;
+
+    // Interactive path: JR_STDIN_IS_TTY=1 + write_stdin("y\n") so the gate fires and is confirmed.
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .env("JR_STDIN_IS_TTY", "1")
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            "EJ-21",
+            &file.to_string_lossy(),
+            "--public",
+        ])
+        .write_stdin("y\n")
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Must exit 0 (upload succeeded).
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "P3-001 CWE-116: interactive --public confirm 'y' with bidi filename → exit 0;\nstdout: {stdout}\nstderr: {stderr}"
+    );
+
+    // The prompt must contain the sanitized filename (U+202E replaced by '?').
+    assert!(
+        stderr.contains("evil?name.txt"),
+        "P3-001 CWE-116: jsm_public_gate must sanitize U+202E → '?' in stderr; got: {stderr}"
+    );
+
+    // The raw bidi char (U+202E, UTF-8: E2 80 AE) must NOT appear in stderr.
+    assert!(
+        !stderr.contains('\u{202E}'),
+        "P3-001 CWE-116: raw U+202E must NOT appear in stderr; got: {stderr}"
+    );
+}
