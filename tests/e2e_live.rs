@@ -10444,8 +10444,9 @@ fn p2_3c_print(label: &str, v: &Value) {
 /// attachment array.
 ///
 /// Gated by `JR_E2E_JSM_PROJECT` (same as other JSM tests). Uses `jsm_self_close`
-/// for teardown convention (S-JSM-E2E-2). The temporary attachment is NOT deleted
-/// by this test (attachments on a closed issue are inert; they expire naturally).
+/// for teardown convention (S-JSM-E2E-2). Best-effort attachment delete fires before
+/// jsm_self_close — the AID is parsed from upload stdout; on parse failure a [WARN]
+/// is emitted and self-close proceeds regardless.
 ///
 /// Traces to: AC-011, BC-3.9.003, BC-3.9.007.
 #[test]
