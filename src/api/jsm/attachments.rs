@@ -307,7 +307,13 @@ pub async fn post_request_attachment(
                 .url()
                 .and_then(|u| u.host_str().map(str::to_string))
                 .unwrap_or_else(|| "Jira".to_string());
-            JrError::NetworkError(host)
+            // BC-3.9.006: network errors in step-2 must exit 1 and append RETRY_HINT.
+            JrError::ApiError {
+                status: 0,
+                message: format!(
+                    "Could not reach {host} — check your connection\n{RETRY_HINT}"
+                ),
+            }
         })?;
 
     let status = response.status();
@@ -362,4 +368,30 @@ pub async fn post_request_attachment(
         },
     };
     Err(anyhow::anyhow!(err))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::client::JiraClient;
+
+    /// BC-3.9.006: network errors from step-2 (post_request_attachment) must append
+    /// RETRY_HINT — symmetric with 4xx/5xx error branches.
+    /// Uses 127.0.0.1:1 (established no-listener pattern in this codebase) to
+    /// trigger a ECONNREFUSED without requiring a real server.
+    #[tokio::test]
+    async fn test_bc_3_9_006_step2_network_error_appends_retry_hint() {
+        let client = JiraClient::new_for_test(
+            "http://127.0.0.1:1".to_string(),
+            "Basic dGVzdA==".to_string(),
+        );
+        let result =
+            post_request_attachment(&client, "EJ-1", &["tmp-123".to_string()], true).await;
+        assert!(result.is_err(), "expected an error when server is unreachable");
+        let err_string = format!("{}", result.unwrap_err());
+        assert!(
+            err_string.contains("Temporary attachment IDs may have expired"),
+            "BC-3.9.006: network error must append RETRY_HINT\ngot: {err_string}"
+        );
+    }
 }

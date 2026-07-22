@@ -1384,23 +1384,36 @@ fn attachment_replace_confirmation_gate(
 // S-576-5: JSM visibility helpers and handler
 // ---------------------------------------------------------------------------
 
-/// Derive the project key from an issue key (e.g. `"EJ-12"` → `"EJ"`).
+/// Interactive `--public` confirmation gate (consumer 1: `--public` only, no replace).
 ///
-/// Uses the rightmost `-` as the separator so keys like `"MY-PROJ-42"` also
-/// parse correctly.  Falls back to the full key if no `-` is present.
-fn extract_project_key(key: &str) -> &str {
-    key.rsplit_once('-').map(|x| x.0).unwrap_or(key)
-}
-
-/// Interactive `--public` confirmation gate (single-file upload, no replace).
+/// BC-3.9.014 EC-3.9.014-5 prompt format:
+/// - N ≤ 3: `"Upload <f1>, <f2>, <fN> to <KEY> as customer-visible (public)? [y/N] "`
+/// - N > 3: `"Upload <N> files to <KEY> as customer-visible (public)? [y/N] "`
 ///
 /// Returns `Ok(true)` → proceed, `Ok(false)` → cancelled,
 /// `Err(JrError::Interrupted)` → EOF/IO error (exit 130).
-fn jsm_public_gate(file_count: usize, key: &str) -> anyhow::Result<bool> {
-    eprint!(
-        "Continue? Upload {} file(s) to {} as customer-visible? [y/N] ",
-        file_count, key
-    );
+fn jsm_public_gate(file_paths: &[std::path::PathBuf], key: &str) -> anyhow::Result<bool> {
+    if file_paths.len() <= 3 {
+        let names: Vec<&str> = file_paths
+            .iter()
+            .map(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("<unknown>")
+            })
+            .collect();
+        eprint!(
+            "Upload {} to {} as customer-visible (public)? [y/N] ",
+            names.join(", "),
+            key
+        );
+    } else {
+        eprint!(
+            "Upload {} files to {} as customer-visible (public)? [y/N] ",
+            file_paths.len(),
+            key
+        );
+    }
     let _ = std::io::Write::flush(&mut std::io::stderr());
     use std::io::BufRead;
     let mut line = String::new();
@@ -1413,7 +1426,11 @@ fn jsm_public_gate(file_count: usize, key: &str) -> anyhow::Result<bool> {
     }
 }
 
-/// Interactive combined gate: `--public` + `--replace-existing` with ≥1 filename match.
+/// Interactive combined gate: `--public` + `--replace-existing` with ≥1 filename match (consumer 3).
+///
+/// BC-3.9.014 prompt format:
+/// `"Upload to <KEY> as customer-visible (public) and replace existing attachment(s):\n"`
+/// followed by `"  <filename> (id: <AID>)\n"` for each match, then `"Continue? [y/N] "`.
 ///
 /// VP-576-005: ONE prompt only (not one for replace + one for public).
 ///
@@ -1421,7 +1438,7 @@ fn jsm_public_gate(file_count: usize, key: &str) -> anyhow::Result<bool> {
 /// `Err(JrError::Interrupted)` → EOF/IO error (exit 130).
 fn jsm_public_combined_gate(key: &str, would_delete: &[AttachmentObject]) -> anyhow::Result<bool> {
     eprintln!(
-        "Replace existing attachment(s) and upload as customer-visible on {}:",
+        "Upload to {} as customer-visible (public) and replace existing attachment(s):",
         key
     );
     for att in would_delete {
@@ -1487,8 +1504,11 @@ async fn handle_attachment_upload_jsm(
         no_input,
         public,
     } = *opts;
-    // Derive project key from issue key without an HTTP round-trip.
-    let project_key = extract_project_key(key);
+    // Derive project key via HTTP (P1-004): GET /rest/api/3/issue/{key}?fields=project.
+    // Validates that the issue exists and returns its project key exactly as Jira knows it.
+    // 404 → JrError::UserError("Issue {key} not found or not accessible.") → exit 64.
+    let project_key = client.get_issue_project_key(key).await?;
+    let project_key = project_key.as_str();
 
     // Fetch (or read from cache) project metadata for JSM determination.
     let meta = get_or_fetch_project_meta(client, project_key).await?;
@@ -1529,18 +1549,10 @@ async fn handle_attachment_upload_jsm(
         return render_upload_result(&uploaded, output_format);
     }
 
-    // JSM project: resolve sdId.
-    let sd_id = match meta.service_desk_id {
-        Some(ref id) => id.clone(),
-        None => {
-            return Err(JrError::UserError(format!(
-                "No JSM service desk found for project {project_key}. \
-                 The project may still be provisioning; \
-                 verify with `jr queue list --project {project_key}`."
-            ))
-            .into());
-        }
-    };
+    // JSM project: resolve sdId via the canonical resolver (P1-005).
+    // `resolve_service_desk_id` re-reads from cache (hit — just populated above) and
+    // returns the canonical UserError if service_desk_id is None.
+    let sd_id = crate::api::jsm::servicedesks::resolve_service_desk_id(client, project_key).await?;
 
     // JSM dry-run: preview without step-1/step-2, with visibility annotation.
     // The non-JSM guard already fired above so EC-3.9.020-8 is satisfied.
@@ -1558,12 +1570,31 @@ async fn handle_attachment_upload_jsm(
 
     // --public visibility gate (--internal has no gate).
     if public {
-        // Non-interactive gate fires BEFORE any list GET (EC-3.9.003-7).
-        // When --replace-existing is present, the combined message is used
-        // regardless of whether there are actual filename matches — the gate
-        // cannot fetch the list without a potential HTTP call in non-interactive mode.
+        // BC-3.9.014 (P1-007): fetch attachment list FIRST so both the non-interactive
+        // hint and the interactive gate use actual filename-match data.
+        // "No servicedeskapi calls are issued; no DELETEs are issued" in non-interactive
+        // mode (BC-3.9.014) — this platform list GET is explicitly permitted.
+        // VP-576-005: ONE combined prompt when --replace-existing has ≥1 filename match.
+        let to_delete: Vec<AttachmentObject> = if replace_existing {
+            let existing = client.list_attachments(key).await?;
+            let upload_names: std::collections::HashSet<String> = file_paths
+                .iter()
+                .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+                .collect();
+            existing
+                .into_iter()
+                .filter(|a| upload_names.contains(&a.filename))
+                .collect()
+        } else {
+            vec![]
+        };
+        let has_replace_matches = !to_delete.is_empty();
+
+        // Non-interactive path: exit 64 with hint; no gate presented; no DELETEs issued.
+        // Consumer is determined by actual match count (P1-007 fix):
+        // consumer 3 only when replace_existing AND ≥1 match; consumer 1 otherwise.
         if no_input && !yes {
-            return if replace_existing {
+            return if replace_existing && has_replace_matches {
                 Err(JrError::UserError(
                     "Use --yes to confirm uploading as customer-visible (public) and \
                      deleting existing same-filename attachments."
@@ -1581,28 +1612,11 @@ async fn handle_attachment_upload_jsm(
             };
         }
 
-        // Interactive or --yes path: fetch list to determine combined-gate prompt.
-        // VP-576-005: ONE combined prompt when --replace-existing has ≥1 filename match.
-        let to_delete: Vec<AttachmentObject> = if replace_existing {
-            let existing = client.list_attachments(key).await?;
-            let upload_names: std::collections::HashSet<String> = file_paths
-                .iter()
-                .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-                .collect();
-            existing
-                .into_iter()
-                .filter(|a| upload_names.contains(&a.filename))
-                .collect()
-        } else {
-            vec![]
-        };
-        let has_replace_matches = !to_delete.is_empty();
-
         if !yes {
             let proceed = if replace_existing && has_replace_matches {
                 jsm_public_combined_gate(key, &to_delete)?
             } else {
-                jsm_public_gate(file_paths.len(), key)?
+                jsm_public_gate(file_paths, key)?
             };
             if !proceed {
                 eprintln!("Upload cancelled.");
@@ -1667,12 +1681,37 @@ async fn handle_attachment_upload_jsm(
                         }
                         Some(new_id) => {
                             current_sd_id = new_id;
-                            crate::api::jsm::attachments::attach_temporary_file(
-                                client,
-                                &current_sd_id,
-                                path,
-                            )
-                            .await?
+                            // P1-001: explicit EC-4 mapping on retry — bare .await? would
+                            // propagate ApiError{status:404} as exit 1 instead of exit 64.
+                            let retry_result =
+                                crate::api::jsm::attachments::attach_temporary_file(
+                                    client,
+                                    &current_sd_id,
+                                    path,
+                                )
+                                .await;
+                            match retry_result {
+                                Ok(id) => id,
+                                Err(e) => {
+                                    return match e.downcast::<JrError>() {
+                                        Ok(JrError::ApiError { status: 404, .. }) => {
+                                            Err(JrError::UserError(format!(
+                                                "Service desk for {project_key} not found after refresh."
+                                            ))
+                                            .into())
+                                        }
+                                        Ok(JrError::ApiError { status: 401, .. }) => {
+                                            Err(JrError::NotAuthenticated {
+                                                hint: "Run `jr auth login` to re-authenticate."
+                                                    .to_string(),
+                                            }
+                                            .into())
+                                        }
+                                        Ok(other) => Err(anyhow::anyhow!(other)),
+                                        Err(other) => Err(other),
+                                    };
+                                }
+                            }
                         }
                     }
                 } else {

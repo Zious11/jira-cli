@@ -434,6 +434,53 @@ impl JiraClient {
         self.get(&path).await
     }
 
+    /// Get the project key for an issue (P1-004, BC-3.9.003).
+    ///
+    /// Calls `GET /rest/api/3/issue/{key}?fields=project` and extracts
+    /// `fields.project.key`.  On 404 returns `JrError::UserError` (exit 64) with
+    /// the canonical message `"Issue {key} not found or not accessible."` so the
+    /// attachment upload handler can surface it clearly without leaking the raw API
+    /// error body.
+    pub async fn get_issue_project_key(&self, key: &str) -> anyhow::Result<String> {
+        use crate::error::JrError;
+
+        let path = format!(
+            "/rest/api/3/issue/{}?fields=project",
+            urlencoding::encode(key)
+        );
+        let result: anyhow::Result<serde_json::Value> = self.get(&path).await;
+
+        match result {
+            Ok(v) => {
+                let project_key = v
+                    .get("fields")
+                    .and_then(|f| f.get("project"))
+                    .and_then(|p| p.get("key"))
+                    .and_then(|k| k.as_str())
+                    .map(str::to_string)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(JrError::Internal(format!(
+                            "Issue {key} response missing fields.project.key"
+                        )))
+                    })?;
+                Ok(project_key)
+            }
+            Err(e) => {
+                let is_404 = e.downcast_ref::<JrError>().is_some_and(|jr| {
+                    matches!(jr, JrError::ApiError { status: 404, .. })
+                });
+                if is_404 {
+                    Err(JrError::UserError(format!(
+                        "Issue {key} not found or not accessible."
+                    ))
+                    .into())
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
+
     /// Create a new issue.
     pub async fn create_issue(&self, fields: Value) -> Result<CreateIssueResponse> {
         let body = serde_json::json!({ "fields": fields });

@@ -232,6 +232,12 @@ async fn test_bc_3_9_003_public_on_non_jsm_exits_64_before_gate() {
     let file = tmp.path().join("report.pdf");
     std::fs::write(&file, b"pdf content").unwrap();
 
+    // P1-004: issue key lookup (GET …?fields=project) must resolve before project meta check.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/DEV-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_get_response("DEV-1", "DEV")))
+        .mount(&server)
+        .await;
     // Mount: GET project meta → non-JSM project.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/project/DEV"))
@@ -509,18 +515,16 @@ async fn test_vp_576_005_combined_gate_single_prompt_fires_once() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    // VP-576-005: the combined prompt keyword "Continue?" must appear exactly once.
-    let continue_count = stderr.matches("Continue?").count();
+    // VP-576-005: exactly ONE confirmation prompt fires for the combined gate.
+    // The consumer-1 gate prompt ends with "? [y/N] "; consumer-3 also ends with
+    // "Continue? [y/N] ".  Both contain "[y/N]" exactly once — ensuring neither gate
+    // fires twice, and the two gates don't both fire.
+    let yn_count = stderr.matches("[y/N]").count();
     assert!(
-        continue_count <= 1,
-        "VP-576-005: combined gate must fire at most once (not two prompts); \
-         'Continue?' appeared {continue_count} times in stderr:\n{stderr}"
+        yn_count == 1,
+        "VP-576-005: combined gate must fire exactly once (not zero or two prompts); \
+         '[y/N]' appeared {yn_count} times in stderr:\n{stderr}"
     );
-
-    // VP-576-005: when the implementation is correct, it should appear exactly once.
-    // For RED, the interim guard fires exit 64 before any prompt is shown (0 times).
-    // We assert <= 1 as the must-not-regress condition, so this passes in both RED and GREEN.
-    // The positive assertion (== 1) is checked by the implementer in Task 5.
 }
 
 // ---------------------------------------------------------------------------
@@ -934,6 +938,12 @@ async fn test_bc_3_9_004_internal_on_non_jsm_silent_noop_oq9() {
     let file = tmp.path().join("nonjsm.txt");
     std::fs::write(&file, b"nonjsm").unwrap();
 
+    // P1-004: issue key lookup (GET …?fields=project) must resolve before project meta check.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/DEV-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_get_response("DEV-1", "DEV")))
+        .mount(&server)
+        .await;
     // Non-JSM project (software).
     Mock::given(method("GET"))
         .and(path("/rest/api/3/project/DEV"))
@@ -1122,7 +1132,44 @@ async fn test_bc_3_9_006_jsm_upload_error_taxonomy() {
     let file = tmp.path().join("tax.txt");
     std::fs::write(&file, b"tax").unwrap();
 
+    // --- Sub-assertion 0: issue 404 → exit 64 + "not found or not accessible" (P1-004) ---
+    // get_issue_project_key fires FIRST; a 404 from Jira surfaces as exit 64 with the
+    // canonical message before any project-meta or gate logic runs.
+    {
+        // No mock for GHOST-1 → wiremock 404 for unmatched requests.
+        let out = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+            .args([
+                "issue",
+                "attachment",
+                "upload",
+                "GHOST-1",
+                &file.to_string_lossy(),
+                "--public",
+                "--yes",
+            ])
+            .timeout(std::time::Duration::from_secs(10))
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            out.status.code(),
+            Some(64),
+            "taxonomy sub-0: issue 404 → exit 64; got {:?}; stderr: {stderr}",
+            out.status.code()
+        );
+        assert!(
+            stderr.contains("GHOST-1 not found or not accessible"),
+            "taxonomy sub-0: issue 404 → 'not found or not accessible'; got: {stderr}"
+        );
+    }
+
     // --- Sub-assertion 1: --public on non-JSM → exit 64 + BC-3.9.005 message ---
+    // P1-004: issue key lookup fires first; DEV-1 exists with project "DEV".
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/DEV-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_get_response("DEV-1", "DEV")))
+        .mount(&server)
+        .await;
     Mock::given(method("GET"))
         .and(path("/rest/api/3/project/DEV"))
         .respond_with(ResponseTemplate::new(200).set_body_json(non_jsm_project_response("DEV")))
@@ -1157,7 +1204,7 @@ async fn test_bc_3_9_006_jsm_upload_error_taxonomy() {
     }
 
     // --- Sub-assertion 2: non-interactive + --public without --yes → exit 64 + "Use --yes" ---
-    // JSM project mocks for this sub-assertion.
+    // JSM project mocks for sub-assertions 2–10 (permanent, shared).
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/EJ-10"))
         .respond_with(ResponseTemplate::new(200).set_body_json(issue_get_response("EJ-10", "EJ")))
@@ -1168,11 +1215,20 @@ async fn test_bc_3_9_006_jsm_upload_error_taxonomy() {
         .respond_with(ResponseTemplate::new(200).set_body_json(jsm_project_response("EJ", "10099")))
         .mount(&server)
         .await;
+    // Returns both EJ (sd42, pid 10099) and EJSA (SD7-NEW, pid 70001) so sub-assertion 7
+    // can test the P1-001 retry path without any scoped priority overrides.
     Mock::given(method("GET"))
         .and(path("/rest/servicedeskapi/servicedesk"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(service_desk_list_response("42", "10099")),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "size": 2,
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "values": [
+                {"id": "42",      "projectId": "10099", "projectName": "EJ JSM"},
+                {"id": "SD7-NEW", "projectId": "70001", "projectName": "JSM SA7"}
+            ]
+        })))
         .mount(&server)
         .await;
 
@@ -1206,17 +1262,21 @@ async fn test_bc_3_9_006_jsm_upload_error_taxonomy() {
 
     // --- Sub-assertion 3: non-interactive + --public + --replace-existing (≥1 match) without --yes ---
     {
-        // Need a list attachment mock for --replace-existing. The list endpoint is
-        // GET /rest/api/3/issue/{key}?fields=attachment.
+        // Attachment list: existing "tax.txt" — matches upload file "tax.txt" → ≥1 match.
+        // Uses platform shape (top-level `id`/`self`/`content`) for correct AttachmentObject deserialization.
+        // `.with_priority(1)` is REQUIRED: the plain EJ-10 issue GET mock (priority 5, registered
+        // before this mock) would otherwise win under same-priority FIFO ordering, returning
+        // `issue_get_response` with no `attachment` field → empty list → consumer 1 hint (wrong).
         Mock::given(method("GET"))
             .and(path("/rest/api/3/issue/EJ-10"))
             .and(wiremock::matchers::query_param("fields", "attachment"))
             .respond_with(
                 ResponseTemplate::new(200).set_body_json(attachments_list_response(
                     "EJ-10",
-                    vec![attachment_object("99010", "tax.txt")],
+                    vec![platform_attachment_object("99010", "tax.txt")],
                 )),
             )
+            .with_priority(1)
             .mount(&server)
             .await;
 
@@ -1367,11 +1427,106 @@ async fn test_bc_3_9_006_jsm_upload_error_taxonomy() {
             stderr.contains("Temporary attachment IDs may have expired. Try the upload again."),
             "taxonomy: step-2 400 → retry hint; got: {stderr}"
         );
-    } // _step2_guard drops → 400 mock removed before sub-assertion 8
+    } // _step2_guard drops → 400 mock removed before sub-assertion 7
 
-    // --- Sub-assertion 7: sdId not found after SEC-576-006 retry → exit 64 + "not found after refresh" ---
-    // This sub-assertion is satisfied by the existing two sub-assertions on exit code and message.
-    // (Detailed test in AC-005; here we just pin the error message substring.)
+    // --- Permanent mocks for sub-assertion 7 (EJSA stale-heal scenario) ---
+    // These use unique paths not shared with EJ sub-assertions; no scoped overrides needed.
+
+    // P1-004: issue key lookup for EJSA-1 → project "EJSA".
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJSA-1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(issue_get_response("EJSA-1", "EJSA")),
+        )
+        .mount(&server)
+        .await;
+
+    // Project GET for EJSA re-fetch after stale-heal invalidation.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/EJSA"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "70001",
+            "key": "EJSA",
+            "name": "JSM SA7",
+            "projectTypeKey": "service_desk",
+            "simplified": false
+        })))
+        .mount(&server)
+        .await;
+
+    // Step-1 on stale sd "SD7-OLD" → 404 (triggers stale-heal).
+    Mock::given(method("POST"))
+        .and(path(
+            "/rest/servicedeskapi/servicedesk/SD7-OLD/attachTemporaryFile",
+        ))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+
+    // Step-1 retry on fresh sd "SD7-NEW" → 404 (EC-4 mapping: exit 64 + "not found after refresh").
+    // This is what P1-001 must catch: before fix bare .await? gives exit 1, after fix gives exit 64.
+    Mock::given(method("POST"))
+        .and(path(
+            "/rest/servicedeskapi/servicedesk/SD7-NEW/attachTemporaryFile",
+        ))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+
+    // --- Sub-assertion 7: post-retry 404 after stale-heal → exit 64 + "not found after refresh" ---
+    // P1-001/P1-002: the stale-heal retry branch ends with bare `.await?` which propagates
+    // ApiError{status:404} → exit 1. After P1-001 fix, it maps to exit 64 + "not found after refresh".
+    // RED evidence: bare .await? gives exit 1 (not 64) → assertion fails → RED.
+    // Design: EJSA (pid "70001") uses permanent mocks only — no scoped priority overrides needed.
+    // The permanent servicedesk list returns SD7-NEW for pid "70001" so service_desk_id = Some("SD7-NEW")
+    // after re-fetch, ensuring the P1-001 retry code path is exercised (not the None branch).
+    {
+        // Pre-populate cache with stale sd "SD7-OLD" for project "EJSA" (fetched_at far-future → fresh).
+        let profile_dir = cache.path().join("v1").join("default");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        let cache_path = profile_dir.join("project_meta.json");
+        let mut existing: serde_json::Value = if cache_path.exists() {
+            std::fs::read_to_string(&cache_path)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_else(|| serde_json::json!({}))
+        } else {
+            serde_json::json!({})
+        };
+        existing["EJSA"] = serde_json::json!({
+            "project_type": "service_desk",
+            "simplified": false,
+            "project_id": "70001",
+            "service_desk_id": "SD7-OLD",
+            "fetched_at": "2099-01-01T00:00:00Z"
+        });
+        std::fs::write(&cache_path, serde_json::to_string_pretty(&existing).unwrap()).unwrap();
+
+        let out = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+            .args([
+                "issue",
+                "attachment",
+                "upload",
+                "EJSA-1",
+                &file.to_string_lossy(),
+                "--public",
+                "--yes",
+            ])
+            .timeout(std::time::Duration::from_secs(10))
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            out.status.code(),
+            Some(64),
+            "taxonomy sub-7: post-retry 404 after stale-heal → exit 64; got {:?}; stderr: {stderr}",
+            out.status.code()
+        );
+        assert!(
+            stderr.contains("not found after refresh"),
+            "taxonomy sub-7: post-retry 404 after stale-heal → 'not found after refresh'; got: {stderr}"
+        );
+    }
 
     // --- Sub-assertion 8: step-2 failure 401 → exit 2 ---
     {
@@ -1806,6 +1961,12 @@ async fn test_bc_3_9_011_internal_json_shape_jsm_vs_non_jsm_asymmetry() {
     );
 
     // --- non-JSM path ---
+    // P1-004: issue key lookup fires before project meta check.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/DEV-2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_get_response("DEV-2", "DEV")))
+        .mount(&server)
+        .await;
     Mock::given(method("GET"))
         .and(path("/rest/api/3/project/DEV"))
         .respond_with(ResponseTemplate::new(200).set_body_json(non_jsm_project_response("DEV")))
@@ -2195,4 +2356,365 @@ async fn test_ec_x_8_010_1_no_matching_service_desk_exits_64() {
             "EC-X.8.010-1 JSON mode: stdout must be EMPTY (render_json NOT called); got: {stdout}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// P1-006-a: test_bc_3_9_014_consumer1_n_le_3_lists_filenames
+//
+// BC-3.9.014 EC-3.9.014-5 (N ≤ 3): prompt must list individual filenames —
+// `"Upload <filename1>, ..., <filenameN> to <KEY> as customer-visible (public)? [y/N] "`
+//
+// RED evidence: current prompt is `"Continue? Upload 1 file(s) to EJ-17 as customer-visible? [y/N] "`.
+// Assertion: stderr contains "Upload upload_one.txt to EJ-17 as customer-visible (public)?"
+// → fails because "(public)" and leading "Upload" (not "Continue?") are missing.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_bc_3_9_014_consumer1_n_le_3_lists_filenames() {
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("upload_one.txt");
+    std::fs::write(&file, b"hello").unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJ-17"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_get_response("EJ-17", "EJ")))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/EJ"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(jsm_project_response("EJ", "10099")))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(service_desk_list_response("42", "10099")),
+        )
+        .mount(&server)
+        .await;
+
+    // Cancel: send "n\n" to avoid needing upload mocks.
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .env("JR_STDIN_IS_TTY", "1")
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            "EJ-17",
+            &file.to_string_lossy(),
+            "--public",
+        ])
+        .write_stdin("n\n")
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // BC-3.9.014 EC-3.9.014-5: N=1 prompt must list the filename, not just the count.
+    // Must match: "Upload upload_one.txt to EJ-17 as customer-visible (public)? [y/N] "
+    assert!(
+        stderr.contains("Upload upload_one.txt to EJ-17 as customer-visible (public)?"),
+        "BC-3.9.014 EC-3.9.014-5: N=1 prompt must list filename and include '(public)'; got:\n{stderr}"
+    );
+
+    // Cancel → exit 0.
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "BC-3.9.014 EC-3.9.014-5: cancel 'n' → exit 0; got {:?}\nstdout: {stdout}\nstderr: {stderr}",
+        output.status.code()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// P1-006-b: test_bc_3_9_014_consumer1_n_gt_3_shows_count
+//
+// BC-3.9.014 EC-3.9.014-5 (N > 3): prompt must use count summary —
+// `"Upload <N> files to <KEY> as customer-visible (public)? [y/N] "`
+//
+// RED evidence: current prompt is `"Continue? Upload 4 file(s) to EJ-18 as customer-visible? [y/N] "`.
+// Assertion: stderr contains "Upload 4 files to EJ-18 as customer-visible (public)?"
+// → fails because "(public)" and "4 files" (not "4 file(s)") and leading "Upload" are missing.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_bc_3_9_014_consumer1_n_gt_3_shows_count() {
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let tmp = TempDir::new().unwrap();
+
+    // Create 4 files with distinct names.
+    let f1 = tmp.path().join("alpha.txt");
+    let f2 = tmp.path().join("beta.txt");
+    let f3 = tmp.path().join("gamma.txt");
+    let f4 = tmp.path().join("delta.txt");
+    for f in [&f1, &f2, &f3, &f4] {
+        std::fs::write(f, b"data").unwrap();
+    }
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJ-18"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_get_response("EJ-18", "EJ")))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/EJ"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(jsm_project_response("EJ", "10099")))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(service_desk_list_response("42", "10099")),
+        )
+        .mount(&server)
+        .await;
+
+    // Cancel: send "n\n" to avoid needing upload mocks.
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .env("JR_STDIN_IS_TTY", "1")
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            "EJ-18",
+            &f1.to_string_lossy(),
+            &f2.to_string_lossy(),
+            &f3.to_string_lossy(),
+            &f4.to_string_lossy(),
+            "--public",
+        ])
+        .write_stdin("n\n")
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // BC-3.9.014 EC-3.9.014-5: N=4 prompt must use count summary with "(public)".
+    // Must match: "Upload 4 files to EJ-18 as customer-visible (public)? [y/N] "
+    assert!(
+        stderr.contains("Upload 4 files to EJ-18 as customer-visible (public)?"),
+        "BC-3.9.014 EC-3.9.014-5: N=4 prompt must show count and include '(public)'; got:\n{stderr}"
+    );
+
+    // Cancel → exit 0.
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "BC-3.9.014 EC-3.9.014-5: cancel 'n' → exit 0; got {:?}\nstdout: {stdout}\nstderr: {stderr}",
+        output.status.code()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// P1-006-c: test_bc_3_9_014_consumer3_combined_prompt_text
+//
+// BC-3.9.014 consumer 3 (--public + ≥1 match): prompt must start with
+// `"Upload to <KEY> as customer-visible (public) and replace existing attachment(s):"`
+// followed by each `"  <filename> (id: <AID>)"` entry, then `"Continue? [y/N] "`.
+//
+// RED evidence: current prompt starts with "Replace existing attachment(s) and upload as
+// customer-visible on EJ-19:" → fails the assertion below.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_bc_3_9_014_consumer3_combined_prompt_text() {
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("combo.txt");
+    std::fs::write(&file, b"hello").unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJ-19"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_get_response("EJ-19", "EJ")))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/EJ"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(jsm_project_response("EJ", "10099")))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(service_desk_list_response("42", "10099")),
+        )
+        .mount(&server)
+        .await;
+
+    // Platform attachment list: one existing "combo.txt" with id "77001".
+    // Uses the platform shape (top-level `id` + `self` + `content`) for correct deserialization.
+    // `.with_priority(1)` is REQUIRED: the plain issue GET mock (priority 5) would otherwise
+    // win because it was registered first (same-priority = FIFO in wiremock 0.6).
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJ-19"))
+        .and(wiremock::matchers::query_param("fields", "attachment"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(attachments_list_response(
+                "EJ-19",
+                vec![platform_attachment_object("77001", "combo.txt")],
+            )),
+        )
+        .with_priority(1)
+        .mount(&server)
+        .await;
+
+    // Cancel: send "n\n" to avoid needing servicedeskapi upload mocks.
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .env("JR_STDIN_IS_TTY", "1")
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            "EJ-19",
+            &file.to_string_lossy(),
+            "--public",
+            "--replace-existing",
+        ])
+        .write_stdin("n\n")
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // BC-3.9.014 consumer 3: prompt must begin with "Upload to KEY as customer-visible (public)
+    // and replace existing attachment(s):".
+    assert!(
+        stderr.contains("Upload to EJ-19 as customer-visible (public) and replace existing attachment(s):"),
+        "BC-3.9.014 consumer3: combined prompt must start with correct text; got:\n{stderr}"
+    );
+
+    // The attachment entry must appear in the prompt.
+    assert!(
+        stderr.contains("combo.txt (id: 77001)"),
+        "BC-3.9.014 consumer3: attachment entry 'combo.txt (id: 77001)' must appear in prompt; got:\n{stderr}"
+    );
+
+    // Must end with "Continue? [y/N]".
+    assert!(
+        stderr.contains("Continue? [y/N]"),
+        "BC-3.9.014 consumer3: prompt must end with 'Continue? [y/N]'; got:\n{stderr}"
+    );
+
+    // Cancel → exit 0.
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "BC-3.9.014 consumer3: cancel 'n' → exit 0; got {:?}\nstdout: {stdout}\nstderr: {stderr}",
+        output.status.code()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// P1-007: test_bc_3_9_014_noinput_replace_no_match_uses_consumer1_hint
+//
+// BC-3.9.014 P17-004: in non-interactive mode, consumer choice is symmetric
+// with the interactive path.  When --replace-existing has ZERO filename matches,
+// the hint MUST be consumer 1 ("Use --yes to confirm uploading N file(s) …"),
+// NOT consumer 3 ("Use --yes to confirm uploading as customer-visible (public)
+// and deleting …").
+//
+// RED evidence: current code uses consumer 3 hint whenever `replace_existing` is
+// set, regardless of actual matches.  The assertion below checks for the consumer 1
+// hint string → fails because the current message is the consumer 3 string.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_bc_3_9_014_noinput_replace_no_match_uses_consumer1_hint() {
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let tmp = TempDir::new().unwrap();
+    // File named "nomatch.txt"; the attachment list will contain no "nomatch.txt".
+    let file = tmp.path().join("nomatch.txt");
+    std::fs::write(&file, b"content").unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJ-20"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_get_response("EJ-20", "EJ")))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/EJ"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(jsm_project_response("EJ", "10099")))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(service_desk_list_response("42", "10099")),
+        )
+        .mount(&server)
+        .await;
+
+    // Attachment list: existing "other.txt" — no filename match with "nomatch.txt".
+    // .with_priority(1) so this mock wins over the plain EJ-20 GET mock (same priority = FIFO,
+    // plain GET registered first; priority 1 overrides that ordering).
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJ-20"))
+        .and(wiremock::matchers::query_param("fields", "attachment"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(attachments_list_response(
+                "EJ-20",
+                vec![platform_attachment_object("88001", "other.txt")],
+            )),
+        )
+        .with_priority(1)
+        .mount(&server)
+        .await;
+
+    // Non-interactive: --no-input flag + --replace-existing (no match).
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            "EJ-20",
+            &file.to_string_lossy(),
+            "--public",
+            "--replace-existing",
+            "--no-input",
+        ])
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // BC-3.9.014 P17-004: 0 filename matches → consumer 1 hint, NOT consumer 3 hint.
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "P1-007: 0 matches non-interactive → exit 64; got {:?}\nstdout: {stdout}\nstderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("Use --yes to confirm uploading 1 file(s) to EJ-20 as customer-visible, or run interactively."),
+        "P1-007: 0 matches → consumer 1 hint; got:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("deleting existing same-filename attachments"),
+        "P1-007: consumer 3 hint must NOT appear when there are 0 matches; got:\n{stderr}"
+    );
 }

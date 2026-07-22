@@ -65,6 +65,7 @@ construct a new `reqwest::multipart::Form`, and POST. `src/api/jira/attachments.
 
 **JSM visibility (`--public`/`--internal`, S-576-5):**
 When `--public` or `--internal` is set, the upload routes through the JSM two-step flow:
+- **P1-004 issue key lookup (first):** `GET /rest/api/3/issue/{key}?fields=project` → extracts `fields.project.key`. 404 → exit 64 "Issue {key} not found or not accessible." Implemented by `src/api/jira/issues.rs::JiraClient::get_issue_project_key`.
 - Step 1: `POST /rest/servicedeskapi/servicedesk/{sdId}/attachTemporaryFile` (multipart; returns `temporaryAttachmentId`). One call per file. `X-Atlassian-Token: no-check` mandatory.
 - Step 2: `POST /rest/servicedeskapi/request/{issueKey}/attachment` with `{"temporaryAttachmentIds":[…],"public":<bool>}`.
 
@@ -74,15 +75,15 @@ When `--public` or `--internal` is set, the upload routes through the JSM two-st
 
 **`--internal` on non-JSM (OQ-9):** silent no-op — falls through to the platform POST path (no error, no warning, no servicedeskapi calls).
 
-**EC-3.9.003-7:** non-JSM guard fires AFTER `get_or_fetch_project_meta` but BEFORE the visibility gate and BEFORE any dry-run preview.
+**EC-3.9.003-7:** non-JSM guard fires AFTER `get_or_fetch_project_meta` but BEFORE the visibility gate and BEFORE any dry-run preview. Issue key lookup (P1-004) fires BEFORE the non-JSM guard.
 
-**SEC-576-006 stale-ID self-heal:** on 404/403 from step-1, `invalidate_project_meta_cache` + re-fetch + retry ONCE only. Second failure propagates as-is.
+**SEC-576-006 stale-ID self-heal:** on 404/403 from step-1, `invalidate_project_meta_cache` + re-fetch + retry ONCE only. Second failure: 404 → exit 64 "Service desk for {key} not found after refresh." (P1-001); 401 → exit 2; others propagate as-is.
 
 **BC-3.9.006 step-2 error taxonomy:** 401 → exit 2; 403 → exit 1; other 4xx → exit 64; 5xx → exit 1. All append retry hint "Temporary attachment IDs may have expired. Try the upload again."
 
 **`--public --dry-run` (EC-3.9.020-7):** `wouldUpload` entries include `"visibility":"public"`; human mode prints `"Would upload N file(s) [public]."`. Non-JSM guard fires before dry-run (EC-3.9.020-8).
 
-Implemented: `src/cli/issue/attachments.rs::handle_attachment_upload` + `handle_attachment_upload_jsm`. API (platform): `src/api/jira/attachments.rs::upload_attachments`, `delete_attachment`. API (JSM): `src/api/jsm/attachments.rs::attach_temporary_file`, `post_request_attachment`. JSM meta: `src/api/jsm/servicedesks.rs::get_or_fetch_project_meta`.
+Implemented: `src/cli/issue/attachments.rs::handle_attachment_upload` + `handle_attachment_upload_jsm`. API (platform): `src/api/jira/attachments.rs::upload_attachments`, `delete_attachment`. API (JSM): `src/api/jsm/attachments.rs::attach_temporary_file`, `post_request_attachment`. JSM meta: `src/api/jsm/servicedesks.rs::get_or_fetch_project_meta`. Issue key lookup: `src/api/jira/issues.rs::JiraClient::get_issue_project_key`.
 
 ### `jr issue attachment delete`
 
