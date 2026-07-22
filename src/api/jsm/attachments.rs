@@ -338,20 +338,30 @@ pub async fn post_request_attachment(
         //   - NO top-level `id` — extract from `_links.jiraRest` URL tail
         //   - Content URL lives at `_links.content`, not top-level `content`
         //
-        // Parse defensively field-by-field so future schema drift never fails the
-        // command — the upload succeeded server-side; the echo MUST NOT fail it
-        // (BC-3.9.007 intent).
-        let bytes = response.bytes().await?;
-        let resp: serde_json::Value = serde_json::from_slice(&bytes)?;
-        let values = resp
-            .get("attachments")
-            .and_then(|a| a.get("values"))
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| {
-                JrError::Internal("step-2 response missing attachments.values".to_string())
-            })?;
-        let attachments: Vec<AttachmentObject> =
-            values.iter().map(curate_jsm_attachment_entry).collect();
+        // BC-3.9.007 (enforced): the upload succeeded server-side; the echo MUST
+        // NOT fail the command.  Parse best-effort: non-JSON body or missing
+        // attachments.values → return an empty Vec with a stderr warning.
+        let bytes = response.bytes().await.unwrap_or_default();
+        let attachments = match serde_json::from_slice::<serde_json::Value>(&bytes) {
+            Ok(resp) => match resp
+                .get("attachments")
+                .and_then(|a| a.get("values"))
+                .and_then(|v| v.as_array())
+            {
+                Some(values) => values.iter().map(curate_jsm_attachment_entry).collect(),
+                None => {
+                    eprintln!(
+                        "warning: step-2 response echo had unrecognized shape \
+                         (attachments.values missing); upload succeeded"
+                    );
+                    vec![]
+                }
+            },
+            Err(_) => {
+                eprintln!("warning: step-2 response echo was not valid JSON; upload succeeded");
+                vec![]
+            }
+        };
         return Ok(attachments);
     }
 

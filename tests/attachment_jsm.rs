@@ -4194,3 +4194,98 @@ async fn test_p5_003_consumer2_internal_replace_hostile_server_filename_sanitize
         "P5-003 consumer-2: raw U+202E must NOT appear in stderr; got: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// P6-001: BC-3.9.007 — step-2 201 echo with non-conformant body (bare array)
+// MUST NOT fail the upload. Schema drift on the 2xx echo → exit 0 + empty
+// JSON array on stdout + warning on stderr (best-effort semantics).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_bc_3_9_007_step2_bare_array_echo_exits_0_best_effort() {
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("p6.txt");
+    std::fs::write(&file, b"p6test").unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJ-P6A"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_get_response("EJ-P6A", "EJ")))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/EJ"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(jsm_project_response("EJ", "10099")))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(service_desk_list_response("42", "10099")),
+        )
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path(
+            "/rest/servicedeskapi/servicedesk/42/attachTemporaryFile",
+        ))
+        .and(header("X-Atlassian-Token", "no-check"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "temporaryAttachments": [{"temporaryAttachmentId": "tmp-p6-001", "fileName": "p6.txt"}]
+        })))
+        .mount(&server)
+        .await;
+
+    // Step-2 returns 201 with a bare JSON array — NOT the expected
+    // {"attachments":{"values":[...]}} envelope.  BC-3.9.007 mandates that
+    // schema drift on the 2xx echo must NEVER fail the upload command.
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request/EJ-P6A/attachment"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!([])))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            "EJ-P6A",
+            &file.to_string_lossy(),
+            "--public",
+            "--yes",
+            "--output",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // BC-3.9.007: upload succeeded server-side → MUST exit 0 even when echo is malformed.
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "P6-001 BC-3.9.007: step-2 bare-array echo → exit 0 (upload succeeded); got {:?}\nstdout: {stdout}\nstderr: {stderr}",
+        output.status.code()
+    );
+    // Best-effort: unrecognized echo shape → empty JSON array on stdout.
+    let arr: Vec<Value> = serde_json::from_str(&stdout)
+        .expect("P6-001 BC-3.9.007: stdout must be a JSON array even on malformed echo");
+    assert!(
+        arr.is_empty(),
+        "P6-001 BC-3.9.007: unrecognized echo → empty output array; got: {stdout}"
+    );
+    // Warning on stderr so the operator knows the echo was unexpected.
+    assert!(
+        stderr.contains("warning:"),
+        "P6-001 BC-3.9.007: warning must appear on stderr when echo shape unrecognized; got: {stderr}"
+    );
+}
