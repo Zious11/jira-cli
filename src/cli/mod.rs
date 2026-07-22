@@ -829,13 +829,15 @@ pub enum AttachmentSubcommand {
         #[arg(long, requires = "replace_existing")]
         dry_run: bool,
 
-        /// Mark the upload as public on the JSM customer portal (BC-3.9.003).
-        /// S-576-3 INTERIM: exits 64 until S-576-5 wires full JSM visibility.
+        /// Mark the upload as customer-visible (public) on the JSM portal (BC-3.9.003).
+        /// Routes through the servicedeskapi two-step flow. Requires a JSM project;
+        /// exits 64 on non-JSM issues. Conflicts with --internal.
         #[arg(long, conflicts_with = "internal")]
         public: bool,
 
         /// Mark the upload as internal (agent-only) on JSM (BC-3.9.004).
-        /// S-576-3 INTERIM: exits 64 until S-576-5 wires full JSM visibility.
+        /// Routes through the servicedeskapi two-step flow on JSM issues.
+        /// Silent no-op on non-JSM issues (falls through to platform upload). Conflicts with --public.
         #[arg(long, conflicts_with = "public")]
         internal: bool,
     },

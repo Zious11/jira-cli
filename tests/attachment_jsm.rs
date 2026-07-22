@@ -1540,8 +1540,7 @@ async fn test_bc_3_9_006_jsm_upload_error_taxonomy() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/EJSC-1"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(issue_get_response("EJSC-1", "EJSC")),
+            ResponseTemplate::new(200).set_body_json(issue_get_response("EJSC-1", "EJSC")),
         )
         .mount(&server)
         .await;
@@ -1578,8 +1577,7 @@ async fn test_bc_3_9_006_jsm_upload_error_taxonomy() {
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/EJSD-1"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(issue_get_response("EJSD-1", "EJSD")),
+            ResponseTemplate::new(200).set_body_json(issue_get_response("EJSD-1", "EJSD")),
         )
         .mount(&server)
         .await;
@@ -1876,7 +1874,11 @@ async fn test_bc_3_9_006_jsm_upload_error_taxonomy() {
             "service_desk_id": "SD8-OLD",
             "fetched_at": "2099-01-01T00:00:00Z"
         });
-        std::fs::write(&cache_path, serde_json::to_string_pretty(&existing).unwrap()).unwrap();
+        std::fs::write(
+            &cache_path,
+            serde_json::to_string_pretty(&existing).unwrap(),
+        )
+        .unwrap();
 
         let out = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
             .args([
@@ -1927,7 +1929,11 @@ async fn test_bc_3_9_006_jsm_upload_error_taxonomy() {
             "service_desk_id": "SD9-OLD",
             "fetched_at": "2099-01-01T00:00:00Z"
         });
-        std::fs::write(&cache_path, serde_json::to_string_pretty(&existing).unwrap()).unwrap();
+        std::fs::write(
+            &cache_path,
+            serde_json::to_string_pretty(&existing).unwrap(),
+        )
+        .unwrap();
 
         let out = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
             .args([
@@ -1952,6 +1958,121 @@ async fn test_bc_3_9_006_jsm_upload_error_taxonomy() {
         assert!(
             stderr.contains("Not authenticated") || stderr.contains("jr auth login"),
             "taxonomy sub-14: post-retry 401 → auth hint in stderr; got: {stderr}"
+        );
+    }
+
+    // --- Sub-assertion 15: post-retry 5xx after stale-heal → exit 1 (P4-005) ---
+    //
+    // Stale-heal fires (step-1 returns 404), cache invalidated, fresh sdId resolved,
+    // retried step-1 returns 500 → propagates as JrError::ApiError → exit 1.
+    //
+    // Uses EJSE (pid "70004") with its own stale SD10-OLD → 404 → stale-heal →
+    // SD10-500 → 500. Scoped priority-1 service desk list override adds EJSE's entry
+    // for the duration of this sub-assertion.
+    {
+        // EJSE issue meta mock (permanent)
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/issue/EJSE-1"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(issue_get_response("EJSE-1", "EJSE")),
+            )
+            .mount(&server)
+            .await;
+        // EJSE project meta mock (permanent; serves initial + post-invalidation re-fetch)
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/project/EJSE"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "70004",
+                "key": "EJSE",
+                "name": "JSM SE",
+                "projectTypeKey": "service_desk",
+                "simplified": false
+            })))
+            .mount(&server)
+            .await;
+        // Step-1 on stale sd "SD10-OLD" → 404 (triggers stale-heal for sub-15)
+        Mock::given(method("POST"))
+            .and(path(
+                "/rest/servicedeskapi/servicedesk/SD10-OLD/attachTemporaryFile",
+            ))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        // Step-1 retry on fresh sd "SD10-500" → 500 (post-retry 5xx path)
+        Mock::given(method("POST"))
+            .and(path(
+                "/rest/servicedeskapi/servicedesk/SD10-500/attachTemporaryFile",
+            ))
+            .and(header("X-Atlassian-Token", "no-check"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        // Scoped service desk list override: adds EJSE entry (pid "70004" → "SD10-500").
+        // Priority 1 overrides the permanent mock (default priority 5).
+        let _sd_list_guard = Mock::given(method("GET"))
+            .and(path("/rest/servicedeskapi/servicedesk"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "size": 5,
+                "start": 0,
+                "limit": 50,
+                "isLastPage": true,
+                "values": [
+                    {"id": "42",       "projectId": "10099", "projectName": "EJ JSM"},
+                    {"id": "SD7-NEW",  "projectId": "70001", "projectName": "JSM SA7"},
+                    {"id": "SD7-403",  "projectId": "70002", "projectName": "JSM SC (403)"},
+                    {"id": "SD7-401",  "projectId": "70003", "projectName": "JSM SD (401)"},
+                    {"id": "SD10-500", "projectId": "70004", "projectName": "JSM SE (500)"}
+                ]
+            })))
+            .with_priority(1)
+            .mount_as_scoped(&server)
+            .await;
+
+        // Pre-populate cache with stale sd "SD10-OLD" for project "EJSE".
+        let profile_dir = cache.path().join("v1").join("default");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        let cache_path = profile_dir.join("project_meta.json");
+        let mut existing: serde_json::Value = if cache_path.exists() {
+            std::fs::read_to_string(&cache_path)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_else(|| serde_json::json!({}))
+        } else {
+            serde_json::json!({})
+        };
+        existing["EJSE"] = serde_json::json!({
+            "project_type": "service_desk",
+            "simplified": false,
+            "project_id": "70004",
+            "service_desk_id": "SD10-OLD",
+            "fetched_at": "2099-01-01T00:00:00Z"
+        });
+        std::fs::write(
+            &cache_path,
+            serde_json::to_string_pretty(&existing).unwrap(),
+        )
+        .unwrap();
+
+        let out = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+            .args([
+                "issue",
+                "attachment",
+                "upload",
+                "EJSE-1",
+                &file.to_string_lossy(),
+                "--public",
+                "--yes",
+            ])
+            .timeout(std::time::Duration::from_secs(10))
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "taxonomy sub-15: post-retry 5xx after stale-heal → exit 1; got {:?}; stderr: {stderr}",
+            out.status.code()
         );
     }
 }
@@ -3073,23 +3194,18 @@ async fn test_cwe116_jsm_public_gate_sanitizes_hostile_filename() {
     // JSM project mocks for EJ-21.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/EJ-21"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(issue_get_response("EJ-21", "EJ")),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_get_response("EJ-21", "EJ")))
         .mount(&server)
         .await;
     Mock::given(method("GET"))
         .and(path("/rest/api/3/project/EJ"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(jsm_project_response("EJ", "10099")),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(jsm_project_response("EJ", "10099")))
         .mount(&server)
         .await;
     Mock::given(method("GET"))
         .and(path("/rest/servicedeskapi/servicedesk"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(service_desk_list_response("42", "10099")),
+            ResponseTemplate::new(200).set_body_json(service_desk_list_response("42", "10099")),
         )
         .mount(&server)
         .await;
@@ -3154,4 +3270,466 @@ async fn test_cwe116_jsm_public_gate_sanitizes_hostile_filename() {
         !stderr.contains('\u{202E}'),
         "P3-001 CWE-116: raw U+202E must NOT appear in stderr; got: {stderr}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// P4-001 Test A: test_jsm_internal_replace_existing_issues_delete_then_two_step
+//
+// BC-3.9.004 + BC-3.9.017 consumer-2: `--internal --replace-existing --yes` on JSM
+// must DELETE matching attachments BEFORE the two-step upload (VP-576-003 ordering).
+//
+// RED evidence: replace_existing fetch+DELETE loop lives inside `if public { }` in
+// `handle_attachment_upload_jsm`; `--internal` never enters that branch → DELETE
+// mock .expect(1) is not satisfied → test fails on drop → RED.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_jsm_internal_replace_existing_issues_delete_then_two_step() {
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("upload.txt");
+    std::fs::write(&file, b"data").unwrap();
+
+    // Issue GET: EJ16-1 → project key EJ16 (dedicated key to avoid FIFO shadowing)
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJ16-1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(issue_get_response("EJ16-1", "EJ16")),
+        )
+        .mount(&server)
+        .await;
+
+    // Project GET: EJ16 → JSM, project_id "90001"
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/EJ16"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(jsm_project_response("EJ16", "90001")),
+        )
+        .mount(&server)
+        .await;
+
+    // Service desk list: entry with projectId "90001" → sdId "60003"
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "size": 1,
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "values": [{"id": "60003", "projectId": "90001", "projectName": "EJ16 Help Desk"}]
+        })))
+        .mount(&server)
+        .await;
+
+    // Attachment list: existing "upload.txt" → matches upload filename
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJ16-1"))
+        .and(wiremock::matchers::query_param("fields", "attachment"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(attachments_list_response(
+                "EJ16-1",
+                vec![platform_attachment_object("AID-EJ16-01", "upload.txt")],
+            )),
+        )
+        .with_priority(1)
+        .mount(&server)
+        .await;
+
+    // DELETE mock: VP-576-003 ordering — DELETE before POST
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/attachment/AID-EJ16-01"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Step 1: attachTemporaryFile → sdId 60003
+    Mock::given(method("POST"))
+        .and(path(
+            "/rest/servicedeskapi/servicedesk/60003/attachTemporaryFile",
+        ))
+        .and(header("X-Atlassian-Token", "no-check"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "temporaryAttachments": [{"temporaryAttachmentId": "tmp-ej16-01", "fileName": "upload.txt"}]
+        })))
+        .mount(&server)
+        .await;
+
+    // Step 2: post_request_attachment with public:false (--internal)
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request/EJ16-1/attachment"))
+        .and(body_partial_json(serde_json::json!({"public": false})))
+        .respond_with(
+            ResponseTemplate::new(201).set_body_json(attachment_create_result_dto(vec![
+                attachment_object("AID-EJ16-02", "upload.txt"),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            "EJ16-1",
+            &file.to_string_lossy(),
+            "--internal",
+            "--replace-existing",
+            "--yes",
+        ])
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "P4-001 Test A: --internal --replace-existing --yes → exit 0; got {:?}\nstdout: {stdout}\nstderr: {stderr}",
+        output.status.code()
+    );
+    // DELETE mock .expect(1) verified on MockServer drop
+}
+
+// ---------------------------------------------------------------------------
+// P4-001 Test B: test_jsm_internal_replace_existing_noinput_exits_64_with_hint
+//
+// BC-3.9.017 consumer-2 non-interactive path: `--internal --replace-existing --no-input`
+// (without --yes) exits 64 with canonical hint.
+//
+// RED evidence: `--internal` path never enters `if public { }` → no non-interactive
+// exit fires → falls through to step-1 → gate not checked → wrong exit code → RED.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_jsm_internal_replace_existing_noinput_exits_64_with_hint() {
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("upload.txt");
+    std::fs::write(&file, b"data").unwrap();
+
+    // Same project/meta/list mocks as Test A (EJ16, permanent)
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJ16-1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(issue_get_response("EJ16-1", "EJ16")),
+        )
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/EJ16"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(jsm_project_response("EJ16", "90001")),
+        )
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "size": 1,
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "values": [{"id": "60003", "projectId": "90001", "projectName": "EJ16 Help Desk"}]
+        })))
+        .mount(&server)
+        .await;
+
+    // Attachment list: "upload.txt" exists → ≥1 match triggers consumer-2 gate
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJ16-1"))
+        .and(wiremock::matchers::query_param("fields", "attachment"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(attachments_list_response(
+                "EJ16-1",
+                vec![platform_attachment_object("AID-EJ16-01", "upload.txt")],
+            )),
+        )
+        .with_priority(1)
+        .mount(&server)
+        .await;
+
+    // No DELETE or step-1/step-2 mocks: non-interactive exit fires before those
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            "EJ16-1",
+            &file.to_string_lossy(),
+            "--internal",
+            "--replace-existing",
+            "--no-input",
+        ])
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "P4-001 Test B: --internal --replace-existing --no-input → exit 64; got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains("Use --yes to confirm deletion of existing same-filename attachments."),
+        "P4-001 Test B: consumer-2 hint must appear in stderr; got: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// P4-001 Test C: test_jsm_internal_replace_existing_dry_run_shows_woulddelete
+//
+// `--internal --replace-existing --dry-run --output json` on JSM must show
+// wouldDelete entries (dry_run_upload already handles --internal; verifying).
+//
+// Expected GREEN immediately (dry_run_upload handles replace_existing independently
+// of --public/--internal). Added for explicit coverage of BC-3.9.017 dry-run path.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_jsm_internal_replace_existing_dry_run_shows_woulddelete() {
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("upload.txt");
+    std::fs::write(&file, b"data").unwrap();
+
+    // Same EJ16 mocks as Test A
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJ16-1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(issue_get_response("EJ16-1", "EJ16")),
+        )
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/EJ16"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(jsm_project_response("EJ16", "90001")),
+        )
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "size": 1,
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "values": [{"id": "60003", "projectId": "90001", "projectName": "EJ16 Help Desk"}]
+        })))
+        .mount(&server)
+        .await;
+
+    // Attachment list: "upload.txt" → populates wouldDelete
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJ16-1"))
+        .and(wiremock::matchers::query_param("fields", "attachment"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(attachments_list_response(
+                "EJ16-1",
+                vec![platform_attachment_object("AID-EJ16-01", "upload.txt")],
+            )),
+        )
+        .with_priority(1)
+        .mount(&server)
+        .await;
+
+    // No DELETE or step-1/step-2 mocks: dry-run suppresses those
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            "EJ16-1",
+            &file.to_string_lossy(),
+            "--internal",
+            "--replace-existing",
+            "--dry-run",
+            "--output",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "P4-001 Test C: --internal --replace-existing --dry-run → exit 0; got {:?}\nstdout: {stdout}\nstderr: {stderr}",
+        output.status.code()
+    );
+
+    let preview: Value =
+        serde_json::from_str(&stdout).expect("P4-001 Test C: dry-run JSON must be valid object");
+    let would_delete = preview
+        .get("wouldDelete")
+        .and_then(Value::as_array)
+        .expect("P4-001 Test C: wouldDelete must be array");
+    assert!(
+        !would_delete.is_empty(),
+        "P4-001 Test C: wouldDelete must be non-empty"
+    );
+    assert_eq!(
+        would_delete[0].get("filename").and_then(Value::as_str),
+        Some("upload.txt"),
+        "P4-001 Test C: wouldDelete[0].filename must be 'upload.txt'; got: {:?}",
+        would_delete[0]
+    );
+    assert_eq!(
+        would_delete[0].get("id").and_then(Value::as_str),
+        Some("AID-EJ16-01"),
+        "P4-001 Test C: wouldDelete[0].id must be 'AID-EJ16-01'; got: {:?}",
+        would_delete[0]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// P4-004: test_ec_3_9_003_3_multi_file_jsm_upload_two_step_1_posts
+//
+// EC-3.9.003-3: for N files, step-1 is called N times (once per file), each
+// returning a distinct tmpId. Step-2 is called ONCE with all N tmpIds.
+//
+// Uses dedicated project key EJ17 (sdId 60004) to avoid FIFO shadowing.
+// Wiremock FIFO ordering: step-1 mock A serves the first POST, mock B serves the second.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_ec_3_9_003_3_multi_file_jsm_upload_two_step_1_posts() {
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let tmp = TempDir::new().unwrap();
+    let file1 = tmp.path().join("file1.txt");
+    let file2 = tmp.path().join("file2.txt");
+    std::fs::write(&file1, b"content1").unwrap();
+    std::fs::write(&file2, b"content2").unwrap();
+
+    // Issue GET: EJ17-1 → project EJ17
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJ17-1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(issue_get_response("EJ17-1", "EJ17")),
+        )
+        .mount(&server)
+        .await;
+
+    // Project GET: EJ17 → JSM, project_id "90002"
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/EJ17"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(jsm_project_response("EJ17", "90002")),
+        )
+        .mount(&server)
+        .await;
+
+    // Service desk list: entry with projectId "90002" → sdId "60004"
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "size": 1,
+            "start": 0,
+            "limit": 50,
+            "isLastPage": true,
+            "values": [{"id": "60004", "projectId": "90002", "projectName": "EJ17 Help Desk"}]
+        })))
+        .mount(&server)
+        .await;
+
+    // Step-1: called ONCE PER FILE (EC-3.9.003-3 pin).
+    // wiremock FIFO: a single mock with .expect(2) verifies exactly 2 step-1 calls.
+    // Using a fixed tmpId ("tmp-multi") — the important assertion is call count,
+    // not distinct IDs per call.
+    Mock::given(method("POST"))
+        .and(path(
+            "/rest/servicedeskapi/servicedesk/60004/attachTemporaryFile",
+        ))
+        .and(header("X-Atlassian-Token", "no-check"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "temporaryAttachments": [{"temporaryAttachmentId": "tmp-multi", "fileName": "file.txt"}]
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    // Step-2: called EXACTLY ONCE with public:true (EC-3.9.003-3 pin).
+    // The body contains temporaryAttachmentIds with 2 entries (one per file).
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request/EJ17-1/attachment"))
+        .and(body_partial_json(serde_json::json!({"public": true})))
+        .respond_with(
+            ResponseTemplate::new(201).set_body_json(attachment_create_result_dto(vec![
+                attachment_object("AID-EJ17-01", "file1.txt"),
+                attachment_object("AID-EJ17-02", "file2.txt"),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            "EJ17-1",
+            &file1.to_string_lossy(),
+            &file2.to_string_lossy(),
+            "--public",
+            "--yes",
+        ])
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "P4-004 EC-3.9.003-3: multi-file two-step → exit 0; got {:?}\nstdout: {stdout}\nstderr: {stderr}",
+        output.status.code()
+    );
+
+    // Verify step-2 body contains 2 entries in temporaryAttachmentIds (one per file).
+    let received = server.received_requests().await.unwrap();
+    let step2_req = received
+        .iter()
+        .find(|r| {
+            r.url.path().ends_with("/attachment")
+                && r.method == wiremock::http::Method::POST
+                && r.url.path().contains("EJ17-1")
+        })
+        .expect("P4-004: step-2 request must have been received");
+    let body: Value =
+        serde_json::from_slice(&step2_req.body).expect("step-2 body must be valid JSON");
+    let tmp_ids = body
+        .get("temporaryAttachmentIds")
+        .and_then(Value::as_array)
+        .expect("P4-004: step-2 body must have temporaryAttachmentIds array");
+    assert_eq!(
+        tmp_ids.len(),
+        2,
+        "P4-004 EC-3.9.003-3: step-2 must contain 2 tmpIds (one per file); got {:?}",
+        tmp_ids
+    );
+    // step-1 .expect(2) and step-2 .expect(1) verified on MockServer drop
 }

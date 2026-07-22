@@ -1569,31 +1569,33 @@ async fn handle_attachment_upload_jsm(
         .await;
     }
 
-    // --public visibility gate (--internal has no gate).
-    if public {
-        // BC-3.9.014 (P1-007): fetch attachment list FIRST so both the non-interactive
-        // hint and the interactive gate use actual filename-match data.
-        // "No servicedeskapi calls are issued; no DELETEs are issued" in non-interactive
-        // mode (BC-3.9.014) — this platform list GET is explicitly permitted.
-        // VP-576-005: ONE combined prompt when --replace-existing has ≥1 filename match.
-        let to_delete: Vec<AttachmentObject> = if replace_existing {
-            let existing = client.list_attachments(key).await?;
-            let upload_names: std::collections::HashSet<String> = file_paths
-                .iter()
-                .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-                .collect();
-            existing
-                .into_iter()
-                .filter(|a| upload_names.contains(&a.filename))
-                .collect()
-        } else {
-            vec![]
-        };
-        let has_replace_matches = !to_delete.is_empty();
+    // HOISTED: attachment-list fetch runs for BOTH --public and --internal when
+    // replace_existing=true (P4-001: previously inside `if public { }`, silently
+    // skipping DELETEs on the --internal path).
+    //
+    // BC-3.9.014 (P1-007): fetch FIRST so both non-interactive hint and interactive
+    // gate use actual filename-match data.
+    // VP-576-005: ONE combined prompt when --public + --replace-existing + ≥1 match.
+    let to_delete: Vec<AttachmentObject> = if replace_existing {
+        let existing = client.list_attachments(key).await?;
+        let upload_names: std::collections::HashSet<String> = file_paths
+            .iter()
+            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .collect();
+        existing
+            .into_iter()
+            .filter(|a| upload_names.contains(&a.filename))
+            .collect()
+    } else {
+        vec![]
+    };
+    let has_replace_matches = !to_delete.is_empty();
 
+    if public {
+        // --public visibility gate: consumer-1 (public-only) or consumer-3 (combined).
         // Non-interactive path: exit 64 with hint; no gate presented; no DELETEs issued.
         // Consumer is determined by actual match count (P1-007 fix):
-        // consumer 3 only when replace_existing AND ≥1 match; consumer 1 otherwise.
+        // consumer-3 only when replace_existing AND ≥1 match; consumer-1 otherwise.
         if no_input && !yes {
             return if replace_existing && has_replace_matches {
                 Err(JrError::UserError(
@@ -1633,19 +1635,46 @@ async fn handle_attachment_upload_jsm(
                 return Ok(());
             }
         }
+    } else if replace_existing && has_replace_matches {
+        // --internal + --replace-existing + ≥1 filename match: consumer-2 gate
+        // (BC-3.9.017). No gate when zero matches.
+        if no_input && !yes {
+            return Err(JrError::UserError(
+                "Use --yes to confirm deletion of existing same-filename attachments.".to_string(),
+            )
+            .into());
+        }
+        if !yes {
+            let refs: Vec<&AttachmentObject> = to_delete.iter().collect();
+            let proceed = attachment_replace_confirmation_gate(key, &refs, false)?;
+            if !proceed {
+                eprintln!("Upload cancelled.");
+                if let OutputFormat::Json = output_format {
+                    println!(
+                        "{}",
+                        output::render_json(&serde_json::json!({
+                            "cancelled": true,
+                            "uploaded": false
+                        }))?
+                    );
+                }
+                return Ok(());
+            }
+        }
+    }
 
-        // VP-576-003: all DELETEs complete before the first POST.
-        if replace_existing && has_replace_matches {
-            for att in &to_delete {
-                match client.delete_attachment(&att.id).await {
-                    Ok(()) => {}
-                    Err(e) => {
-                        let is_benign = e.downcast_ref::<JrError>().is_some_and(|jr| {
-                            matches!(jr, JrError::UserError(msg) if msg.contains("not found or already deleted"))
-                        });
-                        if !is_benign {
-                            return Err(e);
-                        }
+    // VP-576-003: all DELETEs complete before the first POST.
+    // Now covers BOTH --public and --internal when has_replace_matches=true (P4-001).
+    if has_replace_matches {
+        for att in &to_delete {
+            match client.delete_attachment(&att.id).await {
+                Ok(()) => {}
+                Err(e) => {
+                    let is_benign = e.downcast_ref::<JrError>().is_some_and(|jr| {
+                        matches!(jr, JrError::UserError(msg) if msg.contains("not found or already deleted"))
+                    });
+                    if !is_benign {
+                        return Err(e);
                     }
                 }
             }
