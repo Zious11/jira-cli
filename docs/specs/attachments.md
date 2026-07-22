@@ -1,4 +1,4 @@
-# Attachment Commands Spec (S-576-1..4)
+# Attachment Commands Spec (S-576-1..5)
 
 `jr issue attachment` — list, download, upload, and delete attachments on Jira issues.
 
@@ -36,9 +36,8 @@ Uploads one or more files via `POST /rest/api/3/issue/{key}/attachments` (multip
 `X-Atlassian-Token: no-check` is MANDATORY on every request (SEC-576-003).
 
 **Pre-checks (before any HTTP):**
-1. `--public`/`--internal` rejected at exit 64 with interim message (AC-017; removed at S-576-5).
-2. Bare `-` as a file path rejected at exit 64 (stdin not supported for upload; EC-3.9.001-6).
-3. File existence: every path must resolve to a regular file (exit 64 on missing/unreadable).
+1. Bare `-` as a file path rejected at exit 64 (stdin not supported for upload; EC-3.9.001-6).
+2. File existence: every path must resolve to a regular file (exit 64 on missing/unreadable).
 
 **`--replace-existing`:** fetches existing attachment list, finds all same-filename matches
 (case-sensitive exact match; JRACLOUD-96384 allows multiple same-name attachments to coexist).
@@ -64,7 +63,26 @@ construct a new `reqwest::multipart::Form`, and POST. `src/api/jira/attachments.
 **Success JSON:** curated array identical to `attachment list` shape (VP-576-004).
 **Table:** 4-column (Filename / Size / ID / Created).
 
-Implemented: `src/cli/issue/attachments.rs::handle_attachment_upload`. API: `src/api/jira/attachments.rs::upload_attachments`, `delete_attachment`.
+**JSM visibility (`--public`/`--internal`, S-576-5):**
+When `--public` or `--internal` is set, the upload routes through the JSM two-step flow:
+- Step 1: `POST /rest/servicedeskapi/servicedesk/{sdId}/attachTemporaryFile` (multipart; returns `temporaryAttachmentId`). One call per file. `X-Atlassian-Token: no-check` mandatory.
+- Step 2: `POST /rest/servicedeskapi/request/{issueKey}/attachment` with `{"temporaryAttachmentIds":[…],"public":<bool>}`.
+
+**`--public` gates:** Non-interactive (`--no-input`/non-TTY, no `--yes`): exit 64 with "Use --yes to confirm uploading …" message. `--public + --replace-existing` → combined message. Interactive: `eprint!` + read_line single prompt (VP-576-005 — ONE prompt, not two). Cancel → exit 0; EOF → exit 130.
+
+**`--public` on non-JSM (BC-3.9.005):** exit 64 "–-public is only supported on Jira Service Management (JSM) issues."
+
+**`--internal` on non-JSM (OQ-9):** silent no-op — falls through to the platform POST path (no error, no warning, no servicedeskapi calls).
+
+**EC-3.9.003-7:** non-JSM guard fires AFTER `get_or_fetch_project_meta` but BEFORE the visibility gate and BEFORE any dry-run preview.
+
+**SEC-576-006 stale-ID self-heal:** on 404/403 from step-1, `invalidate_project_meta_cache` + re-fetch + retry ONCE only. Second failure propagates as-is.
+
+**BC-3.9.006 step-2 error taxonomy:** 401 → exit 2; 403 → exit 1; other 4xx → exit 64; 5xx → exit 1. All append retry hint "Temporary attachment IDs may have expired. Try the upload again."
+
+**`--public --dry-run` (EC-3.9.020-7):** `wouldUpload` entries include `"visibility":"public"`; human mode prints `"Would upload N file(s) [public]."`. Non-JSM guard fires before dry-run (EC-3.9.020-8).
+
+Implemented: `src/cli/issue/attachments.rs::handle_attachment_upload` + `handle_attachment_upload_jsm`. API (platform): `src/api/jira/attachments.rs::upload_attachments`, `delete_attachment`. API (JSM): `src/api/jsm/attachments.rs::attach_temporary_file`, `post_request_attachment`. JSM meta: `src/api/jsm/servicedesks.rs::get_or_fetch_project_meta`.
 
 ### `jr issue attachment delete`
 
@@ -108,6 +126,6 @@ Implemented: `src/cli/issue/attachments.rs::handle_attachment_delete`. API:
 ## See Also
 
 - `docs/specs/json-output-shapes.md` — canonical JSON shapes for all four subcommands
-- `CLAUDE.md` — Gotchas: `sanitize_attachment_filename`, redirect behavior, upload multipart retry, SEC-576-004, JRACLOUD-96384, `allow_hyphen_values` variadic caveat, DEC-168 targeted-vs-bulk 404 asymmetry
+- `CLAUDE.md` — Gotchas: `sanitize_attachment_filename`, redirect behavior, upload multipart retry, SEC-576-004, JRACLOUD-96384, `allow_hyphen_values` variadic caveat, DEC-168 targeted-vs-bulk 404 asymmetry, JSM two-step upload (SEC-576-006, BC-3.9.006)
 - `.factory/specs/prd/bc-2-issue-read.md` — list/download behavioral contracts
 - `.factory/specs/prd/bc-3-issue-write.md` — upload/delete behavioral contracts

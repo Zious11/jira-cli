@@ -38,6 +38,13 @@ examine_globs = [
     # handler file → add to mutants.toml at creation (P22-001).
     "src/cli/issue/attachments.rs",
     "src/api/jira/attachments.rs",
+    # S-576-5 — JSM two-step upload (attach_temporary_file, post_request_attachment).
+    # Security-relevant: SEC-576-005 (X-Atlassian-Token), SEC-576-006 (stale-ID self-heal),
+    # BC-3.9.006 (step-2 error taxonomy), VP-576-003 (DELETE-before-POST ordering invariant).
+    "src/api/jsm/attachments.rs",
+    # S-576-5 — JSM project meta resolution (get_or_fetch_project_meta, resolve_service_desk_id).
+    # HIGH-value: TTL logic, project_id string equality match, service_desk_id resolution chain.
+    "src/api/jsm/servicedesks.rs",
 ]
 
 # The absolute per-mutant test ceiling is set via `--timeout 240` on the CLI

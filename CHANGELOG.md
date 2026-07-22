@@ -4,6 +4,25 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **`jr issue attachment upload --public/--internal` — JSM visibility + servicedeskapi two-step (S-576-5, #576):**
+  `--public` and `--internal` now route through the JSM two-step upload flow instead of exiting 64.
+  Step 1: `POST /rest/servicedeskapi/servicedesk/{sdId}/attachTemporaryFile` (multipart; one call per file;
+  `X-Atlassian-Token: no-check` mandatory). Step 2: `POST /rest/servicedeskapi/request/{issueKey}/attachment`
+  with `{"temporaryAttachmentIds":[…],"public":<bool>}`. Customer-visible vs internal distinction is controlled
+  by the `public` boolean in the step-2 body. JSM project determination: `get_or_fetch_project_meta` resolves
+  `service_desk_id` via `ServiceDesk.project_id` string equality (BC-X.8.010). Non-JSM guard: `--public` on a
+  non-JSM issue exits 64 (BC-3.9.005); `--internal` on a non-JSM issue is a silent no-op that falls through to
+  the platform path (OQ-9). Guard fires AFTER project meta fetch but BEFORE the visibility gate and dry-run
+  preview (EC-3.9.003-7). SEC-576-006 stale-ID self-heal: on step-1 404/403, invalidate the cache entry,
+  re-resolve sdId, and retry once. Visibility gate: non-interactive (`--no-input`/non-TTY, no `--yes`) exits
+  64; `--public + --replace-existing` uses the combined message. Interactive: single `eprint!`+read_line prompt
+  (VP-576-005). Cancel → exit 0 + `{"cancelled":true,"uploaded":false}` JSON; EOF → exit 130.
+  Step-2 error taxonomy (BC-3.9.006): 401 → exit 2; 403 → exit 1; other 4xx → exit 64; 5xx → exit 1;
+  all append retry hint. `--dry-run --public` adds `"visibility":"public"` to `wouldUpload` entries (EC-3.9.020-7).
+  feat(issue): attachment upload --public/--internal JSM visibility + servicedeskapi two-step (#576)
+
 ## [0.6.0-dev.10] - 2026-07-15
 
 ### Breaking Changes
