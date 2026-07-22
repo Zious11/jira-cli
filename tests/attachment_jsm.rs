@@ -484,14 +484,48 @@ async fn test_vp_576_005_combined_gate_single_prompt_fires_once() {
         .await;
 
     // Existing attachment with same name for --replace-existing.
+    // .with_priority(1) is REQUIRED: the plain issue-GET mock (priority 5, registered first,
+    // same path) would otherwise win under FIFO ordering, returning issue_get_response with
+    // no `attachment` field → empty list → consumer-1 fires instead of consumer-3 (false-GREEN).
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/EJ-1"))
         .and(wiremock::matchers::query_param("fields", "attachment"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(attachments_list_response(
                 "EJ-1",
-                vec![attachment_object("99001", "attach.txt")],
+                vec![platform_attachment_object("99001", "attach.txt")],
             )),
+        )
+        .with_priority(1)
+        .mount(&server)
+        .await;
+
+    // DELETE mock for the replace-existing path (VP-576-003 ordering: DELETE before POST).
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/attachment/99001"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Step-1: attachTemporaryFile.
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/servicedesk/42/attachTemporaryFile"))
+        .and(header("X-Atlassian-Token", "no-check"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "temporaryAttachments": [{"temporaryAttachmentId": "tmp-vp005", "fileName": "attach.txt"}]
+        })))
+        .mount(&server)
+        .await;
+
+    // Step-2: post_request_attachment with public:true.
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request/EJ-1/attachment"))
+        .and(body_partial_json(serde_json::json!({"public": true})))
+        .respond_with(
+            ResponseTemplate::new(201).set_body_json(attachment_create_result_dto(vec![
+                attachment_object("20099", "attach.txt"),
+            ])),
         )
         .mount(&server)
         .await;
@@ -515,6 +549,13 @@ async fn test_vp_576_005_combined_gate_single_prompt_fires_once() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
 
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "VP-576-005: combined gate confirm 'y' must exit 0; got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+
     // VP-576-005: exactly ONE confirmation prompt fires for the combined gate.
     // The consumer-1 gate prompt ends with "? [y/N] "; consumer-3 also ends with
     // "Continue? [y/N] ".  Both contain "[y/N]" exactly once — ensuring neither gate
@@ -524,6 +565,18 @@ async fn test_vp_576_005_combined_gate_single_prompt_fires_once() {
         yn_count == 1,
         "VP-576-005: combined gate must fire exactly once (not zero or two prompts); \
          '[y/N]' appeared {yn_count} times in stderr:\n{stderr}"
+    );
+
+    // Consumer-3 combined-gate text must appear.
+    assert!(
+        stderr.contains("and replace existing attachment(s):"),
+        "VP-576-005: consumer-3 combined gate text must appear in stderr; got: {stderr}"
+    );
+
+    // Consumer-1 text must NOT appear (consumer-3 fires instead).
+    assert!(
+        !stderr.contains("as customer-visible (public)?"),
+        "VP-576-005: consumer-1 text must NOT appear when consumer-3 fires; got: {stderr}"
     );
 }
 
