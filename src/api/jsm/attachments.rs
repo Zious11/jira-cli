@@ -137,8 +137,17 @@ pub async fn attach_temporary_file(
         }
 
         if !status.is_success() {
-            let status_u16 = status.as_u16();
             let body_bytes = response.bytes().await.unwrap_or_default();
+            // BC-3.9.012: 401 on first occurrence maps to NotAuthenticated (exit 2),
+            // consistent with step-2 401 and the platform upload path. No stale-heal
+            // retry is applied — stale-heal fires only on 404/403 (checked above).
+            if status == StatusCode::UNAUTHORIZED {
+                return Err(JrError::NotAuthenticated {
+                    hint: "Run `jr auth login` to re-authenticate.".to_string(),
+                }
+                .into());
+            }
+            let status_u16 = status.as_u16();
             return Err(JrError::ApiError {
                 status: status_u16,
                 message: String::from_utf8_lossy(&body_bytes).to_string(),

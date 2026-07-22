@@ -1661,6 +1661,55 @@ async fn test_bc_3_9_006_jsm_upload_error_taxonomy() {
             out.status.code()
         );
     }
+
+    // --- Sub-assertion 12: step-1 first-occurrence 401 → exit 2 + auth hint (P2-003) ---
+    //
+    // BC-3.9.012: all codes other than 403/404 map on FIRST occurrence (no stale-heal).
+    // 401 → `JrError::NotAuthenticated` → exit 2 + "Not authenticated" + "jr auth login".
+    // This is symmetric with the step-2 401 path (sub-assertion 8) and the platform
+    // upload 401 path.
+    //
+    // RED evidence: before P2-003 fix, `attach_temporary_file` falls into the generic
+    // `!is_success()` arm → `JrError::ApiError { status: 401 }` → exit 1 (not 2).
+    {
+        // Scoped step-1 mock returning 401 — priority 1 overrides the permanent 200 mock.
+        let _step1_401_guard = Mock::given(method("POST"))
+            .and(path(
+                "/rest/servicedeskapi/servicedesk/42/attachTemporaryFile",
+            ))
+            .and(header("X-Atlassian-Token", "no-check"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                "errorMessages": ["User not authenticated."]
+            })))
+            .with_priority(1) // overrides permanent 200 mock (same path + headers)
+            .mount_as_scoped(&server)
+            .await;
+
+        let out = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+            .args([
+                "issue",
+                "attachment",
+                "upload",
+                "EJ-10",
+                &file.to_string_lossy(),
+                "--public",
+                "--yes",
+            ])
+            .timeout(std::time::Duration::from_secs(10))
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "taxonomy sub-12: step-1 first-occurrence 401 → exit 2; got {:?}; stderr: {stderr}",
+            out.status.code()
+        );
+        assert!(
+            stderr.contains("Not authenticated") || stderr.contains("jr auth login"),
+            "taxonomy sub-12: step-1 401 → NotAuthenticated hint in stderr; got: {stderr}"
+        );
+    } // _step1_401_guard drops → permanent 200 mock restored
 }
 
 // ---------------------------------------------------------------------------
