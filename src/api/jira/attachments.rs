@@ -605,13 +605,17 @@ mod tests {
     }
 
     /// A non-string, non-integer id (bool) must produce a deserialization
-    /// error, confirming the expecting() message path is reachable.
+    /// error whose message cites the expected type from `expecting()`.
+    /// This pins the `expecting()` body: a mutant that empties it produces
+    /// an error message without the expected-type substring, failing here.
     #[test]
     fn test_fix_576_dl_bool_id_is_deserialization_error() {
         let result: Result<AttachmentMetadata, _> = serde_json::from_str(r#"{"id": true}"#);
+        let err = result.expect_err("bool id should fail deserialization");
         assert!(
-            result.is_err(),
-            "bool id should fail deserialization; got: {result:?}"
+            err.to_string()
+                .contains("a string or integer attachment id"),
+            "error message must cite the expected type from expecting(); got: {err}"
         );
     }
 }
