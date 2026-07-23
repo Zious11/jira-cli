@@ -43,12 +43,11 @@ where
             f.write_str("a string or integer attachment id")
         }
 
+        // Three arms only: serde_json dispatches strings to visit_str (never
+        // visit_string), and valid Jira IDs always fit u64/i64 (u128/i128 are
+        // unreachable and their presence only multiplies mutant targets).
         fn visit_str<E: de::Error>(self, v: &str) -> Result<String, E> {
             Ok(v.to_owned())
-        }
-
-        fn visit_string<E: de::Error>(self, v: String) -> Result<String, E> {
-            Ok(v)
         }
 
         fn visit_u64<E: de::Error>(self, v: u64) -> Result<String, E> {
@@ -56,14 +55,6 @@ where
         }
 
         fn visit_i64<E: de::Error>(self, v: i64) -> Result<String, E> {
-            Ok(v.to_string())
-        }
-
-        fn visit_u128<E: de::Error>(self, v: u128) -> Result<String, E> {
-            Ok(v.to_string())
-        }
-
-        fn visit_i128<E: de::Error>(self, v: i128) -> Result<String, E> {
             Ok(v.to_string())
         }
     }
@@ -574,5 +565,53 @@ mod tests {
         );
         assert_eq!(safe_name(""), "");
         assert_eq!(safe_name("ascii_only-123.tar.gz"), "ascii_only-123.tar.gz");
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit pins for deserialize_string_or_int_as_string (FIX-576-DL)
+    //
+    // These tests deserialize AttachmentMetadata directly and assert the
+    // coerced id VALUE — not just process-level exit codes — so that
+    // body-replacement mutants in visit_str/visit_u64/visit_i64 are killed.
+    // -----------------------------------------------------------------------
+
+    use super::AttachmentMetadata;
+
+    /// Live Jira Cloud returns `"id"` as a JSON integer (e.g. 10008).
+    /// visit_u64 must coerce it to the string "10008".
+    #[test]
+    fn test_fix_576_dl_integer_id_deserializes_to_string() {
+        let meta: AttachmentMetadata =
+            serde_json::from_str(r#"{"id": 10008}"#).expect("should deserialize");
+        assert_eq!(meta.id, "10008");
+    }
+
+    /// String IDs (e.g. from the issue-fields list endpoint) remain unchanged.
+    /// visit_str must return the string as-is.
+    #[test]
+    fn test_fix_576_dl_string_id_deserializes_unchanged() {
+        let meta: AttachmentMetadata =
+            serde_json::from_str(r#"{"id": "10009"}"#).expect("should deserialize");
+        assert_eq!(meta.id, "10009");
+    }
+
+    /// Negative integer IDs are hypothetically valid; visit_i64 must coerce
+    /// them to their string representation.
+    #[test]
+    fn test_fix_576_dl_negative_integer_id_deserializes_to_string() {
+        let meta: AttachmentMetadata =
+            serde_json::from_str(r#"{"id": -1}"#).expect("should deserialize");
+        assert_eq!(meta.id, "-1");
+    }
+
+    /// A non-string, non-integer id (bool) must produce a deserialization
+    /// error, confirming the expecting() message path is reachable.
+    #[test]
+    fn test_fix_576_dl_bool_id_is_deserialization_error() {
+        let result: Result<AttachmentMetadata, _> = serde_json::from_str(r#"{"id": true}"#);
+        assert!(
+            result.is_err(),
+            "bool id should fail deserialization; got: {result:?}"
+        );
     }
 }
