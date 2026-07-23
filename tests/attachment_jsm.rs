@@ -3909,6 +3909,7 @@ async fn test_ec_3_9_003_3_multi_file_jsm_upload_two_step_1_posts() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[cfg_attr(windows, ignore)] // Windows rejects filenames with \n (WinError 123); attack vector absent on Windows
 async fn test_sec_576_004_jsm_step1_content_disposition_crlf_guard() {
     let server = MockServer::start().await;
     let cache = TempDir::new().unwrap();
