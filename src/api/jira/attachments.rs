@@ -15,6 +15,62 @@ use serde::{Deserialize, Serialize};
 use crate::api::client::JiraClient;
 use crate::error::JrError;
 
+// ---------------------------------------------------------------------------
+// FIX-576-DL: accept both string and integer id from attachment metadata GET
+// ---------------------------------------------------------------------------
+
+/// Deserialize a field that may arrive as either a JSON string (`"10008"`) or a
+/// JSON integer (`10008`), coercing both to `String`.
+///
+/// **Why this exists (mock-vs-live drift, run 30031724733):**
+/// `GET /rest/api/3/attachment/{id}` (metadata endpoint) returns `"id"` as an
+/// **integer** on live Jira Cloud, while `GET /rest/api/3/issue/{key}?fields=attachment`
+/// (issue-fields list endpoint) returns `"id"` as a **string**.  The S-576-2 tests
+/// mocked both endpoints with string IDs; this divergence was not discovered until the
+/// first live validation run.  The deserializer accepts either form without breaking
+/// existing string-id mocks or the `AttachmentObject` list path.
+fn deserialize_string_or_int_as_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{self, Visitor};
+    struct StringOrIntVisitor;
+
+    impl<'de> Visitor<'de> for StringOrIntVisitor {
+        type Value = String;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a string or integer attachment id")
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<String, E> {
+            Ok(v.to_owned())
+        }
+
+        fn visit_string<E: de::Error>(self, v: String) -> Result<String, E> {
+            Ok(v)
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<String, E> {
+            Ok(v.to_string())
+        }
+
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<String, E> {
+            Ok(v.to_string())
+        }
+
+        fn visit_u128<E: de::Error>(self, v: u128) -> Result<String, E> {
+            Ok(v.to_string())
+        }
+
+        fn visit_i128<E: de::Error>(self, v: i128) -> Result<String, E> {
+            Ok(v.to_string())
+        }
+    }
+
+    deserializer.deserialize_any(StringOrIntVisitor)
+}
+
 /// A Jira attachment object as returned in `fields.attachment[]`.
 ///
 /// All fields are `pub` — `tests/attachment_upload.rs::test_vp_576_004_*`
@@ -72,9 +128,19 @@ struct IssueAttachmentFields {
 /// All content fields are `Option` for partial-struct tolerance (P26-003):
 /// the Jira attachment metadata endpoint may omit fields for deleted or
 /// restricted attachments; missing fields MUST NOT abort the download.
+///
+/// **`id` wire-type note (FIX-576-DL, run 30031724733):** live Jira Cloud returns
+/// `id` as a JSON **integer** here (e.g. `10008`), while the issue-fields list
+/// endpoint returns it as a **string**.  `deserialize_string_or_int_as_string`
+/// normalises both to `String`; do not remove this attribute.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct AttachmentMetadata {
-    /// Attachment ID (always present in practice).
+    /// Attachment ID.
+    ///
+    /// Accepts both JSON string (`"10008"`) and JSON integer (`10008`) —
+    /// live Jira Cloud returns an integer from this endpoint; mocks and the
+    /// issue-fields list path return a string.  See `FIX-576-DL`.
+    #[serde(deserialize_with = "deserialize_string_or_int_as_string")]
     pub id: String,
 
     /// Original filename as stored by Jira.

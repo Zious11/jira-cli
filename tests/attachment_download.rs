@@ -3225,3 +3225,129 @@ async fn test_bc_2_7_008_batch_collision_skip_no_force() {
          (BC-2.7.008 ~797) — got: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// FIX-576-DL — mock-vs-live drift: metadata GET returns integer id on live Cloud
+// ---------------------------------------------------------------------------
+
+/// FIX-576-DL / BC-2.7.007: `GET /rest/api/3/attachment/{id}` returns `"id"` as
+/// an **integer** on live Jira Cloud (e.g. `10008`), while the issue-fields
+/// attachment list endpoint returns string IDs.  The S-576-2 mocks used string
+/// IDs throughout; this test pins the integer-id wire shape so the serde
+/// deserializer is verified against the live-faithful response.
+///
+/// Discovered via S-576-6 live validation run 30031724733:
+/// `Error: invalid type: integer \`10008\`, expected a string at line 1 column 11`
+#[tokio::test]
+async fn test_download_integer_id_in_metadata_succeeds() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+
+    // Live-faithful shape: `id` is an INTEGER (not a string).
+    // Before the fix this causes: "invalid type: integer `10008`, expected a string"
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/attachment/10008"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": 10008,
+            "filename": "live_doc.pdf",
+            "size": 7,
+            "mimeType": "application/pdf",
+            "content": format!("{}/rest/api/3/attachment/content/10008", server.uri()),
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/attachment/content/10008"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"pdfdata"))
+        .mount(&server)
+        .await;
+
+    let out_dir = TempDir::new().unwrap();
+    let out_path = out_dir.path().join("live_doc.pdf");
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "download",
+            "FOO-1",
+            "--id",
+            "10008",
+            "--out",
+            out_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    // RED (before fix): serde error "invalid type: integer `10008`, expected a string"
+    //   → binary exits 1 with an API/parse error.
+    // GREEN (after fix): AttachmentMetadata.id accepts both string and integer forms.
+    assert!(
+        output.status.success(),
+        "download with integer id in metadata must succeed (exit 0) — FIX-576-DL; \
+         stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(out_path.exists(), "output file must be created");
+    assert_eq!(
+        std::fs::read(&out_path).unwrap(),
+        b"pdfdata",
+        "file content must match mocked body"
+    );
+}
+
+/// FIX-576-DL / BC-2.7.007: `id` as string still works after the fix
+/// (regression guard — existing mocks and the issue-fields list path use strings).
+#[tokio::test]
+async fn test_download_string_id_in_metadata_still_succeeds() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+
+    // String id — must continue to work after the deserializer change.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/attachment/10009"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "10009",
+            "filename": "string_id.txt",
+            "size": 3,
+            "mimeType": "text/plain",
+            "content": format!("{}/rest/api/3/attachment/content/10009", server.uri()),
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/attachment/content/10009"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"txt"))
+        .mount(&server)
+        .await;
+
+    let out_dir = TempDir::new().unwrap();
+    let out_path = out_dir.path().join("string_id.txt");
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "download",
+            "FOO-1",
+            "--id",
+            "10009",
+            "--out",
+            out_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "download with string id in metadata must still succeed (exit 0) — regression guard; \
+         stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(out_path.exists(), "output file must be created");
+    assert_eq!(std::fs::read(&out_path).unwrap(), b"txt");
+}
