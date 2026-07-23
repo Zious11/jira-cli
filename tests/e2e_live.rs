@@ -11118,11 +11118,16 @@ fn test_e2e_attachment_platform_roundtrip() {
         .iter()
         .find(|item| item.get("id").and_then(Value::as_str) == Some(the_aid.as_str()))
         .unwrap_or_else(|| {
-            panic!(
-                "AC-001: list JSON must contain item with id={the_aid}; got: {list_json_stdout}"
-            )
+            panic!("AC-001: list JSON must contain item with id={the_aid}; got: {list_json_stdout}")
         });
-    for field in &["filename", "contentUrl", "mimeType", "size", "created", "author"] {
+    for field in &[
+        "filename",
+        "contentUrl",
+        "mimeType",
+        "size",
+        "created",
+        "author",
+    ] {
         assert!(
             list_item.get(field).is_some(),
             "AC-001: list JSON item must have key '{field}' (BC-2.7.002); got: {list_item}"
@@ -11316,9 +11321,7 @@ fn test_e2e_jsm_attachment_public_echo_shape() {
             );
             return;
         }
-        eprintln!(
-            "[SKIP] issue create failed — skipping JSM attachment --public echo shape: {s}"
-        );
+        eprintln!("[SKIP] issue create failed — skipping JSM attachment --public echo shape: {s}");
         return;
     }
 
@@ -11392,8 +11395,8 @@ fn test_e2e_jsm_attachment_public_echo_shape() {
     // Step 5: BC-3.9.011 confirmed shape (EC-3.9.011-1, P2-3c SATISFIED).
     // Confirmed: bare curated array [{author, contentUrl, created, filename, id, mimeType, size}].
     // Probe runs: 29936980027 + 29940792930 + 29945857059 (S-576-5, 2026-07-22).
-    let arr: Vec<Value> = serde_json::from_str(&upload_stdout)
-        .expect("AC-002: --output json must be a JSON array");
+    let arr: Vec<Value> =
+        serde_json::from_str(&upload_stdout).expect("AC-002: --output json must be a JSON array");
     assert!(
         !arr.is_empty(),
         "AC-002: upload JSON array must be non-empty (BC-3.9.011); stdout: {upload_stdout}"
@@ -11632,8 +11635,8 @@ fn test_e2e_jsm_attachment_internal_echo_shape() {
 
     // Step 5: BC-3.9.011 --internal shape assertion.
     // Parse as Value first to assert bare-array structure (no "public"/"uploaded" envelope).
-    let raw_v: Value = serde_json::from_str(&upload_stdout)
-        .expect("AC-003: --output json must be valid JSON");
+    let raw_v: Value =
+        serde_json::from_str(&upload_stdout).expect("AC-003: --output json must be valid JSON");
     // BC-3.9.011 EC-3.9.011-1: output MUST be a bare array, not an object envelope.
     assert!(
         raw_v.is_array(),
@@ -11726,9 +11729,7 @@ fn test_e2e_jsm_attachment_upload_no_flag() {
             );
             return;
         }
-        eprintln!(
-            "[SKIP] requesttype list failed — skipping JSM attachment upload no-flag: {s}"
-        );
+        eprintln!("[SKIP] requesttype list failed — skipping JSM attachment upload no-flag: {s}");
         return;
     }
 
@@ -11779,14 +11780,10 @@ fn test_e2e_jsm_attachment_upload_no_flag() {
     if !create_out.status.success() {
         let s = String::from_utf8_lossy(&create_out.stderr);
         if s.contains("403") {
-            eprintln!(
-                "[SKIP] issue create returned 403 — skipping JSM attachment upload no-flag"
-            );
+            eprintln!("[SKIP] issue create returned 403 — skipping JSM attachment upload no-flag");
             return;
         }
-        eprintln!(
-            "[SKIP] issue create failed — skipping JSM attachment upload no-flag: {s}"
-        );
+        eprintln!("[SKIP] issue create failed — skipping JSM attachment upload no-flag: {s}");
         return;
     }
 
@@ -11889,10 +11886,7 @@ fn test_e2e_jsm_attachment_upload_no_flag() {
 
     // Step 5 assertion: AID present in list (confirms upload succeeded via platform POST path).
     let list_stdout = String::from_utf8_lossy(&list_verify_out.stdout);
-    assert!(
-        list_verify_out.status.success(),
-        "AC-004: list must exit 0"
-    );
+    assert!(list_verify_out.status.success(), "AC-004: list must exit 0");
     let list_arr: Vec<Value> = serde_json::from_str(&list_stdout)
         .expect("AC-004: list --output json must be a JSON array");
     assert!(
