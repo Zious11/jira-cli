@@ -10962,10 +10962,11 @@ impl Drop for AttachmentDropGuard {
 /// E2E round-trip: upload → list (table + JSON) → download → delete → post-delete list.
 ///
 /// Exercises the full `jr issue attachment` surface against a live Jira Cloud ES
-/// project. Verifies BC-2.7.001 (list table filename), BC-2.7.002 (list JSON shape
-/// + contentUrl), BC-2.7.007 (download exits 0 + file exists), BC-3.9.001/009
-/// (upload exits 0 + curated array), BC-3.9.008/010 (delete exits 0 + JSON
-/// `{"deleted":true,"id":"<AID>"}` + post-delete list confirms AID gone).
+/// project. Verifies BC-2.7.001 (list table filename), BC-2.7.002 (list JSON
+/// shape + contentUrl), BC-2.7.007 (download exits 0 + file exists),
+/// BC-3.9.001/009 (upload exits 0 + curated array), BC-3.9.008/010 (delete
+/// exits 0 + JSON `{"deleted":true,"id":"<AID>"}` + post-delete list
+/// confirms AID gone).
 ///
 /// Uses `seed_issue` for ES issue creation (label `rl` enables CI sweeper pick-up
 /// on test failure). Collect-results-then-assert pattern: teardown (delete AID +
