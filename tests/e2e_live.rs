@@ -10899,3 +10899,1006 @@ fn test_e2e_jsm_attachment_upload_internal() {
         "AC-011 E2E internal: curated attachment must NOT contain 'self'; got: {item}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// S-576-6: attachment live E2E coverage — platform round-trip + JSM echo shapes
+// AC-001 (test_e2e_attachment_platform_roundtrip)
+// AC-002 (test_e2e_jsm_attachment_public_echo_shape)
+// AC-003 (test_e2e_jsm_attachment_internal_echo_shape)
+// AC-004 (test_e2e_jsm_attachment_upload_no_flag)
+// ---------------------------------------------------------------------------
+
+/// Drop-guard for JSM attachment E2E teardown (AC-010, AC-002).
+///
+/// Ensures (1) AID deletion and (2) `jsm_self_close` run on both normal return
+/// AND panic unwind. Mandatory for `test_e2e_jsm_attachment_public_echo_shape`
+/// (BC-3.9.011 ADV-022: public attachments persist independently of ticket status).
+///
+/// Populate `guard.key` immediately after capturing the issue key and
+/// `guard.aid` immediately after capturing the upload AID. Both default to
+/// `None`; a `None` field triggers no cleanup.
+struct AttachmentDropGuard {
+    aid: Option<String>,
+    key: Option<String>,
+}
+
+impl AttachmentDropGuard {
+    fn new() -> Self {
+        Self {
+            aid: None,
+            key: None,
+        }
+    }
+}
+
+impl Drop for AttachmentDropGuard {
+    fn drop(&mut self) {
+        // (1) Delete AID before jsm_self_close (ADV-022 ordering invariant).
+        if let Some(ref aid) = self.aid {
+            let h = E2eHarness::new();
+            match h
+                .cmd()
+                .args(["issue", "attachment", "delete", aid, "--yes"])
+                .output()
+            {
+                Ok(o) if o.status.success() => {}
+                Ok(o) => eprintln!(
+                    "[WARN] AttachmentDropGuard Drop: delete {} failed (exit {:?}): {}",
+                    aid,
+                    o.status.code(),
+                    String::from_utf8_lossy(&o.stderr)
+                ),
+                Err(e) => eprintln!("[WARN] AttachmentDropGuard Drop: delete spawn error: {e}"),
+            }
+        }
+        // (2) Self-close JSM issue.
+        if let Some(ref key) = self.key {
+            let h = E2eHarness::new();
+            jsm_self_close(key, &h);
+        }
+    }
+}
+
+/// E2E round-trip: upload → list (table + JSON) → download → delete → post-delete list.
+///
+/// Exercises the full `jr issue attachment` surface against a live Jira Cloud ES
+/// project. Verifies BC-2.7.001 (list table filename), BC-2.7.002 (list JSON shape
+/// + contentUrl), BC-2.7.007 (download exits 0 + file exists), BC-3.9.001/009
+/// (upload exits 0 + curated array), BC-3.9.008/010 (delete exits 0 + JSON
+/// `{"deleted":true,"id":"<AID>"}` + post-delete list confirms AID gone).
+///
+/// Uses `seed_issue` for ES issue creation (label `rl` enables CI sweeper pick-up
+/// on test failure). Collect-results-then-assert pattern: teardown (delete AID +
+/// `best_effort_close`) runs before any `assert!`.
+///
+/// Traces to: AC-001, BC-2.7.001, BC-2.7.002, BC-2.7.007, BC-3.9.001, BC-3.9.008,
+/// BC-3.9.009, BC-3.9.010.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and use --include-ignored to run"]
+fn test_e2e_attachment_platform_roundtrip() {
+    if !e2e_enabled() {
+        return;
+    }
+    let h = e2e_harness();
+    let rl = run_label();
+    let summary = format!("[e2e {}] attachment round-trip", rl);
+    let key = seed_issue(&h, &rl, &summary);
+
+    // Step 2: create a temp file with platform-neutral filename (B4/B5, S-576-2).
+    // ASCII-printable only; no Windows-reserved names; `.txt` extension.
+    let upload_dir = TempDir::new().expect("failed to create upload temp dir");
+    let filename = "attachment-e2e-test.txt".to_string();
+    let upload_file = upload_dir.path().join(&filename);
+    let file_content = format!("jr e2e attachment round-trip {}", rl);
+    std::fs::write(&upload_file, file_content.as_bytes()).expect("failed to write test file");
+
+    // Step 3: Upload (BC-3.9.001/009).
+    let upload_out = h
+        .cmd()
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            &key,
+            &upload_file.to_string_lossy(),
+            "--output",
+            "json",
+            "--yes",
+        ])
+        .output()
+        .expect("failed to spawn jr attachment upload");
+
+    // Capture AID from upload stdout before any assertion can panic.
+    let upload_stdout_raw = String::from_utf8_lossy(&upload_out.stdout);
+    let aid: Option<String> = serde_json::from_str::<Vec<Value>>(&upload_stdout_raw)
+        .ok()
+        .and_then(|arr| arr.into_iter().next())
+        .and_then(|item| item.get("id").and_then(Value::as_str).map(str::to_string));
+
+    // Step 4: List (table) — BC-2.7.001.
+    let list_table_out = h
+        .cmd()
+        .args(["issue", "attachment", "list", &key])
+        .output()
+        .expect("failed to spawn jr attachment list (table)");
+
+    // Step 5: List (JSON) — BC-2.7.002.
+    let list_json_out = h
+        .cmd()
+        .args(["issue", "attachment", "list", &key, "--output", "json"])
+        .output()
+        .expect("failed to spawn jr attachment list --output json");
+
+    // Step 6: Download — BC-2.7.007.
+    let download_dir = TempDir::new().expect("failed to create download temp dir");
+    let download_path = download_dir.path().join("downloaded.txt");
+    let download_out = aid.as_ref().map(|the_aid| {
+        h.cmd()
+            .args([
+                "issue",
+                "attachment",
+                "download",
+                &key,
+                "--id",
+                the_aid,
+                "--out",
+                &download_path.to_string_lossy(),
+            ])
+            .output()
+            .expect("failed to spawn jr attachment download")
+    });
+
+    // Step 7: Delete (AID teardown) — BC-3.9.008/010.
+    let delete_out = aid.as_ref().map(|the_aid| {
+        h.cmd()
+            .args([
+                "issue",
+                "attachment",
+                "delete",
+                the_aid,
+                "--yes",
+                "--output",
+                "json",
+            ])
+            .output()
+            .expect("failed to spawn jr attachment delete")
+    });
+
+    // Step 8: List post-delete (two-step post-condition: delete exits 0 AND AID gone).
+    let post_delete_out = h
+        .cmd()
+        .args(["issue", "attachment", "list", &key, "--output", "json"])
+        .output()
+        .expect("failed to spawn jr attachment list post-delete");
+
+    // Step 9: Issue teardown (best-effort; sweeper handles orphans via label rl).
+    best_effort_close(&h, &key);
+
+    // ---- Assertions (all teardown complete before this line) ----
+
+    // Upload assertions (BC-3.9.001/009).
+    let upload_stderr = String::from_utf8_lossy(&upload_out.stderr);
+    let upload_stdout = String::from_utf8_lossy(&upload_out.stdout);
+    assert!(
+        upload_out.status.success(),
+        "AC-001: upload must exit 0; got {:?}\nstdout: {upload_stdout}\nstderr: {upload_stderr}",
+        upload_out.status.code()
+    );
+    let upload_arr: Vec<Value> = serde_json::from_str(&upload_stdout)
+        .expect("AC-001: upload --output json must be a JSON array");
+    assert!(
+        !upload_arr.is_empty(),
+        "AC-001: upload JSON array must be non-empty; stdout: {upload_stdout}"
+    );
+    let the_aid = aid
+        .as_ref()
+        .expect("AC-001: AID must be parseable from upload output");
+    assert!(!the_aid.is_empty(), "AC-001: AID must be non-empty");
+
+    // List table assertion (BC-2.7.001).
+    let list_table_stdout = String::from_utf8_lossy(&list_table_out.stdout);
+    assert!(
+        list_table_out.status.success(),
+        "AC-001: list (table) must exit 0"
+    );
+    assert!(
+        list_table_stdout.contains(&filename),
+        "AC-001: list table must contain filename '{filename}'; stdout: {list_table_stdout}"
+    );
+
+    // List JSON assertions (BC-2.7.002).
+    let list_json_stdout = String::from_utf8_lossy(&list_json_out.stdout);
+    assert!(
+        list_json_out.status.success(),
+        "AC-001: list (JSON) must exit 0"
+    );
+    let list_arr: Vec<Value> = serde_json::from_str(&list_json_stdout)
+        .expect("AC-001: list --output json must be a JSON array");
+    let list_item = list_arr
+        .iter()
+        .find(|item| item.get("id").and_then(Value::as_str) == Some(the_aid.as_str()))
+        .unwrap_or_else(|| {
+            panic!(
+                "AC-001: list JSON must contain item with id={the_aid}; got: {list_json_stdout}"
+            )
+        });
+    for field in &["filename", "contentUrl", "mimeType", "size", "created", "author"] {
+        assert!(
+            list_item.get(field).is_some(),
+            "AC-001: list JSON item must have key '{field}' (BC-2.7.002); got: {list_item}"
+        );
+    }
+    let content_url = list_item
+        .get("contentUrl")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    assert!(
+        !content_url.is_empty(),
+        "AC-001: contentUrl must be non-null and non-empty (BC-2.7.002); got: {list_item}"
+    );
+
+    // Download assertions (BC-2.7.007).
+    if let Some(ref dl_out) = download_out {
+        let dl_stderr = String::from_utf8_lossy(&dl_out.stderr);
+        assert!(
+            dl_out.status.success(),
+            "AC-001: download must exit 0; got {:?}\nstderr: {dl_stderr}",
+            dl_out.status.code()
+        );
+        assert!(
+            download_path.exists(),
+            "AC-001: downloaded file must exist at {}",
+            download_path.display()
+        );
+        let dl_bytes =
+            std::fs::read(&download_path).expect("AC-001: failed to read downloaded file");
+        assert!(
+            !dl_bytes.is_empty(),
+            "AC-001: downloaded file must be non-empty"
+        );
+    }
+
+    // Delete assertions (BC-3.9.008/010).
+    if let Some(ref del_out) = delete_out {
+        let del_stdout = String::from_utf8_lossy(&del_out.stdout);
+        let del_stderr = String::from_utf8_lossy(&del_out.stderr);
+        assert!(
+            del_out.status.success(),
+            "AC-001: delete must exit 0; got {:?}\nstdout: {del_stdout}\nstderr: {del_stderr}",
+            del_out.status.code()
+        );
+        let del_json: Value = serde_json::from_str(&del_stdout)
+            .expect("AC-001: delete --output json must be valid JSON");
+        assert_eq!(
+            del_json["deleted"],
+            Value::Bool(true),
+            "AC-001: delete JSON must have deleted:true (BC-3.9.010); got: {del_json}"
+        );
+        assert_eq!(
+            del_json["id"].as_str(),
+            Some(the_aid.as_str()),
+            "AC-001: delete JSON 'id' must match AID (BC-3.9.010); got: {del_json}"
+        );
+    }
+
+    // Post-delete list assertion: two-step post-condition (BC-3.9.008 — AID removed).
+    let post_del_stdout = String::from_utf8_lossy(&post_delete_out.stdout);
+    assert!(
+        post_delete_out.status.success(),
+        "AC-001: post-delete list must exit 0"
+    );
+    let post_del_arr: Vec<Value> = serde_json::from_str(&post_del_stdout)
+        .expect("AC-001: post-delete list JSON must be a JSON array");
+    assert!(
+        !post_del_arr
+            .iter()
+            .any(|item| item.get("id").and_then(Value::as_str) == Some(the_aid.as_str())),
+        "AC-001: post-delete list must not contain AID={the_aid} (BC-3.9.008); got: {post_del_stdout}"
+    );
+}
+
+/// E2E shape verification: `--public --yes --output json` exits 0 and returns the
+/// confirmed P2-3c BC-3.9.011 curated attachment schema (bare array; confirmed field
+/// set `{author, contentUrl, created, filename, id, mimeType, size}`; no `"self"` key).
+///
+/// Pins the exact BC-3.9.011 EC-3.9.011-1 schema (P2-3c SATISFIED — S-576-5 probe
+/// runs 29936980027 + 29940792930 + 29945857059, 2026-07-22). Additive to S-576-5's
+/// `test_e2e_jsm_attachment_upload_public` (functional correctness); this test pins
+/// the `--output json` echo shape.
+///
+/// Uses `AttachmentDropGuard` (AC-010): ensures delete-AID then `jsm_self_close` run
+/// on both normal return and panic unwind (ADV-022 obligation).
+///
+/// Gated by `JR_RUN_E2E=1` + `JR_E2E_JSM_PROJECT`. Gate-2 (empty RT list) +
+/// Gate-3 (403) trigger clean-skips.
+///
+/// Traces to: AC-002, AC-005, BC-3.9.003, BC-3.9.007 EC-3.9.007-2, BC-3.9.011.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and JR_E2E_JSM_PROJECT and use --include-ignored to run"]
+fn test_e2e_jsm_attachment_public_echo_shape() {
+    if !e2e_enabled() {
+        return;
+    }
+    // Gate 1 (§3.1): JR_E2E_JSM_PROJECT must be set.
+    let jsm_project = match env::var("JR_E2E_JSM_PROJECT") {
+        Ok(p) if !p.trim().is_empty() => p.trim().to_string(),
+        _ => {
+            eprintln!(
+                "[SKIP] JR_E2E_JSM_PROJECT not set — skipping JSM attachment --public echo shape test"
+            );
+            return;
+        }
+    };
+    let h = e2e_harness();
+    let run_id = run_label();
+
+    // Drop-guard: populated with key + AID as captured; ensures cleanup on panic.
+    let mut guard = AttachmentDropGuard::new();
+
+    // Step 1: discover a request type (Gate 2 applies on empty list).
+    let list_out = h
+        .cmd()
+        .args([
+            "requesttype",
+            "list",
+            "--project",
+            &jsm_project,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr requesttype list");
+
+    if !list_out.status.success() {
+        let s = String::from_utf8_lossy(&list_out.stderr);
+        if s.contains("403") {
+            eprintln!(
+                "[SKIP] requesttype list returned 403 — skipping JSM attachment --public echo shape"
+            );
+            return;
+        }
+        eprintln!(
+            "[SKIP] requesttype list failed — skipping JSM attachment --public echo shape: {s}"
+        );
+        return;
+    }
+
+    let rts: Vec<Value> = match serde_json::from_slice(&list_out.stdout) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[SKIP] requesttype list not a JSON array: {e} — skipping");
+            return;
+        }
+    };
+    // Gate 2 (§3.2): skip if no request types found.
+    if rts.is_empty() {
+        eprintln!(
+            "[SKIP] No request types found on {jsm_project} — skipping JSM attachment --public echo shape"
+        );
+        return;
+    }
+    let first_rt_id = {
+        let id_val = &rts[0]["id"];
+        if let Some(s) = id_val.as_str() {
+            s.to_string()
+        } else if let Some(n) = id_val.as_i64() {
+            n.to_string()
+        } else {
+            eprintln!("[SKIP] rts[0].id is not a usable type — skipping");
+            return;
+        }
+    };
+
+    // Step 2: create a fresh JSM request.
+    let summary = format!("[e2e-jsm {run_id}] attachment --public echo shape");
+    let create_out = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &jsm_project,
+            "--request-type",
+            &first_rt_id,
+            "--summary",
+            &summary,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr issue create");
+
+    if !create_out.status.success() {
+        let s = String::from_utf8_lossy(&create_out.stderr);
+        if s.contains("403") {
+            eprintln!(
+                "[SKIP] issue create returned 403 — skipping JSM attachment --public echo shape"
+            );
+            return;
+        }
+        eprintln!(
+            "[SKIP] issue create failed — skipping JSM attachment --public echo shape: {s}"
+        );
+        return;
+    }
+
+    let create_v: Value = serde_json::from_slice(&create_out.stdout)
+        .expect("issue create --output json must be valid JSON");
+    let key = create_v
+        .get("key")
+        .and_then(Value::as_str)
+        .expect("issue create JSON must contain 'key' field")
+        .to_string();
+    assert!(!key.is_empty(), "created JSM key must be non-empty");
+    // Register key with guard immediately so jsm_self_close runs on any later panic.
+    guard.key = Some(key.clone());
+
+    // Step 3: write a temp file (platform-neutral filename).
+    let upload_dir = TempDir::new().expect("failed to create upload temp dir");
+    let upload_file = upload_dir.path().join("attachment-e2e-public.txt");
+    std::fs::write(&upload_file, b"S-576-6 e2e public attachment echo shape")
+        .expect("write test file");
+
+    // Step 4: upload --public --yes --output json.
+    let upload_out = h
+        .cmd()
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            &key,
+            &upload_file.to_string_lossy(),
+            "--public",
+            "--yes",
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr attachment upload");
+
+    // Gate 3 (§3.3): 403 on upload → clean-skip; guard closes issue.
+    if !upload_out.status.success() {
+        let s = String::from_utf8_lossy(&upload_out.stderr);
+        if s.contains("403") {
+            eprintln!("[SKIP] attachment upload --public returned 403 — skipping");
+            return; // guard drops here: jsm_self_close(key) runs
+        }
+    }
+
+    // Capture AID and register with guard BEFORE any assertion that could panic.
+    let upload_stdout_raw = String::from_utf8_lossy(&upload_out.stdout);
+    let aid: Option<String> = serde_json::from_str::<Vec<Value>>(&upload_stdout_raw)
+        .ok()
+        .and_then(|arr| arr.into_iter().next())
+        .and_then(|item| item.get("id").and_then(Value::as_str).map(str::to_string));
+    match &aid {
+        Some(a) => guard.aid = Some(a.clone()),
+        None => eprintln!(
+            "[WARN] AC-002: could not parse AID from upload stdout — \
+             attachment not registered in drop-guard"
+        ),
+    }
+
+    // ---- Assertions (drop-guard active; cleanup runs on any panic below) ----
+
+    let upload_stderr = String::from_utf8_lossy(&upload_out.stderr);
+    let upload_stdout = String::from_utf8_lossy(&upload_out.stdout);
+    assert!(
+        upload_out.status.success(),
+        "AC-002: upload --public must exit 0; got {:?}\nstdout: {upload_stdout}\nstderr: {upload_stderr}",
+        upload_out.status.code()
+    );
+
+    // Step 5: BC-3.9.011 confirmed shape (EC-3.9.011-1, P2-3c SATISFIED).
+    // Confirmed: bare curated array [{author, contentUrl, created, filename, id, mimeType, size}].
+    // Probe runs: 29936980027 + 29940792930 + 29945857059 (S-576-5, 2026-07-22).
+    let arr: Vec<Value> = serde_json::from_str(&upload_stdout)
+        .expect("AC-002: --output json must be a JSON array");
+    assert!(
+        !arr.is_empty(),
+        "AC-002: upload JSON array must be non-empty (BC-3.9.011); stdout: {upload_stdout}"
+    );
+    let the_aid = aid
+        .as_ref()
+        .expect("AC-002: AID must be parseable from upload output");
+    assert!(!the_aid.is_empty(), "AC-002: AID must be non-empty");
+
+    // BC-3.9.011 EC-3.9.011-1: confirmed curated field set.
+    let item = &arr[0];
+    for field in &[
+        "id",
+        "filename",
+        "contentUrl",
+        "mimeType",
+        "size",
+        "author",
+        "created",
+    ] {
+        assert!(
+            item.get(field).is_some(),
+            "AC-002: curated attachment must have key '{field}' (BC-3.9.011 EC-3.9.011-1); got: {item}"
+        );
+    }
+    // BC-3.9.011: no raw Jira 'self' key (stripped by curation pipeline).
+    assert!(
+        item.get("self").is_none(),
+        "AC-002: curated attachment must NOT contain 'self' (BC-3.9.011); got: {item}"
+    );
+    // guard drops here (end of function scope): delete AID then jsm_self_close.
+}
+
+/// E2E shape verification: `--internal --output json` exits 0 and returns a bare
+/// curated JSON array with NO top-level `"public"` key (BC-3.9.011 EC-3.9.011-3).
+///
+/// Confirms: (a) output is a bare array (not a `{"public":…,"uploaded":[…]}` envelope);
+/// (b) no top-level `"public"` key; (c) confirmed curated field set from BC-3.9.011
+/// EC-3.9.011-1 (P2-3c SATISFIED). Additive to S-576-5's
+/// `test_e2e_jsm_attachment_upload_internal` (functional correctness); this test pins
+/// the `--output json` echo shape.
+///
+/// Teardown uses collect-results-then-assert: delete AID then `jsm_self_close` run
+/// before assertions.
+///
+/// Gated by `JR_RUN_E2E=1` + `JR_E2E_JSM_PROJECT`. Gate-2 (empty RT list) +
+/// Gate-3 (403) trigger clean-skips.
+///
+/// Traces to: AC-003, BC-3.9.004, BC-3.9.007 EC-3.9.007-2, BC-3.9.011.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and JR_E2E_JSM_PROJECT and use --include-ignored to run"]
+fn test_e2e_jsm_attachment_internal_echo_shape() {
+    if !e2e_enabled() {
+        return;
+    }
+    // Gate 1 (§3.1).
+    let jsm_project = match env::var("JR_E2E_JSM_PROJECT") {
+        Ok(p) if !p.trim().is_empty() => p.trim().to_string(),
+        _ => {
+            eprintln!(
+                "[SKIP] JR_E2E_JSM_PROJECT not set — skipping JSM attachment --internal echo shape test"
+            );
+            return;
+        }
+    };
+    let h = e2e_harness();
+    let run_id = run_label();
+
+    // Step 1: discover a request type (Gate 2).
+    let list_out = h
+        .cmd()
+        .args([
+            "requesttype",
+            "list",
+            "--project",
+            &jsm_project,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr requesttype list");
+
+    if !list_out.status.success() {
+        let s = String::from_utf8_lossy(&list_out.stderr);
+        if s.contains("403") {
+            eprintln!(
+                "[SKIP] requesttype list returned 403 — skipping JSM attachment --internal echo shape"
+            );
+            return;
+        }
+        eprintln!(
+            "[SKIP] requesttype list failed — skipping JSM attachment --internal echo shape: {s}"
+        );
+        return;
+    }
+
+    let rts: Vec<Value> = match serde_json::from_slice(&list_out.stdout) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[SKIP] requesttype list not a JSON array: {e} — skipping");
+            return;
+        }
+    };
+    if rts.is_empty() {
+        eprintln!(
+            "[SKIP] No request types found on {jsm_project} — skipping JSM attachment --internal echo shape"
+        );
+        return;
+    }
+    let first_rt_id = {
+        let id_val = &rts[0]["id"];
+        if let Some(s) = id_val.as_str() {
+            s.to_string()
+        } else if let Some(n) = id_val.as_i64() {
+            n.to_string()
+        } else {
+            eprintln!("[SKIP] rts[0].id is not a usable type — skipping");
+            return;
+        }
+    };
+
+    // Step 2: create a fresh JSM request.
+    let summary = format!("[e2e-jsm {run_id}] attachment --internal echo shape");
+    let create_out = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &jsm_project,
+            "--request-type",
+            &first_rt_id,
+            "--summary",
+            &summary,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr issue create");
+
+    if !create_out.status.success() {
+        let s = String::from_utf8_lossy(&create_out.stderr);
+        if s.contains("403") {
+            eprintln!(
+                "[SKIP] issue create returned 403 — skipping JSM attachment --internal echo shape"
+            );
+            return;
+        }
+        eprintln!(
+            "[SKIP] issue create failed — skipping JSM attachment --internal echo shape: {s}"
+        );
+        return;
+    }
+
+    let create_v: Value = serde_json::from_slice(&create_out.stdout)
+        .expect("issue create --output json must be valid JSON");
+    let key = create_v
+        .get("key")
+        .and_then(Value::as_str)
+        .expect("issue create JSON must contain 'key' field")
+        .to_string();
+    assert!(!key.is_empty(), "created JSM key must be non-empty");
+
+    // Step 3: write a temp file.
+    let upload_dir = TempDir::new().expect("failed to create upload temp dir");
+    let upload_file = upload_dir.path().join("attachment-e2e-internal.txt");
+    std::fs::write(&upload_file, b"S-576-6 e2e internal attachment echo shape")
+        .expect("write test file");
+
+    // Step 4: upload --internal --output json (no confirmation gate — BC-3.9.004).
+    let upload_out = h
+        .cmd()
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            &key,
+            &upload_file.to_string_lossy(),
+            "--internal",
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr attachment upload");
+
+    // Gate 3 (§3.3): 403 → clean-skip.
+    if !upload_out.status.success() {
+        let s = String::from_utf8_lossy(&upload_out.stderr);
+        if s.contains("403") {
+            eprintln!("[SKIP] attachment upload --internal returned 403 — skipping");
+            jsm_self_close(&key, &h);
+            return;
+        }
+    }
+
+    // Capture AID for teardown.
+    let upload_stdout_raw = String::from_utf8_lossy(&upload_out.stdout);
+    let teardown_aid: Option<String> = serde_json::from_str::<Vec<Value>>(&upload_stdout_raw)
+        .ok()
+        .and_then(|arr| arr.into_iter().next())
+        .and_then(|item| item.get("id").and_then(Value::as_str).map(str::to_string));
+
+    // Teardown before assertions (collect-results-then-assert pattern).
+    // (a) Delete AID (ADV-022 ordering: before jsm_self_close).
+    if let Some(ref aid) = teardown_aid {
+        match h
+            .cmd()
+            .args(["issue", "attachment", "delete", aid, "--yes"])
+            .output()
+        {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => {
+                eprintln!(
+                    "[WARN] AC-003: failed to delete attachment {aid} (exit {:?}): {}",
+                    o.status.code(),
+                    String::from_utf8_lossy(&o.stderr)
+                );
+            }
+            Err(e) => eprintln!("[WARN] AC-003: failed to spawn attachment delete: {e}"),
+        }
+    } else {
+        eprintln!("[WARN] AC-003: could not parse AID from upload stdout — attachment not deleted");
+    }
+    // (b) Self-close JSM issue.
+    jsm_self_close(&key, &h);
+
+    // ---- Assertions (teardown complete) ----
+
+    let upload_stderr = String::from_utf8_lossy(&upload_out.stderr);
+    let upload_stdout = String::from_utf8_lossy(&upload_out.stdout);
+    assert!(
+        upload_out.status.success(),
+        "AC-003: upload --internal must exit 0; got {:?}\nstdout: {upload_stdout}\nstderr: {upload_stderr}",
+        upload_out.status.code()
+    );
+
+    // Step 5: BC-3.9.011 --internal shape assertion.
+    // Parse as Value first to assert bare-array structure (no "public"/"uploaded" envelope).
+    let raw_v: Value = serde_json::from_str(&upload_stdout)
+        .expect("AC-003: --output json must be valid JSON");
+    // BC-3.9.011 EC-3.9.011-1: output MUST be a bare array, not an object envelope.
+    assert!(
+        raw_v.is_array(),
+        "AC-003: --internal output must be a bare JSON array (BC-3.9.011 EC-3.9.011-1); \
+         got: {raw_v}"
+    );
+    // BC-3.9.011 EC-3.9.011-3: no top-level 'public' key (P2-3c SATISFIED).
+    assert!(
+        raw_v.get("public").is_none(),
+        "AC-003: --internal output must NOT contain a top-level 'public' key \
+         (BC-3.9.011 EC-3.9.011-3); got: {raw_v}"
+    );
+
+    let arr = raw_v.as_array().expect("already asserted is_array");
+    assert!(
+        !arr.is_empty(),
+        "AC-003: --internal upload JSON array must be non-empty; stdout: {upload_stdout}"
+    );
+
+    // BC-3.9.011 EC-3.9.011-1: confirmed curated field set (P2-3c probe runs 29936980027+29940792930+29945857059).
+    let item = &arr[0];
+    for field in &[
+        "id",
+        "filename",
+        "contentUrl",
+        "mimeType",
+        "size",
+        "author",
+        "created",
+    ] {
+        assert!(
+            item.get(field).is_some(),
+            "AC-003: curated attachment must have key '{field}' (BC-3.9.011 EC-3.9.011-1); got: {item}"
+        );
+    }
+    assert!(
+        item.get("self").is_none(),
+        "AC-003: curated attachment must NOT contain 'self'; got: {item}"
+    );
+}
+
+/// E2E no-visibility-flag: `jr issue attachment upload <JSM-KEY> <FILE> --yes
+/// --output json` (no `--public`/`--internal`) exits 0 via the platform POST path
+/// (BC-3.9.002) and returns a non-empty curated array. Verifies the uploaded AID
+/// appears in a subsequent `attachment list` (observable post-condition for the
+/// platform-POST default-internal path).
+///
+/// Gated by `JR_RUN_E2E=1` + `JR_E2E_JSM_PROJECT`. Gate-2 (empty RT list) +
+/// Gate-3 (403) trigger clean-skips.
+///
+/// Traces to: AC-004, BC-3.9.002, BC-3.9.009.
+#[test]
+#[ignore = "set JR_RUN_E2E=1 and JR_E2E_JSM_PROJECT and use --include-ignored to run"]
+fn test_e2e_jsm_attachment_upload_no_flag() {
+    if !e2e_enabled() {
+        return;
+    }
+    // Gate 1 (§3.1).
+    let jsm_project = match env::var("JR_E2E_JSM_PROJECT") {
+        Ok(p) if !p.trim().is_empty() => p.trim().to_string(),
+        _ => {
+            eprintln!(
+                "[SKIP] JR_E2E_JSM_PROJECT not set — skipping JSM attachment upload no-flag test"
+            );
+            return;
+        }
+    };
+    let h = e2e_harness();
+    let run_id = run_label();
+
+    // Step 1: discover a request type (Gate 2).
+    let list_out = h
+        .cmd()
+        .args([
+            "requesttype",
+            "list",
+            "--project",
+            &jsm_project,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr requesttype list");
+
+    if !list_out.status.success() {
+        let s = String::from_utf8_lossy(&list_out.stderr);
+        if s.contains("403") {
+            eprintln!(
+                "[SKIP] requesttype list returned 403 — skipping JSM attachment upload no-flag"
+            );
+            return;
+        }
+        eprintln!(
+            "[SKIP] requesttype list failed — skipping JSM attachment upload no-flag: {s}"
+        );
+        return;
+    }
+
+    let rts: Vec<Value> = match serde_json::from_slice(&list_out.stdout) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[SKIP] requesttype list not a JSON array: {e} — skipping");
+            return;
+        }
+    };
+    if rts.is_empty() {
+        eprintln!(
+            "[SKIP] No request types found on {jsm_project} — skipping JSM attachment upload no-flag"
+        );
+        return;
+    }
+    let first_rt_id = {
+        let id_val = &rts[0]["id"];
+        if let Some(s) = id_val.as_str() {
+            s.to_string()
+        } else if let Some(n) = id_val.as_i64() {
+            n.to_string()
+        } else {
+            eprintln!("[SKIP] rts[0].id is not a usable type — skipping");
+            return;
+        }
+    };
+
+    // Step 2: create a fresh JSM request.
+    let summary = format!("[e2e-jsm {run_id}] attachment upload no-flag");
+    let create_out = h
+        .cmd()
+        .args([
+            "issue",
+            "create",
+            "--project",
+            &jsm_project,
+            "--request-type",
+            &first_rt_id,
+            "--summary",
+            &summary,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr issue create");
+
+    if !create_out.status.success() {
+        let s = String::from_utf8_lossy(&create_out.stderr);
+        if s.contains("403") {
+            eprintln!(
+                "[SKIP] issue create returned 403 — skipping JSM attachment upload no-flag"
+            );
+            return;
+        }
+        eprintln!(
+            "[SKIP] issue create failed — skipping JSM attachment upload no-flag: {s}"
+        );
+        return;
+    }
+
+    let create_v: Value = serde_json::from_slice(&create_out.stdout)
+        .expect("issue create --output json must be valid JSON");
+    let key = create_v
+        .get("key")
+        .and_then(Value::as_str)
+        .expect("issue create JSON must contain 'key' field")
+        .to_string();
+    assert!(!key.is_empty(), "created JSM key must be non-empty");
+
+    // Step 3: write a temp file.
+    let upload_dir = TempDir::new().expect("failed to create upload temp dir");
+    let upload_file = upload_dir.path().join("attachment-e2e-noflag.txt");
+    std::fs::write(&upload_file, b"S-576-6 e2e no-flag attachment").expect("write test file");
+
+    // Step 4: upload without visibility flags → platform POST (BC-3.9.002).
+    let upload_out = h
+        .cmd()
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            &key,
+            &upload_file.to_string_lossy(),
+            "--yes",
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to spawn jr attachment upload");
+
+    // Gate 3 (§3.3): 403 → clean-skip.
+    if !upload_out.status.success() {
+        let s = String::from_utf8_lossy(&upload_out.stderr);
+        if s.contains("403") {
+            eprintln!("[SKIP] attachment upload (no-flag) returned 403 — skipping");
+            jsm_self_close(&key, &h);
+            return;
+        }
+    }
+
+    // Capture AID.
+    let upload_stdout_raw = String::from_utf8_lossy(&upload_out.stdout);
+    let teardown_aid: Option<String> = serde_json::from_str::<Vec<Value>>(&upload_stdout_raw)
+        .ok()
+        .and_then(|arr| arr.into_iter().next())
+        .and_then(|item| item.get("id").and_then(Value::as_str).map(str::to_string));
+
+    // Step 5: verify AID appears in list (post-condition of upload success).
+    let list_verify_out = h
+        .cmd()
+        .args(["issue", "attachment", "list", &key, "--output", "json"])
+        .output()
+        .expect("failed to spawn jr attachment list");
+
+    // Teardown: (a) delete AID, (b) jsm_self_close.
+    if let Some(ref aid) = teardown_aid {
+        match h
+            .cmd()
+            .args(["issue", "attachment", "delete", aid, "--yes"])
+            .output()
+        {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => {
+                eprintln!(
+                    "[WARN] AC-004: failed to delete attachment {aid} (exit {:?}): {}",
+                    o.status.code(),
+                    String::from_utf8_lossy(&o.stderr)
+                );
+            }
+            Err(e) => eprintln!("[WARN] AC-004: failed to spawn attachment delete: {e}"),
+        }
+    } else {
+        eprintln!("[WARN] AC-004: could not parse AID from upload stdout — attachment not deleted");
+    }
+    jsm_self_close(&key, &h);
+
+    // ---- Assertions ----
+
+    let upload_stderr = String::from_utf8_lossy(&upload_out.stderr);
+    let upload_stdout = String::from_utf8_lossy(&upload_out.stdout);
+    assert!(
+        upload_out.status.success(),
+        "AC-004: upload (no-flag) must exit 0; got {:?}\nstdout: {upload_stdout}\nstderr: {upload_stderr}",
+        upload_out.status.code()
+    );
+
+    let arr: Vec<Value> = serde_json::from_str(&upload_stdout)
+        .expect("AC-004: upload --output json must be a JSON array");
+    assert!(
+        !arr.is_empty(),
+        "AC-004: upload JSON array must be non-empty (BC-3.9.002/009); stdout: {upload_stdout}"
+    );
+    let the_aid = teardown_aid
+        .as_ref()
+        .expect("AC-004: AID must be parseable from upload output");
+    assert!(!the_aid.is_empty(), "AC-004: AID must be non-empty");
+
+    // Step 5 assertion: AID present in list (confirms upload succeeded via platform POST path).
+    let list_stdout = String::from_utf8_lossy(&list_verify_out.stdout);
+    assert!(
+        list_verify_out.status.success(),
+        "AC-004: list must exit 0"
+    );
+    let list_arr: Vec<Value> = serde_json::from_str(&list_stdout)
+        .expect("AC-004: list --output json must be a JSON array");
+    assert!(
+        list_arr
+            .iter()
+            .any(|item| item.get("id").and_then(Value::as_str) == Some(the_aid.as_str())),
+        "AC-004: list must contain uploaded AID={the_aid} (BC-3.9.002); got: {list_stdout}"
+    );
+}
