@@ -4,6 +4,16 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`jr issue attachment download` — integer id in metadata response (FIX-576-DL, #576):**
+  `GET /rest/api/3/attachment/{id}` returns `"id"` as a JSON integer on live Jira Cloud
+  (e.g. `10008`), while the issue-fields list endpoint returns it as a string. The S-576-2
+  mocks used string IDs throughout, so the type mismatch was invisible until the first live
+  validation run (S-576-6, run 30031724733), which produced `invalid type: integer \`10008\`,
+  expected a string`. `AttachmentMetadata.id` now uses `deserialize_string_or_int_as_string`
+  to accept both forms; `AttachmentObject.id` (list path) is unaffected.
+
 ### Added
 
 - **`jr issue attachment upload --public/--internal` — JSM visibility + servicedeskapi two-step (S-576-5, #576):**
