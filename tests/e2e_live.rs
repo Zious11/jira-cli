@@ -11888,7 +11888,9 @@ fn test_e2e_jsm_attachment_upload_no_flag() {
     // Step 5 assertion: AID present in list (confirms upload succeeded via platform POST path).
     let list_stderr = String::from_utf8_lossy(&list_verify_out.stderr);
     if !list_verify_out.status.success() && list_stderr.contains("403") {
-        eprintln!("[SKIP] AC-004: list returned 403 — skipping JSM attachment upload no-flag verification (AC-007 §3.3)");
+        eprintln!(
+            "[SKIP] AC-004: list returned 403 — skipping JSM attachment upload no-flag verification (AC-007 §3.3)"
+        );
         return;
     }
     let list_stdout = String::from_utf8_lossy(&list_verify_out.stdout);
