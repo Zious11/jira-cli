@@ -392,6 +392,66 @@ mod tests {
     use super::*;
     use crate::api::client::JiraClient;
 
+    // SEC-576-004 / CWE-93 unit pins for the safe_name transformation guard.
+    //
+    // The guard lives inline in `attach_temporary_file` (~line 67):
+    //   raw_name.chars().map(|c| if matches!(c, '\r' | '\n' | '\0') { '_' } else { c }).collect()
+    //
+    // Mirrored here as a free function so the transformation is testable without
+    // touching the filesystem (no tokio::fs::File, no actual multipart POST).
+    fn safe_name(raw: &str) -> String {
+        raw.chars()
+            .map(|c| {
+                if matches!(c, '\r' | '\n' | '\0') {
+                    '_'
+                } else {
+                    c
+                }
+            })
+            .collect()
+    }
+
+    /// CR (\r) and LF (\n) are each independently mapped to '_'.
+    ///
+    /// This prevents header-line injection via Content-Disposition (CWE-93).
+    /// A filename like "file\r\nX-Injected: hdr" would otherwise split the MIME
+    /// header into two lines, injecting an arbitrary header field.
+    #[test]
+    fn test_sec_576_004_safe_name_crlf_mapped_to_underscore() {
+        // Both \r and \n in one filename → two underscores
+        assert_eq!(
+            safe_name("file\r\nX-Injected: hdr"),
+            "file__X-Injected: hdr"
+        );
+        // Lone \r → single underscore
+        assert_eq!(safe_name("only\r"), "only_");
+        // Lone \n → single underscore
+        assert_eq!(safe_name("only\n"), "only_");
+        // Multiple consecutive newlines
+        assert_eq!(safe_name("a\n\nb"), "a__b");
+    }
+
+    /// NUL byte (\0) is mapped to '_'.
+    ///
+    /// NUL in a Content-Disposition filename can truncate the value in
+    /// C-string-based parsers, silently dropping the rest of the name.
+    #[test]
+    fn test_sec_576_004_safe_name_nul_mapped_to_underscore() {
+        assert_eq!(safe_name("fi\0le"), "fi_le");
+        assert_eq!(safe_name("\0"), "_");
+        assert_eq!(safe_name("a\0b\0c"), "a_b_c");
+    }
+
+    /// Benign filenames are unmodified (regression guard — safe_name must not
+    /// corrupt valid filenames, including names with spaces, dots, and Unicode).
+    #[test]
+    fn test_sec_576_004_safe_name_benign_filenames_pass_through() {
+        assert_eq!(safe_name("report.pdf"), "report.pdf");
+        assert_eq!(safe_name("my file (v2).txt"), "my file (v2).txt");
+        assert_eq!(safe_name("résumé.docx"), "résumé.docx");
+        assert_eq!(safe_name(""), "");
+    }
+
     /// BC-3.9.006: network errors from step-2 (post_request_attachment) must append
     /// RETRY_HINT — symmetric with 4xx/5xx error branches.
     /// Uses 127.0.0.1:1 (established no-listener pattern in this codebase) to
