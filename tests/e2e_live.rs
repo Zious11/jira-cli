@@ -11886,6 +11886,11 @@ fn test_e2e_jsm_attachment_upload_no_flag() {
     assert!(!the_aid.is_empty(), "AC-004: AID must be non-empty");
 
     // Step 5 assertion: AID present in list (confirms upload succeeded via platform POST path).
+    let list_stderr = String::from_utf8_lossy(&list_verify_out.stderr);
+    if !list_verify_out.status.success() && list_stderr.contains("403") {
+        eprintln!("[SKIP] AC-004: list returned 403 — skipping JSM attachment upload no-flag verification (AC-007 §3.3)");
+        return;
+    }
     let list_stdout = String::from_utf8_lossy(&list_verify_out.stdout);
     assert!(list_verify_out.status.success(), "AC-004: list must exit 0");
     let list_arr: Vec<Value> = serde_json::from_str(&list_stdout)
