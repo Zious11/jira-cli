@@ -107,8 +107,10 @@ Uses `seed_issue` for issue creation (label ensures CI sweeper pick-up). Teardow
 
 ### Optional / feature-flagged
 - **JSM** (gated on `JR_E2E_JSM_PROJECT`; value `EJ`; skip cleanly when unset): thirteen test
-  functions covering queue list/view, requesttype list/fields, comment visibility, create
-  round-trip, resolution enforcement, the non-JSM guard, and JSM attachment upload visibility.
+  functions in total — twelve require `JR_E2E_JSM_PROJECT`; one (`test_e2e_jsm_non_jsm_guard`,
+  the non-JSM guard) runs without it. Covers queue list/view, requesttype list/fields, comment
+  visibility, create round-trip, resolution enforcement, the non-JSM guard, and JSM attachment
+  upload visibility.
   All tests use dynamic fixture discovery from list output (no hardcoded queue/RT id env vars).
   Scenarios 5, 6, 8, and the attachment tests create JSM requests and self-close in the test
   body (see §6-teardown note). Added in S-JSM-E2E-1; teardown improved in S-JSM-E2E-2;
@@ -124,9 +126,9 @@ Uses `seed_issue` for issue creation (label ensures CI sweeper pick-up). Teardow
   - `test_e2e_jsm_non_jsm_guard` — `queue list --project <ES>` exits 64; stderr contains `"Jira Service Management project"` (does NOT require `JR_E2E_JSM_PROJECT`)
   - `test_e2e_jsm_attachment_upload_public` — S-576-5: `--public --yes` two-step servicedeskapi flow; AID captured; teardown: delete AID then `jsm_self_close` (ADV-022)
   - `test_e2e_jsm_attachment_upload_internal` — S-576-5: `--internal` two-step with `public:false`; no gate prompt; teardown: delete AID then `jsm_self_close`
-  - `test_e2e_jsm_attachment_public_echo_shape` — S-576-6: `--public --output json` BC-3.9.011 confirmed schema pin (EC-3.9.011-1, P2-3c SATISFIED); uses `AttachmentDropGuard` for unwind-safe teardown (AC-010)
-  - `test_e2e_jsm_attachment_internal_echo_shape` — S-576-6: `--internal --output json` bare-array shape; no top-level `"public"` key (BC-3.9.011 EC-3.9.011-3); teardown: delete AID then `jsm_self_close`
-  - `test_e2e_jsm_attachment_upload_no_flag` — S-576-6: no visibility flag → platform POST (BC-3.9.002); AID appears in list; teardown: delete AID then `jsm_self_close`
+  - `test_e2e_jsm_attachment_public_echo_shape` — S-576-6: `--public --output json` BC-3.9.011 confirmed schema pin (EC-3.9.011-1, P2-3c SATISFIED); teardown: `AttachmentDropGuard` (unwind-safe AID delete + `jsm_self_close`, AC-010)
+  - `test_e2e_jsm_attachment_internal_echo_shape` — S-576-6: `--internal --output json` bare-array shape; no top-level `"public"` key (BC-3.9.011 EC-3.9.011-3); teardown: delete AID then `jsm_self_close` (ADV-022)
+  - `test_e2e_jsm_attachment_upload_no_flag` — S-576-6: no visibility flag → platform POST (BC-3.9.002); AID appears in list; teardown: delete AID then `jsm_self_close` (ADV-022)
 - **Sprint mutation** (`sprint add/remove`): only if `JR_E2E_BOARD_ID` is set.
 
 ### ADF markdown round-trip (`--markdown` → live ADF)
