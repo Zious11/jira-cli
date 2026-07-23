@@ -98,13 +98,21 @@ GET succeeding immediately.
 6. `issue move <key> $JR_E2E_STATUS_IN_PROGRESS` then `$JR_E2E_STATUS_DONE` (single-key `move` is idempotent). Status names are configurable via env vars (see §8); defaults are `"In Progress"` and `"Done"` respectively.
 7. Best-effort in-test close; **guaranteed** close handled by the workflow teardown (§5).
 
+### Attachment surface (S-576-6: `test_e2e_attachment_platform_roundtrip`)
+Full attachment round-trip against the ES project (`JR_E2E_PROJECT`; no `JR_E2E_JSM_PROJECT`
+required). Steps: upload → list (table + JSON) → download → delete → post-delete list.
+Uses `seed_issue` for issue creation (label ensures CI sweeper pick-up). Teardown:
+`attachment delete <AID>` (step 7) + `best_effort_close` (step 9) run before assertions
+(collect-results-then-assert pattern). Covers BC-2.7.001/002/007, BC-3.9.001/008/009/010.
+
 ### Optional / feature-flagged
-- **JSM** (gated on `JR_E2E_JSM_PROJECT`; value `EJ`; skip cleanly when unset): eight test
+- **JSM** (gated on `JR_E2E_JSM_PROJECT`; value `EJ`; skip cleanly when unset): eleven test
   functions covering queue list/view, requesttype list/fields, comment visibility, create
-  round-trip, resolution enforcement, and the non-JSM guard. All tests use dynamic fixture
-  discovery from list output (no hardcoded queue/RT id env vars). Scenarios 5, 6, and 8
-  create JSM requests and self-close in the test body (see §6-teardown note). Added in
-  S-JSM-E2E-1; teardown improved in S-JSM-E2E-2; Scenario 8 added in S-JSM-E2E-3
+  round-trip, resolution enforcement, the non-JSM guard, and JSM attachment upload visibility.
+  All tests use dynamic fixture discovery from list output (no hardcoded queue/RT id env vars).
+  Scenarios 5, 6, 8, and the attachment tests create JSM requests and self-close in the test
+  body (see §6-teardown note). Added in S-JSM-E2E-1; teardown improved in S-JSM-E2E-2;
+  Scenario 8 added in S-JSM-E2E-3; JSM attachment tests added in S-576-5/S-576-6
   (spec `docs/specs/jsm-e2e-coverage.md`).
   - `test_e2e_jsm_queue_list_shape` — queue list shape; per-item `id`+`name` assertions
   - `test_e2e_jsm_requesttype_list_shape` — requesttype list shape; per-item `id`+`name` assertions
@@ -114,6 +122,11 @@ GET succeeding immediately.
   - `test_e2e_jsm_create_request_roundtrip` — `issue create --request-type` (ADR-0014 fork); assert `{"key":"EJ-N"}`; `poll_view`; self-close
   - `test_e2e_jsm_resolution_enforcement` — `issue move --resolution` positive path (BC-3.2.011 + BC-2.3.036) + proactive enforcement: a no-resolution done-category move in `--no-input` asserts exit 64 + `--resolution` hint (BC-3.2.013); `issue resolutions` discovery (BC-3.2.010); reactive 400 backstop (BC-3.2.009); `jsm_self_close` on both tickets (S-JSM-RESOLUTION-REQUIRED)
   - `test_e2e_jsm_non_jsm_guard` — `queue list --project <ES>` exits 64; stderr contains `"Jira Service Management project"` (does NOT require `JR_E2E_JSM_PROJECT`)
+  - `test_e2e_jsm_attachment_upload_public` — S-576-5: `--public --yes` two-step servicedeskapi flow; AID captured; teardown: delete AID then `jsm_self_close` (ADV-022)
+  - `test_e2e_jsm_attachment_upload_internal` — S-576-5: `--internal` two-step with `public:false`; no gate prompt; teardown: delete AID then `jsm_self_close`
+  - `test_e2e_jsm_attachment_public_echo_shape` — S-576-6: `--public --output json` BC-3.9.011 confirmed schema pin (EC-3.9.011-1, P2-3c SATISFIED); uses `AttachmentDropGuard` for unwind-safe teardown (AC-010)
+  - `test_e2e_jsm_attachment_internal_echo_shape` — S-576-6: `--internal --output json` bare-array shape; no top-level `"public"` key (BC-3.9.011 EC-3.9.011-3); teardown: delete AID then `jsm_self_close`
+  - `test_e2e_jsm_attachment_upload_no_flag` — S-576-6: no visibility flag → platform POST (BC-3.9.002); AID appears in list; teardown: delete AID then `jsm_self_close`
 - **Sprint mutation** (`sprint add/remove`): only if `JR_E2E_BOARD_ID` is set.
 
 ### ADF markdown round-trip (`--markdown` → live ADF)
@@ -295,7 +308,7 @@ jobs:
 | `JR_E2E_API_TOKEN` | secret | `<365-day token>` | annual rotation (§9) |
 | `JR_E2E_PROJECT` | variable | `E2E` | Scrum project key |
 | `JR_E2E_BOARD_ID` | variable (optional) | `1` | enables sprint mutation |
-| `JR_E2E_JSM_PROJECT` | variable (optional) | `EJ` | enables JSM tests (8 test functions: S-JSM-E2E-1 added 7; S-JSM-E2E-3 added Scenario 8). Teardown for write tests (Scenarios 5+6+8) is `jsm_self_close(key, &h)` in the test body (S-JSM-E2E-2) — discovers a closing transition dynamically via `jr issue transitions --output json` (`statusCategory.key == "done"`) rather than hardcoding `"Done"`, because the EJ JSM workflow has no transition named "Done". S-JSM-E2E-3 extended `jsm_self_close` to also run `jr issue resolutions --output json` and pass `--resolution <R>` for properly-resolved teardown (fallback: move without `--resolution` if discovery fails). NOT the label-based CI sweeper (labels do not propagate from `servicedeskapi` to Jira issue labels). Orphan risk LOW and accepted (spec `docs/specs/jsm-e2e-coverage.md §6.3`). Activate post-merge by setting `JR_E2E_JSM_PROJECT=EJ` as an environment variable in the `jira-e2e` GitHub Environment. |
+| `JR_E2E_JSM_PROJECT` | variable (optional) | `EJ` | enables JSM tests (11 test functions: S-JSM-E2E-1 added 7; S-JSM-E2E-3 added Scenario 8; S-576-5 added 2 attachment upload tests; S-576-6 added 3 attachment echo shape/no-flag tests). Teardown for write tests is `jsm_self_close(key, &h)` in the test body (S-JSM-E2E-2); attachment tests additionally delete the AID before `jsm_self_close` (ADV-022). Discovers closing transition dynamically via `jr issue transitions --output json` (`statusCategory.key == "done"`) — EJ JSM workflow has no "Done" transition. S-JSM-E2E-3 extended `jsm_self_close` with resolution discovery. S-576-6 added `AttachmentDropGuard` for unwind-safe teardown (AC-002 Drop-guard obligation). P2-3c probe obligation SATISFIED (S-576-5 probe runs 29936980027+29940792930+29945857059, 2026-07-22); BC-3.9.007/011 confirmed schema pinned in S-576-6 assertions. NOT the label-based CI sweeper (labels do not propagate from `servicedeskapi` to Jira issue labels). Orphan risk LOW and accepted (spec `docs/specs/jsm-e2e-coverage.md §6.3`). Activate post-merge by setting `JR_E2E_JSM_PROJECT=EJ` as an environment variable in the `jira-e2e` GitHub Environment. |
 | `JR_E2E_JSM_RESOLUTION` | variable (optional) | `Done` | resolution name override for `jsm_self_close` teardown and `test_e2e_jsm_resolution_enforcement` (S-JSM-E2E-3). When set, overrides the auto-discovered first resolution from `jr issue resolutions`. Useful when the instance has multiple resolutions and a specific one must be used (e.g., "Fixed" vs "Won't Fix"). When unset, the helper uses the first resolution in the list. If the instance has no resolutions configured, teardown falls back to moving without `--resolution`. |
 | `JR_E2E_STATUS_DONE` | variable (optional) | `Done` | workflow status name for "closed/done"; default `"Done"`. Set if the provisioned Scrum project uses a different status name (e.g. `"Closed"`). Used in write-flow step 6 and teardown. |
 | `JR_E2E_STATUS_IN_PROGRESS` | variable (optional) | `In Progress` | workflow status name for "in progress"; default `"In Progress"`. Set if the provisioned Scrum project uses a different status name. Used in write-flow step 6. |
