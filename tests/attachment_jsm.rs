@@ -4290,3 +4290,429 @@ async fn test_bc_3_9_007_step2_bare_array_echo_exits_0_best_effort() {
         "P6-001 BC-3.9.007: warning must appear on stderr when echo shape unrecognized; got: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Mutation-gate tests — S-576-5 PR #640 mutant-kill supplement
+//
+// Four tests covering surviving mutants in src/cli/issue/attachments.rs:
+//   C  — line 1425: `jsm_public_gate` "yes" long-form alias (eq_ignore_ascii_case)
+//   D1 — line 1619: `replace_existing && has_replace_matches` (public path)
+//   D2 — line 1638: `replace_existing && has_replace_matches` (internal/else-if path)
+//   E  — line 1676: `!is_benign` delete-error propagation
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// C: test_jsm_public_gate_long_form_yes_accepted
+//
+// `jsm_public_gate` (line 1425): the "yes" long-form alias must be accepted.
+// `trimmed.eq_ignore_ascii_case("yes")` — deleting or mutating this arm allows
+// "yes\n" to fall through to a false return, cancelling the upload.
+//
+// RED evidence (mutant): `|| trimmed.eq_ignore_ascii_case("yes")` deleted →
+// stdin "yes\n" → gate returns false → "Upload cancelled." → exit 0 but with
+// cancelled:true output, NOT the uploaded attachments (test expects exit 0 with
+// uploaded attachment, so assertions on step-1 POST being made would catch it).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_jsm_public_gate_long_form_yes_accepted() {
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("attach.txt");
+    std::fs::write(&file, b"hello").unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJ-22"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_get_response("EJ-22", "EJ")))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/EJ"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(jsm_project_response("EJ", "10099")))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(service_desk_list_response("42", "10099")),
+        )
+        .mount(&server)
+        .await;
+
+    // Step-1: attachTemporaryFile — must be called if "yes" gate accepted
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/servicedesk/42/attachTemporaryFile"))
+        .and(header("X-Atlassian-Token", "no-check"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "temporaryAttachments": [{"temporaryAttachmentId": "tmp-yes-001", "fileName": "attach.txt"}]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request/EJ-22/attachment"))
+        .respond_with(
+            ResponseTemplate::new(201).set_body_json(attachment_create_result_dto(vec![
+                attachment_object("20100", "attach.txt"),
+            ])),
+        )
+        .mount(&server)
+        .await;
+
+    // Long-form "yes\n" — covers the eq_ignore_ascii_case("yes") branch at line 1425.
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .env("JR_STDIN_IS_TTY", "1")
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            "EJ-22",
+            &file.to_string_lossy(),
+            "--public",
+        ])
+        .write_stdin("yes\n")
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "C / line 1425: 'yes' long-form must be accepted by jsm_public_gate → exit 0; \
+         got {:?}\nstdout: {stdout}\nstderr: {stderr}",
+        output.status.code()
+    );
+    // Upload cancelled implies the gate returned false — must not happen.
+    assert!(
+        !stderr.contains("Upload cancelled"),
+        "C / line 1425: 'yes' must not cancel; got: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// D1: test_jsm_public_replace_zero_matches_consumer1_not_consumer3
+//
+// line 1619: `replace_existing && has_replace_matches` (interactive public path).
+//
+// With the `||` mutant (`replace_existing || has_replace_matches`), the combined
+// consumer-3 gate fires even when zero filenames match.  The test confirms that
+// when --replace-existing is set but there are ZERO same-name matches, the
+// consumer-1 gate fires (contains "as customer-visible (public)?") and consumer-3
+// does NOT fire (no "and replace existing attachment(s):").
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_jsm_public_replace_zero_matches_consumer1_not_consumer3() {
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let tmp = TempDir::new().unwrap();
+    // Upload "nomatch.txt"; attachment list has only "other.txt" → zero filename matches.
+    let file = tmp.path().join("nomatch.txt");
+    std::fs::write(&file, b"content").unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJ-23"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_get_response("EJ-23", "EJ")))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/EJ"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(jsm_project_response("EJ", "10099")))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(service_desk_list_response("42", "10099")),
+        )
+        .mount(&server)
+        .await;
+
+    // Attachment list: "other.txt" exists — NOT "nomatch.txt" → has_replace_matches = false.
+    // .with_priority(1) wins over the EJ-23 issue-GET mock (same path, registered first).
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJ-23"))
+        .and(wiremock::matchers::query_param("fields", "attachment"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(attachments_list_response(
+                "EJ-23",
+                vec![platform_attachment_object("AID-99001", "other.txt")],
+            )),
+        )
+        .with_priority(1)
+        .mount(&server)
+        .await;
+
+    // Step-1 and step-2 mocks: upload proceeds after consumer-1 gate accepts "y".
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/servicedesk/42/attachTemporaryFile"))
+        .and(header("X-Atlassian-Token", "no-check"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "temporaryAttachments": [{"temporaryAttachmentId": "tmp-d1-001", "fileName": "nomatch.txt"}]
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request/EJ-23/attachment"))
+        .respond_with(
+            ResponseTemplate::new(201).set_body_json(attachment_create_result_dto(vec![
+                attachment_object("20101", "nomatch.txt"),
+            ])),
+        )
+        .mount(&server)
+        .await;
+
+    // Interactive "y\n": consumer-1 fires (not consumer-3); upload completes.
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .env("JR_STDIN_IS_TTY", "1")
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            "EJ-23",
+            &file.to_string_lossy(),
+            "--public",
+            "--replace-existing",
+        ])
+        .write_stdin("y\n")
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "D1 / line 1619: --public --replace-existing zero matches + 'y' → exit 0; \
+         got {:?}\nstdout: {stdout}\nstderr: {stderr}",
+        output.status.code()
+    );
+    // Consumer-1 gate text must appear (zero matches → not combined gate).
+    assert!(
+        stderr.contains("as customer-visible (public)?"),
+        "D1 / line 1619: consumer-1 prompt must fire when matches=0; got: {stderr}"
+    );
+    // Consumer-3 combined gate text must NOT appear.
+    assert!(
+        !stderr.contains("and replace existing attachment(s):"),
+        "D1 / line 1619: consumer-3 combined gate must NOT fire when matches=0; got: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// D2: test_jsm_internal_replace_zero_matches_no_gate_upload_proceeds
+//
+// line 1638: `else if replace_existing && has_replace_matches` (internal path).
+//
+// With the `||` mutant, consumer-2 gate fires even with zero matches.
+// Combined with `--no-input`, the consumer-2 `if no_input && !yes` branch would
+// exit 64 — preventing the upload entirely.
+// Original: zero matches → condition false → no gate → upload proceeds.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_jsm_internal_replace_zero_matches_no_gate_upload_proceeds() {
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let tmp = TempDir::new().unwrap();
+    // Upload "newfile.txt"; attachment list has only "existing.txt" → zero matches.
+    let file = tmp.path().join("newfile.txt");
+    std::fs::write(&file, b"data").unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJ-24"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_get_response("EJ-24", "EJ")))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/EJ"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(jsm_project_response("EJ", "10099")))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(service_desk_list_response("42", "10099")),
+        )
+        .mount(&server)
+        .await;
+
+    // Attachment list: "existing.txt" but NOT "newfile.txt" → has_replace_matches = false.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJ-24"))
+        .and(wiremock::matchers::query_param("fields", "attachment"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(attachments_list_response(
+                "EJ-24",
+                vec![platform_attachment_object("AID-99002", "existing.txt")],
+            )),
+        )
+        .with_priority(1)
+        .mount(&server)
+        .await;
+
+    // Step-1 must be called: if no gate fires the two-step upload runs.
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/servicedesk/42/attachTemporaryFile"))
+        .and(header("X-Atlassian-Token", "no-check"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "temporaryAttachments": [{"temporaryAttachmentId": "tmp-d2-001", "fileName": "newfile.txt"}]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request/EJ-24/attachment"))
+        .respond_with(
+            ResponseTemplate::new(201).set_body_json(attachment_create_result_dto(vec![
+                attachment_object("20102", "newfile.txt"),
+            ])),
+        )
+        .mount(&server)
+        .await;
+
+    // --internal --replace-existing --no-input without --yes:
+    // zero matches → else-if condition false → no gate fires → upload runs.
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            "EJ-24",
+            &file.to_string_lossy(),
+            "--internal",
+            "--replace-existing",
+            "--no-input",
+        ])
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "D2 / line 1638: --internal --replace-existing --no-input zero matches \
+         → no gate → exit 0; got {:?}\nstdout: {stdout}\nstderr: {stderr}",
+        output.status.code()
+    );
+    // Consumer-2 hint must NOT appear (gate did not fire).
+    assert!(
+        !stderr.contains("Use --yes to confirm deletion"),
+        "D2 / line 1638: consumer-2 hint must NOT appear when matches=0; got: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// E: test_replace_existing_nonbenign_delete_error_propagates
+//
+// line 1676: `if !is_benign { return Err(e); }` — non-benign delete error propagation.
+//
+// With the `!` deletion mutant (`if is_benign { return Err(e); }`):
+// - A non-benign error (e.g. HTTP 500) has is_benign=false → condition false →
+//   error silently swallowed → upload continues → exits 0.
+// - The test asserts exit non-zero AND step-1 was never called.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_replace_existing_nonbenign_delete_error_propagates() {
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("upload.txt");
+    std::fs::write(&file, b"data").unwrap();
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJ-25"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_get_response("EJ-25", "EJ")))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/EJ"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(jsm_project_response("EJ", "10099")))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(service_desk_list_response("42", "10099")),
+        )
+        .mount(&server)
+        .await;
+
+    // Attachment list: "upload.txt" exists → 1 match → delete loop fires.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJ-25"))
+        .and(wiremock::matchers::query_param("fields", "attachment"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(attachments_list_response(
+                "EJ-25",
+                vec![platform_attachment_object("AID-DEL-001", "upload.txt")],
+            )),
+        )
+        .with_priority(1)
+        .mount(&server)
+        .await;
+
+    // DELETE returns 500 — non-benign (is_benign = false).
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/attachment/AID-DEL-001"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("Internal Server Error"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Step-1 must NOT be called: error propagates before it is reached.
+    Mock::given(method("POST"))
+        .and(path(
+            "/rest/servicedeskapi/servicedesk/42/attachTemporaryFile",
+        ))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            "EJ-25",
+            &file.to_string_lossy(),
+            "--public",
+            "--replace-existing",
+            "--yes",
+        ])
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "E / line 1676: non-benign DELETE 500 must exit non-zero; \
+         got exit 0\nstdout: {stdout}\nstderr: {stderr}"
+    );
+}

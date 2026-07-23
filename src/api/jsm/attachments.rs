@@ -391,6 +391,8 @@ pub async fn post_request_attachment(
 mod tests {
     use super::*;
     use crate::api::client::JiraClient;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     // SEC-576-004 / CWE-93 unit pins for the safe_name transformation guard.
     //
@@ -471,6 +473,233 @@ mod tests {
         assert!(
             err_string.contains("Temporary attachment IDs may have expired"),
             "BC-3.9.006: network error must append RETRY_HINT\ngot: {err_string}"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Mutation-gate tests for attach_temporary_file retry loop (S-576-5 mutant kill).
+    //
+    // These tests cover the three comparison sites that cargo-mutants flagged as
+    // missed on PR #640:
+    //   line 108 (attempt < MAX_RETRIES)  — A1 + A2
+    //   line 111 (delay > MAX_RETRY_AFTER_SECS) — A3 + A4
+    //   line 228 (Some(Value::String(s)) arm of curate_jsm_attachment_entry) — B
+    //
+    // Tests A1/A2/A4 use `start_paused = true` so tokio::time::sleep completes
+    // instantly (the real network I/O used by wiremock is unaffected).
+    // ---------------------------------------------------------------------------
+
+    /// A1 – line 108: a single 429 followed by a 200 must retry and succeed.
+    ///
+    /// Kills mutants that prevent retrying on 429 (e.g. `attempt < MAX_RETRIES`
+    /// → `attempt > MAX_RETRIES` or `attempt >= MAX_RETRIES`).  With those
+    /// mutants the first 429 is NOT retried → error returned → test fails.
+    #[tokio::test(start_paused = true)]
+    async fn test_attach_tmp_429_then_200_retries_and_succeeds() {
+        let server = MockServer::start().await;
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+
+        // First POST → 429 (no Retry-After; delay = DEFAULT_RETRY_SECS=1; clock paused → instant)
+        Mock::given(method("POST"))
+            .and(path(
+                "/rest/servicedeskapi/servicedesk/42/attachTemporaryFile",
+            ))
+            .and(header("X-Atlassian-Token", "no-check"))
+            .respond_with(ResponseTemplate::new(429))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+
+        // Second POST → 200 with temporaryAttachmentId
+        Mock::given(method("POST"))
+            .and(path(
+                "/rest/servicedeskapi/servicedesk/42/attachTemporaryFile",
+            ))
+            .and(header("X-Atlassian-Token", "no-check"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "temporaryAttachments": [{"temporaryAttachmentId": "tmp-a1-001", "fileName": "t"}]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = JiraClient::new_for_test(server.uri(), "Basic dGVzdA==".to_string());
+        let result = attach_temporary_file(&client, "42", tmp.path()).await;
+        assert!(
+            result.is_ok(),
+            "A1: 429→200 must succeed; got: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), "tmp-a1-001");
+
+        let reqs = server.received_requests().await.unwrap();
+        assert_eq!(
+            reqs.len(),
+            2,
+            "A1: must make exactly 2 POSTs; got {}",
+            reqs.len()
+        );
+    }
+
+    /// A2 – line 108: MAX_RETRIES+1 consecutive 429 responses must exhaust
+    /// retries and return an error after exactly 4 POSTs.
+    ///
+    /// Kills the `attempt < MAX_RETRIES` → `attempt <= MAX_RETRIES` mutant:
+    /// with that mutant attempt=3 retries one more time, the loop exhausts, and
+    /// the `unreachable!()` fires (panic → test fails).  Also kills any mutant
+    /// that causes fewer than 4 POSTs.
+    #[tokio::test(start_paused = true)]
+    async fn test_attach_tmp_429_exhausts_retries_returns_error() {
+        let server = MockServer::start().await;
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+
+        // Always return 429; clock paused so each 1s sleep is instant.
+        Mock::given(method("POST"))
+            .and(path(
+                "/rest/servicedeskapi/servicedesk/42/attachTemporaryFile",
+            ))
+            .and(header("X-Atlassian-Token", "no-check"))
+            .respond_with(ResponseTemplate::new(429))
+            .mount(&server)
+            .await;
+
+        let client = JiraClient::new_for_test(server.uri(), "Basic dGVzdA==".to_string());
+        let result = attach_temporary_file(&client, "42", tmp.path()).await;
+        assert!(result.is_err(), "A2: must fail after MAX_RETRIES; got Ok");
+
+        // Attempts 0,1,2 retry; attempt 3 falls through to error handler: 4 POSTs total.
+        let reqs = server.received_requests().await.unwrap();
+        assert_eq!(
+            reqs.len(),
+            4,
+            "A2: must make exactly 4 POSTs (MAX_RETRIES+1); got {}",
+            reqs.len()
+        );
+    }
+
+    /// A3 – line 111: Retry-After: 61 exceeds MAX_RETRY_AFTER_SECS (60) cap →
+    /// immediate error on the first attempt.
+    ///
+    /// Kills mutants that invert the cap check (e.g. `delay > 60` →
+    /// `delay < 60`): those mutants do NOT return a cap error for delay=61,
+    /// instead sleeping and retrying → test receives only 1 POST but the
+    /// second mock would return a 429 again → eventual timeout or wrong result.
+    #[tokio::test]
+    async fn test_attach_tmp_retry_after_cap_exceeded_returns_error() {
+        let server = MockServer::start().await;
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+
+        // 429 with Retry-After: 61 — strictly above the 60s cap.
+        Mock::given(method("POST"))
+            .and(path(
+                "/rest/servicedeskapi/servicedesk/42/attachTemporaryFile",
+            ))
+            .and(header("X-Atlassian-Token", "no-check"))
+            .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "61"))
+            .mount(&server)
+            .await;
+
+        let client = JiraClient::new_for_test(server.uri(), "Basic dGVzdA==".to_string());
+        let result = attach_temporary_file(&client, "42", tmp.path()).await;
+        assert!(
+            result.is_err(),
+            "A3: Retry-After:61 > cap must return error"
+        );
+        let err_str = format!("{}", result.unwrap_err());
+        assert!(
+            err_str.contains("exceeds") && err_str.contains("cap"),
+            "A3: error must describe cap exceeded; got: {err_str}"
+        );
+
+        // Cap fires on attempt=0: exactly 1 POST (no retry attempted).
+        let reqs = server.received_requests().await.unwrap();
+        assert_eq!(
+            reqs.len(),
+            1,
+            "A3: cap must fire on first attempt; got {} POSTs",
+            reqs.len()
+        );
+    }
+
+    /// A4 – line 111: Retry-After: 60 equals MAX_RETRY_AFTER_SECS boundary —
+    /// must NOT fire the cap error and must retry successfully.
+    ///
+    /// Kills the `delay > MAX_RETRY_AFTER_SECS` → `delay >= MAX_RETRY_AFTER_SECS`
+    /// mutant: with that mutant `60 >= 60 = true` → cap error returned →
+    /// test expects success → fails.
+    #[tokio::test(start_paused = true)]
+    async fn test_attach_tmp_retry_after_60_boundary_not_capped_retries() {
+        let server = MockServer::start().await;
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+
+        // First POST → 429 with Retry-After: 60 (at boundary; 60 is NOT > 60).
+        // Clock paused so the 60s sleep is instant.
+        Mock::given(method("POST"))
+            .and(path(
+                "/rest/servicedeskapi/servicedesk/42/attachTemporaryFile",
+            ))
+            .and(header("X-Atlassian-Token", "no-check"))
+            .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "60"))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+
+        // Second POST → 200 after the paused-clock 60s sleep.
+        Mock::given(method("POST"))
+            .and(path(
+                "/rest/servicedeskapi/servicedesk/42/attachTemporaryFile",
+            ))
+            .and(header("X-Atlassian-Token", "no-check"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "temporaryAttachments": [{"temporaryAttachmentId": "tmp-a4-001", "fileName": "t"}]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = JiraClient::new_for_test(server.uri(), "Basic dGVzdA==".to_string());
+        let result = attach_temporary_file(&client, "42", tmp.path()).await;
+        assert!(
+            result.is_ok(),
+            "A4: Retry-After:60 equals cap boundary — must retry and succeed; got: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), "tmp-a4-001");
+    }
+
+    /// B – line 228: `curate_jsm_attachment_entry` must preserve a bare-string
+    /// `created` field verbatim (the `Some(Value::String(s))` arm).
+    ///
+    /// Kills the mutant that removes this arm: without it, a string-form
+    /// `created` falls through to `_ => String::new()` → curated field is
+    /// empty → assertion fails.
+    #[test]
+    fn test_curate_jsm_attachment_entry_string_created_preserved() {
+        let v = serde_json::json!({
+            "filename": "report.pdf",
+            "created": "2026-01-01T00:00:00Z",
+            "_links": {
+                "jiraRest": "https://example.atlassian.net/rest/api/3/attachment/99999",
+                "content": "https://example.atlassian.net/rest/api/3/attachment/content/99999"
+            },
+            "size": 512_u64
+        });
+        let curated = curate_jsm_attachment_entry(&v);
+        assert_eq!(
+            curated.created, "2026-01-01T00:00:00Z",
+            "B: string-form 'created' must be preserved verbatim; got: {}",
+            curated.created
+        );
+        // Confirm object-form and absent paths are not confused with this arm.
+        let v_obj = serde_json::json!({"created": {"iso8601": "2026-07-01T00:00:00Z"}});
+        assert_eq!(
+            curate_jsm_attachment_entry(&v_obj).created,
+            "2026-07-01T00:00:00Z",
+            "B: object-form created must still use iso8601 sub-key"
+        );
+        let v_null: serde_json::Value = serde_json::json!({"created": null});
+        assert_eq!(
+            curate_jsm_attachment_entry(&v_null).created,
+            "",
+            "B: null/absent created must fall through to empty string"
         );
     }
 }
