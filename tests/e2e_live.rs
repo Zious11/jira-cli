@@ -11638,17 +11638,19 @@ fn test_e2e_jsm_attachment_internal_echo_shape() {
     // Parse as Value first to assert bare-array structure (no "public"/"uploaded" envelope).
     let raw_v: Value =
         serde_json::from_str(&upload_stdout).expect("AC-003: --output json must be valid JSON");
-    // BC-3.9.011 EC-3.9.011-1: output MUST be a bare array, not an object envelope.
+    // BC-3.9.011 EC-3.9.011-3: output MUST NOT be an object envelope — catches
+    // {"public":…,"uploaded":[…]} regression specifically (P2-3c SATISFIED).
+    // This assert fires before is_array() so a regression trips the EC-3.9.011-3 label.
+    assert!(
+        !raw_v.is_object(),
+        "AC-003: --internal output must NOT be an object envelope — bare array required \
+         (BC-3.9.011 EC-3.9.011-3); got: {raw_v}"
+    );
+    // BC-3.9.011 EC-3.9.011-1: output MUST be a bare array, not any other non-object type.
     assert!(
         raw_v.is_array(),
         "AC-003: --internal output must be a bare JSON array (BC-3.9.011 EC-3.9.011-1); \
          got: {raw_v}"
-    );
-    // BC-3.9.011 EC-3.9.011-3: no top-level 'public' key (P2-3c SATISFIED).
-    assert!(
-        raw_v.get("public").is_none(),
-        "AC-003: --internal output must NOT contain a top-level 'public' key \
-         (BC-3.9.011 EC-3.9.011-3); got: {raw_v}"
     );
 
     let arr = raw_v.as_array().expect("already asserted is_array");
