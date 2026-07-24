@@ -631,6 +631,42 @@ fn classify_write_error(
     }
 }
 
+/// Compute the two display strings used in all write-error messages for `final_path`.
+///
+/// Returns `(dir_display, dest_display)` where:
+/// - `dir_display`  — parent directory, rendered verbatim (operator-controlled); falls
+///   back to `"."` when the path has no non-empty parent component.
+/// - `dest_display` — full destination string for error messages: `"<dir>/<file>"` when
+///   a non-empty parent exists, otherwise just the sanitized filename (no leading
+///   path-separator prefix).
+///
+/// The filename portion is run through `display_sanitize_filename` (CWE-116 / BC-2.7.011).
+/// The parent portion is rendered verbatim (operator-controlled; no sanitization applied).
+///
+/// # Mutant-killing contract (FIX-F5-010)
+/// - Non-empty parent path: `dir_display` == the parent (NOT `"."`).
+/// - Bare filename (no parent / empty parent):
+///   - `dir_display` == `"."` (NOT `""`).
+///   - `dest_display` == the filename — no leading path-separator character.
+fn write_error_display_strings(final_path: &std::path::Path) -> (String, String) {
+    let final_fname = final_path
+        .file_name()
+        .map(|n| display_sanitize_filename(&n.to_string_lossy()))
+        .unwrap_or_else(|| display_sanitize_filename(&final_path.to_string_lossy()));
+    let final_dir_display = final_path
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .map(|d| d.display().to_string())
+        .unwrap_or_else(|| ".".to_string());
+    let final_dest_display = match final_path.parent() {
+        Some(d) if !d.as_os_str().is_empty() => {
+            format!("{}{}{final_fname}", d.display(), std::path::MAIN_SEPARATOR)
+        }
+        _ => final_fname,
+    };
+    (final_dir_display, final_dest_display)
+}
+
 /// Stream `response` body to `final_path` using an atomic temp-file + rename pattern.
 ///
 /// Temp file: `tmp_<16 random hex digits>` in the SAME directory as `final_path`
@@ -659,21 +695,7 @@ async fn stream_to_file(
     // BC-2.7.012 v1.3.102: pre-compute display strings shared across all four I/O
     // error sites below. CWE-116 / BC-2.7.011: display-sanitize the server-supplied
     // filename portion; the operator-controlled parent directory is rendered verbatim.
-    let final_fname = final_path
-        .file_name()
-        .map(|n| display_sanitize_filename(&n.to_string_lossy()))
-        .unwrap_or_else(|| display_sanitize_filename(&final_path.to_string_lossy()));
-    let final_dir_display = final_path
-        .parent()
-        .filter(|d| !d.as_os_str().is_empty())
-        .map(|d| d.display().to_string())
-        .unwrap_or_else(|| ".".to_string());
-    let final_dest_display = match final_path.parent() {
-        Some(d) if !d.as_os_str().is_empty() => {
-            format!("{}{}{final_fname}", d.display(), std::path::MAIN_SEPARATOR)
-        }
-        _ => final_fname,
-    };
+    let (final_dir_display, final_dest_display) = write_error_display_strings(final_path);
 
     let result: anyhow::Result<u64> = async {
         let mut file = tokio::fs::File::create(&tmp_path).await.map_err(|e| {
@@ -3388,6 +3410,68 @@ mod tests {
         assert!(
             !msg.contains("Check directory permissions"),
             "Generic fallback must NOT include 'Check directory permissions'; got: {msg}"
+        );
+    }
+
+    // FIX-F5-010: write_error_display_strings mutant-killing tests.
+    //
+    // Mutant 1 ("delete ! in stream_to_file", line 668): changes
+    //   `.filter(|d| !d.as_os_str().is_empty())`
+    //   to `.filter(|d| d.as_os_str().is_empty())`.
+    //   - Normal path ("out/dir/file.txt"): non-empty parent is REJECTED by the mutated
+    //     filter (is_empty() → false → filter drops it), so unwrap_or falls to "." — wrong.
+    //   - Bare filename ("file.txt"): empty parent is ACCEPTED by the mutated filter
+    //     (is_empty() → true → filter keeps it), so .map returns "" — wrong.
+    //
+    // Mutant 2 ("replace match guard !d.as_os_str().is_empty() with true", line 672):
+    //   changes `Some(d) if !d.as_os_str().is_empty()` to `Some(d) if true`.
+    //   - Bare filename: Some("") now matches first arm, dest becomes "/" + fname — wrong.
+    //   - Normal path: arm already matched correctly (non-empty parent), no observable change.
+    //
+    // The two tests together kill both mutants by pinning exact output for both cases.
+
+    #[test]
+    fn test_write_error_display_strings_normal_path_kills_mutant1() {
+        // Non-empty parent "out/dir": the filter and guard both pass in correct code.
+        // Mutant 1 (! deleted): filter rejects "out/dir" (not empty) → dir falls to "."
+        // → assertion `dir == "out/dir"` fails, killing the mutant.
+        let path = std::path::Path::new("out/dir/file.txt");
+        let (dir, dest) = write_error_display_strings(path);
+        assert_eq!(
+            dir, "out/dir",
+            "non-empty parent must be used verbatim as dir; mutant 1 would yield '.'"
+        );
+        assert!(
+            dest.starts_with("out/dir"),
+            "dest must start with the parent directory; got: {dest}"
+        );
+        assert!(
+            dest.contains("file.txt"),
+            "dest must contain the filename portion; got: {dest}"
+        );
+    }
+
+    #[test]
+    fn test_write_error_display_strings_bare_filename_kills_both_mutants() {
+        // Bare filename "file.txt": Path::parent() → Some("") (empty component).
+        // Correct: dir=".", dest="file.txt".
+        //
+        // Mutant 1 (! deleted): empty parent is ACCEPTED by mutated filter
+        //   (d.as_os_str().is_empty() → true) → .map returns "" → dir="" ≠ "." → caught.
+        //
+        // Mutant 2 (guard replaced with true): Some("") matches first arm →
+        //   dest = format!("{}{}file.txt", "", MAIN_SEPARATOR) = "/file.txt" on Unix,
+        //   "\file.txt" on Windows — either way dest ≠ "file.txt" → caught.
+        let path = std::path::Path::new("file.txt");
+        let (dir, dest) = write_error_display_strings(path);
+        assert_eq!(
+            dir, ".",
+            "bare filename must fall back to '.'; mutant 1 (! deleted) would yield ''"
+        );
+        assert_eq!(
+            dest, "file.txt",
+            "bare filename dest must be just the filename with no leading separator; \
+             mutant 2 (guard=true) would prepend the path separator"
         );
     }
 }
