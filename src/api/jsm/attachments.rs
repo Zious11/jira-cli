@@ -481,9 +481,8 @@ mod tests {
     /// `test_f5_r2_002_safe_name_backslash_mapped_to_underscore` in
     /// `src/api/jira/attachments.rs`.
     ///
-    /// RED: the current guard (`matches!(c, '\r' | '\n' | '\0' | '"')`) does NOT
-    /// include `\` → `safe_name("file\\name.txt")` returns `"file\\name.txt"`,
-    /// not `"file_name.txt"` → this test fails until the guard is extended.
+    /// GREEN (FIX-F5-007): guard extended to `matches!(c, '\r' | '\n' | '\0' | '"' | '\\')` —
+    /// `safe_name("file\\name.txt")` now returns `"file_name.txt"` as required.
     #[test]
     fn test_f5_r2_002_jsm_safe_name_backslash_mapped_to_underscore() {
         assert_eq!(

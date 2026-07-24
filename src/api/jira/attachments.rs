@@ -488,7 +488,7 @@ mod tests {
     // SEC-576-004 / CWE-93 unit pins for the safe_name transformation guard.
     //
     // The guard lives inline in `upload_attachments`:
-    //   raw_name.chars().map(|c| if matches!(c, '\r' | '\n' | '\0' | '"') { '_' } else { c }).collect()
+    //   raw_name.chars().map(|c| if matches!(c, '\r' | '\n' | '\0' | '"' | '\\') { '_' } else { c }).collect()
     //
     // Mirrored here as a free function so the transformation is testable without
     // spawning a subprocess or needing a real file on disk.
@@ -575,9 +575,8 @@ mod tests {
     /// a server-supplied filename could smuggle a traversal component into the
     /// `filename=` value.
     ///
-    /// RED: the current guard (`matches!(c, '\r' | '\n' | '\0' | '"')`) does NOT
-    /// include `\` → `safe_name("file\\name.txt")` returns `"file\\name.txt"`,
-    /// not `"file_name.txt"` → this test fails until the guard is extended.
+    /// GREEN (FIX-F5-007): guard extended to `matches!(c, '\r' | '\n' | '\0' | '"' | '\\')` —
+    /// `safe_name("file\\name.txt")` now returns `"file_name.txt"` as required.
     #[test]
     fn test_f5_r2_002_safe_name_backslash_mapped_to_underscore() {
         assert_eq!(
