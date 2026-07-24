@@ -842,8 +842,12 @@ async fn handle_batch_download(
     // BC-2.7.009 ~830), then truncate to N.
     if let Some(n) = newest_n {
         filtered.sort_by(|a, b| {
+            // RFC 3339 relaxed parser — accepts any fractional-second precision (0, 1, 2, 3,
+            // 4+ digits) and both +HH:MM and +HHMM offset forms, same as the --older-than path.
+            // The previous %.3f format rejected 1-digit and 4-digit fractional seconds, causing
+            // those attachments to sort LAST (None > Some ordering) — F5-R1-002.
             let parse_dt =
-                |s: &str| chrono::DateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.3f%z").ok();
+                |s: &str| s.parse::<chrono::DateTime<chrono::FixedOffset>>().ok();
             match (parse_dt(&a.created), parse_dt(&b.created)) {
                 (Some(a_dt), Some(b_dt)) => b_dt.cmp(&a_dt), // newest first
                 (Some(_), None) => std::cmp::Ordering::Less, // parsed before unparseable
