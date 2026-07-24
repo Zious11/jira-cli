@@ -318,11 +318,10 @@ pub async fn post_request_attachment(
                 .url()
                 .and_then(|u| u.host_str().map(str::to_string))
                 .unwrap_or_else(|| "Jira".to_string());
-            // BC-3.9.006: network errors in step-2 must exit 1 and append RETRY_HINT.
-            JrError::ApiError {
-                status: 0,
-                message: format!("Could not reach {host} — check your connection\n{RETRY_HINT}"),
-            }
+            // F5-R1-007: use canonical NetworkError variant (exit 1), not ApiError{status:0}
+            // (status=0 is not a real HTTP code and leaks implementation noise).
+            // NetworkError format: "Could not reach {host} — check your connection".
+            JrError::NetworkError(host)
         })?;
 
     let status = response.status();
@@ -480,10 +479,13 @@ mod tests {
         assert_eq!(safe_name(""), "");
     }
 
-    /// BC-3.9.006: network errors from step-2 (post_request_attachment) must append
-    /// RETRY_HINT — symmetric with 4xx/5xx error branches.
+    /// BC-3.9.006: network errors from step-2 (post_request_attachment) exit 1
+    /// and produce a connectivity error message (F5-R1-007: uses JrError::NetworkError,
+    /// not ApiError{status:0}). RETRY_HINT is no longer embedded in network errors
+    /// (it is still present on 4xx/5xx HTTP error branches). NetworkError format:
+    /// "Could not reach {host} — check your connection".
     /// Uses 127.0.0.1:1 (established no-listener pattern in this codebase) to
-    /// trigger a ECONNREFUSED without requiring a real server.
+    /// trigger ECONNREFUSED without requiring a real server.
     #[tokio::test]
     async fn test_bc_3_9_006_step2_network_error_appends_retry_hint() {
         let client = JiraClient::new_for_test(
@@ -496,9 +498,11 @@ mod tests {
             "expected an error when server is unreachable"
         );
         let err_string = format!("{}", result.unwrap_err());
+        // F5-R1-007: NetworkError format is "Could not reach {host} — check your connection".
         assert!(
-            err_string.contains("Temporary attachment IDs may have expired"),
-            "BC-3.9.006: network error must append RETRY_HINT\ngot: {err_string}"
+            err_string.contains("check your connection"),
+            "BC-3.9.006 (updated F5-R1-007): step-2 network error must mention connectivity; \
+             got: {err_string}"
         );
     }
 
