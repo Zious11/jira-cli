@@ -589,8 +589,8 @@ fn batch_path_is_within_dir(
 
 /// Classify a disk-write `io::Error` into a user-friendly discriminated message.
 ///
-/// **BC-2.7.012 v1.3.102** — used by all four I/O sites in `stream_to_file`
-/// (`File::create`, `write_all`, `rename`) so that single-mode (propagate → exit 1)
+/// **BC-2.7.012 v1.3.104** — used by all four I/O sites in `stream_to_file`
+/// (`File::create`, `write_all`, `flush`, `rename`) so that single-mode (propagate → exit 1)
 /// and batch-mode (per-file fail-soft warning) paths both benefit from one chokepoint.
 ///
 /// # Branch mapping
@@ -677,7 +677,7 @@ fn write_error_display_strings(final_path: &std::path::Path) -> (String, String)
 /// On ANY error after temp-file creation, the temp file is deleted before returning
 /// the error (cleanup guarantee for BC-2.7.007 EC-2.7.007-4).
 ///
-/// **Write-error classification (BC-2.7.012 v1.3.102):** all four I/O sites
+/// **Write-error classification (BC-2.7.012 v1.3.104):** all four I/O sites
 /// (`File::create`, `write_all`, `flush`, `rename`) route through `classify_write_error` to
 /// emit discriminated messages (`Disk full: …`, `Permission denied: …`, generic
 /// fallback) that name the **final destination** (never the internal `tmp_<hex>` path).
@@ -692,7 +692,7 @@ async fn stream_to_file(
     let token: u64 = rand::random();
     let tmp_path = parent.join(format!("tmp_{token:016x}"));
 
-    // BC-2.7.012 v1.3.102: pre-compute display strings shared across all four I/O
+    // BC-2.7.012 v1.3.104: pre-compute display strings shared across all four I/O
     // error sites below. CWE-116 / BC-2.7.011: display-sanitize the server-supplied
     // filename portion; the operator-controlled parent directory is rendered verbatim.
     let (final_dir_display, final_dest_display) = write_error_display_strings(final_path);
@@ -3249,16 +3249,15 @@ mod tests {
     }
 
     // ===========================================================================
-    // BC-2.7.012 v1.3.102 — classify_write_error pure classifier unit tests
-    // FIX-F5-010 RED GATE
+    // BC-2.7.012 v1.3.103+ — classify_write_error pure classifier unit tests
+    // GREEN — implemented in FIX-F5-010 / PR #649
     //
-    // These tests call `classify_write_error`, which does NOT yet exist in this
-    // file. They will FAIL TO COMPILE until the implementer adds the function.
+    // `classify_write_error` is implemented in this file.  These tests pin the
+    // three classifier branches.  The PermissionDenied / ReadOnlyFilesystem
+    // branch uses the v1.3.103 shape that adds the `(writing <dest>)` parenthetical
+    // after `<dir>` — see inline `// BC-2.7.012 v1.3.103` annotations below.
     //
-    // Compile failure IS the RED state — the strongest revert-pin. After the
-    // implementation, all tests in this block must pass without modification.
-    //
-    // Implementer contract (from BC-2.7.012, research doc f5-r5-001):
+    // Function contract (BC-2.7.012, research doc f5-r5-001):
     //   fn classify_write_error(
     //       kind: std::io::ErrorKind,
     //       dest_display: &str,   // final destination path (display-safe)

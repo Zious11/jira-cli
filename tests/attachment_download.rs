@@ -3693,21 +3693,16 @@ async fn test_f5_r3_001_download_id_404_canonical_only_no_jira_body() {
 }
 
 // ---------------------------------------------------------------------------
-// FIX-F5-010 — BC-2.7.012 v1.3.102: EACCES permission-denied disk-write error
+// FIX-F5-010 — BC-2.7.012 v1.3.104: EACCES permission-denied disk-write error
 // ---------------------------------------------------------------------------
 
-/// BC-2.7.012 / FIX-F5-010: downloading to a non-writable directory → exit 1
-/// with `Permission denied: cannot write to <dir>: <os_error>. Check directory
-/// permissions and try again.` AND no `tmp_` leak in stderr.
+/// BC-2.7.012 v1.3.103 / FIX-F5-010: downloading to a non-writable directory → exit 1
+/// with `Permission denied: cannot write to <dir> (writing <dest>): <os_error>. Check
+/// directory permissions and try again.` AND no `tmp_` leak in stderr.
 ///
 /// Unix-only (`chmod 0o555` semantics). Skipped cleanly when running as root
 /// (uid 0) because root bypasses directory permission bits — detected by
 /// probing whether a write into the restricted dir actually fails.
-///
-/// RED state: current `stream_to_file` emits
-/// `Error: failed to create temp file /dir/tmp_<hex>: Permission denied (os error 13)`
-/// which fails assertions (b) "Permission denied: cannot write to", (d) remediation
-/// hint, and (e) tmp_-leak pin.
 #[cfg(unix)]
 #[tokio::test]
 async fn test_bc_2_7_012_eacces_permission_denied_error_message() {
@@ -3785,8 +3780,6 @@ async fn test_bc_2_7_012_eacces_permission_denied_error_message() {
     );
 
     // (b) Must contain the "Permission denied: cannot write to" prefix.
-    //
-    // RED: current code emits "Error: failed to create temp file /dir/tmp_<hex>: …"
     assert!(
         stderr.contains("Permission denied: cannot write to "),
         "BC-2.7.012 EACCES: stderr must contain \
@@ -3794,8 +3787,6 @@ async fn test_bc_2_7_012_eacces_permission_denied_error_message() {
     );
 
     // (c) Must name the FINAL destination parent directory (not the tmp_ path).
-    //
-    // RED: current code names the tmp_<hex> file in the path, not the directory alone.
     let dir_str = restricted.path().to_str().unwrap();
     assert!(
         stderr.contains(dir_str),
@@ -3804,8 +3795,6 @@ async fn test_bc_2_7_012_eacces_permission_denied_error_message() {
     );
 
     // (d) Must include the remediation hint (BC-2.7.012 table).
-    //
-    // RED: current code has no remediation hint.
     assert!(
         stderr.contains("Check directory permissions and try again."),
         "BC-2.7.012 EACCES: stderr must contain remediation hint \
@@ -3813,11 +3802,17 @@ async fn test_bc_2_7_012_eacces_permission_denied_error_message() {
     );
 
     // (e) Must NOT leak the internal tmp_<hex> path (tmp-path-leak pin).
-    //
-    // RED: current code leaks "tmp_<16 hex chars>" in the error message.
     assert!(
         !stderr.contains("tmp_"),
         "BC-2.7.012 EACCES: stderr must NOT contain 'tmp_' (internal temp path \
          must not be surfaced to the user); got: {stderr}"
+    );
+
+    // (f) BC-2.7.012 v1.3.103 shape: dest basename must appear in the `(writing <dest>)`
+    //     parenthetical of the PermissionDenied branch.
+    assert!(
+        stderr.contains("eacces_test.bin"),
+        "BC-2.7.012 v1.3.103 EACCES: stderr must contain dest basename 'eacces_test.bin' \
+         in (writing <dest>) parenthetical; got: {stderr}"
     );
 }
