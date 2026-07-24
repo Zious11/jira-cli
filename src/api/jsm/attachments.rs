@@ -63,11 +63,13 @@ pub async fn attach_temporary_file(
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.to_string_lossy().into_owned());
 
-    // SEC-576-004 CRLF/NUL guard — prevent header-injection in Content-Disposition.
+    // SEC-576-004 CRLF/NUL/double-quote guard — prevent header-injection in
+    // Content-Disposition. CR/LF/NUL can inject new header lines; '"' can break
+    // the RFC 2616 quoted-string parameter boundary (F5-R1-006, CWE-93).
     let safe_name: String = raw_name
         .chars()
         .map(|c| {
-            if matches!(c, '\r' | '\n' | '\0') {
+            if matches!(c, '\r' | '\n' | '\0' | '"') {
                 '_'
             } else {
                 c
@@ -396,15 +398,15 @@ mod tests {
 
     // SEC-576-004 / CWE-93 unit pins for the safe_name transformation guard.
     //
-    // The guard lives inline in `attach_temporary_file` (~line 67):
-    //   raw_name.chars().map(|c| if matches!(c, '\r' | '\n' | '\0') { '_' } else { c }).collect()
+    // The guard lives inline in `attach_temporary_file`:
+    //   raw_name.chars().map(|c| if matches!(c, '\r' | '\n' | '\0' | '"') { '_' } else { c }).collect()
     //
     // Mirrored here as a free function so the transformation is testable without
     // touching the filesystem (no tokio::fs::File, no actual multipart POST).
     fn safe_name(raw: &str) -> String {
         raw.chars()
             .map(|c| {
-                if matches!(c, '\r' | '\n' | '\0') {
+                if matches!(c, '\r' | '\n' | '\0' | '"') {
                     '_'
                 } else {
                     c

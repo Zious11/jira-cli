@@ -270,14 +270,15 @@ impl JiraClient {
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| path.to_string_lossy().into_owned());
-                // SEC-576-004: strip CR, LF, and NUL from the filename before
-                // embedding in a Content-Disposition header value to prevent
-                // header-injection (CWE-93). These three chars are the only ones
-                // that can break MIME boundary framing or inject a new header line.
+                // SEC-576-004: strip CR, LF, NUL, and double-quote from the filename
+                // before embedding in a Content-Disposition header value to prevent
+                // header-injection (CWE-93). CR/LF/NUL can inject new header lines;
+                // '"' can break the RFC 2616 quoted-string parameter boundary,
+                // allowing subsequent data to be misread as separate header parameters.
                 let safe_name: String = raw_name
                     .chars()
                     .map(|c| {
-                        if matches!(c, '\r' | '\n' | '\0') {
+                        if matches!(c, '\r' | '\n' | '\0' | '"') {
                             '_'
                         } else {
                             c
@@ -479,15 +480,15 @@ impl JiraClient {
 mod tests {
     // SEC-576-004 / CWE-93 unit pins for the safe_name transformation guard.
     //
-    // The guard lives inline in `upload_attachments` (~line 211):
-    //   raw_name.chars().map(|c| if matches!(c, '\r' | '\n' | '\0') { '_' } else { c }).collect()
+    // The guard lives inline in `upload_attachments`:
+    //   raw_name.chars().map(|c| if matches!(c, '\r' | '\n' | '\0' | '"') { '_' } else { c }).collect()
     //
     // Mirrored here as a free function so the transformation is testable without
     // spawning a subprocess or needing a real file on disk.
     fn safe_name(raw: &str) -> String {
         raw.chars()
             .map(|c| {
-                if matches!(c, '\r' | '\n' | '\0') {
+                if matches!(c, '\r' | '\n' | '\0' | '"') {
                     '_'
                 } else {
                     c
@@ -527,45 +528,12 @@ mod tests {
         assert_eq!(safe_name("a\0b\0c"), "a_b_c");
     }
 
-    /// Double-quote ('"') is NOT sanitized by safe_name — it passes through unchanged.
+    /// Double-quote (`"`) is mapped to `_` by the SEC-576-004 guard.
     ///
-    /// SPEC vs IMPL NOTE:
-    /// AC-018 lists double-quote as a potential injection concern for the
-    /// Content-Disposition `filename=` quoted-string parameter. The current guard
-    /// covers only \r, \n, \0 (SEC-576-004 comment: "only chars that can break MIME
-    /// boundary framing or inject a new header line"). A raw '"' in the filename
-    /// affects only the quoted-string boundary, which reqwest's
-    /// `Part::file_name()` encoding is responsible for handling (percent-encoding
-    /// or `filename*` RFC 5987 form). If reqwest emits a raw '"' into
-    /// Content-Disposition without escaping, a filename like `a"b.txt` could
-    /// break the quoted-string parameter; this is a residual risk tracked at
-    /// AC-018 / SEC-576-004.
-    ///
-    /// This test pins the CURRENT behavior (pass-through) as a regression
-    /// anchor. If safe_name is ever extended to cover '"', update this test
-    /// and the integration test in tests/attachment_upload.rs.
-    #[test]
-    fn test_sec_576_004_safe_name_double_quote_not_in_guard() {
-        // '"' is NOT mapped; passes through unchanged.
-        assert_eq!(safe_name("file\"name.txt"), "file\"name.txt");
-        assert_eq!(safe_name("\"leading"), "\"leading");
-        assert_eq!(safe_name("trailing\""), "trailing\"");
-        assert_eq!(safe_name("mid\"dle"), "mid\"dle");
-    }
-
-    /// F5-R1-006: double-quote (`"`) in a filename must be mapped to underscore (`_`)
-    /// by the SEC-576-004 guard to prevent quoted-string parameter injection in
-    /// Content-Disposition (CWE-93). A raw or backslash-escaped `"` in the filename
-    /// can terminate the quoted-string value prematurely, causing parsers to misread
-    /// subsequent data as separate header parameters.
-    ///
-    /// RED: current guard only maps `\r`, `\n`, `\0` — not `"`.
-    /// Target: `"` is mapped to `_` (same treatment as the injection chars).
-    ///
-    /// When this test turns GREEN, also update:
-    ///   - `test_sec_576_004_safe_name_double_quote_not_in_guard` (remove or rename)
-    ///   - `tests/attachment_upload.rs::test_ac_018_double_quote_filename_well_formed_content_disposition`
-    ///     (update assertions to expect `file_name.txt`, not `\"` form)
+    /// A raw `"` in Content-Disposition `filename=` breaks the RFC 2616 quoted-string
+    /// parameter boundary, allowing parsers to misread subsequent data as a new header
+    /// parameter (CWE-93). Replaced by `test_f5_r1_006_safe_name_double_quote_mapped_to_underscore`
+    /// (F5-R1-006 fix); the old "pass-through" pin is superseded.
     #[test]
     fn test_f5_r1_006_safe_name_double_quote_mapped_to_underscore() {
         assert_eq!(

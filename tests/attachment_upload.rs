@@ -2681,7 +2681,8 @@ async fn test_ac_018_double_quote_filename_well_formed_content_disposition() {
         output.status.code()
     );
 
-    // Content-Disposition well-formedness assertions (reached only when GREEN).
+    // Content-Disposition well-formedness assertions (F5-R1-006: '"' is now mapped
+    // to '_' by the SEC-576-004 guard before reaching Part::file_name()).
     let received = server.received_requests().await.unwrap();
     for req in &received {
         if req.method == wiremock::http::Method::POST {
@@ -2697,26 +2698,21 @@ async fn test_ac_018_double_quote_filename_well_formed_content_disposition() {
                 &body[..body.len().min(400)]
             );
 
-            // (b) The encoded/escaped form MUST be present.
-            // reqwest 0.13 uses RFC 2616/7230 quoted-string escaping: '"' → '\"'
-            // (backslash-escape within the quoted-string), NOT percent-encoding.
-            // Body form: filename="file\"name.txt"
-            // Accept either form in case reqwest ever switches to %22 or filename*:
+            // (b) The sanitized form MUST be present: '"' → '_', so filename is file_name.txt.
             assert!(
-                body.contains(r#"\""#) || body.contains("%22"),
-                "AC-018: filename must contain encoded '\"' (backslash-escape \\\" or %22) \
-                 in Content-Disposition; body excerpt: {}",
+                body.contains("file_name.txt"),
+                "AC-018: SEC-576-004 guard maps '\"' to '_'; \
+                 Content-Disposition filename must be 'file_name.txt'; \
+                 body excerpt: {}",
                 &body[..body.len().min(400)]
             );
 
-            // (c) The raw broken form MUST be absent.
-            // If a bare '"' after 'file' ended the quoted-string, the Content-Disposition
-            // value would be: filename="file"name.txt" — the first '"' closes the parameter,
-            // and "name.txt" becomes unexpected trailing data, which can inject headers.
+            // (c) No raw or reqwest-escaped '"' form should appear (guard fired before
+            //     Part::file_name(), so reqwest never sees the '"').
             assert!(
-                !body.contains("filename=\"file\"name"),
-                "AC-018: raw unescaped '\"' must NOT appear as a Content-Disposition \
-                 quoted-string boundary; got broken form 'filename=\"file\"name' in body; \
+                !body.contains(r#"\""#) && !body.contains("%22"),
+                "AC-018: SEC-576-004 guard must suppress '\"' before reqwest encoding; \
+                 backslash-escaped or percent-encoded '\"' must NOT appear; \
                  body excerpt: {}",
                 &body[..body.len().min(400)]
             );
