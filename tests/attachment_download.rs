@@ -3715,11 +3715,7 @@ async fn test_bc_2_7_012_eacces_permission_denied_error_message() {
 
     // Create a directory that will be made non-writable.
     let restricted = TempDir::new().unwrap();
-    std::fs::set_permissions(
-        restricted.path(),
-        std::fs::Permissions::from_mode(0o555),
-    )
-    .unwrap();
+    std::fs::set_permissions(restricted.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
 
     // Root-skip guard: probe whether the restriction actually binds.
     // Running as root (uid 0) bypasses permission bits → test would not exercise
@@ -3727,10 +3723,7 @@ async fn test_bc_2_7_012_eacces_permission_denied_error_message() {
     let probe = restricted.path().join(".probe_f5010");
     if std::fs::write(&probe, b"").is_ok() {
         let _ = std::fs::remove_file(&probe);
-        let _ = std::fs::set_permissions(
-            restricted.path(),
-            std::fs::Permissions::from_mode(0o755),
-        );
+        let _ = std::fs::set_permissions(restricted.path(), std::fs::Permissions::from_mode(0o755));
         eprintln!(
             "test_bc_2_7_012_eacces_permission_denied_error_message: SKIPPED \
              (write into 0o555 dir succeeded — running as root)"
@@ -3779,10 +3772,7 @@ async fn test_bc_2_7_012_eacces_permission_denied_error_message() {
         .unwrap();
 
     // Restore permissions so TempDir::Drop can remove the directory.
-    let _ = std::fs::set_permissions(
-        restricted.path(),
-        std::fs::Permissions::from_mode(0o755),
-    );
+    let _ = std::fs::set_permissions(restricted.path(), std::fs::Permissions::from_mode(0o755));
 
     let stderr = String::from_utf8_lossy(&output.stderr);
 

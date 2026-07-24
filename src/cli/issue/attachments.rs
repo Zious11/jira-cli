@@ -587,6 +587,50 @@ fn batch_path_is_within_dir(
 // S-576-2: private async helpers
 // ---------------------------------------------------------------------------
 
+/// Classify a disk-write `io::Error` into a user-friendly discriminated message.
+///
+/// **BC-2.7.012 v1.3.102** — used by all three I/O sites in `stream_to_file`
+/// (`File::create`, `write_all`, `rename`) so that single-mode (propagate → exit 1)
+/// and batch-mode (per-file fail-soft warning) paths both benefit from one chokepoint.
+///
+/// # Branch mapping
+/// - `StorageFull | QuotaExceeded` →
+///   `"Disk full: not enough space to write <dest>: <os_err>. Free up disk space and try again."`
+/// - `PermissionDenied | ReadOnlyFilesystem` →
+///   `"Permission denied: cannot write to <dir>: <os_err>. Check directory permissions and try again."`
+/// - `_` (non-exhaustive fallback, **required** because `ErrorKind` is `#[non_exhaustive]`) →
+///   `"Failed to write <dest>: <os_err>."`
+///
+/// # Arguments
+/// - `kind`         — `e.kind()` from the raw `std::io::Error` (call BEFORE any anyhow conversion).
+/// - `dest_display` — final destination path, filename portion display-sanitized (CWE-116).
+/// - `dir_display`  — `final_path.parent()` rendered verbatim (operator-controlled).
+/// - `os_err`       — `e.to_string()` from the raw `std::io::Error` (ends in `(os error N)`).
+fn classify_write_error(
+    kind: std::io::ErrorKind,
+    dest_display: &str,
+    dir_display: &str,
+    os_err: &str,
+) -> String {
+    match kind {
+        std::io::ErrorKind::StorageFull | std::io::ErrorKind::QuotaExceeded => {
+            format!(
+                "Disk full: not enough space to write {dest_display}: {os_err}. \
+                 Free up disk space and try again."
+            )
+        }
+        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem => {
+            format!(
+                "Permission denied: cannot write to {dir_display}: {os_err}. \
+                 Check directory permissions and try again."
+            )
+        }
+        _ => {
+            format!("Failed to write {dest_display}: {os_err}.")
+        }
+    }
+}
+
 /// Stream `response` body to `final_path` using an atomic temp-file + rename pattern.
 ///
 /// Temp file: `tmp_<16 random hex digits>` in the SAME directory as `final_path`
@@ -596,6 +640,11 @@ fn batch_path_is_within_dir(
 ///
 /// On ANY error after temp-file creation, the temp file is deleted before returning
 /// the error (cleanup guarantee for BC-2.7.007 EC-2.7.007-4).
+///
+/// **Write-error classification (BC-2.7.012 v1.3.102):** all three I/O sites
+/// (`File::create`, `write_all`, `rename`) route through `classify_write_error` to
+/// emit discriminated messages (`Disk full: …`, `Permission denied: …`, generic
+/// fallback) that name the **final destination** (never the internal `tmp_<hex>` path).
 async fn stream_to_file(
     response: reqwest::Response,
     final_path: &std::path::Path,
@@ -607,18 +656,49 @@ async fn stream_to_file(
     let token: u64 = rand::random();
     let tmp_path = parent.join(format!("tmp_{token:016x}"));
 
+    // BC-2.7.012 v1.3.102: pre-compute display strings shared across all three I/O
+    // error sites below. CWE-116 / BC-2.7.011: display-sanitize the server-supplied
+    // filename portion; the operator-controlled parent directory is rendered verbatim.
+    let final_fname = final_path
+        .file_name()
+        .map(|n| display_sanitize_filename(&n.to_string_lossy()))
+        .unwrap_or_else(|| display_sanitize_filename(&final_path.to_string_lossy()));
+    let final_dir_display = final_path
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .map(|d| d.display().to_string())
+        .unwrap_or_else(|| ".".to_string());
+    let final_dest_display = match final_path.parent() {
+        Some(d) if !d.as_os_str().is_empty() => {
+            format!("{}{}{final_fname}", d.display(), std::path::MAIN_SEPARATOR)
+        }
+        _ => final_fname,
+    };
+
     let result: anyhow::Result<u64> = async {
         let mut file = tokio::fs::File::create(&tmp_path).await.map_err(|e| {
-            anyhow::anyhow!("failed to create temp file {}: {e}", tmp_path.display())
+            let msg = classify_write_error(
+                e.kind(),
+                &final_dest_display,
+                &final_dir_display,
+                &e.to_string(),
+            );
+            anyhow::anyhow!("{msg}")
         })?;
         let mut bytes_written: u64 = 0;
 
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| anyhow::anyhow!("stream error: {e}"))?;
-            file.write_all(&chunk)
-                .await
-                .map_err(|e| anyhow::anyhow!("write error to {}: {e}", tmp_path.display()))?;
+            file.write_all(&chunk).await.map_err(|e| {
+                let msg = classify_write_error(
+                    e.kind(),
+                    &final_dest_display,
+                    &final_dir_display,
+                    &e.to_string(),
+                );
+                anyhow::anyhow!("{msg}")
+            })?;
             bytes_written += chunk.len() as u64;
         }
 
@@ -628,19 +708,13 @@ async fn stream_to_file(
         tokio::fs::rename(&tmp_path, final_path)
             .await
             .map_err(|e| {
-                // BC-2.7.011 / CWE-116: display-sanitize the server-supplied filename
-                // portion; parent directory is operator-controlled and rendered verbatim.
-                let fname = final_path
-                    .file_name()
-                    .map(|n| display_sanitize_filename(&n.to_string_lossy()))
-                    .unwrap_or_else(|| display_sanitize_filename(&final_path.to_string_lossy()));
-                let display = match final_path.parent() {
-                    Some(d) if !d.as_os_str().is_empty() => {
-                        format!("{}{}{fname}", d.display(), std::path::MAIN_SEPARATOR)
-                    }
-                    _ => fname,
-                };
-                anyhow::anyhow!("failed to rename temp to {display}: {e}")
+                let msg = classify_write_error(
+                    e.kind(),
+                    &final_dest_display,
+                    &final_dir_display,
+                    &e.to_string(),
+                );
+                anyhow::anyhow!("{msg}")
             })?;
 
         Ok(bytes_written)
@@ -3273,12 +3347,7 @@ mod tests {
     fn test_bc_2_7_012_classify_generic_fallback() {
         use std::io::ErrorKind;
         let os_err = std::io::Error::from(ErrorKind::Other).to_string();
-        let msg = classify_write_error(
-            ErrorKind::Other,
-            "/output/report.pdf",
-            "/output",
-            &os_err,
-        );
+        let msg = classify_write_error(ErrorKind::Other, "/output/report.pdf", "/output", &os_err);
         assert!(
             msg.starts_with("Failed to write /output/report.pdf:"),
             "Generic fallback must produce 'Failed to write <dest>:' prefix; got: {msg}"
