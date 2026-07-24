@@ -641,8 +641,8 @@ fn classify_write_error(
 /// On ANY error after temp-file creation, the temp file is deleted before returning
 /// the error (cleanup guarantee for BC-2.7.007 EC-2.7.007-4).
 ///
-/// **Write-error classification (BC-2.7.012 v1.3.102):** all three I/O sites
-/// (`File::create`, `write_all`, `rename`) route through `classify_write_error` to
+/// **Write-error classification (BC-2.7.012 v1.3.102):** all four I/O sites
+/// (`File::create`, `write_all`, `flush`, `rename`) route through `classify_write_error` to
 /// emit discriminated messages (`Disk full: …`, `Permission denied: …`, generic
 /// fallback) that name the **final destination** (never the internal `tmp_<hex>` path).
 async fn stream_to_file(
@@ -702,7 +702,15 @@ async fn stream_to_file(
             bytes_written += chunk.len() as u64;
         }
 
-        file.flush().await?;
+        file.flush().await.map_err(|e| {
+            let msg = classify_write_error(
+                e.kind(),
+                &final_dest_display,
+                &final_dir_display,
+                &e.to_string(),
+            );
+            anyhow::anyhow!("{msg}")
+        })?;
         drop(file);
 
         tokio::fs::rename(&tmp_path, final_path)
