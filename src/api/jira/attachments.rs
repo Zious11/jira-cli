@@ -275,15 +275,17 @@ impl JiraClient {
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| path.to_string_lossy().into_owned());
-                // SEC-576-004: strip CR, LF, NUL, and double-quote from the filename
-                // before embedding in a Content-Disposition header value to prevent
-                // header-injection (CWE-93). CR/LF/NUL can inject new header lines;
-                // '"' can break the RFC 2616 quoted-string parameter boundary,
-                // allowing subsequent data to be misread as separate header parameters.
+                // SEC-576-004: strip CR, LF, NUL, double-quote, and backslash from the
+                // filename before embedding in a Content-Disposition header value to
+                // prevent header-injection (CWE-93). CR/LF/NUL can inject new header
+                // lines; '"' can break the RFC 2616 quoted-string parameter boundary,
+                // allowing subsequent data to be misread as separate header parameters;
+                // '\' is the RFC 2616 quoted-string escape character — a stray '\' lets
+                // a parser misread the next character as an escaped sequence (CWE-93).
                 let safe_name: String = raw_name
                     .chars()
                     .map(|c| {
-                        if matches!(c, '\r' | '\n' | '\0' | '"') {
+                        if matches!(c, '\r' | '\n' | '\0' | '"' | '\\') {
                             '_'
                         } else {
                             c
@@ -493,7 +495,7 @@ mod tests {
     fn safe_name(raw: &str) -> String {
         raw.chars()
             .map(|c| {
-                if matches!(c, '\r' | '\n' | '\0' | '"') {
+                if matches!(c, '\r' | '\n' | '\0' | '"' | '\\') {
                     '_'
                 } else {
                     c
