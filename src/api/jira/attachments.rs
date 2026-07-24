@@ -208,9 +208,14 @@ impl JiraClient {
         match result {
             Ok(meta) => Ok(meta),
             Err(e) => match e.downcast_ref::<JrError>() {
-                Some(JrError::ApiError { status, .. }) if *status == 404 => Err(
-                    JrError::UserError(format!("Attachment {id} not found or not accessible."))
-                        .into(),
+                Some(JrError::ApiError { status, message }) if *status == 404 => Err(
+                    // F5-R1-004: include the Jira error body after the canonical prefix so
+                    // callers surface actionable detail — same shape as delete_attachment_targeted
+                    // (DEC-168). The `..` wildcard previously discarded `message`.
+                    JrError::UserError(format!(
+                        "Attachment {id} not found or not accessible.\n{message}"
+                    ))
+                    .into(),
                 ),
                 Some(JrError::ApiError { status, .. }) if *status == 403 => {
                     Err(JrError::ApiError {
