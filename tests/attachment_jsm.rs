@@ -4852,3 +4852,177 @@ async fn test_f5_r1_006_jsm_step1_content_disposition_double_quote_mapped_to_und
         &body[..body.len().min(500)]
     );
 }
+
+// ---------------------------------------------------------------------------
+// EC-3.9.006-7 regression pin (F5-R9-001 / FIX-F5-012)
+// ---------------------------------------------------------------------------
+
+/// Regression pin for **EC-3.9.006-7** (BC-3.9.006 v1.3.105) and **F5-R9-001**:
+/// `POST /rest/servicedeskapi/request/{key}/attachment` returning HTTP 429
+/// with a `Retry-After: 1` header must behave as follows:
+///
+///   1. Exit 64 — 429 falls into the generic 4xx bucket (same as 400/404/422);
+///      no special `Retry-After` handling at step-2.
+///   2. stderr contains the generic retry hint:
+///      `"Temporary attachment IDs may have expired. Try the upload again."`
+///   3. **EXACTLY ONE** POST reaches the step-2 path — the client does NOT
+///      honour the `Retry-After` header and does NOT enter a retry loop.
+///      This count-1 assertion is the load-bearing trip-wire.
+///   4. Step-1 (`attachTemporaryFile`) was called — confirms the two-step
+///      flow ran to completion through step-1 before stopping at step-2.
+///
+/// ### Why the Retry-After header is load-bearing
+///
+/// The `Retry-After: 1` header is deliberately included in the mock response.
+/// Its presence proves the client ignores it at step-2.  If a future change
+/// introduces a `Retry-After` retry arm at step-2, assertion (3) will trip
+/// because the client would POST to `/request/{key}/attachment` a second time
+/// (after the 1-second delay) and `step2_count` would equal 2, not 1.
+///
+/// ### Deliberate asymmetry (BC-3.9.006 P8-001)
+///
+/// - Step-1 `attachTemporaryFile` **retries** 429 per BC-X.8.010.
+/// - Platform `upload_attachments` **retries** 429 via `send_with_retry`.
+/// - Step-2 `post_request_attachment` deliberately does **NOT** retry 429.
+///   Rationale: step-2 is a single small JSON POST; a 429 at that stage is
+///   rare; the ~1 h temp-attachment TTL makes a manual re-run safe; blast
+///   radius is low.  The carve-out was deferred at the SOH-ATTACHMENTS-1 wave
+///   gate (P8-001).  The generic hint is imprecise for this sub-case —
+///   accepted imprecision; a dedicated 429 arm with `Retry-After` parsing is
+///   a candidate future enhancement, not a defect.
+///
+/// **This is a REGRESSION PIN for already-correct behaviour.**
+/// It MUST pass against current code without modification.
+#[tokio::test]
+async fn test_ec_3_9_006_7_step2_429_no_retry_exactly_one_post() {
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("rate.txt");
+    std::fs::write(&file, b"rate limit test").unwrap();
+
+    // Step 0 (P1-004): issue key lookup — validates the issue exists.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJRATE-1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(issue_get_response("EJRATE-1", "EJRATE")),
+        )
+        .mount(&server)
+        .await;
+
+    // Project meta: JSM project (projectTypeKey == "service_desk").
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/EJRATE"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(jsm_project_response("EJRATE", "93429")),
+        )
+        .mount(&server)
+        .await;
+
+    // Service desk list: SD-RATE matches project_id "93429".
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(service_desk_list_response("SD-RATE", "93429")),
+        )
+        .mount(&server)
+        .await;
+
+    // Step 1: attachTemporaryFile → 200.
+    // Sanity assertion (4) confirms this was called, proving the two-step flow
+    // reached step-2 before the 429 terminated it.
+    Mock::given(method("POST"))
+        .and(path(
+            "/rest/servicedeskapi/servicedesk/SD-RATE/attachTemporaryFile",
+        ))
+        .and(header("X-Atlassian-Token", "no-check"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "temporaryAttachments": [
+                {"temporaryAttachmentId": "tmp-rate-001", "fileName": "rate.txt"}
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    // Step 2: 429 WITH Retry-After: 1.
+    // The Retry-After header is load-bearing: its presence proves the client
+    // deliberately ignores it.  If a retry arm were added at step-2, the
+    // count-1 assertion below would trip (the client would POST again after 1 s).
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request/EJRATE-1/attachment"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("Retry-After", "1")
+                .set_body_json(serde_json::json!({
+                    "errorMessage": "Too Many Requests"
+                })),
+        )
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            "EJRATE-1",
+            &file.to_string_lossy(),
+            "--public",
+            "--yes",
+        ])
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // (1) 429 falls into the generic 4xx → UserError bucket → exit 64.
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "EC-3.9.006-7: step-2 429 must exit 64 (generic 4xx bucket, no retry); \
+         got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+
+    // (2) Generic retry hint must appear (accepted imprecision for 429 sub-case).
+    assert!(
+        stderr.contains("Temporary attachment IDs may have expired. Try the upload again."),
+        "EC-3.9.006-7: step-2 429 must emit generic retry hint; got: {stderr}"
+    );
+
+    let reqs = server.received_requests().await.unwrap();
+
+    // (3) EXACTLY ONE POST to step-2 — the trip-wire.
+    // If a Retry-After retry arm is added at step-2, this count becomes 2+ and
+    // this assertion fails, signalling the deliberate asymmetry has been violated.
+    let step2_count = reqs
+        .iter()
+        .filter(|r| {
+            r.method == wiremock::http::Method::POST
+                && r.url.path() == "/rest/servicedeskapi/request/EJRATE-1/attachment"
+        })
+        .count();
+    assert_eq!(
+        step2_count, 1,
+        "EC-3.9.006-7 trip-wire (F5-R9-001): step-2 must be called exactly once — \
+         no Retry-After retry loop; got {step2_count} call(s). \
+         If this fails after adding a 429 retry arm at step-2, the deliberate \
+         BC-3.9.006 P8-001 asymmetry has been violated."
+    );
+
+    // (4) Sanity: step-1 was called (two-step flow reached step-2).
+    let step1_count = reqs
+        .iter()
+        .filter(|r| {
+            r.method == wiremock::http::Method::POST && r.url.path().contains("attachTemporaryFile")
+        })
+        .count();
+    assert!(
+        step1_count >= 1,
+        "EC-3.9.006-7 sanity: step-1 (attachTemporaryFile) must have been called \
+         to prove the two-step flow reached step-2; got {step1_count} call(s)"
+    );
+}
