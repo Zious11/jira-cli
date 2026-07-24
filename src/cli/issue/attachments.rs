@@ -882,10 +882,19 @@ async fn handle_batch_download(
 
         let final_path = compute_default_output_path(&base_dir, &att.id, &att.filename, true);
 
-        // BC-2.7.011 defense-in-depth: unreachable via API-supplied filenames after sanitization steps 1-5.
-        // Two-step containment check: canonicalize base_dir, then assert joined path starts_with it.
-        if let Some(fname) = final_path.file_name() {
-            if !resolved_dir.join(fname).starts_with(&resolved_dir) {
+        // BC-2.7.011 defense-in-depth: verify the parent directory of final_path equals
+        // (or is inside) resolved_dir. sanitize_attachment_filename (VP-576-001 proptest)
+        // is the primary containment authority; this canonicalized-parent check provides
+        // an additional layer in case compute_default_output_path ever gains sub-directory
+        // logic. The previous check was vacuous: resolved_dir.join(single_component) is
+        // always starts_with resolved_dir because a single path component can never contain
+        // a traversal (F5-R1-001).
+        if let Ok(parent) = final_path
+            .parent()
+            .unwrap_or(base_dir.as_path())
+            .canonicalize()
+        {
+            if !parent.starts_with(&resolved_dir) {
                 eprintln!(
                     "warning: skipping attachment {} — path escape detected after sanitization.",
                     att.id
