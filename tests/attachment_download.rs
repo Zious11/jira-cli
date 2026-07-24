@@ -3636,12 +3636,10 @@ async fn test_f5_r3_001_download_id_404_canonical_only_no_jira_body() {
     // Mount a metadata GET that returns 404 with the sentinel body text.
     Mock::given(method("GET"))
         .and(path("/rest/api/3/attachment/55555"))
-        .respond_with(
-            ResponseTemplate::new(404).set_body_json(serde_json::json!({
-                "errorMessages": [SENTINEL],
-                "errors": {}
-            })),
-        )
+        .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+            "errorMessages": [SENTINEL],
+            "errors": {}
+        })))
         .expect(1)
         .mount(&server)
         .await;

@@ -569,7 +569,14 @@ fn batch_path_is_within_dir(
 ) -> std::io::Result<bool> {
     let parent = final_path.parent().unwrap_or(resolved_dir);
     let canonical_parent = parent.canonicalize()?;
-    Ok(canonical_parent.starts_with(resolved_dir))
+    // F5-R3-002: canonicalize resolved_dir before starts_with so that a
+    // non-canonical base (e.g. containing `..` components, or a macOS
+    // `/var` symlink prefix) does not falsely fail the containment test.
+    // If resolved_dir itself cannot be canonicalized (directory does not
+    // exist), ? propagates an Err so the call site's warn-and-skip path
+    // fires (fail-open: the download proceeds with a warning logged).
+    let canonical_dir = resolved_dir.canonicalize()?;
+    Ok(canonical_parent.starts_with(canonical_dir))
 }
 
 // ---------------------------------------------------------------------------
@@ -699,7 +706,19 @@ async fn handle_single_download(
     }
 
     // BC-2.7.007 step 1: fetch attachment metadata.
-    let metadata = client.get_attachment_metadata(id_str).await?;
+    // BC-2.7.012 body-surfacing asymmetry (F5-R3-001): download emits canonical-only;
+    // get_attachment_metadata passes 404 through as ApiError so callers choose the format.
+    let metadata = client.get_attachment_metadata(id_str).await.map_err(|e| {
+        if let Some(JrError::ApiError { status, .. }) = e.downcast_ref::<JrError>() {
+            if *status == 404 {
+                return JrError::UserError(format!(
+                    "Attachment {id_str} not found or not accessible."
+                ))
+                .into();
+            }
+        }
+        e
+    })?;
     let raw_filename = metadata.filename.as_deref().unwrap_or(id_str);
 
     // Determine final output path.
@@ -1870,8 +1889,23 @@ pub async fn handle_attachment_delete(
 
             // Confirmation gate (BC-3.9.015; VP-576-002; DEC-174)
             if !yes {
-                // Fetch metadata to get the filename for the gate prompt
-                let meta = client.get_attachment_metadata(aid).await?;
+                // Fetch metadata to get the filename for the gate prompt.
+                // DEC-168 / BC-2.7.012 body-surfacing asymmetry (F5-R3-001): on 404
+                // the interactive delete path shows canonical prefix + Jira error body
+                // (actionable detail). get_attachment_metadata returns ApiError { 404 }
+                // with body intact; we format it here as canonical + "\n{body}".
+                let meta = client.get_attachment_metadata(aid).await.map_err(|e| {
+                    if let Some(JrError::ApiError { status, message }) = e.downcast_ref::<JrError>()
+                    {
+                        if *status == 404 {
+                            return JrError::UserError(format!(
+                                "Attachment {aid} not found or not accessible.\n{message}"
+                            ))
+                            .into();
+                        }
+                    }
+                    e
+                })?;
                 let filename = meta.filename.as_deref().unwrap_or(aid.as_str());
                 let display_name = display_sanitize_filename(filename);
 

@@ -198,33 +198,32 @@ impl JiraClient {
     /// all `Option` — missing fields (e.g., for deleted attachments) do NOT abort.
     ///
     /// Error mapping (BC-2.7.012):
-    /// - 404 → `JrError::UserError` (exit 64): attachment not found.
+    /// - 404 → `JrError::ApiError { status: 404, message }` (body preserved).
+    ///   **Callers** convert to `JrError::UserError` (exit 64) with call-site-specific
+    ///   formatting per BC-2.7.012 body-surfacing asymmetry (F5-R3-001):
+    ///   - `handle_single_download` (download path): canonical-only, no body.
+    ///   - `handle_attachment_delete` interactive gate (DEC-168): canonical + `\n{body}`.
+    ///   - bulk dry-run `Err(_)` fallback: body irrelevant (id-only row).
     /// - 401 → `JrError::NotAuthenticated` (exit 2): handled by client.
-    /// - 403 → `JrError::ApiError` (exit 1): `"Permission denied: cannot access attachment <id>."`.
+    /// - 403 → `JrError::ApiError { status: 403 }` (exit 1):
+    ///   `"Permission denied: cannot access attachment <id>."`.
     /// - 5xx / network → `JrError::ApiError` / `JrError::NetworkError` (exit 1).
     pub async fn get_attachment_metadata(&self, id: &str) -> Result<AttachmentMetadata> {
         let path = format!("/rest/api/3/attachment/{}", id);
         let result = self.get::<AttachmentMetadata>(&path).await;
         match result {
             Ok(meta) => Ok(meta),
-            Err(e) => match e.downcast_ref::<JrError>() {
-                Some(JrError::ApiError { status, message }) if *status == 404 => Err(
-                    // F5-R1-004: include the Jira error body after the canonical prefix so
-                    // callers surface actionable detail — same shape as delete_attachment_targeted
-                    // (DEC-168). The `..` wildcard previously discarded `message`.
-                    JrError::UserError(format!(
-                        "Attachment {id} not found or not accessible.\n{message}"
-                    ))
-                    .into(),
-                ),
-                Some(JrError::ApiError { status, .. }) if *status == 403 => {
-                    Err(JrError::ApiError {
-                        status: 403,
-                        message: format!("Permission denied: cannot access attachment {id}."),
-                    }
-                    .into())
+            Err(e) => match e.downcast::<JrError>() {
+                Ok(JrError::ApiError { status: 403, .. }) => Err(JrError::ApiError {
+                    status: 403,
+                    message: format!("Permission denied: cannot access attachment {id}."),
                 }
-                _ => Err(e),
+                .into()),
+                // 404: pass through ApiError with raw Jira body intact so call sites
+                // can choose whether to surface the body (DEC-168 delete path) or emit
+                // canonical-only text (download path, BC-2.7.012).
+                Ok(jr_err) => Err(jr_err.into()),
+                Err(other) => Err(other),
             },
         }
     }
