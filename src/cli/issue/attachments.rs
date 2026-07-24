@@ -3143,4 +3143,162 @@ mod tests {
             non_canonical_base.display()
         );
     }
+
+    // ===========================================================================
+    // BC-2.7.012 v1.3.102 — classify_write_error pure classifier unit tests
+    // FIX-F5-010 RED GATE
+    //
+    // These tests call `classify_write_error`, which does NOT yet exist in this
+    // file. They will FAIL TO COMPILE until the implementer adds the function.
+    //
+    // Compile failure IS the RED state — the strongest revert-pin. After the
+    // implementation, all tests in this block must pass without modification.
+    //
+    // Implementer contract (from BC-2.7.012, research doc f5-r5-001):
+    //   fn classify_write_error(
+    //       kind: std::io::ErrorKind,
+    //       dest_display: &str,   // final destination path (display-safe)
+    //       dir_display: &str,    // final_path.parent() verbatim
+    //       os_err: &str,         // std::io::Error::Display of the raw error
+    //   ) -> String
+    //
+    // Branch mapping (non-exhaustive `_ =>` arm REQUIRED — ErrorKind is
+    // `#[non_exhaustive]` and must NOT be exhaustively matched):
+    //   StorageFull | QuotaExceeded  →  "Disk full: not enough space to write <dest>: <os_err>. Free up disk space and try again."
+    //   PermissionDenied | ReadOnlyFilesystem  →  "Permission denied: cannot write to <dir>: <os_err>. Check directory permissions and try again."
+    //   _ (fallback)  →  "Failed to write <dest>: <os_err>."
+    // ===========================================================================
+
+    #[test]
+    fn test_bc_2_7_012_classify_storage_full_disk_full_prefix() {
+        use std::io::ErrorKind;
+        let os_err = std::io::Error::from(ErrorKind::StorageFull).to_string();
+        let msg = classify_write_error(
+            ErrorKind::StorageFull,
+            "/output/report.pdf",
+            "/output",
+            &os_err,
+        );
+        assert!(
+            msg.starts_with("Disk full: not enough space to write /output/report.pdf:"),
+            "StorageFull must produce \
+             'Disk full: not enough space to write <dest>:' prefix; got: {msg}"
+        );
+        assert!(
+            msg.contains("Free up disk space and try again."),
+            "StorageFull must include remediation hint; got: {msg}"
+        );
+        assert!(
+            msg.contains(&os_err),
+            "StorageFull must include the OS error string '{os_err}'; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_bc_2_7_012_classify_quota_exceeded_disk_full_prefix() {
+        use std::io::ErrorKind;
+        let os_err = std::io::Error::from(ErrorKind::QuotaExceeded).to_string();
+        let msg = classify_write_error(
+            ErrorKind::QuotaExceeded,
+            "/output/report.pdf",
+            "/output",
+            &os_err,
+        );
+        assert!(
+            msg.starts_with("Disk full: not enough space to write /output/report.pdf:"),
+            "QuotaExceeded must produce \
+             'Disk full: not enough space to write <dest>:' prefix; got: {msg}"
+        );
+        assert!(
+            msg.contains("Free up disk space and try again."),
+            "QuotaExceeded must include remediation hint; got: {msg}"
+        );
+        assert!(
+            msg.contains(&os_err),
+            "QuotaExceeded must include the OS error string '{os_err}'; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_bc_2_7_012_classify_permission_denied_perm_prefix() {
+        use std::io::ErrorKind;
+        let os_err = std::io::Error::from(ErrorKind::PermissionDenied).to_string();
+        let msg = classify_write_error(
+            ErrorKind::PermissionDenied,
+            "/output/report.pdf",
+            "/output",
+            &os_err,
+        );
+        assert!(
+            msg.starts_with("Permission denied: cannot write to /output:"),
+            "PermissionDenied must produce \
+             'Permission denied: cannot write to <dir>:' prefix; got: {msg}"
+        );
+        assert!(
+            msg.contains("Check directory permissions and try again."),
+            "PermissionDenied must include remediation hint; got: {msg}"
+        );
+        assert!(
+            msg.contains(&os_err),
+            "PermissionDenied must include the OS error string '{os_err}'; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_bc_2_7_012_classify_read_only_filesystem_perm_prefix() {
+        use std::io::ErrorKind;
+        let os_err = std::io::Error::from(ErrorKind::ReadOnlyFilesystem).to_string();
+        let msg = classify_write_error(
+            ErrorKind::ReadOnlyFilesystem,
+            "/output/report.pdf",
+            "/output",
+            &os_err,
+        );
+        assert!(
+            msg.starts_with("Permission denied: cannot write to /output:"),
+            "ReadOnlyFilesystem must produce \
+             'Permission denied: cannot write to <dir>:' prefix; got: {msg}"
+        );
+        assert!(
+            msg.contains("Check directory permissions and try again."),
+            "ReadOnlyFilesystem must include remediation hint; got: {msg}"
+        );
+        assert!(
+            msg.contains(&os_err),
+            "ReadOnlyFilesystem must include the OS error string '{os_err}'; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_bc_2_7_012_classify_generic_fallback() {
+        use std::io::ErrorKind;
+        let os_err = std::io::Error::from(ErrorKind::Other).to_string();
+        let msg = classify_write_error(
+            ErrorKind::Other,
+            "/output/report.pdf",
+            "/output",
+            &os_err,
+        );
+        assert!(
+            msg.starts_with("Failed to write /output/report.pdf:"),
+            "Generic fallback must produce 'Failed to write <dest>:' prefix; got: {msg}"
+        );
+        assert!(
+            msg.contains(&os_err),
+            "Generic fallback must include the OS error string '{os_err}'; got: {msg}"
+        );
+        assert!(
+            msg.ends_with('.'),
+            "Generic fallback message must end with '.'; got: {msg}"
+        );
+        // Generic fallback must NOT include the discriminated remediation hints.
+        assert!(
+            !msg.contains("Free up disk space"),
+            "Generic fallback must NOT include 'Free up disk space'; got: {msg}"
+        );
+        assert!(
+            !msg.contains("Check directory permissions"),
+            "Generic fallback must NOT include 'Check directory permissions'; got: {msg}"
+        );
+    }
 }
