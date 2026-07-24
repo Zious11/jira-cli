@@ -2597,7 +2597,7 @@ async fn test_bc_2_7_stream_to_file_failure_increments_fail_count() {
     let att_filename = "payload.bin";
 
     // Compute the batch output path: {sha1_hex(att_id)}_{sanitized_filename}.
-    // Mirrors compute_default_output_path(is_batch=true) in src/cli/issue/attachments.rs.
+    // Mirrors compute_default_output_path in src/cli/issue/attachments.rs (batch-only).
     let hash: String = sha1::Sha1::new()
         .chain_update(att_id.as_bytes())
         .finalize()

@@ -516,38 +516,34 @@ pub fn sanitize_attachment_filename(name: &str) -> Option<String> {
     Some(stripped.to_string())
 }
 
-/// Compute the default output path for a downloaded attachment (BC-2.7.010).
+/// Compute the default output path for a **batch** downloaded attachment (BC-2.7.010).
 ///
-/// **Batch** (`--all` / `--newest`):
+/// **Batch** (`--all` / `--newest`) only:
 /// `<base_dir>/<sha1_of_id(40 hex)>_<sanitize_attachment_filename(filename) or id>`.
 /// Combined length guaranteed ≤ 255 bytes (41 + 214 = 255 ≤ NAME_MAX; ADV-010).
 /// When `sanitize_attachment_filename` returns `None` (degenerate name), uses
 /// `<sha1_of_id>_<attachment_id>` as the basename.
 ///
-/// **Single** (`--id`):
-/// Bare `sanitize_attachment_filename(filename)` in `base_dir` (no SHA-1 prefix).
-/// When `sanitize_attachment_filename` returns `None`, uses bare `attachment_id`.
+/// # Single-mode path is NOT owned here
+///
+/// Single-mode (`--id`) path construction is INLINE in `handle_single_download` and
+/// includes the SEC-576-001 Windows device-name escape (`_CON`, `_NUL`, …) — do NOT
+/// consolidate it into this fn without moving that escape (F5-R11-001).
 ///
 /// # Arguments
 /// - `base_dir`      — directory for the output file.
 /// - `attachment_id` — numeric attachment ID from the Jira API (trusted per SEC-576-008).
 /// - `filename`      — raw Jira-supplied filename.
-/// - `is_batch`      — `true` → batch path with SHA-1 prefix; `false` → single bare path.
 fn compute_default_output_path(
     base_dir: &std::path::Path,
     attachment_id: &str,
     filename: &str,
-    is_batch: bool,
 ) -> std::path::PathBuf {
     let sanitized =
         sanitize_attachment_filename(filename).unwrap_or_else(|| attachment_id.to_string());
 
-    if is_batch {
-        let hash = sha1_hex(attachment_id);
-        base_dir.join(format!("{hash}_{sanitized}"))
-    } else {
-        base_dir.join(sanitized)
-    }
+    let hash = sha1_hex(attachment_id);
+    base_dir.join(format!("{hash}_{sanitized}"))
 }
 
 /// Defense-in-depth containment check for the batch download loop (BC-2.7.011 / F5-R1-001).
@@ -1028,7 +1024,7 @@ async fn handle_batch_download(
             );
         }
 
-        let final_path = compute_default_output_path(&base_dir, &att.id, &att.filename, true);
+        let final_path = compute_default_output_path(&base_dir, &att.id, &att.filename);
 
         // BC-2.7.011 defense-in-depth: verify the parent directory of final_path equals
         // (or is inside) resolved_dir. sanitize_attachment_filename (VP-576-001 proptest)
