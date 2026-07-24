@@ -589,7 +589,7 @@ fn batch_path_is_within_dir(
 
 /// Classify a disk-write `io::Error` into a user-friendly discriminated message.
 ///
-/// **BC-2.7.012 v1.3.102** — used by all three I/O sites in `stream_to_file`
+/// **BC-2.7.012 v1.3.102** — used by all four I/O sites in `stream_to_file`
 /// (`File::create`, `write_all`, `rename`) so that single-mode (propagate → exit 1)
 /// and batch-mode (per-file fail-soft warning) paths both benefit from one chokepoint.
 ///
@@ -597,7 +597,7 @@ fn batch_path_is_within_dir(
 /// - `StorageFull | QuotaExceeded` →
 ///   `"Disk full: not enough space to write <dest>: <os_err>. Free up disk space and try again."`
 /// - `PermissionDenied | ReadOnlyFilesystem` →
-///   `"Permission denied: cannot write to <dir>: <os_err>. Check directory permissions and try again."`
+///   `"Permission denied: cannot write to <dir> (writing <dest>): <os_err>. Check directory permissions and try again."`
 /// - `_` (non-exhaustive fallback, **required** because `ErrorKind` is `#[non_exhaustive]`) →
 ///   `"Failed to write <dest>: <os_err>."`
 ///
@@ -621,7 +621,7 @@ fn classify_write_error(
         }
         std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem => {
             format!(
-                "Permission denied: cannot write to {dir_display}: {os_err}. \
+                "Permission denied: cannot write to {dir_display} (writing {dest_display}): {os_err}. \
                  Check directory permissions and try again."
             )
         }
@@ -656,7 +656,7 @@ async fn stream_to_file(
     let token: u64 = rand::random();
     let tmp_path = parent.join(format!("tmp_{token:016x}"));
 
-    // BC-2.7.012 v1.3.102: pre-compute display strings shared across all three I/O
+    // BC-2.7.012 v1.3.102: pre-compute display strings shared across all four I/O
     // error sites below. CWE-116 / BC-2.7.011: display-sanitize the server-supplied
     // filename portion; the operator-controlled parent directory is rendered verbatim.
     let final_fname = final_path
@@ -3247,7 +3247,7 @@ mod tests {
     // Branch mapping (non-exhaustive `_ =>` arm REQUIRED — ErrorKind is
     // `#[non_exhaustive]` and must NOT be exhaustively matched):
     //   StorageFull | QuotaExceeded  →  "Disk full: not enough space to write <dest>: <os_err>. Free up disk space and try again."
-    //   PermissionDenied | ReadOnlyFilesystem  →  "Permission denied: cannot write to <dir>: <os_err>. Check directory permissions and try again."
+    //   PermissionDenied | ReadOnlyFilesystem  →  "Permission denied: cannot write to <dir> (writing <dest>): <os_err>. Check directory permissions and try again."
     //   _ (fallback)  →  "Failed to write <dest>: <os_err>."
     // ===========================================================================
 
@@ -3311,10 +3311,11 @@ mod tests {
             "/output",
             &os_err,
         );
+        // BC-2.7.012 v1.3.103: parenthetical `(writing <dest>)` added after <dir>.
         assert!(
-            msg.starts_with("Permission denied: cannot write to /output:"),
+            msg.starts_with("Permission denied: cannot write to /output (writing"),
             "PermissionDenied must produce \
-             'Permission denied: cannot write to <dir>:' prefix; got: {msg}"
+             'Permission denied: cannot write to <dir> (writing' prefix; got: {msg}"
         );
         assert!(
             msg.contains("Check directory permissions and try again."),
@@ -3323,6 +3324,11 @@ mod tests {
         assert!(
             msg.contains(&os_err),
             "PermissionDenied must include the OS error string '{os_err}'; got: {msg}"
+        );
+        // BC-2.7.012 v1.3.103 / P9-001: dest_display must appear in message.
+        assert!(
+            msg.contains("/output/report.pdf"),
+            "PermissionDenied must include dest_display '/output/report.pdf'; got: {msg}"
         );
     }
 
@@ -3336,10 +3342,11 @@ mod tests {
             "/output",
             &os_err,
         );
+        // BC-2.7.012 v1.3.103: parenthetical `(writing <dest>)` added after <dir>.
         assert!(
-            msg.starts_with("Permission denied: cannot write to /output:"),
+            msg.starts_with("Permission denied: cannot write to /output (writing"),
             "ReadOnlyFilesystem must produce \
-             'Permission denied: cannot write to <dir>:' prefix; got: {msg}"
+             'Permission denied: cannot write to <dir> (writing' prefix; got: {msg}"
         );
         assert!(
             msg.contains("Check directory permissions and try again."),
@@ -3348,6 +3355,11 @@ mod tests {
         assert!(
             msg.contains(&os_err),
             "ReadOnlyFilesystem must include the OS error string '{os_err}'; got: {msg}"
+        );
+        // BC-2.7.012 v1.3.103 / P9-001: dest_display must appear in message.
+        assert!(
+            msg.contains("/output/report.pdf"),
+            "ReadOnlyFilesystem must include dest_display '/output/report.pdf'; got: {msg}"
         );
     }
 
