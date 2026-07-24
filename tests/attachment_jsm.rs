@@ -4754,8 +4754,7 @@ async fn test_f5_r1_006_jsm_step1_content_disposition_double_quote_mapped_to_und
     Mock::given(method("GET"))
         .and(path("/rest/api/3/issue/EJFR6-1"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(issue_get_response("EJFR6-1", "EJFR6")),
+            ResponseTemplate::new(200).set_body_json(issue_get_response("EJFR6-1", "EJFR6")),
         )
         .mount(&server)
         .await;
@@ -4764,8 +4763,7 @@ async fn test_f5_r1_006_jsm_step1_content_disposition_double_quote_mapped_to_und
     Mock::given(method("GET"))
         .and(path("/rest/api/3/project/EJFR6"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(jsm_project_response("EJFR6", "93006")),
+            ResponseTemplate::new(200).set_body_json(jsm_project_response("EJFR6", "93006")),
         )
         .mount(&server)
         .await;
@@ -4774,8 +4772,7 @@ async fn test_f5_r1_006_jsm_step1_content_disposition_double_quote_mapped_to_und
     Mock::given(method("GET"))
         .and(path("/rest/servicedeskapi/servicedesk"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(service_desk_list_response("61006", "93006")),
+            ResponseTemplate::new(200).set_body_json(service_desk_list_response("61006", "93006")),
         )
         .mount(&server)
         .await;
@@ -4831,8 +4828,7 @@ async fn test_f5_r1_006_jsm_step1_content_disposition_double_quote_mapped_to_und
     let step1_req = reqs
         .iter()
         .find(|r| {
-            r.method == wiremock::http::Method::POST
-                && r.url.path().contains("attachTemporaryFile")
+            r.method == wiremock::http::Method::POST && r.url.path().contains("attachTemporaryFile")
         })
         .expect("F5-R1-006 JSM: step-1 POST to attachTemporaryFile must have been received");
 

@@ -3130,10 +3130,7 @@ async fn test_f5_r1_004_single_aid_404_message_includes_jira_error_body() {
         // Metadata GET returns 404 with a Jira error body.
         Mock::given(method("GET"))
             .and(path("/rest/api/3/attachment/77777"))
-            .respond_with(
-                ResponseTemplate::new(404)
-                    .set_body_json(jira_404_body.clone()),
-            )
+            .respond_with(ResponseTemplate::new(404).set_body_json(jira_404_body.clone()))
             .expect(1)
             .mount(&server)
             .await;
@@ -3196,10 +3193,7 @@ async fn test_f5_r1_004_single_aid_404_message_includes_jira_error_body() {
         // DELETE returns 404 with a Jira error body.
         Mock::given(method("DELETE"))
             .and(path("/rest/api/3/attachment/77777"))
-            .respond_with(
-                ResponseTemplate::new(404)
-                    .set_body_json(jira_404_body.clone()),
-            )
+            .respond_with(ResponseTemplate::new(404).set_body_json(jira_404_body.clone()))
             .expect(1)
             .mount(&server)
             .await;

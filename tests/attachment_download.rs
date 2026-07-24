@@ -3405,10 +3405,8 @@ async fn test_newest_selects_no_millis_attachment_over_millis_older() {
         .and(path("/rest/api/3/issue/NEW-1"))
         .and(query_param("fields", "attachment"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(issue_with_attachments(
-                "NEW-1",
-                vec![att_newer, att_older],
-            )),
+            ResponseTemplate::new(200)
+                .set_body_json(issue_with_attachments("NEW-1", vec![att_newer, att_older])),
         )
         .mount(&server)
         .await;
@@ -3516,8 +3514,7 @@ async fn test_batch_download_traversal_filename_lands_inside_out_dir() {
         .and(path("/rest/api/3/issue/TRAV-1"))
         .and(query_param("fields", "attachment"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(issue_with_attachments("TRAV-1", vec![att])),
+            ResponseTemplate::new(200).set_body_json(issue_with_attachments("TRAV-1", vec![att])),
         )
         .mount(&server)
         .await;

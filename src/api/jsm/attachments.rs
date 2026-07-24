@@ -530,8 +530,7 @@ mod tests {
             "http://127.0.0.1:1".to_string(),
             "Basic dGVzdA==".to_string(),
         );
-        let result =
-            post_request_attachment(&client, "EJ-1", &["tmp-123".to_string()], true).await;
+        let result = post_request_attachment(&client, "EJ-1", &["tmp-123".to_string()], true).await;
         let err = result.expect_err("network error expected with unreachable server");
 
         // RED assertion: current code emits "API error (0):" — that must disappear.
