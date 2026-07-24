@@ -3082,3 +3082,154 @@ async fn test_bc_3_9_013_delete_network_error_exit_1() {
         "BC-3.9.013: network error must contain 'Could not reach'; got stderr: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// F5-R1-004: single-AID 404 message parity (metadata-GET path vs. DELETE path)
+// ---------------------------------------------------------------------------
+
+/// F5-R1-004: when a single-AID delete encounters a 404, BOTH the interactive path
+/// (metadata GET 404, no `--yes`) and the `--yes` path (targeted DELETE 404) must
+/// emit the SAME canonical prefix AND the Jira error body. Currently the two paths
+/// are asymmetric:
+///
+/// - `--yes` path:  `delete_attachment_targeted` on 404 returns
+///   `"Attachment {id} not found or not accessible.\n{Jira error body}"` ✓
+/// - Interactive path:  `get_attachment_metadata` on 404 returns
+///   `"Attachment {id} not found or not accessible."` — WITHOUT the error body ✗
+///
+/// Target behavior: both paths emit the canonical prefix PLUS the Jira error body.
+/// The interactive path fix is in `get_attachment_metadata` (~`src/api/jira/attachments.rs`
+/// line 211-212): the `..` wildcard discarding `message` must be replaced with
+/// `message` to include the error body in the formatted string.
+///
+/// IMPORTANT: `delete_attachment` (bulk benign-skip, DEC-168) must NOT be changed —
+/// its 404→`"not found or already deleted"` benign semantics are load-bearing.
+///
+/// Sub-case A (interactive, metadata GET 404): RED — body absent from stderr now.
+/// Sub-case B (--yes, DELETE 404): GREEN — body already present; regression guard.
+#[tokio::test]
+async fn test_f5_r1_004_single_aid_404_message_includes_jira_error_body() {
+    // A Jira-style 404 error body — the real API returns something like this.
+    let jira_404_body = serde_json::json!({
+        "errorMessages": ["The attachment with id '77777' does not exist."],
+        "errors": {}
+    });
+    let jira_404_text = serde_json::to_string(&jira_404_body).unwrap();
+
+    // -----------------------------------------------------------------------
+    // Sub-case A: interactive path (no --yes).
+    //   metadata GET → 404 → error propagated via `get_attachment_metadata`.
+    //   Current: stderr contains prefix, NOT the Jira error body.
+    //   Target:  stderr contains prefix AND the Jira error body.
+    // -----------------------------------------------------------------------
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        // Metadata GET returns 404 with a Jira error body.
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/attachment/77777"))
+            .respond_with(
+                ResponseTemplate::new(404)
+                    .set_body_json(jira_404_body.clone()),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // DELETE must NOT be issued (exits on metadata-GET failure).
+        Mock::given(method("DELETE"))
+            .and(path("/rest/api/3/attachment/77777"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        // Run without --yes in interactive (TTY) mode.
+        // JR_STDIN_IS_TTY=1 bypasses the auto-no-input flip so the code reaches
+        // the metadata GET (line ~1833 in attachments.rs). When that GET returns
+        // 404, the command exits 64 before showing any prompt.
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .env("JR_STDIN_IS_TTY", "1")
+            .args(["issue", "attachment", "delete", "77777"])
+            .timeout(std::time::Duration::from_secs(10))
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert_eq!(
+            output.status.code(),
+            Some(64),
+            "F5-R1-004(A) interactive 404: must exit 64; got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+
+        // Canonical prefix must be present.
+        assert!(
+            stderr.contains("Attachment 77777 not found or not accessible."),
+            "F5-R1-004(A) interactive 404: stderr must contain canonical prefix; \
+             got stderr: {stderr}"
+        );
+
+        // Jira error body must also be present.
+        // RED: current `get_attachment_metadata` discards `message` (the `..` wildcard)
+        //      so the error body does NOT appear in the formatted error.
+        assert!(
+            stderr.contains("does not exist"),
+            "F5-R1-004(A) interactive 404: Jira error body must appear in stderr; \
+             got stderr: {stderr}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Sub-case B: --yes path (targeted DELETE 404).
+    //   `delete_attachment_targeted` on 404 already includes the error body.
+    //   This sub-case is a GREEN regression guard (DEC-168).
+    // -----------------------------------------------------------------------
+    {
+        let server = MockServer::start().await;
+        let cache = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+
+        // DELETE returns 404 with a Jira error body.
+        Mock::given(method("DELETE"))
+            .and(path("/rest/api/3/attachment/77777"))
+            .respond_with(
+                ResponseTemplate::new(404)
+                    .set_body_json(jira_404_body.clone()),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let output = jr_cmd_with_xdg(&server.uri(), cache.path(), cfg.path())
+            .args(["issue", "attachment", "delete", "77777", "--yes"])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert_eq!(
+            output.status.code(),
+            Some(64),
+            "F5-R1-004(B) --yes 404: must exit 64; got {:?}\nstderr: {stderr}",
+            output.status.code()
+        );
+
+        // Canonical prefix.
+        assert!(
+            stderr.contains("Attachment 77777 not found or not accessible."),
+            "F5-R1-004(B) --yes 404: canonical prefix must be present; got stderr: {stderr}"
+        );
+
+        // Jira error body (DEC-168: already implemented in delete_attachment_targeted).
+        // This assertion is GREEN now — regression guard for the --yes path.
+        assert!(
+            stderr.contains(&jira_404_text) || stderr.contains("does not exist"),
+            "F5-R1-004(B) --yes 404: Jira error body must appear in stderr (DEC-168); \
+             got stderr: {stderr}"
+        );
+    }
+}

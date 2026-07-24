@@ -2723,3 +2723,104 @@ async fn test_ac_018_double_quote_filename_well_formed_content_disposition() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// F5-R1-006: SEC-576-004 double-quote guard (platform upload path)
+// ---------------------------------------------------------------------------
+
+/// F5-R1-006 (platform): double-quote (`"`) in the upload filename must be mapped
+/// to underscore (`_`) by the SEC-576-004 guard BEFORE passing to `Part::file_name()`.
+///
+/// When the guard replaces `"` with `_`:
+/// - The Content-Disposition filename becomes `file_name.txt` (safe).
+/// - There is no raw `"` or reqwest-escaped `\"` or `%22` form of the original `"`.
+///
+/// Currently the guard only maps `\r`, `\n`, `\0` — NOT `"`. So the current
+/// Content-Disposition body contains reqwest's escaped form (`file\"name.txt`), NOT
+/// the sanitized form (`file_name.txt`).
+///
+/// Note: `test_ac_018_double_quote_filename_well_formed_content_disposition` (above)
+/// pins the CURRENT reqwest-encoding behavior. When this F5-R1-006 test turns GREEN,
+/// the AC-018 test must be updated to reflect that `"` is now mapped to `_` by the
+/// guard (so the body contains `file_name.txt`, not `file\"name.txt`).
+///
+/// Unix only: `"` is a valid filename char on Unix; Windows rejects it at the FS level.
+///
+/// RED: current guard does NOT map `"` to `_` → body contains `file\"name.txt` (or
+///      `file%22name.txt`), not `file_name.txt` → first assertion fails.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_f5_r1_006_upload_content_disposition_double_quote_mapped_to_underscore() {
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let tmp = TempDir::new().unwrap();
+
+    // `"` is valid on Unix; guard must replace it with `_`.
+    let file_quote = tmp.path().join("file\"name.txt");
+    std::fs::write(&file_quote, b"f5-r1-006 guard test").unwrap();
+
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/TEST-1/attachments"))
+        .and(header("X-Atlassian-Token", "no-check"))
+        // Response uses the SANITIZED filename (what the server would receive post-fix).
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            make_upload_attachment("10601", "file_name.txt")
+        ])))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            "TEST-1",
+            &file_quote.to_string_lossy(),
+            "--output",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "F5-R1-006 platform: upload with '\"' in filename must exit 0; \
+         got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+
+    // Inspect the multipart body received by the mock server.
+    let received = server.received_requests().await.unwrap();
+    for req in &received {
+        if req.method == wiremock::http::Method::POST {
+            let body = std::str::from_utf8(&req.body).unwrap_or("");
+
+            // Target: SEC-576-004 guard maps '"' → '_' → filename in body is "file_name.txt".
+            // RED: current guard does NOT map '"'; body still contains the '"' form.
+            assert!(
+                body.contains("file_name.txt"),
+                "F5-R1-006 platform: '\"' must be mapped to '_' by SEC-576-004 guard; \
+                 Content-Disposition filename must be 'file_name.txt'; \
+                 body excerpt: {}",
+                &body[..body.len().min(500)]
+            );
+
+            // Neither the backslash-escaped nor percent-encoded form should appear.
+            // (Both are present only when the guard fails to strip the '"'.)
+            let has_backslash_escaped = body.contains("file\\\"name.txt");
+            let has_pct_encoded = body.contains("file%22name.txt");
+            assert!(
+                !has_backslash_escaped && !has_pct_encoded,
+                "F5-R1-006 platform: raw or reqwest-encoded '\"' must NOT appear \
+                 when guard maps it to '_'; \
+                 backslash-escaped={has_backslash_escaped} pct-encoded={has_pct_encoded}; \
+                 body excerpt: {}",
+                &body[..body.len().min(500)]
+            );
+        }
+    }
+}

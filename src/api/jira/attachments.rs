@@ -553,6 +553,43 @@ mod tests {
         assert_eq!(safe_name("mid\"dle"), "mid\"dle");
     }
 
+    /// F5-R1-006: double-quote (`"`) in a filename must be mapped to underscore (`_`)
+    /// by the SEC-576-004 guard to prevent quoted-string parameter injection in
+    /// Content-Disposition (CWE-93). A raw or backslash-escaped `"` in the filename
+    /// can terminate the quoted-string value prematurely, causing parsers to misread
+    /// subsequent data as separate header parameters.
+    ///
+    /// RED: current guard only maps `\r`, `\n`, `\0` — not `"`.
+    /// Target: `"` is mapped to `_` (same treatment as the injection chars).
+    ///
+    /// When this test turns GREEN, also update:
+    ///   - `test_sec_576_004_safe_name_double_quote_not_in_guard` (remove or rename)
+    ///   - `tests/attachment_upload.rs::test_ac_018_double_quote_filename_well_formed_content_disposition`
+    ///     (update assertions to expect `file_name.txt`, not `\"` form)
+    #[test]
+    fn test_f5_r1_006_safe_name_double_quote_mapped_to_underscore() {
+        assert_eq!(
+            safe_name("file\"name.txt"),
+            "file_name.txt",
+            "F5-R1-006: '\"' must be mapped to '_' in SEC-576-004 guard"
+        );
+        assert_eq!(
+            safe_name("\"leading"),
+            "_leading",
+            "F5-R1-006: leading '\"' must become '_'"
+        );
+        assert_eq!(
+            safe_name("trailing\""),
+            "trailing_",
+            "F5-R1-006: trailing '\"' must become '_'"
+        );
+        assert_eq!(
+            safe_name("a\"b\"c"),
+            "a_b_c",
+            "F5-R1-006: multiple '\"' must each become '_'"
+        );
+    }
+
     /// Benign filenames are unmodified (regression guard — safe_name must not
     /// corrupt valid filenames).
     #[test]
@@ -619,3 +656,4 @@ mod tests {
         );
     }
 }
+

@@ -3351,3 +3351,254 @@ async fn test_download_string_id_in_metadata_still_succeeds() {
     assert!(out_path.exists(), "output file must be created");
     assert_eq!(std::fs::read(&out_path).unwrap(), b"txt");
 }
+
+// ---------------------------------------------------------------------------
+// F5-R1-002: --newest timestamp parser unification
+// ---------------------------------------------------------------------------
+
+/// F5-R1-002: `--newest N` must rank attachments by true chronological order even
+/// when the "newest" attachment's `created` timestamp has a NON-STANDARD number of
+/// fractional-second digits (not 0 or 3).
+///
+/// Bug: `parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.3f%z")` in chrono 0.4 only accepts
+/// EXACTLY 0 or EXACTLY 3 fractional digits. Timestamps with 1, 2, 4, 6, or 9 digits
+/// fail silently (None), so `--newest 1` sorts them LAST (None > Some ordering) and
+/// downloads an OLDER attachment instead of the genuinely newer one.
+///
+/// Target fix: the `--newest` sort path must use the same relaxed parsing as the
+/// `--older-than` path — i.e. `.parse::<DateTime<FixedOffset>>()` (RFC 3339) — which
+/// accepts any number of fractional digits.
+///
+/// Fixture:
+///   A: id="newer001" filename="newer_file.txt" created="2026-07-20T10:00:00.1+0000"
+///      (1 fractional digit — valid RFC 3339, but %.3f fails → sorts LAST in buggy code)
+///   B: id="older001" filename="older_file.txt" created="2026-01-01T08:00:00.000+0000"
+///      (3 fractional digits — %.3f succeeds, RFC 3339 succeeds — genuinely OLDER)
+///
+/// With `--newest 1`, only A must be downloaded; B must be skipped.
+///
+/// RED: current code (%.3f) cannot parse A → A sorts LAST → downloads B (older).
+#[tokio::test]
+async fn test_newest_selects_no_millis_attachment_over_millis_older() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    let out_dir = TempDir::new().unwrap();
+
+    let att_newer = make_attachment(
+        "newer001",
+        "newer_file.txt",
+        "text/plain",
+        14,
+        "2026-07-20T10:00:00.1+0000", // 1 fractional digit — %.3f FAILS, RFC 3339 OK — NEWER
+    );
+    let att_older = make_attachment(
+        "older001",
+        "older_file.txt",
+        "text/plain",
+        14,
+        "2026-01-01T08:00:00.000+0000", // 3 fractional digits — %.3f OK, RFC 3339 OK — OLDER
+    );
+
+    // Issue GET — returns both attachments.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/NEW-1"))
+        .and(query_param("fields", "attachment"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(issue_with_attachments(
+                "NEW-1",
+                vec![att_newer, att_older],
+            )),
+        )
+        .mount(&server)
+        .await;
+
+    // Content GET for attachment A (newer) — returns unique body.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/attachment/content/newer001"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"NEWEST_CONTENT"))
+        .mount(&server)
+        .await;
+
+    // Content GET for attachment B (older) — returns unique body.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/attachment/content/older001"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"OLDER_CONTENT"))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "download",
+            "NEW-1",
+            "--newest",
+            "1",
+            "--out-dir",
+            out_dir.path().to_str().unwrap(),
+        ])
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "F5-R1-002: --newest 1 must exit 0; got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+
+    // Exactly one file must be written.
+    let entries: Vec<_> = std::fs::read_dir(out_dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+    assert_eq!(
+        entries.len(),
+        1,
+        "F5-R1-002: exactly one file must be written by --newest 1; got {} files\nstderr: {stderr}",
+        entries.len()
+    );
+
+    // The content of the written file must be from the NEWER attachment (A).
+    // RED: current code downloads B (older, parseable) → content "OLDER_CONTENT".
+    // GREEN (fixed): code downloads A (newer, no-millis) → content "NEWEST_CONTENT".
+    let written_content = std::fs::read(entries[0].path()).unwrap();
+    assert_eq!(
+        written_content,
+        b"NEWEST_CONTENT",
+        "F5-R1-002: --newest 1 must download the genuinely newest attachment \
+         (1-digit fractional seconds); got content {:?} — \
+         this fails when %.3f rejects non-0/non-3-digit fractional timestamps \
+         (1-digit, 2-digit, 4-digit etc sort LAST due to None > Some ordering)",
+        String::from_utf8_lossy(&written_content)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// F5-R1-001: Batch traversal security property pin (observable behavior)
+// ---------------------------------------------------------------------------
+
+/// F5-R1-001 observable security property: batch download (`--all`) with a
+/// path-traversal filename (`../../evil.txt`) from the server must write the
+/// file INSIDE `--out-dir`, never outside it.
+///
+/// `sanitize_attachment_filename("../../evil.txt")` returns `Some("evil.txt")`
+/// via `Path::file_name()`, and the batch path then prefixes a SHA-1 of the
+/// attachment ID, producing `<sha1>_evil.txt` safely inside out_dir.
+///
+/// This test pins the END-TO-END observable behavior at the integration level.
+/// The `test_bc_2_7_011_vp576_001_containment_prop` proptest covers the same
+/// invariant at the `sanitize_attachment_filename` function level; this test
+/// complements it by running the full CLI invocation.
+///
+/// Expected: GREEN (the sanitizer is correctly implemented and the batch path
+/// uses it). This is a security-property regression guard, not a RED gate test.
+#[tokio::test]
+async fn test_batch_download_traversal_filename_lands_inside_out_dir() {
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    let out_dir = TempDir::new().unwrap();
+
+    // Attachment with a traversal filename supplied by the "server".
+    let att = make_attachment(
+        "trav001",
+        "../../evil.txt", // path traversal attempt
+        "text/plain",
+        13,
+        "2026-07-20T10:00:00.000+0000",
+    );
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/TRAV-1"))
+        .and(query_param("fields", "attachment"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(issue_with_attachments("TRAV-1", vec![att])),
+        )
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/attachment/content/trav001"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"traversal content"))
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "download",
+            "TRAV-1",
+            "--all",
+            "--out-dir",
+            out_dir.path().to_str().unwrap(),
+        ])
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "F5-R1-001 traversal pin: batch download with traversal filename must exit 0; \
+         got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+
+    // Security property: any files written must be inside out_dir (not above it).
+    let resolved_out = out_dir
+        .path()
+        .canonicalize()
+        .unwrap_or_else(|_| out_dir.path().to_path_buf());
+
+    let entries: Vec<_> = std::fs::read_dir(out_dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+
+    // At least one file must be written (the traversal-named attachment).
+    assert!(
+        !entries.is_empty(),
+        "F5-R1-001 traversal pin: file from traversal-named attachment must land in out_dir; \
+         out_dir is empty\nstderr: {stderr}"
+    );
+
+    // Every written file must be inside out_dir.
+    for entry in &entries {
+        let entry_path = entry.path().canonicalize().unwrap_or_else(|_| entry.path());
+        assert!(
+            entry_path.starts_with(&resolved_out),
+            "F5-R1-001 traversal pin: SECURITY VIOLATION — file escaped out_dir! \
+             file={:?} not inside {:?}",
+            entry_path,
+            resolved_out
+        );
+    }
+
+    // Verify "../../evil.txt" was NOT written outside out_dir.
+    // The parent of out_dir must NOT have gained an "evil.txt" file.
+    let parent = out_dir.path().parent();
+    if let Some(p) = parent {
+        let evil_in_parent = p.join("evil.txt");
+        assert!(
+            !evil_in_parent.exists(),
+            "F5-R1-001 traversal pin: SECURITY VIOLATION — 'evil.txt' escaped to parent dir {:?}",
+            evil_in_parent
+        );
+        let grandparent = p.parent();
+        if let Some(gp) = grandparent {
+            let evil_in_gp = gp.join("evil.txt");
+            assert!(
+                !evil_in_gp.exists(),
+                "F5-R1-001 traversal pin: SECURITY VIOLATION — 'evil.txt' escaped two levels up {:?}",
+                evil_in_gp
+            );
+        }
+    }
+}

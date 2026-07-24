@@ -4716,3 +4716,143 @@ async fn test_replace_existing_nonbenign_delete_error_propagates() {
          got exit 0\nstdout: {stdout}\nstderr: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// F5-R1-006 (JSM step-1): SEC-576-004 double-quote guard in attach_temporary_file
+// ---------------------------------------------------------------------------
+
+/// F5-R1-006 (JSM step-1): double-quote (`"`) in the upload filename must be mapped
+/// to underscore (`_`) by the SEC-576-004 guard in `attach_temporary_file` BEFORE
+/// the filename is placed into the `Content-Disposition` header of the multipart POST.
+///
+/// This is the JSM-path counterpart of
+/// `test_f5_r1_006_upload_content_disposition_double_quote_mapped_to_underscore`
+/// (in tests/attachment_upload.rs).
+///
+/// Note: `test_sec_576_004_jsm_step1_content_disposition_crlf_guard` (above) covers
+/// `\n` injection. This test extends coverage to `"` injection in the JSM step-1 path.
+///
+/// RED: current guard (`src/api/jsm/attachments.rs` ~L67-76) only maps `\r`, `\n`,
+/// `\0` — NOT `"`. The step-1 body will contain reqwest-escaped `file\"name.txt`,
+/// NOT the sanitized form `file_name.txt` → the first body assertion fails.
+///
+/// Unix only: `"` is a valid filename char on Unix.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_f5_r1_006_jsm_step1_content_disposition_double_quote_mapped_to_underscore() {
+    let server = MockServer::start().await;
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let tmp = TempDir::new().unwrap();
+
+    // `"` is valid on Unix; guard must replace it with `_`.
+    let hostile_name = "file\"name.txt";
+    let file = tmp.path().join(hostile_name);
+    std::fs::write(&file, b"f5-r1-006 jsm guard test").unwrap();
+
+    // Step 0: issue GET.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/EJFR6-1"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(issue_get_response("EJFR6-1", "EJFR6")),
+        )
+        .mount(&server)
+        .await;
+
+    // Step 0b: project GET.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/EJFR6"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(jsm_project_response("EJFR6", "93006")),
+        )
+        .mount(&server)
+        .await;
+
+    // Service desk list.
+    Mock::given(method("GET"))
+        .and(path("/rest/servicedeskapi/servicedesk"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(service_desk_list_response("61006", "93006")),
+        )
+        .mount(&server)
+        .await;
+
+    // Step 1: attachTemporaryFile — responds with sanitized fileName.
+    Mock::given(method("POST"))
+        .and(path(
+            "/rest/servicedeskapi/servicedesk/61006/attachTemporaryFile",
+        ))
+        .and(header("X-Atlassian-Token", "no-check"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "temporaryAttachments": [{"temporaryAttachmentId": "tmp-f5r1006", "fileName": "file_name.txt"}]
+        })))
+        .mount(&server)
+        .await;
+
+    // Step 2: request attachment — completes the upload.
+    Mock::given(method("POST"))
+        .and(path("/rest/servicedeskapi/request/EJFR6-1/attachment"))
+        .respond_with(
+            ResponseTemplate::new(201).set_body_json(attachment_create_result_dto(vec![
+                attachment_object("f5r1006-01", "file_name.txt"),
+            ])),
+        )
+        .mount(&server)
+        .await;
+
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "upload",
+            "EJFR6-1",
+            &file.to_string_lossy(),
+            "--public",
+            "--yes",
+        ])
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "F5-R1-006 JSM step-1: upload with '\"' in filename must exit 0; \
+         got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+
+    // Inspect the step-1 POST body for the sanitized Content-Disposition filename.
+    let reqs = server.received_requests().await.unwrap();
+    let step1_req = reqs
+        .iter()
+        .find(|r| {
+            r.method == wiremock::http::Method::POST
+                && r.url.path().contains("attachTemporaryFile")
+        })
+        .expect("F5-R1-006 JSM: step-1 POST to attachTemporaryFile must have been received");
+
+    let body = String::from_utf8_lossy(&step1_req.body);
+
+    // Target: guard maps '"' → '_' → Content-Disposition contains "file_name.txt".
+    // RED: current guard does NOT map '"'; body contains "file\"name.txt" (reqwest form).
+    assert!(
+        body.contains("file_name.txt"),
+        "F5-R1-006 JSM step-1: '\"' must be mapped to '_' by SEC-576-004 guard; \
+         Content-Disposition filename must be 'file_name.txt'; \
+         body excerpt: {}",
+        &body[..body.len().min(500)]
+    );
+
+    // The reqwest-escaped form must NOT appear when the guard fires.
+    assert!(
+        !body.contains("file\\\"name.txt"),
+        "F5-R1-006 JSM step-1: reqwest-escaped '\"' (backslash form) must NOT appear \
+         when guard maps it to '_'; body excerpt: {}",
+        &body[..body.len().min(500)]
+    );
+}
