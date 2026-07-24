@@ -3039,4 +3039,71 @@ mod tests {
              got: {result:?}"
         );
     }
+
+    // ---------------------------------------------------------------------------
+    // F5-R3-002: batch_path_is_within_dir must accept a non-canonical base dir
+    // ---------------------------------------------------------------------------
+
+    /// F5-R3-002: `batch_path_is_within_dir` must return `Ok(true)` when
+    /// `resolved_dir` is NON-canonical (contains `..` segments) but `final_path`
+    /// is genuinely inside the base directory.
+    ///
+    /// **Current defect:** the function canonicalizes `parent` (via
+    /// `parent.canonicalize()`) but compares the result against `resolved_dir`
+    /// as-is.  When `resolved_dir` is the non-canonical fallback value produced
+    /// by the call-site `unwrap_or_else(|_| base_dir.to_path_buf())` at ~line 887
+    /// (e.g., a path containing `..` segments or a macOS symlinked `/var` prefix
+    /// instead of `/private/var`), `canonical_parent.starts_with(resolved_dir)`
+    /// is `false` even though the path IS contained — so every file in a batch
+    /// download is silently rejected, producing "Downloaded 0 of N" with exit 0.
+    ///
+    /// **Fix direction for implementer:** canonicalize `resolved_dir` inside
+    /// `batch_path_is_within_dir` before the `starts_with` check (or accept
+    /// `Err` + warn when the base itself cannot be canonicalized — either
+    /// approach satisfies the contract).
+    ///
+    /// **RED gate:** `canonical_parent.starts_with(non_canonical_base)` is
+    /// `false` for the `..`-containing path constructed below, so the assertion
+    /// fails until the function is fixed.
+    #[test]
+    fn test_f5_r3_002_batch_path_is_within_dir_accepts_non_canonical_base() {
+        let base = tempfile::tempdir().expect("create tempdir");
+        // Canonicalize to get the true filesystem path (resolves symlinks such
+        // as macOS /var → /private/var).
+        let canonical_base = base
+            .path()
+            .canonicalize()
+            .expect("canonicalize base tempdir");
+
+        // Build a NON-canonical path that refers to the SAME directory by
+        // appending `../<basename>`.  For example:
+        //   canonical:     /private/var/folders/…/T/tmp_abc
+        //   non-canonical: /private/var/folders/…/T/tmp_abc/../tmp_abc
+        //
+        // `Path::starts_with` is component-based and does NOT normalize `..`,
+        // so `canonical_parent.starts_with(non_canonical)` returns `false`
+        // even though the directories are identical — this is the defect.
+        let basename = canonical_base
+            .file_name()
+            .expect("canonical_base has a filename");
+        let non_canonical_base = canonical_base.join("..").join(basename);
+
+        // final_path is a genuine child of the base dir.
+        let final_path = canonical_base.join("safe_attachment_f5r3002.bin");
+
+        let result = batch_path_is_within_dir(&final_path, &non_canonical_base);
+
+        // After the fix this must return Ok(true); currently returns Ok(false)
+        // because canonical_parent (/tmp/…/tmp_abc) does NOT start_with the
+        // non-canonical path (/tmp/…/tmp_abc/../tmp_abc).
+        assert!(
+            matches!(result, Ok(true)),
+            "F5-R3-002 RED: batch_path_is_within_dir must accept a genuine child \
+             even when resolved_dir is non-canonical; got: {result:?}\n\
+             final_path:    {}\n\
+             resolved_dir:  {}",
+            final_path.display(),
+            non_canonical_base.display()
+        );
+    }
 }

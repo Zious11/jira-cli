@@ -3599,3 +3599,94 @@ async fn test_batch_download_traversal_filename_lands_inside_out_dir() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// F5-R3-001 — BC-2.7.012: download --id 404 must emit canonical string ONLY
+// ---------------------------------------------------------------------------
+
+/// F5-R3-001 / BC-2.7.012: when `jr issue attachment download <KEY> --id <AID>`
+/// encounters a 404 on the metadata GET, stderr MUST contain the canonical
+/// "Attachment {id} not found or not accessible." string and MUST NOT contain
+/// the Jira API error body text.
+///
+/// The delete single-AID path (`delete_attachment_targeted` / `DEC-168`) surfaces
+/// the body intentionally — that is a different operation.  The download path must
+/// not propagate the raw server error body to the user.
+///
+/// **Current defect (F5-R3-001):** `get_attachment_metadata` (introduced in
+/// the F5-R1-004 fix) appends `\n{message}` to the canonical prefix.  This
+/// leaks the Jira error body to the download caller, which should only see the
+/// canonical one-liner.  BC-2.7.012 §"404 body-surfacing asymmetry" requires
+/// body surfacing on DELETE but CANONICAL-ONLY on DOWNLOAD.
+///
+/// **RED gate:** the assertion `!contains(SENTINEL)` fails until
+/// `get_attachment_metadata` stops appending the body and the enrichment is
+/// relocated to the delete call site.
+#[tokio::test]
+async fn test_f5_r3_001_download_id_404_canonical_only_no_jira_body() {
+    // A sentinel string that is unlikely to appear in any other output.
+    // This is the distinctive body text the mock server returns.
+    const SENTINEL: &str = "SENTINEL_F5_R3_001_BODY_MUST_NOT_APPEAR_IN_DOWNLOAD_STDERR";
+
+    let cache = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    let out_dir = TempDir::new().unwrap();
+
+    // Mount a metadata GET that returns 404 with the sentinel body text.
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/attachment/55555"))
+        .respond_with(
+            ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "errorMessages": [SENTINEL],
+                "errors": {}
+            })),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let out_path = out_dir.path().join("attachment.bin");
+    let output = jr_cmd_with_xdg(&server.uri(), cache.path(), config.path())
+        .args([
+            "issue",
+            "attachment",
+            "download",
+            "FOO-1",
+            "--id",
+            "55555",
+            "--out",
+            out_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // (a) Exit code must be 64 (UserError).
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "F5-R3-001: download --id 404 must exit 64; got {:?}\nstderr: {stderr}",
+        output.status.code()
+    );
+
+    // (b) Canonical prefix must be present.
+    assert!(
+        stderr.contains("Attachment 55555 not found or not accessible."),
+        "F5-R3-001: download --id 404 stderr must contain canonical \
+         'Attachment 55555 not found or not accessible.'; got: {stderr}"
+    );
+
+    // (c) The Jira API body MUST NOT appear in stderr.
+    //
+    // RED GATE: currently `get_attachment_metadata` appends `\n{message}` to
+    // the canonical prefix (F5-R1-004 fix), so the sentinel leaks into stderr.
+    // This assertion fails until the enrichment is relocated to the delete
+    // call site (the fix for F5-R3-001).
+    assert!(
+        !stderr.contains(SENTINEL),
+        "F5-R3-001 RED: download --id 404 must NOT surface the Jira error body \
+         (BC-2.7.012 canonical-only); sentinel found in stderr: {stderr}"
+    );
+}
