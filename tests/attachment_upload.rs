@@ -2791,32 +2791,33 @@ async fn test_f5_r1_006_upload_content_disposition_double_quote_mapped_to_unders
 
     // Inspect the multipart body received by the mock server.
     let received = server.received_requests().await.unwrap();
-    for req in &received {
-        if req.method == wiremock::http::Method::POST {
-            let body = std::str::from_utf8(&req.body).unwrap_or("");
+    let post_req = received
+        .iter()
+        .find(|r| r.method == wiremock::http::Method::POST)
+        .expect("F5-R1-006 platform: POST to /attachments must have been received");
 
-            // Target: SEC-576-004 guard maps '"' → '_' → filename in body is "file_name.txt".
-            // RED: current guard does NOT map '"'; body still contains the '"' form.
-            assert!(
-                body.contains("file_name.txt"),
-                "F5-R1-006 platform: '\"' must be mapped to '_' by SEC-576-004 guard; \
-                 Content-Disposition filename must be 'file_name.txt'; \
-                 body excerpt: {}",
-                &body[..body.len().min(500)]
-            );
+    let body = std::str::from_utf8(&post_req.body).unwrap_or("");
 
-            // Neither the backslash-escaped nor percent-encoded form should appear.
-            // (Both are present only when the guard fails to strip the '"'.)
-            let has_backslash_escaped = body.contains("file\\\"name.txt");
-            let has_pct_encoded = body.contains("file%22name.txt");
-            assert!(
-                !has_backslash_escaped && !has_pct_encoded,
-                "F5-R1-006 platform: raw or reqwest-encoded '\"' must NOT appear \
-                 when guard maps it to '_'; \
-                 backslash-escaped={has_backslash_escaped} pct-encoded={has_pct_encoded}; \
-                 body excerpt: {}",
-                &body[..body.len().min(500)]
-            );
-        }
-    }
+    // Target: SEC-576-004 guard maps '"' → '_' → filename in body is "file_name.txt".
+    // RED: current guard does NOT map '"'; body still contains the '"' form.
+    assert!(
+        body.contains("file_name.txt"),
+        "F5-R1-006 platform: '\"' must be mapped to '_' by SEC-576-004 guard; \
+         Content-Disposition filename must be 'file_name.txt'; \
+         body excerpt: {}",
+        &body[..body.len().min(500)]
+    );
+
+    // Neither the backslash-escaped nor percent-encoded form should appear.
+    // (Both are present only when the guard fails to strip the '"'.)
+    let has_backslash_escaped = body.contains("file\\\"name.txt");
+    let has_pct_encoded = body.contains("file%22name.txt");
+    assert!(
+        !has_backslash_escaped && !has_pct_encoded,
+        "F5-R1-006 platform: raw or reqwest-encoded '\"' must NOT appear \
+         when guard maps it to '_'; \
+         backslash-escaped={has_backslash_escaped} pct-encoded={has_pct_encoded}; \
+         body excerpt: {}",
+        &body[..body.len().min(500)]
+    );
 }

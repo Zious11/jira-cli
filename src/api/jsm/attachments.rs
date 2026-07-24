@@ -469,6 +469,38 @@ mod tests {
         );
     }
 
+    /// F5-R2-002 (JSM): backslash (`\`) in a filename must be mapped to underscore (`_`)
+    /// by the SEC-576-004 guard in `attach_temporary_file`.
+    ///
+    /// A raw `\` in Content-Disposition `filename=` is the RFC 2616 quoted-string
+    /// escape character — a stray `\` lets a parser misread the next character as
+    /// an escaped sequence (CWE-93). This is the JSM-path twin of
+    /// `test_f5_r2_002_safe_name_backslash_mapped_to_underscore` in
+    /// `src/api/jira/attachments.rs`.
+    ///
+    /// RED: the current guard (`matches!(c, '\r' | '\n' | '\0' | '"')`) does NOT
+    /// include `\` → `safe_name("file\\name.txt")` returns `"file\\name.txt"`,
+    /// not `"file_name.txt"` → this test fails until the guard is extended.
+    #[test]
+    fn test_f5_r2_002_jsm_safe_name_backslash_mapped_to_underscore() {
+        assert_eq!(
+            safe_name("file\\name.txt"),
+            "file_name.txt",
+            "F5-R2-002 JSM: '\\' must be mapped to '_' in SEC-576-004 guard"
+        );
+        assert_eq!(
+            safe_name("a\\b\\c"),
+            "a_b_c",
+            "F5-R2-002 JSM: multiple '\\' must each become '_'"
+        );
+        // Mixed with other guarded chars.
+        assert_eq!(
+            safe_name("a\\\0b"),
+            "a__b",
+            "F5-R2-002 JSM: '\\' and '\\0' each become '_'"
+        );
+    }
+
     /// Benign filenames are unmodified (regression guard — safe_name must not
     /// corrupt valid filenames, including names with spaces, dots, and Unicode).
     #[test]

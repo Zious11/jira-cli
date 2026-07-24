@@ -563,6 +563,49 @@ mod tests {
         );
     }
 
+    /// F5-R2-002: backslash (`\`) in a filename must be mapped to underscore (`_`)
+    /// by the SEC-576-004 guard.
+    ///
+    /// A raw `\` in Content-Disposition `filename=` is the RFC 2616 quoted-string
+    /// escape character — a stray `\` lets a parser misread the next character as
+    /// an escaped sequence, potentially breaking the quoted-string boundary (CWE-93).
+    /// On Windows, `\` is also a path-component separator, so an unguarded `\` in
+    /// a server-supplied filename could smuggle a traversal component into the
+    /// `filename=` value.
+    ///
+    /// RED: the current guard (`matches!(c, '\r' | '\n' | '\0' | '"')`) does NOT
+    /// include `\` → `safe_name("file\\name.txt")` returns `"file\\name.txt"`,
+    /// not `"file_name.txt"` → this test fails until the guard is extended.
+    #[test]
+    fn test_f5_r2_002_safe_name_backslash_mapped_to_underscore() {
+        assert_eq!(
+            safe_name("file\\name.txt"),
+            "file_name.txt",
+            "F5-R2-002: '\\' must be mapped to '_' in SEC-576-004 guard"
+        );
+        assert_eq!(
+            safe_name("\\leading"),
+            "_leading",
+            "F5-R2-002: leading '\\' must become '_'"
+        );
+        assert_eq!(
+            safe_name("trailing\\"),
+            "trailing_",
+            "F5-R2-002: trailing '\\' must become '_'"
+        );
+        assert_eq!(
+            safe_name("a\\b\\c"),
+            "a_b_c",
+            "F5-R2-002: multiple '\\' must each become '_'"
+        );
+        // Mixed with other guarded chars — all must be replaced.
+        assert_eq!(
+            safe_name("a\\\rb"),
+            "a__b",
+            "F5-R2-002: '\\' and '\\r' each become '_'"
+        );
+    }
+
     /// Benign filenames are unmodified (regression guard — safe_name must not
     /// corrupt valid filenames).
     #[test]
