@@ -486,8 +486,13 @@ mod tests {
     /// "Could not reach {host} — check your connection".
     /// Uses 127.0.0.1:1 (established no-listener pattern in this codebase) to
     /// trigger ECONNREFUSED without requiring a real server.
+    /// BC-3.9.006 / F5-R1-007: step-2 transport errors use the connectivity message
+    /// ("check your connection"), NOT the expired-ID retry hint.  This test was
+    /// formerly named `test_bc_3_9_006_step2_network_error_appends_retry_hint`; the
+    /// old name was misleading because the retry hint is no longer present on the
+    /// network-error path after F5-R1-007.
     #[tokio::test]
-    async fn test_bc_3_9_006_step2_network_error_appends_retry_hint() {
+    async fn test_bc_3_9_006_step2_network_error_uses_connectivity_message_no_retry_hint() {
         let client = JiraClient::new_for_test(
             "http://127.0.0.1:1".to_string(),
             "Basic dGVzdA==".to_string(),
@@ -504,6 +509,13 @@ mod tests {
             "BC-3.9.006 (updated F5-R1-007): step-2 network error must mention connectivity; \
              got: {err_string}"
         );
+        // Confirm the retry hint ("Temporary attachment IDs may have expired") is absent
+        // on the network-error path — it belongs only on HTTP 4xx/5xx branches (F5-R1-007).
+        assert!(
+            !err_string.contains("may have expired"),
+            "BC-3.9.006 (F5-R1-007): retry hint must NOT appear on transport/network errors; \
+             got: {err_string}"
+        );
     }
 
     /// F5-R1-007: step-2 network/transport errors from `post_request_attachment`
@@ -515,13 +527,8 @@ mod tests {
     /// The exit code must remain 1 (both `NetworkError` and `ApiError` map to 1
     /// via `JrError::exit_code()`'s catch-all arm).
     ///
-    /// RED: current code returns `ApiError { status: 0, message: "Could not reach…" }`.
-    /// Target: returns `NetworkError(host)` with RETRY_HINT embedded.
-    ///
-    /// Note: the existing `test_bc_3_9_006_step2_network_error_appends_retry_hint`
-    /// checks that RETRY_HINT appears in the formatted error — that test will need
-    /// to be updated when the fix is applied (to verify RETRY_HINT is still present
-    /// in the new NetworkError formatting).
+    /// Companion to `test_bc_3_9_006_step2_network_error_uses_connectivity_message_no_retry_hint`
+    /// which checks the formatted message; this test checks the error variant type.
     #[tokio::test]
     async fn test_f5_r1_007_step2_network_error_uses_canonical_network_error_variant() {
         use crate::error::JrError;
