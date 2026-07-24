@@ -569,12 +569,16 @@ fn batch_path_is_within_dir(
 ) -> std::io::Result<bool> {
     let parent = final_path.parent().unwrap_or(resolved_dir);
     let canonical_parent = parent.canonicalize()?;
-    // F5-R3-002: canonicalize resolved_dir before starts_with so that a
-    // non-canonical base (e.g. containing `..` components, or a macOS
-    // `/var` symlink prefix) does not falsely fail the containment test.
-    // If resolved_dir itself cannot be canonicalized (directory does not
-    // exist), ? propagates an Err so the call site's warn-and-skip path
-    // fires (fail-open: the download proceeds with a warning logged).
+    // F5-R3-002: canonicalize resolved_dir before starts_with so that the
+    // helper is correct even when called with a non-canonical base (e.g.,
+    // containing `..` components or a macOS `/var` → `/private/var` symlink
+    // prefix).  Via handle_batch_download, resolved_dir is always produced
+    // by base_dir.canonicalize().unwrap_or(base_dir), so a non-canonical
+    // value is not reachable there in practice; this guard provides
+    // defense-in-depth for hypothetical future callers (e.g., if
+    // compute_default_output_path gains sub-directory logic).  If
+    // resolved_dir itself cannot be canonicalized, ? propagates an Err so
+    // the call site's warn-and-skip path fires (fail-open).
     let canonical_dir = resolved_dir.canonicalize()?;
     Ok(canonical_parent.starts_with(canonical_dir))
 }
@@ -3082,23 +3086,20 @@ mod tests {
     /// `resolved_dir` is NON-canonical (contains `..` segments) but `final_path`
     /// is genuinely inside the base directory.
     ///
-    /// **Current defect:** the function canonicalizes `parent` (via
-    /// `parent.canonicalize()`) but compares the result against `resolved_dir`
-    /// as-is.  When `resolved_dir` is the non-canonical fallback value produced
-    /// by the call-site `unwrap_or_else(|_| base_dir.to_path_buf())` at ~line 887
-    /// (e.g., a path containing `..` segments or a macOS symlinked `/var` prefix
-    /// instead of `/private/var`), `canonical_parent.starts_with(resolved_dir)`
-    /// is `false` even though the path IS contained — so every file in a batch
-    /// download is silently rejected, producing "Downloaded 0 of N" with exit 0.
+    /// **Reachability note:** the `Ok(false)` mass-rejection scenario (all files
+    /// skipped) is UNREACHABLE via `handle_batch_download`.  In that caller,
+    /// `resolved_dir` is always `base_dir.canonicalize().unwrap_or(base_dir)` —
+    /// a canonical path when the directory exists — and `final_path.parent()` is
+    /// always `base_dir`, so both `canonicalize()` calls inside
+    /// `batch_path_is_within_dir` succeed and agree.  A non-canonical
+    /// `resolved_dir` cannot arise there in practice; if either `canonicalize()`
+    /// fails, the helper returns `Err` and the call site's warn-and-skip path
+    /// fires (fail-open).
     ///
-    /// **Fix direction for implementer:** canonicalize `resolved_dir` inside
-    /// `batch_path_is_within_dir` before the `starts_with` check (or accept
-    /// `Err` + warn when the base itself cannot be canonicalized — either
-    /// approach satisfies the contract).
-    ///
-    /// **RED gate:** `canonical_parent.starts_with(non_canonical_base)` is
-    /// `false` for the `..`-containing path constructed below, so the assertion
-    /// fails until the function is fixed.
+    /// This test exercises the **standalone helper contract** via direct unit
+    /// call — hardening for hypothetical future callers (e.g., if
+    /// `compute_default_output_path` gains sub-directory logic) that might
+    /// supply a non-canonical base path.
     #[test]
     fn test_f5_r3_002_batch_path_is_within_dir_accepts_non_canonical_base() {
         let base = tempfile::tempdir().expect("create tempdir");
@@ -3127,8 +3128,10 @@ mod tests {
 
         let result = batch_path_is_within_dir(&final_path, &non_canonical_base);
 
-        // After the fix this must return Ok(true); currently returns Ok(false)
-        // because canonical_parent (/tmp/…/tmp_abc) does NOT start_with the
+        // The F5-R3-002 fix canonicalizes resolved_dir inside
+        // batch_path_is_within_dir before the starts_with check, so
+        // canonical_parent (/tmp/…/tmp_abc) correctly starts_with the
+        // canonicalized resolved_dir even when the input was the
         // non-canonical path (/tmp/…/tmp_abc/../tmp_abc).
         assert!(
             matches!(result, Ok(true)),
