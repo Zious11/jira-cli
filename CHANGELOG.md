@@ -4,6 +4,8 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+## [0.6.0-dev.11] - 2026-07-25
+
 ### Fixed
 
 - **`jr issue attachment download` — integer id in metadata response (FIX-576-DL, #576):**
@@ -13,6 +15,56 @@ All notable changes to jr will be documented here.
   validation run (S-576-6, run 30031724733), which produced `invalid type: integer \`10008\`,
   expected a string`. `AttachmentMetadata.id` now uses `deserialize_string_or_int_as_string`
   to accept both forms; `AttachmentObject.id` (list path) is unaffected.
+
+- **`jr issue attachment download` — `--newest` RFC 3339 parser accepts any fractional-second precision (FIX-F5-006, #644):**
+  The `%.3f` strptime specifier in the `--newest` sort path accepted only exactly 0 or 3
+  fractional-second digits; timestamps with 1, 2, or 4+ digits (all valid RFC 3339) failed to
+  parse and sorted last, causing `--newest N` to select older attachments over genuinely-newer
+  ones. The sort path now uses the same relaxed `chrono::DateTime` RFC 3339 parser already
+  used by the `--older-than` path.
+
+- **`jr issue attachment delete` — interactive single-AID 404 surfaces Jira error body (FIX-F5-006, #644):**
+  The interactive confirmation gate (`handle_attachment_delete`) now appends the raw Jira error
+  body to the canonical `"Attachment <AID> not found or not accessible."` prefix (DEC-168
+  body-surfacing contract). The download path (`handle_single_download`) retains
+  canonical-only output per BC-2.7.012.
+
+- **`jr issue attachment upload` — SEC-576-004 Content-Disposition guard extended to `"` (FIX-F5-006, #644):**
+  A double-quote (`"`) in a server-supplied filename was not mapped to `_` before passing to
+  `Part::file_name()`, allowing it to prematurely terminate the `filename=` value and expose
+  subsequent Content-Disposition data to parser misreading. The guard now maps `\r`, `\n`, `\0`,
+  and `"` to `_` in both the platform and JSM upload paths (CWE-93).
+
+- **`jr issue attachment upload` — JSM step-2 transport errors report connectivity hint, not expired-ID hint (FIX-F5-006, #644):**
+  Network errors from `post_request_attachment` (step 2 of the JSM upload flow) previously emitted
+  `ApiError { status: 0 }` and the "Temporary attachment IDs may have expired" retry hint, which
+  misled users on connectivity failures. Transport errors now map to `JrError::NetworkError` with
+  a "Could not reach {host} — check your connection" message; the retry hint is scoped to HTTP
+  error branches only.
+
+- **`jr issue attachment upload` — SEC-576-004 Content-Disposition guard extended to `\` (FIX-F5-007, #646):**
+  A backslash (`\`) in a server-supplied filename was not mapped to `_`. As the RFC 2616
+  quoted-string escape character, a stray `\` in a `filename=` value causes parsers to misread
+  the next character as an escaped sequence. The guard now maps `\r`, `\n`, `\0`, `"`, and `\`
+  to `_` in both the platform and JSM upload paths (CWE-93 symmetry).
+
+- **`jr issue attachment download` — `--id` 404 message is canonical-only; Jira body not leaked (FIX-F5-008, #647):**
+  A prior fix inadvertently moved Jira error body appending into `get_attachment_metadata`
+  itself, causing the download path to include the raw Jira body in its 404 message. The
+  BC-2.7.012 asymmetry is restored: `handle_single_download` emits the canonical-only prefix
+  `"Attachment <id> not found or not accessible."`; the delete interactive gate continues to
+  append `\n{body}` per DEC-168. Also fixed: `batch_path_is_within_dir` now canonicalizes
+  the resolved directory before the containment check, preventing false rejections on paths
+  containing `..` components.
+
+- **`jr issue attachment download` — disk-write errors classified with remediation hints (FIX-F5-010, #649):**
+  All I/O failure sites in the streaming download path (file create, write, flush, rename) now
+  produce user-friendly error messages with remediation hints instead of raw OS error strings:
+  `StorageFull`/`QuotaExceeded` → `"Disk full: not enough space to write <dest>: <os_err>. Free up disk space and try again."`;
+  `PermissionDenied`/`ReadOnlyFilesystem` → `"Permission denied: cannot write to <dir>: <os_err>. Check directory permissions and try again."`;
+  all other errors → `"Failed to write <dest>: <os_err>."`.
+  All three sites now display the final destination path rather than the internal
+  `tmp_<hex>` staging path that was previously leaked in error messages.
 
 ### Added
 
@@ -31,7 +83,6 @@ All notable changes to jr will be documented here.
   (VP-576-005). Cancel → exit 0 + `{"cancelled":true,"uploaded":false}` JSON; EOF → exit 130.
   Step-2 error taxonomy (BC-3.9.006): 401 → exit 2; 403 → exit 1; other 4xx → exit 64; 5xx → exit 1;
   all append retry hint. `--dry-run --public` adds `"visibility":"public"` to `wouldUpload` entries (EC-3.9.020-7).
-  feat(issue): attachment upload --public/--internal JSM visibility + servicedeskapi two-step (#576)
 
 ## [0.6.0-dev.10] - 2026-07-15
 
