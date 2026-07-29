@@ -405,6 +405,16 @@ fn find_line_ref_suffix(s: &str) -> Option<usize> {
 // Integration tests — VP-CITE-002
 // ---------------------------------------------------------------------------
 
+/// Coverage floor: floor(0.75 × N) where N=99 citations measured 2026-07-28.
+///
+/// If `extract_path_citations` regresses to return fewer paths (e.g. a regex change
+/// or CLAUDE.md's backtick convention shifts), the guard would still pass `dead.is_empty()`
+/// while validating nothing. This floor catches that case.
+///
+/// Recalibrate after intentional bulk removal from CLAUDE.md — increases never fire it.
+/// Mirrors the `FLOOR=231` pattern in `scripts/check-bc-citation-symbols.sh`.
+const CITATION_FLOOR: usize = 74; // floor(0.75 × 99); N=99 measured 2026-07-28
+
 /// BC-X.13.001 postcondition 1: guard is GREEN on develop HEAD.
 /// BC-X.13.001 postcondition 2: failure message is CI-CITE-001 verbatim
 ///   with real 1-based line numbers.
@@ -419,6 +429,19 @@ fn test_claude_md_citations_resolve_to_real_files() {
     let root = env!("CARGO_MANIFEST_DIR");
     // extract_path_citations returns Vec<(String, usize)> — (normalized_path, 1-based line)
     let citations = extract_path_citations(doc);
+
+    // POL-11 coverage floor: if the extractor regresses (e.g. returns []),
+    // `dead.is_empty()` would still pass having validated nothing.
+    // A low count means the extractor regressed, not that CLAUDE.md shrank.
+    assert!(
+        citations.len() >= CITATION_FLOOR,
+        "extract_path_citations returned only {} citations from CLAUDE.md (floor is {}). \
+         A count this low means the extractor regressed — check CLAUDE.md backtick \
+         conventions and the extract_path_citations pipeline.",
+        citations.len(),
+        CITATION_FLOOR
+    );
+
     // No is_off_working_branch_allowlisted call — .factory/ is excluded by
     // extract_path_citations dir-prefix filter (step (c)); no allowlist needed.
     let dead: Vec<(String, usize)> = citations

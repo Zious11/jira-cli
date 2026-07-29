@@ -16,10 +16,12 @@ set -euo pipefail
 
 FACTORY=".factory/specs/prd"
 ERRORS=0
+BC_FILES_PROCESSED=0
 
 # Check each bc-N-*.md file
 for f in "$FACTORY"/bc-*.md; do
   [ -f "$f" ] || continue
+  BC_FILES_PROCESSED=$((BC_FILES_PROCESSED+1))
   actual=$(grep -c '^#### BC-' "$f" || true)
   declared=$(grep '^definitional_count:' "$f" | awk '{print $2}')
   if [ "$actual" != "$declared" ]; then
@@ -27,6 +29,14 @@ for f in "$FACTORY"/bc-*.md; do
     ERRORS=$((ERRORS+1))
   fi
 done
+
+# POL-11: coverage floor — the guard cannot pass silently when no bc files exist
+# (e.g. misconfigured worktree, wrong working directory, or empty spec directory).
+# Mirrors the behaviour of scripts/check-bc-no-numeric-test-counts.sh, exit 2.
+if [ "$BC_FILES_PROCESSED" -eq 0 ]; then
+  echo "ERROR: no bc-*.md files found in $FACTORY — nothing to validate" >&2
+  exit 2
+fi
 
 # Check nfr-catalog.md
 nfr_file="$FACTORY/nfr-catalog.md"
@@ -58,4 +68,4 @@ if [ "$ERRORS" -gt 0 ]; then
   echo "FAIL: $ERRORS spec count mismatch(es). Fix frontmatter or body before merging."
   exit 1
 fi
-echo "OK: all spec counts verified."
+echo "Check passed: $BC_FILES_PROCESSED bc files validated"
