@@ -4,6 +4,14 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **`comfy-table` pinned to 7.2.1 (S-626-1):** `comfy-table 7.2.2` uses let-chains
+  (`edition = "2024"`, Rust ≥1.88 required) and deleted its `rust-version` manifest field,
+  so a caret range `"7"` would silently resolve to an incompatible version without cargo
+  enforcing any MSRV constraint. Pinned to `=7.2.1` until the codebase is ready for an
+  MSRV raise to 1.88 (tracked as a dedicated follow-up story).
+
 ## [0.6.0-dev.11] - 2026-07-25
 
 ### Fixed

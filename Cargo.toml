@@ -16,7 +16,12 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 colored = "3"
-comfy-table = "7"
+# Pinned to 7.2.1: 7.2.2 uses let-chains (edition 2024, requires Rust ≥1.88) and
+# deleted the rust-version manifest field, so a caret range resolves to an
+# incompatible version without any MSRV enforcement from cargo. Pin holds until
+# MSRV is raised to 1.88 in a dedicated story.
+# Ref: .factory/research/msrv-let-chains-comfy-table-2026-07-30.md
+comfy-table = "=7.2.1"
 dialoguer = "0.12"
 dirs = "6"
 figment = { version = "0.10", features = ["toml", "env"] }
