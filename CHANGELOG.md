@@ -7,11 +7,12 @@ All notable changes to jr will be documented here.
 ### Fixed
 
 - **MSRV CI job genuinely validates 1.85.0 (S-626-1, CI correctness):** The `msrv`
-  job in `ci.yml` previously installed Rust 1.85.0 via `dtolnay/rust-toolchain` but
-  then ran `cargo check` under the stable toolchain because `rust-toolchain.toml`
-  (`channel = "stable"`) re-asserted at process start, outranking the action's
-  `toolchain:` input. Adding `RUSTUP_TOOLCHAIN: "1.85.0"` to the `cargo check` step
-  — which is the highest-precedence rustup override — makes the MSRV check genuine.
+  job in `ci.yml` previously used a bare `uses: dtolnay/rust-toolchain` step with no
+  `with:` block — the action read `rust-toolchain.toml` (`channel = "stable"`) and
+  installed stable, so `cargo check` ran under stable rather than 1.85.0 (a silent
+  false-green). The fix adds `with: {toolchain: "1.85.0"}` to install the correct
+  toolchain AND `RUSTUP_TOOLCHAIN: "1.85.0"` on the `cargo check` step — which
+  outranks `rust-toolchain.toml` at process level — making the MSRV check genuine.
   No user-visible behaviour change.
 
 ### Changed
