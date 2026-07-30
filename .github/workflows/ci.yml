@@ -78,8 +78,9 @@ jobs:
       # The --all-features flag is effectively a no-op (this crate has no
       # [features] table); it is kept for explicitness. Note: omitting
       # --all-targets also means inline #[cfg(test)] mod blocks in src/ sit
-      # outside the MSRV floor's enforceable scope; this gap cannot be closed
-      # until dev-dependencies (wiremock 0.6.x) support 1.85.0.
+      # outside the MSRV floor's enforceable scope; closing this gap would
+      # require dev-dependencies that build at 1.85.0 — a wiremock downgrade-pin
+      # was not evaluated.
       - run: cargo check --all-features --locked
         env:
           RUSTUP_TOOLCHAIN: "1.85.0"
