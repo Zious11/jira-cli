@@ -423,7 +423,7 @@ async fn sprint_current_falls_back_to_uuid_when_team_not_cached() {
 /// `show_team_col` would be true and the "Team" header would appear — causing
 /// this test to fail.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn board_view_kanban_omits_team_col_when_field_unconfigured() {
+async fn test_board_view_omits_team_column_when_field_unconfigured() {
     let server = MockServer::start().await;
     mount_kanban_board_prereqs(&server).await;
 
@@ -473,7 +473,7 @@ async fn board_view_kanban_omits_team_col_when_field_unconfigured() {
 /// `show_team_col` would be true and the "Team" header would appear — causing
 /// this test to fail.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn issue_list_omits_team_col_when_field_unconfigured() {
+async fn test_issue_list_omits_team_column_when_field_unconfigured() {
     let server = MockServer::start().await;
 
     // `issue list --project PROJ` calls project_exists() before searching

@@ -4,6 +4,16 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **MSRV CI job genuinely validates 1.85.0 (S-626-1, CI correctness):** The `msrv`
+  job in `ci.yml` previously installed Rust 1.85.0 via `dtolnay/rust-toolchain` but
+  then ran `cargo check` under the stable toolchain because `rust-toolchain.toml`
+  (`channel = "stable"`) re-asserted at process start, outranking the action's
+  `toolchain:` input. Adding `RUSTUP_TOOLCHAIN: "1.85.0"` to the `cargo check` step
+  — which is the highest-precedence rustup override — makes the MSRV check genuine.
+  No user-visible behaviour change.
+
 ### Changed
 
 - **`comfy-table` pinned to 7.2.1 (S-626-1):** `comfy-table 7.2.2` uses let-chains

@@ -71,10 +71,12 @@ jobs:
         with:
           toolchain: "1.85.0"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
-      # --all-features checks lib + bins only (NOT --all-targets).
-      # wiremock 0.6.5 (a dev-dependency) requires Rust ≥1.88; including
-      # --all-targets would pull in tests/benches and fail to compile against
-      # the 1.85.0 MSRV toolchain. --all-features is intentional.
+      # Scope is deliberately lib + bins only (NOT --all-targets): including
+      # --all-targets pulls in dev-dependencies (tests, benches) which cannot
+      # compile at 1.85.0. wiremock 0.6.5 uses let-chains and ships no
+      # rust-version field — the same defect class as comfy-table 7.2.2 — and
+      # requires Rust ≥1.88. The --all-features flag is effectively a no-op
+      # (this crate has no [features] table); it is kept for explicitness.
       - run: cargo check --all-features
         env:
           RUSTUP_TOOLCHAIN: "1.85.0"
