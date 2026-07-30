@@ -520,30 +520,32 @@ pub(super) async fn handle_list(
     // raw UUID under `fields.<team_field_id>` (IssueFields::extra is
     // `#[serde(flatten)]`) and can resolve locally.
     let client_verbose = client.verbose();
-    let team_displays: Vec<String> = if matches!(output_format, OutputFormat::Table)
-        && let Some(field_id) = team_field_id
-    {
-        let uuids: Vec<Option<String>> = issues
-            .iter()
-            .map(|i| i.fields.team_id(field_id, client_verbose))
-            .collect();
-        if uuids.iter().any(|u| u.is_some()) {
-            // Team cache read is best-effort for display — an Err or missing
-            // entry falls back to the UUID. Cache population is not this
-            // command's responsibility.
-            let team_map: std::collections::HashMap<String, String> =
-                crate::cache::read_team_cache(&config.active_profile_name)
-                    .ok()
-                    .flatten()
-                    .map(|c| c.teams.into_iter().map(|t| (t.id, t.name)).collect())
-                    .unwrap_or_default();
-            uuids
+    let team_displays: Vec<String> = if matches!(output_format, OutputFormat::Table) {
+        if let Some(field_id) = team_field_id {
+            let uuids: Vec<Option<String>> = issues
                 .iter()
-                .map(|u| match u {
-                    Some(uuid) => team_map.get(uuid).cloned().unwrap_or_else(|| uuid.clone()),
-                    None => "-".to_string(),
-                })
-                .collect()
+                .map(|i| i.fields.team_id(field_id, client_verbose))
+                .collect();
+            if uuids.iter().any(|u| u.is_some()) {
+                // Team cache read is best-effort for display — an Err or missing
+                // entry falls back to the UUID. Cache population is not this
+                // command's responsibility.
+                let team_map: std::collections::HashMap<String, String> =
+                    crate::cache::read_team_cache(&config.active_profile_name)
+                        .ok()
+                        .flatten()
+                        .map(|c| c.teams.into_iter().map(|t| (t.id, t.name)).collect())
+                        .unwrap_or_default();
+                uuids
+                    .iter()
+                    .map(|u| match u {
+                        Some(uuid) => team_map.get(uuid).cloned().unwrap_or_else(|| uuid.clone()),
+                        None => "-".to_string(),
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            }
         } else {
             Vec::new()
         }
