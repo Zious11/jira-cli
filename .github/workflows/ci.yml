@@ -71,6 +71,10 @@ jobs:
         with:
           toolchain: "1.85.0"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      # --all-features checks lib + bins only (NOT --all-targets).
+      # wiremock 0.6.5 (a dev-dependency) requires Rust ≥1.88; including
+      # --all-targets would pull in tests/benches and fail to compile against
+      # the 1.85.0 MSRV toolchain. --all-features is intentional.
       - run: cargo check --all-features
         env:
           RUSTUP_TOOLCHAIN: "1.85.0"

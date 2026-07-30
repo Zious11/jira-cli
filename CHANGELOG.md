@@ -12,6 +12,12 @@ All notable changes to jr will be documented here.
   enforcing any MSRV constraint. Pinned to `=7.2.1` until the codebase is ready for an
   MSRV raise to 1.88 (tracked as a dedicated follow-up story).
 
+- **Three in-tree let-chains rewritten to nested `if` blocks (S-626-1, internal):**
+  `src/cli/auth/keychain.rs`, `src/cli/board.rs`, and `src/cli/issue/list.rs` each
+  contained one let-chain that is valid only under Rust ≥1.88 edition 2024. Rewritten as
+  semantically-equivalent nested `if` blocks to restore MSRV 1.85.0 compliance. No
+  user-visible behaviour change.
+
 ## [0.6.0-dev.11] - 2026-07-25
 
 ### Fixed
