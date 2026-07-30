@@ -77,9 +77,9 @@ jobs:
       # — the same defect class as comfy-table 7.2.2 — and requires Rust ≥1.88.
       # The --all-features flag is effectively a no-op (this crate has no
       # [features] table); it is kept for explicitness. Note: omitting
-      # --all-targets also skips inline #[cfg(test)] mod blocks in src/ —
-      # a let-chain in an in-tree test module would pass this job but fail
-      # `cargo test` at 1.85.0.
+      # --all-targets also means inline #[cfg(test)] mod blocks in src/ sit
+      # outside the MSRV floor's enforceable scope; this gap cannot be closed
+      # until dev-dependencies (wiremock 0.6.x) support 1.85.0.
       - run: cargo check --all-features --locked
         env:
           RUSTUP_TOOLCHAIN: "1.85.0"

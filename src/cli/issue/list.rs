@@ -520,7 +520,7 @@ pub(super) async fn handle_list(
     // raw UUID under `fields.<team_field_id>` (IssueFields::extra is
     // `#[serde(flatten)]`) and can resolve locally.
     let client_verbose = client.verbose();
-    // Nested if (not a let-chain): let-chains require Rust >= 1.88 + edition 2024; MSRV is 1.85. See CLAUDE.md toolchain gotcha.
+    // Nested if (not a let-chain): let-chains require Rust >= 1.88 + edition 2024; MSRV is 1.85. See CLAUDE.md Conventions — No let-chains.
     let team_displays: Vec<String> = if matches!(output_format, OutputFormat::Table) {
         if let Some(field_id) = team_field_id {
             let uuids: Vec<Option<String>> = issues
