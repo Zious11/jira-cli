@@ -57,7 +57,7 @@ jobs:
       - run: cargo test --all-features
 
   msrv:
-    name: MSRV (1.85.0)
+    name: MSRV (1.88.0)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -67,13 +67,13 @@ jobs:
           egress-policy: audit
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88  # 1.85.0
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88  # 1.88.0
         with:
-          toolchain: "1.85.0"
+          toolchain: "1.88.0"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
       - run: cargo check --all-features
         env:
-          RUSTUP_TOOLCHAIN: "1.85.0"
+          RUSTUP_TOOLCHAIN: "1.88.0"
 
   deny:
     name: Deny (licenses + vulnerabilities)

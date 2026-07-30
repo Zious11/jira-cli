@@ -4,6 +4,18 @@ All notable changes to jr will be documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **MSRV raised from 1.85 to 1.88 (S-626-1):** `comfy-table 7.2.2` uses let-chains
+  (RFC 2497, stabilised in Rust 1.88.0) under `edition = "2024"`, making 1.88 the
+  empirically verified minimum. The old CI MSRV job ran `cargo check` under stable because
+  `rust-toolchain.toml`'s `channel = "stable"` outranked the action's `toolchain:` input at
+  the shell level — a silent false-green that kept the violation invisible. The fix adds
+  `RUSTUP_TOOLCHAIN: "1.88.0"` on the `cargo check` step, which is the highest-precedence
+  rustup override and outranks `rust-toolchain.toml`. Pre-built binary users are unaffected;
+  developers building from source on Rust 1.85–1.87 will see `E0658: let expressions in this
+  position are unstable` from `comfy-table`.
+
 ## [0.6.0-dev.11] - 2026-07-25
 
 ### Fixed
