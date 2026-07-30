@@ -7,13 +7,16 @@ All notable changes to jr will be documented here.
 ### Fixed
 
 - **MSRV CI job genuinely validates 1.85.0 (S-626-1, CI correctness):** The `msrv`
-  job in `ci.yml` previously used a bare `uses: dtolnay/rust-toolchain` step with no
-  `with:` block — the action read `rust-toolchain.toml` (`channel = "stable"`) and
-  installed stable, so `cargo check` ran under stable rather than 1.85.0 (a silent
-  false-green). The fix adds `with: {toolchain: "1.85.0"}` to install the correct
-  toolchain AND `RUSTUP_TOOLCHAIN: "1.85.0"` on the `cargo check` step — which
-  outranks `rust-toolchain.toml` at process level — making the MSRV check genuine.
-  No user-visible behaviour change.
+  job in `ci.yml` previously pointed at the tip of dtolnay's `1.85.0` version branch,
+  which hard-codes the toolchain and has no `toolchain` input. The action correctly
+  installed 1.85.0 and set it as `rustup default`, but `cargo check` ran in the repo
+  root where `rust-toolchain.toml` (`channel = "stable"`) outranks `rustup default`
+  in rustup's precedence chain — so the check silently ran under stable (a
+  false-green). The fix replaces the SHA to `fa04a1451ff1842e2626ccb99004d0195b455a88`
+  (a version of the action that declares `toolchain` as a required input), adds
+  `with: {toolchain: "1.85.0"}`, and adds `RUSTUP_TOOLCHAIN: "1.85.0"` to the
+  `cargo check` step — which outranks `rust-toolchain.toml` at process level —
+  making the MSRV check genuine. No user-visible behaviour change.
 
 ### Changed
 
@@ -21,7 +24,8 @@ All notable changes to jr will be documented here.
   (`edition = "2024"`, Rust ≥1.88 required) and deleted its `rust-version` manifest field,
   so a caret range `"7"` would silently resolve to an incompatible version without cargo
   enforcing any MSRV constraint. Pinned to `=7.2.1` until the codebase is ready for an
-  MSRV raise to 1.88 (tracked as a dedicated follow-up story).
+  MSRV raise to 1.88 (tracked as a dedicated follow-up story). User impact: None for
+  binary users or source-builders on Rust ≥1.85.0.
 
 - **Three in-tree let-chains rewritten to nested `if` blocks (S-626-1, internal):**
   `src/cli/auth/keychain.rs`, `src/cli/board.rs`, and `src/cli/issue/list.rs` each
