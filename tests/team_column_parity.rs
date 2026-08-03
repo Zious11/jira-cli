@@ -410,7 +410,13 @@ async fn sprint_current_falls_back_to_uuid_when_team_not_cached() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Team"))
-        .stdout(predicate::str::contains("team-uuid-orphan"));
+        .stdout(predicate::str::contains("team-uuid-orphan"))
+        // BC-5.3.003 postcondition: bare UUID only — no parenthetical suffix.
+        // The suffix "(name not cached — run 'jr team list --refresh')" belongs
+        // exclusively to the single-issue view path (BC-2.3.035, src/cli/issue/view.rs).
+        // This assertion prevents a refactor from accidentally copying view.rs's
+        // friendlier formatting to the table render sites (board.rs, list.rs, sprint.rs).
+        .stdout(predicate::str::contains("name not cached").not());
 }
 
 /// `jr board view` (kanban) omits the Team column when `team_field_id` is NOT

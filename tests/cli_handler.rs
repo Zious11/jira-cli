@@ -2180,7 +2180,11 @@ async fn test_list_team_column_falls_back_to_uuid_when_cache_missing() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Team")) // column header (summary has no "Team")
-        .stdout(predicate::str::contains("team-uuid-unknown")); // raw UUID fallback
+        .stdout(predicate::str::contains("team-uuid-unknown")) // raw UUID fallback
+        // BC-5.3.003 postcondition: bare UUID only — no parenthetical suffix.
+        // The suffix "(name not cached — run 'jr team list --refresh')" belongs
+        // exclusively to the single-issue view path (BC-2.3.035, src/cli/issue/view.rs).
+        .stdout(predicate::str::contains("name not cached").not());
 }
 
 /// Team column is omitted when no issue in the result has a populated team,
