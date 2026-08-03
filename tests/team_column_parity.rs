@@ -414,8 +414,11 @@ async fn sprint_current_falls_back_to_uuid_when_team_not_cached() {
         // BC-5.3.003 postcondition: bare UUID only — no parenthetical suffix.
         // The suffix "(name not cached — run 'jr team list --refresh')" belongs
         // exclusively to the single-issue view path (BC-2.3.035, src/cli/issue/view.rs).
-        // This assertion prevents a refactor from accidentally copying view.rs's
-        // friendlier formatting to the table render sites (board.rs, list.rs, sprint.rs).
+        // This assertion pins the sprint.rs render site. The board.rs site is
+        // covered by test_board_view_falls_back_to_uuid_when_team_not_cached
+        // (below); the list.rs site by
+        // test_list_team_column_falls_back_to_uuid_when_cache_missing in
+        // tests/cli_handler.rs.
         .stdout(predicate::str::contains("name not cached").not());
 }
 
@@ -525,6 +528,57 @@ async fn test_issue_list_omits_team_column_when_field_unconfigured() {
         .stdout(predicate::str::contains("Assignee"))
         .stdout(predicate::str::contains("Summary"))
         .stdout(predicate::str::contains("Team").not());
+}
+
+/// `jr board view` (kanban path) falls back to the raw team UUID when the UUID
+/// is absent from the local team cache. Pins BC-5.3.003's no-suffix
+/// postcondition for the `src/cli/board.rs` render site: the table shows the
+/// raw UUID with no parenthetical "(name not cached — run 'jr team list
+/// --refresh')" suffix.
+///
+/// Positive anchors (Team column present, UUID cell value present) are
+/// asserted BEFORE the negative to eliminate vacuous passes on empty or
+/// errored output — the exact false-green class this story exists to fix.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_board_view_falls_back_to_uuid_when_team_not_cached() {
+    let server = MockServer::start().await;
+    mount_kanban_board_prereqs(&server).await;
+
+    let issues = vec![issue_with_team(
+        "PROJ-10",
+        "Orphan team ticket",
+        "To Do",
+        "team-uuid-orphan",
+    )];
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(common::fixtures::issue_search_response(issues)),
+        )
+        .mount(&server)
+        .await;
+
+    // No team cache written — teams.json absent, so the UUID→name map is
+    // empty and the UUID falls through as the display value via
+    // board.rs::handle_view's `team_map.get(uuid).cloned().unwrap_or_else(|| uuid.clone())`.
+    let cache_dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    write_config_with_team_field(config_dir.path());
+
+    jr_cmd_with_xdg(&server.uri(), cache_dir.path(), config_dir.path())
+        .args(["--project", "PROJ", "board", "view"])
+        .assert()
+        .success()
+        // Positive anchors first: the table rendered, the Team column header
+        // is present, and the raw UUID appears as the cell value.
+        .stdout(predicate::str::contains("Team"))
+        .stdout(predicate::str::contains("team-uuid-orphan"))
+        // BC-5.3.003 postcondition: bare UUID only — no parenthetical suffix.
+        // The suffix "(name not cached — run 'jr team list --refresh')" belongs
+        // exclusively to the single-issue view path (BC-2.3.035,
+        // src/cli/issue/view.rs). This assertion pins the board.rs render site.
+        .stdout(predicate::str::contains("name not cached").not());
 }
 
 /// JSON mode keeps the raw team UUID and does not resolve it to a team name.
