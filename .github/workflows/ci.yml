@@ -54,7 +54,46 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
-      - run: cargo test --all-features
+      - name: Run tests (zero-test floor, POL-11)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Tee streams to both the console and a capture file.  pipefail
+          # ensures a non-zero cargo exit propagates through the tee pipe, so
+          # real test failures still fail the step.
+          cargo test --all-features 2>&1 | tee "$RUNNER_TEMP/cargo_test_out.txt"
+
+          # Sum "N passed" from every "test result:" line (one per test binary
+          # plus doc-tests).  awk initialises sum=0 so empty grep output → 0.
+          total=$(grep -E "^test result: " "$RUNNER_TEMP/cargo_test_out.txt" \
+            | grep -Eo "[0-9]+ passed" \
+            | awk '{sum += $1} END {print sum+0}')
+
+          # Count how many test binaries reported results.
+          # grep -c exits 1 when there are no matches; || echo 0 keeps the
+          # script alive (the floor guard below catches the actual failure).
+          binaries=$(grep -cE "^test result: " "$RUNNER_TEMP/cargo_test_out.txt" || echo 0)
+
+          # POL-11 zero-test floor.
+          # Floor is "> 0" (not a hardcoded count) because:
+          #   - "> 0" precisely guards the F-07 false-green class: cargo test
+          #     exits 0 when 0 tests run; this catches complete test-target
+          #     orphaning (autotests=false, [[test]] rename, harness
+          #     misconfiguration).
+          #   - A hardcoded floor (e.g. 200) would additionally catch partial
+          #     orphaning but requires manual maintenance on every legitimate
+          #     test reduction and breaks CI for the wrong reason.  The specific
+          #     POL-11 defect class is "0 tests executed" — that is the guard.
+          if [ "${total}" -eq 0 ]; then
+            echo "FAIL (POL-11): zero tests executed across ${binaries} test binaries."
+            echo "Possible causes: autotests=false in Cargo.toml, a [[test]] rename,"
+            echo "a harness misconfiguration, or a filter matching no test targets."
+            exit 1
+          fi
+
+          # Positive-coverage assertion (POL-11 requirement: exit code alone is
+          # insufficient — emit a runtime-computed count to prove tests ran).
+          echo "Check passed: ${total} tests executed across ${binaries} test binaries"
 
   msrv:
     name: MSRV (1.85.0)

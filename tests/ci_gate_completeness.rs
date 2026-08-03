@@ -748,3 +748,49 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
          Current ci-gate block:\n{gate_block}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// POL-11 — `test` job must have a zero-test floor
+// ---------------------------------------------------------------------------
+
+/// POL-11: The `test` job step must contain a zero-test floor guard so that
+/// `cargo test` exiting 0 with 0 tests executed does not satisfy the required
+/// branch-protection check.
+///
+/// `cargo test` exits 0 when zero test targets are found or all targets are
+/// filtered out.  Without an explicit floor, a `Cargo.toml` change
+/// (`autotests = false`, a `[[test]]` rename, or a harness misconfiguration)
+/// can orphan all integration-test targets and still green the `test` job —
+/// which is in `ci-gate.needs`.  This is the POL-11 / F-07 false-green class
+/// documented in the S-626-1 story spec.
+///
+/// Anchoring: assertion is made only within the `test` job block, so a
+/// matching substring in an unrelated job cannot produce a false positive.
+#[test]
+fn test_verify_test_job_has_zero_test_floor() {
+    let ci = read_ci_yml();
+    let test_block = extract_job_block(&ci, "test").unwrap_or_else(|| {
+        panic!(
+            "FAIL: `.github/workflows/ci.yml` does not contain a `test:` job.\n\
+             Required: the `test` job must exist with a zero-test floor guard \
+             (POL-11 / F-07)."
+        )
+    });
+
+    // The floor guard emits this string when zero tests are executed.
+    // Asserting on it here means that removing the guard fails this test,
+    // preventing a silent revert of the POL-11 fix.
+    assert!(
+        test_block.contains("FAIL (POL-11)"),
+        "FAIL (POL-11): The `test` job step does not contain the zero-test \
+         floor guard.\n\
+         Required: the `cargo test` step must count tests executed at runtime \
+         and fail loudly if the total is 0 (emitting \
+         `FAIL (POL-11): zero tests executed ...`).\n\
+         Removing the floor reopens the false-green class documented in \
+         S-626-1 / F-07: cargo test exits 0 on 0 tests, so the `test` job \
+         passes even when all integration-test targets are orphaned, causing \
+         ci-gate to silently green with ~2000+ regression pins unenforced.\n\
+         Current test job block:\n{test_block}"
+    );
+}
