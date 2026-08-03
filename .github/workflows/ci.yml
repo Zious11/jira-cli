@@ -56,6 +56,15 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
       - name: Run tests (zero-test floor, POL-11)
         shell: bash
+        env:
+          # Override file-level CARGO_TERM_COLOR: always for this step only.
+          # The pass/fail logic anchors on "^test result: " with a plain regex;
+          # ANSI escape codes in that line would silently zero the anchored
+          # grep, making the diagnostic branch unreachable and triggering a
+          # permanent false-red with no diagnostic.  POL-11 cites this exact
+          # anti-pattern (TD-VSDD-057 / prism PR #127, where ANSI codes
+          # silently zeroed an anchored regex for 12 converged passes).
+          CARGO_TERM_COLOR: never
         run: |
           set -euo pipefail
           # Tee streams to both the console and a capture file.  pipefail
@@ -63,27 +72,72 @@ jobs:
           # real test failures still fail the step.
           cargo test --all-features 2>&1 | tee "$RUNNER_TEMP/cargo_test_out.txt"
 
+          # Temporarily disable pipefail for the count computations.
+          # Under set -o pipefail, grep exits 1 on no-match; that exit
+          # propagates through the pipeline and, combined with set -e, aborts
+          # the step before the diagnostic branch can print.  Under
+          # set +o pipefail the pipeline exit is the last command's exit; awk
+          # and wc -l always exit 0, so neither computation can abort.
+          set +o pipefail
+
           # Sum "N passed" from every "test result:" line (one per test binary
           # plus doc-tests).  awk initialises sum=0 so empty grep output → 0.
           total=$(grep -E "^test result: " "$RUNNER_TEMP/cargo_test_out.txt" \
             | grep -Eo "[0-9]+ passed" \
             | awk '{sum += $1} END {print sum+0}')
 
-          # Count how many test binaries reported results.
-          # grep -c exits 1 when there are no matches; || echo 0 keeps the
-          # script alive (the floor guard below catches the actual failure).
-          binaries=$(grep -cE "^test result: " "$RUNNER_TEMP/cargo_test_out.txt" || echo 0)
+          # Count test binaries that reported results.
+          # wc -l avoids the grep -c no-match trap: grep -c exits 1 on zero
+          # matches while still printing "0", so the prior `|| echo 0` fallback
+          # produced the two-line value "0\n0" that breaks bash arithmetic
+          # (same defect class as the mutants job F5 fix, ci.yml:~415-426).
+          binaries=$(grep -E "^test result: " "$RUNNER_TEMP/cargo_test_out.txt" | wc -l | tr -d ' ')
 
-          # POL-11 zero-test floor.
-          # Floor is "> 0" (not a hardcoded count) because:
-          #   - "> 0" precisely guards the F-07 false-green class: cargo test
-          #     exits 0 when 0 tests run; this catches complete test-target
-          #     orphaning (autotests=false, [[test]] rename, harness
-          #     misconfiguration).
-          #   - A hardcoded floor (e.g. 200) would additionally catch partial
-          #     orphaning but requires manual maintenance on every legitimate
-          #     test reduction and breaks CI for the wrong reason.  The specific
-          #     POL-11 defect class is "0 tests executed" — that is the guard.
+          # Restore pipefail before the gate checks so real I/O errors below
+          # are not silently swallowed.
+          set -o pipefail
+
+          # POL-11 zero-test floor — TWO instruments required.
+          #
+          # A passed-count "> 0" cannot detect integration-test orphaning:
+          # cargo test --all-features also runs the inline #[cfg(test)] modules
+          # in src/ (~1,100 tests at head), so orphaning every file in tests/
+          # via autotests=false or a [[test]] rename still produces total > 0.
+          # The prior "> 0" predicate was inert against the defect class its
+          # own comment claimed to catch.  Partial orphaning is also NOT
+          # covered by cargo-mutants: examine_globs is a 17-entry whitelist
+          # that excludes board.rs, list.rs, keychain.rs, sprint.rs, config.rs,
+          # output.rs and others; the mutants job is PR-only with --in-diff
+          # scope; a silently-orphaned test binary provides zero coverage
+          # against unchanged code regardless of kill rate.
+          #
+          # (1) Binary-count floor (<90): at head, cargo test produces ~103
+          #     test binaries (1 lib + ~54 integration + ~1 doc).  Orphaning
+          #     all tests/ files drops this below 90.  The threshold tolerates
+          #     up to ~13 legitimate binary reductions without false-alarming
+          #     (e.g. test-file removals during refactors).  Update the
+          #     threshold when a legitimately large reduction is planned.
+          #
+          # (2) Named canary: asserts tests/ci_gate_completeness ran.  This
+          #     catches the self-orphaning case — the binary carrying this guard
+          #     and all CI-gate Rust regression pins stops running — even when
+          #     the binary count stays above 90.  The binary floor alone cannot
+          #     detect this case.
+          if [ "${binaries}" -lt 90 ]; then
+            echo "FAIL (POL-11): only ${binaries} test binaries reported results (floor: 90)."
+            echo "Possible causes: autotests=false in Cargo.toml, a [[test]] rename,"
+            echo "a harness misconfiguration, or a mass deletion of test files."
+            exit 1
+          fi
+
+          if ! grep -q "ci_gate_completeness" "$RUNNER_TEMP/cargo_test_out.txt"; then
+            echo "FAIL (POL-11): tests/ci_gate_completeness did not run."
+            echo "The binary carrying the CI-gate regression pins was not executed."
+            echo "Possible causes: the file was renamed, autotests=false, or a"
+            echo "[[test]] entry overrides the default target list."
+            exit 1
+          fi
+
           if [ "${total}" -eq 0 ]; then
             echo "FAIL (POL-11): zero tests executed across ${binaries} test binaries."
             echo "Possible causes: autotests=false in Cargo.toml, a [[test]] rename,"

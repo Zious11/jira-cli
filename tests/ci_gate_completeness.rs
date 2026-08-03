@@ -764,6 +764,23 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
 /// which is in `ci-gate.needs`.  This is the POL-11 / F-07 false-green class
 /// documented in the S-626-1 story spec.
 ///
+/// A passed-count `> 0` floor is insufficient: `cargo test --all-features`
+/// also runs the inline `#[cfg(test)]` modules in `src/` (~1,100 tests at
+/// head), so orphaning every file in `tests/` via `autotests = false` or a
+/// `[[test]]` rename still produces a non-zero total — the `> 0` predicate is
+/// inert against the defect class it claims to catch.  Two instruments are
+/// therefore required:
+///   (1) Binary-count floor (`< 90`): catches mass orphaning of tests/ files.
+///       At head ~103 binaries run; orphaning all integration targets drops
+///       this below 90.  The threshold tolerates ~13 legitimate reductions.
+///   (2) Named canary: asserts `tests/ci_gate_completeness` ran, catching the
+///       self-orphaning case where the guard binary itself stops running —
+///       even when the binary count stays above 90.
+///
+/// Both the `CARGO_TERM_COLOR: never` override (Defect 3 fix) and the
+/// `set +o pipefail` scoped computation (Defect 2 fix) are structural parts
+/// of the correct guard; the assertions below pin all operative parts.
+///
 /// Anchoring: assertion is made only within the `test` job block, so a
 /// matching substring in an unrelated job cannot produce a false positive.
 #[test]
@@ -777,20 +794,84 @@ fn test_verify_test_job_has_zero_test_floor() {
         )
     });
 
-    // The floor guard emits this string when zero tests are executed.
-    // Asserting on it here means that removing the guard fails this test,
-    // preventing a silent revert of the POL-11 fix.
+    // --- Instrument 0: error sentinel ---
+    // The floor guard emits "FAIL (POL-11)" in all failure branches.
+    // Asserting on it means that removing the guard entirely fails this test.
     assert!(
         test_block.contains("FAIL (POL-11)"),
         "FAIL (POL-11): The `test` job step does not contain the zero-test \
          floor guard.\n\
          Required: the `cargo test` step must count tests executed at runtime \
-         and fail loudly if the total is 0 (emitting \
-         `FAIL (POL-11): zero tests executed ...`).\n\
+         and fail loudly (emitting `FAIL (POL-11): ...`).\n\
          Removing the floor reopens the false-green class documented in \
          S-626-1 / F-07: cargo test exits 0 on 0 tests, so the `test` job \
          passes even when all integration-test targets are orphaned, causing \
          ci-gate to silently green with ~2000+ regression pins unenforced.\n\
+         Current test job block:\n{test_block}"
+    );
+
+    // --- Instrument 1: binary-count floor ---
+    // Guards against mass orphaning of tests/ files.  The prior "> 0" check
+    // on the passed count was inert because src/ inline tests still run when
+    // tests/ is fully orphaned.  The floor must use a non-trivial threshold
+    // on the *binary count*, not the passed count.
+    assert!(
+        test_block.contains("-lt 90"),
+        "FAIL (POL-11): The `test` job step does not contain the binary-count \
+         floor (`-lt 90`).\n\
+         A '> 0' passed-count predicate is inert: src/ inline tests (~1,100) \
+         still run when tests/ is orphaned, keeping total > 0.  The floor must \
+         gate on the number of test *binaries* (binaries -lt 90).\n\
+         Current test job block:\n{test_block}"
+    );
+
+    // --- Instrument 2: named canary ---
+    // Guards the self-orphaning case: the binary carrying this guard and all
+    // CI-gate Rust regression pins stops running.  The binary floor cannot
+    // detect this case when the count stays above 90.
+    assert!(
+        test_block.contains("ci_gate_completeness"),
+        "FAIL (POL-11): The `test` job step does not contain the named canary \
+         for `ci_gate_completeness`.\n\
+         Required: grep the captured output for the ci_gate_completeness binary \
+         to detect the self-orphaning case (guard binary renamed, autotests=false,\
+         or [[test]] override).\n\
+         Current test job block:\n{test_block}"
+    );
+
+    // --- exit 1 is present ---
+    // The floor branches must actually fail the step, not merely warn.
+    assert!(
+        test_block.contains("exit 1"),
+        "FAIL (POL-11): The `test` job step does not contain `exit 1`.\n\
+         The floor/canary guards must fail the step on violation.\n\
+         Current test job block:\n{test_block}"
+    );
+
+    // --- Positive-coverage line is present ---
+    // POL-11 requires emitting a runtime-computed count to prove tests ran
+    // (exit code alone is insufficient — the count proves the assertions
+    // above were actually evaluated at non-trivial scale).
+    assert!(
+        test_block.contains("Check passed:"),
+        "FAIL (POL-11): The `test` job step does not contain the \
+         `Check passed:` positive-coverage assertion.\n\
+         Required: emit a runtime-computed count so that a reviewer can see \
+         both the guard passed and how many tests ran.\n\
+         Current test job block:\n{test_block}"
+    );
+
+    // --- CARGO_TERM_COLOR: never is present ---
+    // The file-level `env: CARGO_TERM_COLOR: always` must be overridden for
+    // this step.  Without it, ANSI escape codes in "test result:" lines would
+    // silently zero the anchored grep, making the diagnostic unreachable and
+    // triggering a permanent false-red with no output.
+    assert!(
+        test_block.contains("CARGO_TERM_COLOR: never"),
+        "FAIL (POL-11): The `test` job step does not override \
+         `CARGO_TERM_COLOR` to `never`.\n\
+         Required: add `env: CARGO_TERM_COLOR: never` to the step so that ANSI \
+         escape codes in libtest output do not break the anchored grep.\n\
          Current test job block:\n{test_block}"
     );
 }
