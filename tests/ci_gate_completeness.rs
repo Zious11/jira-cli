@@ -782,6 +782,18 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
 /// of the correct guard.  The assertions below pin all operative parts,
 /// including a dedicated assertion for the pipefail scoping bracket.
 ///
+/// Prose-ambiguity discipline: every assertion targets a form that can ONLY
+/// appear in the operative command, never in a prose comment or diagnostic
+/// echo.  Specifically:
+///   - The binary-count floor asserts `"${binaries}" -lt 90` (variable-bound),
+///     not bare `-lt 90`.  Bare would survive a variable rename to `${total}`
+///     (~2345 tests, floor permanently inert) while keeping this test green.
+///   - The named canary asserts the command form `grep -q "ci_gate_completeness"`,
+///     not the bare substring `ci_gate_completeness`.  The bare form also
+///     appears in a YAML comment (ci.yml:~124) and an echo diagnostic
+///     (ci.yml:~137); either would satisfy a bare-substring check while
+///     leaving the operative grep command absent.
+///
 /// Anchoring: assertion is made only within the `test` job block, so a
 /// matching substring in an unrelated job cannot produce a false positive.
 #[test]
@@ -816,13 +828,18 @@ fn test_verify_test_job_has_zero_test_floor() {
     // on the passed count was inert because src/ inline tests still run when
     // tests/ is fully orphaned.  The floor must use a non-trivial threshold
     // on the *binary count*, not the passed count.
+    //
+    // The assertion targets `"${binaries}" -lt 90` (variable-bound), not the
+    // bare `-lt 90`.  A future edit renaming `binaries` to `total` would keep
+    // bare `-lt 90` present while neutering the floor (`total` is ~2345 tests,
+    // never < 90); this variable-bound form catches that regression.
     assert!(
-        test_block.contains("-lt 90"),
+        test_block.contains("\"${binaries}\" -lt 90"),
         "FAIL (POL-11): The `test` job step does not contain the binary-count \
-         floor (`-lt 90`).\n\
+         floor using the `binaries` variable (`\"${{binaries}}\" -lt 90`).\n\
          A '> 0' passed-count predicate is inert: src/ inline tests (~1,100) \
          still run when tests/ is orphaned, keeping total > 0.  The floor must \
-         gate on the number of test *binaries* (binaries -lt 90).\n\
+         gate on the number of test *binaries* (\"${{binaries}}\" -lt 90).\n\
          Current test job block:\n{test_block}"
     );
 
@@ -830,10 +847,18 @@ fn test_verify_test_job_has_zero_test_floor() {
     // Guards the self-orphaning case: the binary carrying this guard and all
     // CI-gate Rust regression pins stops running.  The binary floor cannot
     // detect this case when the count stays above 90.
+    //
+    // The assertion targets the command form `grep -q "ci_gate_completeness"`
+    // rather than the bare substring `ci_gate_completeness`.  The bare form
+    // also appears in a YAML comment (ci.yml:~124, "asserts
+    // tests/ci_gate_completeness ran") and an echo diagnostic (ci.yml:~137,
+    // "FAIL (POL-11): tests/ci_gate_completeness did not run."); either line
+    // satisfies a bare-substring check while leaving the operative grep command
+    // absent.  Only the command line contains `grep -q "ci_gate_completeness"`.
     assert!(
-        test_block.contains("ci_gate_completeness"),
-        "FAIL (POL-11): The `test` job step does not contain the named canary \
-         for `ci_gate_completeness`.\n\
+        test_block.contains("grep -q \"ci_gate_completeness\""),
+        "FAIL (POL-11): The `test` job step does not contain the named-canary \
+         command `grep -q \"ci_gate_completeness\"`.\n\
          Required: grep the captured output for the ci_gate_completeness binary \
          to detect the self-orphaning case (guard binary renamed, autotests=false,\
          or [[test]] override).\n\
