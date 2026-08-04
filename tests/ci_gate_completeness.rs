@@ -790,8 +790,10 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
 ///     (~2345 tests, floor permanently inert) while keeping this test green.
 ///   - The named canary asserts the command form `grep -q "ci_gate_completeness"`,
 ///     not the bare substring `ci_gate_completeness`.  The bare form also
-///     appears in a YAML comment (ci.yml:~124) and an echo diagnostic
-///     (ci.yml:~137); either would satisfy a bare-substring check while
+///     appears in a YAML comment (ci.yml :: test / "Run tests (zero-test
+///     floor, POL-11)" § "(2) Named canary") and an echo diagnostic
+///     (ci.yml :: test / "Run tests (zero-test floor, POL-11)" § "did not
+///     run" echo); either would satisfy a bare-substring check while
 ///     leaving the operative grep command absent.
 ///
 /// Anchoring: assertion is made only within the `test` job block, so a
@@ -850,11 +852,12 @@ fn test_verify_test_job_has_zero_test_floor() {
     //
     // The assertion targets the command form `grep -q "ci_gate_completeness"`
     // rather than the bare substring `ci_gate_completeness`.  The bare form
-    // also appears in a YAML comment (ci.yml:~124, "asserts
-    // tests/ci_gate_completeness ran") and an echo diagnostic (ci.yml:~137,
-    // "FAIL (POL-11): tests/ci_gate_completeness did not run."); either line
-    // satisfies a bare-substring check while leaving the operative grep command
-    // absent.  Only the command line contains `grep -q "ci_gate_completeness"`.
+    // also appears in a YAML comment (ci.yml :: test / "Run tests (zero-test
+    // floor, POL-11)" § "(2) Named canary") and an echo diagnostic
+    // (ci.yml :: test / "Run tests (zero-test floor, POL-11)" § "did not run"
+    // echo); either line satisfies a bare-substring check while leaving the
+    // operative grep command absent.  Only the command line contains
+    // `grep -q "ci_gate_completeness"`.
     assert!(
         test_block.contains("grep -q \"ci_gate_completeness\""),
         "FAIL (POL-11): The `test` job step does not contain the named-canary \

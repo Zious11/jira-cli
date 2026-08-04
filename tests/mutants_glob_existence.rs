@@ -100,7 +100,7 @@ fn assert_examine_globs_coverage_floor(entries: &[String]) {
 // Test functions — call the fully-implemented helpers above
 // ---------------------------------------------------------------------------
 
-/// Test 1: real-data canonical run — all 11 current examine_globs entries
+/// Test 1: real-data canonical run — all current examine_globs entries
 /// resolve to real files; dead list is empty; coverage floor does not panic.
 #[test]
 fn test_resolve_all_examine_globs_entries_to_real_files() {

@@ -106,7 +106,7 @@ jobs:
           # via autotests=false or a [[test]] rename still produces total > 0.
           # The prior "> 0" predicate was inert against the defect class its
           # own comment claimed to catch.  Partial orphaning is also NOT
-          # covered by cargo-mutants: examine_globs is a 17-entry whitelist
+          # covered by cargo-mutants: examine_globs is a whitelist
           # that excludes board.rs, list.rs, keychain.rs, sprint.rs, config.rs,
           # output.rs and others; the mutants job is PR-only with --in-diff
           # scope; a silently-orphaned test binary provides zero coverage
