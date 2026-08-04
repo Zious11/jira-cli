@@ -779,7 +779,8 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
 ///
 /// Both the `CARGO_TERM_COLOR: never` override (Defect 3 fix) and the
 /// `set +o pipefail` scoped computation (Defect 2 fix) are structural parts
-/// of the correct guard; the assertions below pin all operative parts.
+/// of the correct guard.  The assertions below pin all operative parts,
+/// including a dedicated assertion for the pipefail scoping bracket.
 ///
 /// Anchoring: assertion is made only within the `test` job block, so a
 /// matching substring in an unrelated job cannot produce a false positive.
@@ -872,6 +873,36 @@ fn test_verify_test_job_has_zero_test_floor() {
          `CARGO_TERM_COLOR` to `never`.\n\
          Required: add `env: CARGO_TERM_COLOR: never` to the step so that ANSI \
          escape codes in libtest output do not break the anchored grep.\n\
+         Current test job block:\n{test_block}"
+    );
+
+    // --- pipefail scoping bracket is present ---
+    // The count computations must run under `set +o pipefail` (disabled).
+    // Under set -o pipefail, grep exits 1 on no-match; that exit propagates
+    // through the pipeline and, combined with set -e, aborts the step before
+    // any FAIL (POL-11) diagnostic can print.  `set -o pipefail` restores
+    // the setting so real I/O errors in the gate checks are not swallowed.
+    // Removing either bracket reintroduces the Defect 2 false-abort class.
+    // The trailing `\n` in each check is load-bearing: it distinguishes the
+    // standalone command line from the comments that also mention the same
+    // flags (e.g. `# Under set -o pipefail, ...` or
+    // `# set +o pipefail the pipeline exit ...`).  Those comment lines have
+    // additional text after the flag name and do NOT match the `...\n` form.
+    assert!(
+        test_block.contains("set +o pipefail\n"),
+        "FAIL (POL-11): The `test` job step does not contain the command \
+         `set +o pipefail` as a standalone line.\n\
+         Required: the count computations must run with pipefail disabled so \
+         that grep's no-match exit-1 does not abort the step via `set -e` \
+         before the FAIL (POL-11) diagnostic can print.\n\
+         Current test job block:\n{test_block}"
+    );
+    assert!(
+        test_block.contains("set -o pipefail\n"),
+        "FAIL (POL-11): The `test` job step does not contain the command \
+         `set -o pipefail` as a standalone line (the restoring bracket).\n\
+         Required: pipefail must be re-enabled after the count computations so \
+         that real I/O errors in the gate checks are not silently swallowed.\n\
          Current test job block:\n{test_block}"
     );
 }

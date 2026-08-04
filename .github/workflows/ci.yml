@@ -112,11 +112,14 @@ jobs:
           # against unchanged code regardless of kill rate.
           #
           # (1) Binary-count floor (<90): at head, cargo test produces ~103
-          #     test binaries (1 lib + ~54 integration + ~1 doc).  Orphaning
-          #     all tests/ files drops this below 90.  The threshold tolerates
-          #     up to ~13 legitimate binary reductions without false-alarming
-          #     (e.g. test-file removals during refactors).  Update the
-          #     threshold when a legitimately large reduction is planned.
+          #     test binaries (1 lib + 1 bin + ~100 integration + ~1 doc;
+          #     100 = the 104 files in tests/**/*.rs minus the 4
+          #     tests/common/ module files that are not cargo targets).
+          #     Orphaning all tests/ files drops this below 90.  The
+          #     threshold tolerates up to ~13 legitimate binary reductions
+          #     without false-alarming (e.g. test-file removals during
+          #     refactors).  Update the threshold when a legitimately large
+          #     reduction is planned.
           #
           # (2) Named canary: asserts tests/ci_gate_completeness ran.  This
           #     catches the self-orphaning case — the binary carrying this guard
