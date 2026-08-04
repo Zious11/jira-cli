@@ -90,7 +90,8 @@ jobs:
           # wc -l avoids the grep -c no-match trap: grep -c exits 1 on zero
           # matches while still printing "0", so the prior `|| echo 0` fallback
           # produced the two-line value "0\n0" that breaks bash arithmetic
-          # (same defect class as the mutants job F5 fix, ci.yml:~415-426).
+          # (same defect class as the mutants job F5 fix,
+          #  ci.yml :: mutants / "Check kill rate" else branch — "grep -c '' exits 1 on empty match").
           binaries=$(grep -E "^test result: " "$RUNNER_TEMP/cargo_test_out.txt" | wc -l | tr -d ' ')
 
           # Restore pipefail before the gate checks so real I/O errors below
