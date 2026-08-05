@@ -58,11 +58,17 @@ jobs:
         shell: bash
         env:
           # Override file-level CARGO_TERM_COLOR: always for this step only.
-          # The pass/fail logic anchors on "^test result: " with a plain regex;
-          # ANSI escape codes in that line would silently zero the anchored
-          # grep, making the diagnostic branch unreachable and triggering a
-          # permanent false-red with no diagnostic.  POL-11 cites this exact
-          # anti-pattern (TD-VSDD-057 / prism PR #127, where ANSI codes
+          # The pass/fail logic anchors on "^test result: " with a plain regex.
+          # As of the current cargo/libtest pairing, cargo does not forward its
+          # color preference to libtest, so the "test result: " line is plain
+          # ASCII even under CARGO_TERM_COLOR: always — this override is not
+          # working around a presently-reachable failure. It is defensive: it
+          # removes the dependency on that behavior continuing to hold across
+          # future cargo/libtest versions or a differently-configured CI
+          # runner, where a color-wrapped "test result:" line would silently
+          # zero the anchored grep, making the diagnostic branch unreachable
+          # and producing a false-red with no diagnostic.  POL-11 cites this
+          # exact anti-pattern (TD-VSDD-057 / prism PR #127, where ANSI codes
           # silently zeroed an anchored regex for 12 converged passes).
           CARGO_TERM_COLOR: never
         run: |

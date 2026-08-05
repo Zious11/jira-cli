@@ -786,8 +786,13 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
 /// including a dedicated assertion for the pipefail scoping bracket.
 ///
 /// Prose-ambiguity discipline: TWO of the assertions below target a form
-/// that can ONLY appear in the operative command, never in a prose comment
-/// or diagnostic echo:
+/// that appears only in the operative command in the current file, not in
+/// any prose comment or diagnostic echo. That is an incidental property of
+/// the current wording, not a structural guarantee this test enforces —
+/// `extract_job_block` returns a raw string slice of the YAML including
+/// comments, and every assertion below is a plain substring check, so a
+/// future comment reproducing the exact substring would satisfy the check
+/// just as well as the operative line:
 ///   - The binary-count floor asserts `"${binaries}" -lt 90` (variable-bound),
 ///     not bare `-lt 90`.  Bare would survive a variable rename to `${total}`
 ///     (~2345 tests, floor permanently inert) while keeping this test green.
@@ -800,15 +805,17 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
 ///     leaving the operative grep command absent.
 ///
 /// Three further assertions (the `FAIL (POL-11)` sentinel, the
-/// `Check passed:` positive-coverage line, and `exit 1`) do NOT meet that
-/// bar — all three match text that lives inside the guard's own `echo`
-/// diagnostics (or, for `exit 1`, a generic command with no natural
+/// `Check passed:` positive-coverage line, and `exit 1`) do NOT meet even
+/// that weaker bar — all three match text that lives inside the guard's own
+/// `echo` diagnostics (or, for `exit 1`, a generic command with no natural
 /// variable-binding). They are still useful coarser-grained pins: deleting
 /// the guard step wholesale, or the diagnostic text it emits, fails them.
 /// But a rewrite that preserves the diagnostic strings while gutting the
 /// enforcement logic underneath would not be caught by those three alone —
-/// only the two variable/command-bound assertions above are immune to that
-/// class of regression.
+/// the two variable/command-bound assertions above are harder (not
+/// impossible) to defeat that way, since a comment would have to reproduce
+/// the exact command substring verbatim rather than just the diagnostic
+/// prose.
 ///
 /// The remaining three assertions (`CARGO_TERM_COLOR: never`,
 /// `set +o pipefail\n`, and `set -o pipefail\n`) fall into neither bucket:
@@ -919,10 +926,15 @@ fn test_verify_test_job_has_zero_test_floor() {
     );
 
     // --- CARGO_TERM_COLOR: never is present ---
-    // The file-level `env: CARGO_TERM_COLOR: always` must be overridden for
-    // this step.  Without it, ANSI escape codes in "test result:" lines would
-    // silently zero the anchored grep, making the diagnostic unreachable and
-    // triggering a permanent false-red with no output.
+    // The file-level `env: CARGO_TERM_COLOR: always` is overridden for this
+    // step.  Empirically, cargo does not forward its color preference to
+    // libtest today, so the "test result:" line the grep anchors on is plain
+    // ASCII even without this override — the claimed failure is not
+    // presently reachable.  The override is defensive: it removes the
+    // dependency on that behavior continuing to hold across future
+    // cargo/libtest versions or a differently-configured CI runner, where a
+    // color-wrapped "test result:" line would silently zero the anchored
+    // grep and produce a false-red with no diagnostic.
     assert!(
         test_block.contains("CARGO_TERM_COLOR: never"),
         "FAIL (POL-11): The `test` job step does not override \
