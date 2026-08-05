@@ -83,7 +83,8 @@ jobs:
           # propagates through the pipeline and, combined with set -e, aborts
           # the step before the diagnostic branch can print.  Under
           # set +o pipefail the pipeline exit is the last command's exit; awk
-          # and wc -l always exit 0, so neither computation can abort.
+          # (ends the total= pipe) and tr (ends the binaries= pipe) always
+          # exit 0, so neither computation can abort.
           set +o pipefail
 
           # Sum "N passed" from every "test result:" line (one per test binary
@@ -100,8 +101,15 @@ jobs:
           #  ci.yml :: mutants / "Check kill rate" else branch — "grep -c '' exits 1 on empty match").
           binaries=$(grep -E "^test result: " "$RUNNER_TEMP/cargo_test_out.txt" | wc -l | tr -d ' ')
 
-          # Restore pipefail before the gate checks so real I/O errors below
-          # are not silently swallowed.
+          # Restore pipefail after the count computations (defensive
+          # hygiene, not currently load-bearing): nothing below this line is
+          # a pipeline — the gate checks are `[ ... ]` tests, a bare
+          # `grep -q`, and `echo`s — so this restore has no operative effect
+          # on them today.  It exists so pipefail stays the step's ambient
+          # default in case a future gate check introduces a pipe.  Removing
+          # this bracket is the opposite failure mode of removing the
+          # opening `set +o pipefail` above: it leaves pipefail disabled,
+          # which is strictly more permissive and can never cause an abort.
           set -o pipefail
 
           # POL-11 zero-test floor — TWO instruments required.

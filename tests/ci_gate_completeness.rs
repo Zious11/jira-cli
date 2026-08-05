@@ -771,7 +771,7 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
 /// also runs the inline `#[cfg(test)]` modules in `src/` (~1,100 tests at
 /// head), so orphaning every file in `tests/` via `autotests = false` or a
 /// `[[test]]` rename still produces a non-zero total — the `> 0` predicate is
-/// inert against the defect class it claims to catch.  Two instruments are
+/// inert against the defect class it claims to catch.  Three gates are
 /// therefore required:
 ///   (1) Binary-count floor (`< 90`): catches mass orphaning of tests/ files.
 ///       At head ~103 binaries run; orphaning all integration targets drops
@@ -779,57 +779,73 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
 ///   (2) Named canary: asserts `tests/ci_gate_completeness` ran, catching the
 ///       self-orphaning case where the guard binary itself stops running —
 ///       even when the binary count stays above 90.
+///   (3) Zero-test floor (`"${total}" -eq 0`): catches the case where ≥90
+///       binaries (including the canary) report results but zero tests
+///       passed within them — e.g. a global test filter matching nothing.
+///       Neither (1) nor (2) detects this scenario: the binary count and the
+///       named binary's presence are both satisfied; only the passed-count
+///       check catches it.
+///
+/// A fourth mechanism, orthogonal to all three gates above, has to hold for
+/// any of them to run against a genuine result at all: `set -euo pipefail`
+/// at the top of the step is the SOLE mechanism propagating a real `cargo
+/// test` failure through `cargo test --all-features 2>&1 | tee ...` into a
+/// failed step (without `-o pipefail`, `set -e` sees only `tee`'s
+/// always-0 exit status).
 ///
 /// Both the `CARGO_TERM_COLOR: never` override (Defect 3 fix) and the
-/// `set +o pipefail` scoped computation (Defect 2 fix) are structural parts
-/// of the correct guard.  The assertions below pin all operative parts,
-/// including a dedicated assertion for the pipefail scoping bracket.
+/// `set +o pipefail` / `set -o pipefail` scoped-disable bracket around the
+/// count computations (Defect 2 fix) are structural parts of the guard too.
 ///
-/// Prose-ambiguity discipline: TWO of the assertions below target a form
-/// that appears only in the operative command in the current file, not in
-/// any prose comment or diagnostic echo. That is an incidental property of
-/// the current wording, not a structural guarantee this test enforces —
-/// `extract_job_block` returns a raw string slice of the YAML including
-/// comments, and every assertion below is a plain substring check, so a
-/// future comment reproducing the exact substring would satisfy the check
-/// just as well as the operative line:
-///   - The binary-count floor asserts `"${binaries}" -lt 90` (variable-bound),
-///     not bare `-lt 90`.  Bare would survive a variable rename to `${total}`
-///     (~2345 tests, floor permanently inert) while keeping this test green.
-///   - The named canary asserts the command form `grep -q "ci_gate_completeness"`,
-///     not the bare substring `ci_gate_completeness`.  The bare form also
-///     appears in a YAML comment (ci.yml :: test / "Run tests (zero-test
-///     floor, POL-11)" § "(2) Named canary") and an echo diagnostic
-///     (ci.yml :: test / "Run tests (zero-test floor, POL-11)" § "did not
-///     run" echo); either would satisfy a bare-substring check while
-///     leaving the operative grep command absent.
-///
-/// Three further assertions (the `FAIL (POL-11)` sentinel, the
-/// `Check passed:` positive-coverage line, and `exit 1`) do NOT meet even
-/// that weaker bar — all three match text that lives inside the guard's own
-/// `echo` diagnostics (or, for `exit 1`, a generic command with no natural
-/// variable-binding). They are still useful coarser-grained pins: deleting
-/// the guard step wholesale, or the diagnostic text it emits, fails them.
-/// But a rewrite that preserves the diagnostic strings while gutting the
-/// enforcement logic underneath would not be caught by those three alone —
-/// the two variable/command-bound assertions above are harder (not
-/// impossible) to defeat that way, since a comment would have to reproduce
-/// the exact command substring verbatim rather than just the diagnostic
-/// prose.
-///
-/// The remaining three assertions (`CARGO_TERM_COLOR: never`,
-/// `set +o pipefail\n`, and `set -o pipefail\n`) fall into neither bucket:
-/// they are not echo-diagnostic text, but they are not operative-command-only
-/// either. `CARGO_TERM_COLOR: never` is a literal step-level env override —
-/// a comment or unrelated step could in principle reproduce the same
-/// substring within the `test` job block. The pipefail pair is
-/// comment-satisfiable in principle: a comment line ending exactly with
-/// `set -o pipefail` immediately before the newline (no trailing text) would
-/// also match `"set -o pipefail\n"`. No such comment exists in the current
-/// file — every comment mentioning pipefail carries trailing prose on the
-/// same line (see the inline comment below on the scoping bracket) — but
-/// that is an incidental property of the current wording, not a structural
-/// guarantee this test enforces.
+/// **What is pinned below, and what is not.**  An earlier version of this
+/// docstring claimed the assertions below "pin all operative parts" — that
+/// was false.  Gate (3) above (`"${total}" -eq 0`) and the `set -euo
+/// pipefail` line had NO assertion prior to round 17: three independent
+/// reviewers each demonstrated a defeat that left every other assertion in
+/// this test green — deleting the `if [ "${total}" -eq 0 ]; ... fi` block
+/// verbatim, and separately replacing `set -euo pipefail` with `set -eu`
+/// while feeding a mock `cargo` that exits 101 after printing passing "test
+/// result:" lines (which made the step exit 0 and print `Check passed:
+/// ...` despite the simulated failure) — both reproduced in a scratchpad
+/// copy before the fix. The assertions below are graded by how hard they
+/// are to defeat without also breaking the enforcement logic itself:
+///   - **Variable/command-bound** (hardest to defeat: a rename or rewrite
+///     that neuters the check also breaks the literal text this assertion
+///     requires): `"${binaries}" -lt 90`, `"${total}" -eq 0`,
+///     `grep -q "ci_gate_completeness"`.  None of these three forms
+///     currently appears anywhere else in `ci.yml` (verified) — a bare
+///     `-lt 90` / `-eq 0` / `ci_gate_completeness` substring, by contrast,
+///     also appears in this guard's own comments and echo diagnostics and
+///     would be satisfied even after the check was neutered by a variable
+///     rename.
+///   - **Exact standalone line** (comment-satisfiable only by a future
+///     comment reproducing the identical trailing form — no such comment
+///     exists today): `set -euo pipefail\n`, `set +o pipefail\n`,
+///     `set -o pipefail\n`.  `"set -o pipefail\n"` is NOT a substring of
+///     `"set -euo pipefail\n"` (the characters after `set -` are `euo`, not
+///     `o`), so these three assertions are independent of one another —
+///     dropping any one of the three lines fails exactly one assertion, not
+///     all three.  This is incidental to the current comment wording, not a
+///     structural guarantee: a future comment line ending exactly with one
+///     of these forms (no trailing text) immediately before the newline
+///     would also satisfy the corresponding assertion.
+///   - **Literal substring, weaker still** (a comment or unrelated step
+///     could in principle reproduce it): `CARGO_TERM_COLOR: never`.
+///   - **Weakest** (also appears inside this guard's own `echo`
+///     diagnostics, or — for `exit 1` — is a generic command with no
+///     natural variable-binding; a rewrite that preserves the diagnostic
+///     strings while gutting the enforcement logic underneath would not be
+///     caught by these alone): `FAIL (POL-11)`, `Check passed:`, `exit 1`.
+///   - **NOT PINNED — no assertion covers these today:** the
+///     `cargo test --all-features 2>&1 | tee "$RUNNER_TEMP/cargo_test_out.txt"`
+///     invocation itself (a rewrite dropping `--all-features`, or changing
+///     what gets captured, is undetected); and the `total=`/`binaries=`
+///     computation pipelines (the `grep`/`grep -Eo`/`awk` and
+///     `grep`/`wc -l`/`tr` chains) that produce the values the gates above
+///     test — only their *usages* (`"${total}" -eq 0`,
+///     `"${binaries}" -lt 90`) are pinned, so a rewrite of the computation
+///     logic that leaves those two variables holding a wrong-but-passing
+///     value is undetected as long as the variable names survive.
 ///
 /// Anchoring: assertion is made only within the `test` job block, so a
 /// matching substring in an unrelated job cannot produce a false positive.
@@ -903,6 +919,32 @@ fn test_verify_test_job_has_zero_test_floor() {
          Current test job block:\n{test_block}"
     );
 
+    // --- Instrument 3: zero-test floor (`total -eq 0`) ---
+    // Distinct from both instruments above: the binary floor and the named
+    // canary both pass when ≥90 binaries (including ci_gate_completeness)
+    // report results but zero tests passed within them (e.g. a global
+    // `--skip` filter, or a harness that reports results without running
+    // any test body).  This is BC-X.13.007 Behavior item 3, and this
+    // assertion is the ONLY gate covering that scenario — proven by
+    // deleting the `if [ "${total}" -eq 0 ]; then ... fi` block wholesale
+    // in a scratchpad copy: every other assertion in this test (including
+    // the binary floor and named canary above) stayed green.
+    //
+    // The assertion targets the variable-bound form `"${total}" -eq 0`, not
+    // a bare `-eq 0`, for the same reason Instrument 1 targets
+    // `"${binaries}" -lt 90` rather than bare `-lt 90`: a bare form would
+    // survive a variable rename that neuters the check.
+    assert!(
+        test_block.contains("\"${total}\" -eq 0"),
+        "FAIL (POL-11): The `test` job step does not contain the zero-test \
+         floor gate using the `total` variable (`\"${{total}}\" -eq 0`).\n\
+         This is the only gate that catches ≥90 test binaries reporting \
+         results while zero tests actually passed (e.g. a global test \
+         filter matching nothing) — the binary-count floor and named canary \
+         both pass in that scenario.\n\
+         Current test job block:\n{test_block}"
+    );
+
     // --- exit 1 is present ---
     // The floor branches must actually fail the step, not merely warn.
     assert!(
@@ -944,13 +986,62 @@ fn test_verify_test_job_has_zero_test_floor() {
          Current test job block:\n{test_block}"
     );
 
+    // --- top-level abort mechanism (`set -euo pipefail`) is present ---
+    // This is the SOLE mechanism that propagates a genuine `cargo test`
+    // failure through `cargo test --all-features 2>&1 | tee ...` into a
+    // failed step.  Without pipefail here, the tee pipeline's exit status is
+    // `tee`'s (always 0), so `set -e` never fires on a failed `cargo test` —
+    // the step falls through to the count computations, which sum whatever
+    // partial "test result:" lines cargo did print, satisfy the binary
+    // floor / canary / zero-test-floor gates, and print `Check passed:` —
+    // an unambiguous false-green.  Reproduced directly: replacing this line
+    // with `set -eu` (dropping `-o pipefail`) and feeding a mock `cargo`
+    // that exits 101 after printing 103 "test result:" lines summing to a
+    // non-zero passed count causes the step to exit 0 and print
+    // `Check passed: ... test binaries` — while the unmutated line correctly
+    // propagates the mock's exit 101.
+    //
+    // The assertion targets the exact whole-line form `set -euo pipefail\n`
+    // rather than a bare `pipefail` substring, and is distinct from (does
+    // not overlap) the `set -o pipefail\n` assertion below: `"set -o
+    // pipefail\n"` is not a substring of `"set -euo pipefail\n"` (the
+    // characters immediately after `set -` are `euo`, not `o`), so a
+    // regression that drops the `-o pipefail` combination into `set -eu`
+    // would fail THIS assertion while the scoping-bracket assertions below
+    // are unaffected (they check a different, later line in the script).
+    assert!(
+        test_block.contains("set -euo pipefail\n"),
+        "FAIL (POL-11): The `test` job step does not open with the command \
+         `set -euo pipefail` as a standalone line.\n\
+         Required: `-o pipefail` is what causes a failed `cargo test` in \
+         `cargo test --all-features 2>&1 | tee ...` to actually fail the \
+         step — without it, `tee`'s (always-0) exit status is what `set -e` \
+         sees, and a genuine test failure silently falls through to the \
+         count computations and prints `Check passed:` (verified false-green \
+         reproduction, S-626-1 round 17).\n\
+         Current test job block:\n{test_block}"
+    );
+
     // --- pipefail scoping bracket is present ---
     // The count computations must run under `set +o pipefail` (disabled).
     // Under set -o pipefail, grep exits 1 on no-match; that exit propagates
     // through the pipeline and, combined with set -e, aborts the step before
-    // any FAIL (POL-11) diagnostic can print.  `set -o pipefail` restores
-    // the setting so real I/O errors in the gate checks are not swallowed.
-    // Removing either bracket reintroduces the Defect 2 false-abort class.
+    // any FAIL (POL-11) diagnostic can print.  Removing the OPENING bracket
+    // (`set +o pipefail`) reintroduces that false-abort class.
+    //
+    // Removing the CLOSING bracket (`set -o pipefail`, the restore) does
+    // NOT reintroduce the same class — it is the opposite failure mode:
+    // pipefail stays disabled, which is strictly more permissive and can
+    // never cause an abort.  The two brackets guard opposite failure modes,
+    // not a shared one.  The restore's stated purpose — so that "real I/O
+    // errors in the gate checks are not silently swallowed" — has no
+    // operative effect today: nothing after the restore is a pipeline (the
+    // gate checks are `[ ... ]` tests, a bare `grep -q`, and `echo`s), so
+    // there is no pipe exit status for pipefail to change the handling of.
+    // It remains defensive hygiene — restoring the step's ambient default
+    // in case a future gate check introduces a pipe — but is not, in the
+    // current file, load-bearing the way the opening bracket is.
+    //
     // The trailing `\n` in each check is load-bearing: it distinguishes the
     // standalone command line from the comments that also mention the same
     // flags (e.g. `# Under set -o pipefail, ...` or
@@ -973,8 +1064,10 @@ fn test_verify_test_job_has_zero_test_floor() {
         test_block.contains("set -o pipefail\n"),
         "FAIL (POL-11): The `test` job step does not contain the command \
          `set -o pipefail` as a standalone line (the restoring bracket).\n\
-         Required: pipefail must be re-enabled after the count computations so \
-         that real I/O errors in the gate checks are not silently swallowed.\n\
+         Required: pipefail must be re-enabled after the count computations \
+         as defensive hygiene (restoring the step's ambient default) — even \
+         though nothing after it is currently a pipeline, so this has no \
+         operative effect on the gate checks that follow today.\n\
          Current test job block:\n{test_block}"
     );
 }
@@ -1004,14 +1097,32 @@ fn test_verify_test_job_has_zero_test_floor() {
 /// prose, but documentation references are not guards — so `msrv` would
 /// have kept passing while validating `stable` again.
 ///
-/// Both asserted strings are exact, quote-included forms
-/// (`toolchain: "1.85.0"` and `RUSTUP_TOOLCHAIN: "1.85.0"`) that appear
-/// exactly once each in the whole of `ci.yml`, both in operative
-/// (`with:`/`env:`) position — never inside a comment. (The bare
-/// substring `1.85.0` also appears in the job's `name:` line, the
-/// `dtolnay/rust-toolchain` version-pin comment, and two scope-rationale
-/// comments — which is why the assertions below match the longer,
-/// key-qualified forms rather than the bare version string.)
+/// This test makes THREE assertions, not two. The first two asserted
+/// strings are exact, quote-included forms (`toolchain: "1.85.0"` and
+/// `RUSTUP_TOOLCHAIN: "1.85.0"`) that appear exactly once each in the whole
+/// of `ci.yml`, both in operative `with:`/`env:` key-value position — never
+/// inside a comment. (The bare substring `1.85.0` also appears in the job's
+/// `name:` line, the `dtolnay/rust-toolchain` version-pin comment, and two
+/// scope-rationale comments — which is why the assertions below match the
+/// longer, key-qualified forms rather than the bare version string.)
+///
+/// The third assertion, `cargo check --all-features --locked` (added when
+/// `d848d9a5` pinned `--locked` to close a dependency-drift gap — see the
+/// AC-3 rationale above), is a different shape: it is the literal `run:`
+/// step command itself, not a `with:`/`env:` key-value pair. It also
+/// appears exactly once in the whole of `ci.yml`, in operative position.
+/// The `msrv` job carries a 10-line scope-rationale comment discussing
+/// `--all-targets` and `--all-features` (why the job omits the former and
+/// why the latter is a no-op for this crate) — that comment does NOT
+/// currently reproduce the full concatenated substring
+/// `cargo check --all-features --locked`, so today this assertion is not
+/// comment-satisfiable. That is, as with the `toolchain`/`RUSTUP_TOOLCHAIN`
+/// pair above, an incidental property of the current comment wording, not a
+/// structural guarantee: a future edit to that scope comment that happened
+/// to quote the full command verbatim would satisfy this assertion without
+/// the operative `run:` line needing to match it — this is a live,
+/// unresolved question this docstring does not close, not a claim that it
+/// cannot happen.
 ///
 /// Anchoring: assertion is made only within the `msrv` job block, so a
 /// matching substring in an unrelated job (e.g. `coverage`, which pins a
