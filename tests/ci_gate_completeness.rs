@@ -999,9 +999,14 @@ fn test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env() {
         msrv_block.contains("toolchain: \"1.85.0\""),
         "FAIL (S-626-1): The `msrv` job does not pin `toolchain: \"1.85.0\"` \
          on its `dtolnay/rust-toolchain` step.\n\
-         Required: without this input the action falls back to whatever \
-         `rust-toolchain.toml` or the action's own default resolves to, \
-         defeating the MSRV floor.\n\
+         Required: at the pinned SHA (`fa04a1451ff1842e2626ccb99004d0195b455a88`), \
+         `toolchain` is a required input with no default — omitting the `with:` \
+         block does not fall back to `rust-toolchain.toml` or a default; the \
+         action exits 1 with `'toolchain' is a required input`, failing the job \
+         loudly. The genuinely silent revert vector is removal of the \
+         `RUSTUP_TOOLCHAIN` env override on the `cargo check` step (see the next \
+         assertion) — that's what this input's presence guards against staying \
+         meaningful.\n\
          Current msrv job block:\n{msrv_block}"
     );
 
@@ -1014,6 +1019,18 @@ fn test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env() {
          (`channel = \"stable\"`) in rustup's precedence chain. Without this \
          override, `cargo check` silently validates `stable` instead of \
          1.85.0 — the exact false-green this job exists to close.\n\
+         Current msrv job block:\n{msrv_block}"
+    );
+
+    assert!(
+        msrv_block.contains("cargo check --all-features --locked"),
+        "FAIL (S-626-1 AC-3): The `msrv` job's `cargo check` step is not \
+         invoked with `--locked`.\n\
+         Required: without `--locked`, `cargo check` is free to re-resolve \
+         other and transitive dependencies against `Cargo.toml` at check \
+         time, decoupling the MSRV check from the exact dependency graph \
+         the rest of CI (and users) actually build against — a silent \
+         drift vector with no other test or CI signal to catch it.\n\
          Current msrv job block:\n{msrv_block}"
     );
 }

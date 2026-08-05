@@ -6,7 +6,7 @@ All notable changes to jr will be documented here.
 
 ### Fixed
 
-- **MSRV CI job genuinely validates 1.85.0 (S-626-1, CI correctness):** The `msrv`
+- **MSRV CI job genuinely validates 1.85.0 (S-626-1, #626, CI correctness):** The `msrv`
   job in `ci.yml` previously pointed at the tip of dtolnay's `1.85.0` version branch,
   which hard-codes the toolchain and has no `toolchain` input. The action correctly
   installed 1.85.0 and set it as `rustup default`, but `cargo check` ran in the repo
@@ -26,14 +26,14 @@ All notable changes to jr will be documented here.
 
 ### Changed
 
-- **`comfy-table` pinned to 7.2.1 (S-626-1):** `comfy-table 7.2.2` uses let-chains
+- **`comfy-table` pinned to 7.2.1 (S-626-1, #626):** `comfy-table 7.2.2` uses let-chains
   (`edition = "2024"`, Rust ≥1.88 required) and deleted its `rust-version` manifest field,
   so a caret range `"7"` would silently resolve to an incompatible version without cargo
   enforcing any MSRV constraint. Pinned to `=7.2.1` until the codebase is ready for an
   MSRV raise to 1.88 (tracked as a dedicated follow-up story). User impact: None for
   binary users or source-builders on Rust ≥1.85.0.
 
-- **Three in-tree let-chains rewritten to nested `if` blocks (S-626-1, internal):**
+- **Three in-tree let-chains rewritten to nested `if` blocks (S-626-1, #626, internal):**
   `src/cli/auth/keychain.rs`, `src/cli/board.rs`, and `src/cli/issue/list.rs` each
   contained one let-chain that is valid only under Rust ≥1.88 edition 2024. Rewritten as
   semantically-equivalent nested `if` blocks to restore MSRV 1.85.0 compliance. No
