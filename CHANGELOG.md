@@ -19,7 +19,8 @@ All notable changes to jr will be documented here.
   making the MSRV check genuine. The `msrv` job's `cargo check` also gained
   `--locked`, so the gate validates the committed `Cargo.lock` instead of
   silently re-resolving other and transitive dependencies at check time —
-  a real MSRV risk given crates (e.g. `wiremock`) that ship no `rust-version`.
+  a real MSRV risk given dependencies in the checked lib+bins graph (e.g. `dirs`)
+  that ship no `rust-version` manifest field.
   (The exact `=7.2.1` `comfy-table` pin described below is unaffected either
   way: an exact-`=` pin cannot re-resolve to a different version regardless
   of `--locked`.) No user-visible behaviour change.

@@ -799,7 +799,7 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
 ///     run" echo); either would satisfy a bare-substring check while
 ///     leaving the operative grep command absent.
 ///
-/// The remaining three assertions (the `FAIL (POL-11)` sentinel, the
+/// Three further assertions (the `FAIL (POL-11)` sentinel, the
 /// `Check passed:` positive-coverage line, and `exit 1`) do NOT meet that
 /// bar — all three match text that lives inside the guard's own `echo`
 /// diagnostics (or, for `exit 1`, a generic command with no natural
@@ -809,6 +809,20 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
 /// enforcement logic underneath would not be caught by those three alone —
 /// only the two variable/command-bound assertions above are immune to that
 /// class of regression.
+///
+/// The remaining three assertions (`CARGO_TERM_COLOR: never`,
+/// `set +o pipefail\n`, and `set -o pipefail\n`) fall into neither bucket:
+/// they are not echo-diagnostic text, but they are not operative-command-only
+/// either. `CARGO_TERM_COLOR: never` is a literal step-level env override —
+/// a comment or unrelated step could in principle reproduce the same
+/// substring within the `test` job block. The pipefail pair is
+/// comment-satisfiable in principle: a comment line ending exactly with
+/// `set -o pipefail` immediately before the newline (no trailing text) would
+/// also match `"set -o pipefail\n"`. No such comment exists in the current
+/// file — every comment mentioning pipefail carries trailing prose on the
+/// same line (see the inline comment below on the scoping bracket) — but
+/// that is an incidental property of the current wording, not a structural
+/// guarantee this test enforces.
 ///
 /// Anchoring: assertion is made only within the `test` job block, so a
 /// matching substring in an unrelated job cannot produce a false positive.
@@ -928,8 +942,12 @@ fn test_verify_test_job_has_zero_test_floor() {
     // The trailing `\n` in each check is load-bearing: it distinguishes the
     // standalone command line from the comments that also mention the same
     // flags (e.g. `# Under set -o pipefail, ...` or
-    // `# set +o pipefail the pipeline exit ...`).  Those comment lines have
-    // additional text after the flag name and do NOT match the `...\n` form.
+    // `# set +o pipefail the pipeline exit ...`).  Those comment lines
+    // currently carry additional text after the flag name, so they do not
+    // match the `...\n` form today — but this is an incidental property of
+    // the current comment wording, not a guarantee: a future comment line
+    // ending exactly with `set -o pipefail` (no trailing text) immediately
+    // before the newline would also satisfy this assertion.
     assert!(
         test_block.contains("set +o pipefail\n"),
         "FAIL (POL-11): The `test` job step does not contain the command \
@@ -969,8 +987,10 @@ fn test_verify_test_job_has_zero_test_floor() {
 /// which outranks `rust-toolchain.toml` at process level and is the part
 /// that actually forces the check to run at 1.85.0. Deleting only the
 /// `env:` block is a two-line, silent regression: before this test
-/// existed, nothing else in the tree referenced `RUSTUP_TOOLCHAIN`, so
-/// `msrv` would have kept passing while validating `stable` again.
+/// existed, nothing else in CI or the test suite *asserted* on
+/// `RUSTUP_TOOLCHAIN` — CLAUDE.md and CHANGELOG.md both mention it in
+/// prose, but documentation references are not guards — so `msrv` would
+/// have kept passing while validating `stable` again.
 ///
 /// Both asserted strings are exact, quote-included forms
 /// (`toolchain: "1.85.0"` and `RUSTUP_TOOLCHAIN: "1.85.0"`) that appear
