@@ -221,7 +221,8 @@ fn test_ci_gate_needs_exactly_the_required_jobs() {
         panic!(
             "FAIL (RED GATE): The `ci-gate` job block does not contain a \
              `needs:` key.\n\
-             Required: `needs: [fmt, clippy, test, msrv, deny, spec-guard]`\n\
+             Required: `needs: [fmt, clippy, test, msrv, deny, spec-guard, \
+             check-signing-workflow-injection, mutants]`\n\
              Current ci-gate block:\n{gate_block}"
         )
     });
