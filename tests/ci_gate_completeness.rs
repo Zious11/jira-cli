@@ -949,12 +949,11 @@ fn test_verify_test_job_has_zero_test_floor() {
 }
 
 // ---------------------------------------------------------------------------
-// S-626-1 AC-10 (BC-X.13.007 postcondition 1) — `msrv` job genuinely
-// validates 1.85.0
+// S-626-1 AC-3 — `msrv` job genuinely validates 1.85.0
 // ---------------------------------------------------------------------------
 
-/// S-626-1 AC-10 / BC-X.13.007 postcondition 1: the `msrv` job must
-/// genuinely compile at Rust 1.85.0, not silently fall through to
+/// S-626-1 AC-3: the `msrv` job must genuinely compile at Rust 1.85.0,
+/// not silently fall through to
 /// `rust-toolchain.toml`'s `channel = "stable"`.
 ///
 /// `rust-toolchain.toml` outranks `rustup default` in rustup's precedence
@@ -968,10 +967,9 @@ fn test_verify_test_job_has_zero_test_floor() {
 /// (2) `env: {RUSTUP_TOOLCHAIN: "1.85.0"}` on the `cargo check` step,
 /// which outranks `rust-toolchain.toml` at process level and is the part
 /// that actually forces the check to run at 1.85.0. Deleting only the
-/// `env:` block is a two-line, silent regression: nothing else in the
-/// tree references `RUSTUP_TOOLCHAIN` (`grep -rn "RUSTUP_TOOLCHAIN"
-/// tests/*.rs` returns zero hits), so `msrv` would keep passing while
-/// validating `stable` again.
+/// `env:` block is a two-line, silent regression: before this test
+/// existed, nothing else in the tree referenced `RUSTUP_TOOLCHAIN`, so
+/// `msrv` would have kept passing while validating `stable` again.
 ///
 /// Both asserted strings are exact, quote-included forms
 /// (`toolchain: "1.85.0"` and `RUSTUP_TOOLCHAIN: "1.85.0"`) that appear
@@ -992,7 +990,7 @@ fn test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env() {
         panic!(
             "FAIL: `.github/workflows/ci.yml` does not contain an `msrv:` job.\n\
              Required: the `msrv` job must exist and genuinely validate Rust \
-             1.85.0 (S-626-1 / BC-X.13.007 postcondition 1)."
+             1.85.0 (S-626-1 AC-3)."
         )
     });
 

@@ -18,10 +18,11 @@ All notable changes to jr will be documented here.
   `cargo check` step — which outranks `rust-toolchain.toml` at process level —
   making the MSRV check genuine. The `msrv` job's `cargo check` also gained
   `--locked`, so the gate validates the committed `Cargo.lock` instead of
-  re-resolving dependencies — reinforcing the exact `=7.2.1` `comfy-table` pin
-  described below rather than letting MSRV validation silently resolve a
-  different (and possibly incompatible) version. No user-visible behaviour
-  change.
+  silently re-resolving other and transitive dependencies at check time —
+  a real MSRV risk given crates (e.g. `wiremock`) that ship no `rust-version`.
+  (The exact `=7.2.1` `comfy-table` pin described below is unaffected either
+  way: an exact-`=` pin cannot re-resolve to a different version regardless
+  of `--locked`.) No user-visible behaviour change.
 
 ### Changed
 
