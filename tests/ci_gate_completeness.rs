@@ -808,7 +808,9 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
 /// result:" lines (which made the step exit 0 and print `Check passed:
 /// ...` despite the simulated failure) — both reproduced in a scratchpad
 /// copy before the fix. The assertions below are graded by how hard they
-/// are to defeat without also breaking the enforcement logic itself:
+/// are to defeat without also breaking the enforcement logic itself. Twelve
+/// assertions total (added in a later pass: `shell: bash` and the full
+/// `cargo test` capture invocation, both below):
 ///   - **Variable/command-bound** (hardest to defeat: a rename or rewrite
 ///     that neuters the check also breaks the literal text this assertion
 ///     requires): `"${binaries}" -lt 90`, `"${total}" -eq 0`,
@@ -821,31 +823,44 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
 ///   - **Exact standalone line** (comment-satisfiable only by a future
 ///     comment reproducing the identical trailing form — no such comment
 ///     exists today): `set -euo pipefail\n`, `set +o pipefail\n`,
-///     `set -o pipefail\n`.  `"set -o pipefail\n"` is NOT a substring of
+///     `set -o pipefail\n`, and the full capture invocation
+///     `cargo test --all-features 2>&1 | tee "$RUNNER_TEMP/cargo_test_out.txt"\n`.
+///     `"set -o pipefail\n"` is NOT a substring of
 ///     `"set -euo pipefail\n"` (the characters after `set -` are `euo`, not
 ///     `o`), so these three assertions are independent of one another —
 ///     dropping any one of the three lines fails exactly one assertion, not
 ///     all three.  This is incidental to the current comment wording, not a
 ///     structural guarantee: a future comment line ending exactly with one
 ///     of these forms (no trailing text) immediately before the newline
-///     would also satisfy the corresponding assertion.
+///     would also satisfy the corresponding assertion.  The capture
+///     invocation is the literal `run:` command itself (not a `with:`/`env:`
+///     key-value pair, and not variable-bound like the tier above) — it
+///     occurs exactly once in the whole of `ci.yml` (verified) and is not
+///     reproduced by any comment today, so it sits in this tier rather than
+///     the weaker one below, even though nothing prevents a future comment
+///     from quoting it verbatim.
 ///   - **Literal substring, weaker still** (a comment or unrelated step
-///     could in principle reproduce it): `CARGO_TERM_COLOR: never`.
+///     could in principle reproduce it): `CARGO_TERM_COLOR: never`,
+///     `shell: bash`.  Both are step-level YAML key-value pairs; `shell:
+///     bash` occurs exactly once in the whole of `ci.yml` (verified) today,
+///     but nothing prevents a future comment from reproducing the string.
 ///   - **Weakest** (also appears inside this guard's own `echo`
 ///     diagnostics, or — for `exit 1` — is a generic command with no
 ///     natural variable-binding; a rewrite that preserves the diagnostic
 ///     strings while gutting the enforcement logic underneath would not be
 ///     caught by these alone): `FAIL (POL-11)`, `Check passed:`, `exit 1`.
-///   - **NOT PINNED — no assertion covers these today:** the
-///     `cargo test --all-features 2>&1 | tee "$RUNNER_TEMP/cargo_test_out.txt"`
-///     invocation itself (a rewrite dropping `--all-features`, or changing
-///     what gets captured, is undetected); and the `total=`/`binaries=`
-///     computation pipelines (the `grep`/`grep -Eo`/`awk` and
+///   - **NOT PINNED — no assertion covers these today:** the `total=`/
+///     `binaries=` computation pipelines (the `grep`/`grep -Eo`/`awk` and
 ///     `grep`/`wc -l`/`tr` chains) that produce the values the gates above
 ///     test — only their *usages* (`"${total}" -eq 0`,
 ///     `"${binaries}" -lt 90`) are pinned, so a rewrite of the computation
 ///     logic that leaves those two variables holding a wrong-but-passing
-///     value is undetected as long as the variable names survive.
+///     value is undetected as long as the variable names survive.  (The
+///     capture invocation itself — `--all-features` and the `tee` target —
+///     moved out of this bucket into the "Exact standalone line" tier above;
+///     these computation pipelines remain structurally unpinnable by
+///     substring matching, since a wrong-but-passing rewrite can preserve
+///     every substring this test could reasonably assert on.)
 ///
 /// Anchoring: assertion is made only within the `test` job block, so a
 /// matching substring in an unrelated job cannot produce a false positive.
@@ -983,6 +998,65 @@ fn test_verify_test_job_has_zero_test_floor() {
          `CARGO_TERM_COLOR` to `never`.\n\
          Required: add `env: CARGO_TERM_COLOR: never` to the step so that ANSI \
          escape codes in libtest output do not break the anchored grep.\n\
+         Current test job block:\n{test_block}"
+    );
+
+    // --- `shell: bash` override is present ---
+    // The `test` job is a 3-OS matrix (ubuntu/macos/windows). GitHub Actions
+    // defaults `run:` steps to `pwsh` on `windows-latest`; the floor guard's
+    // script uses `set -euo pipefail`, `[ ... ]` tests, and `$(...)` command
+    // substitution, none of which are valid pwsh syntax. Without this
+    // override the step would fail outright on the Windows leg with a pwsh
+    // parse error, rather than silently skip the floor — but that failure
+    // would be indistinguishable at a glance from a genuine POL-11 violation
+    // and would block the Windows leg on every run, so the override is
+    // treated as load-bearing rather than something to discover by accident.
+    // `"shell: bash"` appears exactly once in the whole of `ci.yml` (verified),
+    // so this is not comment-satisfiable by any text elsewhere in the file
+    // today.
+    assert!(
+        test_block.contains("shell: bash"),
+        "FAIL (POL-11): The `test` job step does not override `shell: bash`.\n\
+         Required: GitHub Actions defaults `run:` steps to `pwsh` on \
+         `windows-latest`; the floor guard's script (`set -euo pipefail`, \
+         `[ ... ]` tests, `$(...)` substitution) is bash syntax and is \
+         invalid under pwsh. Without this override the step fails outright \
+         on the Windows leg of the 3-OS matrix.\n\
+         Current test job block:\n{test_block}"
+    );
+
+    // --- the exact `cargo test` capture invocation is present ---
+    // Pins the full `run:` command line the rest of this test's gates
+    // depend on: `--all-features` (so `#[cfg(test)]` gated code is actually
+    // exercised) and the `tee` target (`$RUNNER_TEMP/cargo_test_out.txt`,
+    // the same path the `total=`/`binaries=` computations below read back
+    // from). A rewrite that drops `--all-features`, redirects to a
+    // different file, or otherwise changes what gets captured is
+    // undetected by any other assertion in this test — the `total`/
+    // `binaries` gates only check the *values* of those variables, not how
+    // they were populated. This does NOT pin the `total=`/`binaries=`
+    // computation pipelines themselves (the `grep`/`grep -Eo`/`awk` and
+    // `grep`/`wc -l`/`tr` chains) — those remain structurally unpinnable by
+    // substring matching, per the "NOT PINNED" note above.
+    //
+    // The assertion targets the exact standalone line (trailing `\n`), not
+    // a bare `2>&1` substring: `2>&1` occurs exactly once in the whole of
+    // `ci.yml` today, so a bare substring would already be unambiguous, but
+    // the longer command-bound form is chosen anyway because it also pins
+    // `--all-features` and the `tee` target, closing that portion of the
+    // "NOT PINNED" gap in one assertion. `RUNNER_TEMP/cargo_test_out.txt`
+    // alone would be ambiguous — it also appears in the `grep` lines that
+    // read the file back — so the full command line (unique in the file)
+    // is required.
+    assert!(
+        test_block
+            .contains("cargo test --all-features 2>&1 | tee \"$RUNNER_TEMP/cargo_test_out.txt\"\n"),
+        "FAIL (POL-11): The `test` job step does not contain the exact \
+         capture invocation \
+         `cargo test --all-features 2>&1 | tee \"$RUNNER_TEMP/cargo_test_out.txt\"`.\n\
+         Required: `--all-features` ensures feature-gated tests run; the \
+         `tee` target must match the file the `total=`/`binaries=` \
+         computations read back from.\n\
          Current test job block:\n{test_block}"
     );
 
