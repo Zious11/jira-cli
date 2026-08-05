@@ -16,7 +16,12 @@ All notable changes to jr will be documented here.
   (a version of the action that declares `toolchain` as a required input), adds
   `with: {toolchain: "1.85.0"}`, and adds `RUSTUP_TOOLCHAIN: "1.85.0"` to the
   `cargo check` step — which outranks `rust-toolchain.toml` at process level —
-  making the MSRV check genuine. No user-visible behaviour change.
+  making the MSRV check genuine. The `msrv` job's `cargo check` also gained
+  `--locked`, so the gate validates the committed `Cargo.lock` instead of
+  re-resolving dependencies — reinforcing the exact `=7.2.1` `comfy-table` pin
+  described below rather than letting MSRV validation silently resolve a
+  different (and possibly incompatible) version. No user-visible behaviour
+  change.
 
 ### Changed
 

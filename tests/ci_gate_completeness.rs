@@ -761,8 +761,10 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
 /// filtered out.  Without an explicit floor, a `Cargo.toml` change
 /// (`autotests = false`, a `[[test]]` rename, or a harness misconfiguration)
 /// can orphan all integration-test targets and still green the `test` job —
-/// which is in `ci-gate.needs`.  This is the POL-11 / F-07 false-green class
-/// documented in the S-626-1 story spec.
+/// which is in `ci-gate.needs`.  This is the POL-11 false-green class covered
+/// by story S-626-1 AC-10, anchored to BC-X.13.007 ("The `test` job enforces
+/// a runtime-computed test-execution floor") in
+/// `.factory/specs/prd/cross-cutting.md`.
 ///
 /// A passed-count `> 0` floor is insufficient: `cargo test --all-features`
 /// also runs the inline `#[cfg(test)]` modules in `src/` (~1,100 tests at
@@ -782,9 +784,9 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
 /// of the correct guard.  The assertions below pin all operative parts,
 /// including a dedicated assertion for the pipefail scoping bracket.
 ///
-/// Prose-ambiguity discipline: every assertion targets a form that can ONLY
-/// appear in the operative command, never in a prose comment or diagnostic
-/// echo.  Specifically:
+/// Prose-ambiguity discipline: TWO of the assertions below target a form
+/// that can ONLY appear in the operative command, never in a prose comment
+/// or diagnostic echo:
 ///   - The binary-count floor asserts `"${binaries}" -lt 90` (variable-bound),
 ///     not bare `-lt 90`.  Bare would survive a variable rename to `${total}`
 ///     (~2345 tests, floor permanently inert) while keeping this test green.
@@ -795,6 +797,17 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
 ///     (ci.yml :: test / "Run tests (zero-test floor, POL-11)" § "did not
 ///     run" echo); either would satisfy a bare-substring check while
 ///     leaving the operative grep command absent.
+///
+/// The remaining three assertions (the `FAIL (POL-11)` sentinel, the
+/// `Check passed:` positive-coverage line, and `exit 1`) do NOT meet that
+/// bar — all three match text that lives inside the guard's own `echo`
+/// diagnostics (or, for `exit 1`, a generic command with no natural
+/// variable-binding). They are still useful coarser-grained pins: deleting
+/// the guard step wholesale, or the diagnostic text it emits, fails them.
+/// But a rewrite that preserves the diagnostic strings while gutting the
+/// enforcement logic underneath would not be caught by those three alone —
+/// only the two variable/command-bound assertions above are immune to that
+/// class of regression.
 ///
 /// Anchoring: assertion is made only within the `test` job block, so a
 /// matching substring in an unrelated job cannot produce a false positive.
@@ -932,5 +945,76 @@ fn test_verify_test_job_has_zero_test_floor() {
          Required: pipefail must be re-enabled after the count computations so \
          that real I/O errors in the gate checks are not silently swallowed.\n\
          Current test job block:\n{test_block}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// S-626-1 AC-10 (BC-X.13.007 postcondition 1) — `msrv` job genuinely
+// validates 1.85.0
+// ---------------------------------------------------------------------------
+
+/// S-626-1 AC-10 / BC-X.13.007 postcondition 1: the `msrv` job must
+/// genuinely compile at Rust 1.85.0, not silently fall through to
+/// `rust-toolchain.toml`'s `channel = "stable"`.
+///
+/// `rust-toolchain.toml` outranks `rustup default` in rustup's precedence
+/// chain. The pre-fix `msrv` job pointed at the tip of dtolnay's `1.85.0`
+/// version-branch action, which has no `toolchain` input and only sets
+/// `rustup default` — so `cargo check` silently ran under `stable` in the
+/// repo root, a false-green (documented in this project's CLAUDE.md under
+/// "`rust-toolchain.toml` outranks `rustup default`"). The fix requires
+/// TWO cooperating pieces: (1) `with: {toolchain: "1.85.0"}` on the
+/// `dtolnay/rust-toolchain` step, to install the correct toolchain, and
+/// (2) `env: {RUSTUP_TOOLCHAIN: "1.85.0"}` on the `cargo check` step,
+/// which outranks `rust-toolchain.toml` at process level and is the part
+/// that actually forces the check to run at 1.85.0. Deleting only the
+/// `env:` block is a two-line, silent regression: nothing else in the
+/// tree references `RUSTUP_TOOLCHAIN` (`grep -rn "RUSTUP_TOOLCHAIN"
+/// tests/*.rs` returns zero hits), so `msrv` would keep passing while
+/// validating `stable` again.
+///
+/// Both asserted strings are exact, quote-included forms
+/// (`toolchain: "1.85.0"` and `RUSTUP_TOOLCHAIN: "1.85.0"`) that appear
+/// exactly once each in the whole of `ci.yml`, both in operative
+/// (`with:`/`env:`) position — never inside a comment. (The bare
+/// substring `1.85.0` also appears in the job's `name:` line, the
+/// `dtolnay/rust-toolchain` version-pin comment, and two scope-rationale
+/// comments — which is why the assertions below match the longer,
+/// key-qualified forms rather than the bare version string.)
+///
+/// Anchoring: assertion is made only within the `msrv` job block, so a
+/// matching substring in an unrelated job (e.g. `coverage`, which pins a
+/// different dtolnay toolchain) cannot produce a false positive.
+#[test]
+fn test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env() {
+    let ci = read_ci_yml();
+    let msrv_block = extract_job_block(&ci, "msrv").unwrap_or_else(|| {
+        panic!(
+            "FAIL: `.github/workflows/ci.yml` does not contain an `msrv:` job.\n\
+             Required: the `msrv` job must exist and genuinely validate Rust \
+             1.85.0 (S-626-1 / BC-X.13.007 postcondition 1)."
+        )
+    });
+
+    assert!(
+        msrv_block.contains("toolchain: \"1.85.0\""),
+        "FAIL (S-626-1): The `msrv` job does not pin `toolchain: \"1.85.0\"` \
+         on its `dtolnay/rust-toolchain` step.\n\
+         Required: without this input the action falls back to whatever \
+         `rust-toolchain.toml` or the action's own default resolves to, \
+         defeating the MSRV floor.\n\
+         Current msrv job block:\n{msrv_block}"
+    );
+
+    assert!(
+        msrv_block.contains("RUSTUP_TOOLCHAIN: \"1.85.0\""),
+        "FAIL (S-626-1): The `msrv` job does not set \
+         `RUSTUP_TOOLCHAIN: \"1.85.0\"` as an env override on its \
+         `cargo check` step.\n\
+         Required: `RUSTUP_TOOLCHAIN` outranks `rust-toolchain.toml` \
+         (`channel = \"stable\"`) in rustup's precedence chain. Without this \
+         override, `cargo check` silently validates `stable` instead of \
+         1.85.0 — the exact false-green this job exists to close.\n\
+         Current msrv job block:\n{msrv_block}"
     );
 }
