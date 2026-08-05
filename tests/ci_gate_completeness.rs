@@ -29,13 +29,15 @@
 //!     check (DEC-101).
 //!
 //! Test coverage map (→ S-CIGATE-1 AC):
-//!   test_ci_gate_job_exists_with_correct_shell               → AC-001
+//!   test_ci_gate_job_exists_with_required_metadata           → AC-001
 //!   test_ci_gate_needs_exactly_the_required_jobs             → AC-003
 //!   test_ci_gate_excludes_advisory_and_secret_scan_jobs      → AC-003
 //!   test_mutants_is_in_ci_gate_needs                         → MUTATION-CI-TIMEOUT / AC-003
 //!   test_ci_gate_fails_on_failed_or_cancelled_need           → AC-002
 //!   test_ci_gate_needs_jobs_have_no_event_conditional_if     → EC-002 (M1)
 //!   test_ci_gate_pass_fail_semantics_are_structurally_placed → AC-001/AC-002 (M2)
+//!   test_verify_test_job_has_zero_test_floor                 → AC-10 / BC-X.13.007
+//!   test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env → AC-3
 
 use std::collections::HashSet;
 use std::fs;
@@ -133,9 +135,14 @@ fn parse_needs_set(job_block: &str) -> Option<HashSet<String>> {
 /// Anchoring: assertion is made only within the `ci-gate` job block, so
 /// a matching substring in an unrelated job cannot produce a false positive.
 ///
+/// Naming note (F-05): this test asserts `name:`, `runs-on:`, and the
+/// job-level `if: always()` — it makes no assertion about a shell. It was
+/// previously misnamed `..._with_correct_shell`; renamed to describe what it
+/// actually verifies rather than adding an unrelated shell assertion.
+///
 /// RED GATE: `ci-gate` does not exist in ci.yml.  This test FAILS on develop.
 #[test]
-fn test_ci_gate_job_exists_with_correct_shell() {
+fn test_ci_gate_job_exists_with_required_metadata() {
     let ci = read_ci_yml();
     let gate_block = extract_job_block(&ci, "ci-gate").unwrap_or_else(|| {
         panic!(
@@ -184,7 +191,7 @@ fn test_ci_gate_job_exists_with_correct_shell() {
 }
 
 // ---------------------------------------------------------------------------
-// AC-003 — `ci-gate.needs` is exactly the required six-job set
+// AC-003 — `ci-gate.needs` is exactly the required eight-job set
 // ---------------------------------------------------------------------------
 
 /// AC-003 (exact-set check): `ci-gate.needs` must contain exactly the eight
@@ -322,7 +329,16 @@ fn test_ci_gate_excludes_advisory_and_secret_scan_jobs() {
         )
     });
 
-    let needs = parse_needs_set(gate_block).unwrap_or_default();
+    let needs = parse_needs_set(gate_block).unwrap_or_else(|| {
+        panic!(
+            "FAIL (RED GATE): The `ci-gate` job block does not contain a \
+             `needs:` key.\n\
+             An empty/absent needs set would otherwise vacuously satisfy \
+             both `!needs.contains(...)` assertions below (F-04) — panic \
+             instead, matching every sibling test in this file.\n\
+             Current ci-gate block:\n{gate_block}"
+        )
+    });
 
     // `security` is gated by `github.event_name == 'pull_request'` AND by
     // `vars.GITLEAKS_DISABLED` — emits `skipped` on push; must not be in needs.
@@ -418,7 +434,7 @@ fn test_mutants_is_in_ci_gate_needs() {
 ///   - `needs.*.result` — accesses the result map across all deps.
 ///   - `'failure'`      — catches failed upstreams.
 ///   - `'cancelled'`    — catches cancelled upstreams (not `skipped` —
-///     `skipped` is not possible for the six unconditionally-run jobs).
+///     `skipped` is not possible for the seven unconditionally-run jobs).
 ///
 /// The step's `if:` condition gates the `run: exit 1` so the step is skipped
 /// (and the job passes) when all `needs` results are `success`.
@@ -470,18 +486,35 @@ fn test_ci_gate_fails_on_failed_or_cancelled_need() {
 }
 
 // ---------------------------------------------------------------------------
-// M1 — needs jobs must run unconditionally (no event-conditional job-level if:)
+// M1 — needs jobs must run unconditionally (no job-level if: key at all)
 // ---------------------------------------------------------------------------
 
 /// M1: For each unconditionally-running job listed in `ci-gate.needs`, assert
-/// that the job's block contains NO job-level `if:` line that references
-/// `github.event_name`.
+/// that the job's block contains NO job-level `if:` key at all.
 ///
 /// Rationale: the existing exact-set test (`test_ci_gate_needs_exactly_the_required_jobs`)
 /// pins WHICH jobs are in `needs`, but not that those jobs run unconditionally.
-/// If a future maintainer adds `if: github.event_name == 'pull_request'` to
-/// e.g. `deny`, the gate would silently pass on push events (deny → skipped →
-/// not 'failure').  This is the exact drift vector EC-002 claims to prevent.
+/// If a future maintainer adds a job-level `if:` guard to e.g. `deny` — for
+/// ANY condition, not just `github.event_name` — a false condition makes the
+/// job report `skipped`, which the ci-gate step's `if:` treats as neither
+/// `failure` nor `cancelled`; the gate goes green with that job never having
+/// run. This is the exact drift vector EC-002 claims to prevent, and the
+/// required property is "no job-level `if:` key" — not merely "no
+/// `github.event_name`-referencing job-level `if:` key".
+///
+/// F-03 (round 19): the prior version of this test matched only single-line
+/// `    if:` lines containing the literal substring `github.event_name`. Two
+/// escapes survived that: (a) a folded/block scalar (`if: >-` with the
+/// expression on continuation lines — a shape `ci.yml :: ci-gate` itself
+/// uses for its step-level `if:`) moves the `github.event_name` substring (or
+/// any other condition) off the `if:` line itself; (b) any non-event
+/// conditional (`if: false`, `github.ref == 'refs/heads/main'`,
+/// `vars.X != 'true'`) never contains `github.event_name` in the first place.
+/// Both produce a `skipped` result exactly as hazardous as the
+/// `github.event_name` case. Matching on presence of the `if:` KEY at
+/// job-property indent — regardless of the condition's shape or content —
+/// closes both escapes, because a folded scalar's opening line still starts
+/// with `    if:` even though its condition text lives on continuation lines.
 ///
 /// `mutants` is intentionally excluded from this list: it carries
 /// `if: github.event_name == 'pull_request'` by design (PR-only scope),
@@ -527,22 +560,25 @@ fn test_ci_gate_needs_jobs_have_no_event_conditional_if() {
         // job key (GitHub Actions YAML convention).  Step-level `if:` blocks
         // are indented 8+ spaces; those are irrelevant to this check.
         //
-        // We detect a job-level if: by looking for lines that start with
-        // exactly four spaces followed by "if:" (with optional trailing space).
+        // We detect a job-level if: KEY by looking for lines that start with
+        // exactly four spaces followed by "if:" — deliberately NOT filtering
+        // on the condition's content or shape (see F-03 docstring above):
+        // any job-level `if:` key on these seven jobs is hazardous, whether
+        // it's a single-line condition, a folded/block scalar, or references
+        // something other than `github.event_name`.
         for line in job_block.lines() {
             // Match lines at job-property indent (4 spaces, not 8+).
-            if line.starts_with("    if:")
-                && !line.starts_with("        ")
-                && line.contains("github.event_name")
-            {
+            if line.starts_with("    if:") && !line.starts_with("        ") {
                 panic!(
-                    "FAIL (M1): Job `{job_name}` has a job-level `if:` that \
-                     references `github.event_name`:\n\
+                    "FAIL (M1/F-03): Job `{job_name}` has a job-level `if:` \
+                     key:\n\
                      \n  {line}\n\
                      \n\
-                     This makes `{job_name}` skip on push events (it emits \
-                     `skipped`, not `failure`), which silently satisfies \
-                     `ci-gate.needs` and allows broken code to merge.\n\
+                     Any job-level `if:` on this job is hazardous regardless \
+                     of the condition's shape or content: a false condition \
+                     makes `{job_name}` report `skipped` (not `failure`), \
+                     which silently satisfies `ci-gate.needs` and allows \
+                     broken code to merge.\n\
                      \n\
                      Fix: either remove the job-level `if:` guard from \
                      `{job_name}` and use a step-level `if:` instead, or \
@@ -746,6 +782,47 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
          actually fails the job when the step-level `if:` condition is met.\n\
          Without a `run:` step the job trivially succeeds for every upstream \
          result.\n\
+         Current ci-gate block:\n{gate_block}"
+    );
+
+    // -----------------------------------------------------------------------
+    // Assertion 4 (F-01, round 19): the `run:` step's body is literally
+    // `exit 1` — not merely "a `run:` step exists".
+    //
+    // Assertion 3 above (M2-g) only checks that *some* `run:` line is
+    // present. `ci-gate` is THE single required branch-protection status
+    // check (CLAUDE.md § "CI Gate"); replacing the body with e.g.
+    // `run: echo "gate disabled"` keeps every other assertion in this file
+    // green (name/runs-on/always()/needs-set/needs.*.result/'failure'/
+    // 'cancelled' are all still textually present) while making the gate
+    // incapable of ever failing, regardless of upstream results — the
+    // single required check goes permanently green. The only other
+    // `exit 1` assertion in this file (`test_verify_test_job_has_zero_test_floor`
+    // § "--- exit 1 is present ---") is scoped to the `test` job block and
+    // is itself the "weakest" tier by that test's own docstring grading (a
+    // bare substring, satisfiable by a comment) — it provides no coverage
+    // of `ci-gate`'s own enforcement body at all.
+    //
+    // The assertion targets the exact trimmed line `run: exit 1` (not a bare
+    // `contains("exit 1")` substring): a body of `run: exit 100` or
+    // `run: exit 10` would satisfy a bare-substring check on `"exit 1"`
+    // (`"exit 100"` and `"exit 10"` both contain `"exit 1"` as a prefix) while
+    // being a materially different (or accidentally-truncated) command.
+    // Matching the whole trimmed line closes that gap.
+    let has_exit_1_run_step = gate_block.lines().any(|l| l.trim() == "run: exit 1");
+
+    assert!(
+        has_exit_1_run_step,
+        "FAIL (F-01): The `ci-gate` job's `run:` step body is not exactly \
+         `exit 1`.\n\
+         `ci-gate` is the single required branch-protection status check — a \
+         body that can never fail (e.g. `run: echo \"...\"`) makes the \
+         required check permanently green regardless of upstream job \
+         results, even though every other structural assertion in this test \
+         (name, runs-on, always(), needs.*.result, 'failure', 'cancelled') \
+         would still pass.\n\
+         Required: a step in the `ci-gate` job block with the line \
+         `run: exit 1` (leading/trailing whitespace aside).\n\
          Current ci-gate block:\n{gate_block}"
     );
 }
@@ -1249,5 +1326,65 @@ fn test_verify_msrv_job_pins_toolchain_and_rustup_toolchain_env() {
          the rest of CI (and users) actually build against — a silent \
          drift vector with no other test or CI signal to catch it.\n\
          Current msrv job block:\n{msrv_block}"
+    );
+
+    // -----------------------------------------------------------------------
+    // F-02 (round 19): pin PLACEMENT, not just whole-block presence.
+    //
+    // The `RUSTUP_TOOLCHAIN: "1.85.0"` assertion above is a whole-block
+    // substring check — it passes as long as that string appears ANYWHERE
+    // in the `msrv` job, including on the WRONG step. Moving the `env:`
+    // block from the `cargo check --all-features --locked` step onto the
+    // `dtolnay/rust-toolchain` step (or any other step) keeps that
+    // assertion green while `cargo check` runs with no `RUSTUP_TOOLCHAIN`
+    // override; `rust-toolchain.toml` (`channel = "stable"`) then wins at
+    // process level, and the job silently validates stable — exactly the
+    // false-green AC-3 exists to close (see this test's own docstring and
+    // CLAUDE.md § "rust-toolchain.toml outranks rustup default").
+    //
+    // Technique: isolate the step slice that starts at the `cargo check
+    // --all-features --locked` anchor and runs to the next step boundary
+    // (a line at the same `      - ` list-item indent used throughout
+    // `steps:` in this file) or end of block — the same indent-based
+    // level-distinction technique `test_ci_gate_pass_fail_semantics_are_structurally_placed`
+    // uses to separate job-level from step-level `if:` keys. Then assert
+    // the env override lives INSIDE that slice, not merely inside the
+    // whole `msrv` block.
+    // -----------------------------------------------------------------------
+    let cargo_check_anchor = "cargo check --all-features --locked";
+    let anchor_pos = msrv_block.find(cargo_check_anchor).unwrap_or_else(|| {
+        panic!(
+            "FAIL (S-626-1 AC-3 / F-02): could not re-locate the anchor \
+             `{cargo_check_anchor}` in the `msrv` job block to check \
+             `RUSTUP_TOOLCHAIN` placement — the assertion immediately above \
+             this one should already have failed.\n\
+             Current msrv job block:\n{msrv_block}"
+        )
+    });
+    let after_anchor = &msrv_block[anchor_pos..];
+    // The next step begins at a line with the `      - ` (6-space + dash)
+    // list-item indent used for every step in this file. Skip past the
+    // anchor's own leading byte before searching so the anchor line itself
+    // is never mistaken for the boundary.
+    let step_end = after_anchor[1..]
+        .find("\n      - ")
+        .map(|p| p + 1)
+        .unwrap_or(after_anchor.len());
+    let cargo_check_step = &after_anchor[..step_end];
+
+    assert!(
+        cargo_check_step.contains("RUSTUP_TOOLCHAIN: \"1.85.0\""),
+        "FAIL (S-626-1 AC-3 / F-02): `RUSTUP_TOOLCHAIN: \"1.85.0\"` is not \
+         on the SAME step as `cargo check --all-features --locked`.\n\
+         `RUSTUP_TOOLCHAIN` outranks `rust-toolchain.toml` at PROCESS level \
+         — it must be an `env:` override on the `cargo check` step itself. \
+         Setting it on any other step (e.g. the `dtolnay/rust-toolchain` \
+         step) only affects that step's own process; `cargo check` would \
+         then run with no override, `rust-toolchain.toml`'s \
+         `channel = \"stable\"` would win, and the job would silently \
+         validate stable again.\n\
+         Step slice inspected (from the `cargo check` anchor to the next \
+         step boundary):\n{cargo_check_step}\n\
+         Full msrv job block:\n{msrv_block}"
     );
 }
