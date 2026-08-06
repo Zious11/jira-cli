@@ -49,16 +49,6 @@
 # DEC-148/DEC-150 pattern). Wired into `spec-guard` (NOT `ci-gate` — a gate
 # cannot depend on a job that depends on it).
 #
-# ============================================================================
-# RED GATE NOTICE (S-CIGATE-2): the decision function `evaluate_needs()`
-# below is DELIBERATELY STUBBED for the Red Gate phase of this story — it
-# always reports every job as OK, regardless of its actual result value.
-# This is intentional: the Red Gate proves the fixture harness and wiring
-# exist and correctly detect a wrong answer, before the real fail-closed
-# logic is written. Do NOT mistake the stub for finished work.
-# STUB — implemented in the Green phase (S-CIGATE-2 AC-001..AC-004)
-# ============================================================================
-#
 # USAGE:
 #   echo "$NEEDS_JSON" | scripts/check-ci-gate.sh   # canonical CI invocation
 #   scripts/check-ci-gate.sh --self-test            # offline fixture suite
@@ -102,24 +92,19 @@ is_allowed_skip() {
 }
 
 # ---------------------------------------------------------------------------
-# evaluate_needs <json> — the fail-closed decision function.
+# evaluate_needs <json> — the fail-closed decision function (S-CIGATE-2
+# AC-001..AC-004).
 #
-# STUB — implemented in the Green phase (S-CIGATE-2 AC-001..AC-004). The
-# real implementation must:
-#   - jq-parse the JSON payload into a job -> result map
-#   - fail closed (return 1) on an empty `needs` object (AC-004)
+#   - jq-parses the JSON payload into a job -> result map
+#   - fails closed (returns 1) on an empty `needs` object (AC-004) — a gate
+#     with nothing to check must not vacuously pass
 #   - for each job: `success` -> OK; `skipped` + `is_allowed_skip` -> OK;
-#     anything else (including unrecognized future values) -> FAIL via a
+#     anything else (including `failure`, `cancelled`, an unlisted
+#     `skipped`, or any result string never seen before) -> FAIL via a
 #     default arm, not an enumerated list of known-bad values (AC-002/AC-003)
-#   - print one `OK  <job> = <result>` or `FAIL <job> = <result>` line per
+#   - prints one `OK  <job> = <result>` or `FAIL  <job> = <result>` line per
 #     job so a gate failure is diagnosable from the ci-gate job's own log
-#   - return 0 only if every job passed
-#
-# Current stub behaviour: always returns 0 (every job reported OK)
-# regardless of its actual result. This makes every fixture that expects a
-# FAIL outcome deliberately RED right now (S-CIGATE-2 AC-005) — the
-# --self-test harness below reports exactly which fixtures disagree with
-# the stub's always-pass behaviour.
+#   - returns 0 only if every job passed
 # ---------------------------------------------------------------------------
 evaluate_needs() {
     local json="$1"
@@ -138,33 +123,58 @@ evaluate_needs() {
     jobs=$(echo "${json}" | jq -r 'keys[]' 2>/dev/null || true)
 
     if [ -z "${jobs}" ]; then
-        echo "STUB: needs JSON is empty — the Green-phase implementation" \
-             "fails closed here (AC-004); the current stub does not."
-        # STUB — implemented in the Green phase (S-CIGATE-2 AC-001..AC-004)
-        return 0
+        echo "FAIL: needs JSON is empty — the gate has nothing to verify (AC-004)."
+        echo "      A gate with nothing to check must not vacuously pass; this"
+        echo "      most likely means ci-gate.needs was lost, not that every job"
+        echo "      passed."
+        return 1
     fi
 
+    local overall_rc=0
     local job result
     while IFS= read -r job; do
         [ -z "${job}" ] && continue
         result=$(echo "${json}" | jq -r --arg j "${job}" '.[$j].result')
-        # STUB — implemented in the Green phase (S-CIGATE-2 AC-001..AC-004):
-        # every job is unconditionally reported OK regardless of `result`.
-        echo "OK  ${job} = ${result} (STUB — not a real decision yet)"
+
+        # Exact match against ALLOWED_SKIPS only (is_allowed_skip) — no
+        # substring/prefix matching, so e.g. a job named `mutants-extra`
+        # does not inherit the `mutants` carve-out.
+        case "${result}" in
+            success)
+                echo "OK  ${job} = ${result}"
+                ;;
+            skipped)
+                if is_allowed_skip "${job}"; then
+                    echo "OK  ${job} = ${result} (allowlisted in ALLOWED_SKIPS)"
+                else
+                    echo "FAIL  ${job} = ${result} (not in ALLOWED_SKIPS — see" \
+                         "scripts/check-ci-gate.sh's ALLOWED_SKIPS comment)"
+                    overall_rc=1
+                fi
+                ;;
+            *)
+                # Default arm (AC-003): catches `failure`, `cancelled`, and
+                # any result value this script has never seen before —
+                # including an allowlisted job's non-`skipped` result (the
+                # allowlist tolerates `skipped` ONLY, never any other
+                # non-`success` value; AC-002).
+                echo "FAIL  ${job} = ${result}"
+                overall_rc=1
+                ;;
+        esac
     done <<<"${jobs}"
 
-    return 0
+    return "${overall_rc}"
 }
 
 # ---------------------------------------------------------------------------
 # Self-test fixture suite (S-CIGATE-2 AC-002/AC-003/AC-004/AC-005).
 #
 # Each fixture asserts an EXPECTED outcome (pass = exit 0, fail = non-zero
-# exit) against evaluate_needs(). Under the current stub, evaluate_needs()
-# always exits 0 — so fixtures expecting "fail" are deliberately RED right
-# now. Fixtures expecting "pass" trivially pass under the stub too (not
-# meaningful proof of correctness on their own; they only become meaningful
-# once the real per-job logic exists).
+# exit) against evaluate_needs(). This proves the decision logic is not a
+# no-op: every fixture below was independently proven RED against the
+# Red Gate stub (which always returned 0 regardless of input) before the
+# real fail-closed logic in evaluate_needs() was written.
 # ---------------------------------------------------------------------------
 run_self_test() {
     echo "=== check-ci-gate.sh SELF-TEST (S-CIGATE-2) ==="
@@ -264,10 +274,9 @@ run_self_test() {
 
     if [ "${mismatches}" -gt 0 ]; then
         echo "FAIL: ${mismatches} fixture(s) disagreed with evaluate_needs()."
-        echo "      (Expected under the current Red Gate stub — see the STUB"
-        echo "      NOTICE at the top of this file. The Green phase's real"
-        echo "      fail-closed implementation must make all fixtures above"
-        echo "      match their expected outcome.)"
+        echo "      This means the fail-closed decision logic in evaluate_needs()"
+        echo "      does not match the expected outcome for one or more fixtures"
+        echo "      above — see the [FAIL] line(s) for which fixture(s) and why."
         return 1
     fi
 

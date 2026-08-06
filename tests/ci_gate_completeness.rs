@@ -1,4 +1,5 @@
-//! S-CIGATE-1 — permanent regression guard for the `ci-gate` aggregator job.
+//! S-CIGATE-1 / S-CIGATE-2 — permanent regression guard for the `ci-gate`
+//! aggregator job.
 //!
 //! These tests pin the structural invariants required for the `ci-gate`
 //! aggregator job to work correctly as the single required branch-protection
@@ -22,9 +23,15 @@
 //!     is advisory by design (`fail_ci_if_error: false`).
 //!   - `mutants` IS in `needs` (MUTATION-CI-TIMEOUT, 2026-06-28).  It carries
 //!     `if: github.event_name == 'pull_request'` and emits `skipped` on push
-//!     events.  The ci-gate pass condition checks for `failure` or `cancelled`
-//!     only — `skipped` is neither, so ci-gate passes on push events.  This is
-//!     the correct behavior per DEC-096/097 and delta-analysis §5.
+//!     events.  Since S-CIGATE-2, the gate's pass/fail decision lives in
+//!     `scripts/check-ci-gate.sh` (invoked with `toJSON(needs)`), which
+//!     fails closed by default: `mutants` reporting `skipped` on push is
+//!     tolerated ONLY because it is named in that script's restrictive
+//!     `ALLOWED_SKIPS` allowlist (which still fails the gate on
+//!     `failure`/`cancelled` for that same job) — not because the gate's
+//!     decision happens not to catch it. Any other job's `skipped` result,
+//!     or any result value the script has never seen before, fails the gate
+//!     by default (see the S-CIGATE-2 section below for the full history).
 //!   - `spec-guard` has no `if:` guard and must be promoted to a blocking
 //!     check (DEC-101).
 //!
@@ -33,26 +40,28 @@
 //!   test_ci_gate_needs_exactly_the_required_jobs             → AC-003
 //!   test_ci_gate_excludes_advisory_and_secret_scan_jobs      → AC-003
 //!   test_mutants_is_in_ci_gate_needs                         → MUTATION-CI-TIMEOUT / AC-003
-//!   test_ci_gate_fails_on_failed_or_cancelled_need           → AC-002
+//!   test_ci_gate_fails_on_failed_or_cancelled_need           → AC-002 (retargeted, S-CIGATE-2)
 //!   test_ci_gate_needs_jobs_have_no_event_conditional_if     → EC-002 (M1)
-//!   test_ci_gate_pass_fail_semantics_are_structurally_placed → AC-001/AC-002 (M2)
+//!   test_ci_gate_pass_fail_semantics_are_structurally_placed → AC-001/AC-002 (M2, retargeted, S-CIGATE-2)
 //!
-//! S-CIGATE-2 ADDENDUM (2026-08-06) — skipped-status false-green fix:
+//! ## S-CIGATE-2 (2026-08-06) — skipped-status false-green fix
 //!
-//! The doc-comment bullet above reading "the ci-gate pass condition checks
-//! for `failure` or `cancelled` only — `skipped` is neither, so ci-gate
-//! passes on push events. This is the correct behavior per DEC-096/097 and
-//! delta-analysis §5" describes the DEFECT this story fixes, not correct
-//! behavior. `skipped` satisfying neither `contains()` call is exactly how
-//! a job that never ran (e.g. `mutants` on every push, by design) silently
-//! makes the sole required branch-protection check report green without
-//! that job having run at all — confirmed reachable on every push via live
-//! CI run 30465686049 (`gh run view 30465686049 --json jobs`: `Mutation
-//! testing` concluded `skipped`, `CI Gate` concluded `success`).
+//! Before S-CIGATE-2, `ci-gate`'s pass condition checked only
+//! `contains(needs.*.result, 'failure') || contains(needs.*.result,
+//! 'cancelled')`. `skipped` satisfies neither `contains()` call, so a job
+//! that never ran (e.g. `mutants` on every push, by design) silently made
+//! the sole required branch-protection check report green without that job
+//! having run at all — confirmed reachable on every push via live CI run
+//! 30465686049 (`gh run view 30465686049 --json jobs`: `Mutation testing`
+//! concluded `skipped`, `CI Gate` concluded `success`). An earlier revision
+//! of this file's doc comment described that behavior as "the correct
+//! behavior per DEC-096/097 and delta-analysis §5" — it was not; that
+//! framing described the defect this story fixes, and has been corrected
+//! above rather than left standing beside this note.
 //!
 //! Under Option C (human-approved fix; Options A and B were both rejected —
 //! see `.factory/stories/S-CIGATE-2-skipped-status-false-green.md`), the
-//! gate's decision logic moves from this file's inline
+//! gate's decision logic moved from this file's inline
 //! `contains(needs.*.result, 'failure') || contains(needs.*.result,
 //! 'cancelled')` condition into `scripts/check-ci-gate.sh`, invoked with
 //! `toJSON(needs)`. `mutants` reporting `skipped` on push is tolerated ONLY
@@ -67,10 +76,12 @@
 //!   test_spec_guard_contains_check_ci_gate_self_test_step          → AC-008
 //!   test_mutants_job_structure_unchanged_by_cigate2_option_c       → AC-006
 //!
-//! RED GATE (S-CIGATE-2, 2026-08-06): the two AC-001/AC-008 tests above FAIL
-//! against the pre-fix `ci.yml` (still on the retired inline condition, with
-//! no `check-ci-gate.sh` wiring anywhere). This is proven and recorded in
-//! this story's Red Gate report — see the commit introducing this addendum.
+//! `test_ci_gate_fails_on_failed_or_cancelled_need` and
+//! `test_ci_gate_pass_fail_semantics_are_structurally_placed` (both
+//! pre-existing, from S-CIGATE-1) were retargeted rather than left pinning
+//! the retired inline condition's literal text: per this story's own
+//! `files_modified` plan, they now assert the retired condition is GONE and
+//! that `scripts/check-ci-gate.sh` performs the decision instead.
 
 use std::collections::HashSet;
 use std::fs;
@@ -228,8 +239,10 @@ fn test_ci_gate_job_exists_with_correct_shell() {
 ///
 /// `mutants` was promoted to hard-required in MUTATION-CI-TIMEOUT (2026-06-28).
 /// It carries `if: github.event_name == 'pull_request'` and emits `skipped` on
-/// push events.  The ci-gate condition checks for `failure` or `cancelled` only
-/// — `skipped` is neither, so ci-gate passes on push events (correct behavior).
+/// push events. Since S-CIGATE-2, `scripts/check-ci-gate.sh` tolerates this
+/// ONLY because `mutants` is named in that script's restrictive
+/// `ALLOWED_SKIPS` allowlist — any other job's `skipped` result fails the
+/// gate by default.
 ///
 /// Rationale for exact-set (not subset):
 ///   - Adding a job to `needs` without updating this test intentionally fails
@@ -337,9 +350,11 @@ fn test_ci_gate_needs_exactly_the_required_jobs() {
 /// legitimate merges.
 ///
 /// NOTE: `mutants` IS in `ci-gate.needs` since MUTATION-CI-TIMEOUT
-/// (2026-06-28).  It carries `if: github.event_name == 'pull_request'` but
-/// the ci-gate pass condition checks `failure` or `cancelled` only — `skipped`
-/// is neither, so ci-gate passes on push events.  See delta-analysis §5.
+/// (2026-06-28).  It carries `if: github.event_name == 'pull_request'`.
+/// Since S-CIGATE-2, `scripts/check-ci-gate.sh` tolerates its `skipped`
+/// push-event result ONLY because `mutants` is named in that script's
+/// restrictive `ALLOWED_SKIPS` allowlist — not because the gate's decision
+/// happens not to catch it.
 ///
 /// Anchoring: assertion is made only within the `ci-gate` job block.
 ///
@@ -398,11 +413,15 @@ fn test_ci_gate_excludes_advisory_and_secret_scan_jobs() {
 ///
 /// The `mutants` job was promoted to hard-required to enforce the 90% kill-rate
 /// gate on every PR.  It carries `if: github.event_name == 'pull_request'` and
-/// emits `skipped` on push events.  The ci-gate condition checks for `failure`
-/// or `cancelled` only — `skipped` is neither, so ci-gate passes on push events.
+/// emits `skipped` on push events.  Since S-CIGATE-2, `scripts/check-ci-gate.sh`
+/// tolerates this ONLY because `mutants` is named in that script's restrictive
+/// `ALLOWED_SKIPS` allowlist — any other job's `skipped` result, or a `failure`
+/// / `cancelled` result for `mutants` itself, fails the gate.
 ///
 /// This test pins the promotion: a future edit that accidentally removes
-/// `mutants` from `ci-gate.needs` must explicitly update this test.
+/// `mutants` from `ci-gate.needs` must explicitly update this test (and, per
+/// CLAUDE.md's `ci-gate` convention, `scripts/check-ci-gate.sh`'s
+/// `ALLOWED_SKIPS`).
 ///
 /// Anchoring: assertion is made only within the `ci-gate` job block.
 #[test]
@@ -428,9 +447,10 @@ fn test_mutants_is_in_ci_gate_needs() {
         "FAIL (MUTATION-CI-TIMEOUT): `mutants` is missing from `ci-gate.needs`.\n\
          The `mutants` job was promoted to hard-required in MUTATION-CI-TIMEOUT \
          (2026-06-28) to enforce the 90% kill-rate gate on every PR.\n\
-         Push-event safety: `mutants` emits `skipped` on push events; the \
-         ci-gate condition checks `failure`/`cancelled` only — `skipped` is \
-         neither, so ci-gate passes on push events.\n\
+         Push-event safety: `mutants` emits `skipped` on push events; \
+         `scripts/check-ci-gate.sh` tolerates this ONLY because `mutants` is \
+         named in that script's restrictive `ALLOWED_SKIPS` allowlist \
+         (S-CIGATE-2).\n\
          To restore: add `mutants` to `ci-gate.needs` in ci.yml.\n\
          Current needs: {:?}",
         {
@@ -442,63 +462,68 @@ fn test_mutants_is_in_ci_gate_needs() {
 }
 
 // ---------------------------------------------------------------------------
-// AC-002 — gate step exits 1 on failure or cancelled upstream
+// AC-002 — gate fails on failure or cancelled upstream (via check-ci-gate.sh)
 // ---------------------------------------------------------------------------
 
-/// AC-002: The `ci-gate` job must contain a step that exits 1 when any
-/// upstream `needs` result is `'failure'` or `'cancelled'`.
+/// AC-002 (retargeted, S-CIGATE-2): The `ci-gate` job must delegate its
+/// failure/cancelled/skipped decision to `scripts/check-ci-gate.sh`'s
+/// `evaluate_needs()`, not to an inline YAML condition.
 ///
-/// Required substrings in the job block (F1 delta analysis §4):
-///   - `needs.*.result` — accesses the result map across all deps.
-///   - `'failure'`      — catches failed upstreams.
-///   - `'cancelled'`    — catches cancelled upstreams (not `skipped` —
-///     `skipped` is not possible for the six unconditionally-run jobs).
+/// Before S-CIGATE-2, this test pinned the retired inline condition
+/// (`contains(needs.*.result, 'failure') || contains(needs.*.result,
+/// 'cancelled')`) directly in the `ci-gate` step body. That condition is the
+/// root cause this story fixes: `skipped` satisfies neither `contains()`
+/// call, so a job that never ran (e.g. `mutants` on every push) silently
+/// made the gate report green (live CI run 30465686049). Under Option C
+/// (human-approved; see
+/// `.factory/stories/S-CIGATE-2-skipped-status-false-green.md`), the
+/// failure/cancelled/skipped decision moves into
+/// `scripts/check-ci-gate.sh`'s `evaluate_needs()`, which is exercised
+/// directly by that script's own `--self-test` fixture suite (fixtures
+/// `one-job-failure`, `job-cancelled`, `unlisted-job-skipped`,
+/// `mutants-failure-allowlist-is-restrictive`).
 ///
-/// The step's `if:` condition gates the `run: exit 1` so the step is skipped
-/// (and the job passes) when all `needs` results are `success`.
+/// This test now pins the migration itself:
+///   (a) the retired inline `contains(needs.*.result, ...)` condition must
+///       be GONE from `ci-gate`'s step body — its presence alongside the
+///       new script invocation would indicate a half-migrated state, and
+///   (b) the step invokes `scripts/check-ci-gate.sh`, which performs the
+///       failure/cancelled/skipped decision instead (see
+///       `test_ci_gate_step_invokes_check_ci_gate_script_with_needs_json`
+///       for the full AC-001 invocation-shape assertion).
 ///
 /// Anchoring: assertion is made only within the `ci-gate` job block.
-///
-/// RED GATE: `ci-gate` does not exist in ci.yml.  This test FAILS on develop.
 #[test]
 fn test_ci_gate_fails_on_failed_or_cancelled_need() {
     let ci = read_ci_yml();
     let gate_block = extract_job_block(&ci, "ci-gate").unwrap_or_else(|| {
         panic!(
-            "FAIL (RED GATE): `.github/workflows/ci.yml` does not contain a \
+            "FAIL: `.github/workflows/ci.yml` does not contain a \
              `ci-gate:` job.\n\
              Required: append the `ci-gate` aggregator job to ci.yml per \
              S-CIGATE-1 AC-001 / AC-002."
         )
     });
 
-    // The step condition (or the run: body) must reference needs.*.result
-    // with both 'failure' and 'cancelled' checks.
     assert!(
-        gate_block.contains("needs.*.result"),
-        "FAIL (RED GATE): The `ci-gate` job block does not contain \
-         `needs.*.result`.\n\
-         Required: a step `if:` condition like \
-         `${{{{ contains(needs.*.result, 'failure') || \
-         contains(needs.*.result, 'cancelled') }}}}`\n\
+        !gate_block.contains("contains(needs.*.result"),
+        "FAIL (S-CIGATE-2 AC-002): The `ci-gate` job block still contains \
+         the retired inline `contains(needs.*.result, ...)` condition.\n\
+         This condition is the root cause S-CIGATE-2 fixes: `skipped` \
+         satisfies neither `contains(needs.*.result, 'failure')` nor \
+         `contains(needs.*.result, 'cancelled')`, so a job that never ran \
+         (e.g. `mutants` on every push) silently made the gate report \
+         green. It must be fully replaced by an invocation of \
+         `scripts/check-ci-gate.sh`, not kept alongside it.\n\
          Current ci-gate block:\n{gate_block}"
     );
 
     assert!(
-        gate_block.contains("'failure'"),
-        "FAIL (RED GATE): The `ci-gate` job block does not contain `'failure'`.\n\
-         Required: the gate step must check \
-         `contains(needs.*.result, 'failure')` so that a failed upstream causes \
-         `ci-gate` to fail (not be skipped).\n\
-         Current ci-gate block:\n{gate_block}"
-    );
-
-    assert!(
-        gate_block.contains("'cancelled'"),
-        "FAIL (RED GATE): The `ci-gate` job block does not contain `'cancelled'`.\n\
-         Required: the gate step must check \
-         `contains(needs.*.result, 'cancelled')` so that a cancelled upstream \
-         causes `ci-gate` to fail.\n\
+        gate_block.contains("check-ci-gate.sh"),
+        "FAIL (S-CIGATE-2 AC-002): The `ci-gate` job block does not invoke \
+         `scripts/check-ci-gate.sh`, which now performs the \
+         failure/cancelled/skipped decision that the retired inline \
+         condition used to perform directly in YAML.\n\
          Current ci-gate block:\n{gate_block}"
     );
 }
@@ -514,14 +539,19 @@ fn test_ci_gate_fails_on_failed_or_cancelled_need() {
 /// Rationale: the existing exact-set test (`test_ci_gate_needs_exactly_the_required_jobs`)
 /// pins WHICH jobs are in `needs`, but not that those jobs run unconditionally.
 /// If a future maintainer adds `if: github.event_name == 'pull_request'` to
-/// e.g. `deny`, the gate would silently pass on push events (deny → skipped →
-/// not 'failure').  This is the exact drift vector EC-002 claims to prevent.
+/// e.g. `deny` WITHOUT also adding it to `scripts/check-ci-gate.sh`'s
+/// `ALLOWED_SKIPS`, the gate correctly starts FAILING deny's push-event runs
+/// (S-CIGATE-2 fail-closed default) rather than silently passing — but this
+/// test still exists to catch the drift at review time, before a maintainer
+/// is surprised by a newly-red gate.
 ///
 /// `mutants` is intentionally excluded from this list: it carries
 /// `if: github.event_name == 'pull_request'` by design (PR-only scope),
-/// emits `skipped` on push events, and the ci-gate condition checks `failure`
-/// or `cancelled` only — so `skipped` is safe.  The `test_mutants_is_in_ci_gate_needs`
-/// test pins that `mutants` remains in `ci-gate.needs`.
+/// emits `skipped` on push events, and is named in
+/// `scripts/check-ci-gate.sh`'s restrictive `ALLOWED_SKIPS` allowlist — so
+/// its `skipped` result is tolerated deliberately, not by accident.  The
+/// `test_mutants_is_in_ci_gate_needs` test pins that `mutants` remains in
+/// `ci-gate.needs`.
 ///
 /// Job-level `if:` lines are at 4-space indent immediately under the job key
 /// (e.g. `    if: github.event_name == 'pull_request'`).  Step-level `if:`
@@ -592,30 +622,43 @@ fn test_ci_gate_needs_jobs_have_no_event_conditional_if() {
 // M2 — pass/fail semantics are structurally placed correctly
 // ---------------------------------------------------------------------------
 
-/// M2: Pin the structural placement of `always()` (job-level) and
-/// `contains(needs.*.result, …)` (step-level) so they cannot be accidentally
-/// transposed by a future maintainer.
+/// M2 (retargeted, S-CIGATE-2): Pin the structural placement of `always()`
+/// (job-level, unchanged) and the failure decision (now delegated to
+/// `scripts/check-ci-gate.sh` via an unconditional `run:` step, rather than
+/// a step-level `if:` gating a bare `exit 1`).
 ///
-/// The correct shape is:
+/// The correct shape (Option C) is:
 ///
 /// ```yaml
 ///   ci-gate:
 ///     if: ${{ always() }}          ← job-level: must have always(), must NOT
 ///     steps:                           have contains(needs
 ///       - name: …
-///         if: >-                   ← step-level: must have contains(needs.*.result,
-///           ${{ contains(…) }}         'failure') and contains(…, 'cancelled')
-///         run: exit 1              ← a run: step must be present
+///         env:
+///           NEEDS_JSON: ${{ toJSON(needs) }}
+///         run: echo "${NEEDS_JSON}" | bash scripts/check-ci-gate.sh
+///                                  ← the script's own exit code is the
+///                                     pass/fail signal; no step-level `if:`
+///                                     gates it
 /// ```
 ///
-/// If `always()` were moved to the step-level `if:` and `contains(needs…)` to
-/// the job-level `if:`, the job would run only when needs fail (breaking the
-/// intended pass path) or the job would be skipped silently when needs fail
-/// (reopening the skipped-job trap).
+/// Before S-CIGATE-2, the failure/cancelled decision lived in a step-level
+/// `if: contains(needs.*.result, 'failure') || contains(needs.*.result,
+/// 'cancelled')` gating a bare `run: exit 1` — the retired condition that
+/// let `skipped` (satisfying neither `contains()` call) silently pass. Under
+/// Option C, `scripts/check-ci-gate.sh`'s `evaluate_needs()` makes that
+/// decision internally (see the script's own `--self-test` fixture suite)
+/// and communicates it via its own exit code from an unconditional `run:`
+/// step — there is no longer a step-level `if:` to transpose with the
+/// job-level `always()`.
+///
+/// If `always()` were removed from the job level (or a step-level `if:` were
+/// reintroduced to gate the `check-ci-gate.sh` invocation), the job could be
+/// skipped silently when needs fail (reopening the skipped-job trap) or the
+/// gate script could stop running on some upstream results.
 ///
 /// Distinction technique: job-level `if:` lines start with exactly 4 spaces
-/// (not 8+) and are not inside a `steps:` block.  Step-level `if:` lines are
-/// inside `steps:` and start with 8 spaces (within a list item).
+/// (not 8+) and are not inside a `steps:` block.
 #[test]
 fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
     let ci = read_ci_yml();
@@ -687,87 +730,38 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
     );
 
     // -----------------------------------------------------------------------
-    // Assertion 2: A step-level `if:` contains the failure/cancelled checks.
-    //
-    // "Step-level" means the `if:` key is inside the `steps:` block,
-    // indented 8 spaces (within a list item under steps:).  We accept any
-    // line starting with 8 spaces that begins with "if:" (after trimming).
+    // Assertion 2 (retargeted, S-CIGATE-2): NO step-level `if:` gates the
+    // gate-check invocation. Before this story, a step-level
+    // `if: contains(needs.*.result, 'failure') || contains(needs.*.result,
+    // 'cancelled')` decided whether to run a bare `exit 1` — that condition
+    // is exactly what let `skipped` (satisfying neither `contains()` call)
+    // pass through silently. Under Option C, `scripts/check-ci-gate.sh`
+    // makes the decision internally and signals pass/fail via its own exit
+    // code from an UNCONDITIONAL `run:` step — reintroducing a step-level
+    // `if:` here would mean some upstream results no longer even reach the
+    // script.
     // -----------------------------------------------------------------------
-    let mut step_if_lines: Vec<&str> = Vec::new();
-    let mut past_steps = false;
-    // Collect all step-level if: lines (8-space indent, or inside the
-    // block-scalar continuation of such a line).
-    // We gather the entire gate block after the `steps:` marker.
-    for line in gate_block.lines() {
-        if line.trim_start() == "steps:" {
-            past_steps = true;
-        }
-        if past_steps && line.starts_with("        if:") {
-            step_if_lines.push(line);
-        }
-    }
-
-    // Also capture block-scalar continuation lines (they follow the `if: >-`
-    // line and contain the actual condition expression).
-    let gate_lines: Vec<&str> = gate_block.lines().collect();
-    let mut all_step_if_content = String::new();
-    let mut in_step_if_block = false;
-    let mut step_if_indent = 0usize;
-    for line in &gate_lines {
-        let stripped = line.trim_end();
-        if stripped.starts_with("        if:") {
-            in_step_if_block = true;
-            step_if_indent = 8;
-            all_step_if_content.push_str(stripped);
-            all_step_if_content.push('\n');
-            continue;
-        }
-        if in_step_if_block {
-            // Continuation lines are indented MORE than the `if:` line.
-            let leading = stripped.len() - stripped.trim_start().len();
-            if leading > step_if_indent && !stripped.trim().is_empty() {
-                all_step_if_content.push_str(stripped);
-                all_step_if_content.push('\n');
-            } else {
-                in_step_if_block = false;
-            }
-        }
-    }
+    let has_step_level_if = gate_block.lines().any(|l| l.starts_with("        if:"));
 
     assert!(
-        all_step_if_content.contains("contains(needs.*.result")
-            || step_if_lines
-                .iter()
-                .any(|l| l.contains("contains(needs.*.result")),
-        "FAIL (M2-d): No step-level `if:` in `ci-gate` contains \
-         `contains(needs.*.result`.\n\
-         The failure/cancelled check must live on a STEP-level `if:` \
-         (inside `steps:`), not the job-level `if:`.\n\
-         Step-level if: lines found: {step_if_lines:?}\n\
-         Current ci-gate block:\n{gate_block}"
-    );
-
-    assert!(
-        all_step_if_content.contains("'failure'"),
-        "FAIL (M2-e): The step-level `if:` in `ci-gate` does not check for \
-         `'failure'`.\n\
-         Step-level if content collected:\n{all_step_if_content}\n\
-         Current ci-gate block:\n{gate_block}"
-    );
-
-    assert!(
-        all_step_if_content.contains("'cancelled'"),
-        "FAIL (M2-f): The step-level `if:` in `ci-gate` does not check for \
-         `'cancelled'`.\n\
-         Step-level if content collected:\n{all_step_if_content}\n\
+        !has_step_level_if,
+        "FAIL (M2-d, S-CIGATE-2): The `ci-gate` job block contains a \
+         step-level `if:`. Under Option C, `scripts/check-ci-gate.sh` is \
+         invoked unconditionally and its own exit code IS the pass/fail \
+         signal — no step-level `if:` should gate that invocation (a \
+         reintroduced `if:` here would mean some upstream results never \
+         even reach the script).\n\
          Current ci-gate block:\n{gate_block}"
     );
 
     // -----------------------------------------------------------------------
-    // Assertion 3: A `run:` step exists in the ci-gate block.
-    //
-    // The gate must execute something that can fail.  Without a `run:` step,
-    // the entire job would trivially succeed on any upstream result.
+    // Assertion 3: A `run:` step invoking `scripts/check-ci-gate.sh` exists
+    // in the ci-gate block, fed `toJSON(needs)`. The gate must execute
+    // something that can fail; without this the job would trivially
+    // succeed for every upstream result. (Overlaps in part with
+    // `test_ci_gate_step_invokes_check_ci_gate_script_with_needs_json`
+    // (AC-001) — kept here too so this test's own M2 structural-placement
+    // story remains self-contained.)
     // -----------------------------------------------------------------------
     let has_run_step = gate_block
         .lines()
@@ -776,10 +770,18 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
     assert!(
         has_run_step,
         "FAIL (M2-g): The `ci-gate` job block contains no `run:` step.\n\
-         The gate must have a `run: exit 1` (or equivalent) step that \
-         actually fails the job when the step-level `if:` condition is met.\n\
+         The gate must have a `run:` step that actually invokes \
+         `scripts/check-ci-gate.sh` and fails the job via that script's \
+         exit code.\n\
          Without a `run:` step the job trivially succeeds for every upstream \
          result.\n\
+         Current ci-gate block:\n{gate_block}"
+    );
+
+    assert!(
+        gate_block.contains("check-ci-gate.sh") && gate_block.contains("toJSON(needs)"),
+        "FAIL (M2-h, S-CIGATE-2): The `ci-gate` job block's `run:` step \
+         does not invoke `scripts/check-ci-gate.sh` fed `toJSON(needs)`.\n\
          Current ci-gate block:\n{gate_block}"
     );
 }

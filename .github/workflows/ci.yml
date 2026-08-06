@@ -141,6 +141,9 @@ jobs:
       - name: check-bc-citation-symbols (BC-CITE-001)
         run: bash scripts/check-bc-citation-symbols.sh
 
+      - name: check-ci-gate self-test (fixture suite, S-CIGATE-2)
+        run: bash scripts/check-ci-gate.sh --self-test
+
   security:
     name: Secret Scan (gitleaks)
     runs-on: ubuntu-latest
@@ -438,8 +441,14 @@ jobs:
     needs: [fmt, clippy, test, msrv, deny, spec-guard, check-signing-workflow-injection, mutants]
     if: ${{ always() }}
     steps:
-      - name: Fail if any required job failed or was cancelled
-        if: >-
-          ${{ contains(needs.*.result, 'failure') ||
-              contains(needs.*.result, 'cancelled') }}
-        run: exit 1
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Evaluate required job results (S-CIGATE-2, fail-closed)
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: echo "${NEEDS_JSON}" | bash scripts/check-ci-gate.sh
