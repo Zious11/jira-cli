@@ -1390,36 +1390,71 @@ fn extract_and_normalize_if_expr(job_block: &str) -> Result<Option<String>, Stri
 /// object) — not `result` alone. Every job named in `skipped_jobs` reports
 /// `skipped` for `result`; every other job reports `success`.
 ///
-/// SOURCE (PR #671 review round 8 — corrects a round-7 error): per
-/// GitHub's contexts reference
+/// SOURCE (PR #671 review round 8 — corrects a round-7 error; round 9
+/// added two more independent confirmations plus a correction to the
+/// record below): per GitHub's contexts reference
 /// (<https://docs.github.com/en/actions/learn-github-actions/contexts>,
-/// "needs context"), `needs.<job_id>` has EXACTLY two properties:
-/// `result` and `outputs`. There is no `outcome` on `needs` — `outcome`
-/// belongs solely to the STEPS context (`steps.<step_id>.outcome`,
-/// "result of a completed step before `continue-on-error` is applied"),
-/// a per-step concept with no job-level analog. Round 7 modeled this
-/// payload as `result`+`outputs`+`outcome`, sourced from an earlier
-/// fixture's unverified "realistic shape" comment that nobody checked
-/// against the docs before three more rounds cited and built on it. That
-/// phantom field was worse than merely redundant: because every fixture
-/// and payload had `outcome` while production payloads never do, a
-/// mutation keyed on `outcome`'s ABSENCE (or exact field-set matching)
-/// would pass every test here — because the test always supplied the
-/// field — while tolerating everything in production, where the field
-/// never appears. Reproduced end-to-end (round 8): the inverted mutation
-/// `! echo "${json}" | jq -e ... 'has("outcome")'` passed `--self-test`
-/// (13/13) and `cargo test` (all green) under the round-7 shape, while
-/// accepting any skip in a live gate run (which never has `outcome`).
+/// "needs context" — also independently confirmed against the raw
+/// `github/docs` source, `content/actions/reference/workflows-and-actions/
+/// contexts.md`, whose `needs` table has exactly five rows and no
+/// `outcome` row; that file path is the more durable of the two citations,
+/// since the rendered URL can be restructured across a docs-site redesign
+/// while the source repo path is versioned), `needs.<job_id>` has EXACTLY
+/// two properties: `result` and `outputs`. There is no `outcome` on
+/// `needs` — `outcome` belongs solely to the STEPS context
+/// (`steps.<step_id>.outcome`, "result of a completed step before
+/// `continue-on-error` is applied"), a per-step concept with no job-level
+/// analog. Round 7 modeled this payload as `result`+`outputs`+`outcome`,
+/// sourced from an earlier fixture's unverified "realistic shape" comment
+/// that nobody checked against the docs before three more rounds cited and
+/// built on it.
 ///
-/// CRITICAL-3 (PR #671 review round 7, still valid after the `outcome`
-/// correction): the ORIGINAL prior-round single-field
-/// `{"job":{"result":"..."}}` shape, used everywhere in this test before
-/// round 7, never exercised any codepath keying on a sibling field at
-/// all — a mutation tolerating any skipped job carrying an `outputs` key
-/// (i.e. every real job, since `outputs` is always present) passed every
-/// payload this test built before round 7. `outputs` is genuinely part of
-/// the real shape (see SOURCE above) and stays modeled here; `outcome`
-/// does not exist on `needs` and has been removed.
+/// CORRECTED RECORD (round 9 — round 8's own report of its RED proof was
+/// itself imprecise about which guard caught what): that phantom `outcome`
+/// field was worse than merely redundant — because every fixture and
+/// payload had it while production payloads never do, a mutation keyed on
+/// its ABSENCE could diverge between test and production. But the SPECIFIC
+/// single-conjunct mutation round 8 reproduced,
+/// `is_allowed_skip || !has("outcome")`, was only HALF-lethal under the
+/// round-7 shape: reproduced fresh (round 9, against the actual round-7
+/// commit's fixtures and payload builder in isolation) it defeated
+/// `cargo test` completely (stayed 13/13 green) but was still CAUGHT by
+/// `--self-test` (11/13 — both the minimal `result`-only
+/// `unlisted-job-skipped` fixture and the then-`outcome`-carrying
+/// `unlisted-job-skipped-full-production-shape` fixture independently
+/// flagged it), because bash's own fixtures were not uniformly
+/// `outcome`-carrying the way every Rust-side payload was. Round 8's
+/// original report described this as caught by "neither" guard fully
+/// fooled — that was wrong in the self-test direction; it should have
+/// read "cargo test only." The mutation that actually matters — the one
+/// GitHub Actions review round 7 identified as truly production-shape-
+/// exact — is the TWO-CONJUNCT form: `has("outputs") and (has("outcome")
+/// | not)`. Reproduced (round 9, against the true round-7 commit): this
+/// form defeats BOTH `--self-test` (13/13) AND `cargo test` (13/13)
+/// completely, because it evaluates to `true` for every job in every
+/// round-7 fixture/payload (all of which carry both `outputs` and
+/// `outcome`) exactly as it does for a real, unlisted skipped job in
+/// production (which carries `outputs` but never `outcome`) — a live gate
+/// run on `{"fmt":{"result":"skipped","outputs":{}}}` returns rc=0 under
+/// this mutation. Reproduced again against the CURRENT (round 8+)
+/// `outputs`-only shape: this same two-conjunct mutation is caught by both
+/// guards (`--self-test` 12/13, `cargo test` 12 passed/2 failed) — the
+/// CRITICAL this shape correction closes is real and confirmed closed.
+///
+/// CRITICAL-3 (PR #671 review round 7 — corrected attribution, round 9):
+/// the ORIGINAL prior-round single-field `{"job":{"result":"..."}}` shape,
+/// used everywhere in this test before round 7, never exercised any
+/// codepath keying on a sibling field at all — a mutation tolerating any
+/// skipped job carrying an `outputs` key (i.e. every real job, since
+/// `outputs` is always present) passed every payload this test built
+/// before round 7 (reproduced: exploitable under commit `eb6e4551`'s
+/// `result`-only payloads). Round 7's STATED rationale for its fix chased
+/// the phantom `outcome` field described above — chasing the wrong
+/// diagnosis — but its ACTUAL code change (fixture 13 plus modeling
+/// `outputs` in every payload) closed this real, live hole regardless:
+/// right fix, wrong stated reason. `outputs` is genuinely part of the real
+/// shape (see SOURCE above) and stays modeled here; `outcome` does not
+/// exist on `needs` and has been removed (round 8).
 ///
 /// Also used to cover the realistic PRODUCTION case that every actual push
 /// already has: `mutants` is essentially always `skipped` alongside
@@ -1610,22 +1645,45 @@ fn run_check_ci_gate_sh(json_payload: &str) -> std::process::Output {
 /// `build_multi_skip_payload`'s doc comment — and is superseded by round
 /// 8's finding below.
 ///
-/// Proven RED (round 8, sha256-verified byte-identical restores): the
-/// INVERTED mutation this false premise actually opened,
+/// Proven RED (round 8, sha256-verified byte-identical restores; CORRECTED
+/// round 9 — see below): the single-conjunct INVERTED mutation,
 /// `is_allowed_skip "${job}" || ! echo "${json}" | jq -e --arg j "${job}"
-/// '.[$j] | has("outcome")'` — under the round-7 shape (every payload
-/// carries a phantom `outcome`) this passed `--self-test` (13/13) and
-/// `cargo test` (all green) while tolerating every skip in a live gate
-/// run, since real `needs` entries never carry `outcome`. Under the
-/// round-8 corrected shape (`outputs` only, no `outcome`), this same
-/// mutated line is inert — `has("outcome")` is always `false` for both
-/// test payloads and production, so the mutation can no longer
-/// distinguish anything and every fixture/test still catches it via the
-/// unchanged `is_allowed_skip` half. Also re-verified RED: `has("outputs")`
-/// (tolerates any skipped job, since `outputs` IS always present —
-/// CRITICAL-3 original, still exploitable and still caught). Also
-/// re-confirmed RED (unchanged from rounds 3/5/6): mutations A and B, all
-/// four round-2 `+=`-form bypasses, and the four round-5/6 bypasses
+/// '.[$j] | has("outcome")'`, tolerates every skip in a live gate run,
+/// since real `needs` entries never carry `outcome`. Under the round-8
+/// corrected shape (`outputs` only, no `outcome`), this same mutated line
+/// is inert — `has("outcome")` is always `false` for both test payloads
+/// and production, so the mutation can no longer distinguish anything and
+/// every fixture/test still catches it via the unchanged `is_allowed_skip`
+/// half. Also re-verified RED: `has("outputs")` (tolerates any skipped
+/// job, since `outputs` IS always present — CRITICAL-3 original, still
+/// exploitable and still caught).
+///
+/// CORRECTED (round 9): round 8's report of this proof claimed the
+/// single-conjunct inverted mutation "passed `--self-test` (13/13) and
+/// `cargo test` (all green)" under the round-7 shape. Re-reproduced
+/// (round 9) against the actual round-7 commit in isolation: `cargo test`
+/// DID stay 13/13 green, but `--self-test` did NOT — it dropped to 11/13,
+/// with BOTH the minimal `unlisted-job-skipped` fixture (`result`-only,
+/// no `outcome` key, so `!has("outcome")` was already `true` there
+/// independent of any shape question) and
+/// `unlisted-job-skipped-full-production-shape` correctly flagging the
+/// mismatch. The claim should have read "cargo test only" — self-test was
+/// only ever half-fooled, not fully. The mutation that IS fully lethal
+/// under the round-7 shape (defeats BOTH guards completely, and matches
+/// production exactly) is the TWO-CONJUNCT form review round 7 actually
+/// identified: `has("outputs") and (has("outcome") | not)`. Reproduced
+/// (round 9) against the true round-7 commit: `--self-test` 13/13,
+/// `cargo test` 13/13, live gate rc=0 on
+/// `{"fmt":{"result":"skipped","outputs":{}}}` — full false-green.
+/// Reproduced again against the CURRENT (`outputs`-only, post-round-8)
+/// shape: this same two-conjunct mutation is now caught by both guards
+/// (`--self-test` 12/13, `cargo test` 12 passed / 2 failed) — the CRITICAL
+/// this round's shape correction was meant to close is confirmed closed
+/// against the mutation that actually mattered, not just the half-lethal
+/// one originally reported.
+///
+/// Also re-confirmed RED (unchanged from rounds 3/5/6): mutations A and B,
+/// all four round-2 `+=`-form bypasses, and the four round-5/6 bypasses
 /// (trailing-comment no-op, bare `always()`, permanently-false
 /// `github.ref`, `always() || github.ref`). The legitimate `mutants` case
 /// still passes (positive branch, exit 0, both payload variants).
