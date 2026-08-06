@@ -36,6 +36,41 @@
 //!   test_ci_gate_fails_on_failed_or_cancelled_need           → AC-002
 //!   test_ci_gate_needs_jobs_have_no_event_conditional_if     → EC-002 (M1)
 //!   test_ci_gate_pass_fail_semantics_are_structurally_placed → AC-001/AC-002 (M2)
+//!
+//! S-CIGATE-2 ADDENDUM (2026-08-06) — skipped-status false-green fix:
+//!
+//! The doc-comment bullet above reading "the ci-gate pass condition checks
+//! for `failure` or `cancelled` only — `skipped` is neither, so ci-gate
+//! passes on push events. This is the correct behavior per DEC-096/097 and
+//! delta-analysis §5" describes the DEFECT this story fixes, not correct
+//! behavior. `skipped` satisfying neither `contains()` call is exactly how
+//! a job that never ran (e.g. `mutants` on every push, by design) silently
+//! makes the sole required branch-protection check report green without
+//! that job having run at all — confirmed reachable on every push via live
+//! CI run 30465686049 (`gh run view 30465686049 --json jobs`: `Mutation
+//! testing` concluded `skipped`, `CI Gate` concluded `success`).
+//!
+//! Under Option C (human-approved fix; Options A and B were both rejected —
+//! see `.factory/stories/S-CIGATE-2-skipped-status-false-green.md`), the
+//! gate's decision logic moves from this file's inline
+//! `contains(needs.*.result, 'failure') || contains(needs.*.result,
+//! 'cancelled')` condition into `scripts/check-ci-gate.sh`, invoked with
+//! `toJSON(needs)`. `mutants` reporting `skipped` on push is tolerated ONLY
+//! because it is named in that script's restrictive `ALLOWED_SKIPS`
+//! allowlist (which still fails the gate on `failure`/`cancelled` for that
+//! same job) — not because the gate's condition happens not to catch it.
+//! Any other job's `skipped` result, or any result value the script has
+//! never seen before, fails the gate by default.
+//!
+//! New test coverage (→ S-CIGATE-2 AC):
+//!   test_ci_gate_step_invokes_check_ci_gate_script_with_needs_json → AC-001
+//!   test_spec_guard_contains_check_ci_gate_self_test_step          → AC-008
+//!   test_mutants_job_structure_unchanged_by_cigate2_option_c       → AC-006
+//!
+//! RED GATE (S-CIGATE-2, 2026-08-06): the two AC-001/AC-008 tests above FAIL
+//! against the pre-fix `ci.yml` (still on the retired inline condition, with
+//! no `check-ci-gate.sh` wiring anywhere). This is proven and recorded in
+//! this story's Red Gate report — see the commit introducing this addendum.
 
 use std::collections::HashSet;
 use std::fs;
@@ -746,5 +781,251 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
          Without a `run:` step the job trivially succeeds for every upstream \
          result.\n\
          Current ci-gate block:\n{gate_block}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// S-CIGATE-2 AC-001 — ci-gate's step invokes scripts/check-ci-gate.sh
+// ---------------------------------------------------------------------------
+
+/// S-CIGATE-2 AC-001: `ci-gate`'s step must invoke `scripts/check-ci-gate.sh`,
+/// fed the serialized `needs` context via `toJSON(needs)`, replacing the
+/// retired inline `contains(needs.*.result, ...)` condition. Option C
+/// (human-approved; Options A and B rejected — see
+/// `.factory/stories/S-CIGATE-2-skipped-status-false-green.md`) keeps
+/// `if: ${{ always() }}` at the job level, unchanged — only the step body
+/// changes.
+///
+/// This closes the exact gap the pre-fix `ci-gate` condition has: `skipped`
+/// satisfies neither `contains(needs.*.result, 'failure')` nor
+/// `contains(needs.*.result, 'cancelled')`, so a job that never ran (e.g.
+/// `mutants` on every push) silently makes the gate report green. Under
+/// Option C, the decision moves into `scripts/check-ci-gate.sh`, which
+/// fails closed by default and tolerates `skipped` only for jobs named in
+/// its restrictive `ALLOWED_SKIPS` allowlist.
+///
+/// RED GATE (S-CIGATE-2, 2026-08-06): as of this commit, `ci-gate`'s step
+/// still uses the retired inline `contains(needs.*.result, ...)` condition
+/// and does not invoke `check-ci-gate.sh` anywhere — this test FAILS until
+/// the Green phase implements AC-001. Proven RED locally: `cargo test
+/// --test ci_gate_completeness
+/// test_ci_gate_step_invokes_check_ci_gate_script_with_needs_json` fails
+/// with the diagnostic below, naming exactly what's missing.
+///
+/// Anchoring: assertion is made only within the `ci-gate` job block.
+#[test]
+fn test_ci_gate_step_invokes_check_ci_gate_script_with_needs_json() {
+    let ci = read_ci_yml();
+    let gate_block = extract_job_block(&ci, "ci-gate").unwrap_or_else(|| {
+        panic!(
+            "FAIL: `.github/workflows/ci.yml` does not contain a \
+             `ci-gate:` job."
+        )
+    });
+
+    assert!(
+        gate_block.contains("check-ci-gate.sh"),
+        "FAIL (RED GATE, S-CIGATE-2 AC-001): The `ci-gate` job block does \
+         not invoke `scripts/check-ci-gate.sh`.\n\
+         Required: the gate step's `run:` body must call \
+         `scripts/check-ci-gate.sh`, fed `toJSON(needs)` (Option C — see \
+         `.factory/stories/S-CIGATE-2-skipped-status-false-green.md`).\n\
+         Current ci-gate block:\n{gate_block}"
+    );
+
+    assert!(
+        gate_block.contains("toJSON(needs)"),
+        "FAIL (RED GATE, S-CIGATE-2 AC-001): The `ci-gate` job block does \
+         not serialize the `needs` context via `toJSON(needs)`.\n\
+         Required: pass `toJSON(needs)` to `scripts/check-ci-gate.sh` (as \
+         an environment variable, a piped stdin payload, or a temp-file \
+         argument).\n\
+         Current ci-gate block:\n{gate_block}"
+    );
+
+    // The job-level `if: always()` must remain — Option C does not change
+    // this pre-existing S-CIGATE-1 invariant, only the step body.
+    assert!(
+        gate_block.lines().any(|l| {
+            let t = l.trim();
+            t.starts_with("if:") && t.contains("always()")
+        }),
+        "FAIL (S-CIGATE-2 AC-001): The `ci-gate` job-level `if: always()` \
+         is missing. Option C retains `if: ${{{{ always() }}}}` at job \
+         level — only the step body is replaced with an invocation of \
+         `scripts/check-ci-gate.sh`.\n\
+         Current ci-gate block:\n{gate_block}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// S-CIGATE-2 AC-008 — spec-guard runs check-ci-gate.sh --self-test
+// ---------------------------------------------------------------------------
+
+/// S-CIGATE-2 AC-008: `spec-guard` must gain a step running
+/// `bash scripts/check-ci-gate.sh --self-test`, positioned consistently
+/// with the existing self-test-then-real-check pairing already used in that
+/// job for `check-cargo-mutants-policy-citations.sh` and
+/// `check-bc-citation-symbols.sh`. The self-test must NOT be wired into
+/// `ci-gate` itself: a gate cannot depend on a job that depends on it, and
+/// `ci-gate` has no other steps to host a self-test alongside the real gate
+/// check it performs against the actual `needs` payload for that run.
+///
+/// RED GATE (S-CIGATE-2, 2026-08-06): `spec-guard` does not yet contain a
+/// `check-ci-gate.sh --self-test` step — this test FAILS until the Green
+/// phase implements AC-008. Proven RED locally: `cargo test --test
+/// ci_gate_completeness
+/// test_spec_guard_contains_check_ci_gate_self_test_step` fails with the
+/// diagnostic below.
+///
+/// Anchoring: assertions are made only within the `spec-guard` and
+/// `ci-gate` job blocks respectively.
+#[test]
+fn test_spec_guard_contains_check_ci_gate_self_test_step() {
+    let ci = read_ci_yml();
+    let spec_guard_block = extract_job_block(&ci, "spec-guard").unwrap_or_else(|| {
+        panic!("FAIL: `.github/workflows/ci.yml` does not contain a `spec-guard:` job.")
+    });
+
+    assert!(
+        spec_guard_block.contains("check-ci-gate.sh") && spec_guard_block.contains("--self-test"),
+        "FAIL (RED GATE, S-CIGATE-2 AC-008): `spec-guard` does not contain \
+         a step running `scripts/check-ci-gate.sh --self-test`.\n\
+         Required: add a step mirroring the existing self-test pairing \
+         pattern already used in this job for \
+         `check-cargo-mutants-policy-citations.sh --self-test` and \
+         `check-bc-citation-symbols.sh --self-test`.\n\
+         Current spec-guard block:\n{spec_guard_block}"
+    );
+
+    // The self-test must NOT be wired into ci-gate itself — structurally
+    // impossible/circular (a gate cannot depend on a job that depends on
+    // it). This distinguishes the real gate check (against the actual
+    // `needs` payload) from the fixture suite.
+    let gate_block = extract_job_block(&ci, "ci-gate").unwrap_or_default();
+    assert!(
+        !gate_block.contains("--self-test"),
+        "FAIL (S-CIGATE-2 AC-008): `ci-gate` itself contains a \
+         `--self-test` invocation. The self-test must live in \
+         `spec-guard`, not `ci-gate` (a gate cannot depend on a job that \
+         depends on it, and `ci-gate` has no other steps to host it \
+         alongside the real gate check).\n\
+         Current ci-gate block:\n{gate_block}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// S-CIGATE-2 AC-006 — `mutants` job structure pinned (Option C drift guard)
+// ---------------------------------------------------------------------------
+
+/// S-CIGATE-2 AC-006: Option C's defining constraint is that the `mutants`
+/// job is left entirely UNCHANGED by this story — no NEW step-level `if:`
+/// guards are added to any of its six steps. (The rejected Option B would
+/// have required exactly that: step-level `if:` guards on five of the six
+/// steps, plus a new branch in `Check kill rate`.) This test pins the six
+/// step identifiers, the job-level `if: github.event_name ==
+/// 'pull_request'` guard, and the single pre-existing step-level `if:
+/// always()` on `Check kill rate` — so that a mid-implementation drift
+/// toward Option B (adding a step-level `if:` to any of the OTHER five
+/// steps) is caught by CI, not just by a manual PR-description diff check.
+///
+/// This is a content-checking pin (not a bare "unchanged" assertion) per
+/// this repo's naming-convention carve-out precedent (S-626-1): it asserts
+/// the specific structural facts Option C's "mutants is unchanged" claim
+/// depends on, not merely that some arbitrary text is stable.
+///
+/// Not expected to be RED at Red Gate time: `mutants` has not yet been
+/// touched by S-CIGATE-2's Green phase. This is a preventive pin exercised
+/// throughout the implementation, not a Red Gate assertion for this
+/// story's own fix (contrast with the two tests above, which target AC-001
+/// and AC-008 directly and ARE proven RED now).
+///
+/// Anchoring: assertion is made only within the `mutants` job block.
+#[test]
+fn test_mutants_job_structure_unchanged_by_cigate2_option_c() {
+    let ci = read_ci_yml();
+    let mutants_block = extract_job_block(&ci, "mutants").unwrap_or_else(|| {
+        panic!("FAIL: `.github/workflows/ci.yml` does not contain a `mutants:` job.")
+    });
+
+    // Job-level if: unchanged — PR-only scope, the exact fact
+    // `scripts/check-ci-gate.sh`'s `ALLOWED_SKIPS` allowlist is built to
+    // tolerate (mutants reports `skipped` on push BECAUSE of this guard).
+    assert!(
+        mutants_block.lines().any(|l| {
+            let t = l.trim_start();
+            t.starts_with("if:") && t.contains("github.event_name == 'pull_request'")
+        }),
+        "FAIL (S-CIGATE-2 AC-006): `mutants`'s job-level `if: \
+         github.event_name == 'pull_request'` guard is missing or was \
+         changed. Option C leaves the `mutants` job entirely UNCHANGED — \
+         this guard (and the fact that `mutants` therefore reports \
+         `skipped` on push) is exactly what `scripts/check-ci-gate.sh`'s \
+         `ALLOWED_SKIPS` allowlist is built to tolerate.\n\
+         Current mutants block:\n{mutants_block}"
+    );
+
+    // All six steps present, unchanged (Option C's principal advantage
+    // over the rejected Option B).
+    let required_step_names = [
+        "Harden the runner (Audit all outbound calls)",
+        "Run mutation tests on PR diff",
+        "Check kill rate",
+    ];
+    for step_name in &required_step_names {
+        assert!(
+            mutants_block.contains(step_name),
+            "FAIL (S-CIGATE-2 AC-006): `mutants` is missing expected step \
+             `{step_name}`. Option C requires the `mutants` job to remain \
+             unchanged.\n\
+             Current mutants block:\n{mutants_block}"
+        );
+    }
+    let required_uses_prefixes = [
+        "uses: actions/checkout@",
+        "uses: taiki-e/install-action@",
+        "uses: Swatinem/rust-cache@",
+    ];
+    for prefix in &required_uses_prefixes {
+        assert!(
+            mutants_block.contains(prefix),
+            "FAIL (S-CIGATE-2 AC-006): `mutants` is missing an expected \
+             step using `{prefix}`. Option C requires the `mutants` job to \
+             remain unchanged (no steps added, removed, or reordered).\n\
+             Current mutants block:\n{mutants_block}"
+        );
+    }
+
+    // Exactly one step-level `if:` (8-space indent) must exist in the
+    // block — the pre-existing `if: always()` on `Check kill rate`. A NEW
+    // step-level `if:` on any of the other five steps would be the
+    // rejected Option B's signature edit (moving PR-only gating from job
+    // level down to individual steps).
+    let step_if_lines: Vec<&str> = mutants_block
+        .lines()
+        .filter(|l| l.starts_with("        if:"))
+        .collect();
+
+    assert_eq!(
+        step_if_lines.len(),
+        1,
+        "FAIL (S-CIGATE-2 AC-006): expected exactly one step-level `if:` \
+         in `mutants` (the pre-existing `if: always()` on `Check kill \
+         rate`). Found {}: {:?}\n\
+         A NEW step-level `if:` on any of the other five steps (Harden the \
+         runner, checkout, install-action, rust-cache, Run mutation tests \
+         on PR diff) would be the rejected Option B's signature edit — \
+         Option C requires `mutants` to remain entirely unchanged.\n\
+         Current mutants block:\n{mutants_block}",
+        step_if_lines.len(),
+        step_if_lines
+    );
+
+    assert!(
+        step_if_lines[0].contains("always()"),
+        "FAIL (S-CIGATE-2 AC-006): the sole step-level `if:` in `mutants` \
+         no longer reads `if: always()` (found: {:?}).\n\
+         Current mutants block:\n{mutants_block}",
+        step_if_lines[0]
     );
 }
