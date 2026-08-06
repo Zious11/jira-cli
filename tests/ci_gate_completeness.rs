@@ -1903,9 +1903,18 @@ fn extract_and_normalize_sole_run_line(job_block: &str) -> Result<String, String
 
     if run_line_indices.is_empty() {
         return Err(
-            "has no step-level `run:` line at all — the gate must execute \
-             something that can fail; without one, the job trivially \
-             succeeds for every upstream result."
+            "has no step-level `run:` line matching this check's expected \
+             8-space indent — the gate must execute something that can \
+             fail; without one, the job trivially succeeds for every \
+             upstream result. NOTE (PR #671 review round 13, benign-false- \
+             red message fix, same class as M2-g's above): if a `run:` \
+             line genuinely exists but at an unexpected POSITION (e.g. a \
+             legal re-indent of the whole step's child block), this check \
+             cannot tell \"missing\" apart from \"moved\" — `run:` is not \
+             necessarily missing, it may simply be in an unrecognized \
+             POSITION. See M2-l (step key SETS, order- and indent-\
+             independent) for the check that still confirms the step \
+             itself is intact in that case."
                 .to_string(),
         );
     }
