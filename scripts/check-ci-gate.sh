@@ -105,17 +105,34 @@ bash -n "${BASH_SOURCE[0]}"
 # STRICTLY WEAKER than the retired inline condition it replaced — the
 # mirror image of the false-green defect this script exists to fix.
 #
-# The actual enforcement is BEHAVIORAL, not textual (PR #671 review, round
-# 3):
-# `tests/ci_gate_completeness.rs::test_ci_gate_decision_matches_job_level_if_for_every_needs_member`
-# runs THIS SCRIPT (a real bash subprocess) against a synthesized payload
-# for every `ci-gate.needs` job — that job `skipped`, every other job
-# `success` — derived from `ci.yml`, and asserts the gate's actual exit
-# code matches whether that job's `ci.yml` block has a job-level `if:`.
-# It has no opinion on how `ALLOWED_SKIPS` is represented internally, so no
-# array-construction form, control-flow trick, subscripted assignment, or
-# rewrite of `is_allowed_skip` can pass it while the gate's real decision
-# is still wrong.
+# PR #671 REVIEW HISTORY (rounds 3-6) — read before touching this array.
+# The enforcement is BEHAVIORAL (round 3): `tests/ci_gate_completeness.rs::
+# test_ci_gate_decision_matches_job_level_if_for_every_needs_member` runs
+# THIS SCRIPT (a real bash subprocess) against a synthesized payload for
+# every `ci-gate.needs` job and asserts the gate's actual exit code
+# matches an EXPECTED decision. That part has survived every round intact.
+#
+# What CHANGED across rounds 4-6 is how "expected decision" is computed.
+# Every attempt to answer "does this job's `ci.yml` `if:` expression MEAN
+# something legitimate?" from source text was bypassed:
+#   - presence-only (any job-level `if:` at all) — accepted a no-op like
+#     `if: ${{ always() }}`.
+#   - no-op blacklist + "references an event/config marker" requirement
+#     (round 5, "M1") — a trailing YAML comment defeated BOTH halves at
+#     once (`if: ${{ always() }}  # not gated on vars.SOMETHING`), AND
+#     independently, the blacklist only covered always-TRUE no-ops —
+#     `if: ${{ github.ref == 'refs/heads/does-not-exist' }}` (an
+#     always-FALSE, permanently-skipped condition) was structurally
+#     unreachable for it.
+# CONCLUSION (round 6): that question is undecidable from source text by
+# pattern-matching. `tests/ci_gate_completeness.rs` no longer asks it.
+# Instead, `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS` there holds one
+# human-reviewed, EXACT `if:` expression per job permitted to be in
+# ALLOWED_SKIPS; the "expected decision" for a job is now "does its
+# ci.yml `if:` text match its pin, byte-for-byte after narrow
+# normalization?" — a decidable string comparison, not a judgment about
+# meaning. Adding a job here REQUIRES adding a matching pinned entry in
+# the SAME change, or the behavioral test fails loudly, naming the job.
 #
 # Two earlier, weaker guards remain as fast diagnostics (they point
 # directly at ALLOWED_SKIPS when it IS the cause) but are NOT sufficient on
@@ -170,6 +187,17 @@ print_allowed_skips() {
 #   - prints one `OK  <job> = <result>` or `FAIL  <job> = <result>` line per
 #     job so a gate failure is diagnosable from the ci-gate job's own log
 #   - returns 0 only if every job passed
+#
+# LOAD-BEARING LOG FORMAT (PR #671 review, round 6): the exact strings
+# `OK  <job> = <result>` and `FAIL  <job> = <result>` — two spaces after
+# `OK`, one after `FAIL`, ` = ` around the result — are asserted verbatim
+# (as a substring match against this function's stdout) by
+# `tests/ci_gate_completeness.rs::test_ci_gate_decision_matches_job_level_if_for_every_needs_member`,
+# which checks for `OK  <job> = skipped` / `FAIL  <job> = skipped` to
+# confirm the gate's per-job decision, not merely its exit code. Changing
+# this format's spacing/wording without updating that test would silently
+# break its assertions in a way `--self-test` (which only checks exit
+# codes via `check_fixture`'s rc comparison) would NOT catch.
 # ---------------------------------------------------------------------------
 evaluate_needs() {
     local json="$1"

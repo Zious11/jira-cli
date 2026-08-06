@@ -1033,134 +1033,139 @@ fn test_mutants_job_structure_unchanged_by_cigate2_option_c() {
 }
 
 // ---------------------------------------------------------------------------
-// CRITICAL — behavioral closure (PR #671 review, round 3).
+// CRITICAL — behavioral closure via PINNED LITERALS (PR #671 review, round
+// 6 — replaces every predicate tried in rounds 3-5).
 //
 // Rounds 1 and 2 (see the CRITICAL-1/round-2 section below) each guarded a
 // REPRESENTATION of `ALLOWED_SKIPS`: round 1 parsed the array literal's
 // source text; round 2 replaced that with a regex-narrowed occurrence count
 // plus a shell-out that asked bash for the array's PRINTED value. Both were
-// independently bypassed by ordinary bash constructions that never touch
-// the three guarded shapes:
-//   - Mutation A: `ALLOWED_SKIPS[9]=test` as the first statement inside
-//     `evaluate_needs` — a subscripted assignment. It matches none of the
-//     three counted shapes (`ALLOWED_SKIPS=`, `ALLOWED_SKIPS+=`,
-//     `${ALLOWED_SKIPS`), and `--print-allowed-skips` never runs
-//     `evaluate_needs`, so the print-mode test's own shell-out never
-//     observes it either — the mutation desyncs the two round-2 guards via
-//     CONTROL FLOW, not declaration form.
-//   - Mutation B: inside `is_allowed_skip`, `EXTRA_SKIPS=("test" "deny"
-//     "clippy")` followed by `for allowed in "${ALLOWED_SKIPS[@]}"
-//     "${EXTRA_SKIPS[@]}"; do` — a parallel array read alongside the real
-//     one. `--print-allowed-skips` still prints only `mutants` (it reads
-//     `ALLOWED_SKIPS` alone, correctly, but that is no longer the full
-//     set `is_allowed_skip` actually honors).
-// Both reproduced end-to-end: gate rc=0 on payloads with the
-// illegitimately-tolerated jobs `skipped`, while `--self-test` stayed
-// 12/12 and both round-1/round-2 tests stayed green.
+// bypassed by ordinary bash constructions (mutations A and B — a
+// subscripted assignment and a parallel array read, neither of which
+// touches the guarded representations at all).
 //
-// The fix is to stop testing any representation of the trust boundary and
-// instead test the gate's ACTUAL DECISION, derived entirely from
-// `ci.yml`'s real job graph — see
-// `test_ci_gate_decision_matches_job_level_if_for_every_needs_member`
-// below. THIS is the closure. The round-1/round-2 tests below it are kept
-// as diagnostics (they fire with a more specific message pointing at
-// `ALLOWED_SKIPS` when the behavioral test's failure would otherwise only
-// say "the gate accepted/rejected a payload it shouldn't have") — they are
-// not, and must not be described as, the enforcement mechanism.
+// Round 3 moved from representation to BEHAVIOR: run the real script
+// against a synthesized payload and check its actual decision. That part
+// survived every subsequent round intact. But round 3 (and its round 5
+// tightening, "M1") still needed an oracle to decide, from `ci.yml`'s text
+// alone, whether a job's `if:` was "the legitimate case" — and every
+// predicate tried for that oracle was bypassed:
+//   - Presence-only (round 3): accepted ANY `if:` line, including
+//     `if: ${{ always() }}` — a genuine no-op.
+//   - No-op-blacklist + event-marker-required (round 5, "M1" fix): a
+//     trailing YAML comment defeated BOTH halves of the predicate at once
+//     — the string no longer ends in `}}` (so the `${{ }}`-wrapped
+//     `always()` literal never matched the blacklist) AND the comment
+//     text itself could satisfy the "references an event/config marker"
+//     rule (round 6 CRITICAL-1: `if: ${{ always() }} # not gated on
+//     vars.SOMETHING` plus allowlisting `deny` passed the full suite,
+//     13/13, gate rc=0).
+//   - Structural gap in the SAME predicate, independent of comments (round
+//     6 CRITICAL-2): `ALWAYS_TRUE_NOOPS` enumerated always-TRUE no-ops.
+//     `if: ${{ github.ref == 'refs/heads/does-not-exist' }}` is an
+//     always-FALSE condition — permanently `skipped`, on every event, on
+//     every branch — and no blacklist of always-true literals can ever
+//     reach the always-false direction. Also confirmed 13/13 green, gate
+//     rc=0.
+//
+// CONCLUSION (round 6): "is this `if:` expression legitimate?" is
+// undecidable from source text by pattern-matching — six rounds, six
+// bypasses. `job_if_can_evaluate_false` (the predicate) is DELETED, not
+// patched again.
+//
+// FIX: `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS` below replaces the question
+// "does this expression MEAN something legitimate?" (undecidable) with
+// "is this expression BYTE-IDENTICAL, after narrow normalization, to one a
+// human has actually reviewed and approved?" (fully decidable — string
+// equality). No predicate can ever answer the first question soundly for
+// arbitrary GitHub Actions expression text; the second question doesn't
+// need to be answered by code at all, only checked. See
+// `extract_and_normalize_if_expr` and `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS`
+// below, and `test_ci_gate_decision_matches_job_level_if_for_every_needs_member`
+// for how they combine with the (unchanged, round-3) real-subprocess
+// behavioral check. THIS combination is the closure. The round-1/round-2
+// tests further below are kept as diagnostics (faster, more specific
+// messages when they DO fire) but are not, and must not be described as,
+// sufficient alone.
 // ---------------------------------------------------------------------------
 
-/// Determine whether a `ci.yml` job block's job-level `if:` expression can
-/// actually evaluate to `false` — not merely whether an `if:` line is
-/// present.
+/// PINNED, human-reviewed `if:` expressions for every job legitimately
+/// permitted to be a member of `scripts/check-ci-gate.sh`'s
+/// `ALLOWED_SKIPS` allowlist (PR #671 review, round 6).
 ///
-/// CRITICAL (PR #671 review, round 4/5, "M1"): the prior version of this
-/// function (`job_has_job_level_if`, presence-only: any line starting with
-/// exactly 4-space `if:`, not 8+ spaces for a step-level `if:` inside
-/// `steps:`) accepted a semantically no-op condition. Reproduced
-/// end-to-end: adding `if: ${{ always() }}` to `deny` (a genuine no-op —
-/// `deny` has no `needs:`, so it runs unconditionally either way; also the
-/// EXACT idiom `ci-gate` itself uses in this same file, so it reads as
-/// unremarkable in a diff) plus `ALLOWED_SKIPS=("mutants" "deny")` in
-/// `scripts/check-ci-gate.sh` passed `--self-test` (12/12) and `cargo test
-/// --test ci_gate_completeness` (13/13), and the real gate accepted `deny:
-/// skipped` with rc=0.
+/// One entry per job. The value is the EXACT `if:` expression text (after
+/// `extract_and_normalize_if_expr`'s narrow normalization — see its doc
+/// comment) that a human has reviewed and approved as a condition that can
+/// genuinely evaluate to both `true` and `false` depending on real,
+/// externally-meaningful state (which event triggered the run, which
+/// branch, a repo variable, a workflow input — not a constant). Adding a
+/// job here, or changing an existing entry's text, is ITSELF the human
+/// review step this design relies on — do not add or edit an entry without
+/// actually reasoning about whether the expression can evaluate `false` in
+/// practice, on both the always-true and always-false axes (the axis that
+/// bypassed round 5's predicate).
 ///
-/// Worse: with ONLY the ci.yml half applied (script untouched), the OLD
-/// oracle made THIS TEST'S OWN FAILURE MESSAGE steer a maintainer toward
-/// completing the bypass — it said `deny` "carries a job-level `if:` ...
-/// (the legitimate case, like `mutants` today)" and that rejecting the
-/// skip "would be a false-red: the gate must still tolerate the one
-/// legitimate skip", directly inviting the second edit
-/// (`ALLOWED_SKIPS+=("deny")`) that turns the whole suite green. A test
-/// that asks for its own bypass on an intermediate step is worse than one
-/// that merely misses it.
+/// Verified by direct read of `.github/workflows/ci.yml :: mutants` for
+/// this revision (do not trust a transcription — re-verify at the time of
+/// any change): the job-level `if:` is exactly `github.event_name ==
+/// 'pull_request'`, with NO `${{ }}` wrapper.
+const PINNED_ALLOWED_SKIP_IF_EXPRESSIONS: &[(&str, &str)] =
+    &[("mutants", "github.event_name == 'pull_request'")];
+
+/// Extract a `ci.yml` job block's job-level `if:` expression and apply the
+/// narrow normalization used for pinned-literal comparison. Returns `None`
+/// if the job has no job-level `if:` at all.
 ///
-/// FIX (this function): a job-level `if:` only counts as "the legitimate
-/// case" when its expression:
-///   1. Is NOT exactly one of the known always-true no-ops (`always()`,
-///      `true`, `success()`, `!cancelled()`, `!failure()`, with or without
-///      a `${{ }}` wrapper), AND
-///   2. References at least one event- or config-dependent context value:
-///      `github.event_name`, `github.ref`, `vars.`, `inputs.`, or
-///      `github.event.` — something whose value can plausibly differ
-///      between CI runs.
+/// Job-level `if:` detection is unchanged from every prior round: a line
+/// starting with exactly 4-space indent (`    if:`), not 8+ spaces (a
+/// step-level `if:` inside `steps:`).
 ///
-/// STATED RESIDUAL LIMITATION (per PR #671 review round 5 — this is a
-/// proxy, not a full boolean evaluator, and is not claimed as closure): a
-/// sufficiently adversarial boolean combination that satisfies rule 2
-/// while remaining vacuously true regardless of the referenced value's
-/// actual value — e.g. `always() || github.event_name == 'push'`, which
-/// technically contains `github.event_name` but is always true because of
-/// the leading `always() ||` — would still defeat this proxy. Closing that
-/// gap would require actually evaluating the expression's possible truth
-/// values (a real boolean-expression parser/evaluator for GitHub Actions
-/// expression syntax), not pattern-matching its text. Out of scope here;
-/// recorded as a known, accepted limit rather than silently left uncaught.
-/// IMPORTANT 3 (CLAUDE.md correction, same review round): because ci.yml's
-/// half of the trust boundary has no code guard at all (only this
-/// pattern-based proxy plus ordinary code review), a sufficiently
-/// determined bypass targeting exactly this residual gap is possible; the
-/// pairing of (a real job-level `if:`) AND (`ALLOWED_SKIPS` membership) is
-/// the trust boundary, not either alone, and ci.yml changes are visible in
-/// PR diffs where a reviewer is expected to catch a `||`-with-`always()`
-/// construction on inspection.
-fn job_if_can_evaluate_false(job_block: &str) -> bool {
+/// NORMALIZATION APPLIED (documented exhaustively — per PR #671 review
+/// round 6, normalization is exactly where predicate-based bypasses lived
+/// in every prior round, so scope creep here would reopen the same class
+/// of hole):
+///   1. Take the raw text after the `if:` key on that one line.
+///   2. Strip a trailing YAML comment: split on the first `#` and keep
+///      only the part before it. (A job-level `if:` VALUE never
+///      legitimately contains a literal `#` before a real comment marker
+///      in this file — every job-level `if:` today is a GitHub Actions
+///      boolean/comparison expression, none of which use `#`.)
+///   3. Collapse all whitespace: split on any run of whitespace and
+///      rejoin with single spaces (this also trims leading/trailing
+///      whitespace, since `split_whitespace` yields only non-empty
+///      tokens). Defends against a purely cosmetic reformat (e.g.
+///      `if:   github.event_name  ==  'pull_request'`) failing to
+///      byte-match a pin written with single spaces.
+///
+/// Deliberately NOT normalized: a `${{ ... }}` wrapper is left AS-IS.
+/// `if: github.event_name == 'pull_request'` and `if: ${{
+/// github.event_name == 'pull_request' }}` are treated as DIFFERENT
+/// strings and would NOT match the same pin. Adding or removing the
+/// wrapper is a real textual change to what's actually in `ci.yml`; under
+/// the "byte-identical to a human-reviewed pin" design, that change
+/// requires the same explicit re-review as any other textual change to
+/// the expression, not silent tolerance for an equivalent-looking
+/// rewrite. (This is a deliberate design choice, not an oversight: being
+/// MORE literal here is strictly safer than trying to guess which textual
+/// variations are "equivalent" — that guessing is exactly the kind of
+/// judgment call that produced six rounds of predicate bypasses.)
+fn extract_and_normalize_if_expr(job_block: &str) -> Option<String> {
     let if_line = job_block
         .lines()
-        .find(|l| l.starts_with("    if:") && !l.starts_with("        "));
+        .find(|l| l.starts_with("    if:") && !l.starts_with("        "))?;
 
-    let Some(if_line) = if_line else {
-        return false;
-    };
+    let raw = if_line.trim_start().strip_prefix("if:").unwrap_or("");
+    let without_comment = raw.split('#').next().unwrap_or(raw);
+    let collapsed = without_comment
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
 
-    let expr = if_line
-        .trim_start()
-        .strip_prefix("if:")
-        .unwrap_or("")
-        .trim()
-        .trim_start_matches("${{")
-        .trim_end_matches("}}")
-        .trim();
-
-    const ALWAYS_TRUE_NOOPS: &[&str] = &[
-        "always()",
-        "true",
-        "success()",
-        "!cancelled()",
-        "!failure()",
-    ];
-    if ALWAYS_TRUE_NOOPS.contains(&expr) {
-        return false;
+    if collapsed.is_empty() {
+        None
+    } else {
+        Some(collapsed)
     }
-
-    const EVENT_OR_CONFIG_MARKERS: &[&str] = &[
-        "github.event_name",
-        "github.ref",
-        "vars.",
-        "inputs.",
-        "github.event.",
-    ];
-    EVENT_OR_CONFIG_MARKERS.iter().any(|m| expr.contains(m))
 }
 
 /// Build a minimal `toJSON(needs)`-shaped JSON payload: every job in
@@ -1217,50 +1222,59 @@ fn run_check_ci_gate_sh(json_payload: &str) -> std::process::Output {
         .unwrap_or_else(|e| panic!("Could not wait on child: {e}"))
 }
 
-/// S-CIGATE-2 CRITICAL (PR #671 review, round 3, tightened round 5) — the
-/// behavioral closure. See the module comment above this section for the
-/// full history of why rounds 1 and 2 (representation-based guards) were
-/// each bypassed, and `job_if_can_evaluate_false`'s doc comment for why
-/// round 3's presence-only `if:` check (M1) was itself insufficient and
-/// this function's stated residual limitation.
+/// S-CIGATE-2 CRITICAL (PR #671 review, round 3, pinned-literal design as
+/// of round 6) — the behavioral closure. See the module comment above this
+/// section for the full history of why rounds 1-5 (a representation guard,
+/// then four generations of predicate-based `if:`-legitimacy oracles) were
+/// each bypassed, and `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS`/
+/// `extract_and_normalize_if_expr`'s doc comments for the pinned-literal
+/// design that replaces the predicate entirely.
 ///
 /// For every job in `ci-gate.needs` (parsed from `ci.yml`, so this test
 /// tracks the real job graph automatically as it changes):
-///   - if the job's `ci.yml` block has NO `if:` that can evaluate `false`
-///     (an always-run job — `fmt`, `clippy`, `test`, `msrv`, `deny`,
-///     `spec-guard`, `check-signing-workflow-injection` today), synthesize
-///     a payload where THAT job reports `skipped` and every other
-///     `ci-gate.needs` job reports `success`, run
-///     `scripts/check-ci-gate.sh` against it in a real subprocess, and
-///     assert: exit code is EXACTLY 1 (not merely non-zero — IMPORTANT 1,
-///     PR #671 review round 5: a bare non-zero check is satisfied by
+///   - Extract and normalize the job's `ci.yml` job-level `if:` expression
+///     (`extract_and_normalize_if_expr`; `None` if it has no job-level
+///     `if:` at all).
+///   - Look up a pinned literal for this job by name in
+///     `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS`.
+///   - If BOTH exist AND are byte-identical: this is the POSITIVE
+///     (legitimate-skip) case. Synthesize a payload where this job reports
+///     `skipped` and every other `ci-gate.needs` job reports `success`,
+///     run `scripts/check-ci-gate.sh` against it in a real subprocess, and
+///     assert: exit code is EXACTLY 0 AND stdout contains an `OK  <job> =
+///     skipped` line naming this job. A fix that made the gate reject
+///     everything would trade this story's false-green for a false-red,
+///     silently breaking every normal push — this half matters exactly as
+///     much as the negative half below.
+///   - Otherwise (no `if:` at all, no pin exists for this job, OR the
+///     `if:` text doesn't match the pinned literal): this is the NEGATIVE
+///     case. Synthesize the same payload shape and assert: exit code is
+///     EXACTLY 1 (not merely non-zero — IMPORTANT 1, PR #671 review round
+///     5: a bare non-zero check is satisfied by
 ///     rc=2/rc=127/an-unrelated-rc=1) AND stdout contains a `FAIL  <job> =
-///     skipped` line naming this specific job.
-///   - if the job's `ci.yml` block HAS an `if:` that can evaluate `false`
-///     (`mutants` today), synthesize the same payload shape and assert:
-///     exit code is EXACTLY 0 AND stdout contains an `OK  <job> = skipped`
-///     line naming this specific job. This half matters exactly as much as
-///     the first: a fix that made the gate reject everything would trade
-///     the false-green this story fixes for a false-red, silently breaking
-///     every normal push.
+///     skipped` line naming this job. If a job WAS actually added to
+///     `ALLOWED_SKIPS` without a matching pin, this branch's assertion
+///     fails LOUDLY — the failure message names the job and states
+///     explicitly that widening requires adding a human-reviewed pin
+///     entry (see the assertion messages below).
 ///
-/// Non-vacuity (IMPORTANT 1): also asserts at least one job took the
-/// positive branch and at least one took the negative branch, so a
+/// Non-vacuity (IMPORTANT 1, round 5): also asserts at least one job took
+/// the positive branch and at least one took the negative branch, so a
 /// pathological mutation that makes EVERY payload fail the same way (e.g.
 /// reading the payload from an env var instead of stdin, so every
 /// `run_check_ci_gate_sh` call sees empty input and every negative
-/// assertion passes "by accident") cannot pass silently — it would trip
-/// this assertion instead, and additionally now fails on message content,
-/// not just exit code, for exactly that reason.
+/// assertion passes "by accident") cannot pass silently.
 ///
 /// This test does not parse, count, or shell out to ask about
 /// `ALLOWED_SKIPS` at all — it has no opinion on how the script represents
-/// its allowlist internally. A subscripted assignment, a nameref, `read
-/// -a`, `mapfile`, a parallel array, or a fully rewritten
-/// `is_allowed_skip` can only pass this test by making the SCRIPT ITSELF
-/// produce the correct exit code AND the correct diagnostic line on every
-/// one of these synthesized payloads — which is the actual property this
-/// story exists to guarantee.
+/// its allowlist internally, and (as of round 6) no opinion on whether an
+/// `if:` expression is "legitimate" either — only on whether it matches a
+/// human-reviewed pin. A subscripted assignment, a nameref, `read -a`,
+/// `mapfile`, a parallel array, a fully rewritten `is_allowed_skip`, a
+/// trailing comment, or a permanently-false condition can only pass this
+/// test by making the SCRIPT ITSELF produce the correct exit code AND the
+/// correct diagnostic line on every one of these synthesized payloads —
+/// which is the actual property this story exists to guarantee.
 ///
 /// `#[cfg(unix)]`: `scripts/check-ci-gate.sh` only ever runs on
 /// `ubuntu-latest` in this repo's actual CI; this test still runs on
@@ -1268,13 +1282,19 @@ fn run_check_ci_gate_sh(json_payload: &str) -> std::process::Output {
 /// `test` matrix requires all three legs green, so this is not a coverage
 /// gap on the platform that matters).
 ///
-/// Proven RED (this round, with sha256-verified byte-identical restores)
-/// against: M1 both halves together, M1's ci.yml-only half in isolation
-/// (now failing with a NON-STEERING message — see this round's fix-report
-/// for the exact before/after text), the env-var-instead-of-stdin vacuity
-/// mutation, and a trailing-YAML-comment `extract_job_block` over-run.
-/// Also re-confirmed RED (unchanged from round 3) against mutations A and
-/// B and all four round-2 `+=`-form bypasses.
+/// Proven RED (round 6, with sha256-verified byte-identical restores)
+/// against all four bypasses from this round's review: (a) `if: ${{
+/// always() }}  # not gated on vars.SOMETHING` (trailing comment defeating
+/// the round-5 predicate) plus allowlisting `deny`, (b) bare `if: ${{
+/// always() }}` plus allowlisting `deny`, (c) `if: ${{ github.ref ==
+/// 'refs/heads/does-not-exist' }}` plus allowlisting `deny` (a
+/// permanently-false condition — the always-false axis no blacklist of
+/// always-true literals could ever reach), (d) `if: ${{ always() ||
+/// github.ref != '' }}` plus allowlisting `deny`. Also re-confirmed RED
+/// (unchanged from rounds 3/5): mutations A and B, all four round-2
+/// `+=`-form bypasses, the env-var-instead-of-stdin vacuity mutation, and
+/// the trailing-YAML-comment `extract_job_block` over-run. The legitimate
+/// `mutants` case still passes (positive branch, exit 0).
 #[cfg(unix)]
 #[test]
 fn test_ci_gate_decision_matches_job_level_if_for_every_needs_member() {
@@ -1301,74 +1321,111 @@ fn test_ci_gate_decision_matches_job_level_if_for_every_needs_member() {
         let job_block = extract_job_block(&ci, job).unwrap_or_else(|| {
             panic!("FAIL: `ci-gate.needs` names `{job}`, but no `{job}:` job exists in ci.yml.")
         });
-        let can_evaluate_false = job_if_can_evaluate_false(job_block);
+        let actual_if_expr = extract_and_normalize_if_expr(job_block);
+        let pinned_expr = PINNED_ALLOWED_SKIP_IF_EXPRESSIONS
+            .iter()
+            .find(|(name, _)| *name == job.as_str())
+            .map(|(_, expr)| *expr);
+
+        let is_pinned_and_matches = match (&actual_if_expr, pinned_expr) {
+            (Some(actual), Some(pinned)) => actual == pinned,
+            _ => false,
+        };
 
         let payload = build_single_skip_payload(&all_jobs, job);
         let output = run_check_ci_gate_sh(&payload);
         let stdout = String::from_utf8_lossy(&output.stdout);
         let exit_code = output.status.code();
 
-        if can_evaluate_false {
+        if is_pinned_and_matches {
             saw_positive_branch = true;
             let expected_line = format!("OK  {job} = skipped");
+            let exit_ok = exit_code == Some(0);
+            let stdout_ok = stdout.contains(&expected_line);
             assert!(
-                exit_code == Some(0) && stdout.contains(&expected_line),
+                exit_ok && stdout_ok,
                 "FAIL (S-CIGATE-2 behavioral closure, PR #671 review round \
-                 5): `{job}` carries a job-level `if:` that CAN evaluate \
-                 `false` in ci.yml (the legitimate case, like `mutants` \
-                 today), but scripts/check-ci-gate.sh did not accept a \
-                 payload where `{job}` is `skipped` and every other \
-                 ci-gate.needs job is `success` — exit code: {exit_code:?} \
-                 (expected Some(0)), stdout did{}contain \"{expected_line}\" \
-                 (expected: contains it).\n\
+                 6): `{job}`'s job-level `if:` matches its pinned, \
+                 human-reviewed literal (\"{}\"), but \
+                 scripts/check-ci-gate.sh did not accept a payload where \
+                 `{job}` is `skipped` and every other ci-gate.needs job is \
+                 `success`.\n\
+                 {}\n\
+                 {}\n\
                  \n\
                  This would be a false-red: the gate must still tolerate \
                  the one legitimate PR-only/repo-variable-gated skip, not \
-                 just reject everything (a fix that rejects every skip \
-                 would trade this story's false-green for a false-red on \
-                 every normal push).\n\
+                 just reject everything.\n\
                  \n\
                  Payload used:\n{payload}\n\
                  \n\
                  --- stdout ---\n{stdout}\n\
                  --- stderr ---\n{}",
-                if stdout.contains(&expected_line) {
-                    " "
+                pinned_expr.unwrap_or(""),
+                if exit_ok {
+                    format!("Exit code: {exit_code:?} (OK).")
                 } else {
-                    " NOT "
+                    format!("Exit code: {exit_code:?} (expected Some(0)).")
+                },
+                if stdout_ok {
+                    format!("stdout contained \"{expected_line}\" (OK).")
+                } else {
+                    format!("stdout did NOT contain \"{expected_line}\".")
                 },
                 String::from_utf8_lossy(&output.stderr)
             );
         } else {
             saw_negative_branch = true;
             let expected_line = format!("FAIL  {job} = skipped");
+            let exit_ok = exit_code == Some(1);
+            let stdout_ok = stdout.contains(&expected_line);
+
+            let diagnosis = match (&actual_if_expr, pinned_expr) {
+                (None, _) => {
+                    format!("`{job}` has no job-level `if:` in ci.yml at all (an always-run job).")
+                }
+                (Some(actual), None) => format!(
+                    "`{job}` has a job-level `if:` (\"{actual}\") but no pinned \
+                     literal exists for `{job}` in PINNED_ALLOWED_SKIP_IF_EXPRESSIONS."
+                ),
+                (Some(actual), Some(pinned)) => format!(
+                    "`{job}`'s job-level `if:` (\"{actual}\") does not match its \
+                     pinned literal (\"{pinned}\")."
+                ),
+            };
+
             assert!(
-                exit_code == Some(1) && stdout.contains(&expected_line),
+                exit_ok && stdout_ok,
                 "FAIL (S-CIGATE-2 behavioral closure, PR #671 review round \
-                 5): `{job}` has NO job-level `if:` that can evaluate \
-                 `false` in ci.yml (an always-run job, or one whose `if:` \
-                 is a semantically no-op condition like `always()` — M1, \
-                 PR #671 review round 4/5), but scripts/check-ci-gate.sh \
-                 did not reject a payload where `{job}` is `skipped` and \
-                 every other ci-gate.needs job is `success` — exit code: \
-                 {exit_code:?} (expected Some(1)), stdout did{}contain \
-                 \"{expected_line}\" (expected: contains it).\n\
+                 6): {diagnosis}\n\
                  \n\
-                 An always-run job's `skipped` result silently passed the \
-                 sole required branch-protection check — the exact \
-                 false-green class this story exists to fix, regardless of \
-                 how ALLOWED_SKIPS is represented internally (this test \
-                 does not inspect that representation at all; it only ran \
-                 the real script against a real payload).\n\
+                 If `{job}` was intentionally added to \
+                 scripts/check-ci-gate.sh's ALLOWED_SKIPS, this is \
+                 UNAUTHORIZED WIDENING from this test's perspective: \
+                 widening the trust boundary requires (1) a human \
+                 reviewing the exact `if:` expression text and confirming \
+                 it can genuinely evaluate both `true` and `false` in \
+                 practice, (2) adding a matching entry to \
+                 PINNED_ALLOWED_SKIP_IF_EXPRESSIONS naming `{job}` and its \
+                 exact (normalized) `if:` text, in the SAME change that \
+                 adds it to ALLOWED_SKIPS. Without that pin, the gate must \
+                 reject `{job}`'s skip.\n\
+                 {}\n\
+                 {}\n\
                  \n\
                  Payload used:\n{payload}\n\
                  \n\
                  --- stdout ---\n{stdout}\n\
                  --- stderr ---\n{}",
-                if stdout.contains(&expected_line) {
-                    " "
+                if exit_ok {
+                    format!("Exit code: {exit_code:?} (OK).")
                 } else {
-                    " NOT "
+                    format!("Exit code: {exit_code:?} (expected Some(1)).")
+                },
+                if stdout_ok {
+                    format!("stdout contained \"{expected_line}\" (OK).")
+                } else {
+                    format!("stdout did NOT contain \"{expected_line}\".")
                 },
                 String::from_utf8_lossy(&output.stderr)
             );
@@ -1377,21 +1434,22 @@ fn test_ci_gate_decision_matches_job_level_if_for_every_needs_member() {
 
     assert!(
         saw_positive_branch,
-        "FAIL: no job in ci-gate.needs has an `if:` that can evaluate \
-         `false` — the positive (legitimate-skip) branch above never ran, \
-         so this test cannot prove the gate still tolerates a real skip. \
-         This should not happen while `mutants` remains in ci-gate.needs \
-         with its current `if:`; if it does, something upstream (job list, \
-         `if:` detection) changed unexpectedly."
+        "FAIL: no job in ci-gate.needs matched a pinned literal — the \
+         positive (legitimate-skip) branch above never ran, so this test \
+         cannot prove the gate still tolerates a real skip. This should \
+         not happen while `mutants` remains in ci-gate.needs with its \
+         current `if:` matching PINNED_ALLOWED_SKIP_IF_EXPRESSIONS; if it \
+         does, something upstream (job list, `if:` text, or the pinned \
+         literal) changed unexpectedly and needs re-review."
     );
     assert!(
         saw_negative_branch,
-        "FAIL: no job in ci-gate.needs lacks an `if:` that can evaluate \
-         `false` — the negative (reject-illegitimate-skip) branch above \
-         never ran. Without at least one negative case, a pathological \
-         mutation that makes every payload succeed (or every payload fail \
-         identically, e.g. by reading input from the wrong source) could \
-         pass this test vacuously."
+        "FAIL: no job in ci-gate.needs lacks a matching pinned literal — \
+         the negative (reject-illegitimate-skip) branch above never ran. \
+         Without at least one negative case, a pathological mutation that \
+         makes every payload succeed (or every payload fail identically, \
+         e.g. by reading input from the wrong source) could pass this \
+         test vacuously."
     );
 }
 
