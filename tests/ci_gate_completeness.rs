@@ -1708,6 +1708,40 @@ fn test_ci_gate_decision_matches_job_level_if_for_every_needs_member() {
         "FAIL: `ci-gate.needs` is empty — cannot synthesize any payload."
     );
 
+    // ADDENDUM (PR #671 review round 9): the structural key-set pin above
+    // (`NEEDS_CONTEXT_JOB_KEYS`) guarantees every payload has the right
+    // KEYS, but `build_multi_skip_payload` still hard-codes `"outputs":
+    // {}` — faithful ONLY because none of today's `ci-gate.needs` jobs
+    // declare a job-level `outputs:` block in ci.yml. The moment one does,
+    // production `needs.<job>.outputs` stops being reliably `{}` and this
+    // model silently diverges — the same train/test-divergence class as
+    // the phantom `outcome` field and the original CRITICAL-3, a third
+    // variant. Rather than try to synthesize realistic output VALUES
+    // (which would need per-job knowledge this test has no way to derive
+    // generically), fail closed: assert the premise that makes `{}`
+    // faithful still holds, so a job gaining real outputs turns this into
+    // a loud, named failure instead of a silent model/reality gap.
+    for job in &all_jobs {
+        let job_block = extract_job_block(&ci, job).unwrap_or_else(|| {
+            panic!("FAIL: `ci-gate.needs` names `{job}`, but no `{job}:` job exists in ci.yml.")
+        });
+        let declares_outputs = job_block
+            .lines()
+            .any(|l| l.starts_with("    outputs:") && !l.starts_with("        "));
+        assert!(
+            !declares_outputs,
+            "FAIL (PR #671 review round 9, outputs-content addendum): \
+             `{job}` declares a job-level `outputs:` block in ci.yml. This \
+             test's synthesized payloads hard-code `\"outputs\": {{}}` \
+             (empty), which was faithful only because no `ci-gate.needs` \
+             job had real outputs — that assumption no longer holds for \
+             `{job}`. Update `build_multi_skip_payload` (and this guard) \
+             to model `{job}`'s real output shape before trusting this \
+             test's coverage of `{job}` again; do not just delete this \
+             assertion."
+        );
+    }
+
     let mut saw_positive_branch = false;
     let mut saw_negative_branch = false;
 
