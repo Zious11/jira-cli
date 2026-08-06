@@ -1033,8 +1033,222 @@ fn test_mutants_job_structure_unchanged_by_cigate2_option_c() {
 }
 
 // ---------------------------------------------------------------------------
-// CRITICAL-1 (PR #671 review) — `ALLOWED_SKIPS` is a trust boundary; pin the
-// semantic reason a job may be in it, not just that it currently is.
+// CRITICAL — behavioral closure (PR #671 review, round 3).
+//
+// Rounds 1 and 2 (see the CRITICAL-1/round-2 section below) each guarded a
+// REPRESENTATION of `ALLOWED_SKIPS`: round 1 parsed the array literal's
+// source text; round 2 replaced that with a regex-narrowed occurrence count
+// plus a shell-out that asked bash for the array's PRINTED value. Both were
+// independently bypassed by ordinary bash constructions that never touch
+// the three guarded shapes:
+//   - Mutation A: `ALLOWED_SKIPS[9]=test` as the first statement inside
+//     `evaluate_needs` — a subscripted assignment. It matches none of the
+//     three counted shapes (`ALLOWED_SKIPS=`, `ALLOWED_SKIPS+=`,
+//     `${ALLOWED_SKIPS`), and `--print-allowed-skips` never runs
+//     `evaluate_needs`, so the print-mode test's own shell-out never
+//     observes it either — the mutation desyncs the two round-2 guards via
+//     CONTROL FLOW, not declaration form.
+//   - Mutation B: inside `is_allowed_skip`, `EXTRA_SKIPS=("test" "deny"
+//     "clippy")` followed by `for allowed in "${ALLOWED_SKIPS[@]}"
+//     "${EXTRA_SKIPS[@]}"; do` — a parallel array read alongside the real
+//     one. `--print-allowed-skips` still prints only `mutants` (it reads
+//     `ALLOWED_SKIPS` alone, correctly, but that is no longer the full
+//     set `is_allowed_skip` actually honors).
+// Both reproduced end-to-end: gate rc=0 on payloads with the
+// illegitimately-tolerated jobs `skipped`, while `--self-test` stayed
+// 12/12 and both round-1/round-2 tests stayed green.
+//
+// The fix is to stop testing any representation of the trust boundary and
+// instead test the gate's ACTUAL DECISION, derived entirely from
+// `ci.yml`'s real job graph — see
+// `test_ci_gate_decision_matches_job_level_if_for_every_needs_member`
+// below. THIS is the closure. The round-1/round-2 tests below it are kept
+// as diagnostics (they fire with a more specific message pointing at
+// `ALLOWED_SKIPS` when the behavioral test's failure would otherwise only
+// say "the gate accepted/rejected a payload it shouldn't have") — they are
+// not, and must not be described as, the enforcement mechanism.
+// ---------------------------------------------------------------------------
+
+/// Determine whether a `ci.yml` job block has a job-level `if:` condition:
+/// a line starting with exactly 4-space indent (`    if:`), not 8+ spaces
+/// (which would be a step-level `if:` inside `steps:`). Mirrors the
+/// detection technique already used elsewhere in this file (e.g.
+/// `test_mutants_job_structure_unchanged_by_cigate2_option_c`).
+fn job_has_job_level_if(job_block: &str) -> bool {
+    job_block
+        .lines()
+        .any(|l| l.starts_with("    if:") && !l.starts_with("        "))
+}
+
+/// Build a minimal `toJSON(needs)`-shaped JSON payload: every job in
+/// `all_jobs` reports `success`, except `target_job`, which reports
+/// `skipped`.
+fn build_single_skip_payload(all_jobs: &[String], target_job: &str) -> String {
+    let mut obj = serde_json::Map::new();
+    for job in all_jobs {
+        let result = if job == target_job {
+            "skipped"
+        } else {
+            "success"
+        };
+        obj.insert(job.clone(), serde_json::json!({ "result": result }));
+    }
+    serde_json::Value::Object(obj).to_string()
+}
+
+/// Run `scripts/check-ci-gate.sh` with `json_payload` on stdin (via a real
+/// bash subprocess, not an in-process call — this is a black-box test of
+/// the gate's actual decision), returning its exit status. The payloads
+/// used by this test are a few hundred bytes and the script's own output
+/// is a handful of short lines, both far under a pipe buffer, so a plain
+/// write-then-wait is sufficient (no risk of the classic write/read
+/// deadlock this pattern can have with larger payloads).
+#[cfg(unix)]
+fn run_check_ci_gate_sh(json_payload: &str) -> std::process::ExitStatus {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let script_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/check-ci-gate.sh");
+    let mut child = Command::new("bash")
+        .arg(&script_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|e| panic!("Could not spawn {}: {e}", script_path.display()));
+
+    child
+        .stdin
+        .take()
+        .expect("child stdin was requested via Stdio::piped()")
+        .write_all(json_payload.as_bytes())
+        .unwrap_or_else(|e| panic!("Could not write to child stdin: {e}"));
+
+    child
+        .wait_with_output()
+        .unwrap_or_else(|e| panic!("Could not wait on child: {e}"))
+        .status
+}
+
+/// S-CIGATE-2 CRITICAL (PR #671 review, round 3) — the behavioral closure.
+/// See the module comment above this section for the full history of why
+/// rounds 1 and 2 (representation-based guards) were each bypassed.
+///
+/// For every job in `ci-gate.needs` (parsed from `ci.yml`, so this test
+/// tracks the real job graph automatically as it changes):
+///   - if the job's `ci.yml` block has NO job-level `if:` (an always-run
+///     job — `fmt`, `clippy`, `test`, `msrv`, `deny`, `spec-guard`,
+///     `check-signing-workflow-injection` today), synthesize a payload
+///     where THAT job reports `skipped` and every other `ci-gate.needs`
+///     job reports `success`, run `scripts/check-ci-gate.sh` against it in
+///     a real subprocess, and assert the exit status is NON-ZERO — the
+///     gate must reject an always-run job's skip.
+///   - if the job's `ci.yml` block HAS a job-level `if:` (`mutants` today),
+///     synthesize the same payload shape and assert the exit status IS
+///     ZERO — the gate must still tolerate the one legitimate skip. This
+///     half matters exactly as much as the first: a fix that made the gate
+///     reject everything would trade the false-green this story fixes for
+///     a false-red, silently breaking every normal push.
+///
+/// This test does not parse, count, or shell out to ask about
+/// `ALLOWED_SKIPS` at all — it has no opinion on how the script represents
+/// its allowlist internally. A subscripted assignment, a nameref, `read
+/// -a`, `mapfile`, a parallel array, or a fully rewritten
+/// `is_allowed_skip` can only pass this test by making the SCRIPT ITSELF
+/// produce the correct exit code on every one of these synthesized
+/// payloads — which is the actual property this story exists to
+/// guarantee.
+///
+/// `#[cfg(unix)]`: `scripts/check-ci-gate.sh` only ever runs on
+/// `ubuntu-latest` in this repo's actual CI; this test still runs on
+/// `ubuntu-latest` and `macos-latest` in the `test` job's 3-OS matrix (the
+/// `test` matrix requires all three legs green, so this is not a coverage
+/// gap on the platform that matters).
+///
+/// Proven RED against mutations A and B (see this round's fix-report for
+/// exact diagnostics and sha256-verified byte-identical restores), and the
+/// four round-2 `+=`-form bypasses were re-confirmed still RED against the
+/// round-1/round-2 tests below (unchanged from round 2).
+#[cfg(unix)]
+#[test]
+fn test_ci_gate_decision_matches_job_level_if_for_every_needs_member() {
+    let ci = read_ci_yml();
+    let gate_block = extract_job_block(&ci, "ci-gate").unwrap_or_else(|| {
+        panic!("FAIL: `.github/workflows/ci.yml` does not contain a `ci-gate:` job.")
+    });
+    let needs = parse_needs_set(gate_block).unwrap_or_else(|| {
+        panic!("FAIL: the `ci-gate` job block does not contain a `needs:` key.")
+    });
+
+    let mut all_jobs: Vec<String> = needs.into_iter().collect();
+    all_jobs.sort(); // deterministic order; not behaviorally required, just stable failure output
+
+    assert!(
+        !all_jobs.is_empty(),
+        "FAIL: `ci-gate.needs` is empty — cannot synthesize any payload."
+    );
+
+    for job in &all_jobs {
+        let job_block = extract_job_block(&ci, job).unwrap_or_else(|| {
+            panic!("FAIL: `ci-gate.needs` names `{job}`, but no `{job}:` job exists in ci.yml.")
+        });
+        let has_job_level_if = job_has_job_level_if(job_block);
+
+        let payload = build_single_skip_payload(&all_jobs, job);
+        let status = run_check_ci_gate_sh(&payload);
+
+        if has_job_level_if {
+            assert!(
+                status.success(),
+                "FAIL (S-CIGATE-2 behavioral closure, PR #671 review round \
+                 3): `{job}` carries a job-level `if:` in ci.yml (the \
+                 legitimate case, like `mutants` today), but \
+                 scripts/check-ci-gate.sh REJECTED a payload where `{job}` \
+                 is `skipped` and every other ci-gate.needs job is \
+                 `success` (exit status: {status:?}).\n\
+                 \n\
+                 This would be a false-red: the gate must still tolerate \
+                 the one legitimate PR-only/repo-variable-gated skip, not \
+                 just reject everything (a fix that rejects every skip \
+                 would trade this story's false-green for a false-red on \
+                 every normal push).\n\
+                 \n\
+                 Payload used:\n{payload}"
+            );
+        } else {
+            assert!(
+                !status.success(),
+                "FAIL (S-CIGATE-2 behavioral closure, PR #671 review round \
+                 3): `{job}` has NO job-level `if:` in ci.yml (an \
+                 always-run job), but scripts/check-ci-gate.sh ACCEPTED a \
+                 payload where `{job}` is `skipped` and every other \
+                 ci-gate.needs job is `success` (exit status: {status:?}).\n\
+                 \n\
+                 An always-run job's `skipped` result silently passed the \
+                 sole required branch-protection check — the exact \
+                 false-green class this story exists to fix, regardless of \
+                 how ALLOWED_SKIPS is represented internally (this test \
+                 does not inspect that representation at all; it only ran \
+                 the real script against a real payload).\n\
+                 \n\
+                 Payload used:\n{payload}"
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CRITICAL-1 (PR #671 review, round 1) / round 2 — DIAGNOSTICS, not the
+// closure. These two tests guard REPRESENTATIONS of `ALLOWED_SKIPS` (its
+// printed value via `--print-allowed-skips`, and a narrow occurrence count
+// over the script's source text). Round 3 proved both bypassable
+// (mutations A and B above) without tripping either. They are kept because
+// they fire with a message pointing directly at `ALLOWED_SKIPS` when it IS
+// the cause — a faster diagnosis than the behavioral test's generic
+// accept/reject message — but
+// `test_ci_gate_decision_matches_job_level_if_for_every_needs_member`
+// above is the actual enforcement mechanism. Do not describe these two as
+// sufficient on their own.
 // ---------------------------------------------------------------------------
 
 /// Read `scripts/check-ci-gate.sh` relative to the repo root.
@@ -1089,12 +1303,11 @@ fn count_allowed_skips_code_occurrences(script: &str) -> usize {
 /// FIX: eliminate the second parser rather than patch it for one more
 /// form. `scripts/check-ci-gate.sh` gained a `--print-allowed-skips` mode
 /// (`print_allowed_skips()`: `printf '%s\n' "${ALLOWED_SKIPS[@]}"`) that
-/// asks BASH ITSELF what it considers `ALLOWED_SKIPS` to be — the exact
-/// same in-memory array `evaluate_needs()` consults, evaluated after every
-/// declaration/append that ran before that point. No array-construction
-/// form can desync from this, because there is no second parser to
-/// disagree with bash: this test shells out to the script instead of
-/// reading its source text.
+/// asks BASH ITSELF what it considers `ALLOWED_SKIPS` to be — the same
+/// in-memory array `evaluate_needs()` consults, AS BASH EVALUATES IT AT
+/// THE POINT `print_allowed_skips` RUNS (i.e. after every
+/// declaration/append that executed before that call). No
+/// array-DECLARATION form can desync from this.
 ///
 /// Proven RED against all four independently-reproduced bypass forms
 /// before this fix, and confirmed still-passing after a byte-identical
@@ -1102,6 +1315,19 @@ fn count_allowed_skips_code_occurrences(script: &str) -> usize {
 /// entries, bare words, and `"${OTHER[@]}"` expansion — see this round's
 /// fix-report for per-form output of `--print-allowed-skips` proving each
 /// is correctly reflected.
+///
+/// CORRECTION (PR #671 review, round 3): the claim above is narrower than
+/// it originally read. This test asks bash for `ALLOWED_SKIPS`'s printed
+/// value, which is faithful to any DECLARATION-form widening (any way of
+/// constructing the array literal). It is NOT faithful to a
+/// CONTROL-FLOW-based desync: a subscripted assignment
+/// (`ALLOWED_SKIPS[9]=test`) placed as the first statement inside
+/// `evaluate_needs` — a code path `--print-allowed-skips` never
+/// executes — silently widens what the real gate honors while this test's
+/// own shell-out still observes only `mutants`. Reproduced end-to-end;
+/// see `test_ci_gate_decision_matches_job_level_if_for_every_needs_member`
+/// above, which is the actual behavioral closure and does not depend on
+/// this test (or this function's `--print-allowed-skips` call) at all.
 ///
 /// `#[cfg(unix)]`: `scripts/check-ci-gate.sh` is a bash script that only
 /// ever runs on `ubuntu-latest` in this repo's actual CI (`ci-gate` and
@@ -1212,8 +1438,24 @@ fn test_allowed_skips_members_require_job_level_conditional_in_ci_yml() {
 /// by `evaluate_needs()`) without necessarily being visible to
 /// `--print-allowed-skips`'s own read. This test does not depend on
 /// execution order or reachability at all — it is a pure count over the
-/// file's text, so a NEW code-level reference to `ALLOWED_SKIPS` anywhere
-/// in the file fails it, unconditionally.
+/// file's text.
+///
+/// CORRECTION (PR #671 review, round 3): the doc comment previously
+/// claimed this fails on "a NEW code-level reference to ALLOWED_SKIPS
+/// anywhere in the file, unconditionally" — that overstates it. This test
+/// counts exactly THREE textual shapes (`ALLOWED_SKIPS=`,
+/// `ALLOWED_SKIPS+=`, `${ALLOWED_SKIPS`), not every possible code-level
+/// reference. A subscripted assignment (`ALLOWED_SKIPS[9]=test`) matches
+/// none of the three and is invisible to this count, as is a
+/// `declare -n`/nameref alias, `read -a ALLOWED_SKIPS`, or `mapfile -t
+/// ALLOWED_SKIPS`. Reproduced end-to-end (mutation A: a subscripted
+/// assignment as the first statement of `evaluate_needs`) — this test
+/// stayed green while the real gate accepted an illegitimate skip. This
+/// test is a fast diagnostic for the three shapes it does cover, not a
+/// general "any new reference" guarantee — see
+/// `test_ci_gate_decision_matches_job_level_if_for_every_needs_member`
+/// above for the guarantee that does not depend on enumerating shapes at
+/// all.
 ///
 /// Runs on all platforms (no bash shell-out) — no `#[cfg(unix)]` needed.
 #[test]

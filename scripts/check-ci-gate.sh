@@ -103,25 +103,33 @@ bash -n "${BASH_SOURCE[0]}"
 # required branch-protection check. Widening it to a job with no legitimate
 # reason to skip (e.g. `test`, `deny`, `clippy`) would make this gate
 # STRICTLY WEAKER than the retired inline condition it replaced — the
-# mirror image of the false-green defect this script exists to fix. This
-# holds regardless of HOW the array is widened: a second `ALLOWED_SKIPS=(...)`
-# declaration, an `ALLOWED_SKIPS+=(...)` append, or any other valid bash
-# array-construction form bash accepts — all are equally a widening.
+# mirror image of the false-green defect this script exists to fix.
 #
+# The actual enforcement is BEHAVIORAL, not textual (PR #671 review, round
+# 3):
+# `tests/ci_gate_completeness.rs::test_ci_gate_decision_matches_job_level_if_for_every_needs_member`
+# runs THIS SCRIPT (a real bash subprocess) against a synthesized payload
+# for every `ci-gate.needs` job — that job `skipped`, every other job
+# `success` — derived from `ci.yml`, and asserts the gate's actual exit
+# code matches whether that job's `ci.yml` block has a job-level `if:`.
+# It has no opinion on how `ALLOWED_SKIPS` is represented internally, so no
+# array-construction form, control-flow trick, subscripted assignment, or
+# rewrite of `is_allowed_skip` can pass it while the gate's real decision
+# is still wrong.
+#
+# Two earlier, weaker guards remain as fast diagnostics (they point
+# directly at ALLOWED_SKIPS when it IS the cause) but are NOT sufficient on
+# their own — round 3 proved both bypassable by ordinary constructions
+# (a subscripted `ALLOWED_SKIPS[9]=...` assignment inside `evaluate_needs`,
+# and a parallel array read alongside `"${ALLOWED_SKIPS[@]}"` inside
+# `is_allowed_skip`) that never touch either guard's textual pattern:
 # `tests/ci_gate_completeness.rs::test_allowed_skips_members_require_job_level_conditional_in_ci_yml`
-# enforces the semantic reason a job may be here: it shells out to THIS
-# SCRIPT's `--print-allowed-skips` mode (not a source-text parser) to ask
-# bash itself what it considers ALLOWED_SKIPS to be, then asserts every
-# named job's `ci.yml` block carries a job-level `if:` condition (the same
-# structural fact that makes `mutants`'s `skipped` result on push
-# legitimate). A second, syntax-independent guard
-# (`test_allowed_skips_has_exactly_three_code_level_references`) counts the
-# non-comment-line occurrences of the `ALLOWED_SKIPS` identifier in this
-# file and asserts exactly 3 (the declaration below, the read in
-# `is_allowed_skip`, and the read in `print_allowed_skips`) — belt-and-
-# braces protection against a new code-level reference (e.g. an `+=`
-# append line) appearing anywhere in this file, independent of whether
-# `--print-allowed-skips` itself would reflect it.
+# shells out to `--print-allowed-skips` (asks bash for the array's PRINTED
+# value, which a control-flow-based bypass can desync from), and
+# `test_allowed_skips_has_exactly_three_code_level_references` counts three
+# specific textual shapes (`ALLOWED_SKIPS=`, `ALLOWED_SKIPS+=`,
+# `${ALLOWED_SKIPS`) in the source, which misses e.g. `ALLOWED_SKIPS[9]=`,
+# `declare -n`, `read -a`, or `mapfile -t`.
 # ---------------------------------------------------------------------------
 ALLOWED_SKIPS=("mutants")
 
@@ -299,10 +307,20 @@ run_self_test() {
     local mismatches=0
 
     # check_fixture <description> <json> <expected: "pass" | "fail:<rc>">
+    #              [expected_substring]
+    #
+    # The optional 4th argument discriminates BETWEEN fixtures that produce
+    # the same exit code via different code paths — without it, two
+    # fixtures with the same expected rc are indistinguishable from each
+    # other's perspective, so deleting the more specific check (e.g. the
+    # empty/whitespace-input pre-check, which shares rc=2 with the
+    # malformed-JSON and non-object-JSON checks) would not be caught by
+    # exit code alone.
     check_fixture() {
         local desc="$1"
         local json="$2"
         local expected="$3"
+        local expected_substring="${4:-}"
 
         total=$((total + 1))
 
@@ -317,10 +335,21 @@ run_self_test() {
             actual="fail:${rc}"
         fi
 
-        if [ "${actual}" = "${expected}" ]; then
+        local rc_ok=true
+        [ "${actual}" = "${expected}" ] || rc_ok=false
+
+        local substring_ok=true
+        if [ -n "${expected_substring}" ] && ! grep -qF -- "${expected_substring}" <<<"${output}"; then
+            substring_ok=false
+        fi
+
+        if [ "${rc_ok}" = true ] && [ "${substring_ok}" = true ]; then
             echo "[PASS] ${desc} (expected=${expected}, actual=${actual})"
         else
             echo "[FAIL] ${desc} (expected=${expected}, actual=${actual})"
+            if [ "${substring_ok}" = false ]; then
+                echo "       expected output to contain: \"${expected_substring}\""
+            fi
             echo "       --- evaluate_needs output ---"
             while IFS= read -r line; do
                 echo "       ${line}"
@@ -387,12 +416,24 @@ run_self_test() {
         "fail:1"
 
     # Fixture 9 — empty/whitespace-only input -> FAIL closed with rc=2, via
-    # its own dedicated check (not the generic "not valid JSON" message —
-    # empty input isn't malformed JSON, it's no input at all).
+    # its own dedicated check, not the object-shape check it would
+    # otherwise fall through to. Verified empirically: `jq empty` on empty
+    # or whitespace-only input exits 0 (it parses zero JSON values, which
+    # jq does not treat as a syntax error), so without the dedicated
+    # pre-check this input would silently pass the JSON-validity check and
+    # instead be caught by the LATER object-shape check (`jq -e 'type ==
+    # "object"'`, which does fail on empty input) — same rc=2, but with the
+    # "input JSON is valid but is not an object" message, which is a
+    # confusing diagnosis for input that was never JSON at all. The 4th
+    # `check_fixture` argument below asserts the dedicated pre-check's OWN
+    # message actually fires (discriminates this fixture from the
+    # malformed-JSON and non-object-JSON fixtures below, which all share
+    # rc=2 but must fire through different code paths).
     check_fixture \
         "empty-or-whitespace-input" \
         '   ' \
-        "fail:2"
+        "fail:2" \
+        "input is empty (or whitespace-only)"
 
     # Fixture 10 — syntactically invalid JSON -> FAIL closed with rc=2
     # (input rejected before any per-job decision is made).
