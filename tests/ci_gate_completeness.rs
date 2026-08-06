@@ -1031,3 +1031,138 @@ fn test_mutants_job_structure_unchanged_by_cigate2_option_c() {
         step_if_lines[0]
     );
 }
+
+// ---------------------------------------------------------------------------
+// CRITICAL-1 (PR #671 review) — `ALLOWED_SKIPS` is a trust boundary; pin the
+// semantic reason a job may be in it, not just that it currently is.
+// ---------------------------------------------------------------------------
+
+/// Read `scripts/check-ci-gate.sh` relative to the repo root.
+fn read_check_ci_gate_sh() -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/check-ci-gate.sh");
+    let raw = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("Could not read {}: {e}", path.display()));
+    raw.replace("\r\n", "\n")
+}
+
+/// Parse the `ALLOWED_SKIPS=(...)` bash array from `scripts/check-ci-gate.sh`,
+/// returning the quoted job names it lists (in file order, quotes stripped).
+///
+/// Deliberately minimal: this is a test-only parser for one specific,
+/// single-line bash array declaration (`ALLOWED_SKIPS=("a" "b" ...)`), not a
+/// general bash-array parser. It looks for a line starting with
+/// `ALLOWED_SKIPS=(`, then extracts every double-quoted token up to the
+/// closing `)`.
+fn parse_allowed_skips_from_script(script: &str) -> Vec<String> {
+    for line in script.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("ALLOWED_SKIPS=(") {
+            let inner = rest.strip_suffix(')').unwrap_or(rest);
+            let mut names = Vec::new();
+            let mut chars = inner.chars();
+            while let Some(c) = chars.next() {
+                if c == '"' {
+                    let mut s = String::new();
+                    for c2 in chars.by_ref() {
+                        if c2 == '"' {
+                            break;
+                        }
+                        s.push(c2);
+                    }
+                    names.push(s);
+                }
+            }
+            return names;
+        }
+    }
+    Vec::new()
+}
+
+/// CRITICAL-1 (PR #671 review, S-CIGATE-2 post-review fix round):
+/// `scripts/check-ci-gate.sh`'s `ALLOWED_SKIPS` array is the gate's trust
+/// boundary — every job named there is granted permission to report
+/// `skipped` and still pass the sole required branch-protection check.
+/// Nothing previously pinned WHY a job may legitimately be there, only that a
+/// specific fixture set happened to be satisfied by whatever was currently
+/// listed.
+///
+/// Reproduced independently: widening `ALLOWED_SKIPS` to
+/// `("mutants" "test" "deny" "clippy" "msrv" "spec-guard"
+/// "check-signing-workflow-injection")` left `--self-test` at 8/8 and this
+/// entire test file green, while a `needs` payload with 7 of the 8 required
+/// jobs reporting `skipped` yielded gate rc=0 — the gate became STRICTLY
+/// WEAKER than the retired inline condition it replaced (the mirror image of
+/// the false-green defect this story fixes: instead of an unknown result
+/// value slipping through, an allowlist entry with no legitimate basis lets a
+/// job that never ran slip through). `fmt` was avoided in that reproduction
+/// specifically because fixture 3 (`unlisted-job-skipped`) already uses
+/// `fmt`, which would have made that ONE fixture (out of eight) catch the
+/// widening — incidental coverage of one of the newly-widened jobs, not a
+/// structural guarantee about the other six.
+///
+/// This test pins the SEMANTIC invariant instead of the literal contents of
+/// `ALLOWED_SKIPS`: every job named there MUST carry a job-level `if:` in its
+/// own `ci.yml` job block — the same structural fact that makes `mutants`'s
+/// `skipped` result on push legitimate (`if: github.event_name ==
+/// 'pull_request'`). `test`, `deny`, `clippy`, `msrv`, `spec-guard`, and
+/// `check-signing-workflow-injection` carry no job-level `if:` today
+/// (confirmed by direct grep of `.github/workflows/ci.yml`), so widening
+/// `ALLOWED_SKIPS` to include any of them fails this test automatically — a
+/// maintainer cannot silently grant an always-run job permission to skip.
+///
+/// Proven RED (2026-08-06, post-review fix round): temporarily widening
+/// `ALLOWED_SKIPS` to the seven-job set above made this test fail with a
+/// diagnostic naming each of the six illegitimately-added jobs; restoring
+/// `ALLOWED_SKIPS=("mutants")` (byte-identical, verified via `git diff`)
+/// made it pass again.
+#[test]
+fn test_allowed_skips_members_require_job_level_conditional_in_ci_yml() {
+    let script = read_check_ci_gate_sh();
+    let allowed_skips = parse_allowed_skips_from_script(&script);
+
+    assert!(
+        !allowed_skips.is_empty(),
+        "FAIL: could not parse ALLOWED_SKIPS=(...) out of \
+         scripts/check-ci-gate.sh — either the array is unexpectedly empty \
+         (it should contain at least `mutants`) or this test's minimal \
+         parser (`parse_allowed_skips_from_script`) needs updating to match \
+         the script's current syntax."
+    );
+
+    let ci = read_ci_yml();
+
+    for job in &allowed_skips {
+        let job_block = extract_job_block(&ci, job).unwrap_or_else(|| {
+            panic!(
+                "FAIL: scripts/check-ci-gate.sh's ALLOWED_SKIPS names `{job}`, \
+                 but no `{job}:` job exists in `.github/workflows/ci.yml`. A \
+                 job named in ALLOWED_SKIPS must be a real job."
+            )
+        });
+
+        let has_job_level_if = job_block
+            .lines()
+            .any(|l| l.starts_with("    if:") && !l.starts_with("        "));
+
+        assert!(
+            has_job_level_if,
+            "FAIL (CRITICAL-1, PR #671 review): `{job}` is listed in \
+             scripts/check-ci-gate.sh's ALLOWED_SKIPS, but its ci.yml job \
+             block has no job-level `if:` condition — meaning `{job}` always \
+             runs and can never legitimately report `skipped`.\n\
+             \n\
+             Allowlisting an always-run job makes the gate STRICTLY WEAKER \
+             than the retired inline condition it replaced: a future \
+             accidental (or malicious) skip of `{job}` would silently pass \
+             the sole required branch-protection check.\n\
+             \n\
+             Fix: remove `{job}` from ALLOWED_SKIPS, or — if `{job}` is \
+             being given a genuine conditional (e.g. `if: \
+             github.event_name == 'pull_request'`) — add that conditional \
+             to its ci.yml job block FIRST, in the same change, so this \
+             test can verify the reason before the carve-out is granted.\n\
+             \n\
+             Current `{job}` block:\n{job_block}"
+        );
+    }
+}

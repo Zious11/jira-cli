@@ -41,7 +41,11 @@
 #   0 — every job passed (success, or allowlisted-skipped)
 #   1 — at least one job failed the gate (see per-job OK/FAIL log lines), or
 #       the `needs` JSON was empty
-#   2 — malformed input (not valid JSON) or missing `jq`
+#   2 — missing `jq`, malformed input (not valid JSON), input JSON that is
+#       valid but not a top-level object (e.g. an array), or an internal jq
+#       failure while extracting job names (should not happen once the two
+#       checks above pass — reported distinctly rather than folded into the
+#       empty-needs case)
 #
 # SELF-TEST: pass --self-test to run the built-in fixture suite (proves the
 # decision logic is not a no-op; modeled on
@@ -55,12 +59,18 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-export REPO_ROOT # referenced defensively; keeps parity with sibling scripts' layout
-
-# Validate script syntax on every invocation (catches accidental bash syntax
-# errors in this file itself before any logic runs).
+# Explicit syntax self-check — repo convention shared with
+# scripts/check-signing-workflow-injection.sh, check-bc-citation-symbols.sh,
+# and check-cargo-mutants-policy-citations.sh (the latter two even pin this
+# line's presence via their own --self-test grep count). Honest note: for
+# THIS script's own control flow it is not strictly load-bearing — every
+# function below is fully defined (and therefore syntax-checked by bash's
+# own sequential parser) before `main "$@"` at the bottom ever runs, so a
+# syntax error anywhere in this file would surface before any real work
+# happens even without this line. Kept for consistency with the sibling
+# scripts' convention and because it gives one explicit, unambiguous
+# syntax-error message up front rather than relying on that incidental
+# ordering.
 bash -n "${BASH_SOURCE[0]}"
 
 # ---------------------------------------------------------------------------
@@ -75,6 +85,19 @@ bash -n "${BASH_SOURCE[0]}"
 # report `skipped` (e.g. a future PR-only or repo-variable-gated job), add
 # it here too — otherwise the gate will (correctly) start failing that
 # job's push-event runs. See CLAUDE.md's `ci-gate` Conventions bullet.
+#
+# THIS ARRAY IS A TRUST BOUNDARY, not a convenience list: every job named
+# here is granted permission to report `skipped` and still pass the sole
+# required branch-protection check. Widening it to a job with no legitimate
+# reason to skip (e.g. `test`, `deny`, `clippy`) would make this gate
+# STRICTLY WEAKER than the retired inline condition it replaced — the
+# mirror image of the false-green defect this script exists to fix.
+# `tests/ci_gate_completeness.rs::test_allowed_skips_members_require_job_level_conditional_in_ci_yml`
+# enforces the semantic reason a job may be here: it parses this array and
+# asserts every member's `ci.yml` job block carries a job-level `if:`
+# condition (the same structural fact that makes `mutants`'s `skipped`
+# result on push legitimate). A job with no job-level `if:` cannot be added
+# here without that test failing.
 # ---------------------------------------------------------------------------
 ALLOWED_SKIPS=("mutants")
 
@@ -119,8 +142,32 @@ evaluate_needs() {
         return 2
     fi
 
+    # Shape check: `jq empty` above validates JSON *syntax* only — `[1,2,3]`
+    # and `"a string"` are both syntactically valid JSON but neither is a
+    # `toJSON(needs)`-shaped job->result map. Without this check, a
+    # non-object payload reaches the `jq -r --arg j ... '.[$j].result'` call
+    # below and crashes with jq's own "Cannot index array/string with
+    # string" error under `set -e` (jq exit 5) — outside this script's
+    # documented 0/1/2 exit contract and surfacing a raw jq trace instead of
+    # a clean ERROR: message. Fail closed through the documented path
+    # instead.
+    if ! echo "${json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+        echo "ERROR: input JSON is valid but is not an object (expected a" >&2
+        echo "       job -> result map shaped like toJSON(needs))." >&2
+        return 2
+    fi
+
     local jobs
-    jobs=$(echo "${json}" | jq -r 'keys[]' 2>/dev/null || true)
+    local jq_status=0
+    jobs=$(echo "${json}" | jq -r 'keys[]' 2>/dev/null) || jq_status=$?
+
+    if [ "${jq_status}" -ne 0 ]; then
+        echo "ERROR: jq failed while extracting job names from the needs" >&2
+        echo "       object (exit ${jq_status}). This should not happen" >&2
+        echo "       after the JSON-validity and object-shape checks above" >&2
+        echo "       passed — please report this as a bug." >&2
+        return 2
+    fi
 
     if [ -z "${jobs}" ]; then
         echo "FAIL: needs JSON is empty — the gate has nothing to verify (AC-004)."
@@ -134,7 +181,10 @@ evaluate_needs() {
     local job result
     while IFS= read -r job; do
         [ -z "${job}" ] && continue
-        result=$(echo "${json}" | jq -r --arg j "${job}" '.[$j].result')
+        # -c keeps the extracted value on a single line even if `.result`
+        # is ever something other than a plain string (an object/array),
+        # so one job never garbles the OK/FAIL log into multiple lines.
+        result=$(echo "${json}" | jq -rc --arg j "${job}" '.[$j].result')
 
         # Exact match against ALLOWED_SKIPS only (is_allowed_skip) — no
         # substring/prefix matching, so e.g. a job named `mutants-extra`
@@ -170,11 +220,19 @@ evaluate_needs() {
 # ---------------------------------------------------------------------------
 # Self-test fixture suite (S-CIGATE-2 AC-002/AC-003/AC-004/AC-005).
 #
-# Each fixture asserts an EXPECTED outcome (pass = exit 0, fail = non-zero
-# exit) against evaluate_needs(). This proves the decision logic is not a
-# no-op: every fixture below was independently proven RED against the
-# Red Gate stub (which always returned 0 regardless of input) before the
-# real fail-closed logic in evaluate_needs() was written.
+# Each fixture asserts an EXPECTED outcome against evaluate_needs():
+# "pass" (exit 0), or "fail:<rc>" pinning the EXACT exit code (1 = a
+# decision failure — see the per-job OK/FAIL lines; 2 = the input itself
+# was rejected before any per-job decision was made: missing jq, malformed
+# JSON, or valid-but-non-object JSON). Distinguishing rc=1 from rc=2 is
+# what a maintainer debugging a red gate actually needs — folding both into
+# a single "fail" would hide whether the gate rejected the payload's SHAPE
+# or made a real per-job FAIL decision.
+#
+# This proves the decision logic is not a no-op: every fixture below was
+# independently proven RED against the Red Gate stub (which always
+# returned 0 regardless of input) before the real fail-closed logic in
+# evaluate_needs() was written.
 # ---------------------------------------------------------------------------
 run_self_test() {
     echo "=== check-ci-gate.sh SELF-TEST (S-CIGATE-2) ==="
@@ -183,7 +241,7 @@ run_self_test() {
     local total=0
     local mismatches=0
 
-    # check_fixture <description> <json> <expected: pass|fail>
+    # check_fixture <description> <json> <expected: "pass" | "fail:<rc>">
     check_fixture() {
         local desc="$1"
         local json="$2"
@@ -199,13 +257,13 @@ run_self_test() {
         if [ "${rc}" -eq 0 ]; then
             actual="pass"
         else
-            actual="fail"
+            actual="fail:${rc}"
         fi
 
         if [ "${actual}" = "${expected}" ]; then
             echo "[PASS] ${desc} (expected=${expected}, actual=${actual})"
         else
-            echo "[FAIL] ${desc} (expected=${expected}, actual=${actual}, rc=${rc})"
+            echo "[FAIL] ${desc} (expected=${expected}, actual=${actual})"
             echo "       --- evaluate_needs output ---"
             while IFS= read -r line; do
                 echo "       ${line}"
@@ -220,18 +278,18 @@ run_self_test() {
         '{"fmt":{"result":"success"},"clippy":{"result":"success"},"test":{"result":"success"}}' \
         "pass"
 
-    # Fixture 2 — one job failure -> FAIL.
+    # Fixture 2 — one job failure -> FAIL (rc=1: a real per-job decision).
     check_fixture \
         "one-job-failure" \
         '{"fmt":{"result":"failure"},"clippy":{"result":"success"}}' \
-        "fail"
+        "fail:1"
 
     # Fixture 3 — an UNLISTED job reports skipped -> FAIL (only ALLOWED_SKIPS
     # members may tolerate skipped).
     check_fixture \
         "unlisted-job-skipped" \
         '{"fmt":{"result":"skipped"},"clippy":{"result":"success"}}' \
-        "fail"
+        "fail:1"
 
     # Fixture 4 — mutants (allowlisted) reports skipped -> PASS.
     check_fixture \
@@ -245,13 +303,13 @@ run_self_test() {
     check_fixture \
         "mutants-failure-allowlist-is-restrictive" \
         '{"mutants":{"result":"failure"},"fmt":{"result":"success"}}' \
-        "fail"
+        "fail:1"
 
     # Fixture 6 — a job reports cancelled -> FAIL.
     check_fixture \
         "job-cancelled" \
         '{"fmt":{"result":"cancelled"},"clippy":{"result":"success"}}' \
-        "fail"
+        "fail:1"
 
     # Fixture 7 — a job reports an invented/unknown result string -> FAIL via
     # the default arm (the structural fix: today's condition allowlists
@@ -260,14 +318,91 @@ run_self_test() {
     check_fixture \
         "unrecognized-result-value" \
         '{"fmt":{"result":"action_required"},"clippy":{"result":"success"}}' \
-        "fail"
+        "fail:1"
 
     # Fixture 8 — empty needs context -> FAIL closed (a gate with nothing to
-    # check must not vacuously pass).
+    # check must not vacuously pass). rc=1: this is a real "nothing to
+    # verify" decision, distinct from the input-rejection rc=2 fixtures
+    # below.
     check_fixture \
         "empty-needs" \
         '{}' \
-        "fail"
+        "fail:1"
+
+    # Fixture 9 — syntactically invalid JSON -> FAIL closed with rc=2 (input
+    # rejected before any per-job decision is made).
+    check_fixture \
+        "malformed-json" \
+        'not json' \
+        "fail:2"
+
+    # Fixture 10 — syntactically VALID JSON that is not an object (a bare
+    # array) -> FAIL closed with rc=2. `jq empty` alone is not sufficient
+    # here: it validates JSON *syntax*, not *shape*, and `[1,2,3]` passes
+    # it. Without the dedicated object-shape check this fixture pins, this
+    # payload would instead crash the per-job `jq -r --arg j ... .result`
+    # call with jq's own "Cannot index array with string" error (jq exit
+    # 5) — outside this script's documented 0/1/2 exit contract.
+    check_fixture \
+        "non-object-json-array" \
+        '[1,2,3]' \
+        "fail:2"
+
+    # Fixture 11 — a realistic multi-line toJSON(needs) payload, modeled on
+    # the actual shape of live CI run 30465686049 (the run that first
+    # exposed this story's defect): pretty-printed, multi-line, and each
+    # job carries additional fields (`outputs`, `outcome`) beyond `result`
+    # — not the single-line minimal `{"job":{"result":"..."}}` shape every
+    # other fixture above uses. A jq expression that only worked on compact
+    # single-line input would pass every fixture above and still break in
+    # production; this fixture catches that class of bug. Expected: PASS
+    # (mutants skipped + allowlisted, every other required job succeeded —
+    # the actual shape of a legitimate push-event run).
+    check_fixture \
+        "realistic-multiline-toJSON-needs-payload" \
+        '{
+  "fmt": {
+    "result": "success",
+    "outputs": {},
+    "outcome": "success"
+  },
+  "clippy": {
+    "result": "success",
+    "outputs": {},
+    "outcome": "success"
+  },
+  "test": {
+    "result": "success",
+    "outputs": {},
+    "outcome": "success"
+  },
+  "msrv": {
+    "result": "success",
+    "outputs": {},
+    "outcome": "success"
+  },
+  "deny": {
+    "result": "success",
+    "outputs": {},
+    "outcome": "success"
+  },
+  "spec-guard": {
+    "result": "success",
+    "outputs": {},
+    "outcome": "success"
+  },
+  "check-signing-workflow-injection": {
+    "result": "success",
+    "outputs": {},
+    "outcome": "success"
+  },
+  "mutants": {
+    "result": "skipped",
+    "outputs": {},
+    "outcome": "skipped"
+  }
+}' \
+        "pass"
 
     echo
     echo "Self-test summary: $((total - mismatches))/${total} fixtures matched their expected outcome."
