@@ -872,12 +872,23 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
 
     assert!(
         has_run_step,
-        "FAIL (M2-g): The `ci-gate` job block contains no `run:` step.\n\
+        "FAIL (M2-g): The `ci-gate` job block contains no `run:` step \
+         matching this check's pattern (`run:` as the first non-whitespace \
+         text on its own line).\n\
          The gate must have a `run:` step that actually invokes \
          `scripts/check-ci-gate.sh` and fails the job via that script's \
          exit code.\n\
          Without a `run:` step the job trivially succeeds for every upstream \
-         result.\n\
+         result. NOTE (PR #671 review round 12, benign-false-red message \
+         fix): if a `run:` step genuinely exists but its KEYS were \
+         reordered so `run:` is now the step's FIRST key (the one on the \
+         same line as the YAML sequence marker, e.g. `      - run: ...` \
+         instead of `      - name: ...` followed by `run:` later), this \
+         check's `trim_start()`-based pattern does not strip the leading \
+         `- ` marker and so does not recognize it — `run:` is not \
+         missing, it is in an unrecognized POSITION. See M2-l below (step \
+         key SETS, order-independent) for the check that still passes in \
+         that case, confirming the step itself is intact.\n\
          Current ci-gate block:\n{gate_block}"
     );
 
@@ -924,8 +935,18 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
          signal (see this test's M2-g rationale above) — ANY suffix or \
          pipe stage appended after it (`|| true`, `| cat`, `; exit 0`, \
          redirection, etc.) can swallow that signal while leaving every \
-         substring-based check (M2-g, M2-h) satisfied. If this is a \
-         deliberate, reviewed change to the run line, update \
+         substring-based check (M2-g, M2-h) satisfied. NOTE (PR #671 \
+         review round 12, benign-false-red message fix): this checker \
+         treats the `run:` value as an OPAQUE plain-scalar string and \
+         does NOT interpret YAML quoting — a cosmetic rewrap of the exact \
+         same command in single or double quotes (e.g. `run: 'echo \
+         \"${{NEEDS_JSON}}\" | bash scripts/check-ci-gate.sh'`) changes \
+         this byte-comparison even though the command GitHub Actions \
+         actually runs is unchanged; that is not a bug in this check, it \
+         is the same \"more literal is strictly safer than guessing which \
+         rewrites are equivalent\" tradeoff `extract_and_normalize_if_expr` \
+         makes for its `${{ }}` wrapper. If this is a deliberate, \
+         reviewed change to the run line (quoting or otherwise), update \
          PINNED_GATE_RUN_LINE in the SAME change.\n\
          Current ci-gate block:\n{gate_block}"
     );
@@ -1086,6 +1107,34 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
          PINNED_GATE_NEEDS_JSON_LINE in the SAME change.\n\
          Current ci-gate block:\n{gate_block}"
     );
+
+    // -----------------------------------------------------------------------
+    // Assertion 10 (M2-o, PR #671 review round 12, CRITICAL 2): M2-n pins
+    // the ONE `NEEDS_JSON:` line's VALUE but never asserted it is the
+    // ONLY child of the gate step's `env:` block. A sibling
+    // `BASH_ENV: <path>` alongside `NEEDS_JSON:` leaves every prior pin
+    // satisfied while giving the runner's non-interactive bash shell a
+    // script to source BEFORE the pinned run line's script body executes
+    // — a `BASH_ENV` shim ending in `exit 0` ends the shell first,
+    // regardless of `--norc`/`--noprofile` (verified locally under the
+    // runner's actual invocation flags, not assumed). Pin the env:
+    // block's complete key set the same way M2-l pins step key sets.
+    // -----------------------------------------------------------------------
+    let actual_gate_env_keys = extract_gate_env_key_set(gate_block);
+    assert_eq!(
+        actual_gate_env_keys, PINNED_GATE_ENV_KEYS,
+        "FAIL (M2-o, PR #671 review round 12, CRITICAL): the `ci-gate` \
+         gate step's `env:` key set ({actual_gate_env_keys:?}) does not \
+         match the pinned, human-reviewed set ({PINNED_GATE_ENV_KEYS:?}). \
+         `NEEDS_JSON`'s VALUE is pinned by M2-n above, but a SIBLING env \
+         var (most importantly `BASH_ENV`, which non-interactive bash \
+         sources before running any script — including the pinned run \
+         line's body — regardless of `--norc`/`--noprofile`) is a separate \
+         attack this key-set pin exists to close. If this is a \
+         deliberate, reviewed change, update PINNED_GATE_ENV_KEYS in the \
+         SAME change.\n\
+         Current ci-gate block:\n{gate_block}"
+    );
 }
 
 /// PR #671 review round 11, CRITICAL 3 (workflow-level half):
@@ -1108,10 +1157,26 @@ fn test_ci_gate_pass_fail_semantics_are_structurally_placed() {
 /// WORKFLOW level rather than scoping to a specific job's block — see
 /// `common::yaml::extract_job_block`'s doc comment for why that function
 /// itself cannot be asked to cover this case.
+///
+/// CORRECTED (PR #671 review round 12, CRITICAL 1): the original form of
+/// this check was `ci.lines().any(|l| l == "defaults:")` — exact LINE
+/// equality, not key detection. Round 10's `outputs:` finding, one level
+/// up: reproduced end-to-end, flow style (`defaults: {{run: {{shell: "cat
+/// {{0}}"}}}}`, a single added line, `actionlint`-clean), quoted
+/// (`"defaults":`), a trailing comment, and a trailing space all left
+/// this exact-equality check blind (15/15 green) while adding the exact
+/// same workflow-level override. Fixed by reusing
+/// `extract_key_name_at_indent(l, 0)` — the same quote/whitespace-aware
+/// key matcher round 11 already built for job/step-level key sets,
+/// applied here at indent 0 for the workflow's own top-level keys. This
+/// was available in the SAME commit that introduced the exact-equality
+/// form; the new check was written with `==` instead of calling it.
 #[test]
 fn test_ci_yml_has_no_workflow_level_shell_override() {
     let ci = read_ci_yml();
-    let has_top_level_defaults = ci.lines().any(|l| l == "defaults:");
+    let has_top_level_defaults = ci
+        .lines()
+        .any(|l| extract_key_name_at_indent(l, 0).as_deref() == Some("defaults"));
 
     assert!(
         !has_top_level_defaults,
@@ -1130,6 +1195,34 @@ fn test_ci_yml_has_no_workflow_level_shell_override() {
          has no legitimate use in this file today; if one is ever needed, \
          this test must be updated deliberately in the SAME change, not \
          silently bypassed."
+    );
+}
+
+/// PR #671 review round 12, CRITICAL 2 (workflow-level half): the
+/// WORKFLOW's own top-level `env:` block is the second member of the
+/// unpinned-env-siblings set M2-o (above) closes at the gate-step level.
+/// `BASH_ENV` appended there is invisible to every job-block-anchored
+/// check for the same structural reason `defaults:` is (see
+/// `test_ci_yml_has_no_workflow_level_shell_override`'s doc comment) —
+/// this is therefore the second (and, alongside that test, only) test in
+/// this file reading `ci.yml` at the workflow level.
+#[test]
+fn test_ci_yml_workflow_level_env_key_set_is_pinned() {
+    let ci = read_ci_yml();
+    let actual_workflow_env_keys = extract_workflow_env_key_set(&ci);
+
+    assert_eq!(
+        actual_workflow_env_keys, PINNED_WORKFLOW_ENV_KEYS,
+        "FAIL (PR #671 review round 12, CRITICAL 2): the WORKFLOW's own \
+         top-level `env:` key set ({actual_workflow_env_keys:?}) does not \
+         match the pinned, human-reviewed set \
+         ({PINNED_WORKFLOW_ENV_KEYS:?}). This construct lives OUTSIDE \
+         every job block (a sibling of `name:`/`on:`/`jobs:`/`defaults:`), \
+         so no job-block-anchored assertion in this suite can ever see \
+         it — most importantly `BASH_ENV`, which non-interactive bash \
+         sources before running ANY job's script body, regardless of \
+         `--norc`/`--noprofile`. If this is a deliberate, reviewed \
+         change, update PINNED_WORKFLOW_ENV_KEYS in the SAME change."
     );
 }
 
@@ -1868,6 +1961,73 @@ fn extract_and_normalize_sole_run_line(job_block: &str) -> Result<String, String
 ///      real script yields exit 0 unconditionally — worse than round 10's
 ///      `|| true`, because the script's own log then reads as a
 ///      legitimate all-green run instead of a suppressed real failure.
+///
+/// PR #671 review round 12 added:
+///   5. the gate step's `env:` block's own COMPLETE key set
+///      (`PINNED_GATE_ENV_KEYS`, M2-o) — item 4 above pins `NEEDS_JSON`'s
+///      VALUE but never asserted it was the ONLY env child; a sibling
+///      `BASH_ENV` is independently exploitable (non-interactive bash
+///      sources it before running anything, `--norc`/`--noprofile`
+///      notwithstanding — verified under the runner's actual invocation
+///      flags).
+///   6. the WORKFLOW's own top-level `env:` block's key set
+///      (`PINNED_WORKFLOW_ENV_KEYS`,
+///      `test_ci_yml_workflow_level_env_key_set_is_pinned`) — the same
+///      `BASH_ENV` vector, one level further out, outside every job block
+///      entirely (same structural reason as `defaults:` below).
+///   7. fixed CRITICAL 1: `test_ci_yml_has_no_workflow_level_shell_override`
+///      originally checked `ci.lines().any(|l| l == "defaults:")` — exact
+///      LINE equality, not key detection, defeated by flow style, a
+///      quoted key, a trailing comment, or a trailing space (round 10's
+///      `outputs:` finding, one level up). Fixed to reuse
+///      `extract_key_name_at_indent(l, 0)`.
+///
+/// PRECISE SCOPE (PR #671 review round 12, IMPORTANT — the "minimum
+/// equivalent to a full-block pin" framing above, and this suite's
+/// panic text, previously read as though the whole block were closed;
+/// it is not, and was never claimed to be at the per-assertion level —
+/// only the summary framing overclaimed):
+///   PINNED (an unreviewed change WILL be caught): job-level key NAMES
+///   (item 1); step-level key NAMES on every step, in order (item 2);
+///   `ci-gate`'s own `if:` VALUE (item 3); the `NEEDS_JSON:` line's VALUE
+///   (item 4); the gate step's `env:` key NAMES (item 5); the workflow's
+///   top-level `env:` key NAMES (item 6); the workflow's top-level
+///   `defaults:` key PRESENCE (item 7); `continue-on-error` PRESENCE
+///   anywhere in the job block (M2-j).
+///   NOT PINNED (an unreviewed change will NOT be caught by this file):
+///   `uses:` VALUES (e.g. swapping the checkout action for a malicious
+///   fork at the same key), `with:` block CONTENTS (the `harden-runner`
+///   step's `egress-policy` value), and `name:` VALUES on any step or the
+///   job itself. These are deliberately out of scope for THIS story
+///   (S-CIGATE-2 is about the pass/fail DECISION path, not supply-chain
+///   pinning of actions used elsewhere in the file) — recorded here so
+///   "pinned" is never read more broadly than it is true.
+///
+/// CORRECTED (PR #671 review round 12): an earlier limitation note here
+/// speculated that every hardcoded-indent check (including all of the
+/// above) is vulnerable to re-indenting `ci-gate`'s own block, since a
+/// job's children need only be indented consistently with each other,
+/// not with the file's convention (PyYAML-confirmed, round 11). Reviewed
+/// round 12 ATTACKED this directly rather than leaving it speculative:
+/// re-indenting the whole child block +2, alone and combined with an
+/// always-false `if:` or a `shell:` override, failed CLOSED every time —
+/// on M2-a, which asserts PRESENCE of `    if:` at the exact indent this
+/// suite expects; moving the indent makes that presence check itself
+/// fail, before any deeper pin is even reached. The general rule, which
+/// explains both this negative result and round 12's two real CRITICALs
+/// in one sentence: **presence-shaped checks fail closed under position
+/// drift; absence-shaped checks with a position assumption fail open.**
+/// M2-j (`!contains("continue-on-error")`) is absence-shaped but
+/// indent-FREE (a whole-block substring scan) — safe. The pre-round-12
+/// `defaults:` check was absence-shaped AND position-shaped (a specific
+/// line form) — the one combination that failed open, and exactly what
+/// item 7 above fixed. Re-indentation itself remains untested as a
+/// bypass of the PINNED items above (1-6) specifically — those are value/
+/// key-name comparisons, not presence checks, and are not exercised by
+/// this attack — but PyYAML confirms the indent choice is per-job-legal,
+/// so this is recorded as an open question, not a settled negative,
+/// pending a round that attacks the pinned items under a re-indented
+/// block directly.
 const PINNED_GATE_IF_EXPR: &str = "${{ always() }}";
 const PINNED_GATE_NEEDS_JSON_LINE: &str = "${{ toJSON(needs) }}";
 const PINNED_GATE_JOB_KEYS: &[&str] = &["if", "name", "needs", "runs-on", "steps"];
@@ -1876,6 +2036,94 @@ const PINNED_GATE_STEP_KEY_SETS: &[&[&str]] = &[
     &["uses"],
     &["env", "name", "run"],
 ];
+
+/// PR #671 review round 12, CRITICAL 2: `PINNED_GATE_STEP_KEY_SETS` above
+/// confirms `env:` exists as a KEY on the gate step — it says nothing
+/// about which children `env:` itself has. `env:`'s children (10-space
+/// indent, one level deeper than the step's own 8-space keys) are an
+/// unpinned open set under a pinned key: M2-n pins the ONE `NEEDS_JSON:`
+/// line's value but never asserted it is the ONLY env child. Reproduced:
+/// adding a sibling `BASH_ENV: .github/ci-shim.sh` alongside the pinned
+/// `NEEDS_JSON:` line left every existing pin satisfied (the run line,
+/// the job/step key sets, `ci-gate`'s own `if:`, and `NEEDS_JSON`'s value
+/// are all untouched) — 15/15 green — while `BASH_ENV` is genuinely
+/// exploitable: verified locally under the runner's exact invocation
+/// (non-interactive `bash --noprofile --norc -e -o pipefail`, matching
+/// GitHub's own step-execution shell flags), `BASH_ENV` is sourced
+/// regardless of `--norc`/`--noprofile`, so a shim script ending in `exit
+/// 0` ends the shell before the pinned run line's script body ever
+/// executes.
+const PINNED_GATE_ENV_KEYS: &[&str] = &["NEEDS_JSON"];
+
+/// PR #671 review round 12, CRITICAL 2 (workflow-level half): the
+/// WORKFLOW's own top-level `env:` block (2-space indent, a sibling of
+/// `name:`/`on:`/`jobs:`/`defaults:` — currently just
+/// `CARGO_TERM_COLOR: always`) is the second member of the same open
+/// set. `BASH_ENV` appended there is invisible to every job-block-
+/// anchored check for the same structural reason `defaults:` was
+/// (`test_ci_yml_has_no_workflow_level_shell_override`'s doc comment) —
+/// it lives outside every job block by construction — and is
+/// independently exploitable via the same non-interactive-bash
+/// `BASH_ENV`-sourcing mechanism, this time affecting every job in the
+/// file rather than one gate step.
+const PINNED_WORKFLOW_ENV_KEYS: &[&str] = &["CARGO_TERM_COLOR"];
+
+/// Extract the sorted, complete key set of the gate step's `env:` block
+/// (10-space indent — one level deeper than the step's own 8-space keys)
+/// for comparison against `PINNED_GATE_ENV_KEYS`.
+///
+/// Scoped to AFTER the step-level `env:` line specifically (mirroring
+/// `extract_gate_step_key_sets`'s scoping to after `steps:`), not by
+/// scanning the whole `job_block` for 10-space-indent lines — a value
+/// nested 10-deep under an unrelated key (e.g. a future `with:` block
+/// with deeply-nested children) would otherwise be misread as an env
+/// child.
+fn extract_gate_env_key_set(job_block: &str) -> Vec<String> {
+    let lines: Vec<&str> = job_block.lines().collect();
+    let Some(env_line_idx) = lines
+        .iter()
+        .position(|l| extract_key_name_at_indent(l, 8).as_deref() == Some("env"))
+    else {
+        return Vec::new();
+    };
+
+    let mut keys: Vec<String> = lines[env_line_idx + 1..]
+        .iter()
+        .take_while(|l| {
+            let trimmed = l.trim_start();
+            trimmed.is_empty() || l.starts_with("          ")
+        })
+        .filter_map(|l| extract_key_name_at_indent(l, 10))
+        .collect();
+    keys.sort();
+    keys
+}
+
+/// Extract the sorted, complete key set of the WORKFLOW's own top-level
+/// `env:` block (2-space indent) for comparison against
+/// `PINNED_WORKFLOW_ENV_KEYS`. Reads `ci` (the whole file), not a
+/// `job_block` — see `PINNED_WORKFLOW_ENV_KEYS`'s doc comment for why
+/// this construct is outside every job block by construction.
+fn extract_workflow_env_key_set(ci: &str) -> Vec<String> {
+    let lines: Vec<&str> = ci.lines().collect();
+    let Some(env_line_idx) = lines
+        .iter()
+        .position(|l| extract_key_name_at_indent(l, 0).as_deref() == Some("env"))
+    else {
+        return Vec::new();
+    };
+
+    let mut keys: Vec<String> = lines[env_line_idx + 1..]
+        .iter()
+        .take_while(|l| {
+            let trimmed = l.trim_start();
+            trimmed.is_empty() || l.starts_with("  ")
+        })
+        .filter_map(|l| extract_key_name_at_indent(l, 2))
+        .collect();
+    keys.sort();
+    keys
+}
 
 /// Extract and normalize the SOLE `NEEDS_JSON:` env-child line (10-space
 /// indent, inside the gate step's `env:` block) for pinned-literal
