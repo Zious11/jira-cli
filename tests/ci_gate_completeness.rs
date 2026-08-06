@@ -2021,13 +2021,34 @@ fn extract_and_normalize_sole_run_line(job_block: &str) -> Result<String, String
 /// indent-FREE (a whole-block substring scan) — safe. The pre-round-12
 /// `defaults:` check was absence-shaped AND position-shaped (a specific
 /// line form) — the one combination that failed open, and exactly what
-/// item 7 above fixed. Re-indentation itself remains untested as a
-/// bypass of the PINNED items above (1-6) specifically — those are value/
-/// key-name comparisons, not presence checks, and are not exercised by
-/// this attack — but PyYAML confirms the indent choice is per-job-legal,
-/// so this is recorded as an open question, not a settled negative,
-/// pending a round that attacks the pinned items under a re-indented
-/// block directly.
+/// item 7 above fixed.
+///
+/// VERIFIED CLOSED (round-12 follow-up; previously recorded here as
+/// untested): attacked directly, specifically targeting the PINNED items
+/// (1-6) rather than M2-a's `if:` presence check. First construction
+/// tried (`if:` left at 4-space, `steps:` moved to 6-space) turned out to
+/// be INVALID YAML (PyYAML: "mapping values are not allowed here") — a
+/// job's sibling keys must share one indent, so `steps:` cannot move
+/// without moving `if:`/`name:`/`runs-on:` with it; that construction was
+/// never a real bypass to begin with. The VALID form of "only the deeper
+/// structure moves": job-level keys (`if:`, `steps:`, etc.) stay at their
+/// original 4-space indent, but `steps:`'s LIST ITEMS and everything
+/// under them shift deeper (6→8 for step markers, 8/10→10/12 for their
+/// children) — PyYAML-confirmed this parses to the semantically identical
+/// structure. Reproduced: this fails closed too, but via a DIFFERENT
+/// mechanism than M2-a — `extract_and_normalize_sole_run_line`'s
+/// step-level-run-line search itself has a position assumption (exactly
+/// 8-space indent) baked into its "find the candidate line" step, before
+/// it ever gets to comparing a VALUE; shifting the run line to 10-space
+/// makes the search find zero candidates, which is itself a presence
+/// check ("has no step-level `run:` line at all") that fires (M2-i) ahead
+/// of any of the key-set/if:/env: pins below. This refines rather than
+/// contradicts the rule above: a "value pin" that must first LOCATE its
+/// target at an expected position is not purely value-shaped — the
+/// locate step is a presence check, and it is what actually fires here.
+/// No open question remains on re-indentation; both the whole-block and
+/// deeper-structure-only constructions are now verified closed, by two
+/// different (both presence-shaped) mechanisms.
 const PINNED_GATE_IF_EXPR: &str = "${{ always() }}";
 const PINNED_GATE_NEEDS_JSON_LINE: &str = "${{ toJSON(needs) }}";
 const PINNED_GATE_JOB_KEYS: &[&str] = &["if", "name", "needs", "runs-on", "steps"];
