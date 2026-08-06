@@ -199,6 +199,19 @@ fn parse_needs_set(job_block: &str) -> Option<HashSet<String>> {
 /// .github/workflows/ci.yml` returns only `name:`, `on:`, `env:`, `jobs:`,
 /// in that order), so scanning to EOF is correct today; the 0-indent
 /// early-return guards against silently mis-scanning if that ever changes.
+///
+/// `#[cfg(unix)]` (PR #671 review round 15, CI-caught): this helper's only
+/// caller is `test_ci_gate_decision_matches_job_level_if_for_every_needs_member`,
+/// which is itself `#[cfg(unix)]`-gated (the bash shell-outs it performs
+/// don't run on Windows). Gating a TEST to unix does not remove the
+/// HELPERS it alone uses from a Windows build — they still compile there,
+/// now genuinely unused, and `-D warnings` promotes that to a hard clippy
+/// error. `cargo clippy` run 31128902318 caught exactly this on
+/// `windows-latest` (six items, this one included) after thirteen rounds
+/// of macOS-only local review missed it entirely — local verification,
+/// however rigorous, does not cover the platform matrix. Gate the helper
+/// the same way as its only caller, every time.
+#[cfg(unix)]
 fn list_all_ci_yml_job_names(ci: &str) -> Vec<String> {
     let Some(jobs_start) = ci.find("\njobs:\n") else {
         panic!("FAIL: `.github/workflows/ci.yml` has no top-level `jobs:` key.");
@@ -268,6 +281,13 @@ fn list_all_ci_yml_job_names(ci: &str) -> Vec<String> {
 /// function alone — scoped out of this round for that reason, matching
 /// how review round 11 itself scoped it ("low stakes given the file-wide
 /// 4-space assumption").
+///
+/// `#[cfg(unix)]` (PR #671 review round 15, CI-caught): only caller is
+/// `test_ci_gate_decision_matches_job_level_if_for_every_needs_member`,
+/// itself `#[cfg(unix)]`-gated — see `list_all_ci_yml_job_names`'s doc
+/// comment above for the full "gating a test orphans its helpers"
+/// explanation.
+#[cfg(unix)]
 fn line_declares_job_level_key(line: &str, key: &str) -> bool {
     let Some(after_indent) = line.strip_prefix("    ") else {
         return false;
@@ -1732,6 +1752,12 @@ fn test_mutants_job_structure_unchanged_by_cigate2_option_c() {
 /// this revision (do not trust a transcription — re-verify at the time of
 /// any change): the job-level `if:` is exactly `github.event_name ==
 /// 'pull_request'`, with NO `${{ }}` wrapper.
+///
+/// `#[cfg(unix)]` (PR #671 review round 15, CI-caught): every reader of
+/// this pin lives inside one of the three `#[cfg(unix)]`-gated tests —
+/// see `list_all_ci_yml_job_names`'s doc comment for the full "gating a
+/// test orphans its helpers" explanation.
+#[cfg(unix)]
 const PINNED_ALLOWED_SKIP_IF_EXPRESSIONS: &[(&str, &str)] =
     &[("mutants", "github.event_name == 'pull_request'")];
 
@@ -2741,8 +2767,20 @@ fn extract_gate_step_key_sets(job_block: &str) -> Vec<Vec<String>> {
 /// longer invent (or drop) a field here without this assertion failing and
 /// forcing them to look at — and update, in the same change as any real
 /// contract change — the pinned source of truth, not just this call site.
+///
+/// `#[cfg(unix)]` (PR #671 review round 15, CI-caught): used only by
+/// `build_multi_skip_payload` below, itself called only from the two
+/// `#[cfg(unix)]`-gated tests that build multi-skip payloads — see
+/// `list_all_ci_yml_job_names`'s doc comment for the full "gating a test
+/// orphans its helpers" explanation.
+#[cfg(unix)]
 const NEEDS_CONTEXT_JOB_KEYS: &[&str] = &["outputs", "result"];
 
+/// `#[cfg(unix)]`: this function's only callers are
+/// `test_ci_gate_decision_matches_job_level_if_for_every_needs_member` and
+/// `test_ci_gate_decision_is_arity_independent_for_unlisted_skips`, both
+/// themselves `#[cfg(unix)]`-gated.
+#[cfg(unix)]
 fn build_multi_skip_payload(all_jobs: &[String], skipped_jobs: &[&str]) -> String {
     let mut obj = serde_json::Map::new();
     for job in all_jobs {
@@ -2790,6 +2828,12 @@ fn build_multi_skip_payload(all_jobs: &[String], skipped_jobs: &[&str]) -> Strin
 /// every push by design). When `job` IS `mutants`, the two variants are
 /// identical — still run both for code-path uniformity; the redundancy is
 /// cheap.
+///
+/// `#[cfg(unix)]` (PR #671 review round 15, CI-caught): only caller is
+/// `test_ci_gate_decision_matches_job_level_if_for_every_needs_member`,
+/// itself `#[cfg(unix)]`-gated — see `list_all_ci_yml_job_names`'s doc
+/// comment for the full "gating a test orphans its helpers" explanation.
+#[cfg(unix)]
 fn all_skip_variants_for(job: &str) -> Vec<Vec<&str>> {
     vec![vec![job], vec![job, "mutants"]]
 }
