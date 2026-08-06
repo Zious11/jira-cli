@@ -164,6 +164,50 @@ fn parse_needs_set(job_block: &str) -> Option<HashSet<String>> {
     }
 }
 
+/// List every job name defined anywhere in `.github/workflows/ci.yml`'s
+/// `jobs:` map — not just `ci-gate.needs` members.
+///
+/// Used by the pin-coverage check (PR #671 review round 9, IMPORTANT 2) as
+/// the candidate universe for a direct behavioral probe of
+/// `scripts/check-ci-gate.sh`'s actual `ALLOWED_SKIPS` enforcement: only a
+/// name that is a real job in this file could ever appear as a key in a
+/// real `toJSON(needs)` payload, so this is the correct (and only
+/// practical) bound on "every job that could possibly need a pin".
+///
+/// Same 2-space-indent, comment-stripped convention as
+/// `common::yaml::extract_job_block` (kept consistent deliberately — this
+/// file already anchors on that exact shape everywhere else). `jobs:` is
+/// this file's last top-level key (verified: `grep -n '^[a-zA-Z]'
+/// .github/workflows/ci.yml` returns only `name:`, `on:`, `env:`, `jobs:`,
+/// in that order), so scanning to EOF is correct today; the 0-indent
+/// early-return guards against silently mis-scanning if that ever changes.
+fn list_all_ci_yml_job_names(ci: &str) -> Vec<String> {
+    let Some(jobs_start) = ci.find("\njobs:\n") else {
+        panic!("FAIL: `.github/workflows/ci.yml` has no top-level `jobs:` key.");
+    };
+    let jobs_section = &ci[jobs_start + 1..];
+    let mut names = Vec::new();
+    for line in jobs_section.lines().skip(1) {
+        if line.is_empty() || line.starts_with(' ') {
+            if line.starts_with("  ") && line.chars().nth(2).map(|c| c != ' ').unwrap_or(false) {
+                let without_comment = line.split('#').next().unwrap_or(line).trim_end();
+                if let Some(name) = without_comment
+                    .strip_prefix("  ")
+                    .and_then(|s| s.strip_suffix(':'))
+                {
+                    if !name.is_empty() {
+                        names.push(name.to_string());
+                    }
+                }
+            }
+            continue;
+        }
+        // A non-empty, 0-indent line: end of the `jobs:` map.
+        break;
+    }
+    names
+}
+
 // ---------------------------------------------------------------------------
 // AC-001 — `ci-gate` job exists with correct structural properties
 // ---------------------------------------------------------------------------
@@ -1232,9 +1276,30 @@ fn find_comment_start(s: &str) -> Option<usize> {
 /// judgment call that produced six rounds of predicate bypasses.)
 fn extract_and_normalize_if_expr(job_block: &str) -> Result<Option<String>, String> {
     let lines: Vec<&str> = job_block.lines().collect();
-    let if_line_idx = lines
-        .iter()
-        .position(|l| l.starts_with("    if:") && !l.starts_with("        "));
+    let is_job_level_if_line = |l: &&str| l.starts_with("    if:") && !l.starts_with("        ");
+
+    // SUGGESTION (PR #671 review round 9): a job block with TWO job-level
+    // `if:` keys is a hard `Err`, never "use the first match". Reviewed and
+    // confirmed NOT independently exploitable today (GitHub Actions' YAML
+    // parser, and `actionlint`, both reject a duplicate mapping key as a
+    // parse error — a workflow with two `if:` keys under one job never
+    // runs at all), so this is defense-in-depth, not a closed bypass: it
+    // costs one comparison and removes "which `if:` wins" as a question
+    // this checker would otherwise have to answer via first-match order,
+    // which is exactly the kind of implicit, unreviewed tie-break rule
+    // that produced earlier rounds' bypasses.
+    if lines.iter().filter(|l| is_job_level_if_line(l)).count() > 1 {
+        return Err(
+            "has more than one job-level `if:` key in its ci.yml job block \
+             — this is invalid YAML (a duplicate mapping key) that GitHub \
+             Actions and actionlint both reject at parse time, but this \
+             checker refuses to silently pick a winner rather than rely on \
+             that external validation. Remove the duplicate `if:` key."
+                .to_string(),
+        );
+    }
+
+    let if_line_idx = lines.iter().position(is_job_level_if_line);
 
     let Some(if_line_idx) = if_line_idx else {
         return Ok(None);
@@ -1259,10 +1324,29 @@ fn extract_and_normalize_if_expr(job_block: &str) -> Result<Option<String>, Stri
     // CRITICAL-1b: reject a value that continues onto a following,
     // more-deeply-indented line (plain-scalar line folding — YAML permits
     // this without any block-scalar marker at all).
-    if let Some(next_line) = lines[if_line_idx + 1..]
-        .iter()
-        .find(|l| !l.trim().is_empty())
-    {
+    //
+    // IMPORTANT-4 (PR #671 review round 9): skip lines whose first
+    // non-whitespace character is `#` when looking for "the next line" —
+    // a full-line YAML comment does not contribute to a plain scalar's
+    // folded value (PyYAML-confirmed: `if: always()` followed by an
+    // indented `# comment` line on its own parses to exactly `"always()"`,
+    // comment fully discarded, REGARDLESS of the comment line's indent).
+    // Before this fix, a genuinely single-line, pin-matching `if:` such as
+    // `mutants`' followed by an ordinary trailing comment line (e.g.
+    // `      # NOTE: PR-only by design; see the comment above.`) hard-failed
+    // this function with "appears to continue onto a following line" —
+    // advice this specific case cannot act on, since the value already IS
+    // a single-line plain scalar. That false-red is exactly the kind of
+    // loosening pressure that produced rounds 3-6: a maintainer's cheapest
+    // fix for a false alarm is to weaken the check, not to narrow it
+    // correctly. A line that is NOT a full-line comment (i.e. any text
+    // before its own `#`, or no `#` at all) is still treated as a
+    // candidate continuation exactly as before — this only excludes lines
+    // that are comments in their entirety.
+    if let Some(next_line) = lines[if_line_idx + 1..].iter().find(|l| {
+        let trimmed = l.trim_start();
+        !trimmed.is_empty() && !trimmed.starts_with('#')
+    }) {
         let indent = next_line.len() - next_line.trim_start().len();
         if indent > 4 {
             return Err(format!(
@@ -1343,6 +1427,19 @@ fn extract_and_normalize_if_expr(job_block: &str) -> Result<Option<String>, Stri
 /// mutation keying on skip-COUNT (e.g. "≥2 skips means tolerate") rather
 /// than per-job identity would pass a single-skip-only test suite but fail
 /// against the shape every push actually produces.
+///
+/// STRUCTURAL (PR #671 review round 9): the root cause shared by CRITICAL-3
+/// and the round-7/8 `outcome` defect is the same — the payload shape was a
+/// HAND-CHOSEN sample, so round 7 could "fix" one wrong sample by
+/// substituting another wrong one without anything forcing a check against
+/// the actual contract. `NEEDS_CONTEXT_JOB_KEYS` below is that contract,
+/// pinned once, with its own citation; every payload this function builds
+/// is asserted against it before being returned, so a future round can no
+/// longer invent (or drop) a field here without this assertion failing and
+/// forcing them to look at — and update, in the same change as any real
+/// contract change — the pinned source of truth, not just this call site.
+const NEEDS_CONTEXT_JOB_KEYS: &[&str] = &["outputs", "result"];
+
 fn build_multi_skip_payload(all_jobs: &[String], skipped_jobs: &[&str]) -> String {
     let mut obj = serde_json::Map::new();
     for job in all_jobs {
@@ -1351,13 +1448,34 @@ fn build_multi_skip_payload(all_jobs: &[String], skipped_jobs: &[&str]) -> Strin
         } else {
             "success"
         };
-        obj.insert(
-            job.clone(),
-            serde_json::json!({
-                "result": result,
-                "outputs": {},
-            }),
+        let job_value = serde_json::json!({
+            "result": result,
+            "outputs": {},
+        });
+        let mut actual_keys: Vec<&str> = job_value
+            .as_object()
+            .expect("job_value is always constructed as a JSON object literal above")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        actual_keys.sort_unstable();
+        assert_eq!(
+            actual_keys, NEEDS_CONTEXT_JOB_KEYS,
+            "FAIL (PR #671 review round 9, structural): the payload this \
+             test synthesizes for `{job}` has key set {actual_keys:?}, not \
+             the pinned `{NEEDS_CONTEXT_JOB_KEYS:?}` — per GitHub's \
+             contexts reference \
+             (https://docs.github.com/en/actions/learn-github-actions/contexts, \
+             \"needs context\"), `needs.<job_id>` has EXACTLY these two \
+             properties. If you are adding a field here because you believe \
+             the real `needs` context has grown a new property, verify that \
+             against the docs FIRST and update NEEDS_CONTEXT_JOB_KEYS in the \
+             same change — do not just add a field to this literal, or the \
+             next reader inherits an unverified assumption exactly as \
+             happened with the phantom `outcome` field this round removed \
+             (see this function's doc comment)."
         );
+        obj.insert(job.clone(), job_value);
     }
     serde_json::Value::Object(obj).to_string()
 }
@@ -1697,16 +1815,87 @@ fn test_ci_gate_decision_matches_job_level_if_for_every_needs_member() {
          test vacuously."
     );
 
-    // IMPORTANT 5 (PR #671 review round 7): pin-coverage check, independent
-    // of ci-gate.needs. The loop above only ever sees needs members; a job
-    // added to ALLOWED_SKIPS while still outside needs would never be
-    // checked there at all, and would silently inherit tolerance the
-    // moment a later change adds it to needs without touching
-    // ALLOWED_SKIPS or this pin map. Ask bash directly (as in
-    // `test_allowed_skips_members_require_job_level_conditional_in_ci_yml`)
-    // what ALLOWED_SKIPS actually contains, and require a pin for every
-    // member, unconditionally.
+    // IMPORTANT 5 / IMPORTANT 2 / IMPORTANT 3 (PR #671 review rounds 7 and
+    // 9): pin-coverage check, independent of ci-gate.needs.
+    //
+    // WHAT THIS BLOCK ACTUALLY ADDS (corrected, round 9 — the round-7
+    // rationale below was run and found false): the main per-job loop
+    // above iterates `ci-gate.needs` members and, for each, already
+    // requires a pin whenever `is_pinned_and_matches` is false — so for a
+    // job that IS a `ci-gate.needs` member, the main loop ALREADY fails
+    // loudly if it's skip-tolerant with no pin. Reproduced: adding `deny`
+    // (a real `needs` member) to `ALLOWED_SKIPS` with no pin fails at the
+    // main loop's negative-branch assertion, naming `deny` — NOT here.
+    // This block's actual, unique value is for an `ALLOWED_SKIPS` member
+    // that is NOT (yet) a `ci-gate.needs` member (e.g. `security`, a real
+    // job in this file that ci-gate does not depend on) — the main loop
+    // never iterates such a job at all, so THIS is the only code path that
+    // would catch a missing pin for it, closing exactly the gap the
+    // round-7 text described but attributed to the wrong scenario.
+    // Reproduced: adding `security` (not a needs member) to
+    // `ALLOWED_SKIPS` with no pin is caught here, and only here.
+    //
+    // IMPORTANT 2 (round 9): the round-7 version of this block asked ONLY
+    // `--print-allowed-skips` what `ALLOWED_SKIPS` contains, and trusted
+    // that answer completely — but `print_allowed_skips()` is a SEPARATE
+    // function from `is_allowed_skip()` (the one `evaluate_needs()` — the
+    // function that actually decides pass/fail — calls). A mutation to
+    // `print_allowed_skips()` alone (e.g. filtering its output to hide a
+    // member) desyncs the two without touching enforcement at all:
+    // `--print-allowed-skips` would under-report, this block would
+    // silently require pins for fewer jobs than are actually tolerated,
+    // and the real gate would still accept the hidden member's skip.
+    // Reproduced: this exact case (`ALLOWED_SKIPS=("mutants" "security")`
+    // with `print_allowed_skips` filtering `security` out of its own
+    // output) left this round-7 block silently satisfied while the real
+    // gate returned rc=0 on a skipped `security`.
+    //
+    // FIX: do not trust `print_allowed_skips()`'s account of what
+    // `evaluate_needs()` tolerates — ask `evaluate_needs()` directly, by
+    // actually running it (via the real script entry point) on a
+    // single-job payload for every job name that exists ANYWHERE in
+    // ci.yml (`list_all_ci_yml_job_names` — not just `ci-gate.needs`
+    // members, since an `ALLOWED_SKIPS` member need not be one). Whichever
+    // jobs `evaluate_needs()` ITSELF actually tolerates a `skipped` result
+    // for (`behaviorally_allowed` below) is behaviorally-verified ground
+    // truth: it cannot diverge from real enforcement, because it comes
+    // from the same code path enforcement uses, not a separate reporting
+    // function that could drift from it. Require a pin for every
+    // behaviorally-allowed job, AND separately assert that this
+    // independently-derived set matches what `--print-allowed-skips`
+    // reports — a real regression in EITHER function surfaces as a named
+    // mismatch, not a silent pass.
     let script_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/check-ci-gate.sh");
+
+    let mut behaviorally_allowed: Vec<String> = Vec::new();
+    for candidate in list_all_ci_yml_job_names(&ci) {
+        let probe_payload = format!(r#"{{"{candidate}":{{"result":"skipped","outputs":{{}}}}}}"#);
+        let probe_output = run_check_ci_gate_sh(&probe_payload);
+        let probe_stdout = String::from_utf8_lossy(&probe_output.stdout);
+        if probe_stdout.contains(&format!("OK  {candidate} = skipped")) {
+            behaviorally_allowed.push(candidate);
+        }
+    }
+    behaviorally_allowed.sort();
+
+    for member in &behaviorally_allowed {
+        let has_pin = PINNED_ALLOWED_SKIP_IF_EXPRESSIONS
+            .iter()
+            .any(|(name, _)| name == member);
+        assert!(
+            has_pin,
+            "FAIL (PR #671 review round 9, IMPORTANT 2/5): `{member}` is \
+             BEHAVIORALLY tolerated as a `skipped` result by \
+             scripts/check-ci-gate.sh's real `evaluate_needs()` (verified \
+             by directly running the script — not by trusting \
+             `--print-allowed-skips`) but has no entry in \
+             PINNED_ALLOWED_SKIP_IF_EXPRESSIONS. This check is independent \
+             of whether `{member}` is currently in `ci-gate.needs`. Add a \
+             pinned entry for `{member}` naming its exact (normalized) \
+             `if:` text."
+        );
+    }
+
     let print_output = Command::new("bash")
         .arg(&script_path)
         .arg("--print-allowed-skips")
@@ -1718,27 +1907,166 @@ fn test_ci_gate_decision_matches_job_level_if_for_every_needs_member() {
          non-zero (status: {:?}).",
         print_output.status.code()
     );
-    let allowed_skips_members: Vec<String> = String::from_utf8_lossy(&print_output.stdout)
+    let mut allowed_skips_members: Vec<String> = String::from_utf8_lossy(&print_output.stdout)
         .lines()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect();
-    for member in &allowed_skips_members {
-        let has_pin = PINNED_ALLOWED_SKIP_IF_EXPRESSIONS
+    allowed_skips_members.sort();
+
+    assert_eq!(
+        behaviorally_allowed, allowed_skips_members,
+        "FAIL (PR #671 review round 9, IMPORTANT 2): \
+         `--print-allowed-skips`'s reported ALLOWED_SKIPS membership \
+         disagrees with what scripts/check-ci-gate.sh's real \
+         `evaluate_needs()` actually tolerates (verified by direct probe, \
+         one job at a time). This means `print_allowed_skips()` has \
+         drifted from `is_allowed_skip()` — the two are separate \
+         functions in the script, and a mutation to either one alone (not \
+         both) produces exactly this kind of disagreement. Whichever side \
+         is wrong, `--print-allowed-skips` is no longer a trustworthy \
+         account of the gate's real behavior."
+    );
+}
+
+/// IMPORTANT 1 (PR #671 review round 9): arity-independence — the main
+/// behavioral closure test above, via `all_skip_variants_for`, only ever
+/// checks a payload with 1 skip or 2 skips (`job` alone, or `job` +
+/// `mutants`). A mutation keyed on skip-COUNT rather than per-job identity
+/// (e.g. `is_allowed_skip "${job}" || [ "$(… | jq '[.[] | select(.result==
+/// "skipped")] | length')" -ge 3 ]`) is invisible to both arities tested
+/// there and produces gate rc=0 on a real payload with 3+ skips, 2 of them
+/// unlisted.
+///
+/// CHOICE (documented per review's request): this is closed by testing the
+/// EXTREMAL case — every job in `ci-gate.needs` skipped simultaneously —
+/// rather than the full 2^N cross product of skip subsets. A count-keyed
+/// mutation of the form "skip count >= K tolerates everything" is exposed
+/// by ANY payload with skip count >= K; testing the maximum possible
+/// arity (`all_jobs.len()`) therefore refutes every such mutation for
+/// every K up to the current job count in ONE additional subprocess call,
+/// where the full cross product would need 2^`all_jobs.len()` payloads
+/// (256 for today's 8 jobs) for a property already fully proven by the
+/// boundary case. This scales automatically as `ci-gate.needs` grows,
+/// since `all_jobs` (and therefore the arity tested) is derived from the
+/// real job graph at runtime, not hardcoded — a mutation requiring K
+/// skips to fire is exposed for exactly as long as K stays <=
+/// `all_jobs.len()`. What this does NOT prove: a mutation keyed on some
+/// property other than a skip-count threshold (e.g. skip-count PARITY) is
+/// out of scope for this specific closure, same as it would be out of
+/// scope for a bounded cross product of any size short of the full 2^N.
+///
+/// Reproduced: without a 3+-skip payload anywhere in this test file, a
+/// `[ … -ge 3 ]` mutation passed `--self-test` (13/13, no fixture combines
+/// 3+ skips) and this file's main behavioral test (13/13) while returning
+/// gate rc=0 on a payload skipping `mutants` plus two other unlisted jobs.
+///
+/// Expected result computed independently of `all_skip_variants_for`'s
+/// per-job classification, from the same `PINNED_ALLOWED_SKIP_IF_EXPRESSIONS`
+/// source of truth: with every job skipped, the gate must reject (exit 1)
+/// unless literally every job's `if:` matches its pin (not the case today
+/// — only `mutants` has one), and must name every non-matching job with a
+/// `FAIL  <job> = skipped` line and every matching job with an
+/// `OK  <job> = skipped` line.
+#[cfg(unix)]
+#[test]
+fn test_ci_gate_decision_is_arity_independent_for_unlisted_skips() {
+    let ci = read_ci_yml();
+    let gate_block = extract_job_block(&ci, "ci-gate").unwrap_or_else(|| {
+        panic!("FAIL: `.github/workflows/ci.yml` does not contain a `ci-gate:` job.")
+    });
+    let needs = parse_needs_set(gate_block).unwrap_or_else(|| {
+        panic!("FAIL: the `ci-gate` job block does not contain a `needs:` key.")
+    });
+
+    let mut all_jobs: Vec<String> = needs.into_iter().collect();
+    all_jobs.sort();
+
+    assert!(
+        all_jobs.len() >= 3,
+        "FAIL: `ci-gate.needs` has fewer than 3 jobs ({}) — this test needs \
+         at least 3 to distinguish a >=3-skip-count mutation from the \
+         2-skip coverage the main behavioral test already provides. If \
+         `ci-gate.needs` has legitimately shrunk below 3, this test's \
+         premise needs revisiting, not silent weakening.",
+        all_jobs.len()
+    );
+
+    let all_skipped: Vec<&str> = all_jobs.iter().map(String::as_str).collect();
+    let payload = build_multi_skip_payload(&all_jobs, &all_skipped);
+    let output = run_check_ci_gate_sh(&payload);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let exit_code = output.status.code();
+
+    let mut expected_ok: Vec<&str> = Vec::new();
+    let mut expected_fail: Vec<&str> = Vec::new();
+    for job in &all_jobs {
+        let job_block = extract_job_block(&ci, job).unwrap_or_else(|| {
+            panic!("FAIL: `ci-gate.needs` names `{job}`, but no `{job}:` job exists in ci.yml.")
+        });
+        let actual_if_expr = extract_and_normalize_if_expr(job_block).unwrap_or_else(|reason| {
+            panic!(
+                "FAIL (S-CIGATE-2, PR #671 review round 9, arity-independence \
+                 payload): `{job}`'s ci.yml job-level `if:` {reason}"
+            )
+        });
+        let pinned_expr = PINNED_ALLOWED_SKIP_IF_EXPRESSIONS
             .iter()
-            .any(|(name, _)| name == member);
+            .find(|(name, _)| *name == job.as_str())
+            .map(|(_, expr)| *expr);
+        let matches = matches!((&actual_if_expr, pinned_expr), (Some(a), Some(p)) if a == p);
+        if matches {
+            expected_ok.push(job);
+        } else {
+            expected_fail.push(job);
+        }
+    }
+
+    assert!(
+        !expected_fail.is_empty(),
+        "FAIL: every job in ci-gate.needs matches its pinned literal — this \
+         test's premise (at least one job must be a legitimate rejection \
+         target when ALL jobs are skipped) no longer holds; re-derive the \
+         expected exit code before trusting this test's result."
+    );
+
+    assert_eq!(
+        exit_code,
+        Some(1),
+        "FAIL (PR #671 review round 9, IMPORTANT 1): skipping every job in \
+         ci-gate.needs simultaneously (arity {}) did not produce exit code \
+         1, even though {} of them ({:?}) have no matching pin. A mutation \
+         keyed on skip-COUNT rather than per-job identity (e.g. \"skip \
+         count >= K tolerates everything\") would produce exactly this \
+         symptom without being caught by the main behavioral test's 1- and \
+         2-skip payloads.\n\nPayload used:\n{payload}\n\n--- stdout \
+         ---\n{stdout}\n--- stderr ---\n{}",
+        all_jobs.len(),
+        expected_fail.len(),
+        expected_fail,
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    for job in &expected_fail {
+        let expected_line = format!("FAIL  {job} = skipped");
         assert!(
-            has_pin,
-            "FAIL (PR #671 review round 7, IMPORTANT 5): `{member}` is a \
-             member of scripts/check-ci-gate.sh's ALLOWED_SKIPS (per \
-             --print-allowed-skips) but has no entry in \
-             PINNED_ALLOWED_SKIP_IF_EXPRESSIONS. This check is independent \
-             of whether `{member}` is currently in `ci-gate.needs` — \
-             without it, a member outside `needs` today would silently \
-             inherit tolerance the moment it's later added to `needs`, \
-             since the main per-job loop above only iterates \
-             ci-gate.needs members. Add a pinned entry for `{member}` \
-             naming its exact (normalized) `if:` text."
+            stdout.contains(&expected_line),
+            "FAIL (PR #671 review round 9, IMPORTANT 1): expected stdout to \
+             contain \"{expected_line}\" (arity-{} payload) but it did not.\n\
+             \n--- stdout ---\n{stdout}",
+            all_jobs.len()
+        );
+    }
+    for job in &expected_ok {
+        let expected_line = format!("OK  {job} = skipped");
+        assert!(
+            stdout.contains(&expected_line),
+            "FAIL (PR #671 review round 9, IMPORTANT 1): expected stdout to \
+             contain \"{expected_line}\" (arity-{} payload) but it did not \
+             — a legitimately pinned job must still be tolerated even when \
+             every OTHER job is also (illegitimately) skipped in the same \
+             payload.\n\n--- stdout ---\n{stdout}",
+            all_jobs.len()
         );
     }
 }
